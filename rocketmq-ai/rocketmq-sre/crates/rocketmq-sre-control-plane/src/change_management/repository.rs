@@ -37,6 +37,7 @@ use uuid::Uuid;
 use super::model::ManualGateDecisionRecord;
 use super::model::ScheduleEvent;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 impl PostgresRepository {
@@ -47,7 +48,7 @@ impl PostgresRepository {
         actor: &str,
         definition: &RunbookDefinition,
         audit: &AuditEvent,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         let snapshot = json_value(definition)?;
         let mut transaction = self.pool.begin().await?;
         let result = sqlx::query(
@@ -81,7 +82,7 @@ impl PostgresRepository {
             .fetch_one(&mut *transaction)
             .await?;
             if existing != snapshot {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "runbook_version_conflict",
                     "runbook identity and version already contain a different immutable definition",
                 ));
@@ -100,7 +101,7 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         id: RunbookId,
         version: &str,
-    ) -> Result<RunbookDefinition, ControlPlaneError> {
+    ) -> Result<RunbookDefinition, ControlPlaneRequestFailure> {
         let snapshot: Value = sqlx::query_scalar(
             "SELECT definition_snapshot
              FROM runbook_definitions
@@ -113,7 +114,7 @@ impl PostgresRepository {
         .bind(version)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         from_json(snapshot)
     }
 
@@ -122,7 +123,7 @@ impl PostgresRepository {
         tenant_id: TenantId,
         cluster_id: ClusterId,
         limit: i64,
-    ) -> Result<Vec<RunbookDefinition>, ControlPlaneError> {
+    ) -> Result<Vec<RunbookDefinition>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT definition_snapshot
              FROM runbook_definitions
@@ -144,7 +145,7 @@ impl PostgresRepository {
         &self,
         window: &ChangeWindow,
         audit: &AuditEvent,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         let snapshot = json_value(window)?;
         let mut transaction = self.pool.begin().await?;
         let result = sqlx::query(
@@ -178,7 +179,7 @@ impl PostgresRepository {
                 .fetch_one(&mut *transaction)
                 .await?;
             if existing != snapshot {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "change_window_conflict",
                     "change window identifier already contains a different immutable definition",
                 ));
@@ -198,7 +199,7 @@ impl PostgresRepository {
         from: DateTime<Utc>,
         to: DateTime<Utc>,
         limit: i64,
-    ) -> Result<Vec<ChangeWindow>, ControlPlaneError> {
+    ) -> Result<Vec<ChangeWindow>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT window_snapshot
              FROM change_windows
@@ -225,7 +226,7 @@ impl PostgresRepository {
         allowed_parallelism: u16,
         event: &ScheduleEvent,
         audit: &AuditEvent,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let lock_key = format!("{}:{}", schedule.tenant_id, schedule.cluster_id);
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
@@ -251,7 +252,7 @@ impl PostgresRepository {
         .fetch_one(&mut *transaction)
         .await?;
         if resource_overlap {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "change_schedule_conflict",
                 "another non-terminal schedule targets the same resource in the requested interval",
             ));
@@ -270,7 +271,7 @@ impl PostgresRepository {
         .fetch_one(&mut *transaction)
         .await?;
         if overlapping >= i64::from(allowed_parallelism) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "change_parallelism_exceeded",
                 "overlapping schedules meet or exceed the approved parallelism bound",
             ));
@@ -331,7 +332,7 @@ impl PostgresRepository {
         &self,
         tenant_id: TenantId,
         id: ChangeScheduleId,
-    ) -> Result<ChangeSchedule, ControlPlaneError> {
+    ) -> Result<ChangeSchedule, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT *
              FROM change_schedules
@@ -341,7 +342,7 @@ impl PostgresRepository {
         .bind(id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         schedule_from_row(&row)
     }
 
@@ -351,7 +352,7 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         status: Option<ChangeScheduleStatus>,
         limit: i64,
-    ) -> Result<Vec<ChangeSchedule>, ControlPlaneError> {
+    ) -> Result<Vec<ChangeSchedule>, ControlPlaneRequestFailure> {
         let status = status.map(change_schedule_status_name);
         let rows = sqlx::query(
             "SELECT *
@@ -376,7 +377,7 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         starts_at: DateTime<Utc>,
         ends_at: DateTime<Utc>,
-    ) -> Result<Vec<ChangeSchedule>, ControlPlaneError> {
+    ) -> Result<Vec<ChangeSchedule>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT *
              FROM change_schedules
@@ -399,7 +400,7 @@ impl PostgresRepository {
         &self,
         now: DateTime<Utc>,
         limit: i64,
-    ) -> Result<Vec<ChangeSchedule>, ControlPlaneError> {
+    ) -> Result<Vec<ChangeSchedule>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT *
              FROM change_schedules
@@ -422,11 +423,11 @@ impl PostgresRepository {
         expected_updated_at: DateTime<Utc>,
         event: &ScheduleEvent,
         audit: &AuditEvent,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let result = update_schedule_row(&mut transaction, schedule, expected_status, expected_updated_at).await?;
         if result == 0 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "change_schedule_state_changed",
                 "change schedule was updated by another operator or scheduler",
             ));
@@ -444,7 +445,7 @@ impl PostgresRepository {
         decision: &ManualGateDecisionRecord,
         event: &ScheduleEvent,
         audit: &AuditEvent,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO runbook_manual_gate_decisions (
@@ -471,7 +472,7 @@ impl PostgresRepository {
         )
         .await?;
         if updated == 0 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "change_schedule_state_changed",
                 "manual gate no longer matches the active schedule projection",
             ));
@@ -488,7 +489,7 @@ async fn update_schedule_row(
     schedule: &ChangeSchedule,
     expected_status: ChangeScheduleStatus,
     expected_updated_at: DateTime<Utc>,
-) -> Result<u64, ControlPlaneError> {
+) -> Result<u64, ControlPlaneRequestFailure> {
     let result = sqlx::query(
         "UPDATE change_schedules
          SET status = $4,
@@ -530,7 +531,7 @@ async fn update_schedule_row(
 async fn insert_schedule_event(
     transaction: &mut Transaction<'_, Postgres>,
     event: &ScheduleEvent,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO change_schedule_events (
             event_id, schedule_id, correlation_id, from_status, to_status,
@@ -554,7 +555,7 @@ async fn insert_schedule_event(
 async fn insert_audit(
     transaction: &mut Transaction<'_, Postgres>,
     event: &AuditEvent,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO audit_events (
             event_id, tenant_id, cluster_id, correlation_id, event_kind,
@@ -584,7 +585,7 @@ async fn insert_audit(
     Ok(())
 }
 
-fn schedule_from_row(row: &sqlx::postgres::PgRow) -> Result<ChangeSchedule, ControlPlaneError> {
+fn schedule_from_row(row: &sqlx::postgres::PgRow) -> Result<ChangeSchedule, ControlPlaneRequestFailure> {
     let plan_bindings: Vec<RunbookStepPlanBinding> = from_json(row.try_get("plan_bindings")?)?;
     let completed_steps = row
         .try_get::<Vec<Uuid>, _>("completed_step_ids")?
@@ -606,7 +607,7 @@ fn schedule_from_row(row: &sqlx::postgres::PgRow) -> Result<ChangeSchedule, Cont
         status: parse_change_schedule_status(row.try_get("status")?)?,
         intent_persisted: row.try_get("intent_persisted")?,
         next_step_sequence: u16::try_from(row.try_get::<i32, _>("next_step_sequence")?).map_err(|_| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "invalid_persisted_schedule",
                 "persisted next step sequence exceeds the contract bound",
             )
@@ -640,7 +641,7 @@ fn change_schedule_status_name(status: ChangeScheduleStatus) -> &'static str {
     }
 }
 
-fn parse_change_schedule_status(value: &str) -> Result<ChangeScheduleStatus, ControlPlaneError> {
+fn parse_change_schedule_status(value: &str) -> Result<ChangeScheduleStatus, ControlPlaneRequestFailure> {
     match value {
         "scheduled" => Ok(ChangeScheduleStatus::Scheduled),
         "running" => Ok(ChangeScheduleStatus::Running),
@@ -651,7 +652,7 @@ fn parse_change_schedule_status(value: &str) -> Result<ChangeScheduleStatus, Con
         "completed" => Ok(ChangeScheduleStatus::Completed),
         "cancelled" => Ok(ChangeScheduleStatus::Cancelled),
         "rejected" => Ok(ChangeScheduleStatus::Rejected),
-        _ => Err(ControlPlaneError::validation(
+        _ => Err(ControlPlaneRequestFailure::validation(
             "invalid_persisted_schedule",
             "persisted schedule status is unknown",
         )),
@@ -666,11 +667,11 @@ fn change_window_kind_name(kind: rocketmq_sre_contracts::ChangeWindowKind) -> &'
     }
 }
 
-fn action_risk_name(risk: rocketmq_sre_contracts::ActionRisk) -> Result<&'static str, ControlPlaneError> {
+fn action_risk_name(risk: rocketmq_sre_contracts::ActionRisk) -> Result<&'static str, ControlPlaneRequestFailure> {
     match risk {
         rocketmq_sre_contracts::ActionRisk::R1 => Ok("r1"),
         rocketmq_sre_contracts::ActionRisk::R2 => Ok("r2"),
-        _ => Err(ControlPlaneError::validation(
+        _ => Err(ControlPlaneRequestFailure::validation(
             "invalid_runbook_risk",
             "executable runbook risk must be R1 or R2",
         )),
@@ -714,24 +715,24 @@ fn audit_event_kind_name(kind: rocketmq_sre_contracts::AuditEventKind) -> &'stat
     }
 }
 
-fn json_value<T: Serialize>(value: &T) -> Result<Value, ControlPlaneError> {
+fn json_value<T: Serialize>(value: &T) -> Result<Value, ControlPlaneRequestFailure> {
     serde_json::to_value(value)
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "value cannot be represented as JSON"))
+        .map_err(|source| ControlPlaneRequestFailure::operational_validation_source("invalid_request", source))
 }
 
-fn from_json<T: DeserializeOwned>(value: Value) -> Result<T, ControlPlaneError> {
+fn from_json<T: DeserializeOwned>(value: Value) -> Result<T, ControlPlaneRequestFailure> {
     serde_json::from_value(value)
-        .map_err(|_| ControlPlaneError::validation("invalid_persisted_state", "stored JSON is incompatible"))
+        .map_err(|source| ControlPlaneRequestFailure::operational_validation_source("invalid_persisted_state", source))
 }
 
-fn map_manual_gate_error(error: sqlx::Error) -> ControlPlaneError {
+fn map_manual_gate_error(error: sqlx::Error) -> ControlPlaneRequestFailure {
     if let sqlx::Error::Database(database) = &error
         && database.is_unique_violation()
     {
-        return ControlPlaneError::conflict_code(
+        return ControlPlaneRequestFailure::conflict_code(
             "manual_gate_already_decided",
             "manual gate already has an immutable decision",
         );
     }
-    ControlPlaneError::Database(error)
+    ControlPlaneError::database(error).into()
 }

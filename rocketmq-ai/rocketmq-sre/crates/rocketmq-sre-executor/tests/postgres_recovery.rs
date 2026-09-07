@@ -38,10 +38,14 @@ use rocketmq_sre_contracts::VerificationOutcome;
 use rocketmq_sre_contracts::VerificationResult;
 use rocketmq_sre_contracts::current_evidence_schema;
 use rocketmq_sre_execution_agent::AgentEffectStore;
+use rocketmq_sre_execution_agent::AgentEffectStoreOperations;
 use rocketmq_sre_executor::ExecutionJournal;
-use rocketmq_sre_executor::JournalError;
+use rocketmq_sre_executor::ExecutionJournalOperations;
+use rocketmq_sre_executor::JournalFailureCode;
 use rocketmq_sre_executor::LeaseCoordinator;
+use rocketmq_sre_executor::LeaseCoordinatorOperations;
 use rocketmq_sre_executor::ResourceLockRequest;
+use rocketmq_sre_executor::ResourceSafetyOperations;
 use rocketmq_sre_executor::ResourceSafetyStore;
 use rocketmq_sre_executor::VerificationPhase;
 use serde_json::json;
@@ -236,7 +240,7 @@ async fn migrations_journal_locks_fences_and_restart_recovery_are_durable() {
     };
     assert!(matches!(
         safety.acquire(&competing_lock).await,
-        Err(JournalError::ResourceLocked)
+        Err(failure) if failure.code() == JournalFailureCode::ResourceLocked
     ));
     safety
         .release(
@@ -267,7 +271,7 @@ async fn migrations_journal_locks_fences_and_restart_recovery_are_durable() {
     assert!(safety.quarantine(&quarantine).await.expect("quarantine"));
     assert!(matches!(
         safety.acquire(&competing_lock).await,
-        Err(JournalError::ResourceQuarantined)
+        Err(failure) if failure.code() == JournalFailureCode::ResourceQuarantined
     ));
     assert!(
         safety
@@ -328,7 +332,7 @@ async fn migrations_journal_locks_fences_and_restart_recovery_are_durable() {
     };
     assert!(matches!(
         leases.activate(&second_lease, &ack).await,
-        Err(JournalError::LeaseRejected)
+        Err(failure) if failure.code() == JournalFailureCode::LeaseRejected
     ));
     let agent = AgentEffectStore::new(pool.clone());
     assert!(
@@ -363,7 +367,7 @@ async fn migrations_journal_locks_fences_and_restart_recovery_are_durable() {
                 )
             )
             .await,
-        Err(JournalError::LeaseRejected)
+        Err(failure) if failure.code() == JournalFailureCode::LeaseRejected
     ));
     let stale_audit_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM audit_events WHERE reason_code = 'stale-intent-audit'")

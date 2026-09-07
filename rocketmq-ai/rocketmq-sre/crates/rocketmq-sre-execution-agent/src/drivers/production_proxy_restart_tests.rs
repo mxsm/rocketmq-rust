@@ -250,24 +250,35 @@ async fn run_real_restart_fixture(
     client: Client,
     namespace: &str,
     deployment_name: &str,
-) -> Result<(), ExecutionAgentError> {
+) -> Result<(), crate::ExecutionAgentRequestFailure> {
     let deployments: Api<Deployment> = Api::namespaced(client.clone(), namespace);
     let pods: Api<Pod> = Api::namespaced(client, namespace);
     let before = wait_for_fixture_pods(&pods, deployment_name, None).await?;
     let original_uids = before
         .iter()
-        .map(|pod| pod.metadata.uid.clone().ok_or(ExecutionAgentError::DriverFailed))
+        .map(|pod| {
+            pod.metadata
+                .uid
+                .clone()
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
+        })
         .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
     if original_uids.len() != 2 {
-        return Err(ExecutionAgentError::DriverFailed);
+        return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
     }
-    let target = before.first().ok_or(ExecutionAgentError::DriverFailed)?;
+    let target = before
+        .first()
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
     let target_name = target.name_any();
-    let target_uid = target.metadata.uid.clone().ok_or(ExecutionAgentError::DriverFailed)?;
+    let target_uid = target
+        .metadata
+        .uid
+        .clone()
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
     let mut deployment = deployments
         .get(deployment_name)
         .await
-        .map_err(|_| ExecutionAgentError::DriverFailed)?;
+        .map_err(|_| crate::ExecutionAgentRequestFailure::DriverFailed)?;
     let annotations = deployment.metadata.annotations.get_or_insert_with(BTreeMap::new);
     annotations.insert(OPERATION_ANNOTATION.to_owned(), "kind-restart-fixture".to_owned());
     annotations.insert(ORIGINAL_POD_ANNOTATION.to_owned(), target_name.clone());
@@ -275,7 +286,7 @@ async fn run_real_restart_fixture(
     deployments
         .replace(deployment_name, &PostParams::default(), &deployment)
         .await
-        .map_err(|_| ExecutionAgentError::DriverFailed)?;
+        .map_err(|_| crate::ExecutionAgentRequestFailure::DriverFailed)?;
 
     pods.delete(
         &target_name,
@@ -289,15 +300,20 @@ async fn run_real_restart_fixture(
         },
     )
     .await
-    .map_err(|_| ExecutionAgentError::DriverFailed)?;
+    .map_err(|_| crate::ExecutionAgentRequestFailure::DriverFailed)?;
     let after = wait_for_fixture_pods(&pods, deployment_name, Some(&target_uid)).await?;
     let after_uids = after
         .iter()
-        .map(|pod| pod.metadata.uid.clone().ok_or(ExecutionAgentError::DriverFailed))
+        .map(|pod| {
+            pod.metadata
+                .uid
+                .clone()
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
+        })
         .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
     if after_uids.len() != 2 || after_uids.contains(&target_uid) || original_uids.intersection(&after_uids).count() != 1
     {
-        return Err(ExecutionAgentError::DriverFailed);
+        return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
     }
     Ok(())
 }
@@ -306,13 +322,13 @@ async fn wait_for_fixture_pods(
     pods: &Api<Pod>,
     deployment_name: &str,
     replaced_uid: Option<&str>,
-) -> Result<Vec<Pod>, ExecutionAgentError> {
+) -> Result<Vec<Pod>, crate::ExecutionAgentRequestFailure> {
     let selector = format!("rocketmqrust.com/sre-restart-fixture={deployment_name}");
     for _ in 0..120 {
         let ready = pods
             .list(&ListParams::default().labels(&selector))
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?
+            .map_err(|_| crate::ExecutionAgentRequestFailure::DriverFailed)?
             .items
             .into_iter()
             .filter(pod_ready)
@@ -323,7 +339,7 @@ async fn wait_for_fixture_pods(
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    Err(ExecutionAgentError::DriverFailed)
+    Err(crate::ExecutionAgentRequestFailure::DriverFailed)
 }
 
 fn fixture_deployment(name: &str) -> Deployment {

@@ -33,6 +33,7 @@ use super::support::finding_from_row;
 use super::support::finding_state_name;
 use super::support::inspection_from_row;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::fleet::model::ComplianceFindingQuery;
 use crate::fleet::model::CreateFleetInspectionRequest;
 use crate::fleet::model::EvaluateComplianceRequest;
@@ -44,9 +45,9 @@ impl FleetRepository {
     pub(in crate::fleet) async fn upsert_asset(
         &self,
         asset: &FleetAssetIndex,
-    ) -> Result<FleetAssetIndex, ControlPlaneError> {
+    ) -> Result<FleetAssetIndex, ControlPlaneRequestFailure> {
         let attributes = serde_json::to_value(&asset.attributes)
-            .map_err(|_| ControlPlaneError::validation("invalid_request", "Fleet asset attributes are invalid"))?;
+            .map_err(|source| ControlPlaneRequestFailure::validation_source("invalid_request", source))?;
         let row = sqlx::query(
             "INSERT INTO fleet_asset_index (
                 cluster_id, fleet_id, tenant_id, region_id, environment,
@@ -95,12 +96,12 @@ impl FleetRepository {
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "fleet_asset_stale_or_scope_mismatch",
                 "Fleet asset update is stale or outside the registered scope",
             )
         })?;
-        asset_from_row(&row)
+        Ok(asset_from_row(&row)?)
     }
 
     pub(in crate::fleet) async fn assets(
@@ -108,7 +109,7 @@ impl FleetRepository {
         tenant_id: TenantId,
         allowed_clusters: &[ClusterId],
         query: &FleetScopeQuery,
-    ) -> Result<(Vec<FleetAssetIndex>, u64, BTreeMap<String, u64>, Option<String>), ControlPlaneError> {
+    ) -> Result<(Vec<FleetAssetIndex>, u64, BTreeMap<String, u64>, Option<String>), ControlPlaneRequestFailure> {
         let allowed = cluster_uuids(allowed_clusters);
         let environment = query.environment.map(environment_name);
         let limit = i64::from(bounded_limit(query.limit));
@@ -206,8 +207,7 @@ impl FleetRepository {
         for row in health_rows {
             let health: String = row.try_get("health")?;
             let count: i64 = row.try_get("asset_count")?;
-            let count =
-                u64::try_from(count).map_err(|_| ControlPlaneError::configuration("Fleet asset count is invalid"))?;
+            let count = u64::try_from(count).map_err(ControlPlaneError::configuration_source)?;
             if worst_health.is_none() {
                 worst_health = Some(health.clone());
             }
@@ -225,7 +225,7 @@ impl FleetRepository {
         &self,
         tenant_id: TenantId,
         request: &EvaluateComplianceRequest,
-    ) -> Result<ComplianceFinding, ControlPlaneError> {
+    ) -> Result<ComplianceFinding, ControlPlaneRequestFailure> {
         let id = ComplianceFindingId::new();
         let evidence_ids = request
             .evidence_ids
@@ -270,7 +270,7 @@ impl FleetRepository {
         .bind(request.recommendation.trim())
         .fetch_one(&self.pool)
         .await?;
-        finding_from_row(&row)
+        Ok(finding_from_row(&row)?)
     }
 
     pub(in crate::fleet) async fn resolve_matching_findings(
@@ -278,7 +278,7 @@ impl FleetRepository {
         tenant_id: TenantId,
         cluster_id: ClusterId,
         category: &str,
-    ) -> Result<u64, ControlPlaneError> {
+    ) -> Result<u64, ControlPlaneRequestFailure> {
         let result = sqlx::query(
             "UPDATE fleet_compliance_findings
              SET finding_state = 'resolved', updated_at = NOW()
@@ -298,7 +298,7 @@ impl FleetRepository {
         tenant_id: TenantId,
         allowed_clusters: &[ClusterId],
         query: &ComplianceFindingQuery,
-    ) -> Result<(Vec<ComplianceFinding>, u64), ControlPlaneError> {
+    ) -> Result<(Vec<ComplianceFinding>, u64), ControlPlaneRequestFailure> {
         let allowed = cluster_uuids(allowed_clusters);
         let limit = i64::from(bounded_limit(query.limit));
         let offset = i64::from(query.offset);
@@ -359,7 +359,7 @@ impl FleetRepository {
         &self,
         tenant_id: TenantId,
         request: &CreateFleetInspectionRequest,
-    ) -> Result<FleetInspectionRun, ControlPlaneError> {
+    ) -> Result<FleetInspectionRun, ControlPlaneRequestFailure> {
         let id = FleetInspectionRunId::new();
         let region_ids = request
             .region_ids
@@ -393,7 +393,7 @@ impl FleetRepository {
         .bind(i64::try_from(request.evidence_byte_budget).unwrap_or(i64::MAX))
         .fetch_one(&self.pool)
         .await?;
-        inspection_from_row(&row)
+        Ok(inspection_from_row(&row)?)
     }
 
     pub(in crate::fleet) async fn update_inspection(
@@ -401,7 +401,7 @@ impl FleetRepository {
         tenant_id: TenantId,
         id: FleetInspectionRunId,
         request: &UpdateFleetInspectionRequest,
-    ) -> Result<FleetInspectionRun, ControlPlaneError> {
+    ) -> Result<FleetInspectionRun, ControlPlaneRequestFailure> {
         let next_state = if request.terminal {
             if request.failed_clusters == 0 {
                 FleetInspectionState::Completed
@@ -435,15 +435,17 @@ impl FleetRepository {
         .bind(request.terminal)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or_else(|| ControlPlaneError::conflict_code("inspection_terminal", "Fleet inspection cannot be updated"))?;
-        inspection_from_row(&row)
+        .ok_or_else(|| {
+            ControlPlaneRequestFailure::conflict_code("inspection_terminal", "Fleet inspection cannot be updated")
+        })?;
+        Ok(inspection_from_row(&row)?)
     }
 
     pub(in crate::fleet) async fn inspections(
         &self,
         tenant_id: TenantId,
         limit: u16,
-    ) -> Result<(Vec<FleetInspectionRun>, bool), ControlPlaneError> {
+    ) -> Result<(Vec<FleetInspectionRun>, bool), ControlPlaneRequestFailure> {
         let requested = i64::from(bounded_limit(limit));
         let rows = sqlx::query(
             "SELECT id, fleet_id, tenant_id, region_ids, cluster_ids,

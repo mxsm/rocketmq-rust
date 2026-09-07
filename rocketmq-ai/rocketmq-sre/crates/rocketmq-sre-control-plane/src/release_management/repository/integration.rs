@@ -47,6 +47,7 @@ use super::support::parse_adapter_kind;
 use super::support::parse_delivery_status;
 use super::support::parse_integration_event;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 const MAX_DELIVERY_ATTEMPTS: u16 = 6;
@@ -56,7 +57,7 @@ impl PostgresRepository {
         &self,
         view: &IntegrationTargetView,
         audit: &AuditEvent,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         validate_notification_target(&self.pool, view).await?;
         let target = &view.target;
         let outbound_events = target
@@ -105,7 +106,7 @@ impl PostgresRepository {
         &self,
         tenant_id: TenantId,
         id: IntegrationTargetId,
-    ) -> Result<IntegrationTargetView, ControlPlaneError> {
+    ) -> Result<IntegrationTargetView, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT *
              FROM integration_targets
@@ -115,8 +116,8 @@ impl PostgresRepository {
         .bind(id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
-        integration_target_from_row(&row)
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
+        Ok(integration_target_from_row(&row)?)
     }
 
     pub(in crate::release_management) async fn integration_targets(
@@ -126,7 +127,7 @@ impl PostgresRepository {
         adapter_kind: Option<IntegrationAdapterKind>,
         enabled: Option<bool>,
         limit: i64,
-    ) -> Result<Vec<IntegrationTargetView>, ControlPlaneError> {
+    ) -> Result<Vec<IntegrationTargetView>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT *
              FROM integration_targets
@@ -143,7 +144,9 @@ impl PostgresRepository {
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(integration_target_from_row).collect()
+        rows.iter()
+            .map(|row| integration_target_from_row(row).map_err(Into::into))
+            .collect()
     }
 
     pub(in crate::release_management) async fn set_integration_target_state(
@@ -152,7 +155,7 @@ impl PostgresRepository {
         enabled: bool,
         updated_at: chrono::DateTime<Utc>,
         audit: &AuditEvent,
-    ) -> Result<IntegrationTargetView, ControlPlaneError> {
+    ) -> Result<IntegrationTargetView, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let updated = sqlx::query(
             "UPDATE integration_targets
@@ -167,7 +170,7 @@ impl PostgresRepository {
         .execute(&mut *transaction)
         .await?;
         if updated.rows_affected() != 1 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "integration_target_state_changed",
                 "integration target was changed by another operator",
             ));
@@ -183,7 +186,7 @@ impl PostgresRepository {
         secret_reference: &str,
         updated_at: chrono::DateTime<Utc>,
         audit: &AuditEvent,
-    ) -> Result<IntegrationTargetView, ControlPlaneError> {
+    ) -> Result<IntegrationTargetView, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let updated = sqlx::query(
             "UPDATE integration_targets
@@ -198,7 +201,7 @@ impl PostgresRepository {
         .execute(&mut *transaction)
         .await?;
         if updated.rows_affected() != 1 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "integration_target_state_changed",
                 "integration target was changed by another operator",
             ));
@@ -214,7 +217,7 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         target_id: Option<IntegrationTargetId>,
         limit: i64,
-    ) -> Result<Vec<IntegrationDelivery>, ControlPlaneError> {
+    ) -> Result<Vec<IntegrationDelivery>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT delivery_snapshot, status, attempt_count, next_attempt_at,
                     last_error_code, delivered_at
@@ -230,14 +233,16 @@ impl PostgresRepository {
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(integration_delivery_from_row).collect()
+        rows.iter()
+            .map(|row| integration_delivery_from_row(row).map_err(Into::into))
+            .collect()
     }
 
     pub(in crate::release_management) async fn integration_delivery(
         &self,
         tenant_id: TenantId,
         id: IntegrationDeliveryId,
-    ) -> Result<IntegrationDelivery, ControlPlaneError> {
+    ) -> Result<IntegrationDelivery, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT delivery_snapshot, status, attempt_count, next_attempt_at,
                     last_error_code, delivered_at
@@ -248,15 +253,15 @@ impl PostgresRepository {
         .bind(id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
-        integration_delivery_from_row(&row)
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
+        Ok(integration_delivery_from_row(&row)?)
     }
 
     pub(in crate::release_management) async fn replay_integration_delivery(
         &self,
         delivery: &IntegrationDelivery,
         audit: &AuditEvent,
-    ) -> Result<IntegrationDelivery, ControlPlaneError> {
+    ) -> Result<IntegrationDelivery, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let updated = sqlx::query(
             "UPDATE integration_outbox
@@ -269,7 +274,7 @@ impl PostgresRepository {
         .execute(&mut *transaction)
         .await?;
         if updated.rows_affected() != 1 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "integration_delivery_not_replayable",
                 "only a failed integration delivery can be replayed",
             ));
@@ -351,7 +356,7 @@ impl PostgresRepository {
         &self,
         claim: &IntegrationDeliveryClaim,
         result: Result<AdapterDeliveryReceipt, &'static str>,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let next_attempt = claim.delivery.attempt_count.saturating_add(1);
         let (status, next_attempt_at, error_code, delivered_at, receipt) = match result {
@@ -545,13 +550,13 @@ pub(super) async fn enqueue_delivery_in_transaction(
 async fn validate_notification_target(
     pool: &sqlx::PgPool,
     view: &IntegrationTargetView,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let Some(notification_target_id) = view.notification_target_id else {
         if matches!(
             view.target.adapter_kind,
             IntegrationAdapterKind::ChatOpsWebhook | IntegrationAdapterKind::Pager | IntegrationAdapterKind::Email
         ) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "integration_target_invalid",
                 "notification-backed integration requires a notification target",
             ));
@@ -566,7 +571,7 @@ async fn validate_notification_target(
     .bind(notification_target_id.as_uuid())
     .fetch_optional(pool)
     .await?
-    .ok_or(ControlPlaneError::NotFound)?;
+    .ok_or(ControlPlaneRequestFailure::not_found())?;
     let notification_cluster: Option<Uuid> = row.try_get("cluster_id")?;
     let target_cluster = view.target.cluster_id.map(ClusterId::as_uuid);
     let expected_channel = match view.target.adapter_kind {
@@ -574,7 +579,7 @@ async fn validate_notification_target(
         IntegrationAdapterKind::Pager => "pager",
         IntegrationAdapterKind::Email => "email",
         IntegrationAdapterKind::MockItsm | IntegrationAdapterKind::SignedWebhookItsm => {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "integration_target_invalid",
                 "ITSM adapters cannot reference the notification outbox",
             ));
@@ -582,7 +587,7 @@ async fn validate_notification_target(
         IntegrationAdapterKind::MockCmdb
         | IntegrationAdapterKind::MockGitOps
         | IntegrationAdapterKind::SignedReleaseWebhook => {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "integration_target_invalid",
                 "inbound-only adapters cannot reference the notification outbox",
             ));
@@ -595,7 +600,7 @@ async fn validate_notification_target(
         || row.try_get::<Option<String>, _>("secret_reference")? != view.target.secret_reference
         || !row.try_get::<bool, _>("enabled")?
     {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "integration_scope_mismatch",
             "notification target scope, channel, endpoint, secret reference, or state is incompatible",
         ));
@@ -607,9 +612,9 @@ async fn persist_ticket_link(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     delivery: &IntegrationDelivery,
     ticket_key: &str,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let plan_id = delivery.plan_id.ok_or_else(|| {
-        ControlPlaneError::validation(
+        ControlPlaneRequestFailure::validation(
             "integration_delivery_invalid",
             "ITSM ticket delivery must reference an action plan",
         )
@@ -690,7 +695,7 @@ fn parse_plan_status(value: &str) -> Result<PlanStatus, ControlPlaneError> {
         "rejected" => Ok(PlanStatus::Rejected),
         "expired" => Ok(PlanStatus::Expired),
         "superseded" => Ok(PlanStatus::Superseded),
-        _ => Err(ControlPlaneError::validation(
+        _ => Err(ControlPlaneError::state(
             "invalid_persisted_state",
             "persisted action plan status is incompatible",
         )),
@@ -699,21 +704,18 @@ fn parse_plan_status(value: &str) -> Result<PlanStatus, ControlPlaneError> {
 
 fn to_u16(value: i32) -> Result<u16, ControlPlaneError> {
     u16::try_from(value).map_err(|_| {
-        ControlPlaneError::validation(
+        ControlPlaneError::state(
             "invalid_persisted_state",
             "persisted delivery attempt count exceeds the contract bound",
         )
     })
 }
 
-fn map_target_insert_error(error: sqlx::Error) -> ControlPlaneError {
+fn map_target_insert_error(error: sqlx::Error) -> ControlPlaneRequestFailure {
     if let sqlx::Error::Database(database) = &error
         && database.is_unique_violation()
     {
-        return ControlPlaneError::conflict_code(
-            "integration_target_exists",
-            "an integration target with this identity or scoped name already exists",
-        );
+        return ControlPlaneError::conflict_source("integration_target_exists", error).into();
     }
-    ControlPlaneError::Database(error)
+    ControlPlaneError::database(error).into()
 }

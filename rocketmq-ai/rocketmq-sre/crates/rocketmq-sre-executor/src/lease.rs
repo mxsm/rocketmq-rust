@@ -23,7 +23,8 @@ use rocketmq_sre_contracts::TenantId;
 use sqlx::PgPool;
 use sqlx::Row;
 
-use crate::JournalError;
+use crate::error::JournalError;
+use crate::error::JournalFailure;
 
 /// Durable lease generation used to fence competing Executor instances.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -61,7 +62,7 @@ impl LeaseCoordinator {
     /// # Errors
     ///
     /// Rejects invalid identity/window data or unavailable persistence.
-    pub async fn begin_takeover(
+    pub(crate) async fn begin_takeover(
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
@@ -69,9 +70,9 @@ impl LeaseCoordinator {
         pending_nonce: &str,
         acquired_at: DateTime<Utc>,
         expires_at: DateTime<Utc>,
-    ) -> Result<ExecutorLeaseRecord, JournalError> {
+    ) -> Result<ExecutorLeaseRecord, JournalFailure> {
         if owner.trim().is_empty() || pending_nonce.trim().is_empty() || expires_at <= acquired_at {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "lease takeover requires owner, nonce, and positive validity window".to_owned(),
             ));
         }
@@ -86,7 +87,7 @@ impl LeaseCoordinator {
             .await?;
         let expected_tenant = tenant_id.to_string();
         if cluster_tenant.as_deref() != Some(expected_tenant.as_str()) {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "lease tenant does not own the target cluster".to_owned(),
             ));
         }
@@ -111,7 +112,7 @@ impl LeaseCoordinator {
         .await?;
         let epoch = previous_epoch
             .checked_add(1)
-            .ok_or_else(|| JournalError::InvalidInput("lease epoch exhausted BIGINT".to_owned()))?;
+            .ok_or_else(|| JournalFailure::invalid_input("lease epoch exhausted BIGINT".to_owned()))?;
         let id = LeaseId::new();
         sqlx::query(
             "INSERT INTO executor_leases (
@@ -140,8 +141,9 @@ impl LeaseCoordinator {
             tenant_id,
             cluster_id,
             epoch: LeaseEpoch(
-                u64::try_from(epoch)
-                    .map_err(|_| JournalError::InvalidInput("database returned a negative lease epoch".to_owned()))?,
+                u64::try_from(epoch).map_err(|_| {
+                    JournalFailure::invalid_input("database returned a negative lease epoch".to_owned())
+                })?,
             ),
             owner: owner.to_owned(),
             state: LeaseState::PendingFence,
@@ -158,11 +160,11 @@ impl LeaseCoordinator {
     ///
     /// Rejects stale epochs, nonce/cluster drift, expired leases, and
     /// incomplete acknowledgements.
-    pub async fn activate(
+    pub(crate) async fn activate(
         &self,
         lease: &ExecutorLeaseRecord,
         ack: &FenceAck,
-    ) -> Result<ExecutorLeaseRecord, JournalError> {
+    ) -> Result<ExecutorLeaseRecord, JournalFailure> {
         if lease.state != LeaseState::PendingFence
             || ack.cluster_id != lease.cluster_id
             || ack.epoch != lease.epoch
@@ -170,7 +172,7 @@ impl LeaseCoordinator {
             || ack.agent_subject.trim().is_empty()
             || ack.signature.trim().is_empty()
         {
-            return Err(JournalError::LeaseRejected);
+            return Err(JournalFailure::lease_rejected());
         }
         let snapshot = serde_json::to_value(ack).map_err(JournalError::SnapshotEncoding)?;
         let result = sqlx::query(
@@ -202,7 +204,7 @@ impl LeaseCoordinator {
         .execute(&self.pool)
         .await?;
         if result.rows_affected() == 0 {
-            return Err(JournalError::LeaseRejected);
+            return Err(JournalFailure::lease_rejected());
         }
         let mut active = lease.clone();
         active.state = LeaseState::Active;
@@ -215,7 +217,11 @@ impl LeaseCoordinator {
     /// # Errors
     ///
     /// Returns not-found or persistence failures.
-    pub async fn expire(&self, id: LeaseId, expired_at: DateTime<Utc>) -> Result<(), JournalError> {
+    #[allow(
+        dead_code,
+        reason = "lease expiration remains available to internal recovery coordination"
+    )]
+    pub(crate) async fn expire(&self, id: LeaseId, expired_at: DateTime<Utc>) -> Result<(), JournalFailure> {
         let result = sqlx::query(
             "UPDATE executor_leases
              SET state = 'expired',
@@ -228,7 +234,7 @@ impl LeaseCoordinator {
         .execute(&self.pool)
         .await?;
         if result.rows_affected() == 0 {
-            return Err(JournalError::NotFound);
+            return Err(JournalFailure::not_found());
         }
         Ok(())
     }
@@ -238,7 +244,7 @@ impl LeaseCoordinator {
     /// # Errors
     ///
     /// Returns not-found, database, or invalid stored-state failures.
-    pub async fn lease(&self, id: LeaseId) -> Result<ExecutorLeaseRecord, JournalError> {
+    pub(crate) async fn lease(&self, id: LeaseId) -> Result<ExecutorLeaseRecord, JournalFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, epoch, owner, state,
                     pending_nonce, acquired_at, activated_at, expires_at
@@ -248,7 +254,7 @@ impl LeaseCoordinator {
         .bind(id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(JournalError::NotFound)?;
+        .ok_or(JournalFailure::not_found())?;
         lease_from_row(&row)
     }
 
@@ -257,7 +263,7 @@ impl LeaseCoordinator {
     /// # Errors
     ///
     /// Returns a database or invalid epoch failure.
-    pub async fn highest_epoch(&self, cluster_id: ClusterId) -> Result<Option<LeaseEpoch>, JournalError> {
+    pub(crate) async fn highest_epoch(&self, cluster_id: ClusterId) -> Result<Option<LeaseEpoch>, JournalFailure> {
         let epoch: Option<i64> = sqlx::query_scalar(
             "SELECT MAX(epoch)
              FROM executor_leases
@@ -270,13 +276,79 @@ impl LeaseCoordinator {
             .map(|value| {
                 u64::try_from(value)
                     .map(LeaseEpoch)
-                    .map_err(|_| JournalError::InvalidInput("stored lease epoch is negative".to_owned()))
+                    .map_err(|_| JournalFailure::invalid_input("stored lease epoch is negative".to_owned()))
             })
             .transpose()
     }
 }
 
-fn lease_from_row(row: &sqlx::postgres::PgRow) -> Result<ExecutorLeaseRecord, JournalError> {
+/// Public lease operations with closed, non-error failure codes.
+#[allow(
+    async_fn_in_trait,
+    reason = "fencing persistence is asynchronous and must remain fail-closed"
+)]
+pub trait LeaseCoordinatorOperations {
+    async fn begin_takeover(
+        &self,
+        tenant_id: TenantId,
+        cluster_id: ClusterId,
+        owner: &str,
+        pending_nonce: &str,
+        acquired_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> Result<ExecutorLeaseRecord, JournalFailure>;
+
+    async fn activate(
+        &self,
+        lease: &ExecutorLeaseRecord,
+        ack: &FenceAck,
+    ) -> Result<ExecutorLeaseRecord, JournalFailure>;
+
+    async fn lease(&self, id: LeaseId) -> Result<ExecutorLeaseRecord, JournalFailure>;
+
+    async fn highest_epoch(&self, cluster_id: ClusterId) -> Result<Option<LeaseEpoch>, JournalFailure>;
+}
+
+impl LeaseCoordinatorOperations for LeaseCoordinator {
+    async fn begin_takeover(
+        &self,
+        tenant_id: TenantId,
+        cluster_id: ClusterId,
+        owner: &str,
+        pending_nonce: &str,
+        acquired_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> Result<ExecutorLeaseRecord, JournalFailure> {
+        LeaseCoordinator::begin_takeover(
+            self,
+            tenant_id,
+            cluster_id,
+            owner,
+            pending_nonce,
+            acquired_at,
+            expires_at,
+        )
+        .await
+    }
+
+    async fn activate(
+        &self,
+        lease: &ExecutorLeaseRecord,
+        ack: &FenceAck,
+    ) -> Result<ExecutorLeaseRecord, JournalFailure> {
+        LeaseCoordinator::activate(self, lease, ack).await
+    }
+
+    async fn lease(&self, id: LeaseId) -> Result<ExecutorLeaseRecord, JournalFailure> {
+        LeaseCoordinator::lease(self, id).await
+    }
+
+    async fn highest_epoch(&self, cluster_id: ClusterId) -> Result<Option<LeaseEpoch>, JournalFailure> {
+        LeaseCoordinator::highest_epoch(self, cluster_id).await
+    }
+}
+
+fn lease_from_row(row: &sqlx::postgres::PgRow) -> Result<ExecutorLeaseRecord, JournalFailure> {
     let epoch: i64 = row.try_get("epoch")?;
     let state: String = row.try_get("state")?;
     Ok(ExecutorLeaseRecord {
@@ -285,7 +357,7 @@ fn lease_from_row(row: &sqlx::postgres::PgRow) -> Result<ExecutorLeaseRecord, Jo
         cluster_id: ClusterId::from_uuid(row.try_get("cluster_id")?),
         epoch: LeaseEpoch(
             u64::try_from(epoch)
-                .map_err(|_| JournalError::InvalidInput("stored lease epoch is negative".to_owned()))?,
+                .map_err(|_| JournalFailure::invalid_input("stored lease epoch is negative".to_owned()))?,
         ),
         owner: row.try_get("owner")?,
         state: parse_lease_state(&state)?,
@@ -296,16 +368,16 @@ fn lease_from_row(row: &sqlx::postgres::PgRow) -> Result<ExecutorLeaseRecord, Jo
     })
 }
 
-fn epoch_i64(epoch: LeaseEpoch) -> Result<i64, JournalError> {
-    i64::try_from(epoch.0).map_err(|_| JournalError::InvalidInput("lease epoch exceeds BIGINT".to_owned()))
+fn epoch_i64(epoch: LeaseEpoch) -> Result<i64, JournalFailure> {
+    i64::try_from(epoch.0).map_err(|_| JournalFailure::invalid_input("lease epoch exceeds BIGINT".to_owned()))
 }
 
-fn parse_lease_state(value: &str) -> Result<LeaseState, JournalError> {
+fn parse_lease_state(value: &str) -> Result<LeaseState, JournalFailure> {
     match value {
         "pending_fence" => Ok(LeaseState::PendingFence),
         "active" => Ok(LeaseState::Active),
         "expired" => Ok(LeaseState::Expired),
-        _ => Err(JournalError::InvalidInput(
+        _ => Err(JournalFailure::invalid_input(
             "stored lease state is unsupported".to_owned(),
         )),
     }

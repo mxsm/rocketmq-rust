@@ -124,9 +124,11 @@ impl ProductionProxyRestartClient {
             return Err(ExecutionAgentError::Configuration);
         }
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let mut kube_config = Config::infer().await.map_err(|_| ExecutionAgentError::Configuration)?;
+        let mut kube_config = Config::infer()
+            .await
+            .map_err(ExecutionAgentError::configuration_source)?;
         kube_config.proxy_url = None;
-        let kube = Client::try_from(kube_config).map_err(|_| ExecutionAgentError::Configuration)?;
+        let kube = Client::try_from(kube_config).map_err(ExecutionAgentError::configuration_source)?;
 
         let client_runtime = ClientRuntime::try_new(
             context.component("proxy-restart-admin-client"),
@@ -136,7 +138,7 @@ impl ProductionProxyRestartClient {
             },
             TelemetryHandle::noop(),
         )
-        .map_err(|_| ExecutionAgentError::Configuration)?;
+        .map_err(ExecutionAgentError::configuration_source)?;
         let timeout_millis = duration_millis(admin_config.request_timeout)?;
         let mut read_builder = ReadAdminBuilder::new(Arc::clone(&client_runtime))
             .namesrv_addr(admin_config.namesrv_addr.clone())
@@ -150,7 +152,7 @@ impl ProductionProxyRestartClient {
         let mut read_admin = read_builder
             .build_and_start()
             .await
-            .map_err(|_| ExecutionAgentError::Configuration)?;
+            .map_err(ExecutionAgentError::configuration_source)?;
 
         let mut mutation_builder = MutationAdminBuilder::new(Arc::clone(&client_runtime))
             .namesrv_addr(admin_config.namesrv_addr.clone())
@@ -174,7 +176,7 @@ impl ProductionProxyRestartClient {
             .redirect(reqwest::redirect::Policy::none())
             .timeout(request_timeout)
             .build()
-            .map_err(|_| ExecutionAgentError::Configuration)?;
+            .map_err(ExecutionAgentError::configuration_source)?;
         Ok(Self {
             kube,
             targets: Arc::new(restart_config.targets.clone()),
@@ -200,12 +202,12 @@ impl ProductionProxyRestartClient {
         &self,
         namespace: &str,
         requested_pod: &str,
-    ) -> Result<ResolvedTarget, ExecutionAgentError> {
+    ) -> Result<ResolvedTarget, crate::ExecutionAgentRequestFailure> {
         let pods: Api<Pod> = Api::namespaced(self.kube.clone(), namespace);
         if let Some(pod) = pods
             .get_opt(requested_pod)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?
         {
             let deployment_name = self.deployment_for_pod(namespace, &pod).await?;
             let allowed = self.allowed_target(namespace, &deployment_name)?;
@@ -233,9 +235,9 @@ impl ProductionProxyRestartClient {
             }
         }
         if matches.len() != 1 {
-            return Err(ExecutionAgentError::DriverFailed);
+            return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
         }
-        let (allowed, deployment) = matches.pop().ok_or(ExecutionAgentError::DriverFailed)?;
+        let (allowed, deployment) = matches.pop().ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         let pod = self.replacement_pod(&deployment).await?;
         Ok(ResolvedTarget {
             allowed,
@@ -244,25 +246,33 @@ impl ProductionProxyRestartClient {
         })
     }
 
-    async fn deployment_for_pod(&self, namespace: &str, pod: &Pod) -> Result<String, ExecutionAgentError> {
-        let replica_set_name = controller_owner_name(pod).ok_or(ExecutionAgentError::DriverFailed)?;
+    async fn deployment_for_pod(
+        &self,
+        namespace: &str,
+        pod: &Pod,
+    ) -> Result<String, crate::ExecutionAgentRequestFailure> {
+        let replica_set_name = controller_owner_name(pod).ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         let replica_sets: Api<ReplicaSet> = Api::namespaced(self.kube.clone(), namespace);
         let replica_set = replica_sets
             .get(replica_set_name)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         controller_owner_name(&replica_set)
             .map(str::to_owned)
-            .ok_or(ExecutionAgentError::DriverFailed)
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
     }
 
-    fn allowed_target(&self, namespace: &str, deployment: &str) -> Result<AllowedTarget, ExecutionAgentError> {
+    fn allowed_target(
+        &self,
+        namespace: &str,
+        deployment: &str,
+    ) -> Result<AllowedTarget, crate::ExecutionAgentRequestFailure> {
         let key = format!("{namespace}/{deployment}");
         let remoting_port = self
             .targets
             .get(&key)
             .copied()
-            .ok_or(ExecutionAgentError::DriverFailed)?;
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         Ok(AllowedTarget {
             namespace: namespace.to_owned(),
             deployment: deployment.to_owned(),
@@ -270,26 +280,35 @@ impl ProductionProxyRestartClient {
         })
     }
 
-    async fn deployment(&self, namespace: &str, deployment: &str) -> Result<Deployment, ExecutionAgentError> {
+    async fn deployment(
+        &self,
+        namespace: &str,
+        deployment: &str,
+    ) -> Result<Deployment, crate::ExecutionAgentRequestFailure> {
         Api::<Deployment>::namespaced(self.kube.clone(), namespace)
             .get(deployment)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)
     }
 
-    async fn replacement_pod(&self, deployment: &Deployment) -> Result<Option<Pod>, ExecutionAgentError> {
-        let namespace = deployment.namespace().ok_or(ExecutionAgentError::DriverFailed)?;
+    async fn replacement_pod(
+        &self,
+        deployment: &Deployment,
+    ) -> Result<Option<Pod>, crate::ExecutionAgentRequestFailure> {
+        let namespace = deployment
+            .namespace()
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         let selector = deployment
             .spec
             .as_ref()
             .map(|spec| &spec.selector)
-            .ok_or(ExecutionAgentError::DriverFailed)?;
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         let original_uid = annotation(deployment, ORIGINAL_UID_ANNOTATION);
         let started_at = annotation(deployment, STARTED_AT_ANNOTATION);
         let pods = Api::<Pod>::namespaced(self.kube.clone(), &namespace)
             .list(&ListParams::default())
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         let mut candidates = pods
             .items
             .into_iter()
@@ -306,7 +325,7 @@ impl ProductionProxyRestartClient {
             .collect::<Vec<_>>();
         candidates.sort_by_key(|pod| pod.metadata.creation_timestamp.clone());
         if candidates.len() > 1 {
-            return Err(ExecutionAgentError::DriverFailed);
+            return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
         }
         Ok(candidates.pop())
     }
@@ -315,17 +334,19 @@ impl ProductionProxyRestartClient {
         &self,
         deployment: &Deployment,
         excluded_uid: &str,
-    ) -> Result<bool, ExecutionAgentError> {
-        let namespace = deployment.namespace().ok_or(ExecutionAgentError::DriverFailed)?;
+    ) -> Result<bool, crate::ExecutionAgentRequestFailure> {
+        let namespace = deployment
+            .namespace()
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         let selector = deployment
             .spec
             .as_ref()
             .map(|spec| &spec.selector)
-            .ok_or(ExecutionAgentError::DriverFailed)?;
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         let pods = Api::<Pod>::namespaced(self.kube.clone(), &namespace)
             .list(&ListParams::default())
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         Ok(pods.items.iter().any(|pod| {
             selector_matches(selector, pod.metadata.labels.as_ref())
                 && pod.metadata.uid.as_deref() != Some(excluded_uid)
@@ -333,7 +354,7 @@ impl ProductionProxyRestartClient {
         }))
     }
 
-    async fn query_drain(&self, proxy_addr: &str) -> Result<ProxyDrainState, ExecutionAgentError> {
+    async fn query_drain(&self, proxy_addr: &str) -> Result<ProxyDrainState, crate::ExecutionAgentRequestFailure> {
         self.read_admin
             .lock()
             .await
@@ -341,10 +362,14 @@ impl ProductionProxyRestartClient {
                 proxy_addr: proxy_addr.to_owned(),
             })
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)
     }
 
-    async fn begin_drain(&self, proxy_addr: &str, operation_id: &str) -> Result<ProxyDrainState, ExecutionAgentError> {
+    async fn begin_drain(
+        &self,
+        proxy_addr: &str,
+        operation_id: &str,
+    ) -> Result<ProxyDrainState, crate::ExecutionAgentRequestFailure> {
         self.mutation_admin
             .lock()
             .await
@@ -353,10 +378,14 @@ impl ProductionProxyRestartClient {
                 operation_id: operation_id.to_owned(),
             })
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)
     }
 
-    async fn cancel_drain(&self, proxy_addr: &str, operation_id: &str) -> Result<(), ExecutionAgentError> {
+    async fn cancel_drain(
+        &self,
+        proxy_addr: &str,
+        operation_id: &str,
+    ) -> Result<(), crate::ExecutionAgentRequestFailure> {
         let state = self
             .mutation_admin
             .lock()
@@ -366,11 +395,11 @@ impl ProductionProxyRestartClient {
                 operation_id: operation_id.to_owned(),
             })
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         if accepting(&state) {
             Ok(())
         } else {
-            Err(ExecutionAgentError::DriverFailed)
+            Err(crate::ExecutionAgentRequestFailure::DriverFailed)
         }
     }
 
@@ -379,7 +408,7 @@ impl ProductionProxyRestartClient {
         proxy_addr: &str,
         operation_id: &str,
         deadline: tokio::time::Instant,
-    ) -> Result<(), ExecutionAgentError> {
+    ) -> Result<(), crate::ExecutionAgentRequestFailure> {
         loop {
             let state = self.query_drain(proxy_addr).await?;
             if state.operation_id.as_deref() != Some(operation_id)
@@ -387,13 +416,13 @@ impl ProductionProxyRestartClient {
                 || state.routing_open
                 || state.readiness_published
             {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             if state.phase == ProxyDrainPhase::Drained && state.zero_pending && state.pending.is_zero() {
                 return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             tokio::time::sleep(REPLACEMENT_POLL_INTERVAL).await;
         }
@@ -403,7 +432,7 @@ impl ProductionProxyRestartClient {
         &self,
         target: &AllowedTarget,
         request: &ProxyRestartOneWrite,
-    ) -> Result<Deployment, ExecutionAgentError> {
+    ) -> Result<Deployment, crate::ExecutionAgentRequestFailure> {
         self.replace_annotations(target, Some(request)).await
     }
 
@@ -411,14 +440,14 @@ impl ProductionProxyRestartClient {
         &self,
         target: &AllowedTarget,
         operation_id: &str,
-    ) -> Result<Deployment, ExecutionAgentError> {
+    ) -> Result<Deployment, crate::ExecutionAgentRequestFailure> {
         let deployments: Api<Deployment> = Api::namespaced(self.kube.clone(), &target.namespace);
         let mut deployment = deployments
             .get(&target.deployment)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         if annotation(&deployment, OPERATION_ANNOTATION) != Some(operation_id) {
-            return Err(ExecutionAgentError::DriverFailed);
+            return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
         }
         if let Some(annotations) = deployment.metadata.annotations.as_mut() {
             for key in [
@@ -435,21 +464,21 @@ impl ProductionProxyRestartClient {
         deployments
             .replace(&target.deployment, &PostParams::default(), &deployment)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)
     }
 
     async fn complete_restart(
         &self,
         target: &AllowedTarget,
         operation_id: &str,
-    ) -> Result<Deployment, ExecutionAgentError> {
+    ) -> Result<Deployment, crate::ExecutionAgentRequestFailure> {
         let deployments: Api<Deployment> = Api::namespaced(self.kube.clone(), &target.namespace);
         let mut deployment = deployments
             .get(&target.deployment)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         if annotation(&deployment, OPERATION_ANNOTATION) != Some(operation_id) {
-            return Err(ExecutionAgentError::DriverFailed);
+            return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
         }
         let annotations = deployment.metadata.annotations.get_or_insert_with(BTreeMap::new);
         annotations.insert(LAST_OPERATION_ANNOTATION.to_owned(), operation_id.to_owned());
@@ -457,22 +486,22 @@ impl ProductionProxyRestartClient {
         deployments
             .replace(&target.deployment, &PostParams::default(), &deployment)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)
     }
 
     async fn replace_annotations(
         &self,
         target: &AllowedTarget,
         request: Option<&ProxyRestartOneWrite>,
-    ) -> Result<Deployment, ExecutionAgentError> {
-        let request = request.ok_or(ExecutionAgentError::InvalidRequest)?;
+    ) -> Result<Deployment, crate::ExecutionAgentRequestFailure> {
+        let request = request.ok_or(crate::ExecutionAgentRequestFailure::InvalidRequest)?;
         let deployments: Api<Deployment> = Api::namespaced(self.kube.clone(), &target.namespace);
         let mut deployment = deployments
             .get(&target.deployment)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         if annotation(&deployment, OPERATION_ANNOTATION).is_some() {
-            return Err(ExecutionAgentError::DriverFailed);
+            return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
         }
         let annotations = deployment.metadata.annotations.get_or_insert_with(BTreeMap::new);
         annotations.insert(OPERATION_ANNOTATION.to_owned(), request.operation_id.clone());
@@ -487,7 +516,7 @@ impl ProductionProxyRestartClient {
         deployments
             .replace(&target.deployment, &PostParams::default(), &deployment)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)
     }
 
     async fn delete_expected_pod(
@@ -495,7 +524,7 @@ impl ProductionProxyRestartClient {
         namespace: &str,
         pod: &str,
         expected_uid: &str,
-    ) -> Result<(), ExecutionAgentError> {
+    ) -> Result<(), crate::ExecutionAgentRequestFailure> {
         let params = DeleteParams {
             grace_period_seconds: Some(GRACE_PERIOD_SECONDS),
             preconditions: Some(Preconditions {
@@ -507,7 +536,7 @@ impl ProductionProxyRestartClient {
         Api::<Pod>::namespaced(self.kube.clone(), namespace)
             .delete(pod, &params)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         Ok(())
     }
 
@@ -517,7 +546,7 @@ impl ProductionProxyRestartClient {
         requested_pod: &str,
         expected_uid: &str,
         deadline: tokio::time::Instant,
-    ) -> Result<Pod, ExecutionAgentError> {
+    ) -> Result<Pod, crate::ExecutionAgentRequestFailure> {
         loop {
             let resolved = self.resolve_target(namespace, requested_pod).await?;
             if let Some(pod) = resolved.pod
@@ -528,7 +557,7 @@ impl ProductionProxyRestartClient {
                 return Ok(pod);
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             tokio::time::sleep(REPLACEMENT_POLL_INTERVAL).await;
         }
@@ -536,7 +565,7 @@ impl ProductionProxyRestartClient {
 }
 
 impl VerificationClient {
-    async fn observe(&self) -> Result<VerificationHealth, ExecutionAgentError> {
+    async fn observe(&self) -> Result<VerificationHealth, crate::ExecutionAgentRequestFailure> {
         let query = ExecutionSliQuery {
             schema_version: EXECUTION_VERIFICATION_SCHEMA_VERSION.to_owned(),
             tenant_id: self.tenant_id,
@@ -547,7 +576,7 @@ impl VerificationClient {
         let url = self
             .base_url
             .join("/internal/v1/execution-verification/sli")
-            .map_err(|_| ExecutionAgentError::Configuration)?;
+            .map_err(ExecutionAgentError::configuration_source)?;
         let response = self
             .client
             .post(url)
@@ -559,7 +588,7 @@ impl VerificationClient {
             .json(&query)
             .send()
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         let observation = decode_observation(response).await?;
         validate_observation(&query, &observation)?;
         Ok(VerificationHealth {
@@ -579,12 +608,12 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
             let active_operation_id = annotation(&resolved.deployment, OPERATION_ANNOTATION).map(str::to_owned);
             let last_operation_id = annotation(&resolved.deployment, LAST_OPERATION_ANNOTATION).map(str::to_owned);
             let original_uid = annotation(&resolved.deployment, ORIGINAL_UID_ANNOTATION);
-            let current_pod = resolved.pod.ok_or(ExecutionAgentError::DriverFailed)?;
+            let current_pod = resolved.pod.ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
             let pod_uid = current_pod
                 .metadata
                 .uid
                 .clone()
-                .ok_or(ExecutionAgentError::DriverFailed)?;
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
             let pod_is_ready = pod_ready(&current_pod);
             let remaining_replicas_healthy = self.remaining_replicas_healthy(&resolved.deployment, &pod_uid).await?;
             let replacement_ready = (active_operation_id.is_some() || last_operation_id.is_some())
@@ -615,7 +644,7 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
     fn restart_one_drained<'a>(&'a self, request: &'a ProxyRestartOneWrite) -> DriverFuture<'a, ()> {
         Box::pin(async move {
             let resolved = self.resolve_target(&request.namespace, &request.pod).await?;
-            let pod = resolved.pod.ok_or(ExecutionAgentError::DriverFailed)?;
+            let pod = resolved.pod.ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
             if pod.metadata.uid.as_deref() != Some(request.expected_uid.as_str())
                 || !pod_ready(&pod)
                 || !self
@@ -623,12 +652,12 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
                     .await?
                 || annotation(&resolved.deployment, OPERATION_ANNOTATION).is_some()
             {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             let original_proxy_addr = proxy_addr(&pod, resolved.allowed.remoting_port)?;
             let before = self.query_drain(&original_proxy_addr).await?;
             if !accepting(&before) {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             let begun = match self.begin_drain(&original_proxy_addr, &request.operation_id).await {
                 Ok(state) => state,
@@ -643,7 +672,7 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
                 || begun.readiness_published
             {
                 let _ = self.cancel_drain(&original_proxy_addr, &request.operation_id).await;
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
 
             let deadline = tokio::time::Instant::now() + Duration::from_secs(u64::from(request.drain_timeout_seconds));
@@ -653,11 +682,11 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
                 .is_err()
             {
                 self.cancel_drain(&original_proxy_addr, &request.operation_id).await?;
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             if self.mark_restart(&resolved.allowed, request).await.is_err() {
                 self.cancel_drain(&original_proxy_addr, &request.operation_id).await?;
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             let final_drain = self.query_drain(&original_proxy_addr).await;
             let remaining_replicas_healthy = self
@@ -672,7 +701,7 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
             if !final_drain_is_safe || !matches!(remaining_replicas_healthy, Ok(true)) {
                 self.cancel_drain(&original_proxy_addr, &request.operation_id).await?;
                 self.clear_restart(&resolved.allowed, &request.operation_id).await?;
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             if self
                 .delete_expected_pod(&request.namespace, &request.pod, &request.expected_uid)
@@ -681,7 +710,7 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
             {
                 self.cancel_drain(&original_proxy_addr, &request.operation_id).await?;
                 self.clear_restart(&resolved.allowed, &request.operation_id).await?;
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
 
             let replacement = self
@@ -691,7 +720,7 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
             let replacement_drain = self.query_drain(&replacement_addr).await?;
             let verification = self.verification.observe().await?;
             if !accepting(&replacement_drain) || !verification.synthetic_path_healthy || !verification.slo_healthy {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             self.complete_restart(&resolved.allowed, &request.operation_id).await?;
             Ok(())
@@ -705,7 +734,7 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
         Box::pin(async move {
             let resolved = self.resolve_target(&request.namespace, &request.pod).await?;
             if annotation(&resolved.deployment, OPERATION_ANNOTATION) != Some(request.operation_id.as_str()) {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             let Some(pod) = resolved.pod else {
                 return Ok(ProxyRestartRestoreOutcome::ManualTakeoverRequired);
@@ -724,28 +753,34 @@ impl ProxyRestartClient for ProductionProxyRestartClient {
     }
 }
 
-async fn decode_observation(mut response: reqwest::Response) -> Result<ExecutionSliObservation, ExecutionAgentError> {
+async fn decode_observation(
+    mut response: reqwest::Response,
+) -> Result<ExecutionSliObservation, crate::ExecutionAgentRequestFailure> {
     if response.status() != StatusCode::OK
         || response
             .content_length()
             .is_some_and(|length| length > MAX_VERIFICATION_RESPONSE_BYTES as u64)
     {
-        return Err(ExecutionAgentError::DriverFailed);
+        return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| ExecutionAgentError::DriverFailed)? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(crate::ExecutionAgentRequestFailure::driver_source)?
+    {
         if bytes.len().saturating_add(chunk.len()) > MAX_VERIFICATION_RESPONSE_BYTES {
-            return Err(ExecutionAgentError::DriverFailed);
+            return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).map_err(|_| ExecutionAgentError::DriverFailed)
+    serde_json::from_slice(&bytes).map_err(crate::ExecutionAgentRequestFailure::driver_source)
 }
 
 fn validate_observation(
     query: &ExecutionSliQuery,
     observation: &ExecutionSliObservation,
-) -> Result<(), ExecutionAgentError> {
+) -> Result<(), crate::ExecutionAgentRequestFailure> {
     let expected = query.conditions.iter().collect::<std::collections::BTreeSet<_>>();
     let actual = observation.conditions.keys().collect::<std::collections::BTreeSet<_>>();
     if observation.schema_version != EXECUTION_VERIFICATION_SCHEMA_VERSION
@@ -755,7 +790,7 @@ fn validate_observation(
         || expected.len() != query.conditions.len()
         || actual != expected
     {
-        Err(ExecutionAgentError::DriverFailed)
+        Err(crate::ExecutionAgentRequestFailure::DriverFailed)
     } else {
         Ok(())
     }
@@ -808,12 +843,12 @@ fn pod_ready(pod: &Pod) -> bool {
         })
 }
 
-fn proxy_addr(pod: &Pod, port: u16) -> Result<String, ExecutionAgentError> {
+fn proxy_addr(pod: &Pod, port: u16) -> Result<String, crate::ExecutionAgentRequestFailure> {
     let ip = pod
         .status
         .as_ref()
         .and_then(|status| status.pod_ip.as_deref())
-        .ok_or(ExecutionAgentError::DriverFailed)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
     if ip.contains(':') {
         Ok(format!("[{ip}]:{port}"))
     } else {
@@ -850,7 +885,7 @@ fn selector_matches(selector: &LabelSelector, labels: Option<&BTreeMap<String, S
 }
 
 fn duration_millis(duration: Duration) -> Result<u64, ExecutionAgentError> {
-    u64::try_from(duration.as_millis()).map_err(|_| ExecutionAgentError::Configuration)
+    u64::try_from(duration.as_millis()).map_err(ExecutionAgentError::configuration_source)
 }
 
 #[cfg(test)]

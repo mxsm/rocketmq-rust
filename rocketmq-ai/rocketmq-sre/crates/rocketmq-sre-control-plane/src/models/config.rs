@@ -18,7 +18,9 @@ use std::time::Duration;
 use rocketmq_sre_model_gateway::ProviderProfile;
 use rocketmq_sre_model_gateway::SecretReferenceKind;
 
+use super::provider_configuration_failure;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
 const DEFAULT_MODEL_TIMEOUT_SECONDS: u64 = 20;
 const DEFAULT_MAX_REQUEST_BYTES: usize = 256 * 1024;
@@ -100,18 +102,16 @@ impl ModelRuntimeConfig {
     /// credential material. For a single OpenAI-compatible local or mock
     /// endpoint, `ROCKETMQ_SRE_MODEL_LOCAL_ENDPOINT` and
     /// `ROCKETMQ_SRE_MODEL_LOCAL_NAME` provide a smaller bootstrap surface.
-    pub(super) fn from_env(dev_auth_enabled: bool) -> Result<Self, ControlPlaneError> {
+    pub(super) fn from_env(dev_auth_enabled: bool) -> Result<Self, ControlPlaneRequestFailure> {
         let enabled = parse_env("ROCKETMQ_SRE_MODEL_ENABLED", false)?;
         if !enabled {
             return Ok(Self::disabled());
         }
 
         let mut profiles = match optional_env("ROCKETMQ_SRE_MODEL_PROFILES_JSON") {
-            Some(value) => serde_json::from_str::<Vec<ProviderProfile>>(&value).map_err(|_| {
-                ControlPlaneError::configuration(
-                    "ROCKETMQ_SRE_MODEL_PROFILES_JSON must contain valid reference-only provider profiles",
-                )
-            })?,
+            Some(value) => {
+                serde_json::from_str::<Vec<ProviderProfile>>(&value).map_err(ControlPlaneError::configuration_source)?
+            }
             None => Vec::new(),
         };
         if let Some(endpoint) = optional_env("ROCKETMQ_SRE_MODEL_LOCAL_ENDPOINT") {
@@ -121,21 +121,16 @@ impl ModelRuntimeConfig {
             )?);
         }
         if profiles.is_empty() {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "model calls are enabled but no provider profile is configured",
             ));
         }
         for profile in &profiles {
-            profile.validate().map_err(|error| {
-                ControlPlaneError::configuration(format!(
-                    "configured model profile `{}` is invalid: {:?}",
-                    profile.id, error.code
-                ))
-            })?;
+            profile.validate().map_err(provider_configuration_failure)?;
         }
         let mut ids = std::collections::BTreeSet::new();
         if profiles.iter().any(|profile| !ids.insert(profile.id.clone())) {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "configured model profile identifiers must be unique",
             ));
         }
@@ -144,25 +139,25 @@ impl ModelRuntimeConfig {
         let max_request_bytes = parse_env("ROCKETMQ_SRE_MODEL_MAX_REQUEST_BYTES", DEFAULT_MAX_REQUEST_BYTES)?;
         let max_response_bytes = parse_env("ROCKETMQ_SRE_MODEL_MAX_RESPONSE_BYTES", DEFAULT_MAX_RESPONSE_BYTES)?;
         if timeout_seconds == 0 || max_request_bytes == 0 || max_response_bytes == 0 {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "model time and body limits must be greater than zero",
             ));
         }
         let max_fallbacks = parse_env("ROCKETMQ_SRE_MODEL_MAX_FALLBACKS", DEFAULT_MAX_FALLBACKS)?;
         if max_fallbacks > 3 {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "ROCKETMQ_SRE_MODEL_MAX_FALLBACKS must not exceed 3",
             ));
         }
         let dev_secrets_requested = parse_env("ROCKETMQ_SRE_MODEL_DEV_SECRETS", false)?;
         if dev_secrets_requested && !dev_auth_enabled {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "development model secret adapters require ROCKETMQ_SRE_DEV_AUTH=true",
             ));
         }
         let allow_insecure_non_loopback_http = parse_env("ROCKETMQ_SRE_MODEL_ALLOW_INSECURE_HTTP", false)?;
         if allow_insecure_non_loopback_http && !dev_auth_enabled {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "plaintext non-loopback model endpoints require ROCKETMQ_SRE_DEV_AUTH=true",
             ));
         }
@@ -185,7 +180,7 @@ fn secret_provider_from_env(
     dev_auth_enabled: bool,
     dev_secrets_requested: bool,
     profiles: &[ProviderProfile],
-) -> Result<ModelSecretProviderConfig, ControlPlaneError> {
+) -> Result<ModelSecretProviderConfig, ControlPlaneRequestFailure> {
     let provider = optional_env("ROCKETMQ_SRE_MODEL_SECRET_PROVIDER");
     let provider = provider
         .as_deref()
@@ -194,7 +189,7 @@ fn secret_provider_from_env(
         "none" => ModelSecretProviderConfig::None,
         "dev" => {
             if !dev_auth_enabled || !dev_secrets_requested {
-                return Err(ControlPlaneError::configuration(
+                return Err(ControlPlaneRequestFailure::configuration(
                     "the development model secret provider requires explicit ROCKETMQ_SRE_DEV_AUTH=true and \
                      ROCKETMQ_SRE_MODEL_DEV_SECRETS=true",
                 ));
@@ -214,7 +209,7 @@ fn secret_provider_from_env(
             )?;
             let max_secret_bytes = parse_env("ROCKETMQ_SRE_MODEL_SECRET_MAX_BYTES", DEFAULT_SECRET_MAX_BYTES)?;
             if cache_ttl_seconds == 0 || max_secret_bytes == 0 {
-                return Err(ControlPlaneError::configuration(
+                return Err(ControlPlaneRequestFailure::configuration(
                     "Vault Agent model secret cache TTL and byte limit must be greater than zero",
                 ));
             }
@@ -227,7 +222,7 @@ fn secret_provider_from_env(
             }
         }
         _ => {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "ROCKETMQ_SRE_MODEL_SECRET_PROVIDER must be one of none, dev, or vault_agent_file",
             ));
         }
@@ -239,7 +234,7 @@ fn secret_provider_from_env(
 fn validate_secret_provider_ownership(
     config: &ModelSecretProviderConfig,
     profiles: &[ProviderProfile],
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     for profile in profiles {
         let Some(reference) = profile.credential_ref.as_ref() else {
             continue;
@@ -255,7 +250,7 @@ fn validate_secret_provider_ownership(
             }
         };
         if !owned {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "a model credential reference is not owned by the configured secret provider",
             ));
         }
@@ -277,20 +272,18 @@ fn namespace_owns(namespace: &str, locator: &str) -> bool {
     }
 }
 
-fn local_profile(endpoint: String, model: String) -> Result<ProviderProfile, ControlPlaneError> {
+fn local_profile(endpoint: String, model: String) -> Result<ProviderProfile, ControlPlaneRequestFailure> {
     let mut profile = rocketmq_sre_model_gateway::builtin_provider_profiles()
         .into_iter()
         .find(|profile| profile.id == "vllm")
-        .ok_or_else(|| ControlPlaneError::configuration("the local provider fixture is unavailable"))?;
+        .ok_or_else(|| ControlPlaneRequestFailure::configuration("the local provider fixture is unavailable"))?;
     profile.id = "local-openai-compatible".to_owned();
     profile.endpoint = endpoint;
     profile.model = model;
     profile.model_revision = "configured".to_owned();
     profile.endpoint_instance = "local-openai-compatible:private".to_owned();
     profile.priority = 1;
-    profile.validate().map_err(|error| {
-        ControlPlaneError::configuration(format!("local model profile is invalid: {:?}", error.code))
-    })?;
+    profile.validate().map_err(provider_configuration_failure)?;
     Ok(profile)
 }
 
@@ -305,16 +298,12 @@ fn required_env(name: &str) -> Result<String, ControlPlaneError> {
 fn parse_env<T>(name: &str, default: T) -> Result<T, ControlPlaneError>
 where
     T: std::str::FromStr,
-    T::Err: std::fmt::Display,
+    T::Err: std::error::Error + Send + Sync + 'static,
 {
     match std::env::var(name) {
-        Ok(value) => value
-            .parse()
-            .map_err(|error| ControlPlaneError::configuration(format!("{name} is invalid: {error}"))),
+        Ok(value) => value.parse().map_err(ControlPlaneError::configuration_source),
         Err(std::env::VarError::NotPresent) => Ok(default),
-        Err(error) => Err(ControlPlaneError::configuration(format!(
-            "{name} cannot be read: {error}"
-        ))),
+        Err(error) => Err(ControlPlaneError::configuration_source(error)),
     }
 }
 

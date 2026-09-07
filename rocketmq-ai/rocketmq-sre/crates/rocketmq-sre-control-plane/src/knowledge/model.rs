@@ -24,7 +24,7 @@ use rocketmq_sre_contracts::Sensitivity;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct ImportKnowledgeRequest {
@@ -90,10 +90,10 @@ pub(crate) struct KnowledgeListQuery {
 }
 
 impl KnowledgeListQuery {
-    pub(crate) fn bounded_limit(&self) -> Result<u32, ControlPlaneError> {
+    pub(crate) fn bounded_limit(&self) -> Result<u32, ControlPlaneRequestFailure> {
         let limit = self.limit.unwrap_or(50);
         if !(1..=200).contains(&limit) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "knowledge page limit must be between 1 and 200",
             ));

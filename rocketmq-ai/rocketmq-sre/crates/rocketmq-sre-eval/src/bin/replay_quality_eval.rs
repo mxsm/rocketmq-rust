@@ -16,6 +16,9 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use rocketmq_sre_eval::EvalError;
+use rocketmq_sre_eval::EvalOutcome;
+use rocketmq_sre_eval::EvalRejection;
 use rocketmq_sre_eval::assertions::assert_phase2_quality;
 use rocketmq_sre_eval::phase2::run_phase2_dataset;
 use rocketmq_sre_eval::replay::load_dataset;
@@ -36,33 +39,71 @@ struct ReplayQualityOutput {
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("replay_quality_failed: {error}");
+        Err(failure) => {
+            eprintln!("replay_quality_failed: {}", failure.code());
             ExitCode::FAILURE
         }
     }
 }
 
-fn run() -> Result<(), String> {
+enum ReplayQualityRejection {
+    MissingManifestPath,
+    UnknownArgument,
+    QualityThreshold,
+}
+
+enum ReplayQualityFailure {
+    Rejected(ReplayQualityRejection),
+    EvaluationRejected(EvalRejection),
+    Evaluation(EvalError),
+    OutputEncoding(serde_json::Error),
+}
+
+impl ReplayQualityFailure {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Rejected(rejection) => match rejection {
+                ReplayQualityRejection::MissingManifestPath => "missing_manifest_path",
+                ReplayQualityRejection::UnknownArgument => "unknown_argument",
+                ReplayQualityRejection::QualityThreshold => "quality_threshold_rejected",
+            },
+            Self::EvaluationRejected(rejection) => rejection.code(),
+            Self::Evaluation(source) => source.code(),
+            Self::OutputEncoding(source) => {
+                let _ = source;
+                "output_encoding_failed"
+            }
+        }
+    }
+}
+
+fn run() -> Result<(), ReplayQualityFailure> {
     let mut manifest = PathBuf::from("tests/fixtures/phase2/dataset-manifest.v1.yaml");
     let mut compact = false;
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--manifest" => {
-                manifest = PathBuf::from(
-                    arguments
-                        .next()
-                        .ok_or_else(|| "--manifest requires a path".to_owned())?,
-                );
+                manifest = PathBuf::from(arguments.next().ok_or(ReplayQualityFailure::Rejected(
+                    ReplayQualityRejection::MissingManifestPath,
+                ))?);
             }
             "--compact" => compact = true,
-            other => return Err(format!("unknown argument `{other}`")),
+            _ => {
+                return Err(ReplayQualityFailure::Rejected(ReplayQualityRejection::UnknownArgument));
+            }
         }
     }
-    let dataset = load_dataset(&manifest).map_err(|error| error.to_string())?;
-    let report = run_phase2_dataset(&dataset).map_err(|error| error.to_string())?;
-    assert_phase2_quality(&report, &dataset.quality).map_err(|error| error.to_string())?;
+    let dataset = match load_dataset(&manifest).map_err(ReplayQualityFailure::Evaluation)? {
+        EvalOutcome::Completed(dataset) => dataset,
+        EvalOutcome::Rejected(rejection) => return Err(ReplayQualityFailure::EvaluationRejected(rejection)),
+    };
+    let report = match run_phase2_dataset(&dataset).map_err(ReplayQualityFailure::Evaluation)? {
+        EvalOutcome::Completed(report) => report,
+        EvalOutcome::Rejected(rejection) => return Err(ReplayQualityFailure::EvaluationRejected(rejection)),
+    };
+    assert_phase2_quality(&report, &dataset.quality)
+        .map_err(|_| ReplayQualityFailure::Rejected(ReplayQualityRejection::QualityThreshold))?;
     let output = ReplayQualityOutput {
         evaluable_fixtures: report.evaluable_fixtures,
         root_cause_top3_hits: report.root_cause_top3_hits,
@@ -78,7 +119,7 @@ fn run() -> Result<(), String> {
     } else {
         serde_json::to_string_pretty(&output)
     }
-    .map_err(|error| error.to_string())?;
+    .map_err(ReplayQualityFailure::OutputEncoding)?;
     println!("{output}");
     Ok(())
 }

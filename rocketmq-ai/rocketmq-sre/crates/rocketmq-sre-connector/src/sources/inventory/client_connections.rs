@@ -30,7 +30,7 @@ use super::rocketmq::ensure_route_broker;
 use super::schema_mismatch;
 use super::validate_inventory_name;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 use crate::mcp::McpGateway;
 use crate::read_gateway::ConnectorReadGateway;
 use crate::read_gateway::ReadSession;
@@ -126,7 +126,7 @@ where
                 inventory.mark_gap("connection", "consumer_connection_query_unavailable");
                 inventory.mark_source("connection", true);
                 inventory.mark_partial("consumer_connection_query_incomplete");
-                if error.code == ConnectorErrorCode::DeadlineExceeded {
+                if error.failure() == ConnectorFailure::DeadlineExceeded {
                     break;
                 }
             }
@@ -147,7 +147,7 @@ fn add_producer_connections(
     pseudonymization_key: &[u8],
 ) -> Result<usize, ConnectorError> {
     let mut observed: ProducerConnectionsWire =
-        serde_json::from_value(output.content).map_err(|_| schema_mismatch())?;
+        serde_json::from_value(output.content).map_err(super::schema_mismatch_source)?;
     validate_query_summary(
         observed.queried_broker_count,
         &observed.failed_brokers,
@@ -220,7 +220,7 @@ fn add_consumer_connections(
     pseudonymization_key: &[u8],
 ) -> Result<usize, ConnectorError> {
     let mut observed: ConsumerConnectionsWire =
-        serde_json::from_value(output.content).map_err(|_| schema_mismatch())?;
+        serde_json::from_value(output.content).map_err(super::schema_mismatch_source)?;
     validate_inventory_name(&observed.consumer_group)?;
     validate_query_summary(
         observed.queried_broker_count,

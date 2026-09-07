@@ -3545,7 +3545,6 @@ dependencies = [
  "rocketmq-sre-contracts",
  "serde",
  "serde_json",
- "thiserror",
  "tokio",
 ]
 
@@ -3558,7 +3557,6 @@ dependencies = [
  "rocketmq-sre-contracts",
  "serde",
  "serde_json",
- "thiserror",
  "tokio",
  "url",
 ]
@@ -3603,7 +3601,6 @@ dependencies = [
  "serde_jcs",
  "serde_json",
  "sha2 0.11.0",
- "thiserror",
  "uuid",
 ]
 

@@ -19,6 +19,7 @@ use rocketmq_sre_contracts::ReconcileEffectState;
 use serde_json::json;
 
 use super::*;
+use crate::ExecutionAgentRequestFailure;
 use crate::drivers::test_support;
 
 struct FakeProxyImageCanaryClient {
@@ -58,7 +59,7 @@ impl ProxyImageCanaryClient for FakeProxyImageCanaryClient {
         Box::pin(async move {
             let mut state = self.state.lock().expect("state lock");
             if state.generation != request.expected_generation || request.canary_replicas != 1 {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(ExecutionAgentRequestFailure::DriverFailed);
             }
             *self.previous_digest.lock().expect("previous digest lock") = Some(state.image_digest.clone());
             state.generation += 1;
@@ -77,7 +78,7 @@ impl ProxyImageCanaryClient for FakeProxyImageCanaryClient {
                 .lock()
                 .expect("previous digest lock")
                 .clone()
-                .ok_or(ExecutionAgentError::DriverFailed)?;
+                .ok_or(ExecutionAgentRequestFailure::DriverFailed)?;
             let mut state = self.state.lock().expect("state lock");
             state.generation += 1;
             state.observed_generation = state.generation;

@@ -33,8 +33,6 @@ mod registry;
 mod sli_client;
 mod verifier;
 
-use thiserror::Error;
-
 pub use agent_client::ExecutionAgentClient;
 pub use agent_client::HttpExecutionAgentClient;
 pub use api::build_router;
@@ -48,16 +46,19 @@ pub use engine::ExecuteOutcome;
 pub use engine::ExecutorMetricsSnapshot;
 pub use engine::RecoverySweepOutcome;
 pub use error::ExecutorError;
-pub use error::JournalError;
-pub use journal::ExecutionCreation;
+pub use error::ExecutorOperationOutcome;
+pub use error::ExecutorRejection;
+pub use error::ExecutorRequestFailure;
+pub use error::JournalFailure;
+pub use error::JournalFailureCode;
 pub use journal::ExecutionJournal;
-pub use journal::ManualTakeoverEscalation;
-pub use journal::PendingIntent;
-pub use journal::VerificationEvidenceRecord;
+pub use journal::ExecutionJournalOperations;
 pub use lease::ExecutorLeaseRecord;
 pub use lease::LeaseCoordinator;
+pub use lease::LeaseCoordinatorOperations;
 pub use lock::ResourceLock;
 pub use lock::ResourceLockRequest;
+pub use lock::ResourceSafetyOperations;
 pub use lock::ResourceSafetyStore;
 pub use precheck::ExecutionPrechecker;
 pub use production_verification::ProductionVerificationSource;
@@ -84,8 +85,7 @@ pub struct ExecutionAvailability {
 }
 
 /// Error returned when a caller attempts direct, untyped execution.
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-#[error("direct target execution is forbidden; use a signed request and typed Agent")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExecutionDisabled;
 
 /// Returns the immutable supervised execution status.
@@ -99,9 +99,7 @@ pub const fn availability() -> ExecutionAvailability {
 
 /// Rejects attempts to bypass the signed request and typed Agent boundary.
 ///
-/// # Errors
-///
-/// Always returns [`ExecutionDisabled`].
+/// Always returns the closed [`ExecutionDisabled`] outcome.
 pub const fn reject_execution() -> Result<(), ExecutionDisabled> {
     Err(ExecutionDisabled)
 }

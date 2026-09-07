@@ -30,7 +30,8 @@ use uuid::Uuid;
 use super::SubscriptionGroupPatch;
 use super::SubscriptionGroupPatchApplyOutcome;
 use super::SubscriptionGroupSafetyState;
-use crate::AgentStoreError;
+use crate::error::AgentStoreError;
+use crate::error::AgentStoreFailure;
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub(super) struct SubscriptionGroupBeforeBroker {
@@ -80,7 +81,7 @@ impl SubscriptionGroupJournal {
         plan_step_id: PlanStepId,
         before: &SubscriptionGroupBeforeState,
         created_at: DateTime<Utc>,
-    ) -> Result<SubscriptionGroupBeforeState, AgentStoreError> {
+    ) -> Result<SubscriptionGroupBeforeState, AgentStoreFailure> {
         let broker_states = serde_json::to_value(&before.brokers).map_err(AgentStoreError::SnapshotEncoding)?;
         let forward_patch = serde_json::to_value(&before.forward_patch).map_err(AgentStoreError::SnapshotEncoding)?;
         sqlx::query(
@@ -107,7 +108,7 @@ impl SubscriptionGroupJournal {
         if persisted == *before {
             Ok(persisted)
         } else {
-            Err(AgentStoreError::IdempotencyConflict)
+            Err(AgentStoreFailure::idempotency_conflict())
         }
     }
 
@@ -115,7 +116,7 @@ impl SubscriptionGroupJournal {
         &self,
         execution_id: ExecutionId,
         plan_step_id: PlanStepId,
-    ) -> Result<SubscriptionGroupBeforeState, AgentStoreError> {
+    ) -> Result<SubscriptionGroupBeforeState, AgentStoreFailure> {
         let row = sqlx::query(
             "SELECT consumer_group, operation_id, expected_version,
                     broker_states_snapshot, forward_patch_snapshot
@@ -126,14 +127,14 @@ impl SubscriptionGroupJournal {
         .bind(plan_step_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(AgentStoreError::NotFound)?;
+        .ok_or(AgentStoreFailure::not_found())?;
         decode_before_row(&row)
     }
 
     pub(super) async fn load_before_by_operation(
         &self,
         operation_id: &str,
-    ) -> Result<SubscriptionGroupBeforeState, AgentStoreError> {
+    ) -> Result<SubscriptionGroupBeforeState, AgentStoreFailure> {
         let row = sqlx::query(
             "SELECT consumer_group, operation_id, expected_version,
                     broker_states_snapshot, forward_patch_snapshot
@@ -143,7 +144,7 @@ impl SubscriptionGroupJournal {
         .bind(operation_id)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(AgentStoreError::NotFound)?;
+        .ok_or(AgentStoreFailure::not_found())?;
         decode_before_row(&row)
     }
 
@@ -162,7 +163,7 @@ impl SubscriptionGroupJournal {
         expected_version: u64,
         outcome: SubscriptionGroupPatchApplyOutcome,
         recorded_at: DateTime<Utc>,
-    ) -> Result<(), AgentStoreError> {
+    ) -> Result<(), AgentStoreFailure> {
         let (outcome_code, observed_version, result_snapshot) = match outcome {
             SubscriptionGroupPatchApplyOutcome::Applied {
                 previous_version,
@@ -240,7 +241,7 @@ impl SubscriptionGroupJournal {
         if identical {
             Ok(())
         } else {
-            Err(AgentStoreError::IdempotencyConflict)
+            Err(AgentStoreFailure::idempotency_conflict())
         }
     }
 
@@ -249,7 +250,7 @@ impl SubscriptionGroupJournal {
         group: &str,
         version: u64,
         broker_addrs: &BTreeSet<String>,
-    ) -> Result<Option<String>, AgentStoreError> {
+    ) -> Result<Option<String>, AgentStoreFailure> {
         let rows = sqlx::query(
             "SELECT operation_id, broker_addr
              FROM execution_agent_subscription_group_results
@@ -283,9 +284,9 @@ impl SubscriptionGroupJournal {
     }
 }
 
-fn decode_before_row(row: &sqlx::postgres::PgRow) -> Result<SubscriptionGroupBeforeState, AgentStoreError> {
+fn decode_before_row(row: &sqlx::postgres::PgRow) -> Result<SubscriptionGroupBeforeState, AgentStoreFailure> {
     let expected_version = u64::try_from(row.try_get::<i64, _>("expected_version")?)
-        .map_err(|_| AgentStoreError::InvalidInput("stored Subscription Group version is invalid".to_owned()))?;
+        .map_err(|_| AgentStoreFailure::invalid_input("stored Subscription Group version is invalid".to_owned()))?;
     Ok(SubscriptionGroupBeforeState {
         group: row.try_get("consumer_group")?,
         operation_id: row.try_get("operation_id")?,
@@ -297,7 +298,8 @@ fn decode_before_row(row: &sqlx::postgres::PgRow) -> Result<SubscriptionGroupBef
     })
 }
 
-fn version_i64(version: u64) -> Result<i64, AgentStoreError> {
-    i64::try_from(version)
-        .map_err(|_| AgentStoreError::InvalidInput("Subscription Group version exceeds PostgreSQL BIGINT".to_owned()))
+fn version_i64(version: u64) -> Result<i64, AgentStoreFailure> {
+    i64::try_from(version).map_err(|_| {
+        AgentStoreFailure::invalid_input("Subscription Group version exceeds PostgreSQL BIGINT".to_owned())
+    })
 }

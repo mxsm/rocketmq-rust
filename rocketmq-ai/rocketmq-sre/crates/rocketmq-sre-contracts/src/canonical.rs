@@ -16,7 +16,7 @@ use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
 
-use crate::ContractError;
+use crate::SreContractError;
 
 /// Encodes bytes as lowercase hexadecimal without exposing digest internals.
 #[must_use]
@@ -36,13 +36,11 @@ pub fn encode_lower_hex(bytes: impl AsRef<[u8]>) -> String {
 /// # Errors
 ///
 /// Returns a typed contract error when the value cannot be canonicalized.
-pub fn canonical_sha256<T>(value: &T) -> Result<String, ContractError>
+pub fn canonical_sha256<T>(value: &T) -> Result<String, SreContractError>
 where
     T: Serialize + ?Sized,
 {
-    let canonical = serde_jcs::to_vec(value).map_err(|error| ContractError::InvalidDescriptor {
-        reason: format!("value cannot be canonicalized: {error}"),
-    })?;
+    let canonical = serde_jcs::to_vec(value).map_err(SreContractError::from_source)?;
     let digest = Sha256::digest(canonical);
     Ok(format!("sha256:{}", encode_lower_hex(digest)))
 }
@@ -52,7 +50,7 @@ where
 /// # Errors
 ///
 /// Returns a typed contract error when the value cannot be canonicalized.
-pub fn canonical_evidence_hash<T>(value: &T) -> Result<String, ContractError>
+pub fn canonical_evidence_hash<T>(value: &T) -> Result<String, SreContractError>
 where
     T: Serialize + ?Sized,
 {
@@ -64,7 +62,7 @@ where
 /// # Errors
 ///
 /// Returns a typed contract error when the value cannot be canonicalized.
-pub fn canonical_precondition_hash<T>(value: &T) -> Result<String, ContractError>
+pub fn canonical_precondition_hash<T>(value: &T) -> Result<String, SreContractError>
 where
     T: Serialize + ?Sized,
 {

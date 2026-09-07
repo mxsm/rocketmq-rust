@@ -30,9 +30,11 @@ use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
 
 use crate::CapabilityManifest;
+use crate::ConnectorAdmissionOutcome;
+use crate::ConnectorAdmissionRejection;
 use crate::ConnectorConfig;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 use crate::EvidenceOperation;
 use crate::MCP_BUSINESS_SCHEMA;
 use crate::MCP_PROTOCOL_VERSION;
@@ -70,7 +72,7 @@ struct HandshakeState {
     ready: bool,
     observed_at: Option<DateTime<Utc>>,
     capabilities: BTreeMap<String, VerifiedCapability>,
-    last_error_code: Option<ConnectorErrorCode>,
+    last_error_code: Option<ConnectorFailure>,
 }
 
 /// Coordinates verified MCP handshakes and canonical evidence conversion.
@@ -102,24 +104,14 @@ where
         self.sources.initialize(context).await;
     }
 
-    pub(crate) fn authorize(&self, authorization_header: Option<&str>) -> Result<(), ConnectorError> {
+    pub(crate) fn authorize(&self, authorization_header: Option<&str>) -> Result<(), ConnectorAdmissionRejection> {
         let provided = authorization_header
             .and_then(|value| value.strip_prefix("Bearer "))
-            .ok_or_else(|| {
-                ConnectorError::new(
-                    ConnectorErrorCode::UnauthorizedScope,
-                    false,
-                    "internal Bearer token is missing",
-                )
-            })?;
+            .ok_or(ConnectorAdmissionRejection::UnauthorizedScope)?;
         let expected = self.config.internal_token();
         let matches = provided.len() == expected.len() && bool::from(provided.as_bytes().ct_eq(expected.as_bytes()));
         if !matches {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::UnauthorizedScope,
-                false,
-                "internal Bearer token is invalid",
-            ));
+            return Err(ConnectorAdmissionRejection::UnauthorizedScope);
         }
         Ok(())
     }
@@ -128,7 +120,7 @@ where
         self.config.control_plane.is_some()
     }
 
-    pub(crate) async fn reconcile(&self) -> Result<(), ConnectorError> {
+    pub(crate) async fn reconcile(&self) -> Result<ConnectorAdmissionOutcome<()>, ConnectorError> {
         match self.gateway.handshake().await {
             Ok(capabilities)
                 if capabilities.len() == self.config.cluster_allowlist.len()
@@ -137,9 +129,16 @@ where
                         .all(|cluster| self.config.cluster_allowlist.contains(cluster)) =>
             {
                 for cluster in capabilities.keys() {
-                    if let Err(error) = self.gateway.ensure_cluster_active(cluster).await {
-                        self.record_collection_block(error.code).await;
-                        return Err(error);
+                    match self.gateway.ensure_cluster_active(cluster).await {
+                        Ok(ConnectorAdmissionOutcome::Accepted(())) => {}
+                        Ok(ConnectorAdmissionOutcome::Rejected(rejection)) => {
+                            self.record_collection_block(rejection.failure()).await;
+                            return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+                        }
+                        Err(error) => {
+                            self.record_collection_block(error.failure()).await;
+                            return Err(error);
+                        }
                     }
                 }
                 *self.handshake.write().await = HandshakeState {
@@ -148,30 +147,27 @@ where
                     capabilities,
                     last_error_code: None,
                 };
-                Ok(())
+                Ok(ConnectorAdmissionOutcome::Accepted(()))
             }
             Ok(_) => {
-                let error = ConnectorError::capability(
-                    ConnectorErrorCode::CapabilityMismatch,
-                    "handshake did not return every allowed cluster",
-                );
-                self.record_error(error.code).await;
-                Err(error)
+                let rejection = ConnectorAdmissionRejection::CapabilityMismatch;
+                self.record_error(rejection.failure()).await;
+                Ok(ConnectorAdmissionOutcome::Rejected(rejection))
             }
             Err(error) => {
-                self.record_error(error.code).await;
+                self.record_error(error.failure()).await;
                 Err(error)
             }
         }
     }
 
-    async fn record_error(&self, code: ConnectorErrorCode) {
+    async fn record_error(&self, code: ConnectorFailure) {
         let mut state = self.handshake.write().await;
         state.ready = false;
         state.last_error_code = Some(code);
     }
 
-    async fn record_collection_block(&self, code: ConnectorErrorCode) {
+    async fn record_collection_block(&self, code: ConnectorFailure) {
         let mut state = self.handshake.write().await;
         state.ready = false;
         state.capabilities.clear();
@@ -206,7 +202,7 @@ where
                 .map(|(cluster, capability)| (cluster.clone(), capability.manifest.clone()))
                 .collect(),
             sources: source_capability.sources,
-            last_error_code: state.last_error_code.map(ConnectorErrorCode::as_str),
+            last_error_code: state.last_error_code.map(ConnectorFailure::as_str),
         }
     }
 
@@ -218,8 +214,10 @@ where
         &self,
         request: EvidenceQueryRequest,
         subject: &str,
-    ) -> Result<EvidenceSnapshot, ConnectorError> {
-        self.validate_request(&request)?;
+    ) -> Result<ConnectorAdmissionOutcome<EvidenceSnapshot>, ConnectorError> {
+        if let Err(rejection) = self.validate_request(&request) {
+            return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+        }
         let deadline = Utc::now()
             + chrono::Duration::from_std(self.config.request_timeout).unwrap_or_else(|_| chrono::Duration::seconds(15));
         self.collect(
@@ -239,21 +237,20 @@ where
         subject: &str,
         deadline: DateTime<Utc>,
         cancel: &CancelSignal,
-    ) -> Result<EvidenceSnapshot, ConnectorError> {
+    ) -> Result<ConnectorAdmissionOutcome<EvidenceSnapshot>, ConnectorError> {
         let external_cluster = self
             .config
             .cluster_ids
             .iter()
             .find_map(|(cluster, id)| (*id == query.cluster_id).then_some(cluster.clone()))
-            .ok_or_else(|| {
-                ConnectorError::new(
-                    ConnectorErrorCode::ClusterNotAllowed,
-                    false,
-                    "query cluster identifier has no configured external cluster",
-                )
-                .with_correlation_id(query.correlation_id)
-            })?;
-        self.validate_query_boundary(&query, &external_cluster)?;
+            .ok_or(ConnectorAdmissionRejection::ClusterNotAllowed);
+        let external_cluster = match external_cluster {
+            Ok(cluster) => cluster,
+            Err(rejection) => return Ok(ConnectorAdmissionOutcome::Rejected(rejection)),
+        };
+        if let Err(rejection) = self.validate_query_boundary(&query, &external_cluster) {
+            return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+        }
         self.collect(query, &external_cluster, subject, None, deadline, cancel)
             .await
     }
@@ -262,25 +259,35 @@ where
         &self,
         cluster_id: rocketmq_sre_contracts::ClusterId,
         subject: &str,
-    ) -> Result<InventoryUpload, ConnectorError> {
+    ) -> Result<ConnectorAdmissionOutcome<InventoryUpload>, ConnectorError> {
         let external_cluster = self
             .config
             .cluster_ids
             .iter()
             .find_map(|(cluster, id)| (*id == cluster_id).then_some(cluster.as_str()))
-            .ok_or_else(|| {
-                ConnectorError::new(
-                    ConnectorErrorCode::ClusterNotAllowed,
-                    false,
-                    "inventory cluster identifier has no configured external cluster",
-                )
-            })?;
+            .ok_or(ConnectorAdmissionRejection::ClusterNotAllowed);
+        let external_cluster = match external_cluster {
+            Ok(cluster) => cluster,
+            Err(rejection) => return Ok(ConnectorAdmissionOutcome::Rejected(rejection)),
+        };
         if !self.is_mcp_ready().await {
-            self.reconcile().await?;
+            match self.reconcile().await? {
+                ConnectorAdmissionOutcome::Accepted(()) => {}
+                ConnectorAdmissionOutcome::Rejected(rejection) => {
+                    return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+                }
+            }
         }
-        if let Err(error) = self.gateway.ensure_cluster_active(external_cluster).await {
-            self.record_collection_block(error.code).await;
-            return Err(error);
+        match self.gateway.ensure_cluster_active(external_cluster).await {
+            Ok(ConnectorAdmissionOutcome::Accepted(())) => {}
+            Ok(ConnectorAdmissionOutcome::Rejected(rejection)) => {
+                self.record_collection_block(rejection.failure()).await;
+                return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+            }
+            Err(error) => {
+                self.record_collection_block(error.failure()).await;
+                return Err(error);
+            }
         }
         let deadline = Utc::now()
             + chrono::Duration::from_std(self.config.request_timeout).unwrap_or_else(|_| chrono::Duration::seconds(15));
@@ -303,110 +310,84 @@ where
         operation: Option<&EvidenceOperation>,
         deadline: DateTime<Utc>,
         cancel: &CancelSignal,
-    ) -> Result<EvidenceSnapshot, ConnectorError> {
+    ) -> Result<ConnectorAdmissionOutcome<EvidenceSnapshot>, ConnectorError> {
         let requires_mcp = matches!(
             query.source.as_str(),
             "rocketmq-mcp" | "mcp" | "rocketmq_mcp" | "runtime" | "runtime-diagnostics" | "topology"
         );
         if requires_mcp && !self.is_mcp_ready().await {
-            self.reconcile()
+            match self
+                .reconcile()
                 .await
-                .map_err(|error| error.with_correlation_id(query.correlation_id))?;
+                .map_err(|error| error.with_correlation_id(query.correlation_id))?
+            {
+                ConnectorAdmissionOutcome::Accepted(()) => {}
+                ConnectorAdmissionOutcome::Rejected(rejection) => {
+                    return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+                }
+            }
         }
-        if let Err(error) = self.gateway.ensure_cluster_active(external_cluster).await {
-            self.record_collection_block(error.code).await;
-            return Err(error.with_correlation_id(query.correlation_id));
+        match self.gateway.ensure_cluster_active(external_cluster).await {
+            Ok(ConnectorAdmissionOutcome::Accepted(())) => {}
+            Ok(ConnectorAdmissionOutcome::Rejected(rejection)) => {
+                self.record_collection_block(rejection.failure()).await;
+                return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+            }
+            Err(error) => {
+                self.record_collection_block(error.failure()).await;
+                return Err(error.with_correlation_id(query.correlation_id));
+            }
         }
         self.sources
             .query(query, external_cluster, subject, operation, deadline, cancel)
             .await
     }
 
-    fn validate_request(&self, request: &EvidenceQueryRequest) -> Result<(), ConnectorError> {
-        let correlation_id = request.query.correlation_id;
+    fn validate_request(&self, request: &EvidenceQueryRequest) -> Result<(), ConnectorAdmissionRejection> {
         if request.query.tenant_id != self.config.tenant_id {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::TenantMismatch,
-                false,
-                "query tenant differs from configured tenant",
-            )
-            .with_correlation_id(correlation_id));
+            return Err(ConnectorAdmissionRejection::TenantMismatch);
         }
         let configured_cluster_id = self
             .config
             .cluster_ids
             .get(&request.mcp_cluster)
             .copied()
-            .ok_or_else(|| {
-                ConnectorError::new(
-                    ConnectorErrorCode::ClusterNotAllowed,
-                    false,
-                    "external MCP cluster has no internal cluster mapping",
-                )
-                .with_correlation_id(correlation_id)
-            })?;
+            .ok_or(ConnectorAdmissionRejection::ClusterNotAllowed)?;
         if configured_cluster_id != request.query.cluster_id {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::ClusterNotAllowed,
-                false,
-                "query cluster identifier differs from configured cluster",
-            )
-            .with_correlation_id(correlation_id));
+            return Err(ConnectorAdmissionRejection::ClusterNotAllowed);
         }
         if !self.config.cluster_allowlist.contains(&request.mcp_cluster) {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::ClusterNotAllowed,
-                false,
-                "external MCP cluster is outside the allowlist",
-            )
-            .with_correlation_id(correlation_id));
+            return Err(ConnectorAdmissionRejection::ClusterNotAllowed);
         }
         if matches!(request.query.source.as_str(), "rocketmq-mcp" | "mcp" | "rocketmq_mcp") {
             request
                 .operation
                 .validate()
-                .map_err(|error| error.with_correlation_id(correlation_id))?;
+                .map_err(|_| ConnectorAdmissionRejection::InvalidEvidenceQuery)?;
         }
         if matches!(request.query.source.as_str(), "rocketmq-mcp" | "mcp" | "rocketmq_mcp")
             && request.query.resource != request.operation.resource()
         {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
-                false,
-                "evidence resource does not match the selected operation",
-            )
-            .with_correlation_id(correlation_id));
+            return Err(ConnectorAdmissionRejection::InvalidEvidenceQuery);
         }
         if request.query.time_range.start > request.query.time_range.end {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
-                false,
-                "evidence time range starts after it ends",
-            )
-            .with_correlation_id(correlation_id));
+            return Err(ConnectorAdmissionRejection::InvalidEvidenceQuery);
         }
         Ok(())
     }
 
-    fn validate_query_boundary(&self, query: &EvidenceQuery, external_cluster: &str) -> Result<(), ConnectorError> {
-        let correlation_id = query.correlation_id;
+    fn validate_query_boundary(
+        &self,
+        query: &EvidenceQuery,
+        external_cluster: &str,
+    ) -> Result<(), ConnectorAdmissionRejection> {
         if query.tenant_id != self.config.tenant_id {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::TenantMismatch,
-                false,
-                "query tenant differs from configured tenant",
-            )
-            .with_correlation_id(correlation_id));
+            return Err(ConnectorAdmissionRejection::TenantMismatch);
         }
         if self.config.cluster_ids.get(external_cluster) != Some(&query.cluster_id)
             || !self.config.cluster_allowlist.contains(external_cluster)
         {
-            return Err(ConnectorError::new(
-                ConnectorErrorCode::ClusterNotAllowed,
-                false,
-                "query cluster differs from the configured connector boundary",
-            )
-            .with_correlation_id(correlation_id));
+            return Err(ConnectorAdmissionRejection::ClusterNotAllowed);
         }
         Ok(())
     }
@@ -461,14 +442,12 @@ mod tests {
             Ok(self.wire.clone())
         }
 
-        async fn ensure_cluster_active(&self, _cluster: &str) -> Result<(), ConnectorError> {
+        async fn ensure_cluster_active(&self, _cluster: &str) -> Result<ConnectorAdmissionOutcome<()>, ConnectorError> {
             if self.active.load(Ordering::SeqCst) {
-                Ok(())
+                Ok(ConnectorAdmissionOutcome::Accepted(()))
             } else {
-                Err(ConnectorError::new(
-                    ConnectorErrorCode::ClusterNotAllowed,
-                    false,
-                    "cluster is offboarded",
+                Ok(ConnectorAdmissionOutcome::Rejected(
+                    ConnectorAdmissionRejection::ClusterNotAllowed,
                 ))
             }
         }
@@ -567,11 +546,13 @@ mod tests {
             },
         };
 
-        let evidence = engine
-            .evidence(request.clone(), "test-subject")
-            .await
-            .expect("evidence");
-        let cached = engine.evidence(request, "test-subject").await.expect("cached evidence");
+        let evidence = accepted_evidence(
+            engine
+                .evidence(request.clone(), "test-subject")
+                .await
+                .expect("evidence"),
+        );
+        let cached = accepted_evidence(engine.evidence(request, "test-subject").await.expect("cached evidence"));
         assert!(engine.is_ready().await);
         assert_eq!(evidence.freshness_seconds, 2);
         assert!(evidence.partial);
@@ -590,13 +571,12 @@ mod tests {
         assert_eq!(
             engine
                 .authorize(Some("Bearer different-token"))
-                .expect_err("wrong token")
-                .code,
-            ConnectorErrorCode::UnauthorizedScope
+                .expect_err("wrong token"),
+            ConnectorAdmissionRejection::UnauthorizedScope
         );
 
         let at = Utc::now();
-        let request = EvidenceQueryRequest {
+        let mut request = EvidenceQueryRequest {
             query: EvidenceQuery {
                 query_id: QueryId::new(),
                 correlation_id: CorrelationId::new(),
@@ -609,14 +589,18 @@ mod tests {
             mcp_cluster: "local".to_owned(),
             operation: EvidenceOperation::ClusterOverview,
         };
-        assert_eq!(
+        assert!(matches!(
             engine
-                .evidence(request, "test-subject")
+                .evidence(request.clone(), "test-subject")
                 .await
-                .expect_err("tenant mismatch")
-                .code,
-            ConnectorErrorCode::TenantMismatch
-        );
+                .expect("admission outcome"),
+            ConnectorAdmissionOutcome::Rejected(ConnectorAdmissionRejection::TenantMismatch)
+        ));
+        request.query.tenant_id = tenant_id;
+        assert!(matches!(
+            engine.evidence(request, " ").await.expect("source admission outcome"),
+            ConnectorAdmissionOutcome::Rejected(ConnectorAdmissionRejection::UnauthorizedScope)
+        ));
     }
 
     #[tokio::test]
@@ -640,18 +624,22 @@ mod tests {
             operation: EvidenceOperation::ClusterOverview,
         };
 
-        engine
-            .evidence(request.clone(), "test-subject")
-            .await
-            .expect("active cluster should collect");
+        accepted_evidence(
+            engine
+                .evidence(request.clone(), "test-subject")
+                .await
+                .expect("active cluster should collect"),
+        );
         assert_eq!(gateway.query_count.load(Ordering::SeqCst), 1);
 
         gateway.active.store(false, Ordering::SeqCst);
-        let error = engine
-            .evidence(request, "test-subject")
-            .await
-            .expect_err("offboarded cluster must not collect");
-        assert_eq!(error.code, ConnectorErrorCode::ClusterNotAllowed);
+        assert!(matches!(
+            engine
+                .evidence(request, "test-subject")
+                .await
+                .expect("admission outcome"),
+            ConnectorAdmissionOutcome::Rejected(ConnectorAdmissionRejection::ClusterNotAllowed)
+        ));
         assert_eq!(gateway.query_count.load(Ordering::SeqCst), 1);
         assert!(!engine.is_ready().await);
         assert!(engine.capabilities().await.clusters.is_empty());
@@ -677,10 +665,12 @@ mod tests {
             operation: EvidenceOperation::ClusterOverview,
         };
 
-        let evidence = engine
-            .evidence(request, "test-subject")
-            .await
-            .expect("missing evidence");
+        let evidence = accepted_evidence(
+            engine
+                .evidence(request, "test-subject")
+                .await
+                .expect("missing evidence"),
+        );
         assert!(evidence.partial);
         assert_eq!(evidence.coverage, CoverageStatus::Missing);
         assert_eq!(
@@ -691,5 +681,14 @@ mod tests {
                 "error_code": "source_unavailable"
             }))
         );
+    }
+
+    fn accepted_evidence(outcome: ConnectorAdmissionOutcome<EvidenceSnapshot>) -> EvidenceSnapshot {
+        match outcome {
+            ConnectorAdmissionOutcome::Accepted(snapshot) => snapshot,
+            ConnectorAdmissionOutcome::Rejected(rejection) => {
+                panic!("expected evidence admission, got {rejection:?}");
+            }
+        }
     }
 }

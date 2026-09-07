@@ -24,7 +24,6 @@ use crate::AutonomyOutcomeId;
 use crate::AutonomyPolicyId;
 use crate::AutonomySampleId;
 use crate::ClusterId;
-use crate::ContractError;
 use crate::CriticReviewId;
 use crate::DiagnosisRevisionId;
 use crate::DynamicSafetyDecisionId;
@@ -32,6 +31,7 @@ use crate::ExecutionAction;
 use crate::ExecutionId;
 use crate::IncidentId;
 use crate::ModelInvocationId;
+use crate::SreContractError;
 use crate::TenantId;
 use crate::is_sha256_digest;
 
@@ -94,7 +94,7 @@ impl AutonomyPolicyDefinition {
     ///
     /// Rejects zero versions or bounds, non-R1 action versions, invalid
     /// digests, duplicate evidence sources, and unbounded text.
-    pub fn validate(&self) -> Result<(), ContractError> {
+    pub fn validate(&self) -> Result<(), SreContractError> {
         const MAX_SOURCES: usize = 32;
         let sources = self
             .required_evidence_sources
@@ -125,9 +125,7 @@ impl AutonomyPolicyDefinition {
                 .iter()
                 .any(|source| source.is_empty() || source.chars().count() > 128)
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "autonomy policy violates bounded version, threshold, or source rules".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         Ok(())
     }
@@ -156,7 +154,7 @@ impl AutonomyLifecycleState {
     ///
     /// Rejects missing revisions, invalid paused state, unsafe recovery targets,
     /// or unbounded operator-controlled text.
-    pub fn validate(&self) -> Result<(), ContractError> {
+    pub fn validate(&self) -> Result<(), SreContractError> {
         let paused_valid = match self.mode {
             AutonomyMode::Paused => {
                 self.previous_mode.is_some_and(|mode| {
@@ -182,9 +180,7 @@ impl AutonomyLifecycleState {
                 .as_ref()
                 .is_some_and(|reason| reason.chars().count() > 512)
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "autonomy lifecycle state violates revision, pause, or operator bounds".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         Ok(())
     }
@@ -255,7 +251,7 @@ impl AutonomyQualificationSample {
     /// Rejects incomplete identity bindings, invalid deduplication shapes,
     /// unbounded reason codes, contradictory qualification facts, and
     /// reconciliation timestamps that move backwards.
-    pub fn validate(&self) -> Result<(), ContractError> {
+    pub fn validate(&self) -> Result<(), SreContractError> {
         const MAX_REASON_CODES: usize = 32;
         const MAX_REASON_CODE_CHARS: usize = 128;
         let reasons = self
@@ -285,9 +281,7 @@ impl AutonomyQualificationSample {
             || self.qualified != facts_qualify
             || self.reconciled_at < self.observed_at
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "autonomy qualification sample is incomplete or contradictory".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         Ok(())
     }
@@ -378,7 +372,7 @@ impl DynamicSafetyDecision {
     ///
     /// Rejects incomplete bindings, deny decisions, invalid validity windows,
     /// and decisions whose signed facts are not all safe.
-    pub fn validate_allow_at(&self, now: DateTime<Utc>) -> Result<(), ContractError> {
+    pub fn validate_allow_at(&self, now: DateTime<Utc>) -> Result<(), SreContractError> {
         const MAX_REASON_CODES: usize = 32;
         let validity_seconds = self.expires_at.signed_duration_since(self.issued_at).num_seconds();
         if self.id.as_uuid().is_nil()
@@ -402,9 +396,7 @@ impl DynamicSafetyDecision {
             || self.nonce.trim().is_empty()
             || self.signature.trim().is_empty()
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "dynamic safety allow decision is incomplete, stale, or unsafe".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         Ok(())
     }
@@ -434,12 +426,11 @@ impl DynamicSafetyEvaluationRequest {
     ///
     /// Rejects unknown schemas, nil identifiers, invalid hashes, and missing
     /// policy or lifecycle versions.
-    pub fn validate(&self) -> Result<(), ContractError> {
+    pub fn validate(&self) -> Result<(), SreContractError> {
         if self.schema_version != AUTONOMY_SCHEMA_VERSION {
-            return Err(ContractError::UnsupportedSchemaFamily {
-                actual: self.schema_version.clone(),
-                supported: AUTONOMY_SCHEMA_VERSION.to_owned(),
-            });
+            return Err(crate::SreContractError::new(
+                crate::PublicErrorCode::UnsupportedSchemaFamily,
+            ));
         }
         if self.tenant_id.as_uuid().is_nil()
             || self.cluster_id.as_uuid().is_nil()
@@ -451,9 +442,7 @@ impl DynamicSafetyEvaluationRequest {
             || self.policy_definition_version == 0
             || self.lifecycle_revision == 0
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "dynamic safety evaluation scope is incomplete".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         Ok(())
     }
@@ -475,17 +464,14 @@ impl VerifyDynamicSafetyDecisionRequest {
     ///
     /// Rejects incompatible schemas, tenant drift, and stale or deny
     /// decisions.
-    pub fn validate_at(&self, now: DateTime<Utc>) -> Result<(), ContractError> {
+    pub fn validate_at(&self, now: DateTime<Utc>) -> Result<(), SreContractError> {
         if self.schema_version != AUTONOMY_SCHEMA_VERSION {
-            return Err(ContractError::UnsupportedSchemaFamily {
-                actual: self.schema_version.clone(),
-                supported: AUTONOMY_SCHEMA_VERSION.to_owned(),
-            });
+            return Err(crate::SreContractError::new(
+                crate::PublicErrorCode::UnsupportedSchemaFamily,
+            ));
         }
         if self.tenant_id != self.decision.tenant_id {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "dynamic safety verification tenant does not match the decision".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         self.decision.validate_allow_at(now)
     }

@@ -14,7 +14,6 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::error::Error;
 use std::fmt;
 
 use rocketmq_sre_contracts::Deprecation;
@@ -40,8 +39,8 @@ pub struct DescriptorRegistry {
 }
 
 /// Registry validation and lifecycle errors.
-#[derive(Debug, PartialEq)]
-pub enum RegistryError {
+#[derive(PartialEq)]
+pub enum RegistryRejection {
     AlreadyExists {
         kind: DescriptorKind,
         id: String,
@@ -63,29 +62,16 @@ pub enum RegistryError {
     UnsupportedSchema,
 }
 
-impl fmt::Display for RegistryError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::AlreadyExists { kind, id } => {
-                write!(formatter, "descriptor `{kind:?}/{id}` already exists")
-            }
-            Self::NotFound { kind, id } => write!(formatter, "descriptor `{kind:?}/{id}` was not found"),
-            Self::InvalidVersion { version } => write!(formatter, "descriptor version `{version}` is invalid"),
-            Self::VersionConflict { active, candidate } => {
-                write!(
-                    formatter,
-                    "descriptor upgrade `{candidate}` must be newer than active `{active}`"
-                )
-            }
-            Self::CapabilityMismatch { capability } => {
-                write!(formatter, "descriptor requires unsupported capability `{capability}`")
-            }
-            Self::UnsupportedSchema => formatter.write_str("descriptor supports no known schema family and major"),
-        }
+impl fmt::Display for RegistryRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SRE operation was rejected")
     }
 }
-
-impl Error for RegistryError {}
+impl fmt::Debug for RegistryRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
 
 impl DescriptorRegistry {
     /// Creates a fail-closed registry for explicit schemas and capabilities.
@@ -110,11 +96,11 @@ impl DescriptorRegistry {
     ///
     /// Rejects duplicate IDs, invalid semantic versions, unknown schemas, and
     /// missing required capabilities.
-    pub fn register(&mut self, descriptor: Descriptor) -> Result<(), RegistryError> {
+    pub fn register(&mut self, descriptor: Descriptor) -> Result<(), RegistryRejection> {
         self.validate(&descriptor)?;
         let key = (descriptor.kind(), descriptor.id().to_owned());
         if self.entries.contains_key(&key) {
-            return Err(RegistryError::AlreadyExists { kind: key.0, id: key.1 });
+            return Err(RegistryRejection::AlreadyExists { kind: key.0, id: key.1 });
         }
         let version = parse_version(descriptor.version())?;
         self.entries.insert(
@@ -132,16 +118,16 @@ impl DescriptorRegistry {
     /// # Errors
     ///
     /// Returns a validation, lookup, or version ordering error.
-    pub fn upgrade(&mut self, descriptor: Descriptor) -> Result<(), RegistryError> {
+    pub fn upgrade(&mut self, descriptor: Descriptor) -> Result<(), RegistryRejection> {
         self.validate(&descriptor)?;
         let key = (descriptor.kind(), descriptor.id().to_owned());
         let candidate = parse_version(descriptor.version())?;
-        let entry = self.entries.get_mut(&key).ok_or_else(|| RegistryError::NotFound {
+        let entry = self.entries.get_mut(&key).ok_or_else(|| RegistryRejection::NotFound {
             kind: key.0,
             id: key.1.clone(),
         })?;
         if candidate <= entry.active {
-            return Err(RegistryError::VersionConflict {
+            return Err(RegistryRejection::VersionConflict {
                 active: entry.active.clone(),
                 candidate,
             });
@@ -155,17 +141,17 @@ impl DescriptorRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError::NotFound`] if either the descriptor or target
+    /// Returns [`RegistryRejection::NotFound`] if either the descriptor or target
     /// version does not exist.
-    pub fn rollback(&mut self, kind: DescriptorKind, id: &str, version: &str) -> Result<(), RegistryError> {
+    pub fn rollback(&mut self, kind: DescriptorKind, id: &str, version: &str) -> Result<(), RegistryRejection> {
         let key = (kind, id.to_owned());
         let target = parse_version(version)?;
-        let entry = self.entries.get_mut(&key).ok_or_else(|| RegistryError::NotFound {
+        let entry = self.entries.get_mut(&key).ok_or_else(|| RegistryRejection::NotFound {
             kind,
             id: id.to_owned(),
         })?;
         if !entry.versions.contains_key(&target) {
-            return Err(RegistryError::NotFound {
+            return Err(RegistryRejection::NotFound {
                 kind,
                 id: format!("{id}@{version}"),
             });
@@ -178,8 +164,8 @@ impl DescriptorRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError::NotFound`] for an unknown descriptor.
-    pub fn disable(&mut self, kind: DescriptorKind, id: &str) -> Result<(), RegistryError> {
+    /// Returns [`RegistryRejection::NotFound`] for an unknown descriptor.
+    pub fn disable(&mut self, kind: DescriptorKind, id: &str) -> Result<(), RegistryRejection> {
         self.active_mut(kind, id)?.set_status(DescriptorStatus::Disabled);
         Ok(())
     }
@@ -188,8 +174,13 @@ impl DescriptorRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`RegistryError::NotFound`] for an unknown descriptor.
-    pub fn deprecate(&mut self, kind: DescriptorKind, id: &str, deprecation: Deprecation) -> Result<(), RegistryError> {
+    /// Returns [`RegistryRejection::NotFound`] for an unknown descriptor.
+    pub fn deprecate(
+        &mut self,
+        kind: DescriptorKind,
+        id: &str,
+        deprecation: Deprecation,
+    ) -> Result<(), RegistryRejection> {
         let descriptor = self.active_mut(kind, id)?;
         descriptor.set_status(DescriptorStatus::Deprecated);
         descriptor.set_deprecation(deprecation);
@@ -203,30 +194,30 @@ impl DescriptorRegistry {
         entry.versions.get(&entry.active)
     }
 
-    fn active_mut(&mut self, kind: DescriptorKind, id: &str) -> Result<&mut Descriptor, RegistryError> {
+    fn active_mut(&mut self, kind: DescriptorKind, id: &str) -> Result<&mut Descriptor, RegistryRejection> {
         let entry = self
             .entries
             .get_mut(&(kind, id.to_owned()))
-            .ok_or_else(|| RegistryError::NotFound {
+            .ok_or_else(|| RegistryRejection::NotFound {
                 kind,
                 id: id.to_owned(),
             })?;
         entry
             .versions
             .get_mut(&entry.active)
-            .ok_or_else(|| RegistryError::NotFound {
+            .ok_or_else(|| RegistryRejection::NotFound {
                 kind,
                 id: id.to_owned(),
             })
     }
 
-    fn validate(&self, descriptor: &Descriptor) -> Result<(), RegistryError> {
+    fn validate(&self, descriptor: &Descriptor) -> Result<(), RegistryRejection> {
         if let Some(capability) = descriptor
             .required_capabilities()
             .iter()
             .find(|capability| !self.capabilities.contains(*capability))
         {
-            return Err(RegistryError::CapabilityMismatch {
+            return Err(RegistryRejection::CapabilityMismatch {
                 capability: capability.clone(),
             });
         }
@@ -240,15 +231,15 @@ impl DescriptorRegistry {
                     .all(|feature| self.capabilities.contains(feature))
         });
         if !supports_known_schema {
-            return Err(RegistryError::UnsupportedSchema);
+            return Err(RegistryRejection::UnsupportedSchema);
         }
         parse_version(descriptor.version())?;
         Ok(())
     }
 }
 
-fn parse_version(version: &str) -> Result<DescriptorVersion, RegistryError> {
-    DescriptorVersion::parse(version).map_err(|_| RegistryError::InvalidVersion {
+fn parse_version(version: &str) -> Result<DescriptorVersion, RegistryRejection> {
+    DescriptorVersion::parse(version).map_err(|_| RegistryRejection::InvalidVersion {
         version: version.to_owned(),
     })
 }
@@ -263,6 +254,16 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn rejection_projections_do_not_expose_descriptor_identifiers() {
+        let rejection = RegistryRejection::NotFound {
+            kind: DescriptorKind::Provider,
+            id: "private-token tenant/resource /secret/path".to_owned(),
+        };
+        assert_eq!(rejection.to_string(), "SRE operation was rejected");
+        assert_eq!(format!("{rejection:?}"), "SRE operation was rejected");
+    }
 
     fn provider(version: &str) -> Descriptor {
         Descriptor::Provider(ProviderDescriptor {
@@ -316,7 +317,7 @@ mod tests {
         let registry = DescriptorRegistry::new([("rocketmq-sre.provider", 2)], std::iter::empty::<String>());
         assert_eq!(
             registry.validate(&provider("1.0.0")),
-            Err(RegistryError::UnsupportedSchema)
+            Err(RegistryRejection::UnsupportedSchema)
         );
 
         let mut requires_capability = provider("1.0.0");
@@ -326,7 +327,7 @@ mod tests {
         let registry = DescriptorRegistry::new([("rocketmq-sre.provider", 1)], std::iter::empty::<String>());
         assert_eq!(
             registry.validate(&requires_capability),
-            Err(RegistryError::CapabilityMismatch {
+            Err(RegistryRejection::CapabilityMismatch {
                 capability: "model.tools".to_owned()
             })
         );

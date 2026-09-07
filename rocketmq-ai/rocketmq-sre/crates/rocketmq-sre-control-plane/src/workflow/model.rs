@@ -29,7 +29,7 @@ use serde_json::Value;
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
 const DEFAULT_PAGE_LIMIT: u32 = 50;
 const MAX_PAGE_LIMIT: u32 = 200;
@@ -44,10 +44,10 @@ pub(crate) struct WorkflowListQuery {
 }
 
 impl WorkflowListQuery {
-    pub(crate) fn bounded_limit(&self) -> Result<u32, ControlPlaneError> {
+    pub(crate) fn bounded_limit(&self) -> Result<u32, ControlPlaneRequestFailure> {
         let limit = self.limit.unwrap_or(DEFAULT_PAGE_LIMIT);
         if !(1..=MAX_PAGE_LIMIT).contains(&limit) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "workflow page limit must be between 1 and 200",
             ));
@@ -55,13 +55,13 @@ impl WorkflowListQuery {
         Ok(limit)
     }
 
-    pub(crate) fn cursor_uuid(&self) -> Result<Option<Uuid>, ControlPlaneError> {
+    pub(crate) fn cursor_uuid(&self) -> Result<Option<Uuid>, ControlPlaneRequestFailure> {
         self.cursor
             .as_deref()
             .map(|value| {
                 value
                     .parse()
-                    .map_err(|_| ControlPlaneError::validation("invalid_request", "workflow cursor must be a UUID"))
+                    .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "cursor is invalid"))
             })
             .transpose()
     }
@@ -126,7 +126,7 @@ pub(crate) struct ConversationCreateRequest {
 }
 
 impl ConversationCreateRequest {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         validate_text("question", &self.question, 1, 8_192)?;
         if let Some(resource) = &self.resource {
             validate_text("resource", resource, 1, 1_024)?;
@@ -145,7 +145,7 @@ pub(crate) struct InvestigationCreateRequest {
 }
 
 impl InvestigationCreateRequest {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         validate_text("title", &self.title, 1, 512)?;
         validate_text("symptom_family", &self.symptom_family, 1, 128)?;
         if let Some(resource) = &self.resource {
@@ -162,7 +162,7 @@ pub(crate) struct PromoteInvestigationRequest {
 }
 
 impl PromoteInvestigationRequest {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         if let Some(title) = &self.title {
             validate_text("title", title, 1, 512)?;
         }
@@ -179,7 +179,7 @@ pub(crate) struct IncidentCreateRequest {
 }
 
 impl IncidentCreateRequest {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         validate_text("title", &self.title, 1, 512)?;
         validate_text("symptom_family", &self.symptom_family, 1, 128)?;
         if let Some(resource) = &self.resource {
@@ -197,7 +197,7 @@ pub(crate) struct InspectionCreateRequest {
 }
 
 impl InspectionCreateRequest {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         if let Some(schedule) = &self.schedule {
             validate_text("schedule", schedule, 1, 128)?;
             schedule_interval_from_expression(schedule)?;
@@ -205,7 +205,7 @@ impl InspectionCreateRequest {
         Ok(())
     }
 
-    pub(crate) fn schedule_interval(&self) -> Result<Option<Duration>, ControlPlaneError> {
+    pub(crate) fn schedule_interval(&self) -> Result<Option<Duration>, ControlPlaneRequestFailure> {
         self.schedule
             .as_deref()
             .map(schedule_interval_from_expression)
@@ -229,18 +229,18 @@ pub(crate) enum RecommendationPromotionTarget {
 }
 
 impl RecommendationDispositionRequest {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         validate_text("reason", &self.reason, 1, 2_048)?;
         if self.status == RecommendationStatus::Assigned
             && self.assignee.as_ref().is_none_or(|value| value.trim().is_empty())
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_recommendation",
                 "assigned recommendations require an assignee",
             ));
         }
         if self.promote_to.is_some() && self.status != RecommendationStatus::Promoted {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_recommendation",
                 "promote_to is only valid for a promoted recommendation",
             ));
@@ -277,10 +277,10 @@ pub(crate) struct InspectionView {
     pub pack_diffs: Vec<Value>,
 }
 
-fn validate_text(name: &'static str, value: &str, min: usize, max: usize) -> Result<(), ControlPlaneError> {
+fn validate_text(name: &'static str, value: &str, min: usize, max: usize) -> Result<(), ControlPlaneRequestFailure> {
     let length = value.trim().chars().count();
     if !(min..=max).contains(&length) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             format!("{name} length must be between {min} and {max} characters"),
         ));
@@ -288,14 +288,14 @@ fn validate_text(name: &'static str, value: &str, min: usize, max: usize) -> Res
     Ok(())
 }
 
-pub(crate) fn schedule_interval_from_expression(value: &str) -> Result<Duration, ControlPlaneError> {
+pub(crate) fn schedule_interval_from_expression(value: &str) -> Result<Duration, ControlPlaneRequestFailure> {
     let seconds = match value.trim() {
         "@hourly" => 60 * 60,
         "@daily" => 24 * 60 * 60,
         "@weekly" => 7 * 24 * 60 * 60,
         schedule => {
             let raw = schedule.strip_prefix("every ").ok_or_else(|| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "invalid_schedule",
                     "schedule must be @hourly, @daily, @weekly, or `every <duration>`",
                 )
@@ -304,7 +304,7 @@ pub(crate) fn schedule_interval_from_expression(value: &str) -> Result<Duration,
         }
     };
     if !(60..=30 * 24 * 60 * 60).contains(&seconds) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_schedule",
             "inspection interval must be between one minute and thirty days",
         ));
@@ -312,31 +312,34 @@ pub(crate) fn schedule_interval_from_expression(value: &str) -> Result<Duration,
     Ok(Duration::from_secs(seconds))
 }
 
-fn parse_duration_seconds(value: &str) -> Result<u64, ControlPlaneError> {
+fn parse_duration_seconds(value: &str) -> Result<u64, ControlPlaneRequestFailure> {
     let value = value.trim();
     let split = value
         .find(|character: char| !character.is_ascii_digit())
         .ok_or_else(|| {
-            ControlPlaneError::validation("invalid_schedule", "duration requires an explicit s, m, h, or d unit")
+            ControlPlaneRequestFailure::validation(
+                "invalid_schedule",
+                "duration requires an explicit s, m, h, or d unit",
+            )
         })?;
     let (amount, unit) = value.split_at(split);
     let amount = amount
         .parse::<u64>()
-        .map_err(|_| ControlPlaneError::validation("invalid_schedule", "inspection duration is invalid"))?;
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_schedule", "schedule amount is invalid"))?;
     let multiplier = match unit {
         "s" => 1,
         "m" => 60,
         "h" => 60 * 60,
         "d" => 24 * 60 * 60,
         _ => {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_schedule",
                 "duration unit must be s, m, h, or d",
             ));
         }
     };
     amount.checked_mul(multiplier).ok_or_else(|| {
-        ControlPlaneError::validation("invalid_schedule", "inspection duration exceeds the supported range")
+        ControlPlaneRequestFailure::validation("invalid_schedule", "inspection duration exceeds the supported range")
     })
 }
 

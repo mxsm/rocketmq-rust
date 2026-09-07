@@ -18,7 +18,7 @@ use rocketmq_sre_contracts::AutonomyCohortId;
 use rocketmq_sre_contracts::AutonomyPolicyDefinition;
 use rocketmq_sre_contracts::AutonomyQualificationCohort;
 use rocketmq_sre_contracts::AutonomyQualificationLevel;
-use rocketmq_sre_contracts::ContractError;
+use rocketmq_sre_contracts::SreContractError;
 use rocketmq_sre_contracts::SreTimestamp;
 use rocketmq_sre_contracts::canonical_sha256;
 use rocketmq_sre_contracts::is_sha256_digest;
@@ -37,7 +37,7 @@ impl ActualModelIdentity {
     /// # Errors
     ///
     /// Rejects empty, control-character, or unbounded identity fields.
-    pub fn identity_hash(&self) -> Result<String, ContractError> {
+    pub fn identity_hash(&self) -> Result<String, SreContractError> {
         let profile = bounded(&self.profile, 128)?;
         let family = bounded(&self.model_family, 128)?.to_ascii_lowercase();
         let revision = bounded(&self.model_revision, 128)?;
@@ -55,7 +55,7 @@ impl AutonomyPolicy {
     ///
     /// Rejects non-R1, planning-only, mismatched, disabled, or malformed
     /// policies. Execution support is deliberately not required for Shadow.
-    pub fn validate(policy: &AutonomyPolicyDefinition, descriptor: &ActionDescriptor) -> Result<(), ContractError> {
+    pub fn validate(policy: &AutonomyPolicyDefinition, descriptor: &ActionDescriptor) -> Result<(), SreContractError> {
         policy.validate()?;
         if descriptor.id != policy.action.id()
             || descriptor.version != policy.action_version
@@ -63,9 +63,9 @@ impl AutonomyPolicy {
             || descriptor.plan_only
             || !is_sha256_digest(&policy.descriptor_digest)
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "autonomy policy must bind one exact, non-plan-only R1 descriptor".to_owned(),
-            });
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+            ));
         }
         Ok(())
     }
@@ -79,7 +79,7 @@ impl AutonomyPolicy {
         policy: &AutonomyPolicyDefinition,
         primary: &ActualModelIdentity,
         created_at: SreTimestamp,
-    ) -> Result<AutonomyQualificationCohort, ContractError> {
+    ) -> Result<AutonomyQualificationCohort, SreContractError> {
         let primary_hash = primary.identity_hash()?;
         let cohort_hash = shadow_hash(policy, &primary_hash)?;
         Ok(AutonomyQualificationCohort {
@@ -111,13 +111,13 @@ impl AutonomyPolicy {
         primary: &ActualModelIdentity,
         critic: &ActualModelIdentity,
         created_at: SreTimestamp,
-    ) -> Result<AutonomyQualificationCohort, ContractError> {
+    ) -> Result<AutonomyQualificationCohort, SreContractError> {
         let primary_family = bounded(&primary.model_family, 128)?.to_ascii_lowercase();
         let critic_family = bounded(&critic.model_family, 128)?.to_ascii_lowercase();
         if primary_family == critic_family {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "autonomy Critic must use a different normalized model family".to_owned(),
-            });
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+            ));
         }
         let primary_hash = primary.identity_hash()?;
         let critic_hash = critic.identity_hash()?;
@@ -142,7 +142,7 @@ impl AutonomyPolicy {
     }
 }
 
-fn shadow_hash(policy: &AutonomyPolicyDefinition, primary_hash: &str) -> Result<String, ContractError> {
+fn shadow_hash(policy: &AutonomyPolicyDefinition, primary_hash: &str) -> Result<String, SreContractError> {
     canonical_sha256(&(
         "shadow",
         policy.tenant_id,
@@ -157,12 +157,12 @@ fn shadow_hash(policy: &AutonomyPolicyDefinition, primary_hash: &str) -> Result<
     ))
 }
 
-fn bounded(value: &str, maximum: usize) -> Result<&str, ContractError> {
+fn bounded(value: &str, maximum: usize) -> Result<&str, SreContractError> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > maximum || value.chars().any(char::is_control) {
-        return Err(ContractError::InvalidDescriptor {
-            reason: "actual model identity must be bounded plain text".to_owned(),
-        });
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+        ));
     }
     Ok(value)
 }

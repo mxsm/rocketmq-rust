@@ -36,7 +36,7 @@ use super::ConnectorPrincipal;
 use super::ResponseDisposition;
 use super::SessionScope;
 use super::channel_schema;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 mod retention;
@@ -55,26 +55,26 @@ pub(crate) trait ConnectorChannelStore: Clone + Send + Sync + 'static {
         &self,
         principal: &ConnectorPrincipal,
         request: &ConnectorRegister,
-    ) -> Result<RegistrationResult, ControlPlaneError>;
+    ) -> Result<RegistrationResult, ControlPlaneRequestFailure>;
 
     async fn heartbeat(
         &self,
         principal: &ConnectorPrincipal,
         request: &ConnectorHeartbeat,
-    ) -> Result<SessionScope, ControlPlaneError>;
+    ) -> Result<SessionScope, ControlPlaneRequestFailure>;
 
     async fn session_scope(
         &self,
         principal: &ConnectorPrincipal,
         session_id: ConnectorSessionId,
-    ) -> Result<SessionScope, ControlPlaneError>;
+    ) -> Result<SessionScope, ControlPlaneRequestFailure>;
 
     async fn commands(
         &self,
         scope: &SessionScope,
         after_sequence: u64,
         max_commands: usize,
-    ) -> Result<Vec<ConnectorCommand>, ControlPlaneError>;
+    ) -> Result<Vec<ConnectorCommand>, ControlPlaneRequestFailure>;
 
     async fn enqueue_query(
         &self,
@@ -83,34 +83,34 @@ pub(crate) trait ConnectorChannelStore: Clone + Send + Sync + 'static {
         query: EvidenceQuery,
         deadline: DateTime<Utc>,
         stale_before: DateTime<Utc>,
-    ) -> Result<ConnectorCommand, ControlPlaneError>;
+    ) -> Result<ConnectorCommand, ControlPlaneRequestFailure>;
 
     async fn enqueue_cancel(
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
         correlation_id: CorrelationId,
-    ) -> Result<ConnectorCommand, ControlPlaneError>;
+    ) -> Result<ConnectorCommand, ControlPlaneRequestFailure>;
 
     async fn append_response(
         &self,
         scope: &SessionScope,
         response: &ConnectorResponseEnvelope,
-    ) -> Result<ResponseDisposition, ControlPlaneError>;
+    ) -> Result<ResponseDisposition, ControlPlaneRequestFailure>;
 
     async fn response(
         &self,
         session_id: ConnectorSessionId,
         sequence: u64,
-    ) -> Result<Option<ConnectorResponseEnvelope>, ControlPlaneError>;
+    ) -> Result<Option<ConnectorResponseEnvelope>, ControlPlaneRequestFailure>;
 
     async fn latest_session(
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
-    ) -> Result<Option<SessionScope>, ControlPlaneError>;
+    ) -> Result<Option<SessionScope>, ControlPlaneRequestFailure>;
 
-    async fn latest_sessions(&self, limit: usize) -> Result<Vec<SessionScope>, ControlPlaneError>;
+    async fn latest_sessions(&self, limit: usize) -> Result<Vec<SessionScope>, ControlPlaneRequestFailure>;
 }
 
 #[derive(Clone, Debug)]
@@ -130,12 +130,12 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         &self,
         principal: &ConnectorPrincipal,
         request: &ConnectorRegister,
-    ) -> Result<RegistrationResult, ControlPlaneError> {
+    ) -> Result<RegistrationResult, ControlPlaneRequestFailure> {
         let mut transaction = self.repository.pool.begin().await?;
         ensure_cluster_identity(&mut transaction, request.tenant_id, request.cluster_id, principal).await?;
         let now = Utc::now();
-        let capability = serde_json::to_value(&request.capability).map_err(|_| {
-            ControlPlaneError::validation("capability_mismatch", "connector capability cannot be serialized")
+        let capability = serde_json::to_value(&request.capability).map_err(|source| {
+            ControlPlaneRequestFailure::operational_validation_source("capability_mismatch", source)
         })?;
         let existing = sqlx::query(
             "SELECT session_id, tenant_id, cluster_id, connector_subject, connector_issuer,
@@ -211,12 +211,12 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         &self,
         principal: &ConnectorPrincipal,
         request: &ConnectorHeartbeat,
-    ) -> Result<SessionScope, ControlPlaneError> {
+    ) -> Result<SessionScope, ControlPlaneRequestFailure> {
         let mut transaction = self.repository.pool.begin().await?;
         let scope = locked_session_scope(&mut transaction, request.session_id, principal).await?;
         enforce_scope(&scope, request.tenant_id, request.cluster_id, principal)?;
-        let capability = serde_json::to_value(&request.capability).map_err(|_| {
-            ControlPlaneError::validation("capability_mismatch", "connector capability cannot be serialized")
+        let capability = serde_json::to_value(&request.capability).map_err(|source| {
+            ControlPlaneRequestFailure::operational_validation_source("capability_mismatch", source)
         })?;
         let now = Utc::now();
         sqlx::query(
@@ -264,7 +264,7 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         &self,
         principal: &ConnectorPrincipal,
         session_id: ConnectorSessionId,
-    ) -> Result<SessionScope, ControlPlaneError> {
+    ) -> Result<SessionScope, ControlPlaneRequestFailure> {
         let mut transaction = self.repository.pool.begin().await?;
         let scope = locked_session_scope(&mut transaction, session_id, principal).await?;
         transaction.commit().await?;
@@ -276,10 +276,10 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         scope: &SessionScope,
         after_sequence: u64,
         max_commands: usize,
-    ) -> Result<Vec<ConnectorCommand>, ControlPlaneError> {
+    ) -> Result<Vec<ConnectorCommand>, ControlPlaneRequestFailure> {
         let after_sequence = sequence_to_i64(after_sequence)?;
         let max_commands = i64::try_from(max_commands).map_err(|_| {
-            ControlPlaneError::validation("output_too_large", "command limit exceeds the database bound")
+            ControlPlaneRequestFailure::validation("output_too_large", "command limit exceeds the database bound")
         })?;
         let frontier = sqlx::query(
             "SELECT next_sequence - 1 AS highest_sequence,
@@ -290,17 +290,17 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         .bind(scope.session_id.as_uuid())
         .fetch_optional(&self.repository.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let highest_sequence: i64 = frontier.try_get("highest_sequence")?;
         let compacted_through: i64 = frontier.try_get("compacted_through_sequence")?;
         if after_sequence < compacted_through {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "capability_mismatch",
                 "after_sequence predates the retained connector command frontier; register again before polling",
             ));
         }
         if after_sequence > highest_sequence {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "capability_mismatch",
                 "after_sequence is ahead of the durable command log",
             ));
@@ -320,7 +320,7 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         rows.iter()
             .map(|row| {
                 serde_json::from_value(row.try_get("command_payload")?)
-                    .map_err(|_| ControlPlaneError::configuration("stored connector command payload is invalid"))
+                    .map_err(ControlPlaneRequestFailure::configuration_source)
             })
             .collect()
     }
@@ -332,7 +332,7 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         query: EvidenceQuery,
         deadline: DateTime<Utc>,
         stale_before: DateTime<Utc>,
-    ) -> Result<ConnectorCommand, ControlPlaneError> {
+    ) -> Result<ConnectorCommand, ControlPlaneRequestFailure> {
         let mut transaction = self.repository.pool.begin().await?;
         let scope =
             latest_online_session_for_update(&mut transaction, tenant_id, cluster_id, stale_before, &query.source)
@@ -358,7 +358,7 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         tenant_id: TenantId,
         cluster_id: ClusterId,
         correlation_id: CorrelationId,
-    ) -> Result<ConnectorCommand, ControlPlaneError> {
+    ) -> Result<ConnectorCommand, ControlPlaneRequestFailure> {
         let mut transaction = self.repository.pool.begin().await?;
         let row = sqlx::query(
             "SELECT s.session_id, s.tenant_id, s.cluster_id, s.connector_subject,
@@ -385,7 +385,12 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         .bind(correlation_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or_else(|| ControlPlaneError::conflict("no online connector owns the requested query"))?;
+        .ok_or_else(|| {
+            ControlPlaneRequestFailure::conflict_code(
+                "capability_mismatch",
+                "no online connector owns the requested query",
+            )
+        })?;
         let scope = session_scope_from_row(&row)?;
         let sequence = allocate_next_sequence(&mut transaction, scope.session_id).await?;
         let command = ConnectorCommand::Cancel {
@@ -403,7 +408,7 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         &self,
         scope: &SessionScope,
         response: &ConnectorResponseEnvelope,
-    ) -> Result<ResponseDisposition, ControlPlaneError> {
+    ) -> Result<ResponseDisposition, ControlPlaneRequestFailure> {
         let sequence = sequence_to_i64(response.sequence)?;
         let mut transaction = self.repository.pool.begin().await?;
         let command_correlation: uuid::Uuid = sqlx::query_scalar(
@@ -415,15 +420,15 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         .bind(sequence)
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or_else(|| ControlPlaneError::validation("capability_mismatch", "response sequence is unknown"))?;
+        .ok_or_else(|| ControlPlaneRequestFailure::validation("capability_mismatch", "response sequence is unknown"))?;
         if command_correlation != response.correlation_id.as_uuid() {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "capability_mismatch",
                 "response correlation does not match the durable command",
             ));
         }
-        let payload = serde_json::to_value(response).map_err(|_| {
-            ControlPlaneError::validation("capability_mismatch", "connector response cannot be serialized")
+        let payload = serde_json::to_value(response).map_err(|source| {
+            ControlPlaneRequestFailure::operational_validation_source("capability_mismatch", source)
         })?;
         let inserted = sqlx::query(
             "INSERT INTO connector_channel_responses (
@@ -451,7 +456,8 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
             .fetch_one(&mut *transaction)
             .await?;
             if existing_correlation != response.correlation_id.as_uuid() {
-                return Err(ControlPlaneError::conflict(
+                return Err(ControlPlaneRequestFailure::conflict_code(
+                    "capability_mismatch",
                     "a different response already owns this command sequence",
                 ));
             }
@@ -468,7 +474,7 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         &self,
         session_id: ConnectorSessionId,
         sequence: u64,
-    ) -> Result<Option<ConnectorResponseEnvelope>, ControlPlaneError> {
+    ) -> Result<Option<ConnectorResponseEnvelope>, ControlPlaneRequestFailure> {
         let sequence = sequence_to_i64(sequence)?;
         let row = sqlx::query(
             "SELECT response_payload
@@ -481,7 +487,7 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         .await?;
         row.map(|row| {
             serde_json::from_value(row.try_get("response_payload")?)
-                .map_err(|_| ControlPlaneError::configuration("stored connector response payload is invalid"))
+                .map_err(ControlPlaneRequestFailure::configuration_source)
         })
         .transpose()
     }
@@ -490,7 +496,7 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
-    ) -> Result<Option<SessionScope>, ControlPlaneError> {
+    ) -> Result<Option<SessionScope>, ControlPlaneRequestFailure> {
         sqlx::query(
             "SELECT s.session_id, s.tenant_id, s.cluster_id, s.connector_subject,
                     s.connector_issuer, s.last_heartbeat_at, s.capability
@@ -516,9 +522,9 @@ impl ConnectorChannelStore for PostgresConnectorChannelStore {
         .transpose()
     }
 
-    async fn latest_sessions(&self, limit: usize) -> Result<Vec<SessionScope>, ControlPlaneError> {
+    async fn latest_sessions(&self, limit: usize) -> Result<Vec<SessionScope>, ControlPlaneRequestFailure> {
         let limit = i64::try_from(limit).map_err(|_| {
-            ControlPlaneError::validation("output_too_large", "connector health sample limit is invalid")
+            ControlPlaneRequestFailure::validation("output_too_large", "connector health sample limit is invalid")
         })?;
         let rows = sqlx::query(
             "SELECT session_id, tenant_id, cluster_id, connector_subject,
@@ -555,16 +561,16 @@ async fn append_source_capability_history(
     cluster_id: ClusterId,
     capability: &ConnectorCapabilityState,
     observed_at: DateTime<Utc>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     for source in &capability.sources {
         let schema_major = i32::try_from(source.schema_major).map_err(|_| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "capability_mismatch",
                 "connector source schema major exceeds the database bound",
             )
         })?;
         let freshness_seconds = source.freshness_seconds.map(i64::try_from).transpose().map_err(|_| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "capability_mismatch",
                 "connector source freshness exceeds the database bound",
             )
@@ -627,7 +633,7 @@ async fn ensure_cluster_identity(
     tenant_id: TenantId,
     cluster_id: ClusterId,
     principal: &ConnectorPrincipal,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let row = sqlx::query(
         "SELECT c.tenant_id, c.onboarding_state,
                 EXISTS (
@@ -648,25 +654,25 @@ async fn ensure_cluster_identity(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or_else(|| {
-        ControlPlaneError::forbidden("cluster_not_allowed", "registered connector cluster does not exist")
+        ControlPlaneRequestFailure::forbidden("cluster_not_allowed", "registered connector cluster does not exist")
     })?;
     let stored_tenant: String = row.try_get("tenant_id")?;
     if stored_tenant != tenant_id.to_string() {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "tenant_mismatch",
             "connector tenant does not own the registered cluster",
         ));
     }
     let onboarding_state: String = row.try_get("onboarding_state")?;
     if onboarding_state == "offboarded" {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "offboarded clusters cannot register connector channels",
         ));
     }
     let identity_active: bool = row.try_get("identity_active")?;
     if !identity_active {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "connector subject or issuer is not an active cluster identity",
         ));
@@ -678,7 +684,7 @@ async fn locked_session_scope(
     transaction: &mut Transaction<'_, Postgres>,
     session_id: ConnectorSessionId,
     principal: &ConnectorPrincipal,
-) -> Result<SessionScope, ControlPlaneError> {
+) -> Result<SessionScope, ControlPlaneRequestFailure> {
     let row = sqlx::query(
         "SELECT s.session_id, s.tenant_id, s.cluster_id, s.connector_subject,
                 s.connector_issuer, s.last_heartbeat_at, s.capability,
@@ -698,10 +704,10 @@ async fn locked_session_scope(
     .bind(session_id.as_uuid())
     .fetch_optional(&mut **transaction)
     .await?
-    .ok_or(ControlPlaneError::NotFound)?;
+    .ok_or(ControlPlaneRequestFailure::not_found())?;
     let scope = session_scope_from_row(&row)?;
     if scope.subject != principal.subject || scope.issuer != principal.issuer {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "connector subject or issuer does not own this channel session",
         ));
@@ -709,7 +715,7 @@ async fn locked_session_scope(
     let onboarding_state: String = row.try_get("onboarding_state")?;
     let identity_active: bool = row.try_get("identity_active")?;
     if onboarding_state == "offboarded" || !identity_active {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "connector identity is revoked or its cluster is offboarded",
         ));
@@ -722,21 +728,21 @@ fn enforce_scope(
     tenant_id: TenantId,
     cluster_id: ClusterId,
     principal: &ConnectorPrincipal,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if scope.tenant_id != tenant_id {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "tenant_mismatch",
             "connector request crosses the registered tenant boundary",
         ));
     }
     if scope.cluster_id != cluster_id {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "connector request crosses the registered cluster boundary",
         ));
     }
     if scope.subject != principal.subject || scope.issuer != principal.issuer {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "connector subject or issuer does not own this channel session",
         ));
@@ -750,7 +756,7 @@ async fn latest_online_session_for_update(
     cluster_id: ClusterId,
     stale_before: DateTime<Utc>,
     source: &str,
-) -> Result<SessionScope, ControlPlaneError> {
+) -> Result<SessionScope, ControlPlaneRequestFailure> {
     let row = sqlx::query(
         "SELECT s.session_id, s.tenant_id, s.cluster_id, s.connector_subject,
                 s.connector_issuer, s.last_heartbeat_at, s.capability
@@ -781,7 +787,9 @@ async fn latest_online_session_for_update(
     .bind(source)
     .fetch_optional(&mut **transaction)
     .await?
-    .ok_or_else(|| ControlPlaneError::conflict("no online connector channel is available"))?;
+    .ok_or_else(|| {
+        ControlPlaneRequestFailure::conflict_code("capability_mismatch", "no online connector channel is available")
+    })?;
     session_scope_from_row(&row)
 }
 
@@ -789,9 +797,9 @@ async fn insert_command(
     transaction: &mut Transaction<'_, Postgres>,
     command: &ConnectorCommand,
     session_id: ConnectorSessionId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let payload = serde_json::to_value(command)
-        .map_err(|_| ControlPlaneError::validation("capability_mismatch", "connector command cannot be serialized"))?;
+        .map_err(|source| ControlPlaneRequestFailure::operational_validation_source("capability_mismatch", source))?;
     sqlx::query(
         "INSERT INTO connector_channel_commands (
             session_id, sequence, correlation_id, command_kind, command_payload, created_at
@@ -808,9 +816,9 @@ async fn insert_command(
     Ok(())
 }
 
-fn session_scope_from_row(row: &PgRow) -> Result<SessionScope, ControlPlaneError> {
-    let capability: ConnectorCapabilityState = serde_json::from_value(row.try_get("capability")?)
-        .map_err(|_| ControlPlaneError::configuration("stored connector capability payload is invalid"))?;
+fn session_scope_from_row(row: &PgRow) -> Result<SessionScope, ControlPlaneRequestFailure> {
+    let capability: ConnectorCapabilityState =
+        serde_json::from_value(row.try_get("capability")?).map_err(ControlPlaneRequestFailure::configuration_source)?;
     Ok(SessionScope {
         session_id: ConnectorSessionId::from_uuid(row.try_get("session_id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -833,9 +841,10 @@ fn queryable_source_count(capability: &ConnectorCapabilityState) -> u16 {
     .unwrap_or(u16::MAX)
 }
 
-fn sequence_to_i64(sequence: u64) -> Result<i64, ControlPlaneError> {
-    i64::try_from(sequence)
-        .map_err(|_| ControlPlaneError::validation("capability_mismatch", "sequence exceeds the channel bound"))
+fn sequence_to_i64(sequence: u64) -> Result<i64, ControlPlaneRequestFailure> {
+    i64::try_from(sequence).map_err(|_| {
+        ControlPlaneRequestFailure::validation("capability_mismatch", "connector sequence exceeds the supported range")
+    })
 }
 
 #[cfg(test)]

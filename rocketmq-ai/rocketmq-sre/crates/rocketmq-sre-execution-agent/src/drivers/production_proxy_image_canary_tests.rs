@@ -153,7 +153,7 @@ async fn wait_for_canary(
     workload: &str,
     container: &str,
     operation_id: Option<&str>,
-) -> Result<ProxyImageCanaryState, ExecutionAgentError> {
+) -> Result<ProxyImageCanaryState, crate::ExecutionAgentRequestFailure> {
     for _ in 0..120 {
         let state = client.proxy_image_canary_state(namespace, workload, container).await?;
         let matches = match operation_id {
@@ -170,7 +170,7 @@ async fn wait_for_canary(
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    Err(ExecutionAgentError::DriverFailed)
+    Err(crate::ExecutionAgentRequestFailure::DriverFailed)
 }
 
 async fn isolated_pool(database_url: &str, schema: &str) -> PgPool {

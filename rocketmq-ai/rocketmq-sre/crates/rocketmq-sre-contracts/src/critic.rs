@@ -19,11 +19,11 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::ActionPlanId;
-use crate::ContractError;
 use crate::CriticReviewId;
 use crate::DiagnosisRevisionId;
 use crate::EvidenceId;
 use crate::ModelInvocationId;
+use crate::SreContractError;
 
 /// Critic review availability and validation state.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
@@ -96,7 +96,7 @@ impl CriticAssessment {
     ///
     /// Rejects unknown Evidence references, duplicate or oversized collections,
     /// empty findings, and unbounded rationale or precondition strings.
-    pub fn validate(&self, allowed_evidence_ids: &[EvidenceId]) -> Result<(), ContractError> {
+    pub fn validate(&self, allowed_evidence_ids: &[EvidenceId]) -> Result<(), SreContractError> {
         const MAX_ITEMS: usize = 32;
         let allowed = allowed_evidence_ids
             .iter()
@@ -133,9 +133,7 @@ impl CriticAssessment {
                     || !finding.evidence_ids.iter().all(|id| allowed.contains(id))
             })
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "Critic assessment violates bounded schema or Evidence provenance".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         Ok(())
     }

@@ -14,29 +14,30 @@
 
 //! Simple, explicit Phase 2 replay quality assertions.
 
-use thiserror::Error;
-
 use crate::phase2::Phase2ReplayReport;
 use crate::replay::ReplayQualityConfig;
 
-/// Quality threshold failure from a deterministic replay.
-#[derive(Clone, Debug, Error, PartialEq)]
-pub enum ReplayAssertionError {
-    #[error("root-cause Top-3 rate {actual:.3} is below {minimum:.3}")]
-    RootCauseTop3 { actual: f64, minimum: f64 },
-    #[error("citation coverage {actual:.3} is below {minimum:.3}")]
-    CitationCoverage { actual: f64, minimum: f64 },
-    #[error("fixture `{fixture_id}` used {actual} read-only calls; limit is {maximum}")]
+/// Closed quality result from a deterministic replay.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReplayAssertion {
+    RootCauseTop3 {
+        actual: f64,
+        minimum: f64,
+    },
+    CitationCoverage {
+        actual: f64,
+        minimum: f64,
+    },
     TooManyReadOnlyCalls {
         fixture_id: String,
         actual: usize,
         maximum: usize,
     },
-    #[error("replay recorded {actual} mutation calls; allowed count is {allowed}")]
-    MutationCalls { actual: usize, allowed: usize },
-    #[error("rules-only replay unexpectedly recorded {0} model calls")]
+    MutationCalls {
+        actual: usize,
+        allowed: usize,
+    },
     ModelCalls(usize),
-    #[error("no evaluable replay fixtures were declared")]
     NoEvaluableFixtures,
 }
 
@@ -46,18 +47,16 @@ pub enum ReplayAssertionError {
 /// conclusions; that is reported as not applicable and is not rewritten to
 /// 100 percent.
 ///
-/// # Errors
-///
-/// Returns the first stable threshold violation.
+/// Returns the first stable threshold violation as a closed outcome.
 pub fn assert_phase2_quality(
     report: &Phase2ReplayReport,
     quality: &ReplayQualityConfig,
-) -> Result<(), ReplayAssertionError> {
+) -> Result<(), ReplayAssertion> {
     if report.evaluable_fixtures == 0 {
-        return Err(ReplayAssertionError::NoEvaluableFixtures);
+        return Err(ReplayAssertion::NoEvaluableFixtures);
     }
     if report.root_cause_top3_rate < quality.root_cause_top3_min {
-        return Err(ReplayAssertionError::RootCauseTop3 {
+        return Err(ReplayAssertion::RootCauseTop3 {
             actual: report.root_cause_top3_rate,
             minimum: quality.root_cause_top3_min,
         });
@@ -65,7 +64,7 @@ pub fn assert_phase2_quality(
     if let Some(actual) = report.citation_coverage
         && actual < quality.citation_coverage_min
     {
-        return Err(ReplayAssertionError::CitationCoverage {
+        return Err(ReplayAssertion::CitationCoverage {
             actual,
             minimum: quality.citation_coverage_min,
         });
@@ -75,20 +74,20 @@ pub fn assert_phase2_quality(
         .iter()
         .find(|result| result.readonly_calls > quality.max_readonly_tool_calls)
     {
-        return Err(ReplayAssertionError::TooManyReadOnlyCalls {
+        return Err(ReplayAssertion::TooManyReadOnlyCalls {
             fixture_id: result.fixture_id.clone(),
             actual: result.readonly_calls,
             maximum: quality.max_readonly_tool_calls,
         });
     }
     if report.mutation_calls > quality.mutation_calls_allowed {
-        return Err(ReplayAssertionError::MutationCalls {
+        return Err(ReplayAssertion::MutationCalls {
             actual: report.mutation_calls,
             allowed: quality.mutation_calls_allowed,
         });
     }
     if report.model_calls != 0 {
-        return Err(ReplayAssertionError::ModelCalls(report.model_calls));
+        return Err(ReplayAssertion::ModelCalls(report.model_calls));
     }
     Ok(())
 }

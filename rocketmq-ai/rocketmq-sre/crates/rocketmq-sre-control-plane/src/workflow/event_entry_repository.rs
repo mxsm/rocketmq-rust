@@ -41,7 +41,7 @@ use super::repository::insert_incident;
 use super::repository::insert_investigation;
 use super::repository::inspection_status_name;
 use super::repository::inspection_template_name;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -51,7 +51,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         request: &UnifiedEventEntryRequest,
         request_hash: &str,
-    ) -> Result<Option<UnifiedEventEntryResult>, ControlPlaneError> {
+    ) -> Result<Option<UnifiedEventEntryResult>, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, source_kind, request_hash, target_kind, target_id,
                     correlation_id, accepted_at
@@ -76,9 +76,9 @@ impl PostgresRepository {
         request: &UnifiedEventEntryRequest,
         request_hash: &str,
         correlation_id: CorrelationId,
-    ) -> Result<UnifiedEventEntryResult, ControlPlaneError> {
+    ) -> Result<UnifiedEventEntryResult, ControlPlaneRequestFailure> {
         if request.alert_request().is_some() {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_event_entry",
                 "alert entries must use the correlation-backed persistence path",
             ));
@@ -94,7 +94,7 @@ impl PostgresRepository {
             create_non_alert_target(&mut transaction, auth, request, correlation_id, accepted_at).await?;
         if target_kind != request.target_kind() {
             transaction.rollback().await?;
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "source_unavailable",
                 "unified event entry produced an unexpected workflow target",
             ));
@@ -122,7 +122,7 @@ impl PostgresRepository {
         if !inserted {
             transaction.rollback().await?;
             return self.event_entry(auth, request, request_hash).await?.ok_or_else(|| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "source_unavailable",
                     "concurrent event entry replay could not be loaded",
                 )
@@ -139,7 +139,7 @@ impl PostgresRepository {
         request_hash: &str,
         incident_id: IncidentId,
         correlation_id: CorrelationId,
-    ) -> Result<UnifiedEventEntryResult, ControlPlaneError> {
+    ) -> Result<UnifiedEventEntryResult, ControlPlaneRequestFailure> {
         if let Some(existing) = self.event_entry(auth, request, request_hash).await? {
             return Ok(existing);
         }
@@ -168,7 +168,7 @@ impl PostgresRepository {
         if !inserted {
             transaction.rollback().await?;
             return self.event_entry(auth, request, request_hash).await?.ok_or_else(|| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "source_unavailable",
                     "concurrent alert entry replay could not be loaded",
                 )
@@ -185,9 +185,9 @@ async fn create_non_alert_target(
     request: &UnifiedEventEntryRequest,
     correlation_id: CorrelationId,
     accepted_at: DateTime<Utc>,
-) -> Result<(EventEntryTargetKind, Uuid), ControlPlaneError> {
+) -> Result<(EventEntryTargetKind, Uuid), ControlPlaneRequestFailure> {
     match &request.payload {
-        UnifiedEventPayload::Alert { .. } => Err(ControlPlaneError::validation(
+        UnifiedEventPayload::Alert { .. } => Err(ControlPlaneRequestFailure::validation(
             "invalid_event_entry",
             "alert entries cannot use direct workflow persistence",
         )),
@@ -302,7 +302,7 @@ async fn create_named_workflow_target(
     details: Value,
     correlation_id: CorrelationId,
     accepted_at: DateTime<Utc>,
-) -> Result<(EventEntryTargetKind, Uuid), ControlPlaneError> {
+) -> Result<(EventEntryTargetKind, Uuid), ControlPlaneRequestFailure> {
     match target {
         EventEntryWorkflowTarget::Investigation => {
             let investigation = insert_investigation(
@@ -391,7 +391,7 @@ async fn create_inspection_target(
     inspection: InspectionCreateRequest,
     correlation_id: CorrelationId,
     accepted_at: DateTime<Utc>,
-) -> Result<InspectionRunId, ControlPlaneError> {
+) -> Result<InspectionRunId, ControlPlaneRequestFailure> {
     let id = InspectionRunId::new();
     let status = InspectionStatus::Scheduled;
     let next_run_at = inspection
@@ -399,7 +399,7 @@ async fn create_inspection_target(
         .map(chrono::Duration::from_std)
         .transpose()
         .map_err(|_| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "invalid_schedule",
                 "inspection interval cannot be represented by the scheduler",
             )
@@ -449,7 +449,7 @@ async fn insert_event_entry(
     request_hash: &str,
     result: &UnifiedEventEntryResult,
     occurred_at: DateTime<Utc>,
-) -> Result<bool, ControlPlaneError> {
+) -> Result<bool, ControlPlaneRequestFailure> {
     Ok(sqlx::query(
         "INSERT INTO workflow_event_entries (
             id, tenant_id, cluster_id, source_kind, idempotency_key,
@@ -480,10 +480,10 @@ async fn insert_event_entry(
 fn event_entry_from_row(
     row: &PgRow,
     expected_request_hash: &str,
-) -> Result<UnifiedEventEntryResult, ControlPlaneError> {
+) -> Result<UnifiedEventEntryResult, ControlPlaneRequestFailure> {
     let stored_request_hash: String = row.try_get("request_hash")?;
     if stored_request_hash != expected_request_hash {
-        return Err(ControlPlaneError::conflict_code(
+        return Err(ControlPlaneRequestFailure::conflict_code(
             "event_entry_idempotency_conflict",
             "event entry idempotency key is already bound to different request content",
         ));

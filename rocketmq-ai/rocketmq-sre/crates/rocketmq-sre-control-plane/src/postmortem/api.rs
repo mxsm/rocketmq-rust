@@ -34,7 +34,7 @@ use super::CreatePostmortemRequest;
 use super::PostmortemPatchRequest;
 use super::PostmortemPublishRequest;
 use super::PostmortemView;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -65,7 +65,7 @@ async fn create_postmortem(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<CreatePostmortemRequest>,
-) -> Result<Json<PostmortemView>, ControlPlaneError> {
+) -> Result<Json<PostmortemView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .postmortems
@@ -78,7 +78,7 @@ async fn get_postmortem(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<PostmortemView>, ControlPlaneError> {
+) -> Result<Json<PostmortemView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.postmortems.get(&auth, parse_postmortem_id(&id)?).await.map(Json)
 }
@@ -88,7 +88,7 @@ async fn patch_postmortem(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<PostmortemPatchRequest>,
-) -> Result<Json<PostmortemView>, ControlPlaneError> {
+) -> Result<Json<PostmortemView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .postmortems
@@ -102,7 +102,7 @@ async fn publish_postmortem(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<PostmortemPublishRequest>,
-) -> Result<Json<PostmortemView>, ControlPlaneError> {
+) -> Result<Json<PostmortemView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .postmortems
@@ -115,7 +115,7 @@ async fn list_action_items(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<ActionItemListQuery>,
-) -> Result<Json<ActionItemPage>, ControlPlaneError> {
+) -> Result<Json<ActionItemPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.postmortems.list_action_items(&auth, &query).await.map(Json)
 }
@@ -125,7 +125,7 @@ async fn patch_action_item(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<ActionItemPatchRequest>,
-) -> Result<Json<ActionItem>, ControlPlaneError> {
+) -> Result<Json<ActionItem>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .postmortems
@@ -134,20 +134,20 @@ async fn patch_action_item(
         .map(Json)
 }
 
-fn parse_incident_id(value: &str) -> Result<IncidentId, ControlPlaneError> {
+fn parse_incident_id(value: &str) -> Result<IncidentId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "incident id must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "incident id is invalid"))
 }
 
-fn parse_postmortem_id(value: &str) -> Result<PostmortemId, ControlPlaneError> {
+fn parse_postmortem_id(value: &str) -> Result<PostmortemId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "postmortem id must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "postmortem id is invalid"))
 }
 
-fn parse_action_item_id(value: &str) -> Result<ActionItemId, ControlPlaneError> {
+fn parse_action_item_id(value: &str) -> Result<ActionItemId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "action item id must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "action-item id is invalid"))
 }

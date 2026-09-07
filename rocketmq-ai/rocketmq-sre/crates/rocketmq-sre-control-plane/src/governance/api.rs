@@ -42,7 +42,7 @@ use super::model::GovernanceVersionPage;
 use super::model::GovernanceVersionQuery;
 use super::model::RecordGovernanceImpactRequest;
 use super::model::TransitionGovernanceVersionRequest;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 
 const GOVERNANCE_WRITE_BODY_LIMIT: usize = 256 * 1024;
@@ -81,7 +81,7 @@ async fn create_artifact(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateGovernanceArtifactRequest>,
-) -> Result<Json<GovernanceArtifact>, ControlPlaneError> {
+) -> Result<Json<GovernanceArtifact>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.governance.create_artifact(&auth, &request).await.map(Json)
 }
@@ -90,7 +90,7 @@ async fn artifacts(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<GovernanceArtifactQuery>,
-) -> Result<Json<GovernanceArtifactPage>, ControlPlaneError> {
+) -> Result<Json<GovernanceArtifactPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.governance.artifacts(&auth, &query).await.map(Json)
 }
@@ -100,7 +100,7 @@ async fn create_version(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<CreateGovernanceVersionRequest>,
-) -> Result<Json<GovernanceVersion>, ControlPlaneError> {
+) -> Result<Json<GovernanceVersion>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .governance
@@ -114,7 +114,7 @@ async fn versions(
     headers: HeaderMap,
     Path(id): Path<String>,
     Query(query): Query<GovernanceVersionQuery>,
-) -> Result<Json<GovernanceVersionPage>, ControlPlaneError> {
+) -> Result<Json<GovernanceVersionPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .governance
@@ -128,7 +128,7 @@ async fn transition_version(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<TransitionGovernanceVersionRequest>,
-) -> Result<Json<GovernanceVersion>, ControlPlaneError> {
+) -> Result<Json<GovernanceVersion>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .governance
@@ -142,7 +142,7 @@ async fn record_impact(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<RecordGovernanceImpactRequest>,
-) -> Result<Json<GovernanceImpact>, ControlPlaneError> {
+) -> Result<Json<GovernanceImpact>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, request.cluster_id).await?;
     state
         .governance
@@ -156,7 +156,7 @@ async fn impacts(
     headers: HeaderMap,
     Path(id): Path<String>,
     Query(query): Query<GovernanceImpactQuery>,
-) -> Result<Json<GovernanceImpactPage>, ControlPlaneError> {
+) -> Result<Json<GovernanceImpactPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state
         .governance
@@ -169,7 +169,7 @@ async fn evaluate_admission(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<EvaluateGovernanceAdmissionRequest>,
-) -> Result<Json<GovernanceAdmissionView>, ControlPlaneError> {
+) -> Result<Json<GovernanceAdmissionView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, request.cluster_id).await?;
     state.governance.evaluate_admission(&auth, &request).await.map(Json)
 }
@@ -178,7 +178,7 @@ async fn audit_export(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<GovernanceAuditQuery>,
-) -> Result<Json<GovernanceAuditExport>, ControlPlaneError> {
+) -> Result<Json<GovernanceAuditExport>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.governance.audit_export(&auth, &query).await.map(Json)
 }
@@ -186,22 +186,22 @@ async fn audit_export(
 async fn compliance(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<GovernanceComplianceReport>, ControlPlaneError> {
+) -> Result<Json<GovernanceComplianceReport>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.governance.compliance(&auth).await.map(Json)
 }
 
-fn parse_artifact_id(value: &str) -> Result<GovernanceArtifactId, ControlPlaneError> {
+fn parse_artifact_id(value: &str) -> Result<GovernanceArtifactId, ControlPlaneRequestFailure> {
     value.parse().map_err(|_| {
-        ControlPlaneError::validation(
+        ControlPlaneRequestFailure::validation(
             "invalid_governance_artifact_id",
             "governance artifact ID must be a UUID",
         )
     })
 }
 
-fn parse_version_id(value: &str) -> Result<GovernanceVersionId, ControlPlaneError> {
+fn parse_version_id(value: &str) -> Result<GovernanceVersionId, ControlPlaneRequestFailure> {
     value.parse().map_err(|_| {
-        ControlPlaneError::validation("invalid_governance_version_id", "governance version ID must be a UUID")
+        ControlPlaneRequestFailure::validation("invalid_governance_version_id", "governance version ID must be a UUID")
     })
 }

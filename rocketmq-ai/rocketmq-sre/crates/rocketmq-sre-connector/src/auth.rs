@@ -20,7 +20,7 @@ use serde::Serialize;
 use tokio::sync::Mutex;
 
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 use crate::config::ConnectorAuth;
 use crate::config::SecretValue;
 
@@ -80,18 +80,18 @@ impl TokenProvider {
                         .send(),
                 )
                 .await
-                .map_err(|_| ConnectorError::source("OAuth token request timed out"))?
-                .map_err(|error| ConnectorError::source(format!("OAuth token endpoint request failed: {error}")))?;
+                .map_err(|source| ConnectorError::from_source(ConnectorFailure::DeadlineExceeded, true, source))?
+                .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
                 if !response.status().is_success() {
                     return Err(ConnectorError::new(
-                        ConnectorErrorCode::UnauthorizedScope,
+                        ConnectorFailure::UnauthorizedScope,
                         false,
                         format!("OAuth token endpoint returned status {}", response.status()),
                     ));
                 }
                 if response.content_length().is_some_and(|length| length > 64 * 1024) {
                     return Err(ConnectorError::new(
-                        ConnectorErrorCode::OutputTooLarge,
+                        ConnectorFailure::OutputTooLarge,
                         false,
                         "OAuth token response exceeds 65536 bytes",
                     ));
@@ -100,11 +100,11 @@ impl TokenProvider {
                 while let Some(chunk) = response
                     .chunk()
                     .await
-                    .map_err(|_| ConnectorError::source("OAuth token endpoint returned an invalid response"))?
+                    .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?
                 {
                     if body.len().saturating_add(chunk.len()) > 64 * 1024 {
                         return Err(ConnectorError::new(
-                            ConnectorErrorCode::OutputTooLarge,
+                            ConnectorFailure::OutputTooLarge,
                             false,
                             "OAuth token response exceeds 65536 bytes",
                         ));
@@ -112,12 +112,12 @@ impl TokenProvider {
                     body.extend_from_slice(&chunk);
                 }
                 let token_response: OAuthTokenResponse = serde_json::from_slice(&body)
-                    .map_err(|_| ConnectorError::source("OAuth token endpoint returned an invalid response"))?;
+                    .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
                 if token_response.access_token.trim().is_empty()
                     || !token_response.token_type.eq_ignore_ascii_case("bearer")
                 {
                     return Err(ConnectorError::new(
-                        ConnectorErrorCode::UnauthorizedScope,
+                        ConnectorFailure::UnauthorizedScope,
                         false,
                         "OAuth token response did not contain a Bearer access token",
                     ));

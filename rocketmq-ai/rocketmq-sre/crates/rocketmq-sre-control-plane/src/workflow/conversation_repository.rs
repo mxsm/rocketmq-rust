@@ -39,7 +39,7 @@ use super::ConversationTurnPage;
 use super::ConversationTurnRequest;
 use super::ConversationTurnView;
 use super::repository::append_timeline;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -76,7 +76,7 @@ impl PostgresRepository {
         request: &ConversationTurnRequest,
         intent: Option<&ConversationQueryIntent>,
         correlation_id: CorrelationId,
-    ) -> Result<ConversationTurn, ControlPlaneError> {
+    ) -> Result<ConversationTurn, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         lock_conversation(&mut transaction, auth, conversation).await?;
         let active = sqlx::query_scalar::<_, bool>(
@@ -89,7 +89,7 @@ impl PostgresRepository {
         .fetch_one(&mut *transaction)
         .await?;
         if active {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "conversation_query_in_progress",
                 "only one read-only query may run per conversation",
             ));
@@ -107,7 +107,7 @@ impl PostgresRepository {
         let query_intent = intent
             .map(serde_json::to_value)
             .transpose()
-            .map_err(|_| ControlPlaneError::configuration("conversation query intent cannot be serialized"))?;
+            .map_err(ControlPlaneRequestFailure::configuration_source)?;
         sqlx::query(
             "INSERT INTO conversation_turns (
                 id, conversation_id, tenant_id, cluster_id, sequence,
@@ -133,8 +133,7 @@ impl PostgresRepository {
             conversation_id: conversation.id,
             tenant_id: auth.tenant_id,
             cluster_id: conversation.cluster_id,
-            sequence: u32::try_from(sequence)
-                .map_err(|_| ControlPlaneError::configuration("conversation turn sequence is invalid"))?,
+            sequence: u32::try_from(sequence).map_err(ControlPlaneRequestFailure::configuration_source)?,
             question: request.question.trim().to_owned(),
             resource: request.resource.as_deref().map(str::trim).map(str::to_owned),
             status: ConversationTurnStatus::Collecting,
@@ -150,21 +149,21 @@ impl PostgresRepository {
         auth: &AuthContext,
         turn: &ConversationTurn,
         completion: ConversationCompletion,
-    ) -> Result<ConversationTurnView, ControlPlaneError> {
+    ) -> Result<ConversationTurnView, ControlPlaneRequestFailure> {
         if completion.status == ConversationTurnStatus::Collecting {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "conversation completion requires a terminal turn status",
             ));
         }
         let mut transaction = self.pool.begin().await?;
         let completed_at = chrono::DateTime::<Utc>::from_timestamp_micros(Utc::now().timestamp_micros())
-            .ok_or_else(|| ControlPlaneError::configuration("conversation completion timestamp is invalid"))?;
+            .ok_or_else(|| ControlPlaneRequestFailure::configuration("conversation completion timestamp is invalid"))?;
         let query_intent = completion
             .intent
             .as_ref()
             .map(serde_json::to_value)
             .transpose()
-            .map_err(|_| ControlPlaneError::configuration("conversation query intent cannot be serialized"))?;
+            .map_err(ControlPlaneRequestFailure::configuration_source)?;
         let updated = sqlx::query(
             "UPDATE conversation_turns
              SET status = $4, query_intent = $5, completed_at = $6
@@ -180,16 +179,16 @@ impl PostgresRepository {
         .await?
         .rows_affected();
         if updated != 1 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "conversation_turn_not_active",
                 "conversation turn is no longer collecting",
             ));
         }
         let revision_id = ConversationAnswerRevisionId::new();
-        let citations = serde_json::to_value(&completion.citations)
-            .map_err(|_| ControlPlaneError::configuration("conversation citations cannot be serialized"))?;
-        let warnings = serde_json::to_value(&completion.warnings)
-            .map_err(|_| ControlPlaneError::configuration("conversation warnings cannot be serialized"))?;
+        let citations =
+            serde_json::to_value(&completion.citations).map_err(ControlPlaneRequestFailure::configuration_source)?;
+        let warnings =
+            serde_json::to_value(&completion.warnings).map_err(ControlPlaneRequestFailure::configuration_source)?;
         let evidence_ids = completion
             .evidence_ids
             .iter()
@@ -217,7 +216,7 @@ impl PostgresRepository {
         .await?;
         let diagnosis_revision = if let Some(diagnosis) = completion.diagnosis {
             if diagnosis.evidence_ids.is_empty() {
-                return Err(ControlPlaneError::configuration(
+                return Err(ControlPlaneRequestFailure::configuration(
                     "investigation diagnosis requires at least one evidence reference",
                 ));
             }
@@ -227,7 +226,7 @@ impl PostgresRepository {
                 .any(|id| !completion.evidence_ids.contains(id))
                 || diagnosis.primary_model_invocation_id != completion.model_invocation_id
             {
-                return Err(ControlPlaneError::configuration(
+                return Err(ControlPlaneRequestFailure::configuration(
                     "investigation diagnosis must bind the persisted answer evidence and model invocation",
                 ));
             }
@@ -245,7 +244,7 @@ impl PostgresRepository {
             .fetch_optional(&mut *transaction)
             .await?;
             if investigation_found.is_none() {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "investigation_scope_mismatch",
                     "conversation investigation no longer matches the authenticated turn scope",
                 ));
@@ -318,8 +317,7 @@ impl PostgresRepository {
                 conversation_id: turn.conversation_id,
                 turn_id: turn.id,
                 answer_revision_id: revision_id,
-                revision: u32::try_from(revision)
-                    .map_err(|_| ControlPlaneError::configuration("investigation diagnosis revision is invalid"))?,
+                revision: u32::try_from(revision).map_err(ControlPlaneRequestFailure::configuration_source)?,
                 pack_id: diagnosis.pack_id,
                 pack_version: diagnosis.pack_version,
                 status: diagnosis.status,
@@ -366,9 +364,9 @@ impl PostgresRepository {
         auth: &AuthContext,
         turn: &ConversationTurn,
         evidence_id: EvidenceId,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         if turn.tenant_id != auth.tenant_id || !auth.clusters.contains(&turn.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "conversation evidence is outside the caller scope",
             ));
@@ -391,9 +389,9 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         conversation: &Conversation,
-    ) -> Result<ConversationTurnPage, ControlPlaneError> {
+    ) -> Result<ConversationTurnPage, ControlPlaneRequestFailure> {
         if conversation.tenant_id != auth.tenant_id || !auth.clusters.contains(&conversation.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "conversation is outside the caller scope",
             ));
@@ -448,9 +446,9 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         conversation: &Conversation,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         if conversation.tenant_id != auth.tenant_id || !auth.clusters.contains(&conversation.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "conversation is outside the caller scope",
             ));
@@ -479,7 +477,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         turn: &ConversationTurn,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         let requested = sqlx::query_scalar::<_, bool>(
             "SELECT cancel_requested
              FROM conversation_turns
@@ -490,7 +488,7 @@ impl PostgresRepository {
         .bind(turn.cluster_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         Ok(requested)
     }
 }
@@ -499,7 +497,7 @@ async fn lock_conversation(
     transaction: &mut Transaction<'_, Postgres>,
     auth: &AuthContext,
     conversation: &Conversation,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let found = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM conversations
          WHERE id = $1 AND tenant_id = $2 AND cluster_id = $3 AND status != 'closed'
@@ -511,27 +509,27 @@ async fn lock_conversation(
     .fetch_optional(&mut **transaction)
     .await?;
     if found.is_none() {
-        return Err(ControlPlaneError::NotFound);
+        return Err(ControlPlaneRequestFailure::not_found());
     }
     Ok(())
 }
 
-fn conversation_turn_view_from_row(row: &PgRow) -> Result<ConversationTurnView, ControlPlaneError> {
+fn conversation_turn_view_from_row(row: &PgRow) -> Result<ConversationTurnView, ControlPlaneRequestFailure> {
     let conversation_id = rocketmq_sre_contracts::ConversationId::from_uuid(row.try_get("conversation_id")?);
     let turn_id = ConversationTurnId::from_uuid(row.try_get("id")?);
     let answer_id = row.try_get::<Option<Uuid>, _>("answer_id")?;
     let answer = answer_id
         .map(|id| {
-            Ok::<ConversationAnswerRevision, ControlPlaneError>(ConversationAnswerRevision {
+            Ok::<ConversationAnswerRevision, ControlPlaneRequestFailure>(ConversationAnswerRevision {
                 id: ConversationAnswerRevisionId::from_uuid(id),
                 conversation_id,
                 turn_id,
                 revision: u32::try_from(row.try_get::<i32, _>("answer_revision")?)
-                    .map_err(|_| ControlPlaneError::configuration("stored answer revision is invalid"))?,
+                    .map_err(ControlPlaneRequestFailure::configuration_source)?,
                 answer: row.try_get("answer")?,
                 mode: parse_answer_mode(row.try_get("mode")?)?,
                 citations: serde_json::from_value(row.try_get("citations")?)
-                    .map_err(|_| ControlPlaneError::configuration("stored conversation citations are invalid"))?,
+                    .map_err(ControlPlaneRequestFailure::configuration_source)?,
                 evidence_ids: row
                     .try_get::<Vec<Uuid>, _>("evidence_ids")?
                     .into_iter()
@@ -542,7 +540,7 @@ fn conversation_turn_view_from_row(row: &PgRow) -> Result<ConversationTurnView, 
                     .map(ModelInvocationId::from_uuid),
                 partial: row.try_get("answer_partial")?,
                 warnings: serde_json::from_value(row.try_get("answer_warnings")?)
-                    .map_err(|_| ControlPlaneError::configuration("stored conversation warnings are invalid"))?,
+                    .map_err(ControlPlaneRequestFailure::configuration_source)?,
                 created_at: row.try_get("answer_created_at")?,
             })
         })
@@ -558,7 +556,7 @@ fn conversation_turn_view_from_row(row: &PgRow) -> Result<ConversationTurnView, 
             tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
             cluster_id: rocketmq_sre_contracts::ClusterId::from_uuid(row.try_get("cluster_id")?),
             sequence: u32::try_from(row.try_get::<i32, _>("sequence")?)
-                .map_err(|_| ControlPlaneError::configuration("stored conversation sequence is invalid"))?,
+                .map_err(ControlPlaneRequestFailure::configuration_source)?,
             question: row.try_get("question")?,
             resource: row.try_get("resource")?,
             status: parse_turn_status(row.try_get("status")?)?,
@@ -566,7 +564,7 @@ fn conversation_turn_view_from_row(row: &PgRow) -> Result<ConversationTurnView, 
                 .try_get::<Option<serde_json::Value>, _>("query_intent")?
                 .map(serde_json::from_value)
                 .transpose()
-                .map_err(|_| ControlPlaneError::configuration("stored conversation intent is invalid"))?,
+                .map_err(ControlPlaneRequestFailure::configuration_source)?,
             correlation_id: CorrelationId::from_uuid(row.try_get("correlation_id")?),
             created_at: row.try_get("created_at")?,
             completed_at: row.try_get("completed_at")?,
@@ -576,7 +574,9 @@ fn conversation_turn_view_from_row(row: &PgRow) -> Result<ConversationTurnView, 
     })
 }
 
-fn investigation_diagnosis_from_aliased_row(row: &PgRow) -> Result<InvestigationDiagnosisRevision, ControlPlaneError> {
+fn investigation_diagnosis_from_aliased_row(
+    row: &PgRow,
+) -> Result<InvestigationDiagnosisRevision, ControlPlaneRequestFailure> {
     let alias = |name: &str| format!("diagnosis_{name}");
     Ok(InvestigationDiagnosisRevision {
         id: rocketmq_sre_contracts::DiagnosisRevisionId::from_uuid(row.try_get(alias("id").as_str())?),
@@ -587,7 +587,7 @@ fn investigation_diagnosis_from_aliased_row(row: &PgRow) -> Result<Investigation
         turn_id: ConversationTurnId::from_uuid(row.try_get(alias("turn_id").as_str())?),
         answer_revision_id: ConversationAnswerRevisionId::from_uuid(row.try_get(alias("answer_revision_id").as_str())?),
         revision: u32::try_from(row.try_get::<i32, _>(alias("revision").as_str())?)
-            .map_err(|_| ControlPlaneError::configuration("stored investigation diagnosis revision is invalid"))?,
+            .map_err(ControlPlaneRequestFailure::configuration_source)?,
         pack_id: row.try_get(alias("pack_id").as_str())?,
         pack_version: row.try_get(alias("pack_version").as_str())?,
         status: super::repository::parse_investigation_diagnosis_status(row.try_get(alias("status").as_str())?)?,
@@ -628,7 +628,7 @@ const fn investigation_diagnosis_status_name(value: InvestigationDiagnosisStatus
     }
 }
 
-fn parse_turn_status(value: &str) -> Result<ConversationTurnStatus, ControlPlaneError> {
+fn parse_turn_status(value: &str) -> Result<ConversationTurnStatus, ControlPlaneRequestFailure> {
     match value {
         "collecting" => Ok(ConversationTurnStatus::Collecting),
         "answered" => Ok(ConversationTurnStatus::Answered),
@@ -636,7 +636,7 @@ fn parse_turn_status(value: &str) -> Result<ConversationTurnStatus, ControlPlane
         "needs_evidence" => Ok(ConversationTurnStatus::NeedsEvidence),
         "cancelled" => Ok(ConversationTurnStatus::Cancelled),
         "failed" => Ok(ConversationTurnStatus::Failed),
-        _ => Err(ControlPlaneError::configuration(
+        _ => Err(ControlPlaneRequestFailure::configuration(
             "stored conversation status is invalid",
         )),
     }
@@ -649,11 +649,11 @@ fn answer_mode_name(value: ConversationAnswerMode) -> &'static str {
     }
 }
 
-fn parse_answer_mode(value: &str) -> Result<ConversationAnswerMode, ControlPlaneError> {
+fn parse_answer_mode(value: &str) -> Result<ConversationAnswerMode, ControlPlaneRequestFailure> {
     match value {
         "model_assisted" => Ok(ConversationAnswerMode::ModelAssisted),
         "rules_only" => Ok(ConversationAnswerMode::RulesOnly),
-        _ => Err(ControlPlaneError::configuration(
+        _ => Err(ControlPlaneRequestFailure::configuration(
             "stored conversation answer mode is invalid",
         )),
     }

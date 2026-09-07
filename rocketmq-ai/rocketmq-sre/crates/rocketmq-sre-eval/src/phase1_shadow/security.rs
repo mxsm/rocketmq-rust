@@ -26,7 +26,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 
-use super::ShadowEvalError;
+use super::ShadowEvalFailure;
 use super::ShadowPolicy;
 
 /// Minimal structured model synthesis accepted by the shadow harness.
@@ -89,10 +89,13 @@ pub fn build_model_request(question: &str, policy: &ShadowPolicy) -> CanonicalMo
 ///
 /// Returns `invalid_evidence_citation` when a model invents or crosses scope
 /// for any Evidence ID.
-pub fn validate_citations(authorized: &BTreeSet<EvidenceId>, citations: &[EvidenceId]) -> Result<(), ShadowEvalError> {
+pub(super) fn validate_citations(
+    authorized: &BTreeSet<EvidenceId>,
+    citations: &[EvidenceId],
+) -> Result<(), ShadowEvalFailure> {
     for citation in citations {
         if !authorized.contains(citation) {
-            return Err(ShadowEvalError::InvalidCitation(citation.to_string()));
+            return Err(ShadowEvalFailure::InvalidCitation(citation.to_string()));
         }
     }
     Ok(())
@@ -104,21 +107,21 @@ pub fn validate_citations(authorized: &BTreeSet<EvidenceId>, citations: &[Eviden
 ///
 /// Fails closed on unknown tools, invalid JSON, fake citations, or any claim
 /// that the result is executable.
-pub fn validate_model_response(
+pub(super) fn validate_model_response(
     response: &CanonicalModelResponse,
     authorized: &BTreeSet<EvidenceId>,
     policy: &ShadowPolicy,
-) -> Result<ShadowModelSynthesis, ShadowEvalError> {
+) -> Result<ShadowModelSynthesis, ShadowEvalFailure> {
     for tool_call in &response.tool_calls {
         if !policy.model_visible_tools.contains(&tool_call.name) {
-            return Err(ShadowEvalError::UnauthorizedTool(tool_call.name.clone()));
+            return Err(ShadowEvalFailure::UnauthorizedTool(tool_call.name.clone()));
         }
     }
 
-    let synthesis = serde_json::from_str::<ShadowModelSynthesis>(&response.content)
-        .map_err(|error| ShadowEvalError::InvalidSynthesis(error.to_string()))?;
+    let synthesis =
+        serde_json::from_str::<ShadowModelSynthesis>(&response.content).map_err(ShadowEvalFailure::SynthesisDecode)?;
     if synthesis.execution_eligible {
-        return Err(ShadowEvalError::UnsafePolicy(
+        return Err(ShadowEvalFailure::UnsafePolicy(
             "model synthesis cannot be execution eligible in Phase 01".to_owned(),
         ));
     }

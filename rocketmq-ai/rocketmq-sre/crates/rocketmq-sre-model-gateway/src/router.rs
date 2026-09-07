@@ -27,7 +27,10 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::error::ProviderError;
-use crate::error::ProviderErrorCode;
+use crate::error::ProviderFailure;
+use crate::error::ProviderOperationalFailure;
+use crate::error::ProviderRejection;
+use crate::error::ProviderStatusOutcome;
 use crate::ir::CanonicalModelRequest;
 use crate::ir::CanonicalModelResponse;
 use crate::ir::ResponseFormat;
@@ -108,7 +111,7 @@ pub struct FallbackAttempt {
     pub model_family: String,
     pub model_revision: String,
     pub endpoint_instance: String,
-    pub error_code: ProviderErrorCode,
+    pub error_code: ProviderFailure,
     pub retryable: bool,
 }
 
@@ -197,25 +200,16 @@ impl ProviderRegistry {
         &mut self,
         profile: ProviderProfile,
         provider: Arc<dyn ChatModelProvider>,
-    ) -> Result<(), ProviderError> {
+    ) -> Result<(), ProviderStatusOutcome> {
         profile.validate()?;
         if profile.id != provider.profile_id() {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "provider instance does not match profile id",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         if !provider.capabilities().supports_all(&profile.capabilities.supported) {
-            return Err(ProviderError::new(
-                ProviderErrorCode::CapabilityUnsupported,
-                "provider instance does not satisfy its profile capabilities",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         if self.entries.contains_key(&profile.id) {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "provider profile id is already registered",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         self.entries
             .insert(profile.id.clone(), RegisteredProvider { profile, provider });
@@ -226,11 +220,16 @@ impl ProviderRegistry {
     ///
     /// # Errors
     ///
-    /// Returns [`ProviderErrorCode::ProfileInvalid`] for an unknown profile.
-    pub fn set_profile_health(&mut self, profile_id: &str, health: ProviderHealth) -> Result<(), ProviderError> {
-        let entry = self.entries.get_mut(profile_id).ok_or_else(|| {
-            ProviderError::new(ProviderErrorCode::ProfileInvalid, "provider profile is not registered")
-        })?;
+    /// Returns [`ProviderFailure::ProfileInvalid`] for an unknown profile.
+    pub fn set_profile_health(
+        &mut self,
+        profile_id: &str,
+        health: ProviderHealth,
+    ) -> Result<(), ProviderStatusOutcome> {
+        let entry = self
+            .entries
+            .get_mut(profile_id)
+            .ok_or_else(|| ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid))?;
         entry.profile.health = health;
         Ok(())
     }
@@ -306,14 +305,15 @@ impl ProviderRouter {
     ///
     /// # Errors
     ///
-    /// Returns the first non-fallback-safe provider error, including policy,
-    /// safety, invalid-input, capability, and schema-validation failures.
+    /// Returns policy, safety, invalid-input, capability, and residency
+    /// refusals as closed outcomes. Only operational provider failures use the
+    /// error path.
     pub fn invoke(
         &self,
         request: &CanonicalModelRequest,
         requirements: &RoutingRequirements,
         metadata: &InvocationMetadata,
-    ) -> Result<ModelInvocationOutcome, ProviderError> {
+    ) -> Result<ModelInvocationOutcome, ProviderStatusOutcome> {
         let mut required = requirements.required_capabilities.clone();
         required.extend(ProviderCapabilitiesForRequest::from_request(request));
         self.ensure_static_eligibility(&required, requirements)?;
@@ -388,15 +388,17 @@ impl ProviderRouter {
                         record,
                     })));
                 }
-                Err(error) if error.fallback_allowed() => {
+                Err(ProviderStatusOutcome::Operational(error))
+                    if error.fallback_decision() == crate::ProviderFallbackDecision::TryNextProvider =>
+                {
                     fallback_chain.push(FallbackAttempt {
                         profile_id: entry.profile.id.clone(),
                         provider_family: entry.profile.provider_family,
                         model_family: entry.profile.model_family.clone(),
                         model_revision: entry.profile.model_revision.clone(),
                         endpoint_instance: entry.profile.endpoint_instance.clone(),
-                        error_code: error.code,
-                        retryable: error.retryable,
+                        error_code: error.failure(),
+                        retryable: error.retryable(),
                     });
                     if index + 1 >= max_attempts {
                         return Ok(rules_only(
@@ -406,7 +408,7 @@ impl ProviderRouter {
                         ));
                     }
                 }
-                Err(error) => return Err(error),
+                Err(outcome) => return Err(outcome),
             }
         }
         Ok(rules_only(
@@ -420,7 +422,7 @@ impl ProviderRouter {
         &self,
         required: &BTreeSet<ProviderCapability>,
         requirements: &RoutingRequirements,
-    ) -> Result<(), ProviderError> {
+    ) -> Result<(), ProviderStatusOutcome> {
         if self.registry.entries.is_empty() {
             return Ok(());
         }
@@ -431,8 +433,8 @@ impl ProviderRouter {
             .filter(|entry| entry.profile.capabilities.supports_all(required))
             .collect();
         if capability_matches.is_empty() {
-            return Err(ProviderError::capability_unsupported(
-                "no registered provider satisfies the required capability set",
+            return Err(ProviderStatusOutcome::rejected(
+                ProviderRejection::CapabilityUnsupported,
             ));
         }
         let residency_matches: Vec<_> = capability_matches
@@ -446,18 +448,13 @@ impl ProviderRouter {
             })
             .collect();
         if residency_matches.is_empty() {
-            return Err(ProviderError::new(
-                ProviderErrorCode::DataResidencyDenied,
-                "no registered provider satisfies data residency policy",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::DataResidencyDenied));
         }
         if residency_matches
             .iter()
             .all(|entry| !budget_allows(&entry.profile, requirements))
         {
-            return Err(ProviderError::policy_denied(
-                "no registered provider satisfies the model budget",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied));
         }
         Ok(())
     }
@@ -494,21 +491,31 @@ fn rules_only(
     })
 }
 
-fn validate_structured_output(format: &ResponseFormat, content: &str) -> Result<(), ProviderError> {
+fn validate_structured_output(format: &ResponseFormat, content: &str) -> Result<(), ProviderStatusOutcome> {
     match format {
         ResponseFormat::Text => Ok(()),
         ResponseFormat::JsonObject => {
-            let value: Value = serde_json::from_str(content).map_err(|_| schema_error())?;
+            let value: Value = serde_json::from_str(content).map_err(|source| {
+                ProviderStatusOutcome::Operational(ProviderError::from_source(
+                    ProviderOperationalFailure::ProtocolError,
+                    source,
+                ))
+            })?;
             if value.is_object() { Ok(()) } else { Err(schema_error()) }
         }
         ResponseFormat::JsonSchema { schema, .. } => {
-            let value: Value = serde_json::from_str(content).map_err(|_| schema_error())?;
+            let value: Value = serde_json::from_str(content).map_err(|source| {
+                ProviderStatusOutcome::Operational(ProviderError::from_source(
+                    ProviderOperationalFailure::ProtocolError,
+                    source,
+                ))
+            })?;
             validate_json_schema_node(schema, schema, &value)
         }
     }
 }
 
-fn validate_json_schema_node(root: &Value, schema: &Value, value: &Value) -> Result<(), ProviderError> {
+fn validate_json_schema_node(root: &Value, schema: &Value, value: &Value) -> Result<(), ProviderStatusOutcome> {
     if let Some(boolean_schema) = schema.as_bool() {
         return if boolean_schema { Ok(()) } else { Err(schema_error()) };
     }
@@ -681,7 +688,7 @@ fn value_matches_type(value: &Value, expected: &str) -> bool {
     }
 }
 
-fn enforce_count_bounds(count: usize, minimum: Option<u64>, maximum: Option<u64>) -> Result<(), ProviderError> {
+fn enforce_count_bounds(count: usize, minimum: Option<u64>, maximum: Option<u64>) -> Result<(), ProviderStatusOutcome> {
     let count = count as u64;
     if minimum.is_some_and(|minimum| count < minimum) || maximum.is_some_and(|maximum| count > maximum) {
         Err(schema_error())
@@ -690,11 +697,8 @@ fn enforce_count_bounds(count: usize, minimum: Option<u64>, maximum: Option<u64>
     }
 }
 
-fn schema_error() -> ProviderError {
-    ProviderError::new(
-        ProviderErrorCode::SchemaValidationFailed,
-        "model output failed local JSON schema validation",
-    )
+fn schema_error() -> ProviderStatusOutcome {
+    ProviderStatusOutcome::rejected(ProviderRejection::SchemaValidationFailed)
 }
 
 fn current_unix_ms() -> u64 {
@@ -723,8 +727,8 @@ mod tests {
                 &serde_json::json!({"status":"healthy","secret":"leak"})
             )
             .expect_err("additional property")
-            .code,
-            ProviderErrorCode::SchemaValidationFailed
+            .failure(),
+            ProviderFailure::SchemaValidationFailed
         );
     }
 
@@ -756,8 +760,8 @@ mod tests {
         assert_eq!(
             validate_json_schema_node(&schema, &schema, &serde_json::json!({"status":"invalid","samples":[]}))
                 .expect_err("invalid schema output")
-                .code,
-            ProviderErrorCode::SchemaValidationFailed
+                .failure(),
+            ProviderFailure::SchemaValidationFailed
         );
     }
 }

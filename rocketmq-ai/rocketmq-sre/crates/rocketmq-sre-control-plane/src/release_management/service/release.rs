@@ -34,7 +34,7 @@ use super::support::audit_event;
 use super::support::require_cluster;
 use super::support::require_operator;
 use super::support::transition_release;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 use crate::release_management::model::CreateReleaseRequest;
 use crate::release_management::model::PrepareReleaseRequest;
@@ -50,7 +50,7 @@ impl ReleaseManagementService {
         auth: &AuthContext,
         request: &CreateReleaseRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ReleaseDetail, ControlPlaneError> {
+    ) -> Result<ReleaseDetail, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         require_cluster(auth, request.cluster_id)?;
         validate_create_release(request)?;
@@ -113,7 +113,7 @@ impl ReleaseManagementService {
             updated_at: now,
         };
         ReleaseValidator::validate_workflow(&workflow)
-            .map_err(|error| ControlPlaneError::validation("release_invalid", error.to_string()))?;
+            .map_err(|_| ControlPlaneRequestFailure::validation("release_invalid", "release rejected"))?;
         let event = ReleaseEventRecord {
             id: Uuid::new_v4(),
             release_id: workflow.id,
@@ -162,7 +162,7 @@ impl ReleaseManagementService {
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
-    ) -> Result<ReleaseDetail, ControlPlaneError> {
+    ) -> Result<ReleaseDetail, ControlPlaneRequestFailure> {
         let workflow = self.load_release(auth, release_id).await?;
         self.release_detail(workflow).await
     }
@@ -171,7 +171,7 @@ impl ReleaseManagementService {
         &self,
         auth: &AuthContext,
         query: &ReleaseListQuery,
-    ) -> Result<ReleasePage, ControlPlaneError> {
+    ) -> Result<ReleasePage, ControlPlaneRequestFailure> {
         require_cluster(auth, query.cluster_id)?;
         let limit = bounded_release_page_size(query.limit);
         let mut items = self
@@ -192,7 +192,7 @@ impl ReleaseManagementService {
         auth: &AuthContext,
         release_id: ReleaseId,
         request: &PrepareReleaseRequest,
-    ) -> Result<ReleasePreparationView, ControlPlaneError> {
+    ) -> Result<ReleasePreparationView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let mut current = self.load_release(auth, release_id).await?;
         if current.status == ReleaseStatus::Planned {
@@ -217,7 +217,7 @@ impl ReleaseManagementService {
                 .await?;
             current = transition.workflow;
         } else if current.status != ReleaseStatus::ReadinessChecking {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "release_state_invalid",
                 "release readiness may run only from planned or readiness-checking state",
             ));
@@ -302,13 +302,13 @@ impl ReleaseManagementService {
         &self,
         auth: &AuthContext,
         release_id: ReleaseId,
-    ) -> Result<ReleaseWorkflow, ControlPlaneError> {
+    ) -> Result<ReleaseWorkflow, ControlPlaneRequestFailure> {
         let workflow = self.repository.release_workflow(auth.tenant_id, release_id).await?;
         require_cluster(auth, workflow.cluster_id)?;
         Ok(workflow)
     }
 
-    async fn release_detail(&self, workflow: ReleaseWorkflow) -> Result<ReleaseDetail, ControlPlaneError> {
+    async fn release_detail(&self, workflow: ReleaseWorkflow) -> Result<ReleaseDetail, ControlPlaneRequestFailure> {
         let observations = self
             .repository
             .release_observations(workflow.tenant_id, workflow.id)

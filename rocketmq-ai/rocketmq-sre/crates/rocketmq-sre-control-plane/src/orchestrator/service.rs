@@ -43,6 +43,7 @@ use super::citation::validate_report_citations;
 use super::limits::BudgetUsage;
 use super::limits::OrchestratorLimits;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 use crate::connector_channel::PostgresConnectorChannelService;
 use crate::evidence::EvidenceListQuery;
@@ -96,10 +97,8 @@ impl OrchestratorService {
         workflow: WorkflowService,
         evidence: EvidenceService,
         observability: SreObservability,
-    ) -> Result<Self, ControlPlaneError> {
-        let registry = full_registry().map_err(|error| {
-            ControlPlaneError::configuration(format!("built-in diagnostic registry is invalid: {error}"))
-        })?;
+    ) -> Result<Self, ControlPlaneRequestFailure> {
+        let registry = full_registry().map_err(|_| ControlPlaneError::configuration("diagnostic registry rejected"))?;
         Ok(Self {
             workflow,
             evidence,
@@ -128,7 +127,7 @@ impl OrchestratorService {
         auth: &AuthContext,
         incident_id: IncidentId,
         correlation_id: CorrelationId,
-    ) -> Result<DiagnosisResponse, ControlPlaneError> {
+    ) -> Result<DiagnosisResponse, ControlPlaneRequestFailure> {
         let correlation = CorrelationContext::from_id(correlation_id);
         self.observability.record_incident(IncidentOutcome::Started);
         let result = self
@@ -147,11 +146,12 @@ impl OrchestratorService {
         auth: &AuthContext,
         incident_id: IncidentId,
         correlation_id: CorrelationId,
-    ) -> Result<DiagnosisResponse, ControlPlaneError> {
+    ) -> Result<DiagnosisResponse, ControlPlaneRequestFailure> {
         self.workflow.ensure_operator(auth)?;
         let mut incident = self.workflow.incident(auth, incident_id).await?;
         if incident.incident.status.is_terminal() {
-            return Err(ControlPlaneError::conflict(
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "conflict",
                 "terminal incidents cannot be diagnosed again",
             ));
         }
@@ -217,7 +217,7 @@ impl OrchestratorService {
                 Ok(decision) => decision,
                 Err(error) => {
                     tracing::warn!(
-                        code = control_plane_error_code(&error),
+                        code = error.code(),
                         "model-assisted diagnosis was unavailable; retaining deterministic result"
                     );
                     ModelDiagnosisDecision::rules_only()
@@ -276,7 +276,7 @@ impl OrchestratorService {
         pack_id: &str,
         correlation_id: CorrelationId,
         correlation: CorrelationContext,
-    ) -> Result<(crate::evidence::EvidencePage, u8, u8), ControlPlaneError> {
+    ) -> Result<(crate::evidence::EvidencePage, u8, u8), ControlPlaneRequestFailure> {
         let query = EvidenceListQuery {
             cluster_id: incident.incident.cluster_id,
             incident_id: Some(incident.incident.id),
@@ -291,12 +291,7 @@ impl OrchestratorService {
                     .evidence_collect_span(correlation, EvidenceSourceLabel::Other),
             )
             .await
-            .map_err(|_| {
-                ControlPlaneError::validation(
-                    "source_unavailable",
-                    "evidence collection exceeded the diagnosis deadline",
-                )
-            })
+            .map_err(ControlPlaneRequestFailure::unavailable_source)
             .and_then(|result| result);
         self.observability
             .record_evidence_query(EvidenceSourceLabel::Other, result_class(&result), started.elapsed());
@@ -304,9 +299,7 @@ impl OrchestratorService {
         let Some(connector_channel) = &self.connector_channel else {
             return Ok((evidence, 1, 0));
         };
-        let registry = full_registry().map_err(|error| {
-            ControlPlaneError::configuration(format!("built-in diagnostic registry is invalid: {error}"))
-        })?;
+        let registry = full_registry().map_err(|_| ControlPlaneError::configuration("diagnostic registry rejected"))?;
         let pack = registry.resolve(pack_id).ok_or_else(|| {
             ControlPlaneError::configuration(format!("diagnostic pack `{pack_id}` is not registered"))
         })?;
@@ -333,7 +326,7 @@ impl OrchestratorService {
                 .unwrap_or_else(|_| chrono::Duration::seconds(1));
             let time_range = TimeRange::new(incident.incident.created_at.max(now - chrono::Duration::hours(1)), now)
                 .map_err(|_| {
-                    ControlPlaneError::validation("invalid_request", "incident evidence time range is invalid")
+                    ControlPlaneRequestFailure::validation("invalid_request", "incident evidence time range is invalid")
                 })?;
             let connector_query = EvidenceQuery {
                 query_id: QueryId::new(),
@@ -419,15 +412,16 @@ impl OrchestratorService {
         pack_id: &str,
         evidence: &[rocketmq_sre_contracts::EvidenceSnapshot],
         correlation: CorrelationContext,
-    ) -> Result<DiagnosticReport, ControlPlaneError> {
+    ) -> Result<DiagnosticReport, ControlPlaneRequestFailure> {
         let label = DiagnosticPackLabel::from_pack_id(pack_id);
         let span = self.observability.diagnostic_evaluate_span(correlation, label);
         let _guard = span.enter();
         let started = Instant::now();
-        let result = self.diagnostics.evaluate(pack_id, evidence).map_err(|error| {
-            ControlPlaneError::validation(
+        let result = self.diagnostics.evaluate(pack_id, evidence).map_err(|source| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
                 "diagnostic_evaluation_failed",
-                format!("deterministic diagnostic evaluation failed: {error}"),
+                source,
             )
         });
         self.observability
@@ -436,35 +430,41 @@ impl OrchestratorService {
     }
 }
 
-fn result_class<T>(result: &Result<T, ControlPlaneError>) -> ResultClass {
+fn result_class<T>(result: &Result<T, ControlPlaneRequestFailure>) -> ResultClass {
     match result {
         Ok(_) => ResultClass::Success,
-        Err(ControlPlaneError::Unauthorized | ControlPlaneError::Forbidden { .. }) => ResultClass::Unauthorized,
-        Err(
-            ControlPlaneError::Database(_)
-            | ControlPlaneError::IdentityProvider(_)
-            | ControlPlaneError::ObjectStore
-            | ControlPlaneError::Io(_),
-        ) => ResultClass::Unavailable,
+        Err(error)
+            if matches!(
+                error.failure(),
+                crate::ControlPlaneFailure::Unauthorized | crate::ControlPlaneFailure::Forbidden
+            ) =>
+        {
+            ResultClass::Unauthorized
+        }
+        Err(error)
+            if matches!(
+                error.failure(),
+                crate::ControlPlaneFailure::Database
+                    | crate::ControlPlaneFailure::IdentityProvider
+                    | crate::ControlPlaneFailure::ObjectStore
+                    | crate::ControlPlaneFailure::Io
+            ) =>
+        {
+            ResultClass::Unavailable
+        }
         Err(_) => ResultClass::OtherError,
     }
 }
 
-fn retryable_evidence_query(error: &ControlPlaneError) -> bool {
+fn retryable_evidence_query(error: &ControlPlaneRequestFailure) -> bool {
     matches!(
-        error,
-        ControlPlaneError::Database(_)
-            | ControlPlaneError::IdentityProvider(_)
-            | ControlPlaneError::ObjectStore
-            | ControlPlaneError::Io(_)
-            | ControlPlaneError::NotFound
-    ) || matches!(
-        error,
-        ControlPlaneError::Validation {
-            code: "source_unavailable",
-            ..
-        }
-    )
+        error.failure(),
+        crate::ControlPlaneFailure::Database
+            | crate::ControlPlaneFailure::IdentityProvider
+            | crate::ControlPlaneFailure::ObjectStore
+            | crate::ControlPlaneFailure::Io
+            | crate::ControlPlaneFailure::NotFound
+    ) || (error.failure() == crate::ControlPlaneFailure::Validation && error.code() == "source_unavailable")
 }
 
 fn select_pack(incident: &IncidentView) -> &'static str {
@@ -561,10 +561,8 @@ fn has_complete_evidence(
 fn required_evidence_is_complete(
     pack_id: &str,
     evidence: &[rocketmq_sre_contracts::EvidenceSnapshot],
-) -> Result<bool, ControlPlaneError> {
-    let registry = full_registry().map_err(|error| {
-        ControlPlaneError::configuration(format!("built-in diagnostic registry is invalid: {error}"))
-    })?;
+) -> Result<bool, ControlPlaneRequestFailure> {
+    let registry = full_registry().map_err(|_| ControlPlaneError::configuration("diagnostic registry rejected"))?;
     let pack = registry
         .resolve(pack_id)
         .ok_or_else(|| ControlPlaneError::configuration(format!("diagnostic pack `{pack_id}` is not registered")))?;
@@ -600,19 +598,12 @@ fn per_query_timeout(total: std::time::Duration, max_tool_calls: u8) -> std::tim
     (total / query_slots).max(std::time::Duration::from_secs(1))
 }
 
-fn control_plane_error_code(error: &ControlPlaneError) -> &'static str {
-    match error {
-        ControlPlaneError::Validation { code, .. } | ControlPlaneError::Forbidden { code, .. } => code,
-        ControlPlaneError::Unauthorized => "unauthorized_scope",
-        ControlPlaneError::Conflict { .. } => "capability_mismatch",
-        ControlPlaneError::Configuration { .. }
-        | ControlPlaneError::NotFound
-        | ControlPlaneError::Database(_)
-        | ControlPlaneError::IdentityProvider(_)
-        | ControlPlaneError::Executor(_)
-        | ControlPlaneError::ObjectStore
-        | ControlPlaneError::CapabilityDocument { .. }
-        | ControlPlaneError::Io(_) => "source_unavailable",
+fn control_plane_error_code(error: &ControlPlaneRequestFailure) -> &'static str {
+    match error.failure() {
+        crate::ControlPlaneFailure::Validation | crate::ControlPlaneFailure::Forbidden => error.code(),
+        crate::ControlPlaneFailure::Unauthorized => "unauthorized_scope",
+        crate::ControlPlaneFailure::Conflict => "capability_mismatch",
+        _ => "source_unavailable",
     }
 }
 

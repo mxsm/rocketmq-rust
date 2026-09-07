@@ -17,7 +17,17 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_sre_executor::ExecutorConfig;
 use tracing_subscriber::EnvFilter;
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn main() -> std::process::ExitCode {
+    match run_main() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(_) => {
+            eprintln!("RocketMQ SRE executor failed");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("rocketmq_sre_executor=info")),

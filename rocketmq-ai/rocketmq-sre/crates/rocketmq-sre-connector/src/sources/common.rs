@@ -31,7 +31,7 @@ use sha2::Sha256;
 use tokio::sync::Notify;
 
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 
 const MAX_SAFE_STRING_BYTES: usize = 4096;
 
@@ -138,7 +138,7 @@ pub(crate) async fn bounded_future<T>(
 ) -> Result<T, ConnectorError> {
     if cancel.is_cancelled() {
         return Err(ConnectorError::new(
-            ConnectorErrorCode::QueryCancelled,
+            ConnectorFailure::QueryCancelled,
             false,
             "evidence query was cancelled before collection",
         ));
@@ -146,10 +146,10 @@ pub(crate) async fn bounded_future<T>(
     let remaining = deadline.signed_duration_since(Utc::now());
     let timeout = remaining
         .to_std()
-        .map_err(|_| ConnectorError::new(ConnectorErrorCode::DeadlineExceeded, true, "query deadline elapsed"))?;
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::DeadlineExceeded, true, source))?;
     if timeout.is_zero() {
         return Err(ConnectorError::new(
-            ConnectorErrorCode::DeadlineExceeded,
+            ConnectorFailure::DeadlineExceeded,
             true,
             "query deadline elapsed",
         ));
@@ -157,16 +157,14 @@ pub(crate) async fn bounded_future<T>(
 
     tokio::select! {
         _ = cancel.cancelled() => Err(ConnectorError::new(
-            ConnectorErrorCode::QueryCancelled,
+            ConnectorFailure::QueryCancelled,
             false,
             "evidence query was cancelled",
         )),
         result = tokio::time::timeout(timeout, future) => {
-            result.map_err(|_| ConnectorError::new(
-                ConnectorErrorCode::DeadlineExceeded,
-                true,
-                "evidence source exceeded the query deadline",
-            ))?
+            result.map_err(|source| {
+                ConnectorError::from_source(ConnectorFailure::DeadlineExceeded, true, source)
+            })?
         }
     }
 }
@@ -183,7 +181,7 @@ pub(crate) async fn bounded_response(
         .is_some_and(|length| length > max_bytes as u64)
     {
         return Err(ConnectorError::new(
-            ConnectorErrorCode::OutputTooLarge,
+            ConnectorFailure::OutputTooLarge,
             false,
             "source response exceeds the configured byte bound",
         ));
@@ -194,7 +192,7 @@ pub(crate) async fn bounded_response(
             response
                 .chunk()
                 .await
-                .map_err(|_| ConnectorError::source("source response body is unavailable"))
+                .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))
         })
         .await?;
         let Some(chunk) = chunk else {
@@ -202,7 +200,7 @@ pub(crate) async fn bounded_response(
         };
         if body.len().saturating_add(chunk.len()) > max_bytes {
             return Err(ConnectorError::new(
-                ConnectorErrorCode::OutputTooLarge,
+                ConnectorFailure::OutputTooLarge,
                 false,
                 "source response exceeds the configured byte bound",
             ));
@@ -213,7 +211,8 @@ pub(crate) async fn bounded_response(
 }
 
 pub(crate) fn parse_json(body: &[u8]) -> Result<Value, ConnectorError> {
-    serde_json::from_slice(body).map_err(|_| ConnectorError::source("source returned invalid JSON"))
+    serde_json::from_slice(body)
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))
 }
 
 /// Removes sensitive fields, pseudonymizes message identifiers and bounds
@@ -226,7 +225,7 @@ pub(crate) fn sanitize_and_bound(
 ) -> Result<(Value, bool), ConnectorError> {
     if contains_message_body(&value) {
         return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
+            ConnectorFailure::CapabilityMismatch,
             "evidence source returned forbidden message content",
         ));
     }
@@ -234,10 +233,10 @@ pub(crate) fn sanitize_and_bound(
     let mut truncated = false;
     let sanitized = sanitize_value(value, None, &mut remaining_rows, &mut truncated, pseudonym_key);
     let encoded = serde_json::to_vec(&sanitized)
-        .map_err(|_| ConnectorError::source("sanitized source output cannot be encoded"))?;
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))?;
     if encoded.len() > max_bytes {
         return Err(ConnectorError::new(
-            ConnectorErrorCode::OutputTooLarge,
+            ConnectorFailure::OutputTooLarge,
             false,
             "sanitized source output exceeds the configured byte bound",
         ));
@@ -423,7 +422,7 @@ pub(crate) fn validate_identifier(value: &str, name: &str) -> Result<(), Connect
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'%' | b':'))
     {
         return Err(ConnectorError::new(
-            ConnectorErrorCode::InvalidEvidenceQuery,
+            ConnectorFailure::InvalidEvidenceQuery,
             false,
             format!("{name} contains unsupported characters"),
         ));
@@ -434,7 +433,7 @@ pub(crate) fn validate_identifier(value: &str, name: &str) -> Result<(), Connect
 pub(crate) fn require_label(labels: &BTreeSet<String>, label: &str) -> Result<(), ConnectorError> {
     if !labels.contains(label) {
         return Err(ConnectorError::new(
-            ConnectorErrorCode::ClusterNotAllowed,
+            ConnectorFailure::ClusterNotAllowed,
             false,
             "source query requires a label outside the configured allowlist",
         ));
@@ -520,7 +519,7 @@ mod tests {
                 ]
             });
             let error = sanitize_and_bound(value, 0, 4096, b"tenant-key").expect_err(key);
-            assert_eq!(error.code, ConnectorErrorCode::CapabilityMismatch, "{key}");
+            assert_eq!(error.failure(), ConnectorFailure::CapabilityMismatch, "{key}");
         }
     }
 
@@ -532,6 +531,9 @@ mod tests {
             std::future::pending::<Result<(), ConnectorError>>().await
         })
         .await;
-        assert_eq!(result.expect_err("cancelled").code, ConnectorErrorCode::QueryCancelled);
+        assert_eq!(
+            result.expect_err("cancelled").failure(),
+            ConnectorFailure::QueryCancelled
+        );
     }
 }

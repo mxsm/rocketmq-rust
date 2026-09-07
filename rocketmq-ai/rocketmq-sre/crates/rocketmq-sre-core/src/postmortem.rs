@@ -23,6 +23,5 @@ pub use assembler::PostmortemAssembly;
 pub use assembler::PostmortemAssemblyInput;
 pub use assembler::assemble;
 pub use template::render_markdown;
-pub use validation::PostmortemValidationError;
 pub use validation::validate_action_item_transition;
 pub use validation::validate_revision;

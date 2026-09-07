@@ -67,6 +67,8 @@ fn all_wave_a_cases_run_offline_with_the_mock_provider() {
     let harness = harness();
     let summary = harness
         .run(ProviderMode::Mock, harness.manifest().cluster_id)
+        .expect("mock-provider execution should remain operational")
+        .completed()
         .expect("all mock-provider Wave A scenarios should replay");
 
     assert!(summary.passed);
@@ -99,6 +101,8 @@ fn rules_only_replays_all_cases_without_a_provider_call() {
     let harness = harness();
     let summary = harness
         .run(ProviderMode::RulesOnly, harness.manifest().cluster_id)
+        .expect("rules-only execution should remain operational")
+        .completed()
         .expect("rules-only Wave A scenarios should replay");
 
     assert!(summary.passed);
@@ -114,7 +118,9 @@ fn rules_only_replays_all_cases_without_a_provider_call() {
 fn fake_citation_is_rejected_before_synthesis_is_accepted() {
     let fixture: FakeCitationFixture = read_json_fixture("security/fake-citation.json");
     let error = validate_citations(&fixture.authorized_evidence_ids, &fixture.claimed_evidence_ids)
-        .expect_err("invented citation must fail closed");
+        .expect("citation rejection is not an operational error")
+        .rejection()
+        .expect("invented citation must fail closed");
 
     assert_eq!(error.code(), fixture.expected_error);
 }
@@ -127,7 +133,9 @@ fn cross_cluster_replay_is_rejected_before_fixture_access() {
 
     let error = harness
         .run(ProviderMode::Mock, fixture.requested_cluster_id)
-        .expect_err("cross-cluster request must fail closed");
+        .expect("scope rejection is not an operational error")
+        .rejection()
+        .expect("cross-cluster request must fail closed");
 
     assert_eq!(error.code(), fixture.expected_error);
 }
@@ -168,7 +176,9 @@ fn prompt_injection_cannot_expand_tools_or_connect_an_executor() {
         arguments: serde_json::json!({"topic": "production-topic"}),
     });
     let error = validate_model_response(&response, &BTreeSet::new(), policy)
-        .expect_err("model-proposed mutation must be rejected");
+        .expect("tool rejection is not an operational error")
+        .rejection()
+        .expect("model-proposed mutation must be rejected");
 
     assert_eq!(error.code(), fixture.expected_error);
     assert_eq!(fixture.expected_mutation_calls, 0);
@@ -182,21 +192,35 @@ fn shadow_manifest_rejects_mutation_executor_and_unknown_tool_enablement() {
     let mut mutation = harness.manifest().clone();
     mutation.policy.mutation_supported = true;
     assert_eq!(
-        mutation.validate().expect_err("mutation enablement must fail").code(),
+        mutation
+            .validate()
+            .expect("mutation rejection is not operational")
+            .rejection()
+            .expect("mutation enablement must fail")
+            .code(),
         "mutation_boundary_violation"
     );
 
     let mut executor = harness.manifest().clone();
     executor.policy.executor_connected = true;
     assert_eq!(
-        executor.validate().expect_err("Executor connection must fail").code(),
+        executor
+            .validate()
+            .expect("executor rejection is not operational")
+            .rejection()
+            .expect("Executor connection must fail")
+            .code(),
         "mutation_boundary_violation"
     );
 
     let mut tool = harness.manifest().clone();
     tool.policy.model_visible_tools.insert("delete_topic".to_owned());
     assert_eq!(
-        tool.validate().expect_err("unknown model tool must fail").code(),
+        tool.validate()
+            .expect("tool rejection is not operational")
+            .rejection()
+            .expect("unknown model tool must fail")
+            .code(),
         "mutation_boundary_violation"
     );
 }
@@ -209,6 +233,8 @@ fn provider_outage_falls_back_to_rules_only_for_every_case() {
     let harness = harness();
     let summary = harness
         .run(fixture.provider_mode, harness.manifest().cluster_id)
+        .expect("provider outage execution should remain operational")
+        .completed()
         .expect("provider outage must preserve deterministic diagnosis");
 
     assert_eq!(summary.fixture_count, 24);
@@ -245,6 +271,8 @@ fn message_path_evidence_contains_no_message_body_field() {
 
 fn harness() -> ShadowHarness {
     ShadowHarness::load(&e2e_root().join("wave-a-manifest.v1.yaml"), &fixtures_root())
+        .expect("shadow manifest load should remain operational")
+        .completed()
         .expect("Phase 01 shadow manifest should load")
 }
 

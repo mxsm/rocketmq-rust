@@ -21,6 +21,7 @@ use super::patch_matches;
 use super::safety_matches_before;
 use super::safety_state;
 use super::select_before_values;
+use crate::ExecutionAgentError;
 
 fn state() -> SubscriptionGroupConfigCasState {
     SubscriptionGroupConfigCasState {
@@ -99,4 +100,45 @@ fn safety_comparison_detects_non_allowlisted_changes() {
         state: changed,
     }];
     assert!(!safety_matches_before(&changed_live, &before));
+}
+
+#[test]
+fn admin_failures_remain_operational_with_their_typed_source() {
+    use std::error::Error;
+
+    let error = ExecutionAgentError::driver_source(rocketmq_admin_core::core::AdminError::backend(
+        "query_subscription_group_config_cas_state",
+        "private RocketMQ failure",
+    ));
+    assert!(
+        error
+            .source()
+            .is_some_and(|source| source.is::<rocketmq_admin_core::core::AdminError>())
+    );
+    assert_eq!(
+        error.http_classification(),
+        (axum::http::StatusCode::SERVICE_UNAVAILABLE, "source_unavailable", true)
+    );
+    assert!(matches!(
+        crate::ExecutionAgentRequestFailure::from(error),
+        crate::ExecutionAgentRequestFailure::Operational(_)
+    ));
+
+    let startup_error = ExecutionAgentError::configuration_source(rocketmq_admin_core::core::AdminError::backend(
+        "build_and_start",
+        "private RocketMQ startup failure",
+    ));
+    assert!(
+        startup_error
+            .source()
+            .is_some_and(|source| source.is::<rocketmq_admin_core::core::AdminError>())
+    );
+    assert_eq!(
+        startup_error.http_classification(),
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "source_unavailable",
+            false
+        )
+    );
 }

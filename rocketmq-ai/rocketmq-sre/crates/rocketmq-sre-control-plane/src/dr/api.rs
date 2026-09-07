@@ -47,7 +47,7 @@ use super::model::StartDrExerciseRequest;
 use super::model::TransitionDrExerciseRequest;
 use super::model::UpdateDrActionItemRequest;
 use super::model::UpsertDrBackupAssetRequest;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 
 const DR_WRITE_BODY_LIMIT: usize = 256 * 1024;
@@ -99,7 +99,7 @@ async fn create_plan(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateDrPlanRequest>,
-) -> Result<Json<DrPlan>, ControlPlaneError> {
+) -> Result<Json<DrPlan>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, request.cluster_id).await?;
     state.dr.create_plan(&auth, &request).await.map(Json)
 }
@@ -108,7 +108,7 @@ async fn plans(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<DrPlanQuery>,
-) -> Result<Json<DrPlanPage>, ControlPlaneError> {
+) -> Result<Json<DrPlanPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.dr.plans(&auth, &query).await.map(Json)
 }
@@ -118,7 +118,7 @@ async fn upsert_backup_asset(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<UpsertDrBackupAssetRequest>,
-) -> Result<Json<DrBackupAsset>, ControlPlaneError> {
+) -> Result<Json<DrBackupAsset>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .dr
@@ -131,7 +131,7 @@ async fn backup_assets(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<DrBackupAssetPage>, ControlPlaneError> {
+) -> Result<Json<DrBackupAssetPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.dr.backup_assets(&auth, parse_plan_id(&id)?).await.map(Json)
 }
@@ -140,7 +140,7 @@ async fn create_exercise(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<StartDrExerciseRequest>,
-) -> Result<Json<DrExercise>, ControlPlaneError> {
+) -> Result<Json<DrExercise>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.dr.create_exercise(&auth, &request).await.map(Json)
 }
@@ -149,7 +149,7 @@ async fn exercises(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<DrExerciseQuery>,
-) -> Result<Json<DrExercisePage>, ControlPlaneError> {
+) -> Result<Json<DrExercisePage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.dr.exercises(&auth, &query).await.map(Json)
 }
@@ -159,7 +159,7 @@ async fn transition_exercise(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<TransitionDrExerciseRequest>,
-) -> Result<Json<DrExercise>, ControlPlaneError> {
+) -> Result<Json<DrExercise>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .dr
@@ -173,7 +173,7 @@ async fn record_checkpoint(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<RecordRecoveryCheckpointRequest>,
-) -> Result<Json<RecoveryCheckpoint>, ControlPlaneError> {
+) -> Result<Json<RecoveryCheckpoint>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .dr
@@ -186,7 +186,7 @@ async fn checkpoints(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<RecoveryCheckpointPage>, ControlPlaneError> {
+) -> Result<Json<RecoveryCheckpointPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.dr.checkpoints(&auth, parse_exercise_id(&id)?).await.map(Json)
 }
@@ -196,7 +196,7 @@ async fn record_finding(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<RecordDrFindingRequest>,
-) -> Result<Json<DrFinding>, ControlPlaneError> {
+) -> Result<Json<DrFinding>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .dr
@@ -209,7 +209,7 @@ async fn findings(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<DrFindingPage>, ControlPlaneError> {
+) -> Result<Json<DrFindingPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state.dr.findings(&auth, parse_exercise_id(&id)?).await.map(Json)
 }
@@ -218,7 +218,7 @@ async fn action_items(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<DrActionItemQuery>,
-) -> Result<Json<DrActionItemPage>, ControlPlaneError> {
+) -> Result<Json<DrActionItemPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.dr.action_items(&auth, &query).await.map(Json)
 }
@@ -228,7 +228,7 @@ async fn update_action_item(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<UpdateDrActionItemRequest>,
-) -> Result<Json<DrActionItem>, ControlPlaneError> {
+) -> Result<Json<DrActionItem>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .dr
@@ -237,20 +237,20 @@ async fn update_action_item(
         .map(Json)
 }
 
-fn parse_plan_id(value: &str) -> Result<DrPlanId, ControlPlaneError> {
+fn parse_plan_id(value: &str) -> Result<DrPlanId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_dr_plan_id", "DR plan ID must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_dr_plan_id", "DR plan id is invalid"))
 }
 
-fn parse_exercise_id(value: &str) -> Result<DrExerciseId, ControlPlaneError> {
+fn parse_exercise_id(value: &str) -> Result<DrExerciseId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_dr_exercise_id", "DR exercise ID must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_dr_exercise_id", "DR exercise id is invalid"))
 }
 
-fn parse_action_item_id(value: &str) -> Result<DrActionItemId, ControlPlaneError> {
-    value
-        .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_dr_action_item_id", "DR action item ID must be a UUID"))
+fn parse_action_item_id(value: &str) -> Result<DrActionItemId, ControlPlaneRequestFailure> {
+    value.parse().map_err(|_| {
+        ControlPlaneRequestFailure::validation("invalid_dr_action_item_id", "DR action-item id is invalid")
+    })
 }

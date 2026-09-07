@@ -36,9 +36,9 @@ use sqlx::Row;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
-pub(super) fn artifact_from_row(row: &PgRow) -> Result<GovernanceArtifact, ControlPlaneError> {
+pub(super) fn artifact_from_row(row: &PgRow) -> Result<GovernanceArtifact, ControlPlaneRequestFailure> {
     Ok(GovernanceArtifact {
         id: GovernanceArtifactId::from_uuid(row.try_get("id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -54,7 +54,7 @@ pub(super) fn artifact_from_row(row: &PgRow) -> Result<GovernanceArtifact, Contr
     })
 }
 
-pub(super) fn version_from_row(row: &PgRow) -> Result<GovernanceVersion, ControlPlaneError> {
+pub(super) fn version_from_row(row: &PgRow) -> Result<GovernanceVersion, ControlPlaneRequestFailure> {
     let algorithm = row.try_get::<Option<String>, _>("signature_algorithm")?;
     let key_id = row.try_get::<Option<String>, _>("signing_key_id")?;
     let value = row.try_get::<Option<String>, _>("signature_value")?;
@@ -66,7 +66,7 @@ pub(super) fn version_from_row(row: &PgRow) -> Result<GovernanceVersion, Control
         }),
         (None, None, None) => None,
         _ => {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_persisted_governance_state",
                 "governance signature metadata is incomplete",
             ));
@@ -80,19 +80,11 @@ pub(super) fn version_from_row(row: &PgRow) -> Result<GovernanceVersion, Control
         content_digest: row.try_get("content_digest")?,
         signature,
         state: lifecycle_state(row.try_get("lifecycle_state")?)?,
-        applicable_components: serde_json::from_value(row.try_get("applicable_components")?).map_err(|_| {
-            ControlPlaneError::validation(
-                "invalid_persisted_governance_state",
-                "applicable components are invalid",
-            )
-        })?,
+        applicable_components: serde_json::from_value(row.try_get("applicable_components")?)
+            .map_err(|source| ControlPlaneRequestFailure::state_source("invalid_persisted_governance_state", source))?,
         applicable_version_range: row.try_get("applicable_version_range")?,
-        dependencies: serde_json::from_value(row.try_get("dependencies")?).map_err(|_| {
-            ControlPlaneError::validation(
-                "invalid_persisted_governance_state",
-                "governance dependencies are invalid",
-            )
-        })?,
+        dependencies: serde_json::from_value(row.try_get("dependencies")?)
+            .map_err(|source| ControlPlaneRequestFailure::state_source("invalid_persisted_governance_state", source))?,
         review_due_at: row.try_get("review_due_at")?,
         expires_at: row.try_get("expires_at")?,
         replacement_version_id: row
@@ -107,7 +99,7 @@ pub(super) fn version_from_row(row: &PgRow) -> Result<GovernanceVersion, Control
     })
 }
 
-pub(super) fn impact_from_row(row: &PgRow) -> Result<GovernanceImpact, ControlPlaneError> {
+pub(super) fn impact_from_row(row: &PgRow) -> Result<GovernanceImpact, ControlPlaneRequestFailure> {
     Ok(GovernanceImpact {
         version_id: GovernanceVersionId::from_uuid(row.try_get("version_id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -119,7 +111,7 @@ pub(super) fn impact_from_row(row: &PgRow) -> Result<GovernanceImpact, ControlPl
     })
 }
 
-pub(super) fn event_from_row(row: &PgRow) -> Result<GovernanceEvent, ControlPlaneError> {
+pub(super) fn event_from_row(row: &PgRow) -> Result<GovernanceEvent, ControlPlaneRequestFailure> {
     Ok(GovernanceEvent {
         id: GovernanceEventId::from_uuid(row.try_get("id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -138,7 +130,7 @@ pub(super) fn event_from_row(row: &PgRow) -> Result<GovernanceEvent, ControlPlan
     })
 }
 
-pub(super) fn admission_from_row(row: &PgRow) -> Result<GovernanceAdmission, ControlPlaneError> {
+pub(super) fn admission_from_row(row: &PgRow) -> Result<GovernanceAdmission, ControlPlaneRequestFailure> {
     Ok(GovernanceAdmission {
         id: GovernanceAdmissionId::from_uuid(row.try_get("id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -210,7 +202,7 @@ pub(super) const fn access_path_name(value: GovernanceAccessPath) -> &'static st
     }
 }
 
-fn object_kind(value: &str) -> Result<GovernanceObjectKind, ControlPlaneError> {
+fn object_kind(value: &str) -> Result<GovernanceObjectKind, ControlPlaneRequestFailure> {
     match value {
         "data_policy" => Ok(GovernanceObjectKind::DataPolicy),
         "evidence_policy" => Ok(GovernanceObjectKind::EvidencePolicy),
@@ -227,7 +219,7 @@ fn object_kind(value: &str) -> Result<GovernanceObjectKind, ControlPlaneError> {
     }
 }
 
-fn lifecycle_state(value: &str) -> Result<GovernanceLifecycleState, ControlPlaneError> {
+fn lifecycle_state(value: &str) -> Result<GovernanceLifecycleState, ControlPlaneRequestFailure> {
     match value {
         "draft" => Ok(GovernanceLifecycleState::Draft),
         "review" => Ok(GovernanceLifecycleState::Review),
@@ -239,7 +231,7 @@ fn lifecycle_state(value: &str) -> Result<GovernanceLifecycleState, ControlPlane
     }
 }
 
-fn impact_kind(value: &str) -> Result<GovernanceImpactKind, ControlPlaneError> {
+fn impact_kind(value: &str) -> Result<GovernanceImpactKind, ControlPlaneRequestFailure> {
     match value {
         "cluster" => Ok(GovernanceImpactKind::Cluster),
         "diagnostic_pack" => Ok(GovernanceImpactKind::DiagnosticPack),
@@ -252,7 +244,7 @@ fn impact_kind(value: &str) -> Result<GovernanceImpactKind, ControlPlaneError> {
     }
 }
 
-fn actor_kind(value: &str) -> Result<GovernanceActorKind, ControlPlaneError> {
+fn actor_kind(value: &str) -> Result<GovernanceActorKind, ControlPlaneRequestFailure> {
     match value {
         "human" => Ok(GovernanceActorKind::Human),
         "service" => Ok(GovernanceActorKind::Service),
@@ -261,7 +253,7 @@ fn actor_kind(value: &str) -> Result<GovernanceActorKind, ControlPlaneError> {
     }
 }
 
-fn access_path(value: &str) -> Result<GovernanceAccessPath, ControlPlaneError> {
+fn access_path(value: &str) -> Result<GovernanceAccessPath, ControlPlaneRequestFailure> {
     match value {
         "read_only" => Ok(GovernanceAccessPath::ReadOnly),
         "high_privilege" => Ok(GovernanceAccessPath::HighPrivilege),
@@ -269,8 +261,8 @@ fn access_path(value: &str) -> Result<GovernanceAccessPath, ControlPlaneError> {
     }
 }
 
-fn invalid<T>(name: &str) -> Result<T, ControlPlaneError> {
-    Err(ControlPlaneError::validation(
+fn invalid<T>(name: &str) -> Result<T, ControlPlaneRequestFailure> {
+    Err(ControlPlaneRequestFailure::validation(
         "invalid_persisted_governance_state",
         format!("{name} is not recognized"),
     ))
@@ -278,7 +270,7 @@ fn invalid<T>(name: &str) -> Result<T, ControlPlaneError> {
 
 pub(super) fn dependency_value(
     dependencies: &BTreeSet<GovernanceDependency>,
-) -> Result<serde_json::Value, ControlPlaneError> {
+) -> Result<serde_json::Value, ControlPlaneRequestFailure> {
     serde_json::to_value(dependencies)
-        .map_err(|_| ControlPlaneError::validation("invalid_governance_version", "dependencies cannot be encoded"))
+        .map_err(|source| ControlPlaneRequestFailure::state_source("invalid_governance_version", source))
 }

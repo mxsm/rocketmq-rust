@@ -32,7 +32,7 @@ use super::prometheus::PrometheusSource;
 use super::runtime_diagnostics::RuntimeDiagnosticsSource;
 use super::tempo::TempoSource;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 use crate::mcp::McpGateway;
 use crate::read_gateway::ConnectorReadGateway;
 use crate::read_gateway::ReadSession;
@@ -232,7 +232,7 @@ fn normalize_component(resource: &str) -> Result<&'static str, ConnectorError> {
         "mcp" => Ok("mcp"),
         "runtime" => Ok("runtime"),
         _ => Err(ConnectorError::new(
-            ConnectorErrorCode::InvalidEvidenceQuery,
+            ConnectorFailure::InvalidEvidenceQuery,
             false,
             "Required Signals component is not registered",
         )),
@@ -248,7 +248,7 @@ fn manifest_source(component: &str) -> Result<&'static str, ConnectorError> {
         "mcp" => Ok(MCP_MANIFEST),
         "runtime" => Ok(RUNTIME_MANIFEST),
         _ => Err(ConnectorError::new(
-            ConnectorErrorCode::InvalidEvidenceQuery,
+            ConnectorFailure::InvalidEvidenceQuery,
             false,
             "Required Signals component is not registered",
         )),
@@ -256,17 +256,13 @@ fn manifest_source(component: &str) -> Result<&'static str, ConnectorError> {
 }
 
 fn parse_manifest(expected_component: &str, input: &str) -> Result<RequiredSignalManifest, ConnectorError> {
-    let manifest: RequiredSignalManifest = serde_yaml::from_str(input).map_err(|_| {
-        ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
-            "Required Signals manifest is invalid",
-        )
-    })?;
+    let manifest: RequiredSignalManifest = serde_yaml::from_str(input)
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::CapabilityMismatch, false, source))?;
     let component_matches = manifest.component == expected_component
         || (expected_component == "nameserver" && manifest.component == "name_server");
     if manifest.schema_version != MANIFEST_SCHEMA_VERSION || !component_matches || manifest.signals.is_empty() {
         return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
+            ConnectorFailure::CapabilityMismatch,
             "Required Signals manifest identity is incompatible",
         ));
     }
@@ -278,7 +274,7 @@ fn parse_manifest(expected_component: &str, input: &str) -> Result<RequiredSigna
             || !ids.insert(signal.requirement_id.as_str())
     }) {
         return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
+            ConnectorFailure::CapabilityMismatch,
             "Required Signals manifest contains an invalid requirement",
         ));
     }
@@ -300,7 +296,7 @@ fn fixed_query(component: &str, signal: &ManifestSignal) -> Result<FixedQuery, C
         "existing" | "queryable" => {}
         _ => {
             return Err(ConnectorError::capability(
-                ConnectorErrorCode::CapabilityMismatch,
+                ConnectorFailure::CapabilityMismatch,
                 "Required Signal status is unsupported",
             ));
         }
@@ -315,7 +311,7 @@ fn fixed_query(component: &str, signal: &ManifestSignal) -> Result<FixedQuery, C
                 .unwrap_or_else(|| format!("metrics/{}", signal.registry_reference));
             if !resource.starts_with("metrics/") {
                 return Err(ConnectorError::capability(
-                    ConnectorErrorCode::CapabilityMismatch,
+                    ConnectorFailure::CapabilityMismatch,
                     "Required Signal metric route is not a fixed metric resource",
                 ));
             }
@@ -346,7 +342,7 @@ fn service_name(component: &str) -> Result<&'static str, ConnectorError> {
         "mcp" => Ok("rocketmq-mcp"),
         "runtime" => Ok("rocketmq-mcp"),
         _ => Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
+            ConnectorFailure::CapabilityMismatch,
             "Required Signals manifest component has no bounded service identity",
         )),
     }
@@ -358,7 +354,7 @@ fn normalize_read(
 ) -> Result<CachedRead, ConnectorError> {
     match result {
         Ok(output) => Ok(CachedRead::Output(output)),
-        Err(error) if error.code == ConnectorErrorCode::SourceUnavailable => Ok(CachedRead::Missing {
+        Err(error) if error.failure() == ConnectorFailure::SourceUnavailable => Ok(CachedRead::Missing {
             source,
             reason_code: "required_signal_source_unavailable",
         }),
@@ -499,14 +495,10 @@ fn aggregate(component: String, observations: Vec<RequiredSignalObservation>) ->
         partial,
         observations,
     };
-    evidence.validate().map_err(|_| {
-        ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
-            "Required Signals evidence violates its public contract",
-        )
-    })?;
-    let content = serde_json::to_value(evidence)
-        .map_err(|_| ConnectorError::source("Required Signals evidence cannot be encoded"))?;
+    evidence
+        .validate()
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::CapabilityMismatch, false, source))?;
+    let content = serde_json::to_value(evidence).map_err(ConnectorError::source_error)?;
     let mut output = SourceOutput::available(content, observed_at).with_exposure(EvidenceExposure::RequiredSignals);
     output.partial = partial;
     output.coverage = if available == 0 && missing > 0 {

@@ -63,7 +63,7 @@ use super::model::ReplayIntegrationDeliveryRequest;
 use super::model::ReplayIntegrationDeliveryView;
 use super::model::RotateIntegrationSecretRequest;
 use super::model::SetIntegrationTargetStateRequest;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 use crate::observability::CORRELATION_ID_HEADER;
 
@@ -155,7 +155,7 @@ pub(crate) fn routes() -> Router<AppState> {
 async fn integration_descriptors(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Vec<IntegrationDescriptor>>, ControlPlaneError> {
+) -> Result<Json<Vec<IntegrationDescriptor>>, ControlPlaneRequestFailure> {
     state.auth.authorize(&headers, None).await?;
     Ok(Json(super::ReleaseManagementService::integration_descriptors()))
 }
@@ -164,7 +164,7 @@ async fn register_integration_target(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<RegisterIntegrationTargetRequest>,
-) -> Result<Json<IntegrationTargetView>, ControlPlaneError> {
+) -> Result<Json<IntegrationTargetView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state
         .release_management
@@ -177,7 +177,7 @@ async fn list_integration_targets(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<IntegrationTargetListQuery>,
-) -> Result<Json<IntegrationTargetPage>, ControlPlaneError> {
+) -> Result<Json<IntegrationTargetPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state
         .release_management
@@ -190,7 +190,7 @@ async fn get_integration_target(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<IntegrationTargetView>, ControlPlaneError> {
+) -> Result<Json<IntegrationTargetView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -204,7 +204,7 @@ async fn ingest_enterprise_event(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<EnterpriseIngressRequest>,
-) -> Result<Json<EnterpriseIngressView>, ControlPlaneError> {
+) -> Result<Json<EnterpriseIngressView>, ControlPlaneRequestFailure> {
     let cluster_id = request.payload.cluster_id();
     let auth = state.auth.authorize(&headers, Some(cluster_id)).await?;
     let target_id = parse_target_id(&id)?;
@@ -257,7 +257,7 @@ async fn list_enterprise_events(
     headers: HeaderMap,
     Path(id): Path<String>,
     Query(query): Query<EnterpriseEventListQuery>,
-) -> Result<Json<EnterpriseEventPage>, ControlPlaneError> {
+) -> Result<Json<EnterpriseEventPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -270,7 +270,7 @@ async fn test_integration_config(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<IntegrationHealthView>, ControlPlaneError> {
+) -> Result<Json<IntegrationHealthView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -283,7 +283,7 @@ async fn get_integration_health(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<IntegrationHealthView>, ControlPlaneError> {
+) -> Result<Json<IntegrationHealthView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -297,7 +297,7 @@ async fn set_integration_target_state(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<SetIntegrationTargetStateRequest>,
-) -> Result<Json<IntegrationTargetView>, ControlPlaneError> {
+) -> Result<Json<IntegrationTargetView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -311,7 +311,7 @@ async fn rotate_integration_secret(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<RotateIntegrationSecretRequest>,
-) -> Result<Json<IntegrationTargetView>, ControlPlaneError> {
+) -> Result<Json<IntegrationTargetView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -324,7 +324,7 @@ async fn list_integration_deliveries(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<IntegrationDeliveryListQuery>,
-) -> Result<Json<IntegrationDeliveryPage>, ControlPlaneError> {
+) -> Result<Json<IntegrationDeliveryPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state
         .release_management
@@ -338,7 +338,7 @@ async fn replay_integration_delivery(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<ReplayIntegrationDeliveryRequest>,
-) -> Result<Json<ReplayIntegrationDeliveryView>, ControlPlaneError> {
+) -> Result<Json<ReplayIntegrationDeliveryView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -351,7 +351,7 @@ async fn apply_external_approval(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<ExternalApprovalRequest>,
-) -> Result<Json<ExternalApprovalView>, ControlPlaneError> {
+) -> Result<Json<ExternalApprovalView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -364,7 +364,7 @@ async fn create_release(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreateReleaseRequest>,
-) -> Result<Json<ReleaseDetail>, ControlPlaneError> {
+) -> Result<Json<ReleaseDetail>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state
         .release_management
@@ -377,7 +377,7 @@ async fn list_releases(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<ReleaseListQuery>,
-) -> Result<Json<ReleasePage>, ControlPlaneError> {
+) -> Result<Json<ReleasePage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.release_management.releases(&auth, &query).await.map(Json)
 }
@@ -386,7 +386,7 @@ async fn get_release(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<ReleaseDetail>, ControlPlaneError> {
+) -> Result<Json<ReleaseDetail>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -400,7 +400,7 @@ async fn prepare_release(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<PrepareReleaseRequest>,
-) -> Result<Json<ReleasePreparationView>, ControlPlaneError> {
+) -> Result<Json<ReleasePreparationView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -414,7 +414,7 @@ async fn start_release(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<ReleaseExecutionRequest>,
-) -> Result<Json<ReleaseExecutionView>, ControlPlaneError> {
+) -> Result<Json<ReleaseExecutionView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -428,7 +428,7 @@ async fn record_release_observation(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<RecordReleaseObservationRequest>,
-) -> Result<Json<ReleaseDetail>, ControlPlaneError> {
+) -> Result<Json<ReleaseDetail>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -442,7 +442,7 @@ async fn pause_release(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<ReleaseTransitionRequest>,
-) -> Result<Json<ReleaseDetail>, ControlPlaneError> {
+) -> Result<Json<ReleaseDetail>, ControlPlaneRequestFailure> {
     transition_release_request(state, headers, id, request, ReleaseTransitionKind::Pause).await
 }
 
@@ -451,7 +451,7 @@ async fn resume_release(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<ReleaseTransitionRequest>,
-) -> Result<Json<ReleaseDetail>, ControlPlaneError> {
+) -> Result<Json<ReleaseDetail>, ControlPlaneRequestFailure> {
     transition_release_request(state, headers, id, request, ReleaseTransitionKind::Resume).await
 }
 
@@ -459,7 +459,7 @@ async fn begin_release_verification(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<ReleaseDetail>, ControlPlaneError> {
+) -> Result<Json<ReleaseDetail>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -472,7 +472,7 @@ async fn complete_release(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<ReleaseDetail>, ControlPlaneError> {
+) -> Result<Json<ReleaseDetail>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -486,7 +486,7 @@ async fn start_release_rollback(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<ReleaseExecutionRequest>,
-) -> Result<Json<ReleaseExecutionView>, ControlPlaneError> {
+) -> Result<Json<ReleaseExecutionView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -500,7 +500,7 @@ async fn complete_release_rollback(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<CompleteRollbackRequest>,
-) -> Result<Json<ReleaseDetail>, ControlPlaneError> {
+) -> Result<Json<ReleaseDetail>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .release_management
@@ -514,7 +514,7 @@ async fn manual_release_takeover(
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(request): Json<ReleaseTransitionRequest>,
-) -> Result<Json<ReleaseDetail>, ControlPlaneError> {
+) -> Result<Json<ReleaseDetail>, ControlPlaneRequestFailure> {
     transition_release_request(state, headers, id, request, ReleaseTransitionKind::ManualTakeover).await
 }
 
@@ -530,7 +530,7 @@ async fn transition_release_request(
     id: String,
     request: ReleaseTransitionRequest,
     kind: ReleaseTransitionKind,
-) -> Result<Json<ReleaseDetail>, ControlPlaneError> {
+) -> Result<Json<ReleaseDetail>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     let release_id = parse_release_id(&id)?;
     match kind {
@@ -556,22 +556,22 @@ async fn transition_release_request(
     .map(Json)
 }
 
-fn parse_target_id(value: &str) -> Result<IntegrationTargetId, ControlPlaneError> {
+fn parse_target_id(value: &str) -> Result<IntegrationTargetId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "integration target identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "integration target id is invalid"))
 }
 
-fn parse_delivery_id(value: &str) -> Result<IntegrationDeliveryId, ControlPlaneError> {
+fn parse_delivery_id(value: &str) -> Result<IntegrationDeliveryId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "integration delivery identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "integration delivery id is invalid"))
 }
 
-fn parse_release_id(value: &str) -> Result<ReleaseId, ControlPlaneError> {
+fn parse_release_id(value: &str) -> Result<ReleaseId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "release identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "release id is invalid"))
 }
 
 fn correlation_id(headers: &HeaderMap) -> CorrelationId {
@@ -582,7 +582,7 @@ fn correlation_id(headers: &HeaderMap) -> CorrelationId {
         .unwrap_or_default()
 }
 
-fn enterprise_authorization(headers: &HeaderMap) -> Result<EnterpriseIngressAuthorization, ControlPlaneError> {
+fn enterprise_authorization(headers: &HeaderMap) -> Result<EnterpriseIngressAuthorization, ControlPlaneRequestFailure> {
     Ok(EnterpriseIngressAuthorization {
         timestamp: required_header(headers, ENTERPRISE_EVENT_TIMESTAMP_HEADER)?,
         nonce: required_header(headers, ENTERPRISE_EVENT_NONCE_HEADER)?,
@@ -590,14 +590,14 @@ fn enterprise_authorization(headers: &HeaderMap) -> Result<EnterpriseIngressAuth
     })
 }
 
-fn required_header(headers: &HeaderMap, name: &'static str) -> Result<String, ControlPlaneError> {
+fn required_header(headers: &HeaderMap, name: &'static str) -> Result<String, ControlPlaneRequestFailure> {
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.trim().is_empty() && value.len() <= 512)
         .map(str::to_owned)
         .ok_or_else(|| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "integration_signature_invalid",
                 "signed integration headers are required",
             )

@@ -17,12 +17,12 @@ use sha2::Digest;
 use sha2::Sha256;
 
 use super::model::KnowledgeChunkDraft;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
 const MAX_CHUNK_BYTES: usize = 8 * 1024;
 const MAX_CHUNKS: usize = 256;
 
-pub(super) fn chunk_markdown(markdown: &str) -> Result<Vec<KnowledgeChunkDraft>, ControlPlaneError> {
+pub(super) fn chunk_markdown(markdown: &str) -> Result<Vec<KnowledgeChunkDraft>, ControlPlaneRequestFailure> {
     let mut chunks = Vec::new();
     let mut heading = None;
     let mut content = String::new();
@@ -46,7 +46,7 @@ pub(super) fn chunk_markdown(markdown: &str) -> Result<Vec<KnowledgeChunkDraft>,
     }
     flush(&mut chunks, &heading, &mut content)?;
     if chunks.is_empty() {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             "knowledge Markdown must contain searchable text",
         ));
@@ -85,20 +85,20 @@ fn flush(
     chunks: &mut Vec<KnowledgeChunkDraft>,
     heading: &Option<String>,
     content: &mut String,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let trimmed = content.trim();
     if trimmed.is_empty() {
         content.clear();
         return Ok(());
     }
     if chunks.len() >= MAX_CHUNKS {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "output_too_large",
             "knowledge document exceeds the maximum chunk count",
         ));
     }
     let ordinal = i32::try_from(chunks.len())
-        .map_err(|_| ControlPlaneError::validation("output_too_large", "knowledge chunk count is too large"))?;
+        .map_err(|_| ControlPlaneRequestFailure::validation("output_too_large", "too many knowledge chunks"))?;
     let hash_material = format!("{}\n{trimmed}", heading.as_deref().unwrap_or_default());
     chunks.push(KnowledgeChunkDraft {
         id: KnowledgeChunkId::new(),

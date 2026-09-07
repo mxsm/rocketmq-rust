@@ -15,6 +15,7 @@
 mod rocketmq_driver;
 
 use std::env;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -43,12 +44,11 @@ use rocketmq_sre_probe::ProbeAclConfig;
 use rocketmq_sre_probe::ProbeConfig;
 use rocketmq_sre_probe::ProbeIdentity;
 use rocketmq_sre_probe::ProbePlan;
-use rocketmq_sre_probe::evidence::capture_probe_evidence;
+use rocketmq_sre_probe::capture_probe_evidence;
 use rocketmq_sre_probe::load_probe_acl_config;
 use rocketmq_sre_probe::scenario::ProbeRunStatus;
 use rocketmq_sre_probe::scenario::ProbeScenario;
 use rocketmq_sre_probe::scenario::run_scenario;
-use thiserror::Error;
 use tokio::sync::Notify;
 use uuid::Uuid;
 
@@ -81,41 +81,105 @@ impl Command {
     }
 }
 
-#[derive(Debug, Error)]
+/// Closed process result. Expected command/configuration outcomes and typed
+/// operational sources share the process exit channel without implementing
+/// [`std::error::Error`].
 enum ProbeRunError {
-    #[error(
-        "usage: rocketmq-sre-probe <plan|register|send|consume|run \
-         <send-consume-ack|proxy-path|transaction-commit|delayed-timer|pop-ack>>"
-    )]
     Usage,
-    #[error("probe environment `{name}` is invalid")]
     InvalidEnvironment { name: &'static str },
-    #[error("probe configuration is invalid")]
-    InvalidProbe(#[from] rocketmq_sre_probe::ProbeConfigError),
-    #[error("probe ACL configuration is invalid")]
-    InvalidProbeAcl(#[from] rocketmq_sre_probe::ProbeAclConfigError),
-    #[error("RocketMQ probe operation failed")]
-    RocketMq(#[from] rocketmq_error::RocketMQError),
-    #[error("probe timed out before the bounded operation completed")]
-    Timeout,
-    #[error("probe plan could not be encoded")]
-    Encoding(#[from] serde_json::Error),
-    #[error("probe resource identity is invalid")]
-    InvalidIdentity(#[from] rocketmq_sre_probe::ProbeIdentityError),
-    #[error("probe Evidence could not be captured")]
-    Evidence(#[from] rocketmq_sre_probe::evidence::ProbeEvidenceError),
-    #[error("probe scenario did not satisfy its bounded success contract")]
+    InvalidProbe,
+    InvalidProbeAcl,
+    RocketMq(rocketmq_error::RocketMQError),
+    Timeout(tokio::time::error::Elapsed),
+    Encoding(serde_json::Error),
+    InvalidIdentity,
+    Evidence(rocketmq_sre_probe::scenario::ProbeDriverError),
+    Runtime(rocketmq_runtime::RuntimeError),
     ScenarioFailed,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+impl ProbeRunError {
+    const fn code(&self) -> &'static str {
+        match self {
+            Self::Usage => "invalid_command",
+            Self::InvalidEnvironment { name } => {
+                let _ = name;
+                "invalid_environment"
+            }
+            Self::InvalidProbe | Self::InvalidProbeAcl | Self::InvalidIdentity => "invalid_probe_configuration",
+            Self::RocketMq(source) => {
+                let _ = source;
+                "rocketmq_operation_failed"
+            }
+            Self::Timeout(source) => {
+                let _ = source;
+                "probe_timeout"
+            }
+            Self::Encoding(source) => {
+                let _ = source;
+                "probe_encoding_failed"
+            }
+            Self::Evidence(source) => {
+                let _ = source;
+                "probe_evidence_failed"
+            }
+            Self::Runtime(source) => {
+                let _ = source;
+                "probe_runtime_failed"
+            }
+            Self::ScenarioFailed => "probe_scenario_rejected",
+        }
+    }
+}
+
+impl std::fmt::Debug for ProbeRunError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ProbeRunError")
+    }
+}
+
+impl From<rocketmq_error::RocketMQError> for ProbeRunError {
+    fn from(source: rocketmq_error::RocketMQError) -> Self {
+        Self::RocketMq(source)
+    }
+}
+
+impl From<serde_json::Error> for ProbeRunError {
+    fn from(source: serde_json::Error) -> Self {
+        Self::Encoding(source)
+    }
+}
+
+impl From<rocketmq_sre_probe::scenario::ProbeDriverError> for ProbeRunError {
+    fn from(source: rocketmq_sre_probe::scenario::ProbeDriverError) -> Self {
+        Self::Evidence(source)
+    }
+}
+
+impl From<rocketmq_runtime::RuntimeError> for ProbeRunError {
+    fn from(source: rocketmq_runtime::RuntimeError) -> Self {
+        Self::Runtime(source)
+    }
+}
+
+fn main() -> ExitCode {
+    match try_main() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(failure) => {
+            eprintln!("probe_operation_failed: {}", failure.code());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn try_main() -> Result<(), ProbeRunError> {
     let command = parse_command()?;
     let (plan, namesrv_addr) = load_plan()?;
     if matches!(command, Command::Plan) {
         println!("{}", serde_json::to_string(&plan)?);
         return Ok(());
     }
-    let acl_config = load_probe_acl_config()?;
+    let acl_config = load_probe_acl_config().map_err(|_| ProbeRunError::InvalidProbeAcl)?;
     let operation_timeout = Duration::from_secs(u64::from(plan.max_duration_seconds));
 
     let runtime_owner = RuntimeOwner::plan(RuntimeConfig {
@@ -150,7 +214,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .await
             {
                 Ok(result) => result,
-                Err(_) => Err(ProbeRunError::Timeout),
+                Err(source) => Err(ProbeRunError::Timeout(source)),
             }
         })
     };
@@ -177,7 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         command.as_str()
     );
     if !scenario_succeeded {
-        return Err(ProbeRunError::ScenarioFailed.into());
+        return Err(ProbeRunError::ScenarioFailed);
     }
     Ok(())
 }
@@ -219,18 +283,20 @@ fn load_plan() -> Result<(ProbePlan, String), ProbeRunError> {
         max_payload_bytes: parse_env("ROCKETMQ_SRE_PROBE_PAYLOAD_BYTES", 64)?,
         max_duration_seconds: parse_env("ROCKETMQ_SRE_PROBE_DURATION_SECONDS", 30)?,
     };
-    let mut plan = config.plan(run_id)?;
+    let mut plan = config.plan(run_id).map_err(|_| ProbeRunError::InvalidProbe)?;
     let topic = optional_env("ROCKETMQ_SRE_PROBE_TOPIC")?;
     let producer_group = optional_env("ROCKETMQ_SRE_PROBE_PRODUCER_GROUP")?;
     let consumer_group = optional_env("ROCKETMQ_SRE_PROBE_CONSUMER_GROUP")?;
     match (topic, producer_group, consumer_group) {
         (None, None, None) => {}
         (Some(topic), Some(producer_group), Some(consumer_group)) => {
-            plan = plan.with_preprovisioned_identity(ProbeIdentity {
-                topic,
-                producer_group,
-                consumer_group,
-            })?;
+            plan = plan
+                .with_preprovisioned_identity(ProbeIdentity {
+                    topic,
+                    producer_group,
+                    consumer_group,
+                })
+                .map_err(|_| ProbeRunError::InvalidIdentity)?;
         }
         _ => {
             return Err(ProbeRunError::InvalidEnvironment {
@@ -462,7 +528,7 @@ async fn consume(
     if cleanup_partial {
         eprintln!("level=warn stage=consumer_shutdown cleanup_partial=true reason=timeout");
     }
-    result.map_err(|_| ProbeRunError::Timeout)?;
+    result.map_err(ProbeRunError::Timeout)?;
     println!(
         "consumed={} topic={} group={} cleanup_partial={cleanup_partial}",
         observed.load(Ordering::Acquire),
@@ -528,8 +594,12 @@ fn contains_expected_key(keys: &str, expected_prefix: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
+    use std::time::Duration;
+
     use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 
+    use super::ProbeRunError;
     use super::contains_expected_key;
     use super::history_consume_from_where;
     use super::legacy_message_key_prefix;
@@ -553,5 +623,20 @@ mod tests {
     #[test]
     fn history_consume_reads_messages_sent_before_consumer_start() {
         assert_eq!(history_consume_from_where(), ConsumeFromWhere::ConsumeFromFirstOffset);
+    }
+
+    #[tokio::test]
+    async fn timeout_result_retains_typed_elapsed_source_without_becoming_error() {
+        let source = tokio::time::timeout(Duration::ZERO, pending::<()>())
+            .await
+            .expect_err("pending future must time out");
+        let error = ProbeRunError::Timeout(source);
+
+        assert_eq!(error.code(), "probe_timeout");
+        let ProbeRunError::Timeout(source) = error else {
+            panic!("timeout must retain its typed source");
+        };
+        fn assert_elapsed(_: &tokio::time::error::Elapsed) {}
+        assert_elapsed(&source);
     }
 }

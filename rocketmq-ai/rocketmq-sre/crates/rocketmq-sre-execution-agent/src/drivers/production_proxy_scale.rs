@@ -50,63 +50,73 @@ impl ProductionProxyScaleClient {
         if allowed_targets.is_empty() {
             return Err(ExecutionAgentError::Configuration);
         }
-        let mut config = Config::infer().await.map_err(|_| ExecutionAgentError::Configuration)?;
+        let mut config = Config::infer()
+            .await
+            .map_err(ExecutionAgentError::configuration_source)?;
         // The cluster write path must never inherit an ambient workstation or
         // pod proxy. Kubeconfig or the in-cluster CA authenticates the direct
         // API server connection.
         config.proxy_url = None;
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = Client::try_from(config).map_err(|_| ExecutionAgentError::Configuration)?;
+        let client = Client::try_from(config).map_err(ExecutionAgentError::configuration_source)?;
         Ok(Self {
             client,
             allowed_targets: Arc::new(allowed_targets),
         })
     }
 
-    fn require_target(&self, namespace: &str, workload: &str) -> Result<(), ExecutionAgentError> {
+    fn require_target(&self, namespace: &str, workload: &str) -> Result<(), crate::ExecutionAgentRequestFailure> {
         let target = format!("{namespace}/{workload}");
         if self.allowed_targets.contains(&target) {
             Ok(())
         } else {
-            Err(ExecutionAgentError::InvalidRequest)
+            Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
         }
     }
 
-    async fn deployment(&self, namespace: &str, workload: &str) -> Result<Deployment, ExecutionAgentError> {
+    async fn deployment(
+        &self,
+        namespace: &str,
+        workload: &str,
+    ) -> Result<Deployment, crate::ExecutionAgentRequestFailure> {
         self.require_target(namespace, workload)?;
         Api::<Deployment>::namespaced(self.client.clone(), namespace)
             .get(workload)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)
     }
 
-    async fn quota_available(&self, namespace: &str) -> Result<bool, ExecutionAgentError> {
+    async fn quota_available(&self, namespace: &str) -> Result<bool, crate::ExecutionAgentRequestFailure> {
         let quotas = Api::<ResourceQuota>::namespaced(self.client.clone(), namespace)
             .list(&ListParams::default())
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         Ok(quotas.items.iter().all(quota_has_room_for_one_pod))
     }
 
-    async fn capacity_available(&self) -> Result<bool, ExecutionAgentError> {
+    async fn capacity_available(&self) -> Result<bool, crate::ExecutionAgentRequestFailure> {
         let nodes = Api::<Node>::all(self.client.clone())
             .list(&ListParams::default())
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         Ok(nodes.items.iter().any(node_accepts_new_pods))
     }
 
-    async fn pdb_healthy(&self, namespace: &str, deployment: &Deployment) -> Result<bool, ExecutionAgentError> {
+    async fn pdb_healthy(
+        &self,
+        namespace: &str,
+        deployment: &Deployment,
+    ) -> Result<bool, crate::ExecutionAgentRequestFailure> {
         let labels = deployment
             .spec
             .as_ref()
             .and_then(|spec| spec.template.metadata.as_ref())
             .and_then(|metadata| metadata.labels.as_ref())
-            .ok_or(ExecutionAgentError::DriverFailed)?;
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         let budgets = Api::<PodDisruptionBudget>::namespaced(self.client.clone(), namespace)
             .list(&ListParams::default())
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         let matching = budgets
             .items
             .iter()
@@ -132,11 +142,11 @@ impl ProductionProxyScaleClient {
         plan_step_id: &str,
         required_execution_id: Option<&str>,
         required_plan_step_id: Option<&str>,
-    ) -> Result<(), ExecutionAgentError> {
+    ) -> Result<(), crate::ExecutionAgentRequestFailure> {
         let mut deployment = self.deployment(namespace, workload).await?;
         let current = desired_replicas(&deployment)?;
         if current != expected_replicas {
-            return Err(ExecutionAgentError::DriverFailed);
+            return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
         }
         if let Some(required) = required_execution_id
             && deployment
@@ -147,7 +157,7 @@ impl ProductionProxyScaleClient {
                 .map(String::as_str)
                 != Some(required)
         {
-            return Err(ExecutionAgentError::DriverFailed);
+            return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
         }
         if let Some(required) = required_plan_step_id
             && deployment
@@ -158,13 +168,13 @@ impl ProductionProxyScaleClient {
                 .map(String::as_str)
                 != Some(required)
         {
-            return Err(ExecutionAgentError::DriverFailed);
+            return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
         }
-        let target = i32::try_from(target_replicas).map_err(|_| ExecutionAgentError::InvalidRequest)?;
+        let target = i32::try_from(target_replicas).map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
         deployment
             .spec
             .as_mut()
-            .ok_or(ExecutionAgentError::DriverFailed)?
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?
             .replicas = Some(target);
         let annotations = deployment.metadata.annotations.get_or_insert_with(BTreeMap::new);
         annotations.insert(OPERATION_ANNOTATION.to_owned(), operation_id.to_owned());
@@ -173,13 +183,13 @@ impl ProductionProxyScaleClient {
         let stored = Api::<Deployment>::namespaced(self.client.clone(), namespace)
             .replace(workload, &PostParams::default(), &deployment)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         if desired_replicas(&stored)? != target_replicas
             || annotation(&stored, OPERATION_ANNOTATION) != Some(operation_id)
             || annotation(&stored, EXECUTION_ANNOTATION) != Some(execution_id)
             || annotation(&stored, PLAN_STEP_ANNOTATION) != Some(plan_step_id)
         {
-            return Err(ExecutionAgentError::DriverUnknown);
+            return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
         }
         Ok(())
     }
@@ -190,7 +200,10 @@ impl ProxyScaleClient for ProductionProxyScaleClient {
         Box::pin(async move {
             let deployment = self.deployment(namespace, workload).await?;
             let desired_replicas = desired_replicas(&deployment)?;
-            let status = deployment.status.as_ref().ok_or(ExecutionAgentError::DriverFailed)?;
+            let status = deployment
+                .status
+                .as_ref()
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
             Ok(ProxyScaleState {
                 desired_replicas,
                 ready_replicas: non_negative(status.ready_replicas)?,
@@ -206,7 +219,7 @@ impl ProxyScaleClient for ProductionProxyScaleClient {
     fn scale_out_one<'a>(&'a self, request: &'a ProxyScaleOutOneWrite) -> DriverFuture<'a, ()> {
         Box::pin(async move {
             if request.target_replicas != request.expected_replicas.saturating_add(1) {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             self.replace_replicas(
                 &request.namespace,
@@ -228,7 +241,7 @@ impl ProxyScaleClient for ProductionProxyScaleClient {
             let scaled_replicas = request
                 .original_replicas
                 .checked_add(1)
-                .ok_or(ExecutionAgentError::InvalidRequest)?;
+                .ok_or(crate::ExecutionAgentRequestFailure::InvalidRequest)?;
             let execution_id = request.execution_id.to_string();
             let plan_step_id = request.plan_step_id.to_string();
             self.replace_replicas(
@@ -247,19 +260,19 @@ impl ProxyScaleClient for ProductionProxyScaleClient {
     }
 }
 
-fn desired_replicas(deployment: &Deployment) -> Result<u32, ExecutionAgentError> {
+fn desired_replicas(deployment: &Deployment) -> Result<u32, crate::ExecutionAgentRequestFailure> {
     deployment
         .spec
         .as_ref()
         .and_then(|spec| spec.replicas)
         .and_then(|value| u32::try_from(value).ok())
-        .ok_or(ExecutionAgentError::DriverFailed)
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
 }
 
-fn non_negative(value: Option<i32>) -> Result<u32, ExecutionAgentError> {
+fn non_negative(value: Option<i32>) -> Result<u32, crate::ExecutionAgentRequestFailure> {
     match value {
         None => Ok(0),
-        Some(value) => u32::try_from(value).map_err(|_| ExecutionAgentError::DriverFailed),
+        Some(value) => u32::try_from(value).map_err(crate::ExecutionAgentRequestFailure::driver_source),
     }
 }
 
@@ -530,7 +543,7 @@ mod tests {
         workload: &str,
         desired_replicas: u32,
         operation_id: Option<&str>,
-    ) -> Result<ProxyScaleState, ExecutionAgentError> {
+    ) -> Result<ProxyScaleState, crate::ExecutionAgentRequestFailure> {
         for _ in 0..120 {
             let state = client.proxy_scale_state(namespace, workload).await?;
             if state.desired_replicas == desired_replicas
@@ -542,6 +555,6 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        Err(ExecutionAgentError::DriverFailed)
+        Err(crate::ExecutionAgentRequestFailure::DriverFailed)
     }
 }

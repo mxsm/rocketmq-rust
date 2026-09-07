@@ -33,6 +33,8 @@ use self::audit::ReadAudit;
 use self::audit::ReadAuditOutcome;
 use self::mcp::McpReadAdapter;
 use self::policy::ReadPolicy;
+use crate::ConnectorAdmissionOutcome;
+use crate::ConnectorAdmissionRejection;
 use crate::ConnectorConfig;
 use crate::ConnectorError;
 use crate::EvidenceOperation;
@@ -163,22 +165,22 @@ where
         &'policy self,
         context: &'context ReadContext<'context>,
         audit_target: Option<ReadAuditTarget>,
-    ) -> Result<ReadSession<'policy, 'context>, ConnectorError> {
+    ) -> ConnectorAdmissionOutcome<ReadSession<'policy, 'context>> {
         let started_at = Instant::now();
-        if let Err(error) = self.policy.authorize(context) {
-            self.audit_denial(audit_target, error.code, started_at, context.correlation_id)
+        if let Err(rejection) = self.policy.authorize(context) {
+            self.audit_denial(audit_target, rejection, started_at, context.correlation_id)
                 .await;
-            return Err(error);
+            return ConnectorAdmissionOutcome::Rejected(rejection);
         }
-        let permit = match self.policy.enter(context).await {
+        let permit = match self.policy.enter().await {
             Ok(permit) => permit,
-            Err(error) => {
-                self.audit_denial(audit_target, error.code, started_at, context.correlation_id)
+            Err(rejection) => {
+                self.audit_denial(audit_target, rejection, started_at, context.correlation_id)
                     .await;
-                return Err(error);
+                return ConnectorAdmissionOutcome::Rejected(rejection);
             }
         };
-        Ok(ReadSession {
+        ConnectorAdmissionOutcome::Accepted(ReadSession {
             context,
             _permit: permit,
         })
@@ -257,7 +259,7 @@ where
         let outcome = result
             .as_ref()
             .map(|_| ReadAuditOutcome::Allowed)
-            .unwrap_or_else(|error| ReadAuditOutcome::from_error(error.code));
+            .unwrap_or_else(|error| ReadAuditOutcome::from_error(error.failure()));
         self.audit
             .record(
                 adapter_kind,
@@ -273,7 +275,7 @@ where
     async fn audit_denial(
         &self,
         target: Option<ReadAuditTarget>,
-        code: crate::ConnectorErrorCode,
+        rejection: ConnectorAdmissionRejection,
         started_at: Instant,
         correlation_id: CorrelationId,
     ) {
@@ -282,7 +284,7 @@ where
                 .record(
                     target.adapter,
                     target.resource_class,
-                    ReadAuditOutcome::from_error(code),
+                    ReadAuditOutcome::from_error(rejection.failure()),
                     started_at.elapsed(),
                     correlation_id,
                 )
@@ -295,7 +297,6 @@ where
         context: &ReadContext<'_>,
         mut output: SourceOutput,
     ) -> Result<SourceOutput, ConnectorError> {
-        self.policy.validate_completion(context)?;
         let (content, bounded) = sanitize_and_bound(
             output.content,
             self.policy.max_rows,
@@ -352,7 +353,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::ConnectorErrorCode;
+    use crate::ConnectorFailure;
 
     #[derive(Clone, Copy)]
     enum FakeBehavior {
@@ -469,27 +470,54 @@ mod tests {
     async fn mcp_read<'a>(
         gateway: &ReadGateway<FakeAdapter, FakeAdapter>,
         context: &'a ReadContext<'a>,
-    ) -> Result<SourceOutput, ConnectorError> {
-        let session = gateway
+    ) -> Result<ConnectorAdmissionOutcome<SourceOutput>, ConnectorError> {
+        let admission = gateway
             .admit(
                 context,
                 Some(ReadAuditTarget::new(ReadAdapterKind::Mcp, "logical_query")),
             )
-            .await?;
-        gateway.mcp_query(&session, &EvidenceOperation::ClusterOverview).await
+            .await;
+        let session = match admission {
+            ConnectorAdmissionOutcome::Accepted(session) => session,
+            ConnectorAdmissionOutcome::Rejected(rejection) => {
+                return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+            }
+        };
+        gateway
+            .mcp_query(&session, &EvidenceOperation::ClusterOverview)
+            .await
+            .map(ConnectorAdmissionOutcome::Accepted)
     }
 
     async fn admin_read<'a>(
         gateway: &ReadGateway<FakeAdapter, FakeAdapter>,
         context: &'a ReadContext<'a>,
-    ) -> Result<SourceOutput, ConnectorError> {
-        let session = gateway
+    ) -> Result<ConnectorAdmissionOutcome<SourceOutput>, ConnectorError> {
+        let admission = gateway
             .admit(
                 context,
                 Some(ReadAuditTarget::new(ReadAdapterKind::Admin, "logical_query")),
             )
-            .await?;
-        gateway.admin_query(&session, "admin/brokers").await
+            .await;
+        let session = match admission {
+            ConnectorAdmissionOutcome::Accepted(session) => session,
+            ConnectorAdmissionOutcome::Rejected(rejection) => {
+                return Ok(ConnectorAdmissionOutcome::Rejected(rejection));
+            }
+        };
+        gateway
+            .admin_query(&session, "admin/brokers")
+            .await
+            .map(ConnectorAdmissionOutcome::Accepted)
+    }
+
+    fn accepted_output(outcome: ConnectorAdmissionOutcome<SourceOutput>) -> SourceOutput {
+        match outcome {
+            ConnectorAdmissionOutcome::Accepted(output) => output,
+            ConnectorAdmissionOutcome::Rejected(rejection) => {
+                panic!("test read admission unexpectedly rejected: {rejection:?}");
+            }
+        }
     }
 
     #[tokio::test]
@@ -506,7 +534,7 @@ mod tests {
         let cancel = CancelSignal::default();
         let context = context(tenant_id, cluster_id, "operator", future_deadline(), &cancel);
 
-        let output = mcp_read(&gateway, &context).await.expect("authorized read");
+        let output = accepted_output(mcp_read(&gateway, &context).await.expect("authorized read"));
 
         assert!(output.content.get("access_token").is_none());
         assert_eq!(output.content["rows"].as_array().map(Vec::len), Some(8));
@@ -541,8 +569,8 @@ mod tests {
         let cancel = CancelSignal::default();
         let context = context(tenant_id, cluster_id, "operator", future_deadline(), &cancel);
 
-        let mcp = mcp_read(&gateway, &context).await.expect("MCP read");
-        let admin = admin_read(&gateway, &context).await.expect("Admin read");
+        let mcp = accepted_output(mcp_read(&gateway, &context).await.expect("MCP read"));
+        let admin = accepted_output(admin_read(&gateway, &context).await.expect("Admin read"));
 
         for output in [mcp, admin] {
             assert!(output.content.get("access_token").is_none());
@@ -573,12 +601,17 @@ mod tests {
             context(tenant_id, ClusterId::new(), "operator", future_deadline(), &cancel),
             context(tenant_id, cluster_id, "", future_deadline(), &cancel),
         ] {
-            let error = mcp_read(&gateway, &denied).await.expect_err("scope must be denied");
+            let outcome = mcp_read(&gateway, &denied)
+                .await
+                .expect("admission rejection is not operational");
+            let ConnectorAdmissionOutcome::Rejected(rejection) = outcome else {
+                panic!("scope must be denied");
+            };
             assert!(matches!(
-                error.code,
-                ConnectorErrorCode::TenantMismatch
-                    | ConnectorErrorCode::ClusterNotAllowed
-                    | ConnectorErrorCode::UnauthorizedScope
+                rejection,
+                ConnectorAdmissionRejection::TenantMismatch
+                    | ConnectorAdmissionRejection::ClusterNotAllowed
+                    | ConnectorAdmissionRejection::UnauthorizedScope
             ));
         }
         assert_eq!(gateway.mcp.calls.load(Ordering::Relaxed), 0);
@@ -614,10 +647,13 @@ mod tests {
         );
 
         for denied in [&wide_range, &long_deadline] {
-            let error = mcp_read(&gateway, denied)
+            let outcome = mcp_read(&gateway, denied)
                 .await
-                .expect_err("bounded context must be denied");
-            assert_eq!(error.code, ConnectorErrorCode::InvalidEvidenceQuery);
+                .expect("admission rejection is not operational");
+            assert!(matches!(
+                outcome,
+                ConnectorAdmissionOutcome::Rejected(ConnectorAdmissionRejection::InvalidEvidenceQuery)
+            ));
         }
         assert_eq!(gateway.mcp.calls.load(Ordering::Relaxed), 0);
         assert!(
@@ -643,10 +679,15 @@ mod tests {
         let cancel = CancelSignal::default();
         let context = context(tenant_id, cluster_id, "operator", future_deadline(), &cancel);
 
-        mcp_read(&gateway, &context).await.expect("first read");
-        let error = admin_read(&gateway, &context).await.expect_err("shared rate limit");
+        accepted_output(mcp_read(&gateway, &context).await.expect("first read"));
+        let outcome = admin_read(&gateway, &context)
+            .await
+            .expect("rate rejection is not operational");
 
-        assert_eq!(error.code, ConnectorErrorCode::RateLimited);
+        assert!(matches!(
+            outcome,
+            ConnectorAdmissionOutcome::Rejected(ConnectorAdmissionRejection::RateLimited)
+        ));
         assert_eq!(gateway.admin.calls.load(Ordering::Relaxed), 0);
         assert_eq!(gateway.audit_events().await[1].outcome, ReadAuditOutcome::RateLimited);
     }
@@ -670,21 +711,28 @@ mod tests {
                 &first_context,
                 Some(ReadAuditTarget::new(ReadAdapterKind::Mcp, "logical_query")),
             )
-            .await
-            .expect("first admission");
+            .await;
+        let ConnectorAdmissionOutcome::Accepted(held) = held else {
+            panic!("first admission must be accepted");
+        };
         let second_cancel = CancelSignal::default();
         let second_context = context(tenant_id, cluster_id, "operator-b", future_deadline(), &second_cancel);
 
-        let error = admin_read(&gateway, &second_context)
+        let outcome = admin_read(&gateway, &second_context)
             .await
-            .expect_err("shared concurrency limit");
-        assert_eq!(error.code, ConnectorErrorCode::RateLimited);
+            .expect("concurrency rejection is not operational");
+        assert!(matches!(
+            outcome,
+            ConnectorAdmissionOutcome::Rejected(ConnectorAdmissionRejection::RateLimited)
+        ));
         assert_eq!(gateway.admin.calls.load(Ordering::Relaxed), 0);
 
         drop(held);
-        admin_read(&gateway, &second_context)
-            .await
-            .expect("admission recovers after permit release");
+        accepted_output(
+            admin_read(&gateway, &second_context)
+                .await
+                .expect("admission recovers after permit release"),
+        );
     }
 
     #[tokio::test]
@@ -701,10 +749,13 @@ mod tests {
         let cancel = CancelSignal::default();
         cancel.cancel();
         let cancelled_context = context(tenant_id, cluster_id, "operator", future_deadline(), &cancel);
-        let error = mcp_read(&cancelled_gateway, &cancelled_context)
+        let outcome = mcp_read(&cancelled_gateway, &cancelled_context)
             .await
-            .expect_err("cancelled read");
-        assert_eq!(error.code, ConnectorErrorCode::QueryCancelled);
+            .expect("cancellation rejection is not operational");
+        assert!(matches!(
+            outcome,
+            ConnectorAdmissionOutcome::Rejected(ConnectorAdmissionRejection::QueryCancelled)
+        ));
         assert_eq!(
             cancelled_gateway.audit_events().await[0].outcome,
             ReadAuditOutcome::Cancelled
@@ -722,7 +773,7 @@ mod tests {
         let error = mcp_read(&timeout_gateway, &timeout_context)
             .await
             .expect_err("timed out read");
-        assert_eq!(error.code, ConnectorErrorCode::DeadlineExceeded);
+        assert_eq!(error.failure(), ConnectorFailure::DeadlineExceeded);
         assert_eq!(
             timeout_gateway.audit_events().await[0].outcome,
             ReadAuditOutcome::TimedOut
@@ -739,7 +790,7 @@ mod tests {
 
         let error = mcp_read(&gateway, &context).await.expect_err("source failure");
 
-        assert_eq!(error.code, ConnectorErrorCode::SourceUnavailable);
+        assert_eq!(error.failure(), ConnectorFailure::SourceUnavailable);
         let events = gateway.audit_events().await;
         let event = &events[0];
         assert_eq!(event.outcome, ReadAuditOutcome::SourceFailed);
@@ -754,7 +805,7 @@ mod tests {
         let cancel = CancelSignal::default();
         let context = context(tenant_id, cluster_id, "operator", future_deadline(), &cancel);
 
-        let output = mcp_read(&partial_gateway, &context).await.expect("partial output");
+        let output = accepted_output(mcp_read(&partial_gateway, &context).await.expect("partial output"));
         assert!(output.partial);
         assert_eq!(output.warnings, vec!["source_partial"]);
 
@@ -768,7 +819,7 @@ mod tests {
         let error = mcp_read(&oversized_gateway, &context)
             .await
             .expect_err("oversized output");
-        assert_eq!(error.code, ConnectorErrorCode::OutputTooLarge);
+        assert_eq!(error.failure(), ConnectorFailure::OutputTooLarge);
         assert_eq!(
             oversized_gateway.audit_events().await[0].outcome,
             ReadAuditOutcome::SourceFailed

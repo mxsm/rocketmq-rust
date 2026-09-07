@@ -31,7 +31,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::ReleaseManagementService;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 use crate::release_management::descriptors::resolve_descriptor;
 use crate::release_management::model::QueuedIntegrationDelivery;
@@ -52,7 +52,7 @@ impl ReleaseManagementService {
         event_kind: IntegrationEventKind,
         sanitized_summary: &str,
         actor: &AuthContext,
-    ) -> Result<Vec<QueuedIntegrationDelivery>, ControlPlaneError> {
+    ) -> Result<Vec<QueuedIntegrationDelivery>, ControlPlaneRequestFailure> {
         validate_bounded_text("integration summary", sanitized_summary, 2_048)?;
         reject_sensitive(sanitized_summary)?;
         let targets = self
@@ -66,7 +66,7 @@ impl ReleaseManagementService {
             )
             .await?;
         if targets.len() > MAX_INTEGRATION_TARGETS {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "integration_target_limit_exceeded",
                 "release has more than 256 enabled integration targets",
             ));
@@ -77,7 +77,7 @@ impl ReleaseManagementService {
                 continue;
             }
             if target.target.cluster_id != Some(workflow.cluster_id) {
-                return Err(ControlPlaneError::forbidden(
+                return Err(ControlPlaneRequestFailure::forbidden(
                     "integration_scope_mismatch",
                     "integration target does not match the release cluster",
                 ));
@@ -88,13 +88,18 @@ impl ReleaseManagementService {
                 target.target.adapter_kind,
             )
             .ok_or_else(|| {
-                ControlPlaneError::conflict_code(
+                ControlPlaneRequestFailure::conflict_code(
                     "integration_descriptor_mismatch",
                     "integration target references an unknown descriptor version",
                 )
             })?;
-            IntegrationValidator::validate_target(&target.target, &descriptor)
-                .map_err(|error| ControlPlaneError::validation("integration_target_invalid", error.to_string()))?;
+            IntegrationValidator::validate_target(&target.target, &descriptor).map_err(|error| {
+                ControlPlaneRequestFailure::contract(
+                    crate::ControlPlaneFailure::Validation,
+                    "integration_target_invalid",
+                    error,
+                )
+            })?;
             let id = IntegrationDeliveryId::new();
             let delivery = IntegrationDelivery {
                 schema_version: INTEGRATION_DELIVERY_SCHEMA_VERSION.to_owned(),
@@ -123,8 +128,13 @@ impl ReleaseManagementService {
                 delivered_at: None,
                 created_at: workflow.updated_at,
             };
-            IntegrationValidator::validate_delivery(&delivery, &target.target, &descriptor)
-                .map_err(|error| ControlPlaneError::validation("integration_delivery_invalid", error.to_string()))?;
+            IntegrationValidator::validate_delivery(&delivery, &target.target, &descriptor).map_err(|error| {
+                ControlPlaneRequestFailure::contract(
+                    crate::ControlPlaneFailure::Validation,
+                    "integration_delivery_invalid",
+                    error,
+                )
+            })?;
             queued.push(QueuedIntegrationDelivery {
                 target,
                 audit: audit_event(
@@ -156,11 +166,11 @@ pub(super) fn transition_release(
     reason: &str,
     details: Value,
     occurred_at: chrono::DateTime<chrono::Utc>,
-) -> Result<ReleaseTransition, ControlPlaneError> {
+) -> Result<ReleaseTransition, ControlPlaneRequestFailure> {
     require_cluster(auth, current.cluster_id)?;
     validate_reason(reason)?;
     ReleaseStateMachine::transition(current.status, to)
-        .map_err(|error| ControlPlaneError::conflict_code("release_state_invalid", error.to_string()))?;
+        .map_err(|_| ControlPlaneRequestFailure::conflict_code("release_state_invalid", "operation rejected"))?;
     let mut workflow = current.clone();
     workflow.status = to;
     workflow.updated_at = occurred_at;
@@ -173,7 +183,7 @@ pub(super) fn transition_release(
         workflow.pause_reason = None;
     }
     ReleaseValidator::validate_workflow(&workflow)
-        .map_err(|error| ControlPlaneError::validation("release_invalid", error.to_string()))?;
+        .map_err(|_| ControlPlaneRequestFailure::validation("release_invalid", "release rejected"))?;
     Ok(ReleaseTransition {
         event: ReleaseEventRecord {
             id: Uuid::new_v4(),
@@ -233,17 +243,17 @@ pub(super) fn audit_event(
     }
 }
 
-pub(super) fn require_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+pub(super) fn require_operator(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     require_role(auth, "operator")
 }
 
-pub(super) fn require_approver(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+pub(super) fn require_approver(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     require_role(auth, "approver")
 }
 
-pub(super) fn require_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneError> {
+pub(super) fn require_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneRequestFailure> {
     if !auth.clusters.contains(&cluster_id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "release cluster is outside the authenticated scope",
         ));
@@ -251,15 +261,19 @@ pub(super) fn require_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Resu
     Ok(())
 }
 
-pub(super) fn validate_reason(value: &str) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_reason(value: &str) -> Result<(), ControlPlaneRequestFailure> {
     validate_bounded_text("reason", value, 2_048)?;
     reject_sensitive(value)
 }
 
-pub(super) fn validate_bounded_text(name: &str, value: &str, max_chars: usize) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_bounded_text(
+    name: &str,
+    value: &str,
+    max_chars: usize,
+) -> Result<(), ControlPlaneRequestFailure> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > max_chars || value.chars().any(char::is_control) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             format!("{name} must be non-empty, bounded, and contain no control characters"),
         ));
@@ -267,7 +281,7 @@ pub(super) fn validate_bounded_text(name: &str, value: &str, max_chars: usize) -
     Ok(())
 }
 
-pub(super) fn reject_sensitive(value: &str) -> Result<(), ControlPlaneError> {
+pub(super) fn reject_sensitive(value: &str) -> Result<(), ControlPlaneRequestFailure> {
     let normalized = value.to_ascii_lowercase();
     if [
         "token=",
@@ -281,7 +295,7 @@ pub(super) fn reject_sensitive(value: &str) -> Result<(), ControlPlaneError> {
     .iter()
     .any(|marker| normalized.contains(marker))
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "sensitive_data_rejected",
             "release content contains prohibited sensitive material",
         ));
@@ -289,9 +303,9 @@ pub(super) fn reject_sensitive(value: &str) -> Result<(), ControlPlaneError> {
     Ok(())
 }
 
-fn require_role(auth: &AuthContext, role: &'static str) -> Result<(), ControlPlaneError> {
+fn require_role(auth: &AuthContext, role: &'static str) -> Result<(), ControlPlaneRequestFailure> {
     if !auth.roles.contains(role) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "role_required",
             format!("release operation requires the {role} role"),
         ));

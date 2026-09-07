@@ -40,6 +40,7 @@ use serde_json::json;
 
 use super::*;
 use crate::ConfigWriteClient;
+use crate::ExecutionAgentRequestFailure;
 use crate::LoggerLevelControlClient;
 use crate::LoggerLevelTtlRestore;
 use crate::LoggerLevelTtlWrite;
@@ -71,11 +72,11 @@ impl ConfigWriteClient for FakeLoggerClient {
     fn set_logger_level_ttl<'a>(
         &'a self,
         request: &'a LoggerLevelTtlWrite,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ExecutionAgentError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), ExecutionAgentRequestFailure>> + Send + 'a>> {
         Box::pin(async move {
             let mut state = self.state.lock().expect("fake state lock");
             if state.active_operation_id.is_some() {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(ExecutionAgentRequestFailure::DriverFailed);
             }
             *self.original_level.lock().expect("fake original lock") = Some(state.level.clone());
             state.level = request.level.clone();
@@ -99,14 +100,14 @@ impl LoggerLevelControlClient for FakeLoggerClient {
     fn restore_logger_level<'a>(
         &'a self,
         request: &'a LoggerLevelTtlRestore,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ExecutionAgentError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), ExecutionAgentRequestFailure>> + Send + 'a>> {
         Box::pin(async move {
             let original = self
                 .original_level
                 .lock()
                 .expect("fake original lock")
                 .clone()
-                .ok_or(ExecutionAgentError::DriverFailed)?;
+                .ok_or(ExecutionAgentRequestFailure::DriverFailed)?;
             let mut state = self.state.lock().expect("fake state lock");
             state.level = original;
             state.active_operation_id = None;

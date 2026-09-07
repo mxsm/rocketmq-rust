@@ -57,6 +57,9 @@ use crate::ExecutionPrechecker;
 use crate::ExecutionVerifier;
 use crate::ExecutorAuthorityClient;
 use crate::ExecutorError;
+use crate::ExecutorOperationOutcome;
+use crate::ExecutorRejection;
+use crate::ExecutorRequestFailure;
 use crate::ResourceLock;
 use crate::ResourceLockRequest;
 use crate::ResourceSafetyStore;
@@ -183,16 +186,28 @@ impl ChangeExecutor {
     /// Captures a current, typed Agent precondition without entering the
     /// mutation or execution-journal paths.
     ///
+    /// Expected precondition changes are returned as a closed rejection.
+    ///
     /// # Errors
     ///
-    /// Rejects Agent transport failures, malformed hashes, non-ready state,
-    /// and any non-empty reason-code set.
-    pub async fn read_precondition(&self, request: &AgentReadRequest) -> Result<AgentReadResult, ExecutorError> {
-        let result = self.agent.precheck(request).await?;
+    /// Returns only an operational Agent transport failure.
+    pub async fn read_precondition(
+        &self,
+        request: &AgentReadRequest,
+    ) -> Result<ExecutorOperationOutcome<AgentReadResult>, ExecutorError> {
+        let result = match self.agent.precheck(request).await {
+            Ok(result) => result,
+            Err(ExecutorRequestFailure::Rejected(rejection)) => {
+                return Ok(ExecutorOperationOutcome::rejected(rejection));
+            }
+            Err(ExecutorRequestFailure::Operational(error)) => return Err(error),
+        };
         if !result.ready || !result.reason_codes.is_empty() || !is_sha256_digest(&result.precondition_hash) {
-            return Err(ExecutorError::PreconditionChanged);
+            return Ok(ExecutorOperationOutcome::rejected(
+                ExecutorRejection::PreconditionChanged,
+            ));
         }
-        Ok(result)
+        Ok(ExecutorOperationOutcome::accepted(result))
     }
 
     /// Executes every approved step in order and stops before Phase 3 generic
@@ -205,14 +220,17 @@ impl ChangeExecutor {
     ///
     /// # Errors
     ///
-    /// Fails closed on identity, descriptor, precondition, quarantine, lock,
-    /// Authority, Agent, journal, or reconciliation uncertainty.
-    pub async fn execute(&self, request: &ExecutionRequest) -> Result<ExecuteOutcome, ExecutorError> {
+    /// Expected refusals are returned as a closed rejection. Operational
+    /// dependency failures remain opaque errors.
+    pub async fn execute(
+        &self,
+        request: &ExecutionRequest,
+    ) -> Result<ExecutorOperationOutcome<ExecuteOutcome>, ExecutorError> {
         self.metrics.execution_total.fetch_add(1, Ordering::Relaxed);
         self.metrics.active_executions.fetch_add(1, Ordering::Relaxed);
         let result = self.execute_inner(request).await;
         self.metrics.active_executions.fetch_sub(1, Ordering::Relaxed);
-        result
+        executor_outcome(result)
     }
 
     /// Recovers an interrupted compensating execution from its immutable
@@ -227,16 +245,19 @@ impl ChangeExecutor {
     ///
     /// # Errors
     ///
-    /// Returns a typed failure when the execution is not recoverable, durable
-    /// state cannot be loaded, fencing fails, or an effect is not proven
-    /// absent.
-    pub async fn recover_execution(&self, id: ExecutionId) -> Result<ExecuteOutcome, ExecutorError> {
+    /// Returns a closed rejection when the execution is not recoverable or an
+    /// effect is not proven absent. Durable and dependency failures remain
+    /// opaque errors.
+    pub async fn recover_execution(
+        &self,
+        id: ExecutionId,
+    ) -> Result<ExecutorOperationOutcome<ExecuteOutcome>, ExecutorError> {
         self.metrics.execution_total.fetch_add(1, Ordering::Relaxed);
         self.metrics.replay_total.fetch_add(1, Ordering::Relaxed);
         self.metrics.active_executions.fetch_add(1, Ordering::Relaxed);
         let result = self.recover_execution_inner(id).await;
         self.metrics.active_executions.fetch_sub(1, Ordering::Relaxed);
-        result
+        executor_outcome(result)
     }
 
     /// Reconciles a bounded set of interrupted compensation records during
@@ -250,25 +271,28 @@ impl ChangeExecutor {
     ///
     /// Returns dependency, fencing, or journal failures other than the
     /// expected fail-closed unresolved-effect result.
-    pub async fn recover_interrupted_executions(&self, limit: u32) -> Result<RecoverySweepOutcome, ExecutorError> {
+    pub async fn recover_interrupted_executions(
+        &self,
+        limit: u32,
+    ) -> Result<RecoverySweepOutcome, ExecutorRequestFailure> {
         let ids = self.journal.compensating_execution_ids(limit).await?;
         let mut summary = RecoverySweepOutcome::default();
         for id in ids {
             summary.attempted = summary.attempted.saturating_add(1);
             match self.recover_execution(id).await {
-                Ok(outcome) if outcome.state == ExecutionState::RolledBack => {
+                Ok(ExecutorOperationOutcome::Accepted(outcome)) if outcome.state == ExecutionState::RolledBack => {
                     summary.recovered = summary.recovered.saturating_add(1);
                 }
-                Ok(_) | Err(ExecutorError::ReconcileBlocked) => {
+                Ok(ExecutorOperationOutcome::Accepted(_) | ExecutorOperationOutcome::Rejected(_)) => {
                     summary.blocked = summary.blocked.saturating_add(1);
                 }
-                Err(error) => return Err(error),
+                Err(error) => return Err(ExecutorRequestFailure::Operational(error)),
             }
         }
         Ok(summary)
     }
 
-    async fn recover_execution_inner(&self, id: ExecutionId) -> Result<ExecuteOutcome, ExecutorError> {
+    async fn recover_execution_inner(&self, id: ExecutionId) -> Result<ExecuteOutcome, ExecutorRequestFailure> {
         let request = self.journal.execution_request(id).await?;
         let state = self.journal.execution_state(id).await?;
         if matches!(
@@ -283,11 +307,11 @@ impl ChangeExecutor {
             });
         }
         if state != ExecutionState::Compensating {
-            return Err(ExecutorError::ReconcileBlocked);
+            return Err(ExecutorRequestFailure::ReconcileBlocked);
         }
         let forward_intents = self.journal.forward_intents_for_execution(id).await?;
         if forward_intents.is_empty() {
-            return Err(ExecutorError::ReconcileBlocked);
+            return Err(ExecutorRequestFailure::ReconcileBlocked);
         }
 
         let mut leases = self.leases.lock().await;
@@ -342,7 +366,7 @@ impl ChangeExecutor {
 
         if !every_effect_absent || self.journal.execution_state(id).await? != ExecutionState::Compensating {
             self.metrics.reconcile_blocks_total.fetch_add(1, Ordering::Relaxed);
-            return Err(ExecutorError::ReconcileBlocked);
+            return Err(ExecutorRequestFailure::ReconcileBlocked);
         }
         self.transition(
             &request,
@@ -361,7 +385,7 @@ impl ChangeExecutor {
         })
     }
 
-    async fn execute_inner(&self, request: &ExecutionRequest) -> Result<ExecuteOutcome, ExecutorError> {
+    async fn execute_inner(&self, request: &ExecutionRequest) -> Result<ExecuteOutcome, ExecutorRequestFailure> {
         self.authority
             .verify_execution(&VerifyExecutionRequest {
                 schema_version: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
@@ -369,7 +393,7 @@ impl ChangeExecutor {
             })
             .await?;
         if request.plan.steps.is_empty() {
-            return Err(ExecutorError::InvalidRequest);
+            return Err(ExecutorRequestFailure::InvalidRequest);
         }
         for step in &request.plan.steps {
             self.prechecker
@@ -408,7 +432,7 @@ impl ChangeExecutor {
         )
         .await?;
         if let Err(error) = self.prechecker.check(request).await {
-            if matches!(error, ExecutorError::PreconditionChanged) {
+            if error.is_precondition_changed() {
                 self.metrics
                     .precondition_rejections_total
                     .fetch_add(1, Ordering::Relaxed);
@@ -469,7 +493,7 @@ impl ChangeExecutor {
         &self,
         request: &ExecutionRequest,
         force_takeover: bool,
-    ) -> Result<ExecutorLease, ExecutorError> {
+    ) -> Result<ExecutorLease, ExecutorRequestFailure> {
         let mut leases = self.leases.lock().await;
         if !force_takeover
             && let Some(lease) = leases.get(&request.cluster_id)
@@ -518,7 +542,7 @@ impl ChangeExecutor {
         &self,
         request: &ExecutionRequest,
         grant: &ReconcileGrant,
-    ) -> Result<(), ExecutorError> {
+    ) -> Result<(), ExecutorRequestFailure> {
         let pending = self
             .journal
             .pending_intents_for_cluster(request.cluster_id, MAX_RECOVERY_INTENTS)
@@ -543,13 +567,13 @@ impl ChangeExecutor {
                 })
                 .await?;
             if response.state == ReconcileEffectState::Unknown {
-                return Err(ExecutorError::ReconcileBlocked);
+                return Err(ExecutorRequestFailure::ReconcileBlocked);
             }
             let reason_code = match response.state {
                 ReconcileEffectState::Applied => "reconciled_applied",
                 ReconcileEffectState::NotApplied => "reconciled_not_applied",
                 ReconcileEffectState::Failed => "reconciled_failed",
-                ReconcileEffectState::Unknown => return Err(ExecutorError::ReconcileBlocked),
+                ReconcileEffectState::Unknown => return Err(ExecutorRequestFailure::ReconcileBlocked),
             };
             let result = StepResult {
                 step_id: pending.intent.step_id,
@@ -608,7 +632,11 @@ impl ChangeExecutor {
         Ok(())
     }
 
-    async fn enter_reconciling(&self, state: ExecutionState, scope: &ExecutionRequest) -> Result<(), ExecutorError> {
+    async fn enter_reconciling(
+        &self,
+        state: ExecutionState,
+        scope: &ExecutionRequest,
+    ) -> Result<(), ExecutorRequestFailure> {
         let synthetic = scope.clone();
         match state {
             ExecutionState::IntentPersisted => {
@@ -660,14 +688,14 @@ impl ChangeExecutor {
                 .await?;
             }
             ExecutionState::Reconciling => {}
-            _ => return Err(ExecutorError::ReconcileBlocked),
+            _ => return Err(ExecutorRequestFailure::ReconcileBlocked),
         }
         Ok(())
     }
 
-    async fn acquire_locks(&self, request: &ExecutionRequest) -> Result<Vec<ResourceLock>, ExecutorError> {
+    async fn acquire_locks(&self, request: &ExecutionRequest) -> Result<Vec<ResourceLock>, ExecutorRequestFailure> {
         let now = Utc::now();
-        let ttl = TimeDelta::from_std(self.resource_lock_ttl).map_err(|_| ExecutorError::Configuration)?;
+        let ttl = TimeDelta::from_std(self.resource_lock_ttl).map_err(ExecutorError::configuration_source)?;
         let mut unique = BTreeSet::new();
         let mut locks = Vec::new();
         for step in &request.plan.steps {
@@ -719,7 +747,7 @@ impl ChangeExecutor {
         from: ExecutionState,
         to: ExecutionState,
         reason: &str,
-    ) -> Result<(), ExecutorError> {
+    ) -> Result<(), ExecutorRequestFailure> {
         let occurred_at = Utc::now();
         let transition = ExecutionTransition {
             from,
@@ -743,7 +771,7 @@ impl ChangeExecutor {
         {
             Ok(())
         } else {
-            Err(ExecutorError::InvalidRequest)
+            Err(ExecutorRequestFailure::InvalidRequest)
         }
     }
 
@@ -807,6 +835,67 @@ impl ChangeExecutor {
     }
 }
 
+fn executor_outcome<T>(
+    result: Result<T, ExecutorRequestFailure>,
+) -> Result<ExecutorOperationOutcome<T>, ExecutorError> {
+    match result {
+        Ok(value) => Ok(ExecutorOperationOutcome::accepted(value)),
+        Err(ExecutorRequestFailure::Rejected(rejection)) => Ok(ExecutorOperationOutcome::rejected(rejection)),
+        Err(ExecutorRequestFailure::Operational(error)) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    use std::error::Error;
+
+    use super::executor_outcome;
+    use crate::ExecutorError;
+    use crate::ExecutorOperationOutcome;
+    use crate::ExecutorRejection;
+    use crate::ExecutorRequestFailure;
+
+    fn invalid_json() -> serde_json::Error {
+        serde_json::from_str::<serde_json::Value>("{").expect_err("invalid JSON fixture")
+    }
+
+    #[test]
+    fn decode_failures_remain_operational_with_their_typed_source() {
+        for error in [
+            ExecutorError::authority_decode(invalid_json()),
+            ExecutorError::agent_decode(invalid_json()),
+            ExecutorError::verification_decode(invalid_json()),
+        ] {
+            let error = executor_outcome::<()>(Err(error.into())).expect_err("decode failure must remain operational");
+            assert!(error.source().is_some_and(|source| source.is::<serde_json::Error>()));
+            assert_eq!(
+                error.http_classification(),
+                (axum::http::StatusCode::SERVICE_UNAVAILABLE, "source_unavailable", true)
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_remote_refusals_remain_closed_outcomes() {
+        for (failure, expected) in [
+            (
+                ExecutorRequestFailure::AuthorityRejected,
+                ExecutorRejection::AuthorityRejected,
+            ),
+            (ExecutorRequestFailure::AgentRejected, ExecutorRejection::AgentRejected),
+            (
+                ExecutorRequestFailure::VerificationRejected,
+                ExecutorRejection::VerificationRejected,
+            ),
+        ] {
+            assert_eq!(
+                executor_outcome::<()>(Err(failure)).expect("explicit refusal is not operational"),
+                ExecutorOperationOutcome::rejected(expected)
+            );
+        }
+    }
+}
+
 #[derive(Default)]
 struct ReconcileAggregate {
     requires_compensation: bool,
@@ -820,8 +909,12 @@ impl ReconcileAggregate {
 
 fn execution_projection(
     request: &ExecutionRequest,
-) -> Result<(String, rocketmq_sre_contracts::ExecutionAction), ExecutorError> {
-    let first = request.plan.steps.first().ok_or(ExecutorError::InvalidRequest)?;
+) -> Result<(String, rocketmq_sre_contracts::ExecutionAction), ExecutorRequestFailure> {
+    let first = request
+        .plan
+        .steps
+        .first()
+        .ok_or(ExecutorRequestFailure::InvalidRequest)?;
     let resource = if request.plan.steps.len() == 1 {
         first.resource.clone()
     } else {

@@ -18,12 +18,14 @@ use rocketmq_sre_contracts::ActionDescriptor;
 use rocketmq_sre_contracts::ActionRisk;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_contracts::PlanStep;
+use rocketmq_sre_contracts::SreContractError;
 use rocketmq_sre_core::ActionCatalog;
 use rocketmq_sre_core::EMBEDDED_ACTION_DESCRIPTOR_YAMLS;
 use serde_json::Map;
 use serde_json::Value;
 
 use crate::ExecutorError;
+use crate::ExecutorRequestFailure;
 
 /// Exact catalog snapshot revalidated inside Executor before every dispatch.
 #[derive(Clone, Debug)]
@@ -46,8 +48,12 @@ impl ExecutorActionRegistry {
             .copied()
             .map(serde_yaml::from_str::<ActionDescriptor>)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| ExecutorError::Configuration)?;
-        Self::from_descriptors(descriptors)
+            .map_err(ExecutorError::configuration_source)?;
+        match Self::from_descriptors(descriptors) {
+            Ok(registry) => Ok(registry),
+            Err(ExecutorRequestFailure::Operational(error)) => Err(error),
+            Err(ExecutorRequestFailure::Rejected(_)) => Err(ExecutorError::Configuration),
+        }
     }
 
     /// Creates an immutable registry from exact descriptors.
@@ -58,7 +64,9 @@ impl ExecutorActionRegistry {
     /// # Errors
     ///
     /// Rejects any descriptor outside the closed action catalog.
-    pub fn from_descriptors(descriptors: impl IntoIterator<Item = ActionDescriptor>) -> Result<Self, ExecutorError> {
+    pub fn from_descriptors(
+        descriptors: impl IntoIterator<Item = ActionDescriptor>,
+    ) -> Result<Self, ExecutorRequestFailure> {
         let mut catalog = ActionCatalog::default();
         let mut executable = BTreeSet::new();
         for descriptor in descriptors {
@@ -66,7 +74,10 @@ impl ExecutorActionRegistry {
             if descriptor.execution_supported {
                 executable.insert(action);
             }
-            catalog.register(descriptor)?;
+            catalog
+                .register(descriptor)
+                .map_err(SreContractError::from)
+                .map_err(ExecutorRequestFailure::from)?;
         }
         Ok(Self { catalog, executable })
     }
@@ -78,7 +89,7 @@ impl ExecutorActionRegistry {
     ///
     /// Fails closed for disabled/unknown versions, R3, descriptor drift, and
     /// parameters outside the local allowlist.
-    pub fn validate_step(&self, step: &PlanStep) -> Result<(), ExecutorError> {
+    pub fn validate_step(&self, step: &PlanStep) -> Result<(), ExecutorRequestFailure> {
         self.validate_step_authorization(step, false)
     }
 
@@ -88,10 +99,12 @@ impl ExecutorActionRegistry {
     ///
     /// In addition to the normal descriptor checks, autonomous requests are
     /// rejected unless the exact descriptor version is R1.
-    pub fn validate_step_authorization(&self, step: &PlanStep, autonomous: bool) -> Result<(), ExecutorError> {
+    pub fn validate_step_authorization(&self, step: &PlanStep, autonomous: bool) -> Result<(), ExecutorRequestFailure> {
         let descriptor = self
             .catalog
-            .executable_descriptor(step.action, &step.descriptor_version)?;
+            .executable_descriptor(step.action, &step.descriptor_version)
+            .map_err(SreContractError::from)
+            .map_err(ExecutorRequestFailure::from)?;
         if !matches!(descriptor.risk, ActionRisk::R1 | ActionRisk::R2)
             || (autonomous && descriptor.risk != ActionRisk::R1)
             || descriptor.max_impact != step.max_impact
@@ -99,7 +112,7 @@ impl ExecutorActionRegistry {
             || descriptor.compensation != step.compensation
             || !self.executable.contains(&step.action)
         {
-            return Err(ExecutorError::InvalidRequest);
+            return Err(ExecutorRequestFailure::InvalidRequest);
         }
         validate_parameters(descriptor, &step.parameters)?;
         Ok(())
@@ -111,14 +124,14 @@ impl ExecutorActionRegistry {
     }
 }
 
-fn validate_parameters(descriptor: &ActionDescriptor, parameters: &Value) -> Result<(), ExecutorError> {
+fn validate_parameters(descriptor: &ActionDescriptor, parameters: &Value) -> Result<(), ExecutorRequestFailure> {
     let mut observed_fields = BTreeSet::new();
     collect_fields(parameters, &mut observed_fields);
     if observed_fields
         .iter()
         .any(|field| descriptor.forbidden_fields.contains(field))
     {
-        return Err(ExecutorError::InvalidRequest);
+        return Err(ExecutorRequestFailure::InvalidRequest);
     }
     validate_schema_value(parameters, &descriptor.parameter_schema)
 }
@@ -140,26 +153,26 @@ fn collect_fields(value: &Value, fields: &mut BTreeSet<String>) {
     }
 }
 
-fn validate_schema_value(value: &Value, schema: &Value) -> Result<(), ExecutorError> {
+fn validate_schema_value(value: &Value, schema: &Value) -> Result<(), ExecutorRequestFailure> {
     match schema.get("type").and_then(Value::as_str) {
         Some("object") => validate_object(value, schema),
         Some("string") => validate_string(value, schema),
         Some("integer") => validate_integer(value, schema),
         Some("boolean") if value.is_boolean() => Ok(()),
         Some("array") if value.is_array() => Ok(()),
-        Some(_) => Err(ExecutorError::InvalidRequest),
+        Some(_) => Err(ExecutorRequestFailure::InvalidRequest),
         None => Ok(()),
     }
 }
 
-fn validate_object(value: &Value, schema: &Value) -> Result<(), ExecutorError> {
-    let values = value.as_object().ok_or(ExecutorError::InvalidRequest)?;
+fn validate_object(value: &Value, schema: &Value) -> Result<(), ExecutorRequestFailure> {
+    let values = value.as_object().ok_or(ExecutorRequestFailure::InvalidRequest)?;
     let empty = Map::new();
     let properties = schema.get("properties").and_then(Value::as_object).unwrap_or(&empty);
     if schema.get("additionalProperties") == Some(&Value::Bool(false))
         && values.keys().any(|name| !properties.contains_key(name))
     {
-        return Err(ExecutorError::InvalidRequest);
+        return Err(ExecutorRequestFailure::InvalidRequest);
     }
     if schema
         .get("required")
@@ -169,7 +182,7 @@ fn validate_object(value: &Value, schema: &Value) -> Result<(), ExecutorError> {
         .filter_map(Value::as_str)
         .any(|name| !values.contains_key(name))
     {
-        return Err(ExecutorError::InvalidRequest);
+        return Err(ExecutorRequestFailure::InvalidRequest);
     }
     validate_property_count(values, schema)?;
     for (name, value) in values {
@@ -180,8 +193,8 @@ fn validate_object(value: &Value, schema: &Value) -> Result<(), ExecutorError> {
     Ok(())
 }
 
-fn validate_property_count(values: &Map<String, Value>, schema: &Value) -> Result<(), ExecutorError> {
-    let count = u64::try_from(values.len()).map_err(|_| ExecutorError::InvalidRequest)?;
+fn validate_property_count(values: &Map<String, Value>, schema: &Value) -> Result<(), ExecutorRequestFailure> {
+    let count = u64::try_from(values.len()).map_err(|_| ExecutorRequestFailure::InvalidRequest)?;
     if schema
         .get("minProperties")
         .and_then(Value::as_u64)
@@ -191,13 +204,13 @@ fn validate_property_count(values: &Map<String, Value>, schema: &Value) -> Resul
             .and_then(Value::as_u64)
             .is_some_and(|maximum| count > maximum)
     {
-        return Err(ExecutorError::InvalidRequest);
+        return Err(ExecutorRequestFailure::InvalidRequest);
     }
     Ok(())
 }
 
-fn validate_string(value: &Value, schema: &Value) -> Result<(), ExecutorError> {
-    let value = value.as_str().ok_or(ExecutorError::InvalidRequest)?;
+fn validate_string(value: &Value, schema: &Value) -> Result<(), ExecutorRequestFailure> {
+    let value = value.as_str().ok_or(ExecutorRequestFailure::InvalidRequest)?;
     if schema
         .get("maxLength")
         .and_then(Value::as_u64)
@@ -207,13 +220,13 @@ fn validate_string(value: &Value, schema: &Value) -> Result<(), ExecutorError> {
             .and_then(Value::as_array)
             .is_some_and(|allowed| !allowed.iter().any(|candidate| candidate.as_str() == Some(value)))
     {
-        return Err(ExecutorError::InvalidRequest);
+        return Err(ExecutorRequestFailure::InvalidRequest);
     }
     Ok(())
 }
 
-fn validate_integer(value: &Value, schema: &Value) -> Result<(), ExecutorError> {
-    let value = value.as_i64().ok_or(ExecutorError::InvalidRequest)?;
+fn validate_integer(value: &Value, schema: &Value) -> Result<(), ExecutorRequestFailure> {
+    let value = value.as_i64().ok_or(ExecutorRequestFailure::InvalidRequest)?;
     if schema
         .get("minimum")
         .and_then(Value::as_i64)
@@ -223,7 +236,7 @@ fn validate_integer(value: &Value, schema: &Value) -> Result<(), ExecutorError> 
             .and_then(Value::as_i64)
             .is_some_and(|maximum| value > maximum)
     {
-        return Err(ExecutorError::InvalidRequest);
+        return Err(ExecutorRequestFailure::InvalidRequest);
     }
     Ok(())
 }

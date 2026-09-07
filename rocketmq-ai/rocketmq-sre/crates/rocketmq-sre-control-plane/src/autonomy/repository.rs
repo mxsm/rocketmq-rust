@@ -57,6 +57,7 @@ use super::model::ShadowOutcomeRecord;
 use super::model::ShadowOutcomeView;
 use super::model::SupervisedExecutionQualificationFacts;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 impl PostgresRepository {
@@ -64,7 +65,7 @@ impl PostgresRepository {
         &self,
         mut definition: AutonomyPolicyDefinition,
         actor: &str,
-    ) -> Result<(AutonomyPolicyDefinition, AutonomyLifecycleState), ControlPlaneError> {
+    ) -> Result<(AutonomyPolicyDefinition, AutonomyLifecycleState), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         lock_scope(
             &mut transaction,
@@ -210,7 +211,7 @@ impl PostgresRepository {
                 .execute(&mut *transaction)
                 .await?;
                 if updated.rows_affected() != 1 {
-                    return Err(ControlPlaneError::conflict_code(
+                    return Err(ControlPlaneRequestFailure::conflict_code(
                         "autonomy_state_changed",
                         "autonomy lifecycle changed while the policy version was created",
                     ));
@@ -291,7 +292,7 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         action: ExecutionAction,
         action_version: &str,
-    ) -> Result<AutonomyScopeView, ControlPlaneError> {
+    ) -> Result<AutonomyScopeView, ControlPlaneRequestFailure> {
         self.autonomy_scope_at(tenant_id, cluster_id, action, action_version, Utc::now())
             .await
     }
@@ -303,7 +304,7 @@ impl PostgresRepository {
         action: ExecutionAction,
         action_version: &str,
         evaluated_at: DateTime<Utc>,
-    ) -> Result<AutonomyScopeView, ControlPlaneError> {
+    ) -> Result<AutonomyScopeView, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT state.*, definition.definition_snapshot
              FROM autonomy_lifecycle_states state
@@ -319,7 +320,7 @@ impl PostgresRepository {
         .bind(action_version)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let policy: AutonomyPolicyDefinition = from_json(row.try_get("definition_snapshot")?)?;
         let lifecycle = lifecycle_from_row(&row, tenant_id, cluster_id, action)?;
         let qualification = self.autonomy_qualification(&policy, evaluated_at).await?;
@@ -363,7 +364,7 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         limit: i64,
         evaluated_at: DateTime<Utc>,
-    ) -> Result<Vec<AutonomyScopeView>, ControlPlaneError> {
+    ) -> Result<Vec<AutonomyScopeView>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT action_id, action_version
              FROM autonomy_lifecycle_states
@@ -396,7 +397,7 @@ impl PostgresRepository {
         owner_confirmed: bool,
         owner_approval_ref: Option<&str>,
         reason_code: &str,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let updated = sqlx::query(
             "UPDATE autonomy_lifecycle_states
@@ -429,7 +430,7 @@ impl PostgresRepository {
         .execute(&mut *transaction)
         .await?;
         if updated.rows_affected() != 1 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "autonomy_state_changed",
                 "autonomy lifecycle changed before this transition completed",
             ));
@@ -459,7 +460,7 @@ impl PostgresRepository {
         starts_at: DateTime<Utc>,
         expires_at: Option<DateTime<Utc>>,
         actor: &str,
-    ) -> Result<AutonomyFreezeView, ControlPlaneError> {
+    ) -> Result<AutonomyFreezeView, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let cluster_scope = cluster_id.map_or_else(|| "*".to_owned(), |id| id.to_string());
         let lock_key = format!(
@@ -561,7 +562,7 @@ impl PostgresRepository {
         active: bool,
         reason: &str,
         actor: &str,
-    ) -> Result<AutonomyKillSwitchView, ControlPlaneError> {
+    ) -> Result<AutonomyKillSwitchView, ControlPlaneRequestFailure> {
         let now = Utc::now();
         let row = sqlx::query(
             "INSERT INTO autonomy_kill_switches (
@@ -604,7 +605,7 @@ impl PostgresRepository {
         &self,
         policy_id: AutonomyPolicyId,
         cohort: &AutonomyQualificationCohort,
-    ) -> Result<AutonomyQualificationCohort, ControlPlaneError> {
+    ) -> Result<AutonomyQualificationCohort, ControlPlaneRequestFailure> {
         sqlx::query(
             "INSERT INTO autonomy_qualification_cohorts (
                 id, level, tenant_id, cluster_id, action_id, action_version,
@@ -663,7 +664,7 @@ impl PostgresRepository {
             || stored.primary_actual_model_identity_hash != cohort.primary_actual_model_identity_hash
             || stored.critic_actual_model_identity_hash != cohort.critic_actual_model_identity_hash
         {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "autonomy_cohort_hash_collision",
                 "stored autonomy cohort does not match the canonical qualification key",
             ));
@@ -674,7 +675,7 @@ impl PostgresRepository {
     pub(super) async fn autonomy_cohort(
         &self,
         cohort_id: rocketmq_sre_contracts::AutonomyCohortId,
-    ) -> Result<AutonomyQualificationCohort, ControlPlaneError> {
+    ) -> Result<AutonomyQualificationCohort, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT *
              FROM autonomy_qualification_cohorts
@@ -683,8 +684,8 @@ impl PostgresRepository {
         .bind(cohort_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
-        cohort_from_row(&row)
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
+        Ok(cohort_from_row(&row)?)
     }
 
     #[allow(
@@ -701,7 +702,7 @@ impl PostgresRepository {
         plan_hash: &str,
         execution_id: ExecutionId,
         minimum_stable_window_seconds: u64,
-    ) -> Result<SupervisedExecutionQualificationFacts, ControlPlaneError> {
+    ) -> Result<SupervisedExecutionQualificationFacts, ControlPlaneRequestFailure> {
         let minimum_stable_window_seconds =
             i64::try_from(minimum_stable_window_seconds).map_err(|_| invalid_request("stable window is too large"))?;
         let row = sqlx::query(
@@ -826,7 +827,7 @@ impl PostgresRepository {
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "supervised_execution_scope_mismatch",
                 "supervised execution does not match the exact qualification scope",
             )
@@ -894,10 +895,14 @@ impl PostgresRepository {
     pub(super) async fn store_qualification_sample(
         &self,
         sample: &AutonomyQualificationSample,
-    ) -> Result<AutonomyQualificationSample, ControlPlaneError> {
-        sample
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_qualification_sample", error.to_string()))?;
+    ) -> Result<AutonomyQualificationSample, ControlPlaneRequestFailure> {
+        sample.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_qualification_sample",
+                error,
+            )
+        })?;
         let inserted = sqlx::query(
             "INSERT INTO autonomy_qualification_samples (
                 id, cohort_id, sample_kind, incident_id, plan_id, plan_hash,
@@ -962,7 +967,7 @@ impl PostgresRepository {
         };
         let stored: AutonomyQualificationSample = from_json(row.try_get("sample_snapshot")?)?;
         if !same_qualification_sample(&stored, sample) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "qualification_sample_conflict",
                 "qualification sample idempotency key already has different content",
             ));
@@ -974,10 +979,14 @@ impl PostgresRepository {
         &self,
         record: &ShadowOutcomeRecord,
         sample: &AutonomyQualificationSample,
-    ) -> Result<ShadowOutcomeView, ControlPlaneError> {
-        sample
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_qualification_sample", error.to_string()))?;
+    ) -> Result<ShadowOutcomeView, ControlPlaneRequestFailure> {
+        sample.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_qualification_sample",
+                error,
+            )
+        })?;
         let mut transaction = self.pool.begin().await?;
         let inserted = sqlx::query(
             "INSERT INTO autonomy_shadow_outcomes (
@@ -1046,7 +1055,7 @@ impl PostgresRepository {
             shadow_outcome_from_row(&row)?
         };
         if !same_shadow_outcome(&stored_view, &record.view) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "shadow_outcome_conflict",
                 "Shadow outcome idempotency key already has different content",
             ));
@@ -1096,7 +1105,7 @@ impl PostgresRepository {
             .await?;
             let stored: AutonomyQualificationSample = from_json(row.try_get("sample_snapshot")?)?;
             if !same_qualification_sample(&stored, sample) {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "qualification_sample_conflict",
                     "Shadow qualification sample already has different content",
                 ));
@@ -1113,7 +1122,7 @@ impl PostgresRepository {
         action: ExecutionAction,
         action_version: &str,
         limit: i64,
-    ) -> Result<Vec<ShadowOutcomeView>, ControlPlaneError> {
+    ) -> Result<Vec<ShadowOutcomeView>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT id, cohort_id, incident_id, plan_id, plan_hash,
                     qualified, reason_codes, observed_at
@@ -1130,7 +1139,9 @@ impl PostgresRepository {
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(shadow_outcome_from_row).collect()
+        rows.iter()
+            .map(|row| shadow_outcome_from_row(row).map_err(Into::into))
+            .collect()
     }
 
     #[allow(
@@ -1153,7 +1164,7 @@ impl PostgresRepository {
         critic_profile: &str,
         critic_family: &str,
         critic_revision: &str,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT
                 review.plan_id,
@@ -1226,7 +1237,7 @@ impl PostgresRepository {
     pub(super) async fn store_dynamic_safety_decision(
         &self,
         decision: &DynamicSafetyDecision,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         sqlx::query(
             "INSERT INTO autonomy_dynamic_safety_decisions (
                 id, tenant_id, cluster_id, action_id, action_version,
@@ -1282,7 +1293,7 @@ impl PostgresRepository {
     pub(super) async fn dynamic_safety_decision_is_persisted(
         &self,
         decision: &DynamicSafetyDecision,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         let snapshot: Option<Value> = sqlx::query_scalar(
             "SELECT decision_snapshot
              FROM autonomy_dynamic_safety_decisions
@@ -1302,10 +1313,10 @@ impl PostgresRepository {
         .bind(decision.execution_step_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?;
-        snapshot
+        Ok(snapshot
             .map(from_json::<DynamicSafetyDecision>)
             .transpose()
-            .map(|stored| stored.as_ref() == Some(decision))
+            .map(|stored| stored.as_ref() == Some(decision))?)
     }
 
     pub(super) async fn plan_evidence_is_current(
@@ -1319,7 +1330,7 @@ impl PostgresRepository {
         maximum_age_seconds: u64,
         required_sources: &[String],
         now: DateTime<Utc>,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         let snapshot: Option<Value> = sqlx::query_scalar(
             "SELECT plan_snapshot
              FROM action_plans
@@ -1409,7 +1420,7 @@ impl PostgresRepository {
         &self,
         outcome: &AutonomyOutcome,
         actor: &str,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         lock_scope(
             &mut transaction,
@@ -1475,7 +1486,7 @@ impl PostgresRepository {
             .await?;
             let stored: AutonomyOutcome = from_json(snapshot)?;
             if !same_autonomy_outcome(&stored, outcome) {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "autonomy_outcome_conflict",
                     "autonomy outcome idempotency key already has different content",
                 ));
@@ -1497,7 +1508,7 @@ impl PostgresRepository {
             .bind(&effective.action_version)
             .fetch_optional(&mut *transaction)
             .await?
-            .ok_or(ControlPlaneError::NotFound)?;
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
             let current = lifecycle_from_row(&row, effective.tenant_id, effective.cluster_id, effective.action)?;
             if current.mode != AutonomyMode::Paused {
                 let reason = effective
@@ -1514,7 +1525,9 @@ impl PostgresRepository {
                     PromotionQualification::default(),
                     pause_at,
                 )
-                .map_err(|error| ControlPlaneError::conflict_code("autonomy_pause_failed", error.to_string()))?;
+                .map_err(|_| {
+                    ControlPlaneRequestFailure::conflict_code("autonomy_pause_failed", "operation rejected")
+                })?;
                 sqlx::query(
                     "UPDATE autonomy_lifecycle_states
                      SET mode = 'paused',
@@ -1568,7 +1581,7 @@ impl PostgresRepository {
         &self,
         policy: &AutonomyPolicyDefinition,
         evaluated_at: DateTime<Utc>,
-    ) -> Result<AutonomyQualificationView, ControlPlaneError> {
+    ) -> Result<AutonomyQualificationView, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT *
              FROM autonomy_qualification_cohorts
@@ -1632,7 +1645,7 @@ impl PostgresRepository {
         action: ExecutionAction,
         action_version: &str,
         now: DateTime<Utc>,
-    ) -> Result<Vec<AutonomyFreezeView>, ControlPlaneError> {
+    ) -> Result<Vec<AutonomyFreezeView>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT *
              FROM autonomy_freezes
@@ -1654,7 +1667,9 @@ impl PostgresRepository {
         .bind(now)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(freeze_from_row).collect()
+        rows.iter()
+            .map(|row| freeze_from_row(row).map_err(Into::into))
+            .collect()
     }
 
     pub(super) async fn autonomy_freeze_state(
@@ -1664,7 +1679,7 @@ impl PostgresRepository {
         action: ExecutionAction,
         action_version: &str,
         now: DateTime<Utc>,
-    ) -> Result<(u64, bool), ControlPlaneError> {
+    ) -> Result<(u64, bool), ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT COALESCE(MAX(revision), 0) AS revision,
                     COALESCE(BOOL_OR(
@@ -1699,7 +1714,7 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         action: ExecutionAction,
         action_version: &str,
-    ) -> Result<Option<AutonomyKillSwitchView>, ControlPlaneError> {
+    ) -> Result<Option<AutonomyKillSwitchView>, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT *
              FROM autonomy_kill_switches
@@ -1712,7 +1727,7 @@ impl PostgresRepository {
         .bind(action_version)
         .fetch_optional(&self.pool)
         .await?;
-        row.as_ref().map(kill_switch_from_row).transpose()
+        Ok(row.as_ref().map(kill_switch_from_row).transpose()?)
     }
 
     async fn autonomy_recent_outcomes(
@@ -1722,7 +1737,7 @@ impl PostgresRepository {
         action: ExecutionAction,
         action_version: &str,
         limit: i64,
-    ) -> Result<Vec<AutonomyOutcome>, ControlPlaneError> {
+    ) -> Result<Vec<AutonomyOutcome>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT outcome_snapshot
              FROM autonomy_outcomes
@@ -1739,7 +1754,12 @@ impl PostgresRepository {
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter()
-            .map(|row| from_json(row.try_get("outcome_snapshot")?))
+            .map(|row| {
+                let snapshot = row
+                    .try_get("outcome_snapshot")
+                    .map_err(ControlPlaneRequestFailure::from)?;
+                from_json(snapshot).map_err(Into::into)
+            })
             .collect()
     }
 }
@@ -1766,7 +1786,7 @@ async fn insert_lifecycle_event(
     owner_approval_ref: Option<&str>,
     reason_code: &str,
     actor: &str,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO autonomy_lifecycle_events (
             event_id, tenant_id, cluster_id, action_id, action_version,
@@ -2133,21 +2153,20 @@ fn count_u32(value: i64) -> Result<u32, ControlPlaneError> {
 }
 
 fn json_value<T: serde::Serialize>(value: &T) -> Result<Value, ControlPlaneError> {
-    serde_json::to_value(value)
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "value cannot be represented as JSON"))
+    serde_json::to_value(value).map_err(|source| ControlPlaneError::validation_source("invalid_request", source))
 }
 
 fn from_json<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, ControlPlaneError> {
     serde_json::from_value(value)
-        .map_err(|_| invalid_persisted("stored autonomy JSON is incompatible with the current contract"))
+        .map_err(|source| ControlPlaneError::validation_source("invalid_persisted_autonomy", source))
 }
 
-fn invalid_request(detail: &'static str) -> ControlPlaneError {
-    ControlPlaneError::validation("invalid_autonomy_request", detail)
+fn invalid_request(detail: &'static str) -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::validation("invalid_autonomy_request", detail)
 }
 
 fn invalid_persisted(detail: &'static str) -> ControlPlaneError {
-    ControlPlaneError::validation("invalid_persisted_autonomy", detail)
+    ControlPlaneError::state("invalid_persisted_autonomy", detail)
 }
 
 #[cfg(test)]

@@ -34,7 +34,7 @@ use super::support::reject_sensitive;
 use super::support::require_cluster;
 use super::support::require_operator;
 use super::support::validate_bounded_text;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 use crate::release_management::descriptors::resolve_descriptor;
 use crate::release_management::model::EnterpriseEventListQuery;
@@ -56,12 +56,15 @@ impl ReleaseManagementService {
         target_id: IntegrationTargetId,
         authorization: &EnterpriseIngressAuthorization,
         request: &EnterpriseIngressRequest,
-    ) -> Result<EnterpriseIngressView, ControlPlaneError> {
+    ) -> Result<EnterpriseIngressView, ControlPlaneRequestFailure> {
         let target = self.integration_target(auth, target_id).await?;
-        let cluster_id = target.target.cluster_id.ok_or(ControlPlaneError::NotFound)?;
+        let cluster_id = target
+            .target
+            .cluster_id
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         require_cluster(auth, cluster_id)?;
         if !target.target.enabled {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "integration_target_disabled",
                 "integration target is disabled",
             ));
@@ -74,7 +77,7 @@ impl ReleaseManagementService {
         validate_nonce(&authorization.nonce)?;
         let signed_at = DateTime::parse_from_rfc3339(authorization.timestamp.trim())
             .map_err(|_| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "integration_signature_invalid",
                     "integration timestamp must be RFC 3339",
                 )
@@ -84,7 +87,7 @@ impl ReleaseManagementService {
         if now.signed_duration_since(signed_at).abs() > Duration::seconds(SIGNATURE_WINDOW_SECONDS)
             || now.signed_duration_since(request.occurred_at).abs() > Duration::seconds(SIGNATURE_WINDOW_SECONDS)
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "integration_event_expired",
                 "integration event is outside the accepted signature window",
             ));
@@ -95,34 +98,41 @@ impl ReleaseManagementService {
             target.target.adapter_kind,
         )
         .ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "integration_descriptor_mismatch",
                 "integration target references an unsupported descriptor version",
             )
         })?;
         let recent = self.repository.recent_enterprise_event_count(target_id).await?;
         if recent >= u64::from(descriptor.operational.rate_limit_per_minute) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "integration_rate_limited",
                 "integration target exceeded its bounded ingress rate",
             ));
         }
         let secret_reference = target.target.secret_reference.as_deref().ok_or_else(|| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "integration_secret_unavailable",
                 "integration target does not have a secret reference",
             )
         })?;
-        let secret = self.secrets.resolve(secret_reference).map_err(|_| {
-            ControlPlaneError::conflict_code(
-                "integration_secret_unavailable",
-                "integration target secret is unavailable",
-            )
-        })?;
-        let payload_digest = canonical_sha256(request).map_err(|_| {
-            ControlPlaneError::validation(
+        let secret = self
+            .secrets
+            .resolve(secret_reference)
+            .map_err(|failure| match failure {
+                ControlPlaneRequestFailure::Rejected(_rejection) => ControlPlaneRequestFailure::conflict_code(
+                    "integration_secret_unavailable",
+                    "integration secret is unavailable",
+                ),
+                ControlPlaneRequestFailure::Operational(error) => error
+                    .reclassify(crate::ControlPlaneFailure::Conflict, "integration_secret_unavailable")
+                    .into(),
+            })?;
+        let payload_digest = canonical_sha256(request).map_err(|source| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
                 "integration_payload_invalid",
-                "integration payload cannot be canonicalized",
+                source,
             )
         })?;
         let signature_material = format!(
@@ -131,14 +141,11 @@ impl ReleaseManagementService {
             authorization.nonce,
             payload_digest
         );
-        let expected_signature = hmac_sha256(&secret, signature_material.as_bytes()).map_err(|_| {
-            ControlPlaneError::validation(
-                "integration_signature_invalid",
-                "integration signature cannot be verified",
-            )
+        let expected_signature = hmac_sha256(&secret, signature_material.as_bytes()).map_err(|error| {
+            error.reclassify(crate::ControlPlaneFailure::Validation, "integration_signature_invalid")
         })?;
         if !signature_matches(&expected_signature, &authorization.signature) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "integration_signature_invalid",
                 "integration signature verification failed",
             ));
@@ -175,7 +182,7 @@ impl ReleaseManagementService {
         auth: &AuthContext,
         target_id: IntegrationTargetId,
         query: &EnterpriseEventListQuery,
-    ) -> Result<EnterpriseEventPage, ControlPlaneError> {
+    ) -> Result<EnterpriseEventPage, ControlPlaneRequestFailure> {
         self.integration_target(auth, target_id).await?;
         let limit = bounded_page_size(query.limit);
         let mut items = self
@@ -195,7 +202,7 @@ impl ReleaseManagementService {
         &self,
         auth: &AuthContext,
         target_id: IntegrationTargetId,
-    ) -> Result<IntegrationHealthView, ControlPlaneError> {
+    ) -> Result<IntegrationHealthView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let target = self.integration_target(auth, target_id).await?;
         let descriptor = resolve_descriptor(
@@ -206,7 +213,12 @@ impl ReleaseManagementService {
         let config_valid = descriptor.is_some();
         let endpoint_valid = valid_endpoint(&target.target.endpoint);
         let secret_available = match target.target.secret_reference.as_deref() {
-            Some(reference) => valid_secret_reference(reference) && self.secrets.available(reference),
+            Some(reference) if valid_secret_reference(reference) => match self.secrets.resolve(reference) {
+                Ok(_secret) => true,
+                Err(ControlPlaneRequestFailure::Rejected(_rejection)) => false,
+                Err(failure @ ControlPlaneRequestFailure::Operational(_)) => return Err(failure),
+            },
+            Some(_) => false,
             None => descriptor
                 .as_ref()
                 .is_some_and(|descriptor| !descriptor.operational.secret_required),
@@ -252,7 +264,7 @@ impl ReleaseManagementService {
         &self,
         auth: &AuthContext,
         target_id: IntegrationTargetId,
-    ) -> Result<IntegrationHealthView, ControlPlaneError> {
+    ) -> Result<IntegrationHealthView, ControlPlaneRequestFailure> {
         self.integration_target(auth, target_id).await?;
         let health = self.repository.integration_health(auth.tenant_id, target_id).await?;
         Ok(IntegrationHealthView {
@@ -266,7 +278,7 @@ impl ReleaseManagementService {
         auth: &AuthContext,
         event_id: EnterpriseIntegrationEventId,
         followup_id: Uuid,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         self.repository
             .record_enterprise_followup(auth.tenant_id, event_id, followup_id)
             .await
@@ -277,9 +289,9 @@ fn validate_enterprise_payload(
     request: &EnterpriseIngressRequest,
     cluster_id: rocketmq_sre_contracts::ClusterId,
     adapter_kind: IntegrationAdapterKind,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if request.payload.cluster_id() != cluster_id || !event_matches_payload(request, adapter_kind) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "integration_scope_mismatch",
             "integration event kind, payload, adapter, and cluster scope must match",
         ));
@@ -369,13 +381,13 @@ fn event_matches_payload(request: &EnterpriseIngressRequest, adapter_kind: Integ
     )
 }
 
-fn validate_nonce(nonce: &str) -> Result<(), ControlPlaneError> {
+fn validate_nonce(nonce: &str) -> Result<(), ControlPlaneRequestFailure> {
     if !(16..=128).contains(&nonce.len())
         || !nonce
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "integration_nonce_invalid",
             "integration nonce is invalid",
         ));
@@ -397,8 +409,8 @@ fn valid_endpoint(value: &str) -> bool {
                 .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1")))
 }
 
-fn invalid_payload(message: &'static str) -> ControlPlaneError {
-    ControlPlaneError::validation("integration_payload_invalid", message)
+fn invalid_payload(message: &'static str) -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::validation("integration_payload_invalid", message)
 }
 
 #[cfg(test)]

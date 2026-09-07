@@ -39,6 +39,7 @@ use rocketmq_sre_contracts::VerificationSpec;
 use serde_json::json;
 
 use super::*;
+use crate::ExecutionAgentRequestFailure;
 
 struct FakeBrokerConfigClient {
     state: Mutex<BrokerConfigPatchState>,
@@ -115,7 +116,7 @@ impl BrokerConfigPatchClient for FakeBrokerConfigClient {
                 .lock()
                 .expect("fake before lock")
                 .clone()
-                .ok_or(ExecutionAgentError::DriverFailed)?;
+                .ok_or(ExecutionAgentRequestFailure::DriverFailed)?;
             let mut state = self.state.lock().expect("fake state lock");
             let previous_generation = state.generation;
             state.values = before;

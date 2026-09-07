@@ -32,7 +32,7 @@ use super::support::quota_usage_from_row;
 use super::support::region_from_row;
 use super::support::registration_from_row;
 use super::support::tenant_from_row;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::fleet::model::CreateQuotaPolicyRequest;
 use crate::fleet::model::FleetScopeQuery;
 use crate::fleet::model::bounded_limit;
@@ -42,7 +42,7 @@ impl FleetRepository {
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
-    ) -> Result<ClusterRegistration, ControlPlaneError> {
+    ) -> Result<ClusterRegistration, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT registration.cluster_id, registration.fleet_id,
                     registration.tenant_id, registration.region_id,
@@ -59,15 +59,15 @@ impl FleetRepository {
         .bind(cluster_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
-        registration_from_row(&row)
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
+        Ok(registration_from_row(&row)?)
     }
 
     pub(in crate::fleet) async fn tenant_scope(
         &self,
         tenant_id: TenantId,
         allowed_clusters: &[ClusterId],
-    ) -> Result<(Fleet, FleetTenant, Vec<FleetRegion>), ControlPlaneError> {
+    ) -> Result<(Fleet, FleetTenant, Vec<FleetRegion>), ControlPlaneRequestFailure> {
         let tenant_row = sqlx::query(
             "SELECT tenant.id, tenant.fleet_id, tenant.name, tenant.owner_name,
                     tenant.active, tenant.created_at, tenant.updated_at
@@ -77,7 +77,7 @@ impl FleetRepository {
         .bind(tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let tenant = tenant_from_row(&tenant_row)?;
         let fleet_row = sqlx::query(
             "SELECT id, name, owner_name, created_at, updated_at
@@ -114,7 +114,7 @@ impl FleetRepository {
         tenant_id: TenantId,
         allowed_clusters: &[ClusterId],
         query: &FleetScopeQuery,
-    ) -> Result<(Vec<ClusterRegistration>, u64), ControlPlaneError> {
+    ) -> Result<(Vec<ClusterRegistration>, u64), ControlPlaneRequestFailure> {
         let allowed = cluster_uuids(allowed_clusters);
         let environment = query.environment.map(environment_name);
         let limit = i64::from(bounded_limit(query.limit));
@@ -169,7 +169,7 @@ impl FleetRepository {
         &self,
         tenant_id: TenantId,
         request: &CreateQuotaPolicyRequest,
-    ) -> Result<QuotaPolicy, ControlPlaneError> {
+    ) -> Result<QuotaPolicy, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let version = sqlx::query_scalar::<_, i64>(
             "SELECT COALESCE(MAX(policy_version), 0) + 1
@@ -234,14 +234,14 @@ impl FleetRepository {
         .fetch_one(&mut *transaction)
         .await?;
         transaction.commit().await?;
-        quota_policy_from_row(&row)
+        Ok(quota_policy_from_row(&row)?)
     }
 
     pub(in crate::fleet) async fn quota_policy(
         &self,
         tenant_id: TenantId,
         cluster_id: Option<ClusterId>,
-    ) -> Result<(QuotaPolicy, QuotaUsage), ControlPlaneError> {
+    ) -> Result<(QuotaPolicy, QuotaUsage), ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, fleet_id, tenant_id, region_id, cluster_id,
                     policy_version, queries_per_minute, model_tokens_per_hour,
@@ -259,7 +259,7 @@ impl FleetRepository {
         .bind(cluster_id.map(|value| value.as_uuid()))
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let policy = quota_policy_from_row(&row)?;
         let usage_row = sqlx::query(
             "SELECT
@@ -312,7 +312,7 @@ impl FleetRepository {
         policy: &QuotaPolicy,
         resource_kind: &str,
         amount: u64,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         sqlx::query(
             "INSERT INTO fleet_quota_usage_events (
                 event_id, quota_policy_id, tenant_id, region_id, cluster_id,

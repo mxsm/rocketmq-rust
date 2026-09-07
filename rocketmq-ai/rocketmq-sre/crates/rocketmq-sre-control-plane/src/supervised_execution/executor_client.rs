@@ -28,8 +28,8 @@ use rocketmq_sre_contracts::is_sha256_digest;
 use serde::Deserialize;
 use url::Url;
 
-use crate::ControlPlaneError;
 use crate::config::validate_internal_service_url;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 const MAX_EXECUTOR_RESPONSE_BYTES: usize = 64 * 1024;
 
@@ -39,6 +39,36 @@ pub(super) struct ExecutorDispatchReceipt {
     pub(super) state: ExecutionState,
     pub(super) replayed: bool,
     pub(super) accepted_steps: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum ExecutorDispatchFailure {
+    Rejected(ControlPlaneRequestFailure),
+    Other(ControlPlaneRequestFailure),
+}
+
+impl ExecutorDispatchFailure {
+    pub(super) const fn is_definitive_rejection(&self) -> bool {
+        matches!(self, Self::Rejected(_))
+    }
+
+    pub(super) fn into_request_failure(self) -> ControlPlaneRequestFailure {
+        match self {
+            Self::Rejected(failure) | Self::Other(failure) => failure,
+        }
+    }
+}
+
+impl From<ControlPlaneRequestFailure> for ExecutorDispatchFailure {
+    fn from(failure: ControlPlaneRequestFailure) -> Self {
+        Self::Other(failure)
+    }
+}
+
+impl From<ExecutorDispatchFailure> for ControlPlaneRequestFailure {
+    fn from(failure: ExecutorDispatchFailure) -> Self {
+        failure.into_request_failure()
+    }
 }
 
 /// Optional client is disabled until a deployment explicitly configures the
@@ -82,7 +112,7 @@ impl ExecutorSubmissionClient {
             .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .build()
-            .map_err(ControlPlaneError::Executor)?;
+            .map_err(ControlPlaneError::executor)?;
         Ok(Self::Http {
             client,
             base_url,
@@ -93,21 +123,22 @@ impl ExecutorSubmissionClient {
     pub(super) async fn submit(
         &self,
         execution: &ExecutionRequest,
-    ) -> Result<ExecutorDispatchReceipt, ControlPlaneError> {
+    ) -> Result<ExecutorDispatchReceipt, ExecutorDispatchFailure> {
         let Self::Http {
             client,
             base_url,
             bearer_token,
         } = self
         else {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "executor_not_configured",
                 "the isolated Change Executor endpoint is not configured",
-            ));
+            )
+            .into());
         };
         let url = base_url
             .join("/internal/v1/executor/executions")
-            .map_err(|_| ControlPlaneError::configuration("Executor URL is invalid"))?;
+            .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))?;
         let mut response = client
             .post(url)
             .bearer_auth(bearer_token.as_ref())
@@ -115,44 +146,55 @@ impl ExecutorSubmissionClient {
             .json(execution)
             .send()
             .await
-            .map_err(ControlPlaneError::Executor)?;
+            .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::executor(source)))?;
         match response.status() {
             StatusCode::OK => {}
             StatusCode::CONFLICT => {
-                return Err(ControlPlaneError::conflict_code(
-                    "executor_rejected",
-                    "Change Executor rejected the request or requires reconciliation",
+                return Err(ExecutorDispatchFailure::Rejected(
+                    ControlPlaneRequestFailure::conflict_code(
+                        "executor_rejected",
+                        "Change Executor rejected the request or requires reconciliation",
+                    ),
                 ));
             }
             status if status.is_client_error() => {
-                return Err(ControlPlaneError::forbidden(
-                    "executor_rejected",
-                    "Change Executor rejected the signed request",
+                return Err(ExecutorDispatchFailure::Rejected(
+                    ControlPlaneRequestFailure::forbidden(
+                        "executor_rejected",
+                        "Change Executor rejected the signed request",
+                    ),
                 ));
             }
             _ => {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "executor_unavailable",
                     "Change Executor is temporarily unavailable",
-                ));
+                )
+                .into());
             }
         }
         if response
             .content_length()
             .is_some_and(|length| length > MAX_EXECUTOR_RESPONSE_BYTES as u64)
         {
-            return Err(invalid_response());
+            return Err(invalid_response().into());
         }
         let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(ControlPlaneError::Executor)? {
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::executor(source)))?
+        {
             if bytes.len().saturating_add(chunk.len()) > MAX_EXECUTOR_RESPONSE_BYTES {
-                return Err(invalid_response());
+                return Err(invalid_response().into());
             }
             bytes.extend_from_slice(&chunk);
         }
-        let receipt: ExecutorDispatchReceipt = serde_json::from_slice(&bytes).map_err(|_| invalid_response())?;
+        let receipt: ExecutorDispatchReceipt = serde_json::from_slice(&bytes).map_err(|source| {
+            ControlPlaneRequestFailure::from(ControlPlaneError::conflict_source("executor_response_invalid", source))
+        })?;
         if receipt.execution_id != execution.id || receipt.accepted_steps != execution.plan.steps.len() {
-            return Err(invalid_response());
+            return Err(invalid_response().into());
         }
         Ok(receipt)
     }
@@ -160,21 +202,21 @@ impl ExecutorSubmissionClient {
     pub(super) async fn read_precondition(
         &self,
         request: &AgentReadRequest,
-    ) -> Result<AgentReadResult, ControlPlaneError> {
+    ) -> Result<AgentReadResult, ControlPlaneRequestFailure> {
         let Self::Http {
             client,
             base_url,
             bearer_token,
         } = self
         else {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "executor_not_configured",
                 "the isolated Change Executor endpoint is not configured",
             ));
         };
         let url = base_url
             .join("/internal/v1/executor/preconditions")
-            .map_err(|_| ControlPlaneError::configuration("Executor URL is invalid"))?;
+            .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))?;
         let mut response = client
             .post(url)
             .bearer_auth(bearer_token.as_ref())
@@ -182,23 +224,23 @@ impl ExecutorSubmissionClient {
             .json(request)
             .send()
             .await
-            .map_err(ControlPlaneError::Executor)?;
+            .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::executor(source)))?;
         match response.status() {
             StatusCode::OK => {}
             StatusCode::CONFLICT => {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "execution_precondition_not_ready",
                     "Execution Agent did not report a ready precondition",
                 ));
             }
             status if status.is_client_error() => {
-                return Err(ControlPlaneError::forbidden(
+                return Err(ControlPlaneRequestFailure::forbidden(
                     "executor_rejected",
                     "Change Executor rejected the precondition request",
                 ));
             }
             _ => {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "executor_unavailable",
                     "Change Executor is temporarily unavailable",
                 ));
@@ -211,13 +253,19 @@ impl ExecutorSubmissionClient {
             return Err(invalid_response());
         }
         let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(ControlPlaneError::Executor)? {
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::executor(source)))?
+        {
             if bytes.len().saturating_add(chunk.len()) > MAX_EXECUTOR_RESPONSE_BYTES {
                 return Err(invalid_response());
             }
             bytes.extend_from_slice(&chunk);
         }
-        let result: AgentReadResult = serde_json::from_slice(&bytes).map_err(|_| invalid_response())?;
+        let result: AgentReadResult = serde_json::from_slice(&bytes).map_err(|source| {
+            ControlPlaneRequestFailure::from(ControlPlaneError::conflict_source("executor_response_invalid", source))
+        })?;
         if result.schema_version != EXECUTION_AGENT_SCHEMA_VERSION
             || result.action != request.action
             || result.target != request.target
@@ -248,8 +296,8 @@ impl Debug for ExecutorSubmissionClient {
     }
 }
 
-fn invalid_response() -> ControlPlaneError {
-    ControlPlaneError::conflict_code(
+fn invalid_response() -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::conflict_code(
         "executor_response_invalid",
         "Change Executor returned an invalid response",
     )

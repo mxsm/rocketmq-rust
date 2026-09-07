@@ -19,13 +19,13 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::ClusterId;
-use crate::ContractError;
 use crate::ExecutionAction;
 use crate::ExecutionId;
 use crate::ExecutionRequest;
 use crate::ExecutionStepId;
 use crate::LeaseId;
 use crate::PlanStepId;
+use crate::SreContractError;
 use crate::TenantId;
 
 /// Wire schema shared by every Lease Authority RPC.
@@ -127,15 +127,13 @@ impl BeginLeaseTakeoverRequest {
     ///
     /// Rejects unknown schemas, nil scope identifiers, and durations outside
     /// the 5–300 second takeover window.
-    pub fn validate(&self) -> Result<(), ContractError> {
+    pub fn validate(&self) -> Result<(), SreContractError> {
         validate_schema(&self.schema_version)?;
         if self.tenant_id.as_uuid().is_nil()
             || self.cluster_id.as_uuid().is_nil()
             || !(5..=300).contains(&self.requested_ttl_seconds)
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "lease takeover requires non-nil scope and a 5-300 second TTL".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         Ok(())
     }
@@ -172,7 +170,7 @@ impl IssueFenceGrantRequest {
     /// # Errors
     ///
     /// Rejects unknown schemas, nil identifiers, and epoch zero.
-    pub fn validate(&self) -> Result<(), ContractError> {
+    pub fn validate(&self) -> Result<(), SreContractError> {
         validate_schema(&self.schema_version)?;
         if self.tenant_id.as_uuid().is_nil()
             || self.cluster_id.as_uuid().is_nil()
@@ -182,9 +180,7 @@ impl IssueFenceGrantRequest {
             || self.plan_step_id.as_uuid().is_nil()
             || self.epoch.0 == 0
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "fence grant request contains an invalid identity binding".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         Ok(())
     }
@@ -206,7 +202,7 @@ impl ActivateLeaseRequest {
     /// # Errors
     ///
     /// Rejects unknown schemas, nil scope, or incomplete acknowledgements.
-    pub fn validate(&self) -> Result<(), ContractError> {
+    pub fn validate(&self) -> Result<(), SreContractError> {
         validate_schema(&self.schema_version)?;
         if self.tenant_id.as_uuid().is_nil()
             || self.lease_id.as_uuid().is_nil()
@@ -216,9 +212,7 @@ impl ActivateLeaseRequest {
             || self.fence_ack.agent_subject.trim().is_empty()
             || self.fence_ack.signature.trim().is_empty()
         {
-            return Err(ContractError::InvalidDescriptor {
-                reason: "lease activation acknowledgement is incomplete".to_owned(),
-            });
+            return Err(crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor));
         }
         Ok(())
     }
@@ -261,14 +255,13 @@ pub struct GrantVerification {
     pub expires_at: DateTime<Utc>,
 }
 
-fn validate_schema(actual: &str) -> Result<(), ContractError> {
+fn validate_schema(actual: &str) -> Result<(), SreContractError> {
     if actual == LEASE_AUTHORITY_SCHEMA_VERSION {
         Ok(())
     } else {
-        Err(ContractError::UnsupportedSchemaFamily {
-            actual: actual.to_owned(),
-            supported: LEASE_AUTHORITY_SCHEMA_VERSION.to_owned(),
-        })
+        Err(crate::SreContractError::new(
+            crate::PublicErrorCode::UnsupportedSchemaFamily,
+        ))
     }
 }
 

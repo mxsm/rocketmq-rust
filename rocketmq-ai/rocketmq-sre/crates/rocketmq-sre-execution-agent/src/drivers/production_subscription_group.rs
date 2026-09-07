@@ -50,7 +50,6 @@ use super::SubscriptionGroupPatchClient;
 use super::SubscriptionGroupPatchRestore;
 use super::SubscriptionGroupPatchState;
 use super::SubscriptionGroupPatchWrite;
-use crate::AgentStoreError;
 use crate::ExecutionAgentError;
 use crate::config::BrokerAdminDriverConfig;
 
@@ -111,7 +110,7 @@ impl ProductionSubscriptionGroupPatchClient {
             },
             TelemetryHandle::noop(),
         )
-        .map_err(|_| ExecutionAgentError::Configuration)?;
+        .map_err(ExecutionAgentError::configuration_source)?;
         let timeout_millis = duration_millis(config.request_timeout)?;
         let mut read_builder = ReadAdminBuilder::new(Arc::clone(&client_runtime))
             .namesrv_addr(config.namesrv_addr.clone())
@@ -125,7 +124,7 @@ impl ProductionSubscriptionGroupPatchClient {
         let mut read_admin = read_builder
             .build_and_start()
             .await
-            .map_err(|_| ExecutionAgentError::Configuration)?;
+            .map_err(ExecutionAgentError::configuration_source)?;
 
         let mut mutation_builder = MutationAdminBuilder::new(Arc::clone(&client_runtime))
             .namesrv_addr(config.namesrv_addr.clone())
@@ -138,9 +137,9 @@ impl ProductionSubscriptionGroupPatchClient {
         }
         let mutation_admin = match mutation_builder.build_and_start().await {
             Ok(session) => session,
-            Err(_) => {
+            Err(error) => {
                 read_admin.shutdown().await;
-                return Err(ExecutionAgentError::Configuration);
+                return Err(ExecutionAgentError::configuration_source(error));
             }
         };
         Ok(Self {
@@ -156,37 +155,37 @@ impl ProductionSubscriptionGroupPatchClient {
         self.mutation_admin.lock().await.shutdown().await;
     }
 
-    async fn live_state(&self, group: &str) -> Result<LiveSubscriptionGroup, ExecutionAgentError> {
+    async fn live_state(&self, group: &str) -> Result<LiveSubscriptionGroup, crate::ExecutionAgentRequestFailure> {
         let retry_topic = format!("{RETRY_TOPIC_PREFIX}{group}");
-        let route_request =
-            GetTopicRouteRequest::try_new(&retry_topic).map_err(|_| ExecutionAgentError::InvalidRequest)?;
+        let route_request = GetTopicRouteRequest::try_new(&retry_topic)
+            .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
         let (targets, broker_states) = {
             let mut admin = self.read_admin.lock().await;
             let route = admin
                 .get_topic_route(&route_request)
                 .await
-                .map_err(|_| ExecutionAgentError::DriverFailed)?
-                .ok_or(ExecutionAgentError::DriverFailed)?;
+                .map_err(ExecutionAgentError::driver_source)?
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
             let mut targets = BTreeSet::new();
             for broker in route.brokers {
                 let master_addr = broker
                     .broker_addrs
                     .get(&MASTER_BROKER_ID)
-                    .ok_or(ExecutionAgentError::DriverFailed)?;
+                    .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
                 targets.insert(master_addr.clone());
             }
             if targets.is_empty() {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             let mut broker_states = Vec::with_capacity(targets.len());
             for broker_addr in &targets {
                 let state = ConsumerQueryAdmin::query_config_cas_state(
                     &mut *admin,
                     &QuerySubscriptionGroupConfigCasRequest::try_new(broker_addr, group)
-                        .map_err(|_| ExecutionAgentError::InvalidRequest)?,
+                        .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?,
                 )
                 .await
-                .map_err(|_| ExecutionAgentError::DriverFailed)?;
+                .map_err(ExecutionAgentError::driver_source)?;
                 broker_states.push(LiveSubscriptionGroupBroker {
                     broker_addr: broker_addr.clone(),
                     state,
@@ -199,8 +198,10 @@ impl ProductionSubscriptionGroupPatchClient {
             .iter()
             .map(|broker| broker.state.version)
             .max()
-            .ok_or(ExecutionAgentError::DriverFailed)?;
-        let first = broker_states.first().ok_or(ExecutionAgentError::DriverFailed)?;
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
+        let first = broker_states
+            .first()
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         let values = state_patch(first.state);
         let safety = safety_state(first.state);
         let configuration_consistent = broker_states.iter().all(|broker| {
@@ -216,7 +217,7 @@ impl ProductionSubscriptionGroupPatchClient {
         let permissions_unchanged = match &last_operation_id {
             Some(operation_id) => match self.journal.load_before_by_operation(operation_id).await {
                 Ok(before) => safety_matches_before(&broker_states, &before),
-                Err(AgentStoreError::NotFound) => configuration_consistent,
+                Err(failure) if failure.code() == crate::AgentStoreFailureCode::NotFound => configuration_consistent,
                 Err(error) => return Err(error.into()),
             },
             None => configuration_consistent,
@@ -239,7 +240,7 @@ impl ProductionSubscriptionGroupPatchClient {
         group: &str,
         expected_version: u64,
         patch: &SubscriptionGroupPatch,
-    ) -> Result<SubscriptionGroupPatchApplyOutcome, ExecutionAgentError> {
+    ) -> Result<SubscriptionGroupPatchApplyOutcome, crate::ExecutionAgentRequestFailure> {
         let request = PatchSubscriptionGroupConfigRequest::try_new(
             broker_addr,
             group,
@@ -250,13 +251,13 @@ impl ProductionSubscriptionGroupPatchClient {
                 consume_timeout_minutes: patch.consume_timeout_minutes,
             },
         )
-        .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+        .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
         let outcome = {
             let mut admin = self.mutation_admin.lock().await;
             admin
                 .patch_config_if_version(&request)
                 .await
-                .map_err(|_| ExecutionAgentError::DriverFailed)?
+                .map_err(ExecutionAgentError::driver_source)?
         };
         Ok(match outcome {
             PatchSubscriptionGroupConfigOutcome::Applied {
@@ -280,12 +281,11 @@ impl ProductionSubscriptionGroupPatchClient {
         &self,
         request: &SubscriptionGroupPatchWrite,
         applied: &[(SubscriptionGroupBeforeBroker, u64)],
-    ) -> Result<(), ExecutionAgentError> {
+    ) -> Result<(), crate::ExecutionAgentRequestFailure> {
         for (broker, current_version) in applied.iter().rev() {
             let outcome = self
                 .apply_one(&broker.broker_addr, &request.group, *current_version, &broker.before)
-                .await
-                .map_err(|_| ExecutionAgentError::DriverUnknown)?;
+                .await?;
             self.journal
                 .append_result(
                     request.execution_id,
@@ -298,10 +298,9 @@ impl ProductionSubscriptionGroupPatchClient {
                     outcome,
                     Utc::now(),
                 )
-                .await
-                .map_err(|_| ExecutionAgentError::DriverUnknown)?;
+                .await?;
             if !matches!(outcome, SubscriptionGroupPatchApplyOutcome::Applied { .. }) {
-                return Err(ExecutionAgentError::DriverUnknown);
+                return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
             }
         }
         Ok(())
@@ -312,12 +311,11 @@ impl ProductionSubscriptionGroupPatchClient {
         request: &SubscriptionGroupPatchRestore,
         before: &SubscriptionGroupBeforeState,
         applied: &[(String, u64)],
-    ) -> Result<(), ExecutionAgentError> {
+    ) -> Result<(), crate::ExecutionAgentRequestFailure> {
         for (broker_addr, current_version) in applied.iter().rev() {
             let outcome = self
                 .apply_one(broker_addr, &request.group, *current_version, &before.forward_patch)
-                .await
-                .map_err(|_| ExecutionAgentError::DriverUnknown)?;
+                .await?;
             self.journal
                 .append_result(
                     request.execution_id,
@@ -330,10 +328,9 @@ impl ProductionSubscriptionGroupPatchClient {
                     outcome,
                     Utc::now(),
                 )
-                .await
-                .map_err(|_| ExecutionAgentError::DriverUnknown)?;
+                .await?;
             if !matches!(outcome, SubscriptionGroupPatchApplyOutcome::Applied { .. }) {
-                return Err(ExecutionAgentError::DriverUnknown);
+                return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
             }
         }
         Ok(())
@@ -352,7 +349,7 @@ impl SubscriptionGroupPatchClient for ProductionSubscriptionGroupPatchClient {
         Box::pin(async move {
             let live = self.live_state(&request.group).await?;
             if !live.aggregate.retry_semantics_known || !live.aggregate.permissions_unchanged {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             if live.aggregate.version != request.expected_version {
                 return Ok(SubscriptionGroupPatchApplyOutcome::VersionConflict {
@@ -361,7 +358,7 @@ impl SubscriptionGroupPatchClient for ProductionSubscriptionGroupPatchClient {
                 });
             }
             if patch_matches(&request.patch, &live.aggregate.values) {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let brokers = live
                 .brokers
@@ -374,7 +371,7 @@ impl SubscriptionGroupPatchClient for ProductionSubscriptionGroupPatchClient {
                         safety: safety_state(broker.state),
                     })
                 })
-                .collect::<Result<Vec<_>, ExecutionAgentError>>()?;
+                .collect::<Result<Vec<_>, crate::ExecutionAgentRequestFailure>>()?;
             let before = SubscriptionGroupBeforeState {
                 group: request.group.clone(),
                 operation_id: request.operation_id.clone(),
@@ -395,7 +392,7 @@ impl SubscriptionGroupPatchClient for ProductionSubscriptionGroupPatchClient {
                     Ok(outcome) => outcome,
                     Err(_) => {
                         let _ = self.rollback_known_forward_effects(request, &applied).await;
-                        return Err(ExecutionAgentError::DriverUnknown);
+                        return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
                     }
                 };
                 if let SubscriptionGroupPatchApplyOutcome::Applied { version, .. } = outcome {
@@ -418,7 +415,7 @@ impl SubscriptionGroupPatchClient for ProductionSubscriptionGroupPatchClient {
                     .is_err()
                 {
                     let _ = self.rollback_known_forward_effects(request, &applied).await;
-                    return Err(ExecutionAgentError::DriverUnknown);
+                    return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
                 }
                 if let SubscriptionGroupPatchApplyOutcome::VersionConflict {
                     expected_version,
@@ -432,13 +429,13 @@ impl SubscriptionGroupPatchClient for ProductionSubscriptionGroupPatchClient {
                         });
                     }
                     let _ = self.rollback_known_forward_effects(request, &applied).await;
-                    return Err(ExecutionAgentError::DriverUnknown);
+                    return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
                 }
             }
             let version = request
                 .expected_version
                 .checked_add(1)
-                .ok_or(ExecutionAgentError::DriverUnknown)?;
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverUnknown)?;
             Ok(SubscriptionGroupPatchApplyOutcome::Applied {
                 previous_version: request.expected_version,
                 version,
@@ -456,7 +453,7 @@ impl SubscriptionGroupPatchClient for ProductionSubscriptionGroupPatchClient {
                 .load_before(request.execution_id, request.plan_step_id)
                 .await?;
             if before.group != request.group {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let live = self.live_state(&request.group).await?;
             let current_targets = live
@@ -489,7 +486,7 @@ impl SubscriptionGroupPatchClient for ProductionSubscriptionGroupPatchClient {
             for broker in &live.brokers {
                 let inverse = before_by_addr
                     .get(broker.broker_addr.as_str())
-                    .ok_or(ExecutionAgentError::DriverFailed)?;
+                    .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
                 let outcome = match self
                     .apply_one(&broker.broker_addr, &request.group, broker.state.version, inverse)
                     .await
@@ -499,7 +496,7 @@ impl SubscriptionGroupPatchClient for ProductionSubscriptionGroupPatchClient {
                         let _ = self
                             .reapply_known_compensation_effects(request, &before, &applied)
                             .await;
-                        return Err(ExecutionAgentError::DriverUnknown);
+                        return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
                     }
                 };
                 if let SubscriptionGroupPatchApplyOutcome::Applied { version, .. } = outcome {
@@ -524,7 +521,7 @@ impl SubscriptionGroupPatchClient for ProductionSubscriptionGroupPatchClient {
                     let _ = self
                         .reapply_known_compensation_effects(request, &before, &applied)
                         .await;
-                    return Err(ExecutionAgentError::DriverUnknown);
+                    return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
                 }
                 if let SubscriptionGroupPatchApplyOutcome::VersionConflict {
                     expected_version,
@@ -540,12 +537,12 @@ impl SubscriptionGroupPatchClient for ProductionSubscriptionGroupPatchClient {
                     let _ = self
                         .reapply_known_compensation_effects(request, &before, &applied)
                         .await;
-                    return Err(ExecutionAgentError::DriverUnknown);
+                    return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
                 }
             }
             let version = previous_version
                 .checked_add(1)
-                .ok_or(ExecutionAgentError::DriverUnknown)?;
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverUnknown)?;
             Ok(SubscriptionGroupPatchApplyOutcome::Applied {
                 previous_version,
                 version,
@@ -591,7 +588,7 @@ fn safety_matches_before(live: &[LiveSubscriptionGroupBroker], before: &Subscrip
 fn select_before_values(
     live: SubscriptionGroupPatch,
     requested: &SubscriptionGroupPatch,
-) -> Result<SubscriptionGroupPatch, ExecutionAgentError> {
+) -> Result<SubscriptionGroupPatch, crate::ExecutionAgentRequestFailure> {
     Ok(SubscriptionGroupPatch {
         retry_max_times: requested
             .retry_max_times
@@ -609,14 +606,14 @@ fn select_before_values(
 }
 
 trait RequiredOption<T> {
-    fn transpose_required(self) -> Result<Option<T>, ExecutionAgentError>;
+    fn transpose_required(self) -> Result<Option<T>, crate::ExecutionAgentRequestFailure>;
 }
 
 impl<T> RequiredOption<T> for Option<Option<T>> {
-    fn transpose_required(self) -> Result<Option<T>, ExecutionAgentError> {
+    fn transpose_required(self) -> Result<Option<T>, crate::ExecutionAgentRequestFailure> {
         match self {
             Some(Some(value)) => Ok(Some(value)),
-            Some(None) => Err(ExecutionAgentError::DriverFailed),
+            Some(None) => Err(crate::ExecutionAgentRequestFailure::DriverFailed),
             None => Ok(None),
         }
     }
@@ -635,7 +632,7 @@ fn patch_matches(patch: &SubscriptionGroupPatch, state: &SubscriptionGroupPatch)
 }
 
 fn duration_millis(duration: std::time::Duration) -> Result<u64, ExecutionAgentError> {
-    u64::try_from(duration.as_millis()).map_err(|_| ExecutionAgentError::Configuration)
+    u64::try_from(duration.as_millis()).map_err(ExecutionAgentError::configuration_source)
 }
 
 #[cfg(test)]

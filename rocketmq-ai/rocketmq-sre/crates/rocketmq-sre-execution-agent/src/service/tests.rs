@@ -62,6 +62,7 @@ use crate::DispatchBarrier;
 use crate::DriverDispatchOutcome;
 use crate::DriverFuture;
 use crate::ExecutionAgentError;
+use crate::ExecutionAgentRequestFailure;
 use crate::FenceAckSigner;
 use crate::LeaseAuthorityClient;
 
@@ -70,11 +71,19 @@ struct UnavailableAuthority;
 
 impl LeaseAuthorityClient for UnavailableAuthority {
     fn verify_fence_grant<'a>(&'a self, _tenant_id: TenantId, _grant: &'a LeaseFenceGrant) -> AuthorityFuture<'a> {
-        Box::pin(async { Err(ExecutionAgentError::AuthorityUnavailable) })
+        Box::pin(async {
+            Err(ExecutionAgentRequestFailure::Operational(
+                ExecutionAgentError::AuthorityUnavailable,
+            ))
+        })
     }
 
     fn verify_reconcile_grant<'a>(&'a self, _tenant_id: TenantId, _grant: &'a ReconcileGrant) -> AuthorityFuture<'a> {
-        Box::pin(async { Err(ExecutionAgentError::AuthorityUnavailable) })
+        Box::pin(async {
+            Err(ExecutionAgentRequestFailure::Operational(
+                ExecutionAgentError::AuthorityUnavailable,
+            ))
+        })
     }
 
     fn verify_dynamic_safety<'a>(
@@ -82,7 +91,11 @@ impl LeaseAuthorityClient for UnavailableAuthority {
         _tenant_id: TenantId,
         _decision: &'a DynamicSafetyDecision,
     ) -> AuthorityFuture<'a, DynamicSafetyVerification> {
-        Box::pin(async { Err(ExecutionAgentError::AuthorityUnavailable) })
+        Box::pin(async {
+            Err(ExecutionAgentRequestFailure::Operational(
+                ExecutionAgentError::AuthorityUnavailable,
+            ))
+        })
     }
 }
 
@@ -227,10 +240,14 @@ async fn authority_outage_prevents_driver_invocation_before_database_access() {
         Duration::from_secs(1),
     );
 
-    assert!(matches!(
-        agent.dispatch(&dispatch_request()).await,
-        Err(ExecutionAgentError::AuthorityUnavailable)
-    ));
+    assert_eq!(
+        agent
+            .dispatch(&dispatch_request())
+            .await
+            .expect_err("authority outage must reject dispatch")
+            .stable_code(),
+        "authority_unavailable"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(agent.metrics().fence_rejections_total, 1);
 }
@@ -260,10 +277,14 @@ async fn autonomous_forward_requires_live_safety_but_compensation_remains_availa
     );
 
     let mut missing = autonomous_dispatch_request(false, false);
-    assert!(matches!(
-        agent.verify_dispatch_safety(&missing).await,
-        Err(ExecutionAgentError::AuthorityRejected)
-    ));
+    assert_eq!(
+        agent
+            .verify_dispatch_safety(&missing)
+            .await
+            .expect_err("missing safety verification must reject dispatch")
+            .stable_code(),
+        "stale_lease_epoch"
+    );
 
     missing.request.intent.dynamic_safety = Some(dynamic_safety(&missing));
     missing
@@ -273,10 +294,14 @@ async fn autonomous_forward_requires_live_safety_but_compensation_remains_availa
         .as_mut()
         .expect("decision")
         .expires_at = Utc::now();
-    assert!(matches!(
-        agent.verify_dispatch_safety(&missing).await,
-        Err(ExecutionAgentError::AuthorityRejected)
-    ));
+    assert_eq!(
+        agent
+            .verify_dispatch_safety(&missing)
+            .await
+            .expect_err("expired safety verification must reject dispatch")
+            .stable_code(),
+        "stale_lease_epoch"
+    );
 
     let valid = autonomous_dispatch_request(false, true);
     agent
@@ -293,10 +318,14 @@ async fn autonomous_forward_requires_live_safety_but_compensation_remains_availa
 
     let mut forged = compensation;
     forged.request.intent.fence_grant.compensation = false;
-    assert!(matches!(
-        agent.registry.validate_dispatch(&forged.request),
-        Err(ExecutionAgentError::InvalidRequest)
-    ));
+    assert_eq!(
+        agent
+            .registry
+            .validate_dispatch(&forged.request)
+            .expect_err("forged compensation must be rejected")
+            .stable_code(),
+        "invalid_agent_request"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 

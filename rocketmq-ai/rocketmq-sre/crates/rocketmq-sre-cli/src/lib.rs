@@ -18,6 +18,12 @@
 //! local JSON and emit a local-only typed artifact to stdout; they cannot
 //! submit, approve, or execute a change.
 
+mod error;
+
+pub use error::CliError;
+pub use error::CliFailure;
+pub use error::CliFailureCode;
+
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -27,7 +33,6 @@ use std::path::PathBuf;
 use chrono::DateTime;
 use chrono::Utc;
 use rocketmq_sre_client::Client;
-use rocketmq_sre_client::ClientError;
 use rocketmq_sre_contracts::ActionPlanId;
 use rocketmq_sre_contracts::ClusterId;
 use rocketmq_sre_contracts::DiagnosisRevisionId;
@@ -39,7 +44,6 @@ use rocketmq_sre_contracts::is_sha256_digest;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use thiserror::Error;
 
 const DEFAULT_TOKEN_ENV: &str = "ROCKETMQ_SRE_TOKEN";
 const BASE_URL_ENV: &str = "ROCKETMQ_SRE_URL";
@@ -121,29 +125,6 @@ pub struct Invocation {
     pub command: Command,
 }
 
-/// Stable CLI errors. Secret values and raw server bodies are never included.
-#[derive(Debug, Error)]
-pub enum CliError {
-    #[error("{0}")]
-    Usage(String),
-    #[error("Control Plane URL is required via --url or ROCKETMQ_SRE_URL")]
-    MissingBaseUrl,
-    #[error("bearer token is required in environment variable {name}")]
-    MissingToken { name: String },
-    #[error("environment variable {name} is not valid Unicode")]
-    InvalidEnvironment { name: String },
-    #[error("draft file exceeds the {MAX_DRAFT_BYTES} byte limit")]
-    DraftTooLarge,
-    #[error("draft file could not be read")]
-    DraftIo(#[source] std::io::Error),
-    #[error("draft does not match the typed local contract: {0}")]
-    DraftContract(String),
-    #[error(transparent)]
-    Client(#[from] ClientError),
-    #[error("JSON output failed: {0}")]
-    Json(#[from] serde_json::Error),
-}
-
 /// One typed local plan step.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -218,9 +199,9 @@ pub struct LocalRunbookDraft {
 ///
 /// # Errors
 ///
-/// Returns [`CliError::Usage`] for an unknown option or command, missing
-/// value, invalid UUID, inline token attempt, or trailing argument.
-pub fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Invocation, CliError> {
+/// Rejects an unknown option or command, missing value, invalid UUID, inline
+/// token attempt, or trailing argument.
+pub fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Invocation, CliFailure> {
     let mut arguments = arguments.into_iter();
     let mut base_url = None;
     let mut token_env = DEFAULT_TOKEN_ENV.to_owned();
@@ -229,13 +210,9 @@ pub fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Invoc
     let mut command_token = None;
 
     while let Some(argument) = arguments.next() {
-        let argument = argument
-            .into_string()
-            .map_err(|_| CliError::Usage("arguments must be valid Unicode".to_owned()))?;
+        let argument = argument.into_string().map_err(|_| CliFailure::usage())?;
         if command_token.is_some() {
-            return Err(CliError::Usage(
-                "unexpected trailing argument; run with --help".to_owned(),
-            ));
+            return Err(CliFailure::usage());
         }
         match argument.as_str() {
             "--url" => {
@@ -253,28 +230,24 @@ pub fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Invoc
             "--compact" => compact = true,
             "--help" | "-h" => command_token = Some("--help".to_owned()),
             "--token" => {
-                return Err(CliError::Usage(
-                    "--token is forbidden; use --token-env to avoid process-list exposure".to_owned(),
-                ));
+                return Err(CliFailure::usage());
             }
             value if value.starts_with('-') => {
-                return Err(CliError::Usage(format!("unknown option {value}; run with --help")));
+                return Err(CliFailure::usage());
             }
             _ => command_token = Some(argument),
         }
     }
 
-    let command_token = command_token.ok_or_else(|| CliError::Usage("a command is required".to_owned()))?;
+    let command_token = command_token.ok_or_else(CliFailure::usage)?;
     let command = match command_token.as_str() {
         "--help" => Command::Help,
         "status" => Command::Status,
         "readiness" => Command::Readiness,
         "openapi" => Command::OpenApi,
         "clusters" => Command::Clusters,
-        value => {
-            return Err(CliError::Usage(format!(
-                "command {value} requires arguments or is unknown; run with --help"
-            )));
+        _ => {
+            return Err(CliFailure::usage());
         }
     };
 
@@ -293,20 +266,16 @@ pub fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Invoc
 ///
 /// This wrapper exists so the parser never treats arbitrary trailing tokens as
 /// generic HTTP paths.
-pub fn parse_process_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Invocation, CliError> {
+pub fn parse_process_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Invocation, CliFailure> {
     let mut input = arguments.into_iter().peekable();
     let mut globals = Vec::new();
     let mut command = None;
     let mut operand = None;
 
     while let Some(argument) = input.next() {
-        let value = argument
-            .into_string()
-            .map_err(|_| CliError::Usage("arguments must be valid Unicode".to_owned()))?;
+        let value = argument.into_string().map_err(|_| CliFailure::usage())?;
         if value == "--token" {
-            return Err(CliError::Usage(
-                "--token is forbidden; use --token-env to avoid process-list exposure".to_owned(),
-            ));
+            return Err(CliFailure::usage());
         }
         if command.is_none() && matches!(value.as_str(), "--help" | "-h") {
             command = Some("--help".to_owned());
@@ -315,9 +284,7 @@ pub fn parse_process_args(arguments: impl IntoIterator<Item = OsString>) -> Resu
         if command.is_none() && value.starts_with('-') {
             globals.push(OsString::from(&value));
             if matches!(value.as_str(), "--url" | "--token-env" | "--allow-cluster") {
-                let option_value = input
-                    .next()
-                    .ok_or_else(|| CliError::Usage(format!("{value} requires a value")))?;
+                let option_value = input.next().ok_or_else(CliFailure::usage)?;
                 globals.push(option_value);
             }
             continue;
@@ -327,7 +294,7 @@ pub fn parse_process_args(arguments: impl IntoIterator<Item = OsString>) -> Resu
         } else if operand.is_none() {
             operand = Some(value);
         } else {
-            return Err(CliError::Usage("only one command operand is accepted".to_owned()));
+            return Err(CliFailure::usage());
         }
     }
 
@@ -337,13 +304,13 @@ pub fn parse_process_args(arguments: impl IntoIterator<Item = OsString>) -> Resu
         "status" | "readiness" | "openapi" | "clusters" | "--help"
     ) {
         if operand.is_some() {
-            return Err(CliError::Usage(format!("{command} does not accept an operand")));
+            return Err(CliFailure::usage());
         }
         globals.push(OsString::from(command));
         return parse_args(globals);
     }
 
-    let operand = operand.ok_or_else(|| CliError::Usage(format!("{command} requires one operand")))?;
+    let operand = operand.ok_or_else(CliFailure::usage)?;
     globals.push(OsString::from("--help"));
     let parsed = parse_args(globals)?;
     let command = match command.as_str() {
@@ -354,7 +321,7 @@ pub fn parse_process_args(arguments: impl IntoIterator<Item = OsString>) -> Resu
         "draft-plan" => Command::DraftPlan(PathBuf::from(operand)),
         "draft-runbook" => Command::DraftRunbook(PathBuf::from(operand)),
         _ => {
-            return Err(CliError::Usage(format!("unknown command {command}; run with --help")));
+            return Err(CliFailure::usage());
         }
     };
     Ok(Invocation {
@@ -368,7 +335,7 @@ pub fn parse_process_args(arguments: impl IntoIterator<Item = OsString>) -> Resu
 /// # Errors
 ///
 /// Returns a configuration, local draft, client, or serialization error.
-pub async fn execute(invocation: &Invocation) -> Result<Value, CliError> {
+pub async fn execute(invocation: &Invocation) -> Result<Value, CliFailure> {
     if invocation.command.is_local() {
         return execute_local(&invocation.command);
     }
@@ -393,9 +360,7 @@ pub async fn execute(invocation: &Invocation) -> Result<Value, CliError> {
         Command::Incident(id) => to_value(client.incident(id).await?),
         Command::Inspection(id) => to_value(client.inspection(id).await?),
         Command::Plan(id) => to_value(client.plan(id).await?),
-        Command::DraftPlan(_) | Command::DraftRunbook(_) | Command::Help => {
-            Err(CliError::Usage("local command routing failed".to_owned()))
-        }
+        Command::DraftPlan(_) | Command::DraftRunbook(_) | Command::Help => Err(CliFailure::usage()),
     }
 }
 
@@ -404,15 +369,15 @@ pub async fn execute(invocation: &Invocation) -> Result<Value, CliError> {
 /// # Errors
 ///
 /// Returns a JSON serialization error.
-pub fn render(invocation: &Invocation, value: &Value) -> Result<String, CliError> {
+pub fn render(invocation: &Invocation, value: &Value) -> Result<String, CliFailure> {
     if invocation.config.compact {
-        serde_json::to_string(value).map_err(CliError::Json)
+        serde_json::to_string(value).map_err(CliFailure::json)
     } else {
-        serde_json::to_string_pretty(value).map_err(CliError::Json)
+        serde_json::to_string_pretty(value).map_err(CliFailure::json)
     }
 }
 
-fn execute_local(command: &Command) -> Result<Value, CliError> {
+fn execute_local(command: &Command) -> Result<Value, CliFailure> {
     match command {
         Command::DraftPlan(path) => {
             let input: LocalPlanDraftInput = read_draft(path)?;
@@ -445,50 +410,42 @@ fn execute_local(command: &Command) -> Result<Value, CliError> {
             })
         }
         Command::Help => Ok(Value::String(USAGE.to_owned())),
-        _ => Err(CliError::Usage("command is not local".to_owned())),
+        _ => Err(CliFailure::usage()),
     }
 }
 
-fn resolve_base_url(config: &CliConfig) -> Result<String, CliError> {
+fn resolve_base_url(config: &CliConfig) -> Result<String, CliFailure> {
     if let Some(value) = &config.base_url {
         return Ok(value.clone());
     }
     match env::var(BASE_URL_ENV) {
         Ok(value) if !value.trim().is_empty() => Ok(value),
-        Ok(_) | Err(env::VarError::NotPresent) => Err(CliError::MissingBaseUrl),
-        Err(env::VarError::NotUnicode(_)) => Err(CliError::InvalidEnvironment {
-            name: BASE_URL_ENV.to_owned(),
-        }),
+        Ok(_) | Err(env::VarError::NotPresent) => Err(CliFailure::missing_base_url()),
+        Err(env::VarError::NotUnicode(_)) => Err(CliFailure::invalid_environment()),
     }
 }
 
-fn resolve_token(config: &CliConfig, command: &Command) -> Result<Option<String>, CliError> {
+fn resolve_token(config: &CliConfig, command: &Command) -> Result<Option<String>, CliFailure> {
     match env::var(&config.token_env) {
         Ok(value) if !value.trim().is_empty() && !value.contains(['\r', '\n']) => Ok(Some(value)),
         Ok(_) | Err(env::VarError::NotPresent) if !command.requires_remote_auth() => Ok(None),
-        Ok(_) | Err(env::VarError::NotPresent) => Err(CliError::MissingToken {
-            name: config.token_env.clone(),
-        }),
-        Err(env::VarError::NotUnicode(_)) => Err(CliError::InvalidEnvironment {
-            name: config.token_env.clone(),
-        }),
+        Ok(_) | Err(env::VarError::NotPresent) => Err(CliFailure::missing_token()),
+        Err(env::VarError::NotUnicode(_)) => Err(CliFailure::invalid_environment()),
     }
 }
 
-fn read_draft<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, CliError> {
-    let metadata = fs::metadata(path).map_err(CliError::DraftIo)?;
+fn read_draft<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, CliFailure> {
+    let metadata = fs::metadata(path).map_err(CliFailure::draft_io)?;
     if metadata.len() > MAX_DRAFT_BYTES {
-        return Err(CliError::DraftTooLarge);
+        return Err(CliFailure::draft_too_large());
     }
-    let bytes = fs::read(path).map_err(CliError::DraftIo)?;
-    serde_json::from_slice(&bytes).map_err(|error| CliError::DraftContract(error.to_string()))
+    let bytes = fs::read(path).map_err(CliFailure::draft_io)?;
+    serde_json::from_slice(&bytes).map_err(|_| CliFailure::draft_rejected())
 }
 
-fn validate_plan_draft(input: &LocalPlanDraftInput) -> Result<(), CliError> {
+fn validate_plan_draft(input: &LocalPlanDraftInput) -> Result<(), CliFailure> {
     if !(1..=64).contains(&input.steps.len()) {
-        return Err(CliError::DraftContract(
-            "steps must contain 1-64 typed actions".to_owned(),
-        ));
+        return Err(CliFailure::draft_rejected());
     }
     for (index, step) in input.steps.iter().enumerate() {
         validate_text(&format!("steps[{index}].action_id"), &step.action_id, 255)?;
@@ -499,26 +456,20 @@ fn validate_plan_draft(input: &LocalPlanDraftInput) -> Result<(), CliError> {
         )?;
         validate_text(&format!("steps[{index}].resource"), &step.resource, 512)?;
         if !step.parameters.is_object() {
-            return Err(CliError::DraftContract(format!(
-                "steps[{index}].parameters must be an object"
-            )));
+            return Err(CliFailure::draft_rejected());
         }
         if !(1..=32).contains(&step.evidence_ids.len()) {
-            return Err(CliError::DraftContract(format!(
-                "steps[{index}].evidence_ids must contain 1-32 identifiers"
-            )));
+            return Err(CliFailure::draft_rejected());
         }
     }
     Ok(())
 }
 
-fn validate_runbook_draft(input: &LocalRunbookDraftInput) -> Result<(), CliError> {
+fn validate_runbook_draft(input: &LocalRunbookDraftInput) -> Result<(), CliFailure> {
     validate_text("name", &input.name, 256)?;
     validate_text("version", &input.version, 64)?;
     if !(1..=64).contains(&input.steps.len()) {
-        return Err(CliError::DraftContract(
-            "steps must contain 1-64 typed entries".to_owned(),
-        ));
+        return Err(CliFailure::draft_rejected());
     }
     for (index, step) in input.steps.iter().enumerate() {
         match step {
@@ -532,9 +483,7 @@ fn validate_runbook_draft(input: &LocalRunbookDraftInput) -> Result<(), CliError
             }
             LocalRunbookStep::PlanReference { plan_hash, .. } => {
                 if !is_sha256_digest(plan_hash) {
-                    return Err(CliError::DraftContract(format!(
-                        "steps[{index}].plan_hash must be a sha256 digest"
-                    )));
+                    return Err(CliFailure::draft_rejected());
                 }
             }
         }
@@ -542,54 +491,49 @@ fn validate_runbook_draft(input: &LocalRunbookDraftInput) -> Result<(), CliError
     Ok(())
 }
 
-fn validate_text(name: &str, value: &str, maximum: usize) -> Result<(), CliError> {
+fn validate_text(_name: &str, value: &str, maximum: usize) -> Result<(), CliFailure> {
     let length = value.trim().chars().count();
     if length == 0 || length > maximum {
-        return Err(CliError::DraftContract(format!(
-            "{name} must contain 1-{maximum} characters"
-        )));
+        return Err(CliFailure::draft_rejected());
     }
     Ok(())
 }
 
-fn validate_environment_name(value: &str) -> Result<(), CliError> {
+fn validate_environment_name(value: &str) -> Result<(), CliFailure> {
     if value.is_empty()
         || value.len() > 128
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
     {
-        return Err(CliError::Usage(
-            "--token-env must use 1-128 uppercase ASCII letters, digits, or underscores".to_owned(),
-        ));
+        return Err(CliFailure::usage());
     }
     Ok(())
 }
 
-fn next_unicode(arguments: &mut impl Iterator<Item = OsString>, option: &str) -> Result<String, CliError> {
+fn next_unicode(arguments: &mut impl Iterator<Item = OsString>, _option: &str) -> Result<String, CliFailure> {
     arguments
         .next()
-        .ok_or_else(|| CliError::Usage(format!("{option} requires a value")))?
+        .ok_or_else(CliFailure::usage)?
         .into_string()
-        .map_err(|_| CliError::Usage(format!("{option} value must be valid Unicode")))
+        .map_err(|_| CliFailure::usage())
 }
 
-fn parse_id<T>(name: &str, value: &str) -> Result<T, CliError>
+fn parse_id<T>(_name: &str, value: &str) -> Result<T, CliFailure>
 where
     T: std::str::FromStr,
 {
-    value
-        .parse()
-        .map_err(|_| CliError::Usage(format!("{name} identifier must be a UUID")))
+    value.parse().map_err(|_| CliFailure::usage())
 }
 
-fn to_value(value: impl Serialize) -> Result<Value, CliError> {
-    serde_json::to_value(value).map_err(CliError::Json)
+fn to_value(value: impl Serialize) -> Result<Value, CliFailure> {
+    serde_json::to_value(value).map_err(CliFailure::json)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
 
     fn os(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
@@ -620,7 +564,8 @@ mod tests {
             .err()
             .expect("inline token must fail");
         let rendered = error.to_string();
-        assert!(rendered.contains("--token is forbidden"));
+        assert_eq!(error.code(), CliFailureCode::Usage);
+        assert_eq!(rendered, "invalid command usage");
         assert!(!rendered.contains("super-secret"));
     }
 
@@ -661,5 +606,16 @@ mod tests {
             }],
         };
         assert!(validate_plan_draft(&input).is_ok());
+    }
+
+    #[test]
+    fn operational_error_preserves_source_without_rendering_it() {
+        let failure = CliFailure::draft_io(std::io::Error::other("secret-path"));
+        let error = failure.operational_error().expect("operational error");
+
+        assert_eq!(error.to_string(), "draft file operation failed");
+        assert_eq!(format!("{error:?}"), "CliError { kind: \"draft_io\" }");
+        assert!(error.source().is_some());
+        assert!(!failure.to_string().contains("secret-path"));
     }
 }

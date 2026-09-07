@@ -19,6 +19,7 @@
 //! `adapter://` credential reference. The gateway never sends credential
 //! material to it.
 
+use std::process::ExitCode;
 use std::sync::Arc;
 
 use rocketmq_sre_contracts::CorrelationId;
@@ -33,10 +34,10 @@ use rocketmq_sre_model_gateway::ModelMessage;
 use rocketmq_sre_model_gateway::ModelRole;
 use rocketmq_sre_model_gateway::ModelStreamEvent;
 use rocketmq_sre_model_gateway::ProviderCapabilities;
-use rocketmq_sre_model_gateway::ProviderError;
 use rocketmq_sre_model_gateway::ProviderHealth;
 use rocketmq_sre_model_gateway::ProviderSpi;
 use rocketmq_sre_model_gateway::ProviderSpiClient;
+use rocketmq_sre_model_gateway::ProviderStatusOutcome;
 use rocketmq_sre_model_gateway::SpiCancelRequest;
 use rocketmq_sre_model_gateway::SpiClientConfig;
 use rocketmq_sre_model_gateway::SpiHandshakeRequest;
@@ -48,7 +49,7 @@ use rocketmq_sre_model_gateway::SpiStreamRequest;
 struct ExampleAdapter;
 
 impl ProviderSpi for ExampleAdapter {
-    fn handshake(&self, request: &SpiHandshakeRequest) -> Result<SpiHandshakeResponse, ProviderError> {
+    fn handshake(&self, request: &SpiHandshakeRequest) -> Result<SpiHandshakeResponse, ProviderStatusOutcome> {
         Ok(SpiHandshakeResponse {
             wire_version: request.wire_version.clone(),
             adapter_identity: "spiffe://sre/provider/example".to_owned(),
@@ -58,7 +59,7 @@ impl ProviderSpi for ExampleAdapter {
         })
     }
 
-    fn invoke(&self, _request: &SpiInvokeRequest) -> Result<CanonicalModelResponse, ProviderError> {
+    fn invoke(&self, _request: &SpiInvokeRequest) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
         Ok(CanonicalModelResponse::text(
             "example-spi",
             "example-model",
@@ -67,19 +68,20 @@ impl ProviderSpi for ExampleAdapter {
         ))
     }
 
-    fn invoke_stream(&self, request: &SpiStreamRequest) -> Result<BoundedModelStream, ProviderError> {
+    fn invoke_stream(&self, request: &SpiStreamRequest) -> Result<BoundedModelStream, ProviderStatusOutcome> {
         let (sink, stream) = BoundedModelStream::channel(request.bounds, CancellationToken::default())?;
-        sink.try_send(ModelStreamEvent::Finish {
+        let outcome = sink.try_send(ModelStreamEvent::Finish {
             reason: FinishReason::Stop,
         })?;
+        let _ = outcome;
         Ok(stream)
     }
 
-    fn cancel(&self, _request: &SpiCancelRequest) -> Result<(), ProviderError> {
+    fn cancel(&self, _request: &SpiCancelRequest) -> Result<(), ProviderStatusOutcome> {
         Ok(())
     }
 
-    fn health(&self) -> Result<SpiHealth, ProviderError> {
+    fn health(&self) -> Result<SpiHealth, ProviderStatusOutcome> {
         Ok(SpiHealth {
             status: ProviderHealth::Healthy,
             credential_version_fingerprint: Some("version:example-v1".to_owned()),
@@ -87,7 +89,17 @@ impl ProviderSpi for ExampleAdapter {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => {
+            eprintln!("provider SPI adapter example failed");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<(), ProviderStatusOutcome> {
     let client = ProviderSpiClient::connect(
         Arc::new(ExampleAdapter),
         SpiClientConfig::mutual_tls("spiffe://sre/gateway", "spiffe://sre/provider/example"),

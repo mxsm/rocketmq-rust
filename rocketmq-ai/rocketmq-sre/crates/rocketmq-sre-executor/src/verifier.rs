@@ -35,7 +35,7 @@ use rocketmq_sre_contracts::VerificationResult;
 use rocketmq_sre_contracts::VerificationSpec;
 use serde_json::Value;
 
-use crate::ExecutorError;
+use crate::ExecutorRequestFailure;
 
 const MAX_CONDITIONS: usize = 64;
 const DEFAULT_MAX_OBSERVATIONS: usize = 10_000;
@@ -84,7 +84,7 @@ pub struct VerificationRun {
 }
 
 pub type VerificationFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<VerificationObservation, ExecutorError>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = Result<VerificationObservation, ExecutorRequestFailure>> + Send + 'a>>;
 
 /// Read-only resource/SLI source. It cannot mutate the target.
 pub trait VerificationSource: Send + Sync {
@@ -124,7 +124,7 @@ impl ExecutionVerifier {
     pub async fn capture(
         &self,
         request: &VerificationCaptureRequest,
-    ) -> Result<VerificationObservation, ExecutorError> {
+    ) -> Result<VerificationObservation, ExecutorRequestFailure> {
         validate_request(request)?;
         let observation = self.source.observe(request).await?;
         validate_observation(request, &observation)?;
@@ -145,21 +145,22 @@ impl ExecutionVerifier {
         started_at: DateTime<Utc>,
         pre_evidence_ids: Vec<rocketmq_sre_contracts::EvidenceId>,
         during_evidence_ids: Vec<rocketmq_sre_contracts::EvidenceId>,
-    ) -> Result<VerificationRun, ExecutorError> {
+    ) -> Result<VerificationRun, ExecutorRequestFailure> {
         if !matches!(request.phase, VerificationPhase::Post | VerificationPhase::RollbackPost)
             || spec.resource_conditions != request.resource_conditions
             || spec.technical_slis != request.technical_slis
             || spec.max_wait_seconds == 0
             || spec.stable_window_seconds > spec.max_wait_seconds
         {
-            return Err(ExecutorError::InvalidRequest);
+            return Err(ExecutorRequestFailure::InvalidRequest);
         }
         validate_request(request)?;
-        let max_wait = i64::try_from(spec.max_wait_seconds).map_err(|_| ExecutorError::InvalidRequest)?;
-        let stable_window = i64::try_from(spec.stable_window_seconds).map_err(|_| ExecutorError::InvalidRequest)?;
+        let max_wait = i64::try_from(spec.max_wait_seconds).map_err(|_| ExecutorRequestFailure::InvalidRequest)?;
+        let stable_window =
+            i64::try_from(spec.stable_window_seconds).map_err(|_| ExecutorRequestFailure::InvalidRequest)?;
         let deadline = started_at
             .checked_add_signed(TimeDelta::seconds(max_wait))
-            .ok_or(ExecutorError::InvalidRequest)?;
+            .ok_or(ExecutorRequestFailure::InvalidRequest)?;
         let mut stable_since = None;
         let mut post_evidence = Vec::new();
         let mut satisfied_conditions = Vec::new();
@@ -234,7 +235,7 @@ struct ConditionEvaluation {
     inconclusive: bool,
 }
 
-fn validate_request(request: &VerificationCaptureRequest) -> Result<(), ExecutorError> {
+fn validate_request(request: &VerificationCaptureRequest) -> Result<(), ExecutorRequestFailure> {
     let resource_conditions = request
         .resource_conditions
         .iter()
@@ -253,7 +254,7 @@ fn validate_request(request: &VerificationCaptureRequest) -> Result<(), Executor
             .chain(&request.technical_slis)
             .any(|condition| condition.trim().is_empty() || condition.len() > 128)
     {
-        return Err(ExecutorError::InvalidRequest);
+        return Err(ExecutorRequestFailure::InvalidRequest);
     }
     Ok(())
 }
@@ -261,11 +262,11 @@ fn validate_request(request: &VerificationCaptureRequest) -> Result<(), Executor
 fn validate_observation(
     request: &VerificationCaptureRequest,
     observation: &VerificationObservation,
-) -> Result<(), ExecutorError> {
+) -> Result<(), ExecutorRequestFailure> {
     let evidence = &observation.evidence;
     evidence
         .verify_content_hash()
-        .map_err(|_| ExecutorError::AgentRejected)?;
+        .map_err(|_| ExecutorRequestFailure::AgentRejected)?;
     if evidence.tenant_id != request.tenant_id
         || evidence.cluster_id != request.cluster_id
         || evidence.correlation_id != request.correlation_id
@@ -273,7 +274,7 @@ fn validate_observation(
         || observation.resource_conditions.len() > MAX_CONDITIONS
         || observation.technical_slis.len() > MAX_CONDITIONS
     {
-        return Err(ExecutorError::AgentRejected);
+        return Err(ExecutorRequestFailure::AgentRejected);
     }
     Ok(())
 }

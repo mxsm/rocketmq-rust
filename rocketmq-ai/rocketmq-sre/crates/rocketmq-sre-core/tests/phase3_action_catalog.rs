@@ -17,6 +17,7 @@ use std::collections::BTreeSet;
 use rocketmq_sre_contracts::ActionDescriptor;
 use rocketmq_sre_contracts::ExecutionAction;
 use rocketmq_sre_core::ActionCatalog;
+use rocketmq_sre_core::ActionCatalogRejection;
 use rocketmq_sre_core::EMBEDDED_ACTION_DESCRIPTOR_YAMLS;
 use serde_json::Value;
 
@@ -46,8 +47,25 @@ fn all_wave_two_and_wave_three_descriptors_form_one_closed_catalog() {
             .collect()
     );
     for action in ExecutionAction::WAVE3_PLAN_ONLY {
-        assert!(catalog.executable_descriptor(action, "1.0.0").is_err());
+        assert_eq!(
+            catalog.executable_descriptor(action, "1.0.0"),
+            Err(ActionCatalogRejection::ExecutionDisabled)
+        );
     }
+}
+
+#[test]
+fn duplicate_descriptor_registration_is_a_closed_rejection() {
+    let descriptor: ActionDescriptor =
+        serde_yaml::from_str(EMBEDDED_ACTION_DESCRIPTOR_YAMLS[0]).expect("valid action descriptor");
+    let mut catalog = ActionCatalog::default();
+    catalog
+        .register(descriptor.clone())
+        .expect("first descriptor registration succeeds");
+    assert_eq!(
+        catalog.register(descriptor),
+        Err(ActionCatalogRejection::DuplicateDescriptor)
+    );
 }
 
 #[test]

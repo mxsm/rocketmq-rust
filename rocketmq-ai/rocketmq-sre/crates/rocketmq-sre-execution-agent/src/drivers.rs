@@ -110,7 +110,7 @@ pub use telemetry_collector_restart_one::TelemetryCollectorRestartOneParameters;
 pub use topic_config_patch::TopicConfigPatchHandler;
 pub use topic_config_patch::TopicConfigPatchParameters;
 
-use crate::ExecutionAgentError;
+use crate::ExecutionAgentRequestFailure;
 use rocketmq_sre_contracts::AgentReadRequest;
 use rocketmq_sre_contracts::AgentReadResult;
 use rocketmq_sre_contracts::ReconcileEffectResponse;
@@ -146,4 +146,4 @@ pub trait AgentActionHandler: Send + Sync {
     ) -> DriverFuture<'a, DriverDispatchOutcome>;
 }
 
-pub type DriverFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ExecutionAgentError>> + Send + 'a>>;
+pub type DriverFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ExecutionAgentRequestFailure>> + Send + 'a>>;

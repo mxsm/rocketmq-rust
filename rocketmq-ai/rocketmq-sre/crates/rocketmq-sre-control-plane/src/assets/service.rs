@@ -24,9 +24,9 @@ use super::IngestInventoryRequest;
 use super::InventorySnapshot;
 use super::TopologyDiff;
 use super::enforce_scope;
-use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 const MAX_DASHBOARD_ORIGINS: usize = 16;
 
@@ -60,8 +60,7 @@ impl DashboardDeepLinkPolicy {
                     "dashboard deep-link allowlist exceeds the supported bound",
                 ));
             }
-            let mut url = Url::parse(origin.as_ref())
-                .map_err(|_| ControlPlaneError::configuration("dashboard deep-link origin is invalid"))?;
+            let mut url = Url::parse(origin.as_ref()).map_err(ControlPlaneError::configuration_source)?;
             if !matches!(url.scheme(), "http" | "https")
                 || url.host_str().is_none()
                 || !url.username().is_empty()
@@ -121,7 +120,7 @@ impl AssetTopologyService {
         &self,
         auth: &AuthContext,
         request: &IngestInventoryRequest,
-    ) -> Result<(InventorySnapshot, TopologyDiff), ControlPlaneError> {
+    ) -> Result<(InventorySnapshot, TopologyDiff), ControlPlaneRequestFailure> {
         let (snapshot, diff) = self.repository.persist_inventory_snapshot(auth, request).await?;
         self.repository.link_topology_diff(auth, &diff).await?;
         Ok((snapshot, diff))
@@ -131,7 +130,7 @@ impl AssetTopologyService {
         &self,
         auth: &AuthContext,
         snapshot_id: Uuid,
-    ) -> Result<InventorySnapshot, ControlPlaneError> {
+    ) -> Result<InventorySnapshot, ControlPlaneRequestFailure> {
         self.repository.inventory_snapshot(auth, snapshot_id).await
     }
 
@@ -139,7 +138,7 @@ impl AssetTopologyService {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
-    ) -> Result<Option<InventorySnapshot>, ControlPlaneError> {
+    ) -> Result<Option<InventorySnapshot>, ControlPlaneRequestFailure> {
         self.repository.latest_inventory_snapshot(auth, cluster_id).await
     }
 
@@ -147,7 +146,7 @@ impl AssetTopologyService {
         &self,
         auth: &AuthContext,
         query: &AssetListQuery,
-    ) -> Result<AssetPage, ControlPlaneError> {
+    ) -> Result<AssetPage, ControlPlaneRequestFailure> {
         self.repository.list_latest_assets(auth, query).await
     }
 
@@ -155,7 +154,7 @@ impl AssetTopologyService {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
-    ) -> Result<Option<TopologyDiff>, ControlPlaneError> {
+    ) -> Result<Option<TopologyDiff>, ControlPlaneRequestFailure> {
         self.repository.latest_topology_diff(auth, cluster_id).await
     }
 
@@ -164,9 +163,9 @@ impl AssetTopologyService {
         auth: &AuthContext,
         cluster_id: ClusterId,
         key: &AssetKey,
-    ) -> Result<Option<DashboardDeepLink>, ControlPlaneError> {
+    ) -> Result<Option<DashboardDeepLink>, ControlPlaneRequestFailure> {
         enforce_scope(auth, auth.tenant_id, cluster_id)?;
-        self.deep_links.link(cluster_id, key)
+        Ok(self.deep_links.link(cluster_id, key)?)
     }
 }
 

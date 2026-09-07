@@ -190,12 +190,12 @@ pub(super) async fn insert_release_event(
 }
 
 pub(super) fn json_value<T: Serialize>(value: &T) -> Result<Value, ControlPlaneError> {
-    serde_json::to_value(value)
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "value cannot be represented as JSON"))
+    serde_json::to_value(value).map_err(|source| ControlPlaneError::validation_source("invalid_request", source))
 }
 
 pub(super) fn from_json<T: DeserializeOwned>(value: Value) -> Result<T, ControlPlaneError> {
-    serde_json::from_value(value).map_err(|_| invalid_persisted("JSON snapshot"))
+    serde_json::from_value(value)
+        .map_err(|source| ControlPlaneError::validation_source("invalid_persisted_state", source))
 }
 
 fn audit_event_kind_name(kind: AuditEventKind) -> &'static str {
@@ -236,7 +236,7 @@ fn audit_event_kind_name(kind: AuditEventKind) -> &'static str {
 }
 
 fn invalid_persisted(name: &str) -> ControlPlaneError {
-    ControlPlaneError::validation(
+    ControlPlaneError::state(
         "invalid_persisted_state",
         format!("persisted {name} is incompatible with this service version"),
     )

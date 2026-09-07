@@ -37,6 +37,7 @@ use super::model::ModelProfileStatus;
 use super::model::PersistInvocation;
 use super::model::RuntimeModelProfile;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::observability::DependencyStatus;
@@ -49,7 +50,7 @@ impl PostgresRepository {
         &self,
         tenant_id: TenantId,
         profiles: &[ProviderProfile],
-    ) -> Result<Vec<RuntimeModelProfile>, ControlPlaneError> {
+    ) -> Result<Vec<RuntimeModelProfile>, ControlPlaneRequestFailure> {
         let mut configured = Vec::with_capacity(profiles.len());
         for profile in profiles {
             let id = ModelProfileId::new();
@@ -132,14 +133,8 @@ impl PostgresRepository {
             .bind(&profile.model_revision)
             .bind(&profile.endpoint_instance)
             .bind(&profile.region)
-            .bind(
-                serde_json::to_value(&profile.allowed_data_classes)
-                    .map_err(|_| ControlPlaneError::configuration("model profile data classes cannot be serialized"))?,
-            )
-            .bind(
-                serde_json::to_value(&profile.capabilities)
-                    .map_err(|_| ControlPlaneError::configuration("model profile capabilities cannot be serialized"))?,
-            )
+            .bind(serde_json::to_value(&profile.allowed_data_classes).map_err(ControlPlaneError::configuration_source)?)
+            .bind(serde_json::to_value(&profile.capabilities).map_err(ControlPlaneError::configuration_source)?)
             .bind(i32::from(profile.priority))
             .bind(credential_ref)
             .bind(health_name(ProviderHealth::Unknown))
@@ -150,7 +145,7 @@ impl PostgresRepository {
                     .estimated_cost_microusd_per_1k_tokens
                     .map(i64::try_from)
                     .transpose()
-                    .map_err(|_| ControlPlaneError::configuration("model profile cost exceeds PostgreSQL bounds"))?,
+                    .map_err(ControlPlaneError::configuration_source)?,
             )
             .bind(profile.preserve_reasoning_content)
             .bind(profile.kimi_mfjs_enabled)
@@ -172,7 +167,7 @@ impl PostgresRepository {
         profile: &RuntimeModelProfile,
         health: ProviderHealth,
         credential_version_fingerprint: Option<&str>,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let health = health_name(health);
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
@@ -195,10 +190,7 @@ impl PostgresRepository {
         .bind(tenant_id.as_uuid())
         .bind(profile.id.as_uuid())
         .bind(health)
-        .bind(
-            serde_json::to_value(&profile.profile.capabilities)
-                .map_err(|_| ControlPlaneError::configuration("model capabilities cannot be serialized"))?,
-        )
+        .bind(serde_json::to_value(&profile.profile.capabilities).map_err(ControlPlaneError::configuration_source)?)
         .bind(credential_version_fingerprint)
         .execute(&mut *transaction)
         .await?;
@@ -209,7 +201,7 @@ impl PostgresRepository {
     pub(super) async fn persist_model_invocation(
         &self,
         invocation: &PersistInvocation,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let fallback_chain = invocation
             .fallback_chain
             .iter()
@@ -254,21 +246,21 @@ impl PostgresRepository {
                 .input_tokens
                 .map(i32::try_from)
                 .transpose()
-                .map_err(|_| ControlPlaneError::configuration("model input token usage exceeds PostgreSQL bounds"))?,
+                .map_err(ControlPlaneError::configuration_source)?,
         )
         .bind(
             invocation
                 .output_tokens
                 .map(i32::try_from)
                 .transpose()
-                .map_err(|_| ControlPlaneError::configuration("model output token usage exceeds PostgreSQL bounds"))?,
+                .map_err(ControlPlaneError::configuration_source)?,
         )
         .bind(
             invocation
                 .cost_micros
                 .map(i64::try_from)
                 .transpose()
-                .map_err(|_| ControlPlaneError::configuration("model invocation cost exceeds PostgreSQL bounds"))?,
+                .map_err(ControlPlaneError::configuration_source)?,
         )
         .bind(&invocation.rationale)
         .bind(invocation.error_code.as_deref())
@@ -283,7 +275,7 @@ impl PostgresRepository {
     pub(super) async fn model_profile_statuses(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<ModelProfileStatus>, ControlPlaneError> {
+    ) -> Result<Vec<ModelProfileStatus>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT p.id, p.profile_name, p.provider_family, p.protocol_family,
                     p.model_family, p.model_name, p.model_revision,
@@ -310,7 +302,7 @@ impl PostgresRepository {
     pub(super) async fn model_health_samples(
         &self,
         limit: u32,
-    ) -> Result<Vec<ProviderHealthSample>, ControlPlaneError> {
+    ) -> Result<Vec<ProviderHealthSample>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT profile_name, provider_family, health
              FROM model_profiles
@@ -341,9 +333,9 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         query: &ModelInvocationListQuery,
-    ) -> Result<ModelInvocationPage, ControlPlaneError> {
+    ) -> Result<ModelInvocationPage, ControlPlaneRequestFailure> {
         if !auth.clusters.contains(&query.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "model invocation cluster is outside the caller scope",
             ));
@@ -389,7 +381,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         plan: &rocketmq_sre_contracts::ActionPlan,
-    ) -> Result<ModelInvocationRecord, ControlPlaneError> {
+    ) -> Result<ModelInvocationRecord, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT m.id, m.tenant_id, m.cluster_id, m.incident_id,
                     m.conversation_id, m.investigation_id,
@@ -425,7 +417,7 @@ impl PostgresRepository {
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "primary_invocation_mismatch",
                 "plan primary invocation does not match the exact confirmed diagnosis revision",
             )
@@ -434,11 +426,11 @@ impl PostgresRepository {
     }
 }
 
-fn enum_name(value: impl Serialize) -> Result<String, ControlPlaneError> {
-    serde_json::to_value(value)
+fn enum_name(value: impl Serialize) -> Result<String, ControlPlaneRequestFailure> {
+    Ok(serde_json::to_value(value)
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
-        .ok_or_else(|| ControlPlaneError::configuration("model profile enum cannot be serialized"))
+        .ok_or_else(|| ControlPlaneError::configuration("model profile enum cannot be serialized"))?)
 }
 
 const fn health_name(health: ProviderHealth) -> &'static str {
@@ -451,20 +443,18 @@ const fn health_name(health: ProviderHealth) -> &'static str {
     }
 }
 
-fn parse_health(value: &str) -> Result<ProviderHealth, ControlPlaneError> {
+fn parse_health(value: &str) -> Result<ProviderHealth, ControlPlaneRequestFailure> {
     match value {
         "unknown" => Ok(ProviderHealth::Unknown),
         "healthy" => Ok(ProviderHealth::Healthy),
         "degraded" => Ok(ProviderHealth::Degraded),
         "unavailable" | "disabled" => Ok(ProviderHealth::Unavailable),
         "quarantined" => Ok(ProviderHealth::Quarantined),
-        _ => Err(ControlPlaneError::configuration(
-            "stored model provider health is invalid",
-        )),
+        _ => Err(ControlPlaneError::configuration("stored model provider health is invalid").into()),
     }
 }
 
-fn dependency_health(value: &str) -> Result<(DependencyStatus, Option<HealthReasonCode>), ControlPlaneError> {
+fn dependency_health(value: &str) -> Result<(DependencyStatus, Option<HealthReasonCode>), ControlPlaneRequestFailure> {
     match value {
         "healthy" => Ok((DependencyStatus::Healthy, None)),
         "unknown" => Ok((DependencyStatus::Unknown, Some(HealthReasonCode::Unknown))),
@@ -474,9 +464,7 @@ fn dependency_health(value: &str) -> Result<(DependencyStatus, Option<HealthReas
             DependencyStatus::Unavailable,
             Some(HealthReasonCode::AuthenticationFailed),
         )),
-        _ => Err(ControlPlaneError::configuration(
-            "stored model provider health is invalid",
-        )),
+        _ => Err(ControlPlaneError::configuration("stored model provider health is invalid").into()),
     }
 }
 
@@ -505,7 +493,7 @@ pub(super) fn provider_label(profile_name: &str, provider_family: &str) -> Provi
     }
 }
 
-fn model_profile_status_from_row(row: &PgRow) -> Result<ModelProfileStatus, ControlPlaneError> {
+fn model_profile_status_from_row(row: &PgRow) -> Result<ModelProfileStatus, ControlPlaneRequestFailure> {
     let credential_ref: String = row.try_get("credential_ref")?;
     Ok(ModelProfileStatus {
         id: ModelProfileId::from_uuid(row.try_get("id")?),
@@ -518,8 +506,7 @@ fn model_profile_status_from_row(row: &PgRow) -> Result<ModelProfileStatus, Cont
         endpoint_instance: row.try_get("endpoint_instance")?,
         region: row.try_get("region")?,
         capabilities: row.try_get("capabilities")?,
-        priority: u16::try_from(row.try_get::<i32, _>("priority")?)
-            .map_err(|_| ControlPlaneError::configuration("stored model priority is invalid"))?,
+        priority: u16::try_from(row.try_get::<i32, _>("priority")?).map_err(ControlPlaneError::configuration_source)?,
         credential_configured: !credential_ref.is_empty(),
         credential_owner: row.try_get("credential_owner")?,
         health: row.try_get("health")?,
@@ -527,7 +514,7 @@ fn model_profile_status_from_row(row: &PgRow) -> Result<ModelProfileStatus, Cont
     })
 }
 
-fn model_invocation_from_row(row: &PgRow) -> Result<ModelInvocationView, ControlPlaneError> {
+fn model_invocation_from_row(row: &PgRow) -> Result<ModelInvocationView, ControlPlaneRequestFailure> {
     let fallback_chain = row
         .try_get::<Vec<Uuid>, _>("fallback_chain")?
         .into_iter()
@@ -567,17 +554,17 @@ fn model_invocation_from_row(row: &PgRow) -> Result<ModelInvocationView, Control
             .try_get::<Option<i32>, _>("input_tokens")?
             .map(u32::try_from)
             .transpose()
-            .map_err(|_| ControlPlaneError::configuration("stored input token usage is invalid"))?,
+            .map_err(ControlPlaneError::configuration_source)?,
         output_tokens: row
             .try_get::<Option<i32>, _>("output_tokens")?
             .map(u32::try_from)
             .transpose()
-            .map_err(|_| ControlPlaneError::configuration("stored output token usage is invalid"))?,
+            .map_err(ControlPlaneError::configuration_source)?,
         cost_micros: row
             .try_get::<Option<i64>, _>("cost_micros")?
             .map(u64::try_from)
             .transpose()
-            .map_err(|_| ControlPlaneError::configuration("stored model cost is invalid"))?,
+            .map_err(ControlPlaneError::configuration_source)?,
         rationale: row.try_get("rationale")?,
         error_code: row.try_get("error_code")?,
         correlation_id: row
@@ -588,7 +575,7 @@ fn model_invocation_from_row(row: &PgRow) -> Result<ModelInvocationView, Control
     })
 }
 
-fn contract_model_invocation_from_row(row: &PgRow) -> Result<ModelInvocationRecord, ControlPlaneError> {
+fn contract_model_invocation_from_row(row: &PgRow) -> Result<ModelInvocationRecord, ControlPlaneRequestFailure> {
     Ok(ModelInvocationRecord {
         id: ModelInvocationId::from_uuid(row.try_get("id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -631,18 +618,18 @@ fn contract_model_invocation_from_row(row: &PgRow) -> Result<ModelInvocationReco
     })
 }
 
-fn bounded_u32(value: Option<i32>, field: &'static str) -> Result<Option<u32>, ControlPlaneError> {
-    value
+fn bounded_u32(value: Option<i32>, _field: &'static str) -> Result<Option<u32>, ControlPlaneRequestFailure> {
+    Ok(value
         .map(u32::try_from)
         .transpose()
-        .map_err(|_| ControlPlaneError::configuration(format!("stored {field} is invalid")))
+        .map_err(ControlPlaneError::configuration_source)?)
 }
 
-fn bounded_u64(value: Option<i64>, field: &'static str) -> Result<Option<u64>, ControlPlaneError> {
-    value
+fn bounded_u64(value: Option<i64>, _field: &'static str) -> Result<Option<u64>, ControlPlaneRequestFailure> {
+    Ok(value
         .map(u64::try_from)
         .transpose()
-        .map_err(|_| ControlPlaneError::configuration(format!("stored {field} is invalid")))
+        .map_err(ControlPlaneError::configuration_source)?)
 }
 
 #[cfg(test)]

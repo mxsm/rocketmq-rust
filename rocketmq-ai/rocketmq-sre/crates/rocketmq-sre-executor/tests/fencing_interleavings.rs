@@ -42,6 +42,7 @@ use rocketmq_sre_contracts::TenantId;
 use rocketmq_sre_execution_agent::AgentActionHandler;
 use rocketmq_sre_execution_agent::AgentDriverRegistry;
 use rocketmq_sre_execution_agent::AgentEffectStore;
+use rocketmq_sre_execution_agent::AgentEffectStoreOperations;
 use rocketmq_sre_execution_agent::AuthorityFuture;
 use rocketmq_sre_execution_agent::DispatchBarrier;
 use rocketmq_sre_execution_agent::DriverDispatchOutcome;
@@ -51,7 +52,9 @@ use rocketmq_sre_execution_agent::ExecutionAgentError;
 use rocketmq_sre_execution_agent::FenceAckSigner;
 use rocketmq_sre_execution_agent::LeaseAuthorityClient;
 use rocketmq_sre_executor::ExecutionJournal;
+use rocketmq_sre_executor::ExecutionJournalOperations;
 use rocketmq_sre_executor::LeaseCoordinator;
+use rocketmq_sre_executor::LeaseCoordinatorOperations;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -96,7 +99,11 @@ impl LeaseAuthorityClient for AcceptingAuthority {
         _tenant_id: TenantId,
         _decision: &'a DynamicSafetyDecision,
     ) -> AuthorityFuture<'a, DynamicSafetyVerification> {
-        Box::pin(async { Err(ExecutionAgentError::AuthorityRejected) })
+        Box::pin(async {
+            Err(rocketmq_sre_execution_agent::ExecutionAgentRequestFailure::Operational(
+                ExecutionAgentError::unavailable(),
+            ))
+        })
     }
 }
 
@@ -278,14 +285,18 @@ async fn fence_ack_waits_for_inflight_dispatch_and_old_epoch_cannot_write_after_
         .await
         .expect("old dispatch join timeout")
         .expect("old dispatch task")
-        .expect("old dispatch result");
+        .expect("old dispatch result")
+        .into_result()
+        .expect("old dispatch accepted");
     assert!(!dispatch_response.replayed);
     assert_eq!(dispatch_response.result.state, EffectState::Confirmed);
     let ack = timeout(Duration::from_secs(5), advance)
         .await
         .expect("fence advance join timeout")
         .expect("fence advance task")
-        .expect("fence advance result");
+        .expect("fence advance result")
+        .into_result()
+        .expect("fence advance accepted");
     assert_eq!(writes.load(Ordering::SeqCst), 1);
     assert_eq!(ack.epoch, pending.epoch);
     leases
@@ -293,10 +304,14 @@ async fn fence_ack_waits_for_inflight_dispatch_and_old_epoch_cannot_write_after_
         .await
         .expect("new epoch activates only after durable Agent acknowledgement");
 
-    assert!(matches!(
-        agent.dispatch(&request).await,
-        Err(ExecutionAgentError::AuthorityRejected)
-    ));
+    assert!(
+        agent
+            .dispatch(&request)
+            .await
+            .expect("stale dispatch is a closed result")
+            .into_result()
+            .is_err()
+    );
     assert_eq!(writes.load(Ordering::SeqCst), 1);
 
     cleanup_schema(&pool, &schema).await;
@@ -372,10 +387,14 @@ async fn dispatched_unknown_effect_blocks_takeover_until_read_only_reconciliatio
         reconcile_grant: reconcile_grant(&pending),
     };
 
-    assert!(matches!(
-        agent.advance_fence(&advance_request).await,
-        Err(ExecutionAgentError::UnresolvedEffect)
-    ));
+    assert!(
+        agent
+            .advance_fence(&advance_request)
+            .await
+            .expect("unresolved effect is a closed result")
+            .into_result()
+            .is_err()
+    );
     assert_eq!(
         store
             .highest_epoch(fixture.cluster_id)
@@ -396,7 +415,9 @@ async fn dispatched_unknown_effect_blocks_takeover_until_read_only_reconciliatio
     let ack = agent
         .advance_fence(&advance_request)
         .await
-        .expect("takeover after terminal reconciliation");
+        .expect("takeover after terminal reconciliation")
+        .into_result()
+        .expect("takeover accepted after terminal reconciliation");
     leases
         .activate(&pending, &ack)
         .await

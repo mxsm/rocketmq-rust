@@ -19,6 +19,7 @@ use rocketmq_sre_contracts::ReconcileEffectState;
 use serde_json::json;
 
 use super::*;
+use crate::ExecutionAgentRequestFailure;
 use crate::drivers::test_support;
 
 struct FakeSubscriptionGroupClient {
@@ -84,7 +85,7 @@ impl SubscriptionGroupPatchClient for FakeSubscriptionGroupClient {
                 .lock()
                 .expect("before lock")
                 .clone()
-                .ok_or(ExecutionAgentError::DriverFailed)?;
+                .ok_or(ExecutionAgentRequestFailure::DriverFailed)?;
             let mut state = self.state.lock().expect("state lock");
             let previous_version = state.version;
             state.values = before;
@@ -160,10 +161,14 @@ async fn permission_and_delete_fields_are_not_deserializable() {
     for forbidden in ["permissions", "delete_group", "consume_enable"] {
         let mut value = parameters();
         value["patch"][forbidden] = json!(true);
-        assert!(matches!(
-            handler.read_state(&read_request(value)).await,
-            Err(ExecutionAgentError::InvalidRequest)
-        ));
+        assert_eq!(
+            handler
+                .read_state(&read_request(value))
+                .await
+                .expect_err("forbidden subscription-group field must be rejected")
+                .stable_code(),
+            "invalid_agent_request"
+        );
     }
 }
 

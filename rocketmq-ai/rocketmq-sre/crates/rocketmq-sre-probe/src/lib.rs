@@ -18,7 +18,7 @@
 
 pub mod cleanup;
 pub mod consumer;
-pub mod evidence;
+mod evidence;
 pub mod producer;
 pub mod scenario;
 
@@ -36,8 +36,9 @@ use rocketmq_sre_contracts::ClusterId;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use thiserror::Error;
 use uuid::Uuid;
+
+pub use evidence::capture_probe_evidence;
 
 pub const PROBE_TOPIC_PREFIX: &str = "SRE_PROBE_";
 pub const PROBE_GROUP_PREFIX: &str = "SRE_PROBE_G_";
@@ -81,24 +82,16 @@ impl ProbeAclConfig {
     }
 }
 
-/// Fail-closed errors for the optional probe ACL identity.
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub enum ProbeAclConfigError {
-    #[error("{PROBE_ACCESS_KEY_ENV} and {PROBE_SECRET_KEY_FILE_ENV} must either both be set or both be absent")]
+/// Closed optional-identity configuration rejection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbeAclRejection {
     IncompleteCredentials,
-    #[error("probe ACL access key must not be empty")]
     EmptyAccessKey,
-    #[error("probe ACL secret key file path must not be empty")]
     EmptySecretKeyFile,
-    #[error("probe ACL secret key file could not be read")]
     SecretKeyFileUnavailable,
-    #[error("probe ACL secret key path must reference a regular file")]
     SecretKeyFileInvalid,
-    #[error("probe ACL secret key file exceeds the configured size limit")]
     SecretKeyFileTooLarge,
-    #[error("probe ACL secret key must not be empty")]
     EmptySecretKey,
-    #[error("probe ACL environment contains a non-Unicode value")]
     InvalidEnvironment,
 }
 
@@ -109,39 +102,39 @@ pub enum ProbeAclConfigError {
 ///
 /// # Errors
 ///
-/// Returns [`ProbeAclConfigError`] when only one reference is configured, a
+/// Returns [`ProbeAclRejection`] when only one reference is configured, a
 /// value is empty or non-Unicode, or the referenced secret file is unreadable
 /// or empty.
-pub fn load_probe_acl_config() -> Result<Option<ProbeAclConfig>, ProbeAclConfigError> {
+pub fn load_probe_acl_config() -> Result<Option<ProbeAclConfig>, ProbeAclRejection> {
     let access_key = optional_env(PROBE_ACCESS_KEY_ENV)?;
     let secret_key_file = optional_env(PROBE_SECRET_KEY_FILE_ENV)?;
     resolve_probe_acl_config(access_key, secret_key_file, read_secret_key_file)
 }
 
-fn optional_env(name: &'static str) -> Result<Option<String>, ProbeAclConfigError> {
+fn optional_env(name: &'static str) -> Result<Option<String>, ProbeAclRejection> {
     match env::var(name) {
         Ok(value) => Ok(Some(value)),
         Err(env::VarError::NotPresent) => Ok(None),
-        Err(env::VarError::NotUnicode(_)) => Err(ProbeAclConfigError::InvalidEnvironment),
+        Err(env::VarError::NotUnicode(_)) => Err(ProbeAclRejection::InvalidEnvironment),
     }
 }
 
-fn read_secret_key_file(path: &str) -> Result<String, ProbeAclConfigError> {
-    let metadata = fs::metadata(path).map_err(|_| ProbeAclConfigError::SecretKeyFileUnavailable)?;
+fn read_secret_key_file(path: &str) -> Result<String, ProbeAclRejection> {
+    let metadata = fs::metadata(path).map_err(|_| ProbeAclRejection::SecretKeyFileUnavailable)?;
     if !metadata.is_file() {
-        return Err(ProbeAclConfigError::SecretKeyFileInvalid);
+        return Err(ProbeAclRejection::SecretKeyFileInvalid);
     }
     if metadata.len() > MAX_SECRET_KEY_FILE_BYTES_U64 {
-        return Err(ProbeAclConfigError::SecretKeyFileTooLarge);
+        return Err(ProbeAclRejection::SecretKeyFileTooLarge);
     }
 
-    let file = File::open(path).map_err(|_| ProbeAclConfigError::SecretKeyFileUnavailable)?;
+    let file = File::open(path).map_err(|_| ProbeAclRejection::SecretKeyFileUnavailable)?;
     let mut secret = String::new();
     file.take(MAX_SECRET_KEY_FILE_BYTES_U64 + 1)
         .read_to_string(&mut secret)
-        .map_err(|_| ProbeAclConfigError::SecretKeyFileUnavailable)?;
+        .map_err(|_| ProbeAclRejection::SecretKeyFileUnavailable)?;
     if secret.len() > MAX_SECRET_KEY_FILE_BYTES {
-        return Err(ProbeAclConfigError::SecretKeyFileTooLarge);
+        return Err(ProbeAclRejection::SecretKeyFileTooLarge);
     }
     Ok(secret)
 }
@@ -150,27 +143,27 @@ fn resolve_probe_acl_config<F>(
     access_key: Option<String>,
     secret_key_file: Option<String>,
     read_secret: F,
-) -> Result<Option<ProbeAclConfig>, ProbeAclConfigError>
+) -> Result<Option<ProbeAclConfig>, ProbeAclRejection>
 where
-    F: FnOnce(&str) -> Result<String, ProbeAclConfigError>,
+    F: FnOnce(&str) -> Result<String, ProbeAclRejection>,
 {
     let (access_key, secret_key_file) = match (access_key, secret_key_file) {
         (None, None) => return Ok(None),
         (Some(access_key), Some(secret_key_file)) => (access_key, secret_key_file),
-        _ => return Err(ProbeAclConfigError::IncompleteCredentials),
+        _ => return Err(ProbeAclRejection::IncompleteCredentials),
     };
     let access_key = access_key.trim();
     if access_key.is_empty() {
-        return Err(ProbeAclConfigError::EmptyAccessKey);
+        return Err(ProbeAclRejection::EmptyAccessKey);
     }
     let secret_key_file = secret_key_file.trim();
     if secret_key_file.is_empty() {
-        return Err(ProbeAclConfigError::EmptySecretKeyFile);
+        return Err(ProbeAclRejection::EmptySecretKeyFile);
     }
     let secret_key = read_secret(secret_key_file)?;
     let secret_key = secret_key.trim_end_matches(['\r', '\n']);
     if secret_key.trim().is_empty() {
-        return Err(ProbeAclConfigError::EmptySecretKey);
+        return Err(ProbeAclRejection::EmptySecretKey);
     }
     Ok(Some(ProbeAclConfig {
         access_key: access_key.to_owned(),
@@ -211,37 +204,31 @@ pub struct ProbePlan {
     pub requires_preprovisioned_topic: bool,
 }
 
-/// Probe validation failures.
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub enum ProbeConfigError {
-    #[error("max_messages must be between 1 and {MAX_MESSAGES_LIMIT}")]
+/// Closed parameter validation rejection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbeConfigRejection {
     MessagesOutOfRange,
-    #[error("max_payload_bytes must be between 1 and {MAX_PAYLOAD_BYTES_LIMIT}")]
     PayloadOutOfRange,
-    #[error("max_messages_per_second must be between 1 and {MAX_MESSAGES_PER_SECOND_LIMIT}")]
     RateOutOfRange,
-    #[error("max_duration_seconds must be between 1 and {MAX_DURATION_SECONDS_LIMIT}")]
     DurationOutOfRange,
 }
 
 impl ProbeConfig {
     /// Validates hard resource limits and derives a dedicated identity.
     ///
-    /// # Errors
-    ///
-    /// Returns a range error rather than clamping unsafe input.
-    pub fn plan(&self, run_id: Uuid) -> Result<ProbePlan, ProbeConfigError> {
+    /// Returns a range rejection rather than clamping unsafe input.
+    pub fn plan(&self, run_id: Uuid) -> Result<ProbePlan, ProbeConfigRejection> {
         if !(1..=MAX_MESSAGES_LIMIT).contains(&self.max_messages) {
-            return Err(ProbeConfigError::MessagesOutOfRange);
+            return Err(ProbeConfigRejection::MessagesOutOfRange);
         }
         if !(1..=MAX_PAYLOAD_BYTES_LIMIT).contains(&self.max_payload_bytes) {
-            return Err(ProbeConfigError::PayloadOutOfRange);
+            return Err(ProbeConfigRejection::PayloadOutOfRange);
         }
         if !(1..=MAX_MESSAGES_PER_SECOND_LIMIT).contains(&self.max_messages_per_second) {
-            return Err(ProbeConfigError::RateOutOfRange);
+            return Err(ProbeConfigRejection::RateOutOfRange);
         }
         if !(1..=MAX_DURATION_SECONDS_LIMIT).contains(&self.max_duration_seconds) {
-            return Err(ProbeConfigError::DurationOutOfRange);
+            return Err(ProbeConfigRejection::DurationOutOfRange);
         }
         let cluster = self.cluster_id.as_uuid().simple();
         let run = run_id.simple();
@@ -269,42 +256,35 @@ impl ProbePlan {
     /// POP groups and short-retention Topics that must be provisioned outside
     /// the probe because this crate has no Admin capability.
     ///
-    /// # Errors
-    ///
-    /// Returns an error when any resource is outside the probe namespace.
-    pub fn with_preprovisioned_identity(mut self, identity: ProbeIdentity) -> Result<Self, ProbeIdentityError> {
+    /// Returns a closed rejection when any resource is outside the probe namespace.
+    pub fn with_preprovisioned_identity(mut self, identity: ProbeIdentity) -> Result<Self, ProbeIdentityRejection> {
         identity.validate()?;
         self.identity = identity;
         Ok(self)
     }
 }
 
-/// Dedicated resource namespace validation error.
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub enum ProbeIdentityError {
-    #[error("probe Topic must use the {PROBE_TOPIC_PREFIX} namespace")]
+/// Closed resource namespace rejection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbeIdentityRejection {
     TopicOutsideNamespace,
-    #[error("probe producer group must use the {PROBE_GROUP_PREFIX} namespace")]
     ProducerGroupOutsideNamespace,
-    #[error("probe consumer group must use the {PROBE_GROUP_PREFIX} namespace")]
     ConsumerGroupOutsideNamespace,
 }
 
 impl ProbeIdentity {
     /// Validates that no business Topic or Group can be selected.
     ///
-    /// # Errors
-    ///
-    /// Returns the exact resource whose namespace is invalid.
-    pub fn validate(&self) -> Result<(), ProbeIdentityError> {
+    /// Returns the exact resource whose namespace was rejected.
+    pub fn validate(&self) -> Result<(), ProbeIdentityRejection> {
         if !self.topic.starts_with(PROBE_TOPIC_PREFIX) {
-            return Err(ProbeIdentityError::TopicOutsideNamespace);
+            return Err(ProbeIdentityRejection::TopicOutsideNamespace);
         }
         if !self.producer_group.starts_with(PROBE_GROUP_PREFIX) {
-            return Err(ProbeIdentityError::ProducerGroupOutsideNamespace);
+            return Err(ProbeIdentityRejection::ProducerGroupOutsideNamespace);
         }
         if !self.consumer_group.starts_with(PROBE_GROUP_PREFIX) {
-            return Err(ProbeIdentityError::ConsumerGroupOutsideNamespace);
+            return Err(ProbeIdentityRejection::ConsumerGroupOutsideNamespace);
         }
         Ok(())
     }
@@ -332,13 +312,13 @@ mod tests {
             resolve_probe_acl_config(Some("probe-ak".to_owned()), None, |_| {
                 panic!("incomplete configuration must not read a secret file")
             }),
-            Err(ProbeAclConfigError::IncompleteCredentials)
+            Err(ProbeAclRejection::IncompleteCredentials)
         );
         assert_eq!(
             resolve_probe_acl_config(None, Some("/run/secrets/probe".to_owned()), |_| {
                 panic!("incomplete configuration must not read a secret file")
             }),
-            Err(ProbeAclConfigError::IncompleteCredentials)
+            Err(ProbeAclRejection::IncompleteCredentials)
         );
     }
 
@@ -374,21 +354,21 @@ mod tests {
             resolve_probe_acl_config(Some(" ".to_owned()), Some("/run/secrets/probe".to_owned()), |_| panic!(
                 "empty access key must be rejected before file access"
             ),),
-            Err(ProbeAclConfigError::EmptyAccessKey)
+            Err(ProbeAclRejection::EmptyAccessKey)
         );
         assert_eq!(
             resolve_probe_acl_config(Some("probe-ak".to_owned()), Some(" ".to_owned()), |_| panic!(
                 "empty path must be rejected before file access"
             ),),
-            Err(ProbeAclConfigError::EmptySecretKeyFile)
+            Err(ProbeAclRejection::EmptySecretKeyFile)
         );
         assert_eq!(
             resolve_probe_acl_config(
                 Some("probe-ak".to_owned()),
                 Some("/run/secrets/probe".to_owned()),
-                |_| Err(ProbeAclConfigError::SecretKeyFileUnavailable),
+                |_| Err(ProbeAclRejection::SecretKeyFileUnavailable),
             ),
-            Err(ProbeAclConfigError::SecretKeyFileUnavailable)
+            Err(ProbeAclRejection::SecretKeyFileUnavailable)
         );
         assert_eq!(
             resolve_probe_acl_config(
@@ -396,7 +376,7 @@ mod tests {
                 Some("/run/secrets/probe".to_owned()),
                 |_| Ok(" \t\r\n".to_owned()),
             ),
-            Err(ProbeAclConfigError::EmptySecretKey)
+            Err(ProbeAclRejection::EmptySecretKey)
         );
     }
 
@@ -406,7 +386,7 @@ mod tests {
         fs::create_dir(&fixture_dir).expect("fixture directory should be created");
         assert_eq!(
             read_secret_key_file(fixture_dir.to_str().expect("fixture path should be Unicode")),
-            Err(ProbeAclConfigError::SecretKeyFileInvalid)
+            Err(ProbeAclRejection::SecretKeyFileInvalid)
         );
 
         let oversized_file = fixture_dir.join("oversized-secret");
@@ -414,7 +394,7 @@ mod tests {
             .expect("oversized fixture should be written");
         assert_eq!(
             read_secret_key_file(oversized_file.to_str().expect("fixture path should be Unicode")),
-            Err(ProbeAclConfigError::SecretKeyFileTooLarge)
+            Err(ProbeAclRejection::SecretKeyFileTooLarge)
         );
 
         fs::remove_file(oversized_file).expect("fixture file should be removed");
@@ -458,7 +438,7 @@ mod tests {
                 producer_group: "SRE_PROBE_G_P".to_owned(),
                 consumer_group: "SRE_PROBE_G_C".to_owned(),
             }),
-            Err(ProbeIdentityError::TopicOutsideNamespace)
+            Err(ProbeIdentityRejection::TopicOutsideNamespace)
         );
     }
 
@@ -472,7 +452,7 @@ mod tests {
             max_duration_seconds: 1,
         };
 
-        assert_eq!(config.plan(Uuid::nil()), Err(ProbeConfigError::MessagesOutOfRange));
+        assert_eq!(config.plan(Uuid::nil()), Err(ProbeConfigRejection::MessagesOutOfRange));
     }
 
     #[test]
@@ -485,6 +465,6 @@ mod tests {
             max_duration_seconds: 1,
         };
 
-        assert_eq!(config.plan(Uuid::nil()), Err(ProbeConfigError::RateOutOfRange));
+        assert_eq!(config.plan(Uuid::nil()), Err(ProbeConfigRejection::RateOutOfRange));
     }
 }

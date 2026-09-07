@@ -47,6 +47,7 @@ use crate::CapabilitySnapshot;
 use crate::Cluster;
 use crate::ControlPlaneConfig;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::HandshakeRequest;
 use crate::OffboardRequest;
 use crate::OnboardClusterRequest;
@@ -264,23 +265,19 @@ struct CoverageRequirementView {
 
 fn build_coverage_matrix() -> Result<Value, ControlPlaneError> {
     let coverage: CoverageDocument =
-        serde_yaml::from_str(COVERAGE).map_err(|error| ControlPlaneError::CapabilityDocument {
-            detail: format!("capability coverage cannot be parsed: {error}"),
-        })?;
+        serde_yaml::from_str(COVERAGE).map_err(ControlPlaneError::capability_document_source)?;
     let manifests = required_signal_manifests()?;
     let registry: TelemetryRegistry =
-        serde_json::from_str(TELEMETRY_REGISTRY).map_err(|error| ControlPlaneError::CapabilityDocument {
-            detail: format!("telemetry semantic registry cannot be parsed: {error}"),
-        })?;
+        serde_json::from_str(TELEMETRY_REGISTRY).map_err(ControlPlaneError::capability_document_source)?;
     let owners = validate_semantic_registry_owners(&registry, &coverage.semantic_registry_owners, &manifests)?;
 
     let packs = PACK_ORDER
         .iter()
         .map(|id| {
             if !coverage.diagnostic_packs.contains_key(*id) {
-                return Err(ControlPlaneError::CapabilityDocument {
-                    detail: format!("capability coverage is missing diagnostic pack `{id}`"),
-                });
+                return Err(ControlPlaneError::capability_document(
+                    "capability coverage is missing a diagnostic pack",
+                ));
             }
             Ok(CoveragePackView {
                 id: (*id).to_owned(),
@@ -309,9 +306,7 @@ fn build_coverage_matrix() -> Result<Value, ControlPlaneError> {
     let selected_manifest = manifests
         .iter()
         .find(|manifest| manifest.component == "controller")
-        .ok_or_else(|| ControlPlaneError::CapabilityDocument {
-            detail: "controller required-signal manifest is missing".to_owned(),
-        })?;
+        .ok_or_else(|| ControlPlaneError::capability_document("controller required-signal manifest is missing"))?;
     let selected_pack = &coverage.diagnostic_packs["controller_stability"];
     let selected_requirements = matching_signals(selected_manifest, selected_pack)
         .into_iter()
@@ -331,9 +326,7 @@ fn build_coverage_matrix() -> Result<Value, ControlPlaneError> {
             requirements: selected_requirements,
         },
     })
-    .map_err(|error| ControlPlaneError::CapabilityDocument {
-        detail: format!("coverage matrix cannot be represented as JSON: {error}"),
-    })
+    .map_err(ControlPlaneError::capability_document_source)
 }
 
 fn required_signal_manifests() -> Result<[RequiredSignalManifest; 6], ControlPlaneError> {
@@ -378,13 +371,11 @@ fn validate_semantic_registry_owners(
                     || source.exposure.trim().is_empty()
             })
         {
-            return Err(ControlPlaneError::CapabilityDocument {
-                detail: format!(
-                    "semantic registry owner `{}` must record a component surface, current exposure, backlog, and \
+            return Err(ControlPlaneError::capability_document(format!(
+                "semantic registry owner `{}` must record a component surface, current exposure, backlog, and \
                      complete notable-source metadata",
-                    owner.owner
-                ),
-            });
+                owner.owner
+            )));
         }
         let claims_remote_queryability = owner.exposure == "queryable"
             || owner
@@ -392,17 +383,15 @@ fn validate_semantic_registry_owners(
                 .iter()
                 .any(|source| source.exposure == "queryable");
         if claims_remote_queryability && !owner_has_protected_query_route(&owner.owner, manifests) {
-            return Err(ControlPlaneError::CapabilityDocument {
-                detail: format!(
-                    "semantic registry owner `{}` cannot claim remote queryability without a protected fixed route",
-                    owner.owner
-                ),
-            });
+            return Err(ControlPlaneError::capability_document(format!(
+                "semantic registry owner `{}` cannot claim remote queryability without a protected fixed route",
+                owner.owner
+            )));
         }
         if !configured_owners.insert(owner.owner.clone()) {
-            return Err(ControlPlaneError::CapabilityDocument {
-                detail: format!("semantic registry owner `{}` is mapped more than once", owner.owner),
-            });
+            return Err(ControlPlaneError::capability_document(
+                "semantic registry owner is mapped more than once",
+            ));
         }
     }
 
@@ -415,12 +404,10 @@ fn validate_semantic_registry_owners(
             .difference(&expected_owners)
             .cloned()
             .collect::<Vec<_>>();
-        return Err(ControlPlaneError::CapabilityDocument {
-            detail: format!(
-                "semantic registry owner coverage must map every owner exactly once; missing={missing:?}, \
+        return Err(ControlPlaneError::capability_document(format!(
+            "semantic registry owner coverage must map every owner exactly once; missing={missing:?}, \
                  unknown={unknown:?}"
-            ),
-        });
+        )));
     }
     Ok(expected_owners)
 }
@@ -464,22 +451,18 @@ impl RequiredSignalExposure {
 
 fn parse_signal_manifest(name: &str, input: &str) -> Result<RequiredSignalManifest, ControlPlaneError> {
     let manifest: RequiredSignalManifest =
-        serde_yaml::from_str(input).map_err(|error| ControlPlaneError::CapabilityDocument {
-            detail: format!("{name} required-signal manifest cannot be parsed: {error}"),
-        })?;
+        serde_yaml::from_str(input).map_err(ControlPlaneError::capability_document_source)?;
     if manifest.schema_version != REQUIRED_SIGNAL_SCHEMA_VERSION {
-        return Err(ControlPlaneError::CapabilityDocument {
-            detail: format!(
-                "{name} required-signal schema `{}` does not equal `{REQUIRED_SIGNAL_SCHEMA_VERSION}`",
-                manifest.schema_version
-            ),
-        });
+        return Err(ControlPlaneError::capability_document(format!(
+            "{name} required-signal schema `{}` does not equal `{REQUIRED_SIGNAL_SCHEMA_VERSION}`",
+            manifest.schema_version
+        )));
     }
     let valid_remote_exposure = manifest.remote_queryable_is_valid();
     if !valid_remote_exposure {
-        return Err(ControlPlaneError::CapabilityDocument {
-            detail: format!("{name} required-signal manifest has an unsupported remote query exposure"),
-        });
+        return Err(ControlPlaneError::capability_document(
+            "required-signal manifest has an unsupported remote query exposure",
+        ));
     }
     Ok(manifest)
 }
@@ -571,14 +554,9 @@ fn component_label(component: &str) -> &'static str {
     }
 }
 
-fn parse_yaml(name: &str, input: &str) -> Result<Value, ControlPlaneError> {
-    let yaml: serde_yaml::Value =
-        serde_yaml::from_str(input).map_err(|error| ControlPlaneError::CapabilityDocument {
-            detail: format!("{name} cannot be parsed: {error}"),
-        })?;
-    serde_json::to_value(yaml).map_err(|error| ControlPlaneError::CapabilityDocument {
-        detail: format!("{name} cannot be represented as JSON: {error}"),
-    })
+fn parse_yaml(_name: &str, input: &str) -> Result<Value, ControlPlaneError> {
+    let yaml: serde_yaml::Value = serde_yaml::from_str(input).map_err(ControlPlaneError::capability_document_source)?;
+    serde_json::to_value(yaml).map_err(ControlPlaneError::capability_document_source)
 }
 
 #[derive(Clone)]
@@ -621,7 +599,7 @@ pub fn build_router(
     repository: PostgresRepository,
     documents: CapabilityDocuments,
     internal_token: impl Into<Arc<str>>,
-) -> Result<Router, ControlPlaneError> {
+) -> Result<Router, ControlPlaneRequestFailure> {
     let internal_token = internal_token.into();
     let auth = AuthService::development(internal_token.clone());
     let model_gateway = ModelGatewayService::disabled(repository.clone());
@@ -667,7 +645,7 @@ fn build_routers_with_auth(
     model_gateway: ModelGatewayService,
     workflow: WorkflowService,
     task_spawner: Option<TaskSpawner>,
-) -> Result<ControlPlaneRouters, ControlPlaneError> {
+) -> Result<ControlPlaneRouters, ControlPlaneRequestFailure> {
     let alerting = AlertingService::new(repository.clone(), workflow.clone())?;
     let evidence = EvidenceService::new(repository.clone(), evidence_blobs);
     let finops = crate::finops::FinOpsService::new(repository.clone());
@@ -826,7 +804,10 @@ fn build_routers_with_auth(
 /// # Errors
 ///
 /// Returns a configuration, database, bind, or serving error.
-pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContext) -> Result<(), ControlPlaneError> {
+pub async fn run(
+    config: ControlPlaneConfig,
+    service_context: ChildServiceContext,
+) -> Result<(), ControlPlaneRequestFailure> {
     let repository = PostgresRepository::connect(config.database_url(), config.database_max_connections()).await?;
     let autonomy_reconciler = crate::autonomy::AutonomyPauseReconciler::new(repository.clone());
     let startup_reconcile = autonomy_reconciler.run_once().await?;
@@ -867,9 +848,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
                 }
             }
         })
-        .map_err(|error| {
-            ControlPlaneError::configuration(format!("autonomy pause reconciler could not be started: {error}"))
-        })?;
+        .map_err(ControlPlaneError::configuration_source)?;
     let documents = CapabilityDocuments::embedded()?;
     let auth = AuthService::from_config(&config).await?;
     let evidence_blobs = EvidenceBlobStore::from_env(config.dev_auth_enabled())?;
@@ -911,9 +890,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
                 }
             }
         })
-        .map_err(|error| {
-            ControlPlaneError::configuration(format!("provider smoke scheduler could not be started: {error}"))
-        })?;
+        .map_err(ControlPlaneError::configuration_source)?;
     let workflow = WorkflowService::new(repository.clone(), WorkflowEventBus::new(1_024));
     let notification_worker = NotificationOutboxWorker::new(repository.clone())?;
     let integration_worker = IntegrationOutboxWorker::new(repository.clone())?;
@@ -930,9 +907,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
                 worker.run_due().await;
             }
         })
-        .map_err(|error| {
-            ControlPlaneError::configuration(format!("notification outbox worker could not be started: {error}"))
-        })?;
+        .map_err(ControlPlaneError::configuration_source)?;
     let integration_tasks = service_context.scheduled_tasks("integration-outbox");
     let mut integration_schedule =
         ScheduledTaskConfig::fixed_rate_no_overlap("phase3-integration-outbox", std::time::Duration::from_secs(5));
@@ -946,9 +921,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
                 worker.run_due().await;
             }
         })
-        .map_err(|error| {
-            ControlPlaneError::configuration(format!("integration outbox worker could not be started: {error}"))
-        })?;
+        .map_err(ControlPlaneError::configuration_source)?;
     let todo_repository = repository.clone();
     let todo_tasks = service_context.scheduled_tasks("postmortem-operator-todos");
     let mut todo_schedule = ScheduledTaskConfig::fixed_rate_no_overlap(
@@ -970,15 +943,15 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
                 }
             }
         })
-        .map_err(|error| {
-            ControlPlaneError::configuration(format!(
-                "postmortem operator todo scheduler could not be started: {error}"
-            ))
-        })?;
-    let public_listener = tokio::net::TcpListener::bind(config.bind_addr()).await?;
-    let public_addr = public_listener.local_addr()?;
-    let connector_listener = tokio::net::TcpListener::bind(config.connector_bind_addr()).await?;
-    let connector_addr = connector_listener.local_addr()?;
+        .map_err(ControlPlaneError::configuration_source)?;
+    let public_listener = tokio::net::TcpListener::bind(config.bind_addr())
+        .await
+        .map_err(ControlPlaneError::io)?;
+    let public_addr = public_listener.local_addr().map_err(ControlPlaneError::io)?;
+    let connector_listener = tokio::net::TcpListener::bind(config.connector_bind_addr())
+        .await
+        .map_err(ControlPlaneError::io)?;
+    let connector_addr = connector_listener.local_addr().map_err(ControlPlaneError::io)?;
     tracing::info!(
         bind_addr = %public_addr,
         scope = service_context.name(),
@@ -1000,7 +973,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
         )?,
         (None, None) => crate::supervised_execution::ExecutorSubmissionClient::disabled(),
         _ => {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "Executor URL and token configuration is incomplete",
             ));
         }
@@ -1044,9 +1017,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
                 }
             }
         })
-        .map_err(|error| {
-            ControlPlaneError::configuration(format!("autonomy report scheduler could not be started: {error}"))
-        })?;
+        .map_err(ControlPlaneError::configuration_source)?;
     let preventive_worker = routers.preventive_automation.clone();
     let preventive_tasks = service_context.scheduled_tasks("preventive-inspection-scheduler");
     let mut preventive_schedule = ScheduledTaskConfig::fixed_rate_no_overlap(
@@ -1063,9 +1034,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
                 preventive.run_due().await;
             }
         })
-        .map_err(|error| {
-            ControlPlaneError::configuration(format!("preventive inspection scheduler could not be started: {error}"))
-        })?;
+        .map_err(ControlPlaneError::configuration_source)?;
     let slo_worker = routers.slo.clone();
     let slo_tasks = service_context.scheduled_tasks("slo-evaluator");
     let mut slo_schedule =
@@ -1080,7 +1049,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
                 slo.run_due().await;
             }
         })
-        .map_err(|error| ControlPlaneError::configuration(format!("SLO evaluator could not be started: {error}")))?;
+        .map_err(ControlPlaneError::configuration_source)?;
     let forecast_worker = routers.forecast.clone();
     let forecast_tasks = service_context.scheduled_tasks("forecast-evaluator");
     let mut forecast_schedule =
@@ -1095,9 +1064,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
                 forecast.run_due().await;
             }
         })
-        .map_err(|error| {
-            ControlPlaneError::configuration(format!("forecast evaluator could not be started: {error}"))
-        })?;
+        .map_err(ControlPlaneError::configuration_source)?;
     let change_worker = routers.change_management.clone();
     let change_tasks = service_context.scheduled_tasks("change-scheduler");
     let mut change_schedule =
@@ -1112,7 +1079,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
                 change_management.run_due().await;
             }
         })
-        .map_err(|error| ControlPlaneError::configuration(format!("change scheduler could not be started: {error}")))?;
+        .map_err(ControlPlaneError::configuration_source)?;
     let ControlPlaneRouters {
         public,
         connector,
@@ -1142,11 +1109,7 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
                 connector_failure.cancel();
             }
         })
-        .map_err(|error| {
-            ControlPlaneError::configuration(format!(
-                "Connector-only listener could not be owned by TaskGroup: {error}"
-            ))
-        })?;
+        .map_err(ControlPlaneError::configuration_source)?;
     let public_shutdown = service_context.task_group().cancellation_token();
     let server_result = axum::serve(public_listener, public)
         .with_graceful_shutdown(async move {
@@ -1164,11 +1127,9 @@ pub async fn run(config: ControlPlaneConfig, service_context: ChildServiceContex
     let report = service_context.task_group().shutdown(config.shutdown_timeout()).await;
     report.log_if_unhealthy();
     if connector_failed.load(Ordering::Acquire) {
-        return Err(ControlPlaneError::Io(std::io::Error::other(
-            "Connector-only listener failed",
-        )));
+        return Err(ControlPlaneError::io(std::io::Error::other("Connector-only listener failed")).into());
     }
-    server_result.map_err(ControlPlaneError::Io)
+    server_result.map_err(|source| ControlPlaneError::io(source).into())
 }
 
 #[derive(Serialize)]
@@ -1288,7 +1249,7 @@ async fn onboard(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<OnboardClusterRequest>,
-) -> Result<(StatusCode, Json<OnboardOutcome>), ControlPlaneError> {
+) -> Result<(StatusCode, Json<OnboardOutcome>), ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     if !auth.roles.iter().any(|role| {
         matches!(
@@ -1296,13 +1257,13 @@ async fn onboard(
             "rocketmq:onboard" | "rocketmq:sre" | "sre-admin" | "admin"
         )
     }) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "cluster onboarding requires the rocketmq:onboard role",
         ));
     }
     if request.tenant_id != auth.tenant_id.to_string() || request.actor_subject != auth.subject {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "tenant_mismatch",
             "onboarding tenant and actor must match the authenticated identity",
         ));
@@ -1320,7 +1281,7 @@ async fn onboard(
 async fn list_clusters(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Vec<Cluster>>, ControlPlaneError> {
+) -> Result<Json<Vec<Cluster>>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     let clusters = state
         .repository
@@ -1336,7 +1297,7 @@ async fn get_cluster(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<Cluster>, ControlPlaneError> {
+) -> Result<Json<Cluster>, ControlPlaneRequestFailure> {
     let id = parse_cluster_id(&id)?;
     let auth = state.auth.authorize(&headers, Some(id)).await?;
     let cluster = state.repository.get(id).await?;
@@ -1349,7 +1310,7 @@ async fn handshake(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<HandshakeRequest>,
-) -> Result<Json<HandshakeOutcome>, ControlPlaneError> {
+) -> Result<Json<HandshakeOutcome>, ControlPlaneRequestFailure> {
     authorize_mutation(&headers, &state.internal_token)?;
     let id = parse_cluster_id(&id)?;
     let decision = request.validate()?;
@@ -1361,10 +1322,10 @@ async fn connector_handshake(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<HandshakeRequest>,
-) -> Result<Json<HandshakeOutcome>, ControlPlaneError> {
+) -> Result<Json<HandshakeOutcome>, ControlPlaneRequestFailure> {
     let principal = state.connector_channel.authenticate(&headers)?;
     if request.connector_subject != principal.subject || request.connector_issuer != principal.issuer {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "connector handshake identity does not match the mTLS principal",
         ));
@@ -1378,7 +1339,7 @@ async fn connector_cluster_state(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<Cluster>, ControlPlaneError> {
+) -> Result<Json<Cluster>, ControlPlaneRequestFailure> {
     let principal = state.connector_channel.authenticate(&headers)?;
     let id = parse_cluster_id(&id)?;
     if !state
@@ -1386,7 +1347,7 @@ async fn connector_cluster_state(
         .connector_identity_known(id, &principal.subject, &principal.issuer)
         .await?
     {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "connector identity is not registered for the requested cluster",
         ));
@@ -1398,7 +1359,7 @@ async fn get_capability(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<CapabilitySnapshot>, ControlPlaneError> {
+) -> Result<Json<CapabilitySnapshot>, ControlPlaneRequestFailure> {
     let id = parse_cluster_id(&id)?;
     let auth = state.auth.authorize(&headers, Some(id)).await?;
     let cluster = state.repository.get(id).await?;
@@ -1411,7 +1372,7 @@ async fn offboard(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<OffboardRequest>,
-) -> Result<Json<Cluster>, ControlPlaneError> {
+) -> Result<Json<Cluster>, ControlPlaneRequestFailure> {
     authorize_mutation(&headers, &state.internal_token)?;
     state
         .repository
@@ -1420,7 +1381,10 @@ async fn offboard(
         .map(Json)
 }
 
-async fn capabilities(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ControlPlaneError> {
+async fn capabilities(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ControlPlaneRequestFailure> {
     let _auth = state.auth.authorize(&headers, None).await?;
     let providers = rocketmq_sre_model_gateway::phase00_provider_descriptors();
     Ok(Json(json!({
@@ -1443,7 +1407,7 @@ async fn capabilities(State(state): State<AppState>, headers: HeaderMap) -> Resu
 async fn phase2_contract_manifest(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Phase2ContractManifest>, ControlPlaneError> {
+) -> Result<Json<Phase2ContractManifest>, ControlPlaneRequestFailure> {
     let _auth = state.auth.authorize(&headers, None).await?;
     Ok(Json(Phase2ContractManifest::default()))
 }
@@ -1452,18 +1416,18 @@ async fn coverage(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<crate::coverage::CoverageQuery>,
-) -> Result<Json<Value>, ControlPlaneError> {
+) -> Result<Json<Value>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     crate::coverage::matrix(&state, &auth, query).await.map(Json)
 }
 
-fn parse_cluster_id(value: &str) -> Result<ClusterId, ControlPlaneError> {
+fn parse_cluster_id(value: &str) -> Result<ClusterId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("cluster_not_allowed", "cluster identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("cluster_not_allowed", "cluster id is invalid"))
 }
 
-fn authorize_mutation(headers: &HeaderMap, expected_token: &str) -> Result<(), ControlPlaneError> {
+fn authorize_mutation(headers: &HeaderMap, expected_token: &str) -> Result<(), ControlPlaneRequestFailure> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -1473,13 +1437,16 @@ fn authorize_mutation(headers: &HeaderMap, expected_token: &str) -> Result<(), C
     if matches {
         Ok(())
     } else {
-        Err(ControlPlaneError::Unauthorized)
+        Err(ControlPlaneRequestFailure::unauthorized())
     }
 }
 
-fn ensure_cluster_authorized(auth: &crate::auth::AuthContext, cluster: &Cluster) -> Result<(), ControlPlaneError> {
+fn ensure_cluster_authorized(
+    auth: &crate::auth::AuthContext,
+    cluster: &Cluster,
+) -> Result<(), ControlPlaneRequestFailure> {
     if cluster.tenant_id != auth.tenant_id.to_string() || !auth.clusters.contains(&cluster.id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "tenant_mismatch",
             "cluster is outside the authenticated tenant scope",
         ));
@@ -1540,11 +1507,7 @@ mod tests {
         incomplete.semantic_registry_owners[0].backlog.clear();
         let error = validate_semantic_registry_owners(&registry, &incomplete.semantic_registry_owners, &manifests)
             .expect_err("missing exposure metadata must fail closed");
-        assert!(matches!(
-            error,
-            ControlPlaneError::CapabilityDocument { detail }
-                if detail.contains("current exposure, backlog")
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::CapabilityDocument);
 
         let broker = coverage
             .semantic_registry_owners
@@ -1564,20 +1527,12 @@ mod tests {
         client.exposure = "queryable".to_owned();
         let error = validate_semantic_registry_owners(&registry, &false_remote.semantic_registry_owners, &manifests)
             .expect_err("queryability without a protected fixed route must fail closed");
-        assert!(matches!(
-            error,
-            ControlPlaneError::CapabilityDocument { detail }
-                if detail.contains("cannot claim remote queryability")
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::CapabilityDocument);
 
         coverage.semantic_registry_owners[1].owner = coverage.semantic_registry_owners[0].owner.clone();
         let error = validate_semantic_registry_owners(&registry, &coverage.semantic_registry_owners, &manifests)
             .expect_err("duplicate owner mapping must fail closed");
-        assert!(matches!(
-            error,
-            ControlPlaneError::CapabilityDocument { detail }
-                if detail.contains("mapped more than once")
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::CapabilityDocument);
     }
 
     #[test]
@@ -1604,11 +1559,7 @@ mod tests {
         missing.semantic_registry_owners.retain(|owner| owner.owner != "mcp");
         let error = validate_semantic_registry_owners(&registry, &missing.semantic_registry_owners, &manifests)
             .expect_err("standalone manifest owners still require a coverage mapping");
-        assert!(matches!(
-            error,
-            ControlPlaneError::CapabilityDocument { detail }
-                if detail.contains("missing=[\"mcp\"]") && detail.contains("unknown=[]")
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::CapabilityDocument);
 
         let mut unknown = coverage;
         let mut owner = unknown.semantic_registry_owners[0].clone();
@@ -1620,11 +1571,7 @@ mod tests {
         unknown.semantic_registry_owners.push(owner);
         let error = validate_semantic_registry_owners(&registry, &unknown.semantic_registry_owners, &manifests)
             .expect_err("owners absent from both the registry and manifests must be rejected");
-        assert!(matches!(
-            error,
-            ControlPlaneError::CapabilityDocument { detail }
-                if detail.contains("missing=[]") && detail.contains("unknown=[\"unknown-component\"]")
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::CapabilityDocument);
     }
 
     #[test]
@@ -1677,21 +1624,13 @@ mod tests {
         let error = parse_signal_manifest("broker", &legacy)
             .err()
             .expect("legacy required-signal schema spelling must fail closed");
-        assert!(matches!(
-            error,
-            ControlPlaneError::CapabilityDocument { detail }
-                if detail.contains("does not equal `rocketmq.sre.required-signals.v1`")
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::CapabilityDocument);
 
         let unprotected = BROKER_SIGNALS.replace("protected_connector_api", "true");
         let error = parse_signal_manifest("broker", &unprotected)
             .err()
             .expect("unprotected remote query exposure must fail closed");
-        assert!(matches!(
-            error,
-            ControlPlaneError::CapabilityDocument { detail }
-                if detail.contains("unsupported remote query exposure")
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::CapabilityDocument);
     }
 
     #[tokio::test]
@@ -1773,18 +1712,20 @@ mod tests {
     #[test]
     fn mutation_authorization_is_fail_closed() {
         let mut headers = HeaderMap::new();
-        assert!(matches!(
-            authorize_mutation(&headers, "expected"),
-            Err(ControlPlaneError::Unauthorized)
-        ));
+        let missing = authorize_mutation(&headers, "expected").expect_err("missing token must fail");
+        assert_eq!(
+            missing.rejection().map(|rejection| rejection.kind()),
+            Some(crate::error::ControlPlaneRejectionKind::Unauthorized)
+        );
         headers.insert(
             axum::http::header::AUTHORIZATION,
             "Bearer wrong".parse().expect("header"),
         );
-        assert!(matches!(
-            authorize_mutation(&headers, "expected"),
-            Err(ControlPlaneError::Unauthorized)
-        ));
+        let wrong = authorize_mutation(&headers, "expected").expect_err("wrong token must fail");
+        assert_eq!(
+            wrong.rejection().map(|rejection| rejection.kind()),
+            Some(crate::error::ControlPlaneRejectionKind::Unauthorized)
+        );
         headers.insert(
             axum::http::header::AUTHORIZATION,
             "Bearer expected".parse().expect("header"),

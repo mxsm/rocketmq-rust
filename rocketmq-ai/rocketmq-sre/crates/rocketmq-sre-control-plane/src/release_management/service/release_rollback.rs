@@ -29,7 +29,7 @@ use super::support::reject_sensitive;
 use super::support::require_operator;
 use super::support::transition_release;
 use super::support::validate_bounded_text;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 use crate::release_management::model::CompleteRollbackRequest;
 use crate::release_management::model::ReleaseDetail;
@@ -44,13 +44,16 @@ impl ReleaseManagementService {
         auth: &AuthContext,
         release_id: ReleaseId,
         request: &ReleaseExecutionRequest,
-    ) -> Result<ReleaseExecutionView, ControlPlaneError> {
+    ) -> Result<ReleaseExecutionView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         validate_execution_input(request)?;
         let current = self.load_release(auth, release_id).await?;
         if current.status == ReleaseStatus::RollingBack {
             let rollback_id = current.rollback_plan_id.ok_or_else(|| {
-                ControlPlaneError::conflict_code("rollback_unavailable", "rolling-back release has no rollback plan")
+                ControlPlaneRequestFailure::conflict_code(
+                    "rollback_unavailable",
+                    "rolling-back release has no rollback plan",
+                )
             })?;
             return self
                 .existing_release_execution(auth, &current, request, rollback_id)
@@ -60,7 +63,7 @@ impl ReleaseManagementService {
             current.status,
             ReleaseStatus::CanaryRunning | ReleaseStatus::Paused | ReleaseStatus::Verifying
         ) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "release_state_invalid",
                 "rollback may start only from an active, paused, or verifying release",
             ));
@@ -75,14 +78,14 @@ impl ReleaseManagementService {
                     "typed rollback plan is unavailable",
                 )
                 .await?;
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "rollback_unavailable",
                     "release entered manual takeover because no typed rollback plan is available",
                 ));
             }
         };
         ReleaseValidator::require_rollback(&current)
-            .map_err(|error| ControlPlaneError::conflict_code("rollback_unavailable", error.to_string()))?;
+            .map_err(|_| ControlPlaneRequestFailure::conflict_code("rollback_unavailable", "operation rejected"))?;
         let rollback = self.supervised.plan(auth, rollback_id).await?;
         let approval = require_approved_release_plan(
             &rollback,
@@ -90,7 +93,7 @@ impl ReleaseManagementService {
             current.cluster_id,
             current.incident_id,
             current.rollback_plan_hash.as_deref().ok_or_else(|| {
-                ControlPlaneError::conflict_code("rollback_unavailable", "rollback plan hash is unavailable")
+                ControlPlaneRequestFailure::conflict_code("rollback_unavailable", "rollback plan hash is unavailable")
             })?,
             self.now(),
         );
@@ -151,7 +154,7 @@ impl ReleaseManagementService {
         auth: &AuthContext,
         release_id: ReleaseId,
         request: CompleteRollbackRequest,
-    ) -> Result<ReleaseDetail, ControlPlaneError> {
+    ) -> Result<ReleaseDetail, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let current = self.load_release(auth, release_id).await?;
         if current.status == ReleaseStatus::RolledBack {
@@ -159,7 +162,7 @@ impl ReleaseManagementService {
             return self.release(auth, release_id).await;
         }
         if current.status != ReleaseStatus::RollingBack {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "release_state_invalid",
                 "rollback completion requires a rolling-back release",
             ));
@@ -168,13 +171,14 @@ impl ReleaseManagementService {
         reject_sensitive(&request.reason)?;
         let observation = request.observation.into_observation(self.now());
         if observation.phase != ReleaseObservationPhase::After {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "release_observation_phase_invalid",
                 "rollback completion requires an after observation",
             ));
         }
-        ReleaseValidator::validate_observation(&observation)
-            .map_err(|error| ControlPlaneError::validation("release_observation_invalid", error.to_string()))?;
+        ReleaseValidator::validate_observation(&observation).map_err(|_| {
+            ControlPlaneRequestFailure::validation("release_observation_invalid", "release observation rejected")
+        })?;
         let execution_succeeded = if request.succeeded {
             self.require_active_execution_succeeded(auth, &current).await?;
             true
@@ -247,7 +251,7 @@ impl ReleaseManagementService {
         auth: &AuthContext,
         release_id: ReleaseId,
         request: &ReleaseTransitionRequest,
-    ) -> Result<ReleaseDetail, ControlPlaneError> {
+    ) -> Result<ReleaseDetail, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let current = self.load_release(auth, release_id).await?;
         self.enter_manual_takeover(auth, &current, "ManualTakeoverRequested", &request.reason)
@@ -261,7 +265,7 @@ impl ReleaseManagementService {
         current: &ReleaseWorkflow,
         reason_code: &str,
         reason: &str,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let transition = transition_release(
             current,
             ReleaseStatus::ManualTakeover,

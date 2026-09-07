@@ -28,7 +28,7 @@ use rocketmq_sre_contracts::ResourceKind;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
 pub(crate) const MAX_ALERTS_PER_WEBHOOK: usize = 128;
 pub(crate) const MAX_LABELS_PER_ALERT: usize = 64;
@@ -52,21 +52,21 @@ pub(crate) struct AlertmanagerWebhook {
 }
 
 impl AlertmanagerWebhook {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         if self.version != "4" {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "unsupported_schema_major",
                 "Alertmanager webhook version must be 4",
             ));
         }
         if !matches!(self.status.as_str(), "firing" | "resolved") {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_alert_schema",
                 "Alertmanager group status must be firing or resolved",
             ));
         }
         if self.alerts.is_empty() || self.alerts.len() > MAX_ALERTS_PER_WEBHOOK {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_alert_schema",
                 "Alertmanager webhook must contain between 1 and 128 alerts",
             ));
@@ -97,15 +97,15 @@ pub(crate) struct AlertmanagerAlert {
 }
 
 impl AlertmanagerAlert {
-    fn validate(&self) -> Result<(), ControlPlaneError> {
+    fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         if !matches!(self.status.as_str(), "firing" | "resolved") {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_alert_schema",
                 "alert status must be firing or resolved",
             ));
         }
         if self.ends_at.is_some_and(|ends_at| ends_at < self.starts_at) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_alert_schema",
                 "alert end time cannot precede its start time",
             ));
@@ -114,7 +114,7 @@ impl AlertmanagerAlert {
         validate_labels(&self.labels)?;
         validate_labels(&self.annotations)?;
         if !self.labels.contains_key("alertname") {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_alert_schema",
                 "Alertmanager alert requires an alertname label",
             ));
@@ -146,10 +146,10 @@ pub(crate) struct IntegrationEventRequest {
 }
 
 impl IntegrationEventRequest {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         self.validate_common()?;
         if self.source == AlertSource::Alertmanager {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_alert_source",
                 "Alertmanager events must use the Alertmanager webhook endpoint",
             ));
@@ -157,13 +157,13 @@ impl IntegrationEventRequest {
         Ok(())
     }
 
-    pub(crate) fn validate_unified_alert(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate_unified_alert(&self) -> Result<(), ControlPlaneRequestFailure> {
         self.validate_common()?;
         if matches!(
             self.source,
             AlertSource::OperatorQuery | AlertSource::Inspection | AlertSource::Deployment
         ) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_alert_source",
                 "operator, inspection, and deployment events must use their dedicated unified entry kind",
             ));
@@ -171,7 +171,7 @@ impl IntegrationEventRequest {
         Ok(())
     }
 
-    fn validate_common(&self) -> Result<(), ControlPlaneError> {
+    fn validate_common(&self) -> Result<(), ControlPlaneRequestFailure> {
         validate_bounded_text("source_event_id", &self.source_event_id, 512, false)?;
         validate_bounded_text("resource_key", &self.resource_key, 512, false)?;
         validate_bounded_text("symptom_family", &self.symptom_family, 128, false)?;
@@ -181,7 +181,7 @@ impl IntegrationEventRequest {
         }
         validate_labels(&self.labels)?;
         if self.evidence_ids.len() > 64 {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "output_too_large",
                 "integration event contains more than 64 evidence references",
             ));
@@ -255,7 +255,7 @@ pub(crate) struct IncidentNoteRequest {
 }
 
 impl IncidentNoteRequest {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         validate_bounded_text("incident note", &self.note, MAX_SUMMARY_CHARS, false)?;
         let normalized = self.note.to_ascii_lowercase();
         if [
@@ -269,7 +269,7 @@ impl IncidentNoteRequest {
         .iter()
         .any(|marker| normalized.contains(marker))
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "sensitive_data_rejected",
                 "incident note contains prohibited sensitive material",
             ));
@@ -321,13 +321,13 @@ pub(super) fn validate_bounded_text(
     value: &str,
     max_chars: usize,
     allow_empty: bool,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let trimmed = value.trim();
     if (!allow_empty && trimmed.is_empty())
         || trimmed.chars().count() > max_chars
         || trimmed.chars().any(char::is_control)
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_alert_schema",
             format!("{name} is empty, contains control characters, or exceeds {max_chars} characters"),
         ));
@@ -335,9 +335,9 @@ pub(super) fn validate_bounded_text(
     Ok(())
 }
 
-fn validate_labels(labels: &BTreeMap<String, String>) -> Result<(), ControlPlaneError> {
+fn validate_labels(labels: &BTreeMap<String, String>) -> Result<(), ControlPlaneRequestFailure> {
     if labels.len() > MAX_LABELS_PER_ALERT {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "output_too_large",
             "alert labels exceed the supported bound",
         ));
@@ -346,7 +346,7 @@ fn validate_labels(labels: &BTreeMap<String, String>) -> Result<(), ControlPlane
         validate_bounded_text("label name", key, 128, false)?;
         validate_bounded_text("label value", value, MAX_LABEL_VALUE_CHARS, true)?;
         if is_sensitive_key(key) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "sensitive_data_rejected",
                 "alert labels or annotations contain a prohibited sensitive field",
             ));

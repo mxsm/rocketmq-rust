@@ -47,50 +47,62 @@ impl ProductionTelemetryCollectorRestartClient {
         if allowed_targets.is_empty() {
             return Err(ExecutionAgentError::Configuration);
         }
-        let mut config = Config::infer().await.map_err(|_| ExecutionAgentError::Configuration)?;
+        let mut config = Config::infer()
+            .await
+            .map_err(ExecutionAgentError::configuration_source)?;
         config.proxy_url = None;
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = Client::try_from(config).map_err(|_| ExecutionAgentError::Configuration)?;
+        let client = Client::try_from(config).map_err(ExecutionAgentError::configuration_source)?;
         Ok(Self {
             client,
             allowed_targets: Arc::new(allowed_targets),
         })
     }
 
-    fn workload_for_namespace(&self, namespace: &str) -> Result<&str, ExecutionAgentError> {
+    fn workload_for_namespace(&self, namespace: &str) -> Result<&str, crate::ExecutionAgentRequestFailure> {
         let prefix = format!("{namespace}/");
         let mut workloads = self
             .allowed_targets
             .iter()
             .filter_map(|target| target.strip_prefix(&prefix));
-        let workload = workloads.next().ok_or(ExecutionAgentError::InvalidRequest)?;
+        let workload = workloads
+            .next()
+            .ok_or(crate::ExecutionAgentRequestFailure::InvalidRequest)?;
         if workloads.next().is_some() {
-            return Err(ExecutionAgentError::Configuration);
+            return Err(crate::ExecutionAgentRequestFailure::Configuration);
         }
         Ok(workload)
     }
 
-    async fn deployment(&self, namespace: &str, workload: &str) -> Result<Deployment, ExecutionAgentError> {
-        Api::<Deployment>::namespaced(self.client.clone(), namespace)
+    async fn deployment(
+        &self,
+        namespace: &str,
+        workload: &str,
+    ) -> Result<Deployment, crate::ExecutionAgentRequestFailure> {
+        Ok(Api::<Deployment>::namespaced(self.client.clone(), namespace)
             .get(workload)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)
+            .map_err(ExecutionAgentError::driver_source)?)
     }
 
-    async fn deployment_pods(&self, namespace: &str, deployment: &Deployment) -> Result<Vec<Pod>, ExecutionAgentError> {
+    async fn deployment_pods(
+        &self,
+        namespace: &str,
+        deployment: &Deployment,
+    ) -> Result<Vec<Pod>, crate::ExecutionAgentRequestFailure> {
         let selector = deployment_selector(deployment)?;
-        Api::<Pod>::namespaced(self.client.clone(), namespace)
+        Ok(Api::<Pod>::namespaced(self.client.clone(), namespace)
             .list(&ListParams::default().labels(&selector))
             .await
             .map(|list| list.items)
-            .map_err(|_| ExecutionAgentError::DriverFailed)
+            .map_err(ExecutionAgentError::driver_source)?)
     }
 
     async fn live_state(
         &self,
         namespace: &str,
         requested_pod: &str,
-    ) -> Result<(Deployment, Pod, bool), ExecutionAgentError> {
+    ) -> Result<(Deployment, Pod, bool), crate::ExecutionAgentRequestFailure> {
         let workload = self.workload_for_namespace(namespace)?;
         let deployment = self.deployment(namespace, workload).await?;
         let mut pods = self.deployment_pods(namespace, &deployment).await?;
@@ -113,7 +125,7 @@ impl ProductionTelemetryCollectorRestartClient {
         let active = replacement
             .or(requested)
             .or_else(|| pods.into_iter().rev().find(pod_ready))
-            .ok_or(ExecutionAgentError::DriverFailed)?;
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         let replaced = active.metadata.name.as_deref() != Some(requested_pod);
         Ok((deployment, active, replaced))
     }
@@ -121,24 +133,28 @@ impl ProductionTelemetryCollectorRestartClient {
     async fn replace_template_annotations(
         &self,
         request: &TelemetryCollectorRestartOneWrite,
-    ) -> Result<(), ExecutionAgentError> {
+    ) -> Result<(), crate::ExecutionAgentRequestFailure> {
         let workload = self.workload_for_namespace(&request.namespace)?.to_owned();
         let mut deployment = self.deployment(&request.namespace, &workload).await?;
         let pod = Api::<Pod>::namespaced(self.client.clone(), &request.namespace)
             .get(&request.pod)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
-        let uid = pod.metadata.uid.as_deref().ok_or(ExecutionAgentError::DriverFailed)?;
+            .map_err(ExecutionAgentError::driver_source)?;
+        let uid = pod
+            .metadata
+            .uid
+            .as_deref()
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         if uid != request.expected_uid || !pod_ready(&pod) || !pod_matches_deployment(&pod, &deployment)? {
-            return Err(ExecutionAgentError::DriverFailed);
+            return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
         }
         if !deployment_ready(&deployment)? {
-            return Err(ExecutionAgentError::DriverFailed);
+            return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
         }
         let annotations = deployment
             .spec
             .as_mut()
-            .ok_or(ExecutionAgentError::DriverFailed)?
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?
             .template
             .metadata
             .get_or_insert_with(Default::default)
@@ -153,13 +169,13 @@ impl ProductionTelemetryCollectorRestartClient {
         let stored = Api::<Deployment>::namespaced(self.client.clone(), &request.namespace)
             .replace(&workload, &PostParams::default(), &deployment)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(ExecutionAgentError::driver_source)?;
         if template_annotation(&stored, OPERATION_ANNOTATION) != Some(request.operation_id.as_str())
             || template_annotation(&stored, EXECUTION_ANNOTATION) != Some(execution_id.as_str())
             || template_annotation(&stored, PLAN_STEP_ANNOTATION) != Some(plan_step_id.as_str())
             || template_annotation(&stored, EXPECTED_UID_ANNOTATION) != Some(request.expected_uid.as_str())
         {
-            return Err(ExecutionAgentError::DriverUnknown);
+            return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
         }
         Ok(())
     }
@@ -174,11 +190,19 @@ impl TelemetryCollectorRestartClient for ProductionTelemetryCollectorRestartClie
     ) -> DriverFuture<'a, TelemetryCollectorRestartState> {
         Box::pin(async move {
             if !matches!(pipeline, "metrics" | "logs" | "traces" | "combined") {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let (deployment, active, replacement_ready) = self.live_state(namespace, pod).await?;
-            let pod_uid = active.metadata.uid.clone().ok_or(ExecutionAgentError::DriverFailed)?;
-            let active_pod = active.metadata.name.clone().ok_or(ExecutionAgentError::DriverFailed)?;
+            let pod_uid = active
+                .metadata
+                .uid
+                .clone()
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
+            let active_pod = active
+                .metadata
+                .name
+                .clone()
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
             let pod_ready = pod_ready(&active);
             let deployment_ready = deployment_ready(&deployment)?;
             // The Collector readiness probe is backed by the Collector health
@@ -210,27 +234,27 @@ impl TelemetryCollectorRestartClient for ProductionTelemetryCollectorRestartClie
     ) -> DriverFuture<'a, ()> {
         Box::pin(async move {
             if !matches!(request.pipeline.as_str(), "metrics" | "logs" | "traces" | "combined") {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             self.replace_template_annotations(request).await
         })
     }
 }
 
-fn deployment_selector(deployment: &Deployment) -> Result<String, ExecutionAgentError> {
+fn deployment_selector(deployment: &Deployment) -> Result<String, crate::ExecutionAgentRequestFailure> {
     let selector = deployment
         .spec
         .as_ref()
         .and_then(|spec| spec.selector.match_labels.as_ref())
         .filter(|labels| !labels.is_empty())
-        .ok_or(ExecutionAgentError::DriverFailed)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
     if deployment
         .spec
         .as_ref()
         .and_then(|spec| spec.selector.match_expressions.as_ref())
         .is_some_and(|expressions| !expressions.is_empty())
     {
-        return Err(ExecutionAgentError::DriverFailed);
+        return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
     }
     Ok(selector
         .iter()
@@ -239,27 +263,34 @@ fn deployment_selector(deployment: &Deployment) -> Result<String, ExecutionAgent
         .join(","))
 }
 
-fn pod_matches_deployment(pod: &Pod, deployment: &Deployment) -> Result<bool, ExecutionAgentError> {
+fn pod_matches_deployment(pod: &Pod, deployment: &Deployment) -> Result<bool, crate::ExecutionAgentRequestFailure> {
     let required = deployment
         .spec
         .as_ref()
         .and_then(|spec| spec.selector.match_labels.as_ref())
-        .ok_or(ExecutionAgentError::DriverFailed)?;
-    let labels = pod.metadata.labels.as_ref().ok_or(ExecutionAgentError::DriverFailed)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
+    let labels = pod
+        .metadata
+        .labels
+        .as_ref()
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
     Ok(required.iter().all(|(key, expected)| labels.get(key) == Some(expected)))
 }
 
-fn deployment_ready(deployment: &Deployment) -> Result<bool, ExecutionAgentError> {
+fn deployment_ready(deployment: &Deployment) -> Result<bool, crate::ExecutionAgentRequestFailure> {
     let desired = deployment
         .spec
         .as_ref()
         .and_then(|spec| spec.replicas)
-        .ok_or(ExecutionAgentError::DriverFailed)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
     let generation = deployment
         .metadata
         .generation
-        .ok_or(ExecutionAgentError::DriverFailed)?;
-    let status = deployment.status.as_ref().ok_or(ExecutionAgentError::DriverFailed)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
+    let status = deployment
+        .status
+        .as_ref()
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
     Ok(status.observed_generation == Some(generation)
         && status.ready_replicas == Some(desired)
         && status.unavailable_replicas.unwrap_or_default() == 0)

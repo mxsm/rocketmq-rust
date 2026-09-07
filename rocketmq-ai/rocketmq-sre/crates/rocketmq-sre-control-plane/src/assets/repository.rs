@@ -40,16 +40,16 @@ use super::invalid_stored_inventory;
 use super::materialize_snapshot;
 use super::verify_diff;
 use super::verify_snapshot;
-use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 impl PostgresRepository {
     pub(crate) async fn persist_inventory_snapshot(
         &self,
         auth: &AuthContext,
         request: &IngestInventoryRequest,
-    ) -> Result<(InventorySnapshot, TopologyDiff), ControlPlaneError> {
+    ) -> Result<(InventorySnapshot, TopologyDiff), ControlPlaneRequestFailure> {
         enforce_scope(auth, auth.tenant_id, request.cluster_id)?;
         let snapshot = materialize_snapshot(auth.tenant_id, request)?;
         let mut transaction = self.pool.begin().await?;
@@ -84,7 +84,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         snapshot_id: Uuid,
-    ) -> Result<InventorySnapshot, ControlPlaneError> {
+    ) -> Result<InventorySnapshot, ControlPlaneRequestFailure> {
         let snapshot = snapshot_from_pool(self, auth.tenant_id, snapshot_id).await?;
         enforce_scope(auth, snapshot.tenant_id, snapshot.cluster_id)?;
         Ok(snapshot)
@@ -94,7 +94,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
-    ) -> Result<Option<InventorySnapshot>, ControlPlaneError> {
+    ) -> Result<Option<InventorySnapshot>, ControlPlaneRequestFailure> {
         enforce_scope(auth, auth.tenant_id, cluster_id)?;
         let row = sqlx::query(
             "SELECT id
@@ -118,7 +118,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         query: &AssetListQuery,
-    ) -> Result<AssetPage, ControlPlaneError> {
+    ) -> Result<AssetPage, ControlPlaneRequestFailure> {
         enforce_scope(auth, auth.tenant_id, query.cluster_id)?;
         let limit = query.bounded_limit()?;
         let cursor = query.cursor.as_deref().map(AssetKey::parse_canonical).transpose()?;
@@ -188,7 +188,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
-    ) -> Result<Option<TopologyDiff>, ControlPlaneError> {
+    ) -> Result<Option<TopologyDiff>, ControlPlaneRequestFailure> {
         enforce_scope(auth, auth.tenant_id, cluster_id)?;
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, previous_snapshot_id, current_snapshot_id,
@@ -210,7 +210,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         diff: &TopologyDiff,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         enforce_scope(auth, diff.tenant_id, diff.cluster_id)?;
         if diff.previous_snapshot_id.is_none()
             || (diff.additions.is_empty() && diff.removals.is_empty() && diff.changes.is_empty())
@@ -299,9 +299,10 @@ impl PostgresRepository {
 async fn insert_snapshot(
     transaction: &mut Transaction<'_, Postgres>,
     snapshot: &InventorySnapshot,
-) -> Result<(), ControlPlaneError> {
-    let sources = serde_json::to_value(&snapshot.sources)
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "inventory sources cannot be serialized"))?;
+) -> Result<(), ControlPlaneRequestFailure> {
+    let sources = serde_json::to_value(&snapshot.sources).map_err(|source| {
+        ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("invalid_request", source))
+    })?;
     sqlx::query(
         "INSERT INTO asset_inventory_snapshots (
             id, tenant_id, cluster_id, sources, observed_at, freshness_seconds,
@@ -371,7 +372,7 @@ async fn insert_snapshot(
 async fn insert_diff(
     transaction: &mut Transaction<'_, Postgres>,
     diff: &TopologyDiff,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO topology_diffs (
             id, tenant_id, cluster_id, previous_observed_at, current_observed_at,
@@ -394,7 +395,7 @@ async fn insert_diff(
     .bind(diff.current_snapshot_id)
     .bind(diff.partial)
     .bind(i32::try_from(diff.suppressed_removals).map_err(|_| {
-        ControlPlaneError::validation(
+        ControlPlaneRequestFailure::validation(
             "output_too_large",
             "suppressed removal count exceeds the supported range",
         )
@@ -409,7 +410,7 @@ async fn ensure_cluster_scope(
     transaction: &mut Transaction<'_, Postgres>,
     auth: &AuthContext,
     cluster_id: ClusterId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let row = sqlx::query(
         "SELECT tenant_id, onboarding_state
          FROM clusters
@@ -419,16 +420,17 @@ async fn ensure_cluster_scope(
     .bind(cluster_id.as_uuid())
     .fetch_optional(&mut **transaction)
     .await?
-    .ok_or(ControlPlaneError::NotFound)?;
+    .ok_or(ControlPlaneRequestFailure::not_found())?;
     let stored_tenant: String = row.try_get("tenant_id")?;
     if stored_tenant != auth.tenant_id.to_string() {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "tenant_mismatch",
             "cluster tenant differs from the authenticated tenant",
         ));
     }
     if row.try_get::<String, _>("onboarding_state")? == "offboarded" {
-        return Err(ControlPlaneError::conflict(
+        return Err(ControlPlaneRequestFailure::conflict_code(
+            "cluster_offboarded",
             "offboarded clusters cannot accept inventory snapshots",
         ));
     }
@@ -439,15 +441,15 @@ pub(crate) fn enforce_scope(
     auth: &AuthContext,
     tenant_id: TenantId,
     cluster_id: ClusterId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if tenant_id != auth.tenant_id {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "tenant_mismatch",
             "inventory tenant differs from the authenticated tenant",
         ));
     }
     if !auth.clusters.contains(&cluster_id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "inventory cluster is outside the authenticated scope",
         ));
@@ -459,13 +461,13 @@ async fn snapshot_from_pool(
     repository: &PostgresRepository,
     tenant_id: TenantId,
     snapshot_id: Uuid,
-) -> Result<InventorySnapshot, ControlPlaneError> {
+) -> Result<InventorySnapshot, ControlPlaneRequestFailure> {
     let metadata = sqlx::query(SNAPSHOT_METADATA)
         .bind(snapshot_id)
         .bind(tenant_id.as_uuid())
         .fetch_optional(&repository.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
     let assets = sqlx::query(ASSET_ROWS)
         .bind(snapshot_id)
         .bind(tenant_id.as_uuid())
@@ -483,13 +485,13 @@ async fn snapshot_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     tenant_id: TenantId,
     snapshot_id: Uuid,
-) -> Result<InventorySnapshot, ControlPlaneError> {
+) -> Result<InventorySnapshot, ControlPlaneRequestFailure> {
     let metadata = sqlx::query(SNAPSHOT_METADATA)
         .bind(snapshot_id)
         .bind(tenant_id.as_uuid())
         .fetch_optional(&mut **transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
     let assets = sqlx::query(ASSET_ROWS)
         .bind(snapshot_id)
         .bind(tenant_id.as_uuid())
@@ -507,9 +509,11 @@ fn snapshot_from_rows(
     metadata: &PgRow,
     asset_rows: &[PgRow],
     edge_rows: &[PgRow],
-) -> Result<InventorySnapshot, ControlPlaneError> {
-    let sources: Vec<AssetSource> = serde_json::from_value(metadata.try_get::<Value, _>("sources")?)
-        .map_err(|_| invalid_stored_inventory("sources"))?;
+) -> Result<InventorySnapshot, ControlPlaneRequestFailure> {
+    let sources: Vec<AssetSource> =
+        serde_json::from_value(metadata.try_get::<Value, _>("sources")?).map_err(|source| {
+            ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("source_unavailable", source))
+        })?;
     let snapshot = InventorySnapshot {
         id: metadata.try_get("id")?,
         tenant_id: TenantId::from_uuid(metadata.try_get("tenant_id")?),
@@ -526,7 +530,7 @@ fn snapshot_from_rows(
     Ok(snapshot)
 }
 
-fn asset_from_row(row: &PgRow) -> Result<NormalizedAsset, ControlPlaneError> {
+fn asset_from_row(row: &PgRow) -> Result<NormalizedAsset, ControlPlaneRequestFailure> {
     let kind = row.try_get::<String, _>("kind")?.parse()?;
     let external_key = row.try_get::<String, _>("external_key")?;
     let asset = NormalizedAsset {
@@ -543,7 +547,7 @@ fn asset_from_row(row: &PgRow) -> Result<NormalizedAsset, ControlPlaneError> {
     Ok(asset)
 }
 
-fn edge_from_row(row: &PgRow) -> Result<NormalizedTopologyEdge, ControlPlaneError> {
+fn edge_from_row(row: &PgRow) -> Result<NormalizedTopologyEdge, ControlPlaneRequestFailure> {
     Ok(NormalizedTopologyEdge {
         id: TopologyEdgeId::from_uuid(row.try_get("id")?),
         from: AssetKey::parse_canonical(&row.try_get::<String, _>("from_key")?)?,
@@ -557,7 +561,7 @@ fn edge_from_row(row: &PgRow) -> Result<NormalizedTopologyEdge, ControlPlaneErro
     })
 }
 
-fn diff_from_row(row: &PgRow) -> Result<TopologyDiff, ControlPlaneError> {
+fn diff_from_row(row: &PgRow) -> Result<TopologyDiff, ControlPlaneRequestFailure> {
     let content_hash = row
         .try_get::<Option<String>, _>("content_hash")?
         .ok_or_else(|| invalid_stored_inventory("topology diff content hash"))?;
@@ -582,21 +586,24 @@ fn diff_from_row(row: &PgRow) -> Result<TopologyDiff, ControlPlaneError> {
     Ok(diff)
 }
 
-fn parse_diff_entries(value: Value) -> Result<Vec<TopologyDiffEntry>, ControlPlaneError> {
-    serde_json::from_value(value).map_err(|_| invalid_stored_inventory("topology diff entries"))
+fn parse_diff_entries(value: Value) -> Result<Vec<TopologyDiffEntry>, ControlPlaneRequestFailure> {
+    serde_json::from_value(value).map_err(|source| {
+        ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("source_unavailable", source))
+    })
 }
 
-fn json_value<T: serde::Serialize>(value: &T, field: &str) -> Result<Value, ControlPlaneError> {
-    serde_json::to_value(value)
-        .map_err(|_| ControlPlaneError::validation("invalid_request", format!("{field} cannot be serialized")))
+fn json_value<T: serde::Serialize>(value: &T, _field: &str) -> Result<Value, ControlPlaneRequestFailure> {
+    serde_json::to_value(value).map_err(|source| {
+        ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("invalid_request", source))
+    })
 }
 
-fn to_i64(value: u64, field: &str) -> Result<i64, ControlPlaneError> {
+fn to_i64(value: u64, field: &str) -> Result<i64, ControlPlaneRequestFailure> {
     i64::try_from(value)
-        .map_err(|_| ControlPlaneError::validation("invalid_request", format!("{field} exceeds the supported range")))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", format!("{field} is too large")))
 }
 
-fn to_u64(value: i64, field: &str) -> Result<u64, ControlPlaneError> {
+fn to_u64(value: i64, field: &str) -> Result<u64, ControlPlaneRequestFailure> {
     u64::try_from(value).map_err(|_| invalid_stored_inventory(field))
 }
 
@@ -641,20 +648,12 @@ mod tests {
             roles: BTreeSet::new(),
         };
         assert!(enforce_scope(&auth, tenant, allowed).is_ok());
-        assert!(matches!(
-            enforce_scope(&auth, tenant, ClusterId::new()),
-            Err(ControlPlaneError::Forbidden {
-                code: "cluster_not_allowed",
-                ..
-            })
-        ));
-        assert!(matches!(
-            enforce_scope(&auth, TenantId::new(), allowed),
-            Err(ControlPlaneError::Forbidden {
-                code: "tenant_mismatch",
-                ..
-            })
-        ));
+        let cluster_error = enforce_scope(&auth, tenant, ClusterId::new()).expect_err("cluster must be rejected");
+        assert_eq!(cluster_error.failure(), crate::ControlPlaneFailure::Forbidden);
+        assert_eq!(cluster_error.code(), "cluster_not_allowed");
+        let tenant_error = enforce_scope(&auth, TenantId::new(), allowed).expect_err("tenant must be rejected");
+        assert_eq!(tenant_error.failure(), crate::ControlPlaneFailure::Forbidden);
+        assert_eq!(tenant_error.code(), "tenant_mismatch");
     }
 
     #[tokio::test]

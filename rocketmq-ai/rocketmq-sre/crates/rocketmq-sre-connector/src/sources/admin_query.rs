@@ -49,6 +49,7 @@ use super::common::SourceOutput;
 use super::common::bounded_future;
 use super::common::validate_identifier;
 use crate::ConnectorError;
+use crate::ConnectorFailure;
 use crate::config::AdminSourceConfig;
 
 struct AdminState {
@@ -106,7 +107,7 @@ impl AdminQuerySource {
             },
             TelemetryHandle::noop(),
         )
-        .map_err(|_| ConnectorError::source("read-only Admin client runtime failed to start"))?;
+        .map_err(ConnectorError::source_error)?;
         let mut builder = ReadAdminBuilder::new(runtime.clone())
             .namesrv_addr(config.namesrv_addr.clone())
             .admin_group("rocketmq-sre-read-admin")
@@ -122,13 +123,10 @@ impl AdminQuerySource {
                     .as_ref()
                     .map(|value| value.expose().to_owned()),
             )
-            .map_err(|_| ConnectorError::configuration("read-admin credential references are invalid"))?;
+            .map_err(ConnectorError::configuration_source)?;
             builder = builder.credentials(credentials);
         }
-        let session = builder
-            .build_and_start()
-            .await
-            .map_err(|_| ConnectorError::source("read-only Admin source failed to start"))?;
+        let session = builder.build_and_start().await.map_err(ConnectorError::source_error)?;
         let mut state = self.state.lock().await;
         state.runtime = Some(runtime);
         state.session = Some(session);
@@ -149,8 +147,7 @@ impl AdminQuerySource {
             .ok_or_else(|| ConnectorError::source("read-only Admin source is not configured or ready"))?;
 
         let value = if resource == "admin/brokers" || resource == "brokers" {
-            let request = ListBrokersRequest::try_new(cluster)
-                .map_err(|_| ConnectorError::source("read-only broker query is invalid"))?;
+            let request = ListBrokersRequest::try_new(cluster).map_err(ConnectorError::source_error)?;
             serialize(
                 bounded_admin(
                     deadline,
@@ -161,8 +158,7 @@ impl AdminQuerySource {
                 .await?,
             )?
         } else if resource == "auth/diagnostics" || resource == "auth-security/diagnostics" {
-            let request = QueryBrokerDiagnosticsRequest::try_new(cluster)
-                .map_err(|_| ConnectorError::source("read-only auth diagnostics query is invalid"))?;
+            let request = QueryBrokerDiagnosticsRequest::try_new(cluster).map_err(ConnectorError::source_error)?;
             let result = bounded_admin(
                 deadline,
                 cancel,
@@ -181,8 +177,7 @@ impl AdminQuerySource {
                 | "store/rocksdb"
                 | "store/tiered"
         ) {
-            let request = QueryBrokerDiagnosticsRequest::try_new(cluster)
-                .map_err(|_| ConnectorError::source("read-only broker diagnostics query is invalid"))?;
+            let request = QueryBrokerDiagnosticsRequest::try_new(cluster).map_err(ConnectorError::source_error)?;
             let result = bounded_admin(
                 deadline,
                 cancel,
@@ -217,8 +212,7 @@ impl AdminQuerySource {
             .or_else(|| resource.strip_prefix("topic-route/"))
         {
             validate_identifier(topic, "topic")?;
-            let request = GetTopicRouteRequest::try_new(topic)
-                .map_err(|_| ConnectorError::source("read-only topic route query is invalid"))?;
+            let request = GetTopicRouteRequest::try_new(topic).map_err(ConnectorError::source_error)?;
             serialize(
                 bounded_admin(
                     deadline,
@@ -235,8 +229,8 @@ impl AdminQuerySource {
         {
             validate_identifier(consumer_group, "consumer group")?;
             validate_identifier(topic, "topic")?;
-            let request = QueryConsumerLagRequest::try_new(topic, consumer_group, false)
-                .map_err(|_| ConnectorError::source("read-only consumer lag query is invalid"))?;
+            let request =
+                QueryConsumerLagRequest::try_new(topic, consumer_group, false).map_err(ConnectorError::source_error)?;
             serialize(
                 bounded_admin(
                     deadline,
@@ -252,7 +246,7 @@ impl AdminQuerySource {
         {
             validate_identifier(consumer_group, "consumer group")?;
             let request = QueryConsumerConnectionsRequest::try_new(cluster, consumer_group, CONNECTION_QUERY_LIMIT)
-                .map_err(|_| ConnectorError::source("read-only connection metadata query is invalid"))?;
+                .map_err(ConnectorError::source_error)?;
             serialize(
                 bounded_admin(
                     deadline,
@@ -269,7 +263,7 @@ impl AdminQuerySource {
             validate_identifier(producer_group, "producer group")?;
             let request = ListProducerConnectionsRequest::try_new(cluster, CONNECTION_QUERY_LIMIT)
                 .and_then(|request| request.with_producer_group(producer_group))
-                .map_err(|_| ConnectorError::source("read-only producer connection query is invalid"))?;
+                .map_err(ConnectorError::source_error)?;
             serialize(
                 bounded_admin(
                     deadline,
@@ -291,8 +285,7 @@ impl AdminQuerySource {
             )?
         } else if let Some(value) = resource.strip_prefix("topic-subscription-config/") {
             let (consumer_group, topic) = exact_pair(value, "topic subscription config")?;
-            let topic_request = GetTopicConfigRequest::try_new(topic, None)
-                .map_err(|_| ConnectorError::source("read-only Topic configuration query is invalid"))?;
+            let topic_request = GetTopicConfigRequest::try_new(topic, None).map_err(ConnectorError::source_error)?;
             let topic_config = bounded_admin(
                 deadline,
                 cancel,
@@ -420,7 +413,7 @@ impl AdminQuerySource {
             consumer_group,
             max_rows.clamp(1, CONNECTION_QUERY_LIMIT),
         )
-        .map_err(|_| ConnectorError::source("read-only consumer connection query is invalid"))?;
+        .map_err(ConnectorError::source_error)?;
         let mut state = self.state.lock().await;
         let session = state
             .session
@@ -444,7 +437,7 @@ impl AdminQuerySource {
         cancel: &CancelSignal,
     ) -> Result<SourceOutput, ConnectorError> {
         let request = ListProducerConnectionsRequest::try_new(cluster, max_rows.clamp(1, CONNECTION_QUERY_LIMIT))
-            .map_err(|_| ConnectorError::source("read-only producer connection query is invalid"))?;
+            .map_err(ConnectorError::source_error)?;
         let mut state = self.state.lock().await;
         let session = state
             .session
@@ -521,7 +514,8 @@ async fn query_client_connections(
 }
 
 fn serialize(value: impl serde::Serialize) -> Result<Value, ConnectorError> {
-    serde_json::to_value(value).map_err(|_| ConnectorError::source("read-only Admin result cannot be encoded"))
+    serde_json::to_value(value)
+        .map_err(|source| ConnectorError::from_source(ConnectorFailure::SourceUnavailable, true, source))
 }
 
 fn exact_pair<'a>(value: &'a str, resource: &str) -> Result<(&'a str, &'a str), ConnectorError> {
@@ -544,10 +538,10 @@ async fn bounded_admin<T>(
     deadline: DateTime<Utc>,
     cancel: &CancelSignal,
     future: impl Future<Output = rocketmq_admin_core::core::AdminResult<T>>,
-    failure: &'static str,
+    _failure: &'static str,
 ) -> Result<T, ConnectorError> {
     bounded_future(deadline, cancel, async {
-        future.await.map_err(|_| ConnectorError::source(failure))
+        future.await.map_err(ConnectorError::source_error)
     })
     .await
 }

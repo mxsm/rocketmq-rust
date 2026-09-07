@@ -25,7 +25,7 @@ use rocketmq_sre_contracts::ShiftHandoffSummary;
 
 use super::report_repository::OperationsReportRepository;
 use super::repository::OperatorWorkbenchRepository;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -47,7 +47,7 @@ impl OperatorWorkbenchService {
         &self,
         auth: &AuthContext,
         incident_id: IncidentId,
-    ) -> Result<IncidentOperationsState, ControlPlaneError> {
+    ) -> Result<IncidentOperationsState, ControlPlaneRequestFailure> {
         self.incidents.state(auth, incident_id).await
     }
 
@@ -57,7 +57,7 @@ impl OperatorWorkbenchService {
         incident_id: IncidentId,
         request: &IncidentOperationRequest,
         correlation_id: CorrelationId,
-    ) -> Result<IncidentOperationResult, ControlPlaneError> {
+    ) -> Result<IncidentOperationResult, ControlPlaneRequestFailure> {
         ensure_operator(auth)?;
         self.incidents.apply(auth, incident_id, request, correlation_id).await
     }
@@ -66,7 +66,7 @@ impl OperatorWorkbenchService {
         &self,
         auth: &AuthContext,
         cluster_id: Option<ClusterId>,
-    ) -> Result<ShiftHandoffSummary, ControlPlaneError> {
+    ) -> Result<ShiftHandoffSummary, ControlPlaneRequestFailure> {
         self.reports.shift_handoff(auth, cluster_id).await
     }
 
@@ -75,7 +75,7 @@ impl OperatorWorkbenchService {
         auth: &AuthContext,
         cluster_id: Option<ClusterId>,
         window: OperationsReportWindow,
-    ) -> Result<OperationsReport, ControlPlaneError> {
+    ) -> Result<OperationsReport, ControlPlaneRequestFailure> {
         self.reports.report(auth, cluster_id, window).await
     }
 }
@@ -141,7 +141,7 @@ pub(super) fn render_report_html(report: &OperationsReport) -> String {
     )
 }
 
-fn ensure_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn ensure_operator(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.iter().any(|role| {
         matches!(
             role.as_str(),
@@ -150,7 +150,7 @@ fn ensure_operator(auth: &AuthContext) -> Result<(), ControlPlaneError> {
     }) {
         return Ok(());
     }
-    Err(ControlPlaneError::forbidden(
+    Err(ControlPlaneRequestFailure::forbidden(
         "unauthorized_scope",
         "operator role is required for incident metadata operations",
     ))

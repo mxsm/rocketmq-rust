@@ -22,7 +22,7 @@ use rocketmq_sre_contracts::is_sha256_digest;
 
 use crate::ExecutionAgentClient;
 use crate::ExecutorActionRegistry;
-use crate::ExecutorError;
+use crate::ExecutorRequestFailure;
 
 /// Deterministic local and live-state validation performed before persistence
 /// of a mutation intent.
@@ -50,7 +50,7 @@ impl ExecutionPrechecker {
     ///
     /// Rejects descriptor drift, disabled actions, unsafe parameters, Agent
     /// readiness failures, malformed hashes, and any precondition change.
-    pub async fn check(&self, request: &ExecutionRequest) -> Result<Vec<AgentReadResult>, ExecutorError> {
+    pub async fn check(&self, request: &ExecutionRequest) -> Result<Vec<AgentReadResult>, ExecutorRequestFailure> {
         let mut results = Vec::with_capacity(request.plan.steps.len());
         for step in &request.plan.steps {
             self.registry.validate_step(step)?;
@@ -72,7 +72,7 @@ impl ExecutionPrechecker {
                 || !is_sha256_digest(&result.precondition_hash)
                 || result.precondition_hash != step.precondition_hash
             {
-                return Err(ExecutorError::PreconditionChanged);
+                return Err(ExecutorRequestFailure::PreconditionChanged);
             }
             results.push(result);
         }

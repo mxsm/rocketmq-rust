@@ -27,7 +27,7 @@ use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::path::Path as ObjectPath;
 
-use crate::ControlPlaneError;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 mod credentials;
 
@@ -50,34 +50,24 @@ pub(crate) struct EvidenceBlobStore {
 }
 
 impl EvidenceBlobStore {
-    pub(crate) fn from_env(dev_mode: bool) -> Result<Self, ControlPlaneError> {
+    pub(crate) fn from_env(dev_mode: bool) -> Result<Self, ControlPlaneRequestFailure> {
         let max_inline_bytes = std::env::var("ROCKETMQ_SRE_EVIDENCE_INLINE_BYTES")
             .ok()
-            .map(|value| {
-                value.parse::<usize>().map_err(|error| {
-                    ControlPlaneError::configuration(format!("ROCKETMQ_SRE_EVIDENCE_INLINE_BYTES is invalid: {error}"))
-                })
-            })
+            .map(|value| value.parse::<usize>().map_err(ControlPlaneError::configuration_source))
             .transpose()?
             .unwrap_or(64 * 1024);
         if !(1_024..=1024 * 1024).contains(&max_inline_bytes) {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "ROCKETMQ_SRE_EVIDENCE_INLINE_BYTES must be between 1024 and 1048576",
             ));
         }
         let max_object_bytes = std::env::var("ROCKETMQ_SRE_EVIDENCE_MAX_OBJECT_BYTES")
             .ok()
-            .map(|value| {
-                value.parse::<usize>().map_err(|error| {
-                    ControlPlaneError::configuration(format!(
-                        "ROCKETMQ_SRE_EVIDENCE_MAX_OBJECT_BYTES is invalid: {error}"
-                    ))
-                })
-            })
+            .map(|value| value.parse::<usize>().map_err(ControlPlaneError::configuration_source))
             .transpose()?
             .unwrap_or(DEFAULT_MAX_OBJECT_BYTES);
         if !(max_inline_bytes..=HARD_MAX_OBJECT_BYTES).contains(&max_object_bytes) {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "ROCKETMQ_SRE_EVIDENCE_MAX_OBJECT_BYTES must be at least the inline limit and at most 67108864",
             ));
         }
@@ -85,20 +75,20 @@ impl EvidenceBlobStore {
         let local_path = optional_env(LOCAL_STORE_ENV);
         let endpoint = optional_env("ROCKETMQ_SRE_OBJECT_STORE_ENDPOINT");
         if local_path.is_some() && endpoint.is_some() {
-            return Err(ControlPlaneError::configuration(format!(
+            return Err(ControlPlaneRequestFailure::configuration(format!(
                 "{LOCAL_STORE_ENV} and ROCKETMQ_SRE_OBJECT_STORE_ENDPOINT are mutually exclusive"
             )));
         }
         if let Some(local_path) = local_path {
             if !dev_mode {
-                return Err(ControlPlaneError::configuration(format!(
+                return Err(ControlPlaneRequestFailure::configuration(format!(
                     "{LOCAL_STORE_ENV} is permitted only when ROCKETMQ_SRE_DEV_AUTH=true"
                 )));
             }
-            return Self::local(local_path, max_inline_bytes, max_object_bytes);
+            return Ok(Self::local(local_path, max_inline_bytes, max_object_bytes)?);
         }
         if endpoint.is_none() && dev_mode {
-            return Err(ControlPlaneError::configuration(format!(
+            return Err(ControlPlaneRequestFailure::configuration(format!(
                 "{LOCAL_STORE_ENV} must be configured for persistent development evidence storage"
             )));
         }
@@ -109,7 +99,7 @@ impl EvidenceBlobStore {
         let endpoint_is_http = endpoint.starts_with("http://");
         let endpoint_is_https = endpoint.starts_with("https://");
         if !endpoint_is_https && (!dev_mode || !endpoint_is_http) {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "object storage endpoint must use HTTPS outside development and HTTP or HTTPS in development",
             ));
         }
@@ -123,15 +113,11 @@ impl EvidenceBlobStore {
             .with_allow_http(allow_http)
             .with_virtual_hosted_style_request(false);
         if let Some(ca_path) = optional_env("ROCKETMQ_SRE_OBJECT_STORE_CA_PATH") {
-            let pem = std::fs::read(ca_path)
-                .map_err(|_| ControlPlaneError::configuration("object storage CA certificate cannot be read"))?;
-            let certificate = Certificate::from_pem(&pem)
-                .map_err(|_| ControlPlaneError::configuration("object storage CA certificate is invalid"))?;
+            let pem = std::fs::read(ca_path).map_err(ControlPlaneError::configuration_source)?;
+            let certificate = Certificate::from_pem(&pem).map_err(ControlPlaneError::configuration_source)?;
             builder = builder.with_client_options(ClientOptions::new().with_root_certificate(certificate));
         }
-        let store = builder
-            .build()
-            .map_err(|_| ControlPlaneError::configuration("S3-compatible evidence store cannot be configured"))?;
+        let store = builder.build().map_err(ControlPlaneError::configuration_source)?;
         Ok(Self {
             store: Arc::new(store),
             uri_prefix: Arc::from(format!("s3://{bucket}/")),
@@ -151,17 +137,14 @@ impl EvidenceBlobStore {
                 "{LOCAL_STORE_ENV} must be an absolute directory"
             )));
         }
-        std::fs::create_dir_all(path)
-            .map_err(|_| ControlPlaneError::configuration("local evidence store directory cannot be initialized"))?;
-        let metadata = std::fs::symlink_metadata(path)
-            .map_err(|_| ControlPlaneError::configuration("local evidence store directory cannot be inspected"))?;
+        std::fs::create_dir_all(path).map_err(ControlPlaneError::configuration_source)?;
+        let metadata = std::fs::symlink_metadata(path).map_err(ControlPlaneError::configuration_source)?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err(ControlPlaneError::configuration(
                 "local evidence store root must be a directory and must not be a symbolic link",
             ));
         }
-        let store = LocalFileSystem::new_with_prefix(path)
-            .map_err(|_| ControlPlaneError::configuration("local evidence store cannot be configured"))?;
+        let store = LocalFileSystem::new_with_prefix(path).map_err(ControlPlaneError::configuration_source)?;
         Ok(Self {
             store: Arc::new(store),
             uri_prefix: Arc::from(LOCAL_URI_PREFIX),
@@ -184,9 +167,9 @@ impl EvidenceBlobStore {
         self.max_inline_bytes
     }
 
-    pub(crate) async fn put(&self, path: &str, value: Vec<u8>) -> Result<String, ControlPlaneError> {
+    pub(crate) async fn put(&self, path: &str, value: Vec<u8>) -> Result<String, ControlPlaneRequestFailure> {
         if value.len() > self.max_object_bytes {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "output_too_large",
                 "evidence object exceeds the configured object size limit",
             ));
@@ -195,33 +178,43 @@ impl EvidenceBlobStore {
         self.store
             .put(&path, PutPayload::from(value))
             .await
-            .map_err(|_| ControlPlaneError::ObjectStore)?;
+            .map_err(object_store_failure)?;
         Ok(format!("{}{path}", self.uri_prefix))
     }
 
-    pub(crate) async fn get(&self, uri: &str, max_bytes: usize) -> Result<Bytes, ControlPlaneError> {
-        let path = uri
-            .strip_prefix(self.uri_prefix.as_ref())
-            .ok_or_else(|| ControlPlaneError::forbidden("unauthorized_scope", "evidence URI is outside the store"))?;
-        let result = self
-            .store
-            .get(&valid_path(path)?)
-            .await
-            .map_err(|_| ControlPlaneError::ObjectStore)?;
+    pub(crate) async fn get(&self, uri: &str, max_bytes: usize) -> Result<Bytes, ControlPlaneRequestFailure> {
+        let path = uri.strip_prefix(self.uri_prefix.as_ref()).ok_or_else(|| {
+            ControlPlaneRequestFailure::forbidden("unauthorized_scope", "evidence URI is outside the store")
+        })?;
+        let result = self.store.get(&valid_path(path)?).await.map_err(object_store_failure)?;
         let max_bytes = u64::try_from(max_bytes).map_err(|_| {
-            ControlPlaneError::validation("output_too_large", "evidence download limit exceeds the supported size")
+            ControlPlaneRequestFailure::validation(
+                "output_too_large",
+                "evidence download limit exceeds the supported size",
+            )
         })?;
         if result.meta.size > max_bytes {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "output_too_large",
                 "evidence content exceeds the bounded download size",
             ));
         }
-        result.bytes().await.map_err(|_| ControlPlaneError::ObjectStore)
+        result.bytes().await.map_err(object_store_failure)
     }
 }
 
-fn valid_path(value: &str) -> Result<ObjectPath, ControlPlaneError> {
+fn object_store_failure(source: object_store::Error) -> ControlPlaneRequestFailure {
+    match source {
+        object_store::Error::Unauthenticated { .. } => ControlPlaneRequestFailure::unauthorized(),
+        object_store::Error::PermissionDenied { .. } => ControlPlaneRequestFailure::forbidden(
+            "object_store_access_denied",
+            "object storage denied credential access",
+        ),
+        source => ControlPlaneError::object_store_source(source).into(),
+    }
+}
+
+fn valid_path(value: &str) -> Result<ObjectPath, ControlPlaneRequestFailure> {
     let is_safe = !value.is_empty()
         && value.len() <= MAX_OBJECT_PATH_BYTES
         && !value.starts_with('/')
@@ -234,13 +227,13 @@ fn valid_path(value: &str) -> Result<ObjectPath, ControlPlaneError> {
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
         });
     if !is_safe {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             "evidence object path is invalid",
         ));
     }
     ObjectPath::parse(value)
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "evidence object path is invalid"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "evidence object path is invalid"))
 }
 
 fn optional_env(name: &str) -> Option<String> {
@@ -318,13 +311,8 @@ mod tests {
             .await
             .expect_err("oversize object must fail closed");
 
-        assert!(matches!(
-            error,
-            ControlPlaneError::Validation {
-                code: "output_too_large",
-                ..
-            }
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::Validation);
+        assert_eq!(error.code(), "output_too_large");
     }
 
     #[tokio::test]

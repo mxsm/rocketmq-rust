@@ -18,7 +18,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::ContractError;
+use crate::SreContractError;
 
 /// Version negotiation information for a serialized contract family.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
@@ -56,36 +56,34 @@ impl SchemaVersion {
     ///
     /// # Errors
     ///
-    /// Returns [`ContractError::UnsupportedSchemaFamily`],
-    /// [`ContractError::UnsupportedSchemaMajor`], or
-    /// [`ContractError::MissingRequiredFeature`] on incompatibility.
+    /// Returns [`crate::SreContractError`] with
+    /// [`crate::PublicErrorCode::UnsupportedSchemaFamily`],
+    /// [`crate::PublicErrorCode::UnsupportedSchemaMajor`], or
+    /// [`crate::PublicErrorCode::MissingRequiredFeature`] on incompatibility.
     pub fn ensure_compatible(
         &self,
         supported_family: &str,
         supported_major: u16,
         supported_features: &BTreeSet<String>,
-    ) -> Result<(), ContractError> {
+    ) -> Result<(), SreContractError> {
         if self.family != supported_family {
-            return Err(ContractError::UnsupportedSchemaFamily {
-                actual: self.family.clone(),
-                supported: supported_family.to_owned(),
-            });
+            return Err(crate::SreContractError::new(
+                crate::PublicErrorCode::UnsupportedSchemaFamily,
+            ));
         }
         if self.major != supported_major {
-            return Err(ContractError::UnsupportedSchemaMajor {
-                family: self.family.clone(),
-                actual: self.major,
-                supported: supported_major,
-            });
+            return Err(crate::SreContractError::new(
+                crate::PublicErrorCode::UnsupportedSchemaMajor,
+            ));
         }
-        if let Some(feature) = self
+        if let Some(_feature) = self
             .required_features
             .iter()
             .find(|feature| !supported_features.contains(*feature))
         {
-            return Err(ContractError::MissingRequiredFeature {
-                feature: feature.clone(),
-            });
+            return Err(crate::SreContractError::new(
+                crate::PublicErrorCode::MissingRequiredFeature,
+            ));
         }
         Ok(())
     }
@@ -115,14 +113,14 @@ mod tests {
             1,
             &BTreeSet::new(),
         );
-        assert!(matches!(major_error, Err(ContractError::UnsupportedSchemaMajor { .. })));
+        assert!(matches!(major_error, Err(error) if error.code() == crate::PublicErrorCode::UnsupportedSchemaMajor));
 
         let feature_error = SchemaVersion::new("rocketmq-sre.evidence", 1, 0)
             .requiring(["unknown"])
             .ensure_compatible("rocketmq-sre.evidence", 1, &BTreeSet::new());
         assert!(matches!(
             feature_error,
-            Err(ContractError::MissingRequiredFeature { .. })
+            Err(error) if error.code() == crate::PublicErrorCode::MissingRequiredFeature
         ));
     }
 }

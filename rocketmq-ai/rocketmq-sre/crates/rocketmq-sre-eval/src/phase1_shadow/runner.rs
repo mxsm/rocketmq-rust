@@ -29,15 +29,15 @@ use serde::Serialize;
 use super::ProviderMode;
 use super::ScenarioCase;
 use super::ScenarioClass;
-use super::ShadowEvalError;
+use super::ShadowEvalFailure;
 use super::ShadowManifest;
 use super::ShadowModelSynthesis;
 use super::build_model_request;
 use super::fixture::load_diagnostic_fixture;
 use super::fixture::status_name;
-use super::load_shadow_manifest;
+use super::manifest::load_shadow_manifest;
 use super::provider::invoke_provider;
-use super::validate_model_response;
+use super::security::validate_model_response;
 
 /// One successful normal, fault, or missing-evidence replay.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -95,11 +95,20 @@ impl ShadowHarness {
     /// # Errors
     ///
     /// Returns manifest, policy, path, or registry validation failures.
-    pub fn load(manifest_path: &Path, fixtures_root: &Path) -> Result<Self, ShadowEvalError> {
+    pub fn load(manifest_path: &Path, fixtures_root: &Path) -> Result<crate::EvalOutcome<Self>, crate::EvalError> {
+        match Self::load_inner(manifest_path, fixtures_root) {
+            Ok(harness) => Ok(crate::EvalOutcome::Completed(harness)),
+            Err(failure) => failure.into_boundary(),
+        }
+    }
+
+    fn load_inner(manifest_path: &Path, fixtures_root: &Path) -> Result<Self, ShadowEvalFailure> {
         let manifest = load_shadow_manifest(manifest_path)?;
-        let engine = DiagnosticEngine::new(
-            wave_a_registry().map_err(|error| ShadowEvalError::InvalidManifest(error.to_string()))?,
-        );
+        let engine = DiagnosticEngine::new(wave_a_registry().map_err(|_| {
+            ShadowEvalFailure::Diagnostic(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+            ))
+        })?);
         Ok(Self {
             manifest,
             fixtures_root: fixtures_root.to_path_buf(),
@@ -123,15 +132,26 @@ impl ShadowHarness {
         &self,
         provider_mode: ProviderMode,
         requested_cluster: ClusterId,
-    ) -> Result<ShadowSuiteSummary, ShadowEvalError> {
+    ) -> Result<crate::EvalOutcome<ShadowSuiteSummary>, crate::EvalError> {
+        match self.run_inner(provider_mode, requested_cluster) {
+            Ok(summary) => Ok(crate::EvalOutcome::Completed(summary)),
+            Err(failure) => failure.into_boundary(),
+        }
+    }
+
+    fn run_inner(
+        &self,
+        provider_mode: ProviderMode,
+        requested_cluster: ClusterId,
+    ) -> Result<ShadowSuiteSummary, ShadowEvalFailure> {
         let suite_started_at = Instant::now();
         if requested_cluster != self.manifest.cluster_id {
-            return Err(ShadowEvalError::ClusterScopeMismatch {
-                requested: requested_cluster.to_string(),
-                authorized: self.manifest.cluster_id.to_string(),
+            return Err(ShadowEvalFailure::ClusterScopeMismatch {
+                _requested: requested_cluster.to_string(),
+                _authorized: self.manifest.cluster_id.to_string(),
             });
         }
-        self.manifest.policy.validate()?;
+        self.manifest.policy.validate_inner()?;
 
         let mut results = Vec::with_capacity(24);
         let mut class_counts = BTreeMap::new();
@@ -188,7 +208,7 @@ impl ShadowHarness {
         scenario: &super::ScenarioDefinition,
         case: &ScenarioCase,
         provider_mode: ProviderMode,
-    ) -> Result<ScenarioResult, ShadowEvalError> {
+    ) -> Result<ScenarioResult, ShadowEvalFailure> {
         let started_at = Instant::now();
         let fixture_path = self.fixtures_root.join(&case.fixture);
         let fixture = load_diagnostic_fixture(&fixture_path, self.manifest.tenant_id, self.manifest.cluster_id)?;
@@ -254,17 +274,17 @@ impl ShadowHarness {
             .map(|snapshot| snapshot.evidence_id)
             .collect::<BTreeSet<_>>();
         let citations = report_citations(&report);
-        super::validate_citations(&authorized, &citations)?;
+        super::security::validate_citations(&authorized, &citations)?;
         let response_content = serde_json::to_string(&ShadowModelSynthesis {
             summary: format!("{} replay completed with status {actual_status}", scenario.pack),
             citations: citations.clone(),
             read_only_recommendations: vec!["Review cited Evidence and the validated Wave A runbook.".to_owned()],
             execution_eligible: false,
         })
-        .map_err(|error| ShadowEvalError::InvalidSynthesis(error.to_string()))?;
+        .map_err(ShadowEvalFailure::SynthesisEncode)?;
         let request = build_model_request(&scenario.description, &self.manifest.policy);
         if request.tools.iter().any(|tool| tool.mutates_cluster) {
-            return Err(ShadowEvalError::UnsafePolicy(
+            return Err(ShadowEvalFailure::UnsafePolicy(
                 "model-visible tool unexpectedly mutates the cluster".to_owned(),
             ));
         }
@@ -273,7 +293,7 @@ impl ShadowHarness {
             ModelInvocationOutcome::Completed(result) => {
                 let synthesis = validate_model_response(&result.response, &authorized, &self.manifest.policy)?;
                 if result.diagnosis_selection.execution_eligible || synthesis.execution_eligible {
-                    return Err(ShadowEvalError::UnsafePolicy(
+                    return Err(ShadowEvalFailure::UnsafePolicy(
                         "mock provider made a shadow result executable".to_owned(),
                     ));
                 }
@@ -281,7 +301,7 @@ impl ShadowHarness {
             }
             ModelInvocationOutcome::RulesOnly(result) => {
                 if result.execution_eligible || result.primary_model_invocation_id.is_some() {
-                    return Err(ShadowEvalError::UnsafePolicy(
+                    return Err(ShadowEvalFailure::UnsafePolicy(
                         "rules-only fallback became executable".to_owned(),
                     ));
                 }
@@ -334,9 +354,9 @@ const fn class_name(class: ScenarioClass) -> &'static str {
     }
 }
 
-fn fixture_mismatch(path: &Path, detail: String) -> ShadowEvalError {
-    ShadowEvalError::InvalidFixture {
-        path: path.to_path_buf(),
-        detail,
+fn fixture_mismatch(path: &Path, detail: String) -> ShadowEvalFailure {
+    ShadowEvalFailure::InvalidFixture {
+        _path: path.to_path_buf(),
+        _detail: detail,
     }
 }

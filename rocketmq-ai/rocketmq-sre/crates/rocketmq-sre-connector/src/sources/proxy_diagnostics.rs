@@ -66,7 +66,7 @@ pub(super) async fn query(
             Ok(output) => {
                 signals.insert(name.to_owned(), output.content);
             }
-            Err(error) if error.code == crate::ConnectorErrorCode::SourceUnavailable => {
+            Err(error) if error.failure() == crate::ConnectorFailure::SourceUnavailable => {
                 missing = missing.saturating_add(1);
                 signals.insert(name.to_owned(), missing_signal());
             }

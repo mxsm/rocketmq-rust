@@ -19,7 +19,7 @@ use rocketmq_sre_contracts::ModelProfileId;
 use serde_json::json;
 
 use super::ModelGatewayService;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 use crate::models::lifecycle::ModelProfileLifecyclePage;
 #[cfg(test)]
@@ -34,7 +34,7 @@ impl ModelGatewayService {
     pub(crate) async fn profile_lifecycles(
         &self,
         auth: &AuthContext,
-    ) -> Result<ModelProfileLifecyclePage, ControlPlaneError> {
+    ) -> Result<ModelProfileLifecyclePage, ControlPlaneRequestFailure> {
         self.configured_profiles(auth).await?;
         Ok(ModelProfileLifecyclePage {
             schema_version: "rocketmq-sre.model-profile-lifecycle.v1",
@@ -47,7 +47,7 @@ impl ModelGatewayService {
         &self,
         auth: &AuthContext,
         profile_id: ModelProfileId,
-    ) -> Result<ModelProfileLifecycleView, ControlPlaneError> {
+    ) -> Result<ModelProfileLifecycleView, ControlPlaneRequestFailure> {
         self.configured_profiles(auth).await?;
         self.repository
             .model_profile_lifecycle(auth.tenant_id, profile_id)
@@ -60,11 +60,11 @@ impl ModelGatewayService {
         profile_id: ModelProfileId,
         request: &ModelProfileLifecycleTransitionRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ModelProfileLifecycleView, ControlPlaneError> {
+    ) -> Result<ModelProfileLifecycleView, ControlPlaneRequestFailure> {
         require_model_governance(auth)?;
         request
             .validate()
-            .map_err(|detail| ControlPlaneError::validation("invalid_model_lifecycle_transition", detail))?;
+            .map_err(|detail| ControlPlaneRequestFailure::validation("invalid_model_lifecycle_transition", detail))?;
         self.configured_profiles(auth).await?;
         self.repository
             .transition_model_profile_lifecycle(auth.tenant_id, profile_id, request, &auth.subject, correlation_id)
@@ -80,11 +80,11 @@ impl ModelGatewayService {
         profile_id: ModelProfileId,
         request: &ModelProfileRollbackRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ModelProfileLifecycleView, ControlPlaneError> {
+    ) -> Result<ModelProfileLifecycleView, ControlPlaneRequestFailure> {
         require_model_governance(auth)?;
         request
             .validate()
-            .map_err(|detail| ControlPlaneError::validation("invalid_model_rollback", detail))?;
+            .map_err(|detail| ControlPlaneRequestFailure::validation("invalid_model_rollback", detail))?;
         self.configured_profiles(auth).await?;
         let active_profile_id = self
             .repository
@@ -108,14 +108,14 @@ impl ModelGatewayService {
         auth: &AuthContext,
         profile_name: &str,
         correlation_id: CorrelationId,
-    ) -> Result<ModelProfileLifecycleView, ControlPlaneError> {
+    ) -> Result<ModelProfileLifecycleView, ControlPlaneRequestFailure> {
         require_model_governance(auth)?;
         let profile = self
             .configured_profiles(auth)
             .await?
             .into_iter()
             .find(|profile| profile.profile.id == profile_name)
-            .ok_or(ControlPlaneError::NotFound)?;
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         let lifecycle = self
             .repository
             .model_profile_lifecycle(auth.tenant_id, profile.id)
@@ -163,7 +163,7 @@ impl ModelGatewayService {
     }
 }
 
-pub(super) fn require_model_governance(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+pub(super) fn require_model_governance(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth
         .roles
         .iter()
@@ -171,7 +171,7 @@ pub(super) fn require_model_governance(auth: &AuthContext) -> Result<(), Control
     {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "model_governance_role_required",
             "model profile lifecycle changes require the model-governance role",
         ))

@@ -33,7 +33,7 @@ use super::PollRequest;
 use super::PollResponse;
 use super::PostgresConnectorChannelStore;
 use super::RegisterAcknowledgement;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 use crate::assets::AssetTopologyService;
 use crate::assets::IngestInventoryRequest;
@@ -83,7 +83,7 @@ pub(crate) async fn register_connector(
     State(service): State<PostgresConnectorChannelService>,
     headers: HeaderMap,
     Json(request): Json<ConnectorRegister>,
-) -> Result<Json<RegisterAcknowledgement>, ControlPlaneError> {
+) -> Result<Json<RegisterAcknowledgement>, ControlPlaneRequestFailure> {
     let principal = service.authenticate(&headers)?;
     service.register(&principal, &request).await.map(Json)
 }
@@ -92,7 +92,7 @@ pub(crate) async fn heartbeat_connector(
     State(service): State<PostgresConnectorChannelService>,
     headers: HeaderMap,
     Json(request): Json<ConnectorHeartbeat>,
-) -> Result<StatusCode, ControlPlaneError> {
+) -> Result<StatusCode, ControlPlaneRequestFailure> {
     let principal = service.authenticate(&headers)?;
     service.heartbeat(&principal, &request).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -103,7 +103,7 @@ pub(crate) async fn poll_commands(
     Path(session_id): Path<ConnectorSessionId>,
     headers: HeaderMap,
     Json(request): Json<PollRequest>,
-) -> Result<Json<PollResponse>, ControlPlaneError> {
+) -> Result<Json<PollResponse>, ControlPlaneRequestFailure> {
     let principal = service.authenticate(&headers)?;
     service.poll(&principal, session_id, &request).await.map(Json)
 }
@@ -113,7 +113,7 @@ pub(crate) async fn submit_response(
     Path(session_id): Path<ConnectorSessionId>,
     headers: HeaderMap,
     Json(response): Json<ConnectorResponseEnvelope>,
-) -> Result<StatusCode, ControlPlaneError> {
+) -> Result<StatusCode, ControlPlaneRequestFailure> {
     let principal = service.authenticate(&headers)?;
     service.submit_response(&principal, session_id, &response).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -125,11 +125,11 @@ pub(crate) async fn upload_inventory(
     Path(session_id): Path<ConnectorSessionId>,
     headers: HeaderMap,
     Json(request): Json<IngestInventoryRequest>,
-) -> Result<StatusCode, ControlPlaneError> {
+) -> Result<StatusCode, ControlPlaneRequestFailure> {
     let principal = service.authenticate(&headers)?;
     let scope = service.authorize_session(&principal, session_id).await?;
     if request.cluster_id != scope.cluster_id {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "inventory upload crosses the registered Connector cluster boundary",
         ));

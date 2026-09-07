@@ -46,9 +46,9 @@ use super::model::ExternalApprovalSource;
 use super::model::NewExecutionProjection;
 use super::model::PersistedPlanProjection;
 use super::model::StoredExecutionProjection;
-use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 mod critic;
 mod support;
@@ -62,7 +62,7 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         incident_id: IncidentId,
         diagnosis_revision_id: DiagnosisRevisionId,
-    ) -> Result<DiagnosisPlanContext, ControlPlaneError> {
+    ) -> Result<DiagnosisPlanContext, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT i.tenant_id, i.cluster_id, d.id, d.status, d.evidence_ids,
                     d.primary_model_invocation_id, d.execution_eligible, d.partial
@@ -77,7 +77,7 @@ impl PostgresRepository {
         .bind(cluster_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let evidence_ids = row
             .try_get::<Vec<Uuid>, _>("evidence_ids")?
             .into_iter()
@@ -103,7 +103,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         incident_id: IncidentId,
         evidence_id: EvidenceId,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         sqlx::query_scalar(
             "SELECT EXISTS (
                 SELECT 1
@@ -123,14 +123,14 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_one(&self.pool)
         .await
-        .map_err(ControlPlaneError::from)
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::from(source)))
     }
 
     pub(super) async fn next_action_plan_version(
         &self,
         auth: &AuthContext,
         incident_id: IncidentId,
-    ) -> Result<u32, ControlPlaneError> {
+    ) -> Result<u32, ControlPlaneRequestFailure> {
         let next: i64 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(p.version), 0)::BIGINT + 1
              FROM action_plans p
@@ -142,8 +142,9 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_one(&self.pool)
         .await?;
-        u32::try_from(next)
-            .map_err(|_| ControlPlaneError::validation("invalid_plan_version", "plan version exceeds u32"))
+        u32::try_from(next).map_err(|source| {
+            ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("invalid_plan_version", source))
+        })
     }
 
     pub(super) async fn persist_plan_bundle(
@@ -152,7 +153,7 @@ impl PostgresRepository {
         risk: ActionRisk,
         decision: &PolicyDecision,
         audits: &[AuditEvent],
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO action_plans (
@@ -174,7 +175,7 @@ impl PostgresRepository {
         .bind(plan.diagnosis_revision.as_uuid())
         .bind(plan.primary_model_invocation_id.as_uuid())
         .bind(i32::try_from(plan.version).map_err(|_| {
-            ControlPlaneError::validation("invalid_plan_version", "plan version exceeds PostgreSQL INTEGER")
+            ControlPlaneRequestFailure::validation("invalid_plan_version", "plan version exceeds PostgreSQL INTEGER")
         })?)
         .bind(&plan.plan_hash)
         .bind(&plan.evidence_hash)
@@ -199,7 +200,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: ActionPlanId,
-    ) -> Result<PersistedPlanProjection, ControlPlaneError> {
+    ) -> Result<PersistedPlanProjection, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT request_snapshot, risk, status, submitted_at
              FROM action_plans
@@ -209,12 +210,12 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let mut plan: ActionPlan = from_json(row.try_get("request_snapshot")?)?;
         plan.status = parse_plan_status(row.try_get("status")?)?;
         plan.submitted_at = row.try_get("submitted_at")?;
         if !auth.clusters.contains(&plan.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "plan cluster is outside the authenticated scope",
             ));
@@ -229,7 +230,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         plan: &ActionPlan,
-    ) -> Result<Option<PolicyDecision>, ControlPlaneError> {
+    ) -> Result<Option<PolicyDecision>, ControlPlaneRequestFailure> {
         let snapshot: Option<Value> = sqlx::query_scalar(
             "SELECT decision_snapshot
              FROM policy_decisions
@@ -251,7 +252,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         plan: &ActionPlan,
-    ) -> Result<Option<ApprovalRecord>, ControlPlaneError> {
+    ) -> Result<Option<ApprovalRecord>, ControlPlaneRequestFailure> {
         let snapshot: Option<Value> = sqlx::query_scalar(
             "SELECT approval_snapshot
              FROM approvals
@@ -274,7 +275,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         plan: &ActionPlan,
         now: DateTime<Utc>,
-    ) -> Result<Option<ApprovalGrant>, ControlPlaneError> {
+    ) -> Result<Option<ApprovalGrant>, ControlPlaneRequestFailure> {
         let snapshot: Option<Value> = sqlx::query_scalar(
             "SELECT approval_grant_snapshot
              FROM approvals
@@ -304,7 +305,7 @@ impl PostgresRepository {
         next_status: PlanStatus,
         audits: &[AuditEvent],
         external_source: Option<&ExternalApprovalSource>,
-    ) -> Result<ActionPlan, ControlPlaneError> {
+    ) -> Result<ActionPlan, ControlPlaneRequestFailure> {
         let expected = expected_statuses
             .iter()
             .map(|status| plan_status_name(*status))
@@ -324,7 +325,7 @@ impl PostgresRepository {
         .execute(&mut *transaction)
         .await?;
         if changed.rows_affected() != 1 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "plan_state_changed",
                 "plan is no longer in an approvable state",
             ));
@@ -402,7 +403,7 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         resource_key: &str,
         action: ExecutionAction,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         sqlx::query_scalar(
             "SELECT EXISTS (
                 SELECT 1
@@ -418,7 +419,7 @@ impl PostgresRepository {
         .bind(action.id())
         .fetch_one(&self.pool)
         .await
-        .map_err(ControlPlaneError::from)
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::from(source)))
     }
 
     pub(super) async fn resource_has_active_change(
@@ -426,7 +427,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         cluster_id: ClusterId,
         resource_key: &str,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         sqlx::query_scalar(
             "SELECT EXISTS (
                 SELECT 1
@@ -441,14 +442,14 @@ impl PostgresRepository {
         .bind(resource_key)
         .fetch_one(&self.pool)
         .await
-        .map_err(ControlPlaneError::from)
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::from(source)))
     }
 
     pub(super) async fn persist_execution_submission(
         &self,
         projection: &NewExecutionProjection,
         audit: &AuditEvent,
-    ) -> Result<StoredExecutionProjection, ControlPlaneError> {
+    ) -> Result<StoredExecutionProjection, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let inserted = sqlx::query(
             "INSERT INTO executions (
@@ -494,7 +495,7 @@ impl PostgresRepository {
             || existing.request.plan.plan_hash != projection.request.plan.plan_hash
             || existing.request.requested_by != projection.request.requested_by
         {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "idempotency_conflict",
                 "idempotency key is already bound to a different execution request",
             ));
@@ -507,7 +508,7 @@ impl PostgresRepository {
         execution_id: ExecutionId,
         rejected_at: DateTime<Utc>,
         audit: &AuditEvent,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let updated = sqlx::query(
             "UPDATE executions
@@ -520,20 +521,17 @@ impl PostgresRepository {
         .await?;
         if updated.rows_affected() != 1 {
             transaction.rollback().await?;
-            return Err(ControlPlaneError::conflict_code(
-                "execution_state_changed",
-                "execution is no longer pending dispatch",
-            ));
+            return Ok(false);
         }
         insert_audit(&mut transaction, audit).await?;
         transaction.commit().await?;
-        Ok(())
+        Ok(true)
     }
 
     async fn execution_by_idempotency(
         &self,
         idempotency_key: &str,
-    ) -> Result<StoredExecutionProjection, ControlPlaneError> {
+    ) -> Result<StoredExecutionProjection, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT request_snapshot, state, started_at
              FROM executions
@@ -542,7 +540,7 @@ impl PostgresRepository {
         .bind(idempotency_key)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         Ok(StoredExecutionProjection {
             request: from_json(row.try_get("request_snapshot")?)?,
             state: parse_execution_state(row.try_get("state")?)?,
@@ -554,7 +552,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         idempotency_key: &str,
-    ) -> Result<Option<StoredExecutionProjection>, ControlPlaneError> {
+    ) -> Result<Option<StoredExecutionProjection>, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT request_snapshot, state, started_at
              FROM executions
@@ -573,7 +571,7 @@ impl PostgresRepository {
             submitted_at: row.try_get("started_at")?,
         };
         if !auth.clusters.contains(&projection.request.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "execution cluster is outside the authenticated scope",
             ));
@@ -585,7 +583,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: ExecutionId,
-    ) -> Result<StoredExecutionProjection, ControlPlaneError> {
+    ) -> Result<StoredExecutionProjection, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT request_snapshot, state, started_at
              FROM executions
@@ -595,14 +593,14 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let projection = StoredExecutionProjection {
             request: from_json(row.try_get("request_snapshot")?)?,
             state: parse_execution_state(row.try_get("state")?)?,
             submitted_at: row.try_get("started_at")?,
         };
         if !auth.clusters.contains(&projection.request.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "execution cluster is outside the authenticated scope",
             ));
@@ -615,7 +613,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         correlation_id: CorrelationId,
         limit: i64,
-    ) -> Result<Vec<AuditEvent>, ControlPlaneError> {
+    ) -> Result<Vec<AuditEvent>, ControlPlaneRequestFailure> {
         let clusters = auth.clusters.iter().map(|id| id.as_uuid()).collect::<Vec<_>>();
         let snapshots: Vec<Value> = sqlx::query_scalar(
             "SELECT event_snapshot
@@ -640,7 +638,7 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         include_cleared: bool,
         limit: i64,
-    ) -> Result<Vec<ResourceQuarantine>, ControlPlaneError> {
+    ) -> Result<Vec<ResourceQuarantine>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT id, tenant_id, cluster_id, resource_key, action_id,
                     reason_code, source_execution_id, evidence_ids,
@@ -665,7 +663,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: ResourceQuarantineId,
-    ) -> Result<ResourceQuarantine, ControlPlaneError> {
+    ) -> Result<ResourceQuarantine, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, resource_key, action_id,
                     reason_code, source_execution_id, evidence_ids,
@@ -678,10 +676,10 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let quarantine = quarantine_from_row(&row)?;
         if !auth.clusters.contains(&quarantine.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "quarantine cluster is outside the authenticated scope",
             ));
@@ -697,7 +695,7 @@ impl PostgresRepository {
         evidence_ids: &[EvidenceId],
         cleared_at: DateTime<Utc>,
         audits: &[AuditEvent],
-    ) -> Result<ResourceQuarantine, ControlPlaneError> {
+    ) -> Result<ResourceQuarantine, ControlPlaneRequestFailure> {
         let evidence_ids = evidence_ids.iter().map(|id| id.as_uuid()).collect::<Vec<_>>();
         let mut transaction = self.pool.begin().await?;
         for audit in audits.iter().take(1) {
@@ -721,7 +719,10 @@ impl PostgresRepository {
         .fetch_optional(&mut *transaction)
         .await?
         .ok_or_else(|| {
-            ControlPlaneError::conflict_code("quarantine_state_changed", "resource quarantine was already cleared")
+            ControlPlaneRequestFailure::conflict_code(
+                "quarantine_state_changed",
+                "resource quarantine was already cleared",
+            )
         })?;
         for audit in audits.iter().skip(1) {
             insert_audit(&mut transaction, audit).await?;
@@ -731,14 +732,14 @@ impl PostgresRepository {
     }
 }
 
-fn map_external_approval_error(error: sqlx::Error) -> ControlPlaneError {
+fn map_external_approval_error(error: sqlx::Error) -> ControlPlaneRequestFailure {
     if let sqlx::Error::Database(database) = &error
         && database.is_unique_violation()
     {
-        return ControlPlaneError::conflict_code(
+        return ControlPlaneRequestFailure::conflict_code(
             "external_approval_duplicate",
             "external approval event was already applied",
         );
     }
-    ControlPlaneError::Database(error)
+    ControlPlaneRequestFailure::from(ControlPlaneError::database(error))
 }

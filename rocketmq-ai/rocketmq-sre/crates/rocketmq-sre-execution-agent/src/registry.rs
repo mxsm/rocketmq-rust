@@ -19,7 +19,7 @@ use rocketmq_sre_contracts::AgentStepRequest;
 use rocketmq_sre_contracts::ExecutionAction;
 
 use crate::AgentActionHandler;
-use crate::ExecutionAgentError;
+use crate::ExecutionAgentRequestFailure;
 use rocketmq_sre_contracts::AgentReadRequest;
 use rocketmq_sre_contracts::EXECUTION_AGENT_SCHEMA_VERSION;
 use rocketmq_sre_contracts::ExecutionAgentCapabilities;
@@ -50,12 +50,44 @@ impl AgentDriverRegistry {
         Self::default()
     }
 
+    pub(crate) fn register_configured_admin<T>(&mut self, action: ExecutionAction, handler: T)
+    where
+        T: AgentActionHandler + 'static,
+    {
+        self.register_configured(action, DriverFamily::AdminCore, Arc::new(handler));
+    }
+
+    pub(crate) fn register_configured_kubernetes<T>(&mut self, action: ExecutionAction, handler: T)
+    where
+        T: AgentActionHandler + 'static,
+    {
+        self.register_configured(action, DriverFamily::Kubernetes, Arc::new(handler));
+    }
+
+    pub(crate) fn register_configured_config<T>(&mut self, action: ExecutionAction, handler: T)
+    where
+        T: AgentActionHandler + 'static,
+    {
+        self.register_configured(action, DriverFamily::Config, Arc::new(handler));
+    }
+
+    fn register_configured(
+        &mut self,
+        action: ExecutionAction,
+        family: DriverFamily,
+        handler: Arc<dyn AgentActionHandler>,
+    ) {
+        debug_assert_eq!(expected_family(action), Some(family));
+        let previous = self.handlers.insert(action, RegisteredHandler { family, handler });
+        debug_assert!(previous.is_none());
+    }
+
     /// Registers one exact Admin action.
     ///
     /// # Errors
     ///
     /// Rejects wrong driver families and duplicate registrations.
-    pub fn register_admin<T>(&mut self, action: ExecutionAction, handler: T) -> Result<(), ExecutionAgentError>
+    pub fn register_admin<T>(&mut self, action: ExecutionAction, handler: T) -> Result<(), ExecutionAgentRequestFailure>
     where
         T: AgentActionHandler + 'static,
     {
@@ -67,7 +99,11 @@ impl AgentDriverRegistry {
     /// # Errors
     ///
     /// Rejects wrong driver families and duplicate registrations.
-    pub fn register_kubernetes<T>(&mut self, action: ExecutionAction, handler: T) -> Result<(), ExecutionAgentError>
+    pub fn register_kubernetes<T>(
+        &mut self,
+        action: ExecutionAction,
+        handler: T,
+    ) -> Result<(), ExecutionAgentRequestFailure>
     where
         T: AgentActionHandler + 'static,
     {
@@ -79,7 +115,11 @@ impl AgentDriverRegistry {
     /// # Errors
     ///
     /// Rejects wrong driver families and duplicate registrations.
-    pub fn register_config<T>(&mut self, action: ExecutionAction, handler: T) -> Result<(), ExecutionAgentError>
+    pub fn register_config<T>(
+        &mut self,
+        action: ExecutionAction,
+        handler: T,
+    ) -> Result<(), ExecutionAgentRequestFailure>
     where
         T: AgentActionHandler + 'static,
     {
@@ -91,40 +131,43 @@ impl AgentDriverRegistry {
         action: ExecutionAction,
         family: DriverFamily,
         handler: Arc<dyn AgentActionHandler>,
-    ) -> Result<(), ExecutionAgentError> {
+    ) -> Result<(), ExecutionAgentRequestFailure> {
         if expected_family(action) != Some(family) || self.handlers.contains_key(&action) {
-            return Err(ExecutionAgentError::InvalidRequest);
+            return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
         }
         self.handlers.insert(action, RegisteredHandler { family, handler });
         Ok(())
     }
 
-    pub(crate) fn handler(&self, action: ExecutionAction) -> Result<Arc<dyn AgentActionHandler>, ExecutionAgentError> {
+    pub(crate) fn handler(
+        &self,
+        action: ExecutionAction,
+    ) -> Result<Arc<dyn AgentActionHandler>, ExecutionAgentRequestFailure> {
         self.handlers
             .get(&action)
             .map(|registered| Arc::clone(&registered.handler))
-            .ok_or(ExecutionAgentError::ActionNotRegistered)
+            .ok_or(crate::ExecutionAgentRequestFailure::ActionNotRegistered)
     }
 
-    pub(crate) fn validate_read(&self, request: &AgentReadRequest) -> Result<(), ExecutionAgentError> {
+    pub(crate) fn validate_read(&self, request: &AgentReadRequest) -> Result<(), ExecutionAgentRequestFailure> {
         if request.schema_version != EXECUTION_AGENT_SCHEMA_VERSION
             || request.descriptor_version.trim().is_empty()
             || request.target.trim().is_empty()
             || request.parameters.as_object().is_none()
         {
-            return Err(ExecutionAgentError::InvalidRequest);
+            return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
         }
         let registered = self
             .handlers
             .get(&request.action)
-            .ok_or(ExecutionAgentError::ActionNotRegistered)?;
+            .ok_or(crate::ExecutionAgentRequestFailure::ActionNotRegistered)?;
         if Some(registered.family) != expected_family(request.action) {
-            return Err(ExecutionAgentError::InvalidRequest);
+            return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
         }
         Ok(())
     }
 
-    pub(crate) fn validate_dispatch(&self, request: &AgentStepRequest) -> Result<(), ExecutionAgentError> {
+    pub(crate) fn validate_dispatch(&self, request: &AgentStepRequest) -> Result<(), ExecutionAgentRequestFailure> {
         if request.descriptor_version.trim().is_empty()
             || request.target.trim().is_empty()
             || request.parameters.as_object().is_none()
@@ -138,7 +181,7 @@ impl AgentDriverRegistry {
             || request.target != request.intent.step.resource
             || request.parameters != request.intent.step.parameters
         {
-            return Err(ExecutionAgentError::InvalidRequest);
+            return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
         }
         self.handler(request.action).map(|_| ())
     }

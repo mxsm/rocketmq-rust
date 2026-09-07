@@ -15,36 +15,33 @@
 use std::collections::BTreeSet;
 
 use rocketmq_sre_contracts::ClusterId;
-use rocketmq_sre_contracts::ContractError;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::IncidentId;
 use rocketmq_sre_contracts::InvestigationId;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
-fn validate_schema(evidence: &EvidenceSnapshot) -> Result<(), ControlPlaneError> {
+fn validate_schema(evidence: &EvidenceSnapshot) -> Result<(), ControlPlaneRequestFailure> {
     let supported = rocketmq_sre_contracts::current_evidence_schema();
     evidence
         .schema
         .ensure_compatible(&supported.family, supported.major, &BTreeSet::new())
-        .map_err(|error| match error {
-            ContractError::UnsupportedSchemaFamily { .. } => {
-                ControlPlaneError::validation("unsupported_schema_family", "evidence schema family is unsupported")
-            }
-            ContractError::UnsupportedSchemaMajor { .. } => {
-                ControlPlaneError::validation("unsupported_schema_major", "evidence schema major is unsupported")
-            }
-            ContractError::MissingRequiredFeature { .. } => {
-                ControlPlaneError::validation("missing_required_feature", "evidence requires an unsupported feature")
-            }
-            ContractError::InvalidTimeRange
-            | ContractError::InvalidContentHash
-            | ContractError::InvalidStateTransition { .. }
-            | ContractError::InvalidDescriptor { .. } => {
-                ControlPlaneError::validation("invalid_request", "evidence schema is invalid")
-            }
+        .map_err(|error| match error.code() {
+            rocketmq_sre_contracts::PublicErrorCode::UnsupportedSchemaFamily => ControlPlaneRequestFailure::validation(
+                "unsupported_schema_family",
+                "evidence schema family is unsupported",
+            ),
+            rocketmq_sre_contracts::PublicErrorCode::UnsupportedSchemaMajor => ControlPlaneRequestFailure::validation(
+                "unsupported_schema_major",
+                "evidence schema major is unsupported",
+            ),
+            rocketmq_sre_contracts::PublicErrorCode::MissingRequiredFeature => ControlPlaneRequestFailure::validation(
+                "missing_required_feature",
+                "evidence requires an unsupported feature",
+            ),
+            _ => ControlPlaneRequestFailure::validation("invalid_request", "evidence schema is invalid"),
         })
 }
 
@@ -56,17 +53,17 @@ pub(crate) struct PersistEvidenceRequest {
 }
 
 impl PersistEvidenceRequest {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         if self.investigation_id.is_none() && self.incident_id.is_none() {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "evidence must be attached to an investigation or incident",
             ));
         }
         validate_schema(&self.evidence)?;
-        self.evidence
-            .verify_content_hash()
-            .map_err(|_| ControlPlaneError::validation("invalid_content_hash", "evidence content hash is invalid"))
+        self.evidence.verify_content_hash().map_err(|source| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_content_hash", source)
+        })
     }
 }
 
@@ -108,13 +105,7 @@ mod tests {
     fn persistence_rejects_unknown_schema_major() {
         let request = request_with_schema(SchemaVersion::new("rocketmq-sre.evidence", 99, 0));
 
-        assert!(matches!(
-            request.validate(),
-            Err(ControlPlaneError::Validation {
-                code: "unsupported_schema_major",
-                ..
-            })
-        ));
+        assert_eq!(request.validate().unwrap_err().code(), "unsupported_schema_major");
     }
 
     #[test]
@@ -123,13 +114,7 @@ mod tests {
             rocketmq_sre_contracts::current_evidence_schema().requiring(["unknown-qualification-feature"]),
         );
 
-        assert!(matches!(
-            request.validate(),
-            Err(ControlPlaneError::Validation {
-                code: "missing_required_feature",
-                ..
-            })
-        ));
+        assert_eq!(request.validate().unwrap_err().code(), "missing_required_feature");
     }
 }
 
@@ -143,10 +128,10 @@ pub(crate) struct EvidenceListQuery {
 }
 
 impl EvidenceListQuery {
-    pub(crate) fn bounded_limit(&self) -> Result<u32, ControlPlaneError> {
+    pub(crate) fn bounded_limit(&self) -> Result<u32, ControlPlaneRequestFailure> {
         let limit = self.limit.unwrap_or(50);
         if !(1..=200).contains(&limit) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "evidence page limit must be between 1 and 200",
             ));

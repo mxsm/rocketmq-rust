@@ -19,7 +19,7 @@ use super::UnifiedEventEntryRequest;
 use super::UnifiedEventEntryResult;
 use super::WorkflowService;
 use super::WorkflowStreamEvent;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::alerting::AlertingService;
 use crate::auth::AuthContext;
@@ -47,7 +47,7 @@ impl UnifiedEventEntryService {
         auth: &AuthContext,
         request: &UnifiedEventEntryRequest,
         correlation_id: CorrelationId,
-    ) -> Result<UnifiedEventEntryResult, ControlPlaneError> {
+    ) -> Result<UnifiedEventEntryResult, ControlPlaneRequestFailure> {
         request.validate()?;
         authorize_cluster(auth, request.cluster_id)?;
         let request_hash = request.request_hash()?;
@@ -93,9 +93,9 @@ impl UnifiedEventEntryService {
 fn authorize_cluster(
     auth: &AuthContext,
     cluster_id: rocketmq_sre_contracts::ClusterId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if !auth.clusters.contains(&cluster_id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "event entry cluster is outside the authenticated scope",
         ));
@@ -122,12 +122,7 @@ mod tests {
             roles: BTreeSet::new(),
         };
         let error = authorize_cluster(&auth, ClusterId::new()).expect_err("cross-cluster entry must fail");
-        assert!(matches!(
-            error,
-            ControlPlaneError::Forbidden {
-                code: "cluster_not_allowed",
-                ..
-            }
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::Forbidden);
+        assert_eq!(error.code(), "cluster_not_allowed");
     }
 }

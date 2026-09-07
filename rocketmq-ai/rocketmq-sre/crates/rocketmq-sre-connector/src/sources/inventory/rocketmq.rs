@@ -29,7 +29,7 @@ use super::recoverable_gap;
 use super::schema_mismatch;
 use super::validate_inventory_name;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 use crate::EvidenceOperation;
 use crate::mcp::McpGateway;
 use crate::read_gateway::ConnectorReadGateway;
@@ -233,7 +233,7 @@ where
             Err(error) if recoverable_gap(&error) => {
                 inventory.mark_gap("queue", "topic_route_source_unavailable");
                 inventory.mark_partial("topic_route_query_incomplete");
-                if error.code == ConnectorErrorCode::DeadlineExceeded {
+                if error.failure() == ConnectorFailure::DeadlineExceeded {
                     break;
                 }
             }
@@ -278,7 +278,7 @@ where
             }
             Err(error) if recoverable_gap(&error) => {
                 inventory.mark_partial("consumer_queue_relation_query_incomplete");
-                if error.code == ConnectorErrorCode::DeadlineExceeded {
+                if error.failure() == ConnectorFailure::DeadlineExceeded {
                     break;
                 }
             }
@@ -297,8 +297,8 @@ fn log_stage_error(stage: &'static str, error: &ConnectorError) {
     tracing::warn!(
         source = "rocketmq",
         stage,
-        code = error.code.as_str(),
-        retryable = error.retryable,
+        code = error.failure().as_str(),
+        retryable = error.retryable(),
         "read-only RocketMQ inventory stage failed"
     );
 }
@@ -1152,7 +1152,7 @@ fn page_limit(max_rows: usize) -> u32 {
 }
 
 fn decode<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, ConnectorError> {
-    serde_json::from_value(value).map_err(|_| schema_mismatch())
+    serde_json::from_value(value).map_err(super::schema_mismatch_source)
 }
 
 #[cfg(test)]

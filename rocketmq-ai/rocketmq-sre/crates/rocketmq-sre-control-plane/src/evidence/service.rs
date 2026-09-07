@@ -27,9 +27,9 @@ use super::EvidenceBlobStore;
 use super::EvidenceListQuery;
 use super::EvidencePage;
 use super::PersistEvidenceRequest;
-use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 const MAX_CONTENT_DOWNLOAD_BYTES: usize = 16 * 1024 * 1024;
 
@@ -49,10 +49,10 @@ impl EvidenceService {
         &self,
         auth: &AuthContext,
         request: PersistEvidenceRequest,
-    ) -> Result<EvidenceSnapshot, ControlPlaneError> {
+    ) -> Result<EvidenceSnapshot, ControlPlaneRequestFailure> {
         request.validate()?;
         if request.evidence.tenant_id != auth.tenant_id || !auth.clusters.contains(&request.evidence.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "evidence scope differs from the authenticated connector scope",
             ));
@@ -74,12 +74,12 @@ impl EvidenceService {
         &self,
         auth: &AuthContext,
         evidence: EvidenceSnapshot,
-    ) -> Result<EvidenceSnapshot, ControlPlaneError> {
-        evidence
-            .verify_content_hash()
-            .map_err(|_| ControlPlaneError::validation("invalid_content_hash", "evidence content hash is invalid"))?;
+    ) -> Result<EvidenceSnapshot, ControlPlaneRequestFailure> {
+        evidence.verify_content_hash().map_err(|source| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_content_hash", source)
+        })?;
         if evidence.tenant_id != auth.tenant_id || !auth.clusters.contains(&evidence.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "evidence scope differs from the authenticated cluster scope",
             ));
@@ -97,13 +97,17 @@ impl EvidenceService {
         cluster_id: rocketmq_sre_contracts::ClusterId,
         source: &str,
         resource: &str,
-    ) -> Result<Option<EvidenceSnapshot>, ControlPlaneError> {
+    ) -> Result<Option<EvidenceSnapshot>, ControlPlaneRequestFailure> {
         self.repository
             .latest_cluster_source_evidence(auth, cluster_id, source, resource)
             .await
     }
 
-    pub(crate) async fn get(&self, auth: &AuthContext, id: EvidenceId) -> Result<EvidenceSnapshot, ControlPlaneError> {
+    pub(crate) async fn get(
+        &self,
+        auth: &AuthContext,
+        id: EvidenceId,
+    ) -> Result<EvidenceSnapshot, ControlPlaneRequestFailure> {
         self.repository.evidence(auth, id).await
     }
 
@@ -111,21 +115,25 @@ impl EvidenceService {
         &self,
         auth: &AuthContext,
         query: &EvidenceListQuery,
-    ) -> Result<EvidencePage, ControlPlaneError> {
+    ) -> Result<EvidencePage, ControlPlaneRequestFailure> {
         self.repository.list_evidence(auth, query).await
     }
 
-    pub(crate) async fn content(&self, auth: &AuthContext, id: EvidenceId) -> Result<Bytes, ControlPlaneError> {
+    pub(crate) async fn content(
+        &self,
+        auth: &AuthContext,
+        id: EvidenceId,
+    ) -> Result<Bytes, ControlPlaneRequestFailure> {
         let snapshot = self.repository.evidence(auth, id).await?;
         let expected_digest = self.repository.evidence_content_digest(auth, id).await?;
         let content = match snapshot.content {
-            EvidenceContent::Inline(value) => serde_json::to_vec(&value).map(Bytes::from).map_err(|_| {
-                ControlPlaneError::validation("source_unavailable", "evidence content cannot be encoded")
+            EvidenceContent::Inline(value) => serde_json::to_vec(&value).map(Bytes::from).map_err(|source| {
+                ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("source_unavailable", source))
             })?,
             EvidenceContent::Reference(reference) => {
                 let bytes = self.blobs.get(&reference.uri, MAX_CONTENT_DOWNLOAD_BYTES).await?;
                 if reference.digest != expected_digest {
-                    return Err(ControlPlaneError::validation(
+                    return Err(ControlPlaneRequestFailure::validation(
                         "invalid_content_hash",
                         "external evidence reference does not match its stored digest",
                     ));
@@ -140,18 +148,19 @@ impl EvidenceService {
     async fn externalize_if_needed(
         &self,
         mut snapshot: EvidenceSnapshot,
-    ) -> Result<(EvidenceSnapshot, String), ControlPlaneError> {
+    ) -> Result<(EvidenceSnapshot, String), ControlPlaneRequestFailure> {
         let value = match &snapshot.content {
             EvidenceContent::Inline(value) => value,
             EvidenceContent::Reference(_) => {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "invalid_request",
                     "connector evidence must not supply an external content reference",
                 ));
             }
         };
-        let encoded = serde_json::to_vec(value)
-            .map_err(|_| ControlPlaneError::validation("invalid_request", "evidence content cannot be encoded"))?;
+        let encoded = serde_json::to_vec(value).map_err(|source| {
+            ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("invalid_request", source))
+        })?;
         let content_digest = format!(
             "sha256:{}",
             rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(&encoded))
@@ -169,44 +178,47 @@ impl EvidenceService {
             digest: content_digest.clone(),
             media_type: "application/json".to_owned(),
             size_bytes: u64::try_from(encoded.len()).map_err(|_| {
-                ControlPlaneError::validation("output_too_large", "evidence content exceeds the supported size")
+                ControlPlaneRequestFailure::validation(
+                    "output_too_large",
+                    "evidence content exceeds the supported size",
+                )
             })?,
         });
-        snapshot.content_hash = snapshot.compute_content_hash().map_err(|_| {
-            ControlPlaneError::validation("invalid_content_hash", "evidence reference cannot be sealed")
+        snapshot.content_hash = snapshot.compute_content_hash().map_err(|source| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_content_hash", source)
         })?;
         Ok((snapshot, content_digest))
     }
 }
 
-fn normalize_for_persistence(mut snapshot: EvidenceSnapshot) -> Result<EvidenceSnapshot, ControlPlaneError> {
+fn normalize_for_persistence(mut snapshot: EvidenceSnapshot) -> Result<EvidenceSnapshot, ControlPlaneRequestFailure> {
     snapshot.time_range.start = postgres_timestamp(snapshot.time_range.start)?;
     snapshot.time_range.end = postgres_timestamp(snapshot.time_range.end)?;
     snapshot.observed_at = postgres_timestamp(snapshot.observed_at)?;
-    snapshot.content_hash = snapshot.compute_content_hash().map_err(|_| {
-        ControlPlaneError::validation(
-            "invalid_content_hash",
-            "evidence cannot be sealed for persistent storage",
-        )
+    snapshot.content_hash = snapshot.compute_content_hash().map_err(|source| {
+        ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_content_hash", source)
     })?;
     Ok(snapshot)
 }
 
-fn postgres_timestamp(value: DateTime<Utc>) -> Result<DateTime<Utc>, ControlPlaneError> {
+fn postgres_timestamp(value: DateTime<Utc>) -> Result<DateTime<Utc>, ControlPlaneRequestFailure> {
     value
         .with_nanosecond((value.nanosecond() / 1_000) * 1_000)
         .ok_or_else(|| {
-            ControlPlaneError::validation("invalid_request", "evidence timestamp is outside the supported range")
+            ControlPlaneRequestFailure::validation(
+                "invalid_request",
+                "evidence timestamp is outside the supported range",
+            )
         })
 }
 
-fn verify_content_digest(content: &[u8], expected_digest: &str) -> Result<(), ControlPlaneError> {
+fn verify_content_digest(content: &[u8], expected_digest: &str) -> Result<(), ControlPlaneRequestFailure> {
     let actual_digest = format!(
         "sha256:{}",
         rocketmq_sre_contracts::encode_lower_hex(Sha256::digest(content))
     );
     if actual_digest != expected_digest {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_content_hash",
             "evidence content does not match its stored digest",
         ));
@@ -309,13 +321,8 @@ mod tests {
         let content = blobs.get(&uri, 128).await.expect("get tampered object");
         let error = verify_content_digest(&content, &expected_digest).expect_err("tampering must fail closed");
 
-        assert!(matches!(
-            error,
-            ControlPlaneError::Validation {
-                code: "invalid_content_hash",
-                ..
-            }
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::Validation);
+        assert_eq!(error.code(), "invalid_content_hash");
     }
 
     #[tokio::test]
@@ -424,13 +431,8 @@ mod tests {
             .content(&auth, persisted.evidence_id)
             .await
             .expect_err("tampered object must fail closed");
-        assert!(matches!(
-            error,
-            ControlPlaneError::Validation {
-                code: "invalid_content_hash",
-                ..
-            }
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::Validation);
+        assert_eq!(error.code(), "invalid_content_hash");
     }
 
     #[tokio::test]
@@ -509,7 +511,7 @@ mod tests {
         async fn externalize(
             &self,
             mut snapshot: EvidenceSnapshot,
-        ) -> Result<(EvidenceSnapshot, String), ControlPlaneError> {
+        ) -> Result<(EvidenceSnapshot, String), ControlPlaneRequestFailure> {
             let encoded = match &snapshot.content {
                 EvidenceContent::Inline(value) => serde_json::to_vec(value).expect("json"),
                 EvidenceContent::Reference(_) => Vec::new(),

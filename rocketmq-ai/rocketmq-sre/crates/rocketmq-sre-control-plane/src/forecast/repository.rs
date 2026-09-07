@@ -30,9 +30,9 @@ use uuid::Uuid;
 
 #[cfg(test)]
 use super::policy::ForecastConfiguration;
-use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 const FORECAST_REPORT_SCHEMA: &str = "rocketmq-sre.cluster-forecast.v1";
 const MAX_REPORT_ITEMS: usize = 256;
@@ -43,7 +43,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         baseline: &AnomalyBaseline,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         enforce_scope(auth, baseline.tenant_id, baseline.cluster_id)?;
         sqlx::query(
             "INSERT INTO anomaly_baselines (
@@ -60,12 +60,15 @@ impl PostgresRepository {
         .bind(serialize(&baseline.resource)?)
         .bind(&baseline.metric)
         .bind(i64::try_from(baseline.period_seconds).map_err(|_| {
-            ControlPlaneError::validation("invalid_forecast", "baseline period exceeds PostgreSQL BIGINT")
+            ControlPlaneRequestFailure::validation("invalid_forecast", "baseline period exceeds PostgreSQL BIGINT")
         })?)
         .bind(baseline.median)
         .bind(baseline.median_absolute_deviation)
         .bind(i32::try_from(baseline.sample_count).map_err(|_| {
-            ControlPlaneError::validation("invalid_forecast", "baseline sample count exceeds PostgreSQL INTEGER")
+            ControlPlaneRequestFailure::validation(
+                "invalid_forecast",
+                "baseline sample count exceeds PostgreSQL INTEGER",
+            )
         })?)
         .bind(baseline.coverage_ratio)
         .bind(&baseline.algorithm_version)
@@ -81,7 +84,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         assessment: &AnomalyAssessment,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         enforce_scope(auth, assessment.tenant_id, assessment.cluster_id)?;
         sqlx::query(
             "INSERT INTO anomaly_assessments (
@@ -106,7 +109,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         change: &ChangePoint,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         enforce_scope(auth, change.tenant_id, change.cluster_id)?;
         sqlx::query(
             "INSERT INTO change_points (
@@ -137,7 +140,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
-    ) -> Result<ClusterForecastReport, ControlPlaneError> {
+    ) -> Result<ClusterForecastReport, ControlPlaneRequestFailure> {
         enforce_cluster(auth, cluster_id)?;
         let forecasts = self
             .latest_reports::<CapacityForecast>(
@@ -229,7 +232,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         cluster_id: ClusterId,
         statement: &'static str,
-    ) -> Result<Vec<T>, ControlPlaneError>
+    ) -> Result<Vec<T>, ControlPlaneRequestFailure>
     where
         T: DeserializeOwned,
     {
@@ -239,7 +242,7 @@ impl PostgresRepository {
             .fetch_all(&self.pool)
             .await?;
         if rows.len() > MAX_REPORT_ITEMS {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "output_too_large",
                 "forecast report exceeded the bounded repository result",
             ));
@@ -255,7 +258,7 @@ impl PostgresRepository {
         cluster_id: ClusterId,
         metric: &str,
         actual_points: &[(DateTime<Utc>, f64)],
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         enforce_cluster(auth, cluster_id)?;
         if actual_points.is_empty() {
             return Ok(());
@@ -323,7 +326,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
-    ) -> Result<Vec<ForecastAccuracy>, ControlPlaneError> {
+    ) -> Result<Vec<ForecastAccuracy>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT metric, forecast_window, COUNT(*) AS evaluated_points,
                     AVG(absolute_error) AS mae, AVG(signed_error) AS bias,
@@ -365,9 +368,9 @@ fn enforce_scope(
     auth: &AuthContext,
     tenant_id: rocketmq_sre_contracts::TenantId,
     cluster_id: ClusterId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if auth.tenant_id != tenant_id {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "tenant_mismatch",
             "forecast tenant differs from the authenticated tenant",
         ));
@@ -375,9 +378,9 @@ fn enforce_scope(
     enforce_cluster(auth, cluster_id)
 }
 
-fn enforce_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneError> {
+fn enforce_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneRequestFailure> {
     if !auth.clusters.contains(&cluster_id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "forecast cluster is outside the authenticated scope",
         ));
@@ -385,14 +388,15 @@ fn enforce_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), Cont
     Ok(())
 }
 
-fn serialize<T: serde::Serialize>(value: &T) -> Result<Value, ControlPlaneError> {
-    serde_json::to_value(value)
-        .map_err(|_| ControlPlaneError::validation("invalid_forecast", "forecast value cannot be serialized"))
+fn serialize<T: serde::Serialize>(value: &T) -> Result<Value, ControlPlaneRequestFailure> {
+    serde_json::to_value(value).map_err(|source| {
+        ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("invalid_forecast", source))
+    })
 }
 
-fn parse<T: DeserializeOwned>(value: Value) -> Result<T, ControlPlaneError> {
+fn parse<T: DeserializeOwned>(value: Value) -> Result<T, ControlPlaneRequestFailure> {
     serde_json::from_value(value)
-        .map_err(|_| ControlPlaneError::configuration("database contains an invalid forecast report"))
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
 fn window_name(window: ForecastWindow) -> &'static str {
@@ -402,11 +406,11 @@ fn window_name(window: ForecastWindow) -> &'static str {
     }
 }
 
-fn parse_window(value: &str) -> Result<ForecastWindow, ControlPlaneError> {
+fn parse_window(value: &str) -> Result<ForecastWindow, ControlPlaneRequestFailure> {
     match value {
         "seven_days" => Ok(ForecastWindow::SevenDays),
         "thirty_days" => Ok(ForecastWindow::ThirtyDays),
-        _ => Err(ControlPlaneError::configuration(
+        _ => Err(ControlPlaneRequestFailure::configuration(
             "database contains an invalid forecast window",
         )),
     }

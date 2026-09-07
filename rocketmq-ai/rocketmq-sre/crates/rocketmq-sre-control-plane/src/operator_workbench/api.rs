@@ -37,7 +37,7 @@ use super::model::OperationsReportQuery;
 use super::model::ShiftHandoffQuery;
 use super::service::render_report_html;
 use super::service::render_report_markdown;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 use crate::observability::CORRELATION_ID_HEADER;
 
@@ -57,7 +57,7 @@ async fn get_incident_operations(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<IncidentOperationsState>, ControlPlaneError> {
+) -> Result<Json<IncidentOperationsState>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .operations
@@ -71,7 +71,7 @@ async fn apply_incident_operation(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<IncidentOperationRequest>,
-) -> Result<Json<IncidentOperationResult>, ControlPlaneError> {
+) -> Result<Json<IncidentOperationResult>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .operations
@@ -84,7 +84,7 @@ async fn get_shift_handoff(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<ShiftHandoffQuery>,
-) -> Result<Json<ShiftHandoffSummary>, ControlPlaneError> {
+) -> Result<Json<ShiftHandoffSummary>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.operations.shift_handoff(&auth, query.cluster_id).await.map(Json)
 }
@@ -93,7 +93,7 @@ async fn get_operations_report(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<OperationsReportQuery>,
-) -> Result<Response, ControlPlaneError> {
+) -> Result<Response, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     let report = state.operations.report(&auth, query.cluster_id, query.window).await?;
     match query.format {
@@ -111,25 +111,24 @@ async fn get_operations_report(
     }
 }
 
-fn download_response(content_type: &str, filename: &str, body: String) -> Result<Response, ControlPlaneError> {
+fn download_response(content_type: &str, filename: &str, body: String) -> Result<Response, ControlPlaneRequestFailure> {
     let mut response = Response::new(Body::from(body));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_str(content_type)
-            .map_err(|_| ControlPlaneError::configuration("report content type is invalid"))?,
+        HeaderValue::from_str(content_type).map_err(ControlPlaneRequestFailure::configuration_source)?,
     );
     response.headers_mut().insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
-            .map_err(|_| ControlPlaneError::configuration("report filename is invalid"))?,
+            .map_err(ControlPlaneRequestFailure::configuration_source)?,
     );
     Ok(response)
 }
 
-fn parse_incident_id(value: &str) -> Result<IncidentId, ControlPlaneError> {
+fn parse_incident_id(value: &str) -> Result<IncidentId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "incident id must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "incident id is invalid"))
 }
 
 fn correlation_id(headers: &HeaderMap) -> CorrelationId {

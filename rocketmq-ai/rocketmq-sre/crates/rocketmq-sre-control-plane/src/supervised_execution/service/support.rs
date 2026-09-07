@@ -14,9 +14,9 @@
 
 use super::*;
 
-pub(super) fn validate_candidate_steps(steps: &[CandidatePlanStep]) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_candidate_steps(steps: &[CandidatePlanStep]) -> Result<(), ControlPlaneRequestFailure> {
     if steps.is_empty() || steps.len() > MAX_PLAN_STEPS {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_plan",
             "plan must contain between one and sixteen steps",
         ));
@@ -30,7 +30,7 @@ pub(super) fn validate_candidate_steps(steps: &[CandidatePlanStep]) -> Result<()
             || step.evidence_ids.is_empty()
             || step.evidence_ids.len() > MAX_STEP_EVIDENCE
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_plan_step",
                 "every step requires bounded action, version, resource, parameters, and Evidence IDs",
             ));
@@ -41,7 +41,7 @@ pub(super) fn validate_candidate_steps(steps: &[CandidatePlanStep]) -> Result<()
 
 pub(super) fn single_manual_action<'a>(
     resolved: &'a [CatalogResolution<'a>],
-) -> Result<Option<&'a ManualAction>, ControlPlaneError> {
+) -> Result<Option<&'a ManualAction>, ControlPlaneRequestFailure> {
     let manual = resolved
         .iter()
         .filter_map(|entry| match entry {
@@ -53,7 +53,7 @@ pub(super) fn single_manual_action<'a>(
         return Ok(None);
     }
     if resolved.len() != 1 {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "mixed_manual_and_execution_plan",
             "R3 manual-only action must be emitted as a standalone runbook",
         ));
@@ -86,27 +86,38 @@ pub(super) fn manual_runbook(
     }
 }
 
-pub(super) fn evidence_hash(evidence: &BTreeMap<EvidenceId, EvidenceSnapshot>) -> Result<String, ControlPlaneError> {
+pub(super) fn evidence_hash(
+    evidence: &BTreeMap<EvidenceId, EvidenceSnapshot>,
+) -> Result<String, ControlPlaneRequestFailure> {
     let bindings = evidence.values().map(evidence_binding).collect::<Vec<_>>();
-    canonical_sha256(&bindings)
-        .map_err(|error| ControlPlaneError::validation("invalid_evidence_hash", error.to_string()))
+    canonical_sha256(&bindings).map_err(|error| {
+        ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_evidence_hash", error)
+    })
 }
 
 pub(super) fn step_precondition_hash(
     ids: &[EvidenceId],
     evidence: &BTreeMap<EvidenceId, EvidenceSnapshot>,
-) -> Result<String, ControlPlaneError> {
+) -> Result<String, ControlPlaneRequestFailure> {
     let mut bindings = ids
         .iter()
         .map(|id| {
             evidence.get(id).map(evidence_binding).ok_or_else(|| {
-                ControlPlaneError::validation("invalid_evidence_binding", "plan step references unknown Evidence")
+                ControlPlaneRequestFailure::validation(
+                    "invalid_evidence_binding",
+                    "plan step references unknown Evidence",
+                )
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
     bindings.sort_by_key(|binding| binding.evidence_id);
-    canonical_precondition_hash(&bindings)
-        .map_err(|error| ControlPlaneError::validation("invalid_precondition_hash", error.to_string()))
+    canonical_precondition_hash(&bindings).map_err(|error| {
+        ControlPlaneRequestFailure::contract(
+            crate::ControlPlaneFailure::Validation,
+            "invalid_precondition_hash",
+            error,
+        )
+    })
 }
 
 pub(super) fn action_precondition_hash(
@@ -114,17 +125,17 @@ pub(super) fn action_precondition_hash(
     resource: &str,
     ids: &[EvidenceId],
     evidence: &BTreeMap<EvidenceId, EvidenceSnapshot>,
-) -> Result<String, ControlPlaneError> {
+) -> Result<String, ControlPlaneRequestFailure> {
     let mut live_hashes = BTreeSet::new();
     for id in ids {
         let snapshot = evidence.get(id).ok_or_else(|| {
-            ControlPlaneError::validation("invalid_evidence_binding", "plan step references unknown Evidence")
+            ControlPlaneRequestFailure::validation("invalid_evidence_binding", "plan step references unknown Evidence")
         })?;
         if snapshot.source != "execution-agent" || snapshot.resource != resource {
             continue;
         }
         let rocketmq_sre_contracts::EvidenceContent::Inline(content) = &snapshot.content else {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_execution_precondition",
                 "Execution Agent precondition Evidence must remain inline",
             ));
@@ -138,7 +149,7 @@ pub(super) fn action_precondition_hash(
             .and_then(serde_json::Value::as_str)
             .filter(|value| rocketmq_sre_contracts::is_sha256_digest(value))
             .ok_or_else(|| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "invalid_execution_precondition",
                     "Execution Agent Evidence does not contain a valid precondition hash",
                 )
@@ -150,7 +161,7 @@ pub(super) fn action_precondition_hash(
             || content.get("ready").and_then(serde_json::Value::as_bool) != Some(true)
             || !reason_codes_empty
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_execution_precondition",
                 "Execution Agent Evidence is not ready or does not bind the exact action target",
             ));
@@ -160,12 +171,12 @@ pub(super) fn action_precondition_hash(
     match live_hashes.len() {
         0 => step_precondition_hash(ids, evidence),
         1 => live_hashes.into_iter().next().ok_or_else(|| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "invalid_execution_precondition",
                 "Execution Agent precondition hash is unavailable",
             )
         }),
-        _ => Err(ControlPlaneError::validation(
+        _ => Err(ControlPlaneRequestFailure::validation(
             "ambiguous_execution_precondition",
             "plan step binds conflicting Execution Agent precondition hashes",
         )),
@@ -181,13 +192,13 @@ pub(super) fn evidence_binding(snapshot: &EvidenceSnapshot) -> EvidenceBinding {
     }
 }
 
-pub(super) fn aggregate_risk(risks: &[ActionRisk]) -> Result<ActionRisk, ControlPlaneError> {
+pub(super) fn aggregate_risk(risks: &[ActionRisk]) -> Result<ActionRisk, ControlPlaneRequestFailure> {
     if risks.contains(&ActionRisk::R2) {
         Ok(ActionRisk::R2)
     } else if risks.iter().all(|risk| *risk == ActionRisk::R1) && !risks.is_empty() {
         Ok(ActionRisk::R1)
     } else {
-        Err(ControlPlaneError::validation(
+        Err(ControlPlaneRequestFailure::validation(
             "unsupported_execution_risk",
             "supervised plan contains a non-executable risk",
         ))
@@ -198,11 +209,11 @@ pub(super) fn validated_plan_expiry(
     now: DateTime<Utc>,
     requested: Option<DateTime<Utc>>,
     max_ttl_seconds: u64,
-) -> Result<DateTime<Utc>, ControlPlaneError> {
+) -> Result<DateTime<Utc>, ControlPlaneRequestFailure> {
     let maximum = now + duration_seconds(max_ttl_seconds)?;
     let expires_at = requested.unwrap_or(maximum);
     if expires_at <= now || expires_at > maximum {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_plan_window",
             "plan expiry must be in the future and within the policy TTL",
         ));
@@ -210,39 +221,39 @@ pub(super) fn validated_plan_expiry(
     Ok(expires_at)
 }
 
-pub(super) fn duration_seconds(seconds: u64) -> Result<Duration, ControlPlaneError> {
+pub(super) fn duration_seconds(seconds: u64) -> Result<Duration, ControlPlaneRequestFailure> {
     i64::try_from(seconds)
         .map(Duration::seconds)
-        .map_err(|_| ControlPlaneError::validation("invalid_time_window", "time window exceeds i64 seconds"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_time_window", "time window is too large"))
 }
 
-pub(super) fn ensure_live_ready(facts: PolicyFacts) -> Result<(), ControlPlaneError> {
+pub(super) fn ensure_live_ready(facts: PolicyFacts) -> Result<(), ControlPlaneRequestFailure> {
     if !facts.evidence_current {
-        return Err(ControlPlaneError::conflict_code(
+        return Err(ControlPlaneRequestFailure::conflict_code(
             "evidence_missing_or_stale",
             "plan Evidence is no longer current and complete",
         ));
     }
     if facts.resource_quarantined {
-        return Err(ControlPlaneError::conflict_code(
+        return Err(ControlPlaneRequestFailure::conflict_code(
             RESOURCE_QUARANTINED,
             "target resource is quarantined",
         ));
     }
     if facts.resource_busy {
-        return Err(ControlPlaneError::conflict_code(
+        return Err(ControlPlaneRequestFailure::conflict_code(
             "resource_change_in_progress",
             "target resource already has an active change",
         ));
     }
     if !facts.maintenance_window_open {
-        return Err(ControlPlaneError::conflict_code(
+        return Err(ControlPlaneRequestFailure::conflict_code(
             "maintenance_window_closed",
             "current time is outside the configured maintenance window",
         ));
     }
     if !facts.rollback_available {
-        return Err(ControlPlaneError::conflict_code(
+        return Err(ControlPlaneRequestFailure::conflict_code(
             "rollback_unavailable",
             "plan has no descriptor-defined compensation path",
         ));
@@ -307,10 +318,10 @@ mod agent_precondition_tests {
     }
 }
 
-pub(super) fn validate_reason(reason: &str) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_reason(reason: &str) -> Result<(), ControlPlaneRequestFailure> {
     let length = reason.trim().chars().count();
     if !(1..=2_048).contains(&length) || reason.chars().any(char::is_control) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_reason",
             "reason must contain between one and 2048 printable characters",
         ));
@@ -318,14 +329,14 @@ pub(super) fn validate_reason(reason: &str) -> Result<(), ControlPlaneError> {
     Ok(())
 }
 
-pub(super) fn validate_idempotency_key(value: &str) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_idempotency_key(value: &str) -> Result<(), ControlPlaneRequestFailure> {
     let length = value.chars().count();
     if !(16..=200).contains(&length)
         || value
             .chars()
             .any(|character| !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':' | '.')))
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_idempotency_key",
             "idempotency key must contain 16 to 200 allowlisted ASCII characters",
         ));
@@ -336,9 +347,9 @@ pub(super) fn validate_idempotency_key(value: &str) -> Result<(), ControlPlaneEr
 pub(super) fn require_cluster(
     auth: &AuthContext,
     cluster_id: rocketmq_sre_contracts::ClusterId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if !auth.clusters.contains(&cluster_id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "cluster is outside the authenticated scope",
         ));

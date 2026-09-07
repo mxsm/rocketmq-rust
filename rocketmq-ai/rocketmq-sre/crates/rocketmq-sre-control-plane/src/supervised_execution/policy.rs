@@ -26,8 +26,8 @@ use rocketmq_sre_contracts::canonical_sha256;
 use serde::Deserialize;
 
 use super::model::PolicyInputDigest;
-use crate::ControlPlaneError;
 use crate::auth::AuthContext;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 const POLICY: &str = include_str!("../../../../config/policy/supervised-execution.v1.yaml");
 
@@ -76,8 +76,7 @@ pub(super) struct PolicyFacts {
 
 impl PolicyEvaluator {
     pub(super) fn embedded() -> Result<Self, ControlPlaneError> {
-        let config: PolicyConfig = serde_yaml::from_str(POLICY)
-            .map_err(|error| ControlPlaneError::configuration(format!("supervised policy is invalid: {error}")))?;
+        let config: PolicyConfig = serde_yaml::from_str(POLICY).map_err(ControlPlaneError::configuration_source)?;
         if config.schema_version != "rocketmq-sre.supervised-policy.v1"
             || config.policy_version.trim().is_empty()
             || config.evaluator != "rocketmq-sre-control-plane"
@@ -108,7 +107,7 @@ impl PolicyEvaluator {
         risks: &[ActionRisk],
         facts: PolicyFacts,
         now: DateTime<Utc>,
-    ) -> Result<PolicyDecision, ControlPlaneError> {
+    ) -> Result<PolicyDecision, ControlPlaneRequestFailure> {
         let mut reasons = Vec::new();
         if !auth.roles.contains(&self.config.required_operator_role) {
             reasons.push("OperatorRoleRequired".to_owned());
@@ -163,7 +162,9 @@ impl PolicyEvaluator {
             rollback_available: facts.rollback_available,
             risks,
         })
-        .map_err(|error| ControlPlaneError::validation("invalid_policy_input", error.to_string()))?;
+        .map_err(|error| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_policy_input", error)
+        })?;
         Ok(PolicyDecision {
             id: PolicyDecisionId::new(),
             tenant_id: plan.tenant_id,
@@ -179,9 +180,9 @@ impl PolicyEvaluator {
         })
     }
 
-    pub(super) fn require_operator(&self, auth: &AuthContext) -> Result<(), ControlPlaneError> {
+    pub(super) fn require_operator(&self, auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
         if !auth.roles.contains(&self.config.required_operator_role) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "operator_role_required",
                 "the authenticated identity is not an operator",
             ));
@@ -189,9 +190,9 @@ impl PolicyEvaluator {
         Ok(())
     }
 
-    pub(super) fn require_approver(&self, auth: &AuthContext) -> Result<(), ControlPlaneError> {
+    pub(super) fn require_approver(&self, auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
         if !auth.roles.contains(&self.config.required_approver_role) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "approver_role_required",
                 "the authenticated identity is not an approver",
             ));

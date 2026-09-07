@@ -39,7 +39,7 @@ use super::model::PreventiveScheduleView;
 use super::service::automation_failure_code;
 use super::service::require_automation_or_operator;
 use super::service::require_automation_reader;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::autonomy::AutonomyService;
@@ -75,7 +75,7 @@ impl PreventiveAutomationService {
         &self,
         auth: &AuthContext,
         request: &PreventiveAutomationRequest,
-    ) -> Result<PreventiveAutomationRun, ControlPlaneError> {
+    ) -> Result<PreventiveAutomationRun, ControlPlaneRequestFailure> {
         self.validate_request(auth, request)?;
         self.submit_with_inspection(auth, request, None).await
     }
@@ -84,12 +84,12 @@ impl PreventiveAutomationService {
         &self,
         auth: &AuthContext,
         query: &PreventiveRunListQuery,
-    ) -> Result<PreventiveRunPage, ControlPlaneError> {
+    ) -> Result<PreventiveRunPage, ControlPlaneRequestFailure> {
         require_automation_reader(auth)?;
         if let Some(cluster_id) = query.cluster_id
             && !auth.clusters.contains(&cluster_id)
         {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "preventive automation query is outside the authenticated cluster scope",
             ));
@@ -112,10 +112,10 @@ impl PreventiveAutomationService {
         &self,
         auth: &AuthContext,
         request: &PreventiveScheduleRequest,
-    ) -> Result<PreventiveScheduleView, ControlPlaneError> {
+    ) -> Result<PreventiveScheduleView, ControlPlaneRequestFailure> {
         require_automation_or_operator(auth)?;
         if !auth.clusters.contains(&request.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "preventive schedule is outside the authenticated cluster scope",
             ));
@@ -196,7 +196,7 @@ impl PreventiveAutomationService {
         auth: &AuthContext,
         request: &PreventiveAutomationRequest,
         inspection_run_id: Option<InspectionRunId>,
-    ) -> Result<PreventiveAutomationRun, ControlPlaneError> {
+    ) -> Result<PreventiveAutomationRun, ControlPlaneRequestFailure> {
         let run = self
             .repository
             .create_preventive_run(request, inspection_run_id)
@@ -364,7 +364,7 @@ impl PreventiveAutomationService {
         inspection_run_id: Option<InspectionRunId>,
         result_code: &str,
         summary: &str,
-    ) -> Result<PreventiveAutomationRun, ControlPlaneError> {
+    ) -> Result<PreventiveAutomationRun, ControlPlaneRequestFailure> {
         self.repository
             .complete_preventive_run(
                 request.tenant_id,
@@ -387,25 +387,29 @@ impl PreventiveAutomationService {
         &self,
         auth: &AuthContext,
         request: &PreventiveAutomationRequest,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         require_automation_or_operator(auth)?;
-        request
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_preventive_request", error.to_string()))?;
+        request.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_preventive_request",
+                error,
+            )
+        })?;
         if request.tenant_id != auth.tenant_id || request.requested_by != auth.subject {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "preventive_identity_mismatch",
                 "preventive request tenant and requester must match the authenticated identity",
             ));
         }
         if !auth.clusters.contains(&request.cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "preventive request is outside the authenticated cluster scope",
             ));
         }
         if request.budget.max_model_calls != 0 {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "model_budget_not_allowed",
                 "preventive inspections are deterministic and cannot allocate model calls",
             ));

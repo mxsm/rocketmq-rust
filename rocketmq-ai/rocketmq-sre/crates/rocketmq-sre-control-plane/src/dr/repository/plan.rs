@@ -25,9 +25,9 @@ use super::support::backup_kind_name;
 use super::support::exercise_mode_name;
 use super::support::plan_from_row;
 use super::support::subject_name;
-use crate::ControlPlaneError;
 use crate::dr::model::DrPlanQuery;
 use crate::dr::model::bounded_limit;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 impl DrRepository {
     pub(in crate::dr) async fn scope_exists(
@@ -36,7 +36,7 @@ impl DrRepository {
         fleet_id: rocketmq_sre_contracts::FleetId,
         region_id: rocketmq_sre_contracts::RegionId,
         cluster_id: Option<ClusterId>,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT EXISTS (
                 SELECT 1
@@ -71,9 +71,10 @@ impl DrRepository {
         Ok(row.try_get("present")?)
     }
 
-    pub(in crate::dr) async fn create_plan(&self, plan: &DrPlan) -> Result<DrPlan, ControlPlaneError> {
-        let checkpoint_definitions = serde_json::to_value(&plan.checkpoints)
-            .map_err(|_| ControlPlaneError::validation("invalid_dr_plan", "checkpoint definitions are invalid"))?;
+    pub(in crate::dr) async fn create_plan(&self, plan: &DrPlan) -> Result<DrPlan, ControlPlaneRequestFailure> {
+        let checkpoint_definitions = serde_json::to_value(&plan.checkpoints).map_err(|source| {
+            ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("invalid_dr_plan", source))
+        })?;
         let allowed_modes = plan
             .allowed_modes
             .iter()
@@ -110,17 +111,15 @@ impl DrRepository {
         .bind(subject_name(plan.subject))
         .bind(&plan.name)
         .bind(i32::try_from(plan.version).map_err(|_| {
-            ControlPlaneError::validation("invalid_dr_plan", "plan version exceeds the supported range")
+            ControlPlaneRequestFailure::validation("invalid_dr_plan", "plan version exceeds the supported range")
         })?)
         .bind(&plan.owner)
-        .bind(
-            i64::try_from(plan.target.rto_seconds)
-                .map_err(|_| ControlPlaneError::validation("invalid_dr_plan", "RTO exceeds the supported range"))?,
-        )
-        .bind(
-            i64::try_from(plan.target.rpo_seconds)
-                .map_err(|_| ControlPlaneError::validation("invalid_dr_plan", "RPO exceeds the supported range"))?,
-        )
+        .bind(i64::try_from(plan.target.rto_seconds).map_err(|_| {
+            ControlPlaneRequestFailure::validation("invalid_dr_plan", "plan RTO exceeds the supported range")
+        })?)
+        .bind(i64::try_from(plan.target.rpo_seconds).map_err(|_| {
+            ControlPlaneRequestFailure::validation("invalid_dr_plan", "plan RPO exceeds the supported range")
+        })?)
         .bind(allowed_modes)
         .bind(&plan.required_sources)
         .bind(checkpoint_definitions)
@@ -131,13 +130,17 @@ impl DrRepository {
         plan_from_row(&row)
     }
 
-    pub(in crate::dr) async fn get_plan(&self, tenant_id: TenantId, id: DrPlanId) -> Result<DrPlan, ControlPlaneError> {
+    pub(in crate::dr) async fn get_plan(
+        &self,
+        tenant_id: TenantId,
+        id: DrPlanId,
+    ) -> Result<DrPlan, ControlPlaneRequestFailure> {
         let row = sqlx::query("SELECT * FROM dr_plans WHERE tenant_id = $1 AND id = $2")
             .bind(tenant_id.as_uuid())
             .bind(id.as_uuid())
             .fetch_optional(&self.pool)
             .await?
-            .ok_or(ControlPlaneError::NotFound)?;
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         plan_from_row(&row)
     }
 
@@ -145,7 +148,7 @@ impl DrRepository {
         &self,
         tenant_id: TenantId,
         query: &DrPlanQuery,
-    ) -> Result<(Vec<DrPlan>, bool), ControlPlaneError> {
+    ) -> Result<(Vec<DrPlan>, bool), ControlPlaneRequestFailure> {
         let subject = query.subject.map(subject_name);
         let limit = bounded_limit(query.limit);
         let rows = sqlx::query(
@@ -177,7 +180,7 @@ impl DrRepository {
         &self,
         tenant_id: TenantId,
         asset: &DrBackupAsset,
-    ) -> Result<DrBackupAsset, ControlPlaneError> {
+    ) -> Result<DrBackupAsset, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "INSERT INTO dr_backup_assets (
                 id, plan_id, asset_kind, owner_name, access_owner,
@@ -212,7 +215,7 @@ impl DrRepository {
         .bind(tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         backup_asset_from_row(&row)
     }
 
@@ -220,7 +223,7 @@ impl DrRepository {
         &self,
         tenant_id: TenantId,
         plan_id: DrPlanId,
-    ) -> Result<Vec<DrBackupAsset>, ControlPlaneError> {
+    ) -> Result<Vec<DrBackupAsset>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT asset.*
              FROM dr_backup_assets asset
@@ -239,7 +242,7 @@ impl DrRepository {
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
-    ) -> Result<String, ControlPlaneError> {
+    ) -> Result<String, ControlPlaneRequestFailure> {
         sqlx::query(
             "SELECT environment
              FROM fleet_cluster_registrations
@@ -252,6 +255,6 @@ impl DrRepository {
         .await?
         .map(|row| row.try_get("environment"))
         .transpose()?
-        .ok_or(ControlPlaneError::NotFound)
+        .ok_or(ControlPlaneRequestFailure::not_found())
     }
 }

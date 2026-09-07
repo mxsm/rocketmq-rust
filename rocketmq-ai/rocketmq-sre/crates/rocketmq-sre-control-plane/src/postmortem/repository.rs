@@ -41,6 +41,7 @@ use super::ActionItemListQuery;
 use super::IncidentRecurrenceView;
 use super::OperatorTodo;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -53,7 +54,7 @@ impl PostgresRepository {
         fingerprint: Option<&str>,
         root_cause_code: Option<&str>,
         affected_component: Option<&str>,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO postmortems (
@@ -90,7 +91,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         incident_id: IncidentId,
-    ) -> Result<Option<PostmortemDraft>, ControlPlaneError> {
+    ) -> Result<Option<PostmortemDraft>, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, incident_id, status, current_revision,
                     confirmed_by, confirmed_at, published_knowledge_item_id,
@@ -109,7 +110,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: PostmortemId,
-    ) -> Result<PostmortemDraft, ControlPlaneError> {
+    ) -> Result<PostmortemDraft, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, incident_id, status, current_revision,
                     confirmed_by, confirmed_at, published_knowledge_item_id,
@@ -121,7 +122,7 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let draft = postmortem_from_row(&row)?;
         enforce_cluster(auth, draft.cluster_id)?;
         Ok(draft)
@@ -131,7 +132,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: PostmortemId,
-    ) -> Result<Vec<PostmortemRevision>, ControlPlaneError> {
+    ) -> Result<Vec<PostmortemRevision>, ControlPlaneRequestFailure> {
         self.scoped_postmortem(auth, id).await?;
         let rows = sqlx::query(
             "SELECT id, postmortem_id, revision, summary, impact, detection,
@@ -152,7 +153,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: PostmortemId,
-    ) -> Result<Vec<ActionItem>, ControlPlaneError> {
+    ) -> Result<Vec<ActionItem>, ControlPlaneRequestFailure> {
         self.scoped_postmortem(auth, id).await?;
         let rows = sqlx::query(
             "SELECT id, tenant_id, cluster_id, postmortem_id, incident_id, title,
@@ -172,7 +173,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         query: &ActionItemListQuery,
-    ) -> Result<Vec<ActionItem>, ControlPlaneError> {
+    ) -> Result<Vec<ActionItem>, ControlPlaneRequestFailure> {
         enforce_cluster(auth, query.cluster_id)?;
         let status = query.status.map(enum_name).transpose()?;
         let rows = sqlx::query(
@@ -200,7 +201,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: ActionItemId,
-    ) -> Result<ActionItem, ControlPlaneError> {
+    ) -> Result<ActionItem, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, postmortem_id, incident_id, title,
                     owner_name, due_at, status, verification, evidence_ids,
@@ -212,7 +213,7 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let item = action_item_from_row(&row)?;
         enforce_cluster(auth, item.cluster_id)?;
         Ok(item)
@@ -223,7 +224,7 @@ impl PostgresRepository {
         auth: &AuthContext,
         current: &ActionItem,
         next: &ActionItem,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let result = sqlx::query(
             "UPDATE action_items
@@ -244,7 +245,10 @@ impl PostgresRepository {
         .execute(&mut *transaction)
         .await?;
         if result.rows_affected() != 1 {
-            return Err(ControlPlaneError::conflict("action item state changed concurrently"));
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "conflict",
+                "action item state changed concurrently",
+            ));
         }
         sqlx::query(
             "INSERT INTO action_item_events (
@@ -270,7 +274,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         id: PostmortemId,
-    ) -> Result<Vec<IncidentRecurrenceView>, ControlPlaneError> {
+    ) -> Result<Vec<IncidentRecurrenceView>, ControlPlaneRequestFailure> {
         let draft = self.scoped_postmortem(auth, id).await?;
         let rows = sqlx::query(
             "SELECT incident_id, previous_incident_id, postmortem_id, fingerprint,
@@ -307,7 +311,7 @@ impl PostgresRepository {
         root_cause_code: Option<&str>,
         affected_component: Option<&str>,
         at: DateTime<Utc>,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT incident_id, id, fingerprint, root_cause_code, affected_component
              FROM postmortems
@@ -373,7 +377,7 @@ impl PostgresRepository {
         markdown: &str,
         root_cause_code: Option<&str>,
         affected_component: &str,
-    ) -> Result<KnowledgeItem, ControlPlaneError> {
+    ) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         insert_knowledge(&mut transaction, item, markdown).await?;
         let result = sqlx::query(
@@ -390,12 +394,13 @@ impl PostgresRepository {
         .bind(draft.id.as_uuid())
         .bind(auth.tenant_id.as_uuid())
         .bind(i32::try_from(revision.revision).map_err(|_| {
-            ControlPlaneError::validation("invalid_revision", "postmortem revision exceeds PostgreSQL INTEGER")
+            ControlPlaneRequestFailure::validation("invalid_revision", "postmortem revision exceeds PostgreSQL INTEGER")
         })?)
         .execute(&mut *transaction)
         .await?;
         if result.rows_affected() != 1 {
-            return Err(ControlPlaneError::conflict(
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "conflict",
                 "postmortem must have a current human-confirmed revision before publication",
             ));
         }
@@ -407,7 +412,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         draft: &PostmortemDraft,
-    ) -> Result<Option<KnowledgeItem>, ControlPlaneError> {
+    ) -> Result<Option<KnowledgeItem>, ControlPlaneRequestFailure> {
         let Some(id) = draft.published_knowledge_item_id else {
             return Ok(None);
         };
@@ -429,7 +434,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         draft: &PostmortemDraft,
-    ) -> Result<Vec<OperatorTodo>, ControlPlaneError> {
+    ) -> Result<Vec<OperatorTodo>, ControlPlaneRequestFailure> {
         let action_ids = sqlx::query_scalar::<_, Uuid>("SELECT id FROM action_items WHERE postmortem_id = $1")
             .bind(draft.id.as_uuid())
             .fetch_all(&self.pool)
@@ -455,7 +460,7 @@ impl PostgresRepository {
         rows.iter().map(todo_from_row).collect()
     }
 
-    pub(super) async fn materialize_due_todos(&self, now: DateTime<Utc>) -> Result<u64, ControlPlaneError> {
+    pub(super) async fn materialize_due_todos(&self, now: DateTime<Utc>) -> Result<u64, ControlPlaneRequestFailure> {
         let due = sqlx::query(
             "SELECT id AS aggregate_id, tenant_id, cluster_id, incident_id,
                     title, due_at, 'action_item_due' AS kind
@@ -533,7 +538,7 @@ async fn enqueue_todo_notifications(
     aggregate_id: Uuid,
     title: &str,
     now: DateTime<Utc>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let targets = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM notification_targets
          WHERE tenant_id = $1 AND enabled = TRUE
@@ -579,7 +584,7 @@ async fn enqueue_todo_notifications(
 async fn insert_revision(
     transaction: &mut Transaction<'_, Postgres>,
     revision: &PostmortemRevision,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO postmortem_revisions (
             id, postmortem_id, revision, summary, impact, detection, timeline,
@@ -594,7 +599,7 @@ async fn insert_revision(
     .bind(revision.id.as_uuid())
     .bind(revision.postmortem_id.as_uuid())
     .bind(i32::try_from(revision.revision).map_err(|_| {
-        ControlPlaneError::validation("invalid_revision", "postmortem revision exceeds PostgreSQL INTEGER")
+        ControlPlaneRequestFailure::validation("invalid_revision", "postmortem revision exceeds PostgreSQL INTEGER")
     })?)
     .bind(&revision.summary)
     .bind(&revision.impact)
@@ -619,7 +624,7 @@ async fn insert_revision(
 async fn insert_action_item(
     transaction: &mut Transaction<'_, Postgres>,
     item: &ActionItem,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO action_items (
             id, tenant_id, cluster_id, postmortem_id, incident_id, title,
@@ -650,7 +655,7 @@ async fn insert_knowledge(
     transaction: &mut Transaction<'_, Postgres>,
     item: &KnowledgeItem,
     markdown: &str,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO knowledge_items (
             id, tenant_id, cluster_id, title, component, rocketmq_version_range,
@@ -698,7 +703,7 @@ async fn insert_knowledge(
     Ok(())
 }
 
-fn postmortem_from_row(row: &sqlx::postgres::PgRow) -> Result<PostmortemDraft, ControlPlaneError> {
+fn postmortem_from_row(row: &sqlx::postgres::PgRow) -> Result<PostmortemDraft, ControlPlaneRequestFailure> {
     Ok(PostmortemDraft {
         id: PostmortemId::from_uuid(row.try_get("id")?),
         tenant_id: rocketmq_sre_contracts::TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -706,7 +711,7 @@ fn postmortem_from_row(row: &sqlx::postgres::PgRow) -> Result<PostmortemDraft, C
         incident_id: IncidentId::from_uuid(row.try_get("incident_id")?),
         status: enum_from_string(row.try_get("status")?, "postmortem status")?,
         current_revision: u32::try_from(row.try_get::<i32, _>("current_revision")?)
-            .map_err(|_| ControlPlaneError::configuration("stored postmortem revision is negative"))?,
+            .map_err(ControlPlaneError::configuration_source)?,
         confirmed_by: row.try_get("confirmed_by")?,
         confirmed_at: row.try_get("confirmed_at")?,
         published_knowledge_item_id: row
@@ -718,12 +723,11 @@ fn postmortem_from_row(row: &sqlx::postgres::PgRow) -> Result<PostmortemDraft, C
     })
 }
 
-fn revision_from_row(row: &sqlx::postgres::PgRow) -> Result<PostmortemRevision, ControlPlaneError> {
+fn revision_from_row(row: &sqlx::postgres::PgRow) -> Result<PostmortemRevision, ControlPlaneRequestFailure> {
     Ok(PostmortemRevision {
         id: rocketmq_sre_contracts::PostmortemRevisionId::from_uuid(row.try_get("id")?),
         postmortem_id: PostmortemId::from_uuid(row.try_get("postmortem_id")?),
-        revision: u32::try_from(row.try_get::<i32, _>("revision")?)
-            .map_err(|_| ControlPlaneError::configuration("stored postmortem revision is negative"))?,
+        revision: u32::try_from(row.try_get::<i32, _>("revision")?).map_err(ControlPlaneError::configuration_source)?,
         summary: row.try_get("summary")?,
         impact: row.try_get("impact")?,
         detection: row.try_get("detection")?,
@@ -748,7 +752,7 @@ fn revision_from_row(row: &sqlx::postgres::PgRow) -> Result<PostmortemRevision, 
     })
 }
 
-fn action_item_from_row(row: &sqlx::postgres::PgRow) -> Result<ActionItem, ControlPlaneError> {
+fn action_item_from_row(row: &sqlx::postgres::PgRow) -> Result<ActionItem, ControlPlaneRequestFailure> {
     Ok(ActionItem {
         id: ActionItemId::from_uuid(row.try_get("id")?),
         tenant_id: rocketmq_sre_contracts::TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -772,7 +776,7 @@ fn action_item_from_row(row: &sqlx::postgres::PgRow) -> Result<ActionItem, Contr
     })
 }
 
-fn knowledge_from_row(row: &sqlx::postgres::PgRow) -> Result<KnowledgeItem, ControlPlaneError> {
+fn knowledge_from_row(row: &sqlx::postgres::PgRow) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
     Ok(KnowledgeItem {
         id: KnowledgeItemId::from_uuid(row.try_get("id")?),
         tenant_id: rocketmq_sre_contracts::TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -795,7 +799,7 @@ fn knowledge_from_row(row: &sqlx::postgres::PgRow) -> Result<KnowledgeItem, Cont
     })
 }
 
-fn todo_from_row(row: &sqlx::postgres::PgRow) -> Result<OperatorTodo, ControlPlaneError> {
+fn todo_from_row(row: &sqlx::postgres::PgRow) -> Result<OperatorTodo, ControlPlaneRequestFailure> {
     Ok(OperatorTodo {
         id: row.try_get("id")?,
         tenant_id: rocketmq_sre_contracts::TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -809,9 +813,9 @@ fn todo_from_row(row: &sqlx::postgres::PgRow) -> Result<OperatorTodo, ControlPla
     })
 }
 
-fn enforce_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneError> {
+fn enforce_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneRequestFailure> {
     if !auth.clusters.contains(&cluster_id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "cluster is outside the authenticated allowlist",
         ));
@@ -819,26 +823,26 @@ fn enforce_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), Cont
     Ok(())
 }
 
-fn enum_name<T: Serialize>(value: T) -> Result<String, ControlPlaneError> {
+fn enum_name<T: Serialize>(value: T) -> Result<String, ControlPlaneRequestFailure> {
     serde_json::to_value(value)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
-        .ok_or_else(|| ControlPlaneError::configuration("workflow enum did not encode as text"))
+        .ok_or_else(|| ControlPlaneRequestFailure::configuration("workflow enum did not encode as text"))
 }
 
-fn enum_from_string<T: DeserializeOwned>(value: String, field: &str) -> Result<T, ControlPlaneError> {
+fn enum_from_string<T: DeserializeOwned>(value: String, _field: &str) -> Result<T, ControlPlaneRequestFailure> {
     serde_json::from_value(Value::String(value))
-        .map_err(|error| ControlPlaneError::configuration(format!("stored {field} is invalid: {error}")))
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-fn json_value<T: Serialize>(value: &T) -> Result<Value, ControlPlaneError> {
+fn json_value<T: Serialize>(value: &T) -> Result<Value, ControlPlaneRequestFailure> {
     serde_json::to_value(value)
-        .map_err(|error| ControlPlaneError::configuration(format!("postmortem JSON cannot be encoded: {error}")))
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
-fn json_from_value<T: DeserializeOwned>(value: Value, field: &str) -> Result<T, ControlPlaneError> {
+fn json_from_value<T: DeserializeOwned>(value: Value, _field: &str) -> Result<T, ControlPlaneRequestFailure> {
     serde_json::from_value(value)
-        .map_err(|error| ControlPlaneError::configuration(format!("stored {field} is invalid: {error}")))
+        .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
 }
 
 #[cfg(test)]

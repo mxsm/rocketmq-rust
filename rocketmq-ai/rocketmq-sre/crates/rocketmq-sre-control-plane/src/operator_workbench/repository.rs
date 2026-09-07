@@ -37,6 +37,7 @@ use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 
 const OPERATIONS_STATE_SCHEMA: &str = "rocketmq-sre.incident-operations-state.v1";
@@ -83,7 +84,7 @@ impl OperatorWorkbenchRepository {
         &self,
         auth: &AuthContext,
         incident_id: IncidentId,
-    ) -> Result<IncidentOperationsState, ControlPlaneError> {
+    ) -> Result<IncidentOperationsState, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, owner_name, acknowledged_at,
                     acknowledged_by, suppressed_until, suppression_reason,
@@ -96,7 +97,7 @@ impl OperatorWorkbenchRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         ensure_cluster_scope(auth, ClusterId::from_uuid(row.try_get("cluster_id")?))?;
         self.state_from_row(&row, Utc::now()).await
     }
@@ -107,7 +108,7 @@ impl OperatorWorkbenchRepository {
         incident_id: IncidentId,
         request: &IncidentOperationRequest,
         correlation_id: CorrelationId,
-    ) -> Result<IncidentOperationResult, ControlPlaneError> {
+    ) -> Result<IncidentOperationResult, ControlPlaneRequestFailure> {
         validate_operation(request)?;
         let mut transaction = self.pool.begin().await?;
         let source = lock_incident(&mut transaction, auth, incident_id).await?;
@@ -180,14 +181,14 @@ impl OperatorWorkbenchRepository {
                 reason,
             } => {
                 if *target_incident_id == incident_id {
-                    return Err(ControlPlaneError::validation(
+                    return Err(ControlPlaneRequestFailure::validation(
                         "invalid_incident_operation",
                         "an incident cannot be merged into itself",
                     ));
                 }
                 let target = lock_incident(&mut transaction, auth, *target_incident_id).await?;
                 if target.cluster_id != source.cluster_id {
-                    return Err(ControlPlaneError::forbidden(
+                    return Err(ControlPlaneRequestFailure::forbidden(
                         "cluster_not_allowed",
                         "merged incidents must belong to the same cluster",
                     ));
@@ -327,7 +328,7 @@ impl OperatorWorkbenchRepository {
         &self,
         row: &PgRow,
         now: DateTime<Utc>,
-    ) -> Result<IncidentOperationsState, ControlPlaneError> {
+    ) -> Result<IncidentOperationsState, ControlPlaneRequestFailure> {
         let incident_id = IncidentId::from_uuid(row.try_get("id")?);
         let acknowledged_at: Option<DateTime<Utc>> = row.try_get("acknowledged_at")?;
         let acknowledgement_due_at: DateTime<Utc> = row.try_get("sla_ack_due_at")?;
@@ -380,7 +381,7 @@ impl OperatorWorkbenchRepository {
     }
 }
 
-pub(super) fn validate_operation(request: &IncidentOperationRequest) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_operation(request: &IncidentOperationRequest) -> Result<(), ControlPlaneRequestFailure> {
     match request {
         IncidentOperationRequest::Acknowledge { note } => {
             if let Some(value) = note {
@@ -411,7 +412,7 @@ pub(super) fn validate_operation(request: &IncidentOperationRequest) -> Result<(
             validate_text("reason", reason, MAX_REASON_CHARS)?;
             let now = Utc::now();
             if *until <= now || *until > now + Duration::days(MAX_SUPPRESSION_DAYS) {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "invalid_incident_operation",
                     "suppression must end within the next 30 days",
                 ));
@@ -421,10 +422,10 @@ pub(super) fn validate_operation(request: &IncidentOperationRequest) -> Result<(
     Ok(())
 }
 
-fn validate_text(name: &'static str, value: &str, max_chars: usize) -> Result<(), ControlPlaneError> {
+fn validate_text(name: &'static str, value: &str, max_chars: usize) -> Result<(), ControlPlaneRequestFailure> {
     let length = value.trim().chars().count();
     if length == 0 || length > max_chars {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_incident_operation",
             format!("{name} must contain between 1 and {max_chars} characters"),
         ));
@@ -436,7 +437,7 @@ async fn lock_incident(
     transaction: &mut Transaction<'_, Postgres>,
     auth: &AuthContext,
     incident_id: IncidentId,
-) -> Result<LockedIncident, ControlPlaneError> {
+) -> Result<LockedIncident, ControlPlaneRequestFailure> {
     let row = sqlx::query(
         "SELECT id, tenant_id, cluster_id, title, resource, symptom_family,
                 severity, owner_name, occurrence_count, status
@@ -448,7 +449,7 @@ async fn lock_incident(
     .bind(auth.tenant_id.as_uuid())
     .fetch_optional(&mut **transaction)
     .await?
-    .ok_or(ControlPlaneError::NotFound)?;
+    .ok_or(ControlPlaneRequestFailure::not_found())?;
     let occurrence_count: i32 = row.try_get("occurrence_count")?;
     Ok(LockedIncident {
         id: IncidentId::from_uuid(row.try_get("id")?),
@@ -459,24 +460,23 @@ async fn lock_incident(
         symptom_family: row.try_get("symptom_family")?,
         severity: parse_severity(row.try_get("severity")?)?,
         owner: row.try_get("owner_name")?,
-        occurrence_count: u32::try_from(occurrence_count)
-            .map_err(|_| ControlPlaneError::configuration("stored occurrence count is invalid"))?,
+        occurrence_count: u32::try_from(occurrence_count).map_err(ControlPlaneError::configuration_source)?,
         status: row.try_get("status")?,
     })
 }
 
-fn parse_severity(value: Option<String>) -> Result<Option<AlertSeverity>, ControlPlaneError> {
+fn parse_severity(value: Option<String>) -> Result<Option<AlertSeverity>, ControlPlaneRequestFailure> {
     value
         .map(|severity| {
             serde_json::from_value(Value::String(severity))
-                .map_err(|_| ControlPlaneError::configuration("stored incident severity is invalid"))
+                .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))
         })
         .transpose()
 }
 
-fn ensure_cluster_scope(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneError> {
+fn ensure_cluster_scope(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneRequestFailure> {
     if !auth.clusters.contains(&cluster_id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "incident cluster is outside the authenticated scope",
         ));
@@ -484,18 +484,22 @@ fn ensure_cluster_scope(auth: &AuthContext, cluster_id: ClusterId) -> Result<(),
     Ok(())
 }
 
-fn ensure_active(incident: &LockedIncident, action: &str) -> Result<(), ControlPlaneError> {
+fn ensure_active(incident: &LockedIncident, action: &str) -> Result<(), ControlPlaneRequestFailure> {
     if matches!(incident.status.as_str(), "resolved" | "escalated") {
-        return Err(ControlPlaneError::conflict(format!(
-            "terminal incidents cannot accept {action}"
-        )));
+        return Err(ControlPlaneRequestFailure::conflict_code(
+            "conflict",
+            format!("terminal incidents cannot accept {action}"),
+        ));
     }
     Ok(())
 }
 
-fn ensure_terminal(incident: &LockedIncident) -> Result<(), ControlPlaneError> {
+fn ensure_terminal(incident: &LockedIncident) -> Result<(), ControlPlaneRequestFailure> {
     if !matches!(incident.status.as_str(), "resolved" | "escalated") {
-        return Err(ControlPlaneError::conflict("only terminal incidents can be reopened"));
+        return Err(ControlPlaneRequestFailure::conflict_code(
+            "conflict",
+            "only terminal incidents can be reopened",
+        ));
     }
     Ok(())
 }
@@ -513,7 +517,7 @@ async fn create_related_incident(
     symptom_family: &str,
     reopened_from: Option<IncidentId>,
     now: DateTime<Utc>,
-) -> Result<IncidentId, ControlPlaneError> {
+) -> Result<IncidentId, ControlPlaneRequestFailure> {
     let id = IncidentId::new();
     let (ack_due, resolve_due) = sla_deadlines(source.severity, now);
     let fingerprint = if reopened_from.is_some() {
@@ -578,7 +582,7 @@ async fn insert_relation(
     relation_kind: &str,
     reason_code: &str,
     now: DateTime<Utc>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO incident_relations (
             id, tenant_id, cluster_id, from_incident_id, to_incident_id,
@@ -608,7 +612,7 @@ async fn persist_operation(
     applied: &AppliedOperation,
     correlation_id: CorrelationId,
     now: DateTime<Utc>,
-) -> Result<TimelineEvent, ControlPlaneError> {
+) -> Result<TimelineEvent, ControlPlaneRequestFailure> {
     let operation_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO incident_operations (
@@ -670,7 +674,7 @@ async fn append_related_timeline(
     details: Value,
     correlation_id: CorrelationId,
     now: DateTime<Utc>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     insert_timeline(
         transaction,
         &TimelineEvent {
@@ -696,7 +700,7 @@ async fn append_related_timeline(
 async fn insert_timeline(
     transaction: &mut Transaction<'_, Postgres>,
     event: &TimelineEvent,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO incident_timeline (
             event_id, tenant_id, cluster_id, investigation_id, incident_id,

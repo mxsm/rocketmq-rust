@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
+
 use hmac::Hmac;
 use hmac::KeyInit;
 use hmac::Mac;
@@ -30,11 +33,7 @@ impl ResolvedSecret {
 
 /// Secret reference boundary shared by outbound and inbound integrations.
 pub(super) trait SecretProvider: Send + Sync {
-    fn resolve(&self, reference: &str) -> Result<ResolvedSecret, &'static str>;
-
-    fn available(&self, reference: &str) -> bool {
-        self.resolve(reference).is_ok()
-    }
+    fn resolve(&self, reference: &str) -> Result<ResolvedSecret, ControlPlaneRequestFailure>;
 }
 
 /// Production provider for environment-backed secret references. Vault and
@@ -44,22 +43,24 @@ pub(super) trait SecretProvider: Send + Sync {
 pub(super) struct EnvSecretProvider;
 
 impl SecretProvider for EnvSecretProvider {
-    fn resolve(&self, reference: &str) -> Result<ResolvedSecret, &'static str> {
+    fn resolve(&self, reference: &str) -> Result<ResolvedSecret, ControlPlaneRequestFailure> {
         let name = environment_name(reference)?;
         std::env::var(name)
-            .ok()
+            .map_err(|source| ControlPlaneError::validation_source("secret_unavailable", source))
+            .map(Some)?
             .filter(|secret| !secret.is_empty() && secret.len() <= 4_096)
             .map(ResolvedSecret)
-            .ok_or("secret_unavailable")
+            .ok_or_else(|| ControlPlaneRequestFailure::validation("secret_unavailable", "delivery rejected"))
     }
 }
 
-pub(super) fn hmac_sha256(key: &ResolvedSecret, message: &[u8]) -> Result<String, &'static str> {
+pub(super) fn hmac_sha256(key: &ResolvedSecret, message: &[u8]) -> Result<String, ControlPlaneError> {
     hmac_sha256_bytes(key.as_bytes(), message)
 }
 
-pub(super) fn hmac_sha256_bytes(key: &[u8], message: &[u8]) -> Result<String, &'static str> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).map_err(|_| "invalid_signature_key")?;
+pub(super) fn hmac_sha256_bytes(key: &[u8], message: &[u8]) -> Result<String, ControlPlaneError> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key)
+        .map_err(|source| ControlPlaneError::validation_source("invalid_signature_key", source))?;
     mac.update(message);
     Ok(hex_lower(&mac.finalize().into_bytes()))
 }
@@ -76,15 +77,20 @@ pub(super) fn valid_secret_reference(reference: &str) -> bool {
     environment_name(reference).is_ok()
 }
 
-fn environment_name(reference: &str) -> Result<&str, &'static str> {
-    let name = reference.strip_prefix("env:").ok_or("unsupported_secret_reference")?;
+fn environment_name(reference: &str) -> Result<&str, ControlPlaneRequestFailure> {
+    let name = reference
+        .strip_prefix("env:")
+        .ok_or_else(|| ControlPlaneRequestFailure::validation("unsupported_secret_reference", "delivery rejected"))?;
     if name.is_empty()
         || name.len() > 128
         || !name
             .bytes()
             .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
     {
-        return Err("invalid_secret_reference");
+        return Err(ControlPlaneRequestFailure::validation(
+            "invalid_secret_reference",
+            "delivery rejected",
+        ));
     }
     Ok(name)
 }
@@ -118,13 +124,13 @@ pub(super) mod tests {
     }
 
     impl SecretProvider for StaticSecretProvider {
-        fn resolve(&self, reference: &str) -> Result<ResolvedSecret, &'static str> {
+        fn resolve(&self, reference: &str) -> Result<ResolvedSecret, ControlPlaneRequestFailure> {
             self.secrets
                 .get(reference)
                 .filter(|secret| !secret.is_empty())
                 .cloned()
                 .map(ResolvedSecret)
-                .ok_or("secret_unavailable")
+                .ok_or_else(|| ControlPlaneRequestFailure::validation("secret_unavailable", "delivery rejected"))
         }
     }
 
@@ -135,7 +141,7 @@ pub(super) mod tests {
         let signature = hmac_sha256(&secret, b"message").expect("signature");
         assert!(signature_matches(&signature, &format!("sha256={signature}")));
         assert!(!signature_matches(&signature, "sha256:invalid"));
-        assert!(!provider.available("env:MISSING"));
+        assert!(provider.resolve("env:MISSING").is_err());
         assert!(valid_secret_reference("env:TEST_SECRET"));
         assert!(!valid_secret_reference("literal:secret"));
     }

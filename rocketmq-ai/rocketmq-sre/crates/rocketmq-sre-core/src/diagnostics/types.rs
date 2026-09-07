@@ -21,7 +21,7 @@ use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_contracts::SchemaVersion;
 
 use super::DiagnosticContext;
-use super::DiagnosticError;
+use rocketmq_sre_contracts::SreContractError;
 
 /// Schema family emitted by every deterministic diagnostic pack.
 pub const DIAGNOSTIC_OUTPUT_SCHEMA_FAMILY: &str = "rocketmq-sre.diagnostic-result";
@@ -272,7 +272,7 @@ pub trait DiagnosticPack: fmt::Debug + Send + Sync {
     ///
     /// Returns a fail-closed diagnostic error when evidence is unsafe or
     /// incompatible with the pack.
-    fn validate_evidence(&self, _evidence: &[EvidenceSnapshot]) -> Result<(), DiagnosticError> {
+    fn validate_evidence(&self, _evidence: &[EvidenceSnapshot]) -> Result<(), SreContractError> {
         Ok(())
     }
 
@@ -281,7 +281,7 @@ pub trait DiagnosticPack: fmt::Debug + Send + Sync {
     /// # Errors
     ///
     /// Returns a diagnostic error when evidence cannot be safely evaluated.
-    fn evaluate(&self, context: &DiagnosticContext<'_>) -> Result<Vec<RuleMatch>, DiagnosticError>;
+    fn evaluate(&self, context: &DiagnosticContext<'_>) -> Result<Vec<RuleMatch>, SreContractError>;
 
     /// Returns the stable major-qualified pack ID.
     #[must_use]

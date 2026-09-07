@@ -32,6 +32,8 @@ use crate::AgentEffectRecord;
 use crate::AgentEffectStore;
 use crate::DispatchBarrier;
 use crate::ExecutionAgentError;
+use crate::ExecutionAgentOperationOutcome;
+use crate::ExecutionAgentRequestFailure;
 use crate::FenceAckSigner;
 use crate::LeaseAuthorityClient;
 use rocketmq_sre_contracts::AdvanceFenceRequest;
@@ -130,16 +132,25 @@ impl ExecutionAgent {
 
     /// Performs a typed, sanitized read for Executor precheck.
     ///
-    /// # Errors
-    ///
-    /// Rejects unknown actions, incompatible schemas, and malformed driver
-    /// responses.
-    pub async fn read_state(&self, request: &AgentReadRequest) -> Result<AgentReadResult, ExecutionAgentError> {
+    /// Expected input, registry, and driver refusals are returned as closed
+    /// rejections. Operational driver and storage failures remain opaque
+    /// errors.
+    pub async fn read_state(
+        &self,
+        request: &AgentReadRequest,
+    ) -> Result<ExecutionAgentOperationOutcome<AgentReadResult>, ExecutionAgentError> {
+        execution_agent_outcome(self.read_state_inner(request).await)
+    }
+
+    async fn read_state_inner(
+        &self,
+        request: &AgentReadRequest,
+    ) -> Result<AgentReadResult, ExecutionAgentRequestFailure> {
         self.registry.validate_read(request)?;
         let handler = self.registry.handler(request.action)?;
         let result = timeout(self.driver_timeout, handler.read_state(request))
             .await
-            .map_err(|_| ExecutionAgentError::DriverUnknown)??;
+            .map_err(ExecutionAgentRequestFailure::driver_source)??;
         if result.schema_version != EXECUTION_AGENT_SCHEMA_VERSION
             || result.action != request.action
             || result.target != request.target
@@ -150,20 +161,33 @@ impl ExecutionAgent {
                 .iter()
                 .any(|code| code.is_empty() || code.len() > 96)
         {
-            return Err(ExecutionAgentError::InvalidRequest);
+            return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
         }
         Ok(result)
     }
 
     /// Executes one idempotent, typed mutation under a shared dispatch barrier.
     ///
+    /// Expected identity, grant, registry, and driver refusals are returned as
+    /// closed rejections. An existing non-terminal effect is never retried.
+    ///
     /// # Errors
     ///
-    /// Fails closed on identity, grant, barrier, persistence, registry, or
-    /// driver uncertainty. An existing non-terminal effect is never retried.
-    pub async fn dispatch(&self, request: &AgentDispatchRequest) -> Result<AgentDispatchResponse, ExecutionAgentError> {
+    /// Returns only operational authority, barrier, persistence, or driver
+    /// failures.
+    pub async fn dispatch(
+        &self,
+        request: &AgentDispatchRequest,
+    ) -> Result<ExecutionAgentOperationOutcome<AgentDispatchResponse>, ExecutionAgentError> {
+        execution_agent_outcome(self.dispatch_inner(request).await)
+    }
+
+    async fn dispatch_inner(
+        &self,
+        request: &AgentDispatchRequest,
+    ) -> Result<AgentDispatchResponse, ExecutionAgentRequestFailure> {
         if request.schema_version != EXECUTION_AGENT_SCHEMA_VERSION {
-            return Err(ExecutionAgentError::InvalidRequest);
+            return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
         }
         self.registry.validate_dispatch(&request.request)?;
         self.verify_dispatch_safety(request).await?;
@@ -180,14 +204,14 @@ impl ExecutionAgent {
         match (result, release) {
             (Ok(response), Ok(())) => Ok(response),
             (Err(error), _) => Err(error),
-            (Ok(_), Err(error)) => Err(error),
+            (Ok(_), Err(error)) => Err(error.into()),
         }
     }
 
     async fn dispatch_under_guard(
         &self,
         request: &AgentDispatchRequest,
-    ) -> Result<AgentDispatchResponse, ExecutionAgentError> {
+    ) -> Result<AgentDispatchResponse, ExecutionAgentRequestFailure> {
         self.verify_dispatch_safety(request).await?;
         self.authority
             .verify_fence_grant(request.tenant_id, &request.request.intent.fence_grant)
@@ -198,7 +222,7 @@ impl ExecutionAgent {
             .highest_epoch(request.request.intent.fence_grant.cluster_id)
             .await?;
         if highest != Some(request.request.intent.fence_grant.epoch) {
-            return Err(self.record_fence_error(ExecutionAgentError::AuthorityRejected));
+            return Err(self.record_fence_error(crate::ExecutionAgentRequestFailure::AuthorityRejected));
         }
         let creation = self
             .store
@@ -214,7 +238,7 @@ impl ExecutionAgent {
                 });
             }
             self.metrics.unknown_effects_total.fetch_add(1, Ordering::Relaxed);
-            return Err(ExecutionAgentError::UnresolvedEffect);
+            return Err(crate::ExecutionAgentRequestFailure::UnresolvedEffect);
         }
 
         let operation_id = format!("sre-{}", creation.effect.id.simple());
@@ -257,23 +281,23 @@ impl ExecutionAgent {
                     .mark_unknown(&creation.effect.idempotency_key, Utc::now())
                     .await?;
                 self.metrics.unknown_effects_total.fetch_add(1, Ordering::Relaxed);
-                Err(ExecutionAgentError::DriverUnknown)
+                Err(crate::ExecutionAgentRequestFailure::DriverUnknown)
             }
             Ok(Err(_)) | Err(_) => {
                 self.store
                     .mark_unknown(&creation.effect.idempotency_key, Utc::now())
                     .await?;
                 self.metrics.unknown_effects_total.fetch_add(1, Ordering::Relaxed);
-                Err(ExecutionAgentError::DriverUnknown)
+                Err(crate::ExecutionAgentRequestFailure::DriverUnknown)
             }
         }
     }
 
-    async fn verify_dispatch_safety(&self, request: &AgentDispatchRequest) -> Result<(), ExecutionAgentError> {
+    async fn verify_dispatch_safety(&self, request: &AgentDispatchRequest) -> Result<(), ExecutionAgentRequestFailure> {
         match request.authorization {
             AgentDispatchAuthorization::HumanApproved => {
                 if request.request.intent.dynamic_safety.is_some() {
-                    return Err(ExecutionAgentError::InvalidRequest);
+                    return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
                 }
                 Ok(())
             }
@@ -284,11 +308,13 @@ impl ExecutionAgent {
                     .intent
                     .dynamic_safety
                     .as_ref()
-                    .ok_or(ExecutionAgentError::AuthorityRejected)?;
-                let plan_id = request.plan_id.ok_or(ExecutionAgentError::InvalidRequest)?;
+                    .ok_or(crate::ExecutionAgentRequestFailure::AuthorityRejected)?;
+                let plan_id = request
+                    .plan_id
+                    .ok_or(crate::ExecutionAgentRequestFailure::InvalidRequest)?;
                 decision
                     .validate_allow_at(Utc::now())
-                    .map_err(|_| ExecutionAgentError::AuthorityRejected)?;
+                    .map_err(|_| crate::ExecutionAgentRequestFailure::AuthorityRejected)?;
                 if decision.tenant_id != request.tenant_id
                     || decision.cluster_id != request.request.intent.fence_grant.cluster_id
                     || decision.action != request.request.action
@@ -298,7 +324,7 @@ impl ExecutionAgent {
                     || decision.execution_id != request.request.intent.execution_id
                     || decision.execution_step_id != request.request.intent.step_id
                 {
-                    return Err(ExecutionAgentError::AuthorityRejected);
+                    return Err(crate::ExecutionAgentRequestFailure::AuthorityRejected);
                 }
                 self.authority
                     .verify_dynamic_safety(request.tenant_id, decision)
@@ -311,13 +337,17 @@ impl ExecutionAgent {
     /// Reconciles one old effect using read-only live state and never retries
     /// the mutation.
     ///
-    /// # Errors
-    ///
-    /// Rejects stale grants, cross-scope effects, and malformed driver output.
     pub async fn reconcile_effect(
         &self,
         request: &ReconcileEffectRequest,
-    ) -> Result<ReconcileEffectResponse, ExecutionAgentError> {
+    ) -> Result<ExecutionAgentOperationOutcome<ReconcileEffectResponse>, ExecutionAgentError> {
+        execution_agent_outcome(self.reconcile_effect_inner(request).await)
+    }
+
+    async fn reconcile_effect_inner(
+        &self,
+        request: &ReconcileEffectRequest,
+    ) -> Result<ReconcileEffectResponse, ExecutionAgentRequestFailure> {
         validate_reconcile_envelope(request)?;
         self.authority
             .verify_reconcile_grant(request.tenant_id, &request.reconcile_grant)
@@ -328,7 +358,7 @@ impl ExecutionAgent {
             || effect.cluster_id != request.reconcile_grant.cluster_id
             || effect.epoch >= request.reconcile_grant.pending_epoch
         {
-            return Err(ExecutionAgentError::AuthorityRejected);
+            return Err(crate::ExecutionAgentRequestFailure::AuthorityRejected);
         }
         // A confirmed dispatch result proves what happened at dispatch time,
         // not what is live during takeover. TTL actions and external
@@ -343,7 +373,7 @@ impl ExecutionAgent {
             handler.reconcile(&read, effect.operation_id.as_deref()),
         )
         .await
-        .map_err(|_| ExecutionAgentError::DriverUnknown)??;
+        .map_err(ExecutionAgentRequestFailure::driver_source)??;
         validate_reconcile_result(&reconciled)?;
         // Confirmed is the immutable dispatch-time journal terminal. Recovery
         // still returns the current live observation, but must not rewrite
@@ -367,13 +397,22 @@ impl ExecutionAgent {
     /// Advances the durable Agent epoch only after all old effects are
     /// terminal and all in-flight shared dispatch guards have drained.
     ///
-    /// # Errors
-    ///
-    /// Fails closed when Authority, barrier, persistence, or reconciliation
-    /// state is unavailable.
-    pub async fn advance_fence(&self, request: &AdvanceFenceRequest) -> Result<FenceAck, ExecutionAgentError> {
+    /// Expected stale-fence and unresolved-effect results are closed
+    /// rejections; operational Authority, barrier, and persistence failures
+    /// remain opaque errors.
+    pub async fn advance_fence(
+        &self,
+        request: &AdvanceFenceRequest,
+    ) -> Result<ExecutionAgentOperationOutcome<FenceAck>, ExecutionAgentError> {
+        execution_agent_outcome(self.advance_fence_inner(request).await)
+    }
+
+    async fn advance_fence_inner(
+        &self,
+        request: &AdvanceFenceRequest,
+    ) -> Result<FenceAck, ExecutionAgentRequestFailure> {
         if request.schema_version != EXECUTION_AGENT_SCHEMA_VERSION {
-            return Err(ExecutionAgentError::InvalidRequest);
+            return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
         }
         self.authority
             .verify_reconcile_grant(request.tenant_id, &request.reconcile_grant)
@@ -385,11 +424,14 @@ impl ExecutionAgent {
         match (result, release) {
             (Ok(ack), Ok(())) => Ok(ack),
             (Err(error), _) => Err(error),
-            (Ok(_), Err(error)) => Err(error),
+            (Ok(_), Err(error)) => Err(error.into()),
         }
     }
 
-    async fn advance_fence_under_guard(&self, request: &AdvanceFenceRequest) -> Result<FenceAck, ExecutionAgentError> {
+    async fn advance_fence_under_guard(
+        &self,
+        request: &AdvanceFenceRequest,
+    ) -> Result<FenceAck, ExecutionAgentRequestFailure> {
         self.authority
             .verify_reconcile_grant(request.tenant_id, &request.reconcile_grant)
             .await
@@ -403,7 +445,7 @@ impl ExecutionAgent {
                 .map_err(Into::into);
         }
         if current.is_some_and(|epoch| epoch > request.reconcile_grant.pending_epoch) {
-            return Err(self.record_fence_error(ExecutionAgentError::AuthorityRejected));
+            return Err(self.record_fence_error(crate::ExecutionAgentRequestFailure::AuthorityRejected));
         }
         if !self
             .store
@@ -415,7 +457,7 @@ impl ExecutionAgent {
             .await?
             .is_empty()
         {
-            return Err(ExecutionAgentError::UnresolvedEffect);
+            return Err(crate::ExecutionAgentRequestFailure::UnresolvedEffect);
         }
         let ack = self.ack_signer.sign(&request.reconcile_grant, Utc::now())?;
         self.store
@@ -424,9 +466,21 @@ impl ExecutionAgent {
         Ok(ack)
     }
 
-    fn record_fence_error(&self, error: ExecutionAgentError) -> ExecutionAgentError {
+    fn record_fence_error(&self, error: ExecutionAgentRequestFailure) -> ExecutionAgentRequestFailure {
         self.metrics.fence_rejections_total.fetch_add(1, Ordering::Relaxed);
         error
+    }
+}
+
+fn execution_agent_outcome<T>(
+    result: Result<T, ExecutionAgentRequestFailure>,
+) -> Result<ExecutionAgentOperationOutcome<T>, ExecutionAgentError> {
+    match result {
+        Ok(value) => Ok(ExecutionAgentOperationOutcome::accepted(value)),
+        Err(ExecutionAgentRequestFailure::Rejected(rejection)) => {
+            Ok(ExecutionAgentOperationOutcome::rejected(rejection))
+        }
+        Err(ExecutionAgentRequestFailure::Operational(error)) => Err(error),
     }
 }
 
@@ -444,23 +498,25 @@ fn read_request(tenant_id: rocketmq_sre_contracts::TenantId, request: &AgentStep
     }
 }
 
-fn effect_result(effect: &AgentEffectRecord) -> Result<AgentStepResult, ExecutionAgentError> {
+fn effect_result(effect: &AgentEffectRecord) -> Result<AgentStepResult, ExecutionAgentRequestFailure> {
     let operation_id = effect
         .operation_id
         .clone()
         .filter(|value| !value.trim().is_empty())
-        .ok_or(ExecutionAgentError::UnresolvedEffect)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::UnresolvedEffect)?;
     let outcome_code = effect
         .outcome_code
         .clone()
         .filter(|value| valid_bounded(value, 96))
-        .ok_or(ExecutionAgentError::UnresolvedEffect)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::UnresolvedEffect)?;
     let sanitized_summary = effect
         .sanitized_summary
         .clone()
         .filter(|value| valid_bounded(value, MAX_SUMMARY_BYTES))
-        .ok_or(ExecutionAgentError::UnresolvedEffect)?;
-    let completed_at = effect.confirmed_at.ok_or(ExecutionAgentError::UnresolvedEffect)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::UnresolvedEffect)?;
+    let completed_at = effect
+        .confirmed_at
+        .ok_or(crate::ExecutionAgentRequestFailure::UnresolvedEffect)?;
     Ok(AgentStepResult {
         execution_id: effect.execution_id,
         step_id: effect.step_id,
@@ -472,7 +528,7 @@ fn effect_result(effect: &AgentEffectRecord) -> Result<AgentStepResult, Executio
     })
 }
 
-fn validate_reconcile_envelope(request: &ReconcileEffectRequest) -> Result<(), ExecutionAgentError> {
+fn validate_reconcile_envelope(request: &ReconcileEffectRequest) -> Result<(), ExecutionAgentRequestFailure> {
     if request.schema_version == EXECUTION_AGENT_SCHEMA_VERSION
         && !request.idempotency_key.trim().is_empty()
         && request.reconcile_grant.cluster_id.as_uuid() != Uuid::nil()
@@ -480,18 +536,18 @@ fn validate_reconcile_envelope(request: &ReconcileEffectRequest) -> Result<(), E
     {
         Ok(())
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 
-fn validate_reconcile_result(result: &ReconcileEffectResponse) -> Result<(), ExecutionAgentError> {
+fn validate_reconcile_result(result: &ReconcileEffectResponse) -> Result<(), ExecutionAgentRequestFailure> {
     if result.schema_version == EXECUTION_AGENT_SCHEMA_VERSION
         && valid_bounded(&result.outcome_code, 96)
         && valid_bounded(&result.sanitized_summary, MAX_SUMMARY_BYTES)
     {
         Ok(())
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 

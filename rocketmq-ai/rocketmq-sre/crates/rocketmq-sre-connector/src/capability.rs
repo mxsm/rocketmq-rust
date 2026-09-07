@@ -26,7 +26,7 @@ use sha2::Digest;
 use sha2::Sha256;
 
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 pub const MCP_BUSINESS_SCHEMA: &str = "rocketmq-mcp.v2";
@@ -74,65 +74,119 @@ pub struct VerifiedCapability {
     pub observed_at: DateTime<Utc>,
 }
 
+/// Closed reason why an MCP capability surface was not accepted.
+///
+/// These deterministic protocol and surface checks do not implement
+/// [`std::error::Error`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConnectorCapabilityRejection {
+    ProtocolMismatch,
+    UnsupportedBusinessSchema,
+    ClusterMismatch,
+    MutationSupported,
+    MalformedSurfaceDigest,
+    PinnedSurfaceDigestMismatch,
+    DuplicateTool,
+    MissingRequiredTool,
+    UnsafeTool,
+    ToolSurfaceMismatch,
+    MissingToolAnnotations,
+    UnsafeToolAnnotations,
+    ToolSchemaDigestMismatch,
+    ToolSurfaceDigestMismatch,
+    DuplicateResource,
+    ResourceSurfaceMismatch,
+    ResourceClusterMismatch,
+    IncompleteClusterSurface,
+    SurfaceChanged,
+}
+
+impl ConnectorCapabilityRejection {
+    /// Returns the stable connector classification for reporting and metrics.
+    #[must_use]
+    pub const fn failure(self) -> ConnectorFailure {
+        match self {
+            Self::UnsupportedBusinessSchema => ConnectorFailure::UnsupportedSchemaMajor,
+            Self::MissingRequiredTool => ConnectorFailure::MissingRequiredFeature,
+            Self::MalformedSurfaceDigest
+            | Self::PinnedSurfaceDigestMismatch
+            | Self::ToolSchemaDigestMismatch
+            | Self::ToolSurfaceDigestMismatch
+            | Self::SurfaceChanged => ConnectorFailure::SchemaDigestMismatch,
+            Self::ClusterMismatch | Self::ResourceClusterMismatch => ConnectorFailure::ClusterNotAllowed,
+            Self::ProtocolMismatch
+            | Self::MutationSupported
+            | Self::DuplicateTool
+            | Self::UnsafeTool
+            | Self::ToolSurfaceMismatch
+            | Self::MissingToolAnnotations
+            | Self::UnsafeToolAnnotations
+            | Self::DuplicateResource
+            | Self::ResourceSurfaceMismatch
+            | Self::IncompleteClusterSurface => ConnectorFailure::CapabilityMismatch,
+        }
+    }
+
+    /// Returns the fixed machine-facing rejection code.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        self.failure().as_str()
+    }
+}
+
+/// Capability verification result with deterministic rejection separated from
+/// operational [`ConnectorError`] failures.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConnectorCapabilityOutcome<T> {
+    Verified(T),
+    Rejected(ConnectorCapabilityRejection),
+}
+
 /// Verifies that a capability resource and the live MCP discovery surface are
 /// the same, read-only contract.
 ///
 /// # Errors
 ///
-/// Returns a fail-closed capability error for protocol/schema mismatch,
-/// mutation exposure, tool drift, resource drift, or digest drift.
+/// Returns an operational error only if the surface cannot be encoded for
+/// verification. Protocol/schema mismatch, mutation exposure, tool drift,
+/// resource drift, and digest drift are closed rejections.
 pub fn verify_manifest(
     mut manifest: CapabilityManifest,
     expected_cluster: &str,
     live_tools: &[Tool],
     live_resource_uris: &BTreeSet<String>,
     pinned_surface_digest: Option<&str>,
-) -> Result<VerifiedCapability, ConnectorError> {
+) -> Result<ConnectorCapabilityOutcome<VerifiedCapability>, ConnectorError> {
     if manifest.mcp_protocol_version != MCP_PROTOCOL_VERSION {
-        return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
-            format!(
-                "MCP protocol `{}` does not equal `{MCP_PROTOCOL_VERSION}`",
-                manifest.mcp_protocol_version
-            ),
+        return Ok(ConnectorCapabilityOutcome::Rejected(
+            ConnectorCapabilityRejection::ProtocolMismatch,
         ));
     }
     if manifest.business_schema_version != MCP_BUSINESS_SCHEMA {
-        return Err(ConnectorError::capability(
-            ConnectorErrorCode::UnsupportedSchemaMajor,
-            format!(
-                "business schema `{}` does not equal `{MCP_BUSINESS_SCHEMA}`",
-                manifest.business_schema_version
-            ),
+        return Ok(ConnectorCapabilityOutcome::Rejected(
+            ConnectorCapabilityRejection::UnsupportedBusinessSchema,
         ));
     }
     if manifest.cluster != expected_cluster {
-        return Err(ConnectorError::capability(
-            ConnectorErrorCode::ClusterNotAllowed,
-            format!(
-                "capability cluster `{}` does not equal requested cluster `{expected_cluster}`",
-                manifest.cluster
-            ),
+        return Ok(ConnectorCapabilityOutcome::Rejected(
+            ConnectorCapabilityRejection::ClusterMismatch,
         ));
     }
     if manifest.mutation_supported {
-        return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
-            "MCP advertises mutation support",
+        return Ok(ConnectorCapabilityOutcome::Rejected(
+            ConnectorCapabilityRejection::MutationSupported,
         ));
     }
     if !is_sha256_digest(&manifest.tool_surface_digest) {
-        return Err(ConnectorError::capability(
-            ConnectorErrorCode::SchemaDigestMismatch,
-            "tool surface digest is malformed",
+        return Ok(ConnectorCapabilityOutcome::Rejected(
+            ConnectorCapabilityRejection::MalformedSurfaceDigest,
         ));
     }
     if let Some(expected) = pinned_surface_digest
         && manifest.tool_surface_digest != expected
     {
-        return Err(ConnectorError::capability(
-            ConnectorErrorCode::SchemaDigestMismatch,
-            "tool surface digest differs from the configured pin",
+        return Ok(ConnectorCapabilityOutcome::Rejected(
+            ConnectorCapabilityRejection::PinnedSurfaceDigestMismatch,
         ));
     }
 
@@ -143,16 +197,14 @@ pub fn verify_manifest(
         .map(|tool| tool.name.as_str())
         .collect::<BTreeSet<_>>();
     if manifest_names.len() != manifest.tools.len() {
-        return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
-            "capability manifest contains duplicate tool names",
+        return Ok(ConnectorCapabilityOutcome::Rejected(
+            ConnectorCapabilityRejection::DuplicateTool,
         ));
     }
     for required in REQUIRED_READ_TOOLS {
         if !manifest_names.contains(required) {
-            return Err(ConnectorError::capability(
-                ConnectorErrorCode::MissingRequiredFeature,
-                format!("required read tool `{required}` is unavailable"),
+            return Ok(ConnectorCapabilityOutcome::Rejected(
+                ConnectorCapabilityRejection::MissingRequiredTool,
             ));
         }
     }
@@ -164,9 +216,8 @@ pub fn verify_manifest(
             || !matches!(tool.risk_level.as_str(), "ReadOnly" | "Diagnose" | "Plan")
             || !is_sha256_digest(&tool.schema_digest)
     }) {
-        return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
-            "one or more tools are not bounded read-only, task-forbidden tools",
+        return Ok(ConnectorCapabilityOutcome::Rejected(
+            ConnectorCapabilityRejection::UnsafeTool,
         ));
     }
 
@@ -175,29 +226,25 @@ pub fn verify_manifest(
         .map(|tool| (tool.name.as_ref(), tool))
         .collect::<BTreeMap<_, _>>();
     let live_names = live_by_name.keys().copied().collect::<BTreeSet<_>>();
-    if live_names != manifest_names {
-        return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
-            "tools/list differs from the capability manifest",
+    if live_names.len() != live_tools.len() || live_names != manifest_names {
+        return Ok(ConnectorCapabilityOutcome::Rejected(
+            ConnectorCapabilityRejection::ToolSurfaceMismatch,
         ));
     }
     for manifest_tool in &manifest.tools {
-        let live_tool = live_by_name.get(manifest_tool.name.as_str()).ok_or_else(|| {
-            ConnectorError::capability(
-                ConnectorErrorCode::CapabilityMismatch,
-                "a manifest tool is absent from tools/list",
-            )
-        })?;
-        let annotations = live_tool.annotations.as_ref().ok_or_else(|| {
-            ConnectorError::capability(
-                ConnectorErrorCode::CapabilityMismatch,
-                format!("tool `{}` does not publish read-only annotations", manifest_tool.name),
-            )
-        })?;
+        let Some(live_tool) = live_by_name.get(manifest_tool.name.as_str()) else {
+            return Ok(ConnectorCapabilityOutcome::Rejected(
+                ConnectorCapabilityRejection::ToolSurfaceMismatch,
+            ));
+        };
+        let Some(annotations) = live_tool.annotations.as_ref() else {
+            return Ok(ConnectorCapabilityOutcome::Rejected(
+                ConnectorCapabilityRejection::MissingToolAnnotations,
+            ));
+        };
         if annotations.read_only_hint != Some(true) || annotations.destructive_hint == Some(true) {
-            return Err(ConnectorError::capability(
-                ConnectorErrorCode::CapabilityMismatch,
-                format!("tool `{}` live annotations are not read-only", manifest_tool.name),
+            return Ok(ConnectorCapabilityOutcome::Rejected(
+                ConnectorCapabilityRejection::UnsafeToolAnnotations,
             ));
         }
         let schema_digest = digest_value(Value::Object(Map::from_iter([
@@ -215,58 +262,50 @@ pub fn verify_manifest(
             ),
         ])));
         if schema_digest != manifest_tool.schema_digest {
-            return Err(ConnectorError::capability(
-                ConnectorErrorCode::SchemaDigestMismatch,
-                format!("tool `{}` schema digest differs from tools/list", manifest_tool.name),
+            return Ok(ConnectorCapabilityOutcome::Rejected(
+                ConnectorCapabilityRejection::ToolSchemaDigestMismatch,
             ));
         }
     }
-    if digest_value(serde_json::to_value(&manifest.tools).map_err(|error| {
-        ConnectorError::capability(
-            ConnectorErrorCode::SchemaDigestMismatch,
-            format!("tool surface cannot be canonicalized: {error}"),
-        )
-    })?) != manifest.tool_surface_digest
+    if digest_value(
+        serde_json::to_value(&manifest.tools)
+            .map_err(|source| ConnectorError::from_source(ConnectorFailure::SchemaDigestMismatch, false, source))?,
+    ) != manifest.tool_surface_digest
     {
-        return Err(ConnectorError::capability(
-            ConnectorErrorCode::SchemaDigestMismatch,
-            "tool surface digest does not match the manifest tools",
+        return Ok(ConnectorCapabilityOutcome::Rejected(
+            ConnectorCapabilityRejection::ToolSurfaceDigestMismatch,
         ));
     }
 
     let manifest_resources = manifest.resources.iter().cloned().collect::<BTreeSet<_>>();
     if manifest_resources.len() != manifest.resources.len() {
-        return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
-            "capability manifest contains duplicate resources",
+        return Ok(ConnectorCapabilityOutcome::Rejected(
+            ConnectorCapabilityRejection::DuplicateResource,
         ));
     }
     let cluster_prefix = format!("rocketmq://clusters/{expected_cluster}/");
+    if manifest_resources
+        .iter()
+        .any(|uri| !uri.starts_with(&cluster_prefix) && !ALLOWED_SYSTEM_RESOURCES.contains(&uri.as_str()))
+    {
+        return Ok(ConnectorCapabilityOutcome::Rejected(
+            ConnectorCapabilityRejection::ResourceClusterMismatch,
+        ));
+    }
     let live_relevant_resources = live_resource_uris
         .iter()
         .filter(|uri| uri.starts_with(&cluster_prefix) || ALLOWED_SYSTEM_RESOURCES.contains(&uri.as_str()))
         .cloned()
         .collect::<BTreeSet<_>>();
     if live_relevant_resources != manifest_resources {
-        return Err(ConnectorError::capability(
-            ConnectorErrorCode::CapabilityMismatch,
-            "resources/list differs from the cluster capability manifest",
+        return Ok(ConnectorCapabilityOutcome::Rejected(
+            ConnectorCapabilityRejection::ResourceSurfaceMismatch,
         ));
     }
-    if manifest_resources
-        .iter()
-        .any(|uri| !uri.starts_with(&cluster_prefix) && !ALLOWED_SYSTEM_RESOURCES.contains(&uri.as_str()))
-    {
-        return Err(ConnectorError::capability(
-            ConnectorErrorCode::ClusterNotAllowed,
-            "manifest includes a resource outside the requested cluster",
-        ));
-    }
-
-    Ok(VerifiedCapability {
+    Ok(ConnectorCapabilityOutcome::Verified(VerifiedCapability {
         manifest,
         observed_at: Utc::now(),
-    })
+    }))
 }
 
 #[must_use]
@@ -378,10 +417,25 @@ mod tests {
         (manifest, tools, live_resources)
     }
 
+    fn assert_rejection(
+        manifest: CapabilityManifest,
+        tools: &[Tool],
+        resources: &BTreeSet<String>,
+        pin: Option<&str>,
+        expected: ConnectorCapabilityRejection,
+    ) {
+        let outcome = verify_manifest(manifest, "local", tools, resources, pin).expect("verification must complete");
+        assert!(matches!(outcome, ConnectorCapabilityOutcome::Rejected(actual) if actual == expected));
+    }
+
     #[test]
     fn accepts_matching_read_only_surface() {
         let (manifest, tools, resources) = fixture();
-        let verified = verify_manifest(manifest, "local", &tools, &resources, None).expect("surface should verify");
+        let ConnectorCapabilityOutcome::Verified(verified) =
+            verify_manifest(manifest, "local", &tools, &resources, None).expect("surface should verify")
+        else {
+            panic!("matching surface must verify");
+        };
         assert!(!verified.manifest.mutation_supported);
     }
 
@@ -389,31 +443,99 @@ mod tests {
     fn rejects_mutation_and_schema_drift() {
         let (mut mutation, tools, resources) = fixture();
         mutation.mutation_supported = true;
-        assert_eq!(
-            verify_manifest(mutation, "local", &tools, &resources, None)
-                .expect_err("mutation must fail")
-                .code,
-            ConnectorErrorCode::CapabilityMismatch
-        );
+        assert!(matches!(
+            verify_manifest(mutation, "local", &tools, &resources, None).expect("verification must complete"),
+            ConnectorCapabilityOutcome::Rejected(ConnectorCapabilityRejection::MutationSupported)
+        ));
 
         let (mut tasks, tools, resources) = fixture();
         tasks.tools[0].task_support = "optional".to_owned();
         tasks.tool_surface_digest = digest_value(serde_json::to_value(&tasks.tools).expect("tools serialize"));
-        assert_eq!(
-            verify_manifest(tasks, "local", &tools, &resources, None)
-                .expect_err("task support must fail")
-                .code,
-            ConnectorErrorCode::CapabilityMismatch
-        );
+        assert!(matches!(
+            verify_manifest(tasks, "local", &tools, &resources, None).expect("verification must complete"),
+            ConnectorCapabilityOutcome::Rejected(ConnectorCapabilityRejection::UnsafeTool)
+        ));
 
         let (mut drift, tools, resources) = fixture();
         drift.tools[0].schema_digest = format!("sha256:{}", "0".repeat(64));
         drift.tool_surface_digest = digest_value(serde_json::to_value(&drift.tools).expect("tools serialize"));
-        assert_eq!(
-            verify_manifest(drift, "local", &tools, &resources, None)
-                .expect_err("schema drift must fail")
-                .code,
-            ConnectorErrorCode::SchemaDigestMismatch
+        assert!(matches!(
+            verify_manifest(drift, "local", &tools, &resources, None).expect("verification must complete"),
+            ConnectorCapabilityOutcome::Rejected(ConnectorCapabilityRejection::ToolSchemaDigestMismatch)
+        ));
+    }
+
+    #[test]
+    fn protocol_schema_cluster_digest_and_resource_drift_are_closed() {
+        let (mut protocol, tools, resources) = fixture();
+        protocol.mcp_protocol_version = "unsupported".to_owned();
+        assert_rejection(
+            protocol,
+            &tools,
+            &resources,
+            None,
+            ConnectorCapabilityRejection::ProtocolMismatch,
+        );
+
+        let (mut schema, tools, resources) = fixture();
+        schema.business_schema_version = "rocketmq-mcp.v99".to_owned();
+        assert_rejection(
+            schema,
+            &tools,
+            &resources,
+            None,
+            ConnectorCapabilityRejection::UnsupportedBusinessSchema,
+        );
+
+        let (mut cluster, tools, resources) = fixture();
+        cluster.cluster = "other".to_owned();
+        assert_rejection(
+            cluster,
+            &tools,
+            &resources,
+            None,
+            ConnectorCapabilityRejection::ClusterMismatch,
+        );
+
+        let (mut digest, tools, resources) = fixture();
+        digest.tool_surface_digest = "not-a-digest".to_owned();
+        assert_rejection(
+            digest,
+            &tools,
+            &resources,
+            None,
+            ConnectorCapabilityRejection::MalformedSurfaceDigest,
+        );
+
+        let (manifest, tools, resources) = fixture();
+        let other_pin = format!("sha256:{}", "f".repeat(64));
+        assert_rejection(
+            manifest,
+            &tools,
+            &resources,
+            Some(&other_pin),
+            ConnectorCapabilityRejection::PinnedSurfaceDigestMismatch,
+        );
+
+        let (mut resource, tools, mut resources) = fixture();
+        resource.resources.push("rocketmq://clusters/other/overview".to_owned());
+        resources.insert("rocketmq://clusters/other/overview".to_owned());
+        assert_rejection(
+            resource,
+            &tools,
+            &resources,
+            None,
+            ConnectorCapabilityRejection::ResourceClusterMismatch,
+        );
+
+        let (mut resource_surface, tools, resources) = fixture();
+        resource_surface.resources.pop();
+        assert_rejection(
+            resource_surface,
+            &tools,
+            &resources,
+            None,
+            ConnectorCapabilityRejection::ResourceSurfaceMismatch,
         );
     }
 }

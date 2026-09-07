@@ -28,7 +28,7 @@ use super::common::CancelSignal;
 use super::common::SourceOutput;
 use crate::ConnectorConfig;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 use crate::config::RuntimeDiagnosticsSourceConfig;
 use crate::config::SecretValue;
 use crate::mcp::McpGateway;
@@ -94,7 +94,7 @@ impl RuntimeDiagnosticsSource {
                 Ok(project_component_runtime(view))
             }
             _ => Err(ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
+                ConnectorFailure::InvalidEvidenceQuery,
                 false,
                 "runtime source supports only fixed protected diagnostics contracts",
             )),
@@ -116,7 +116,7 @@ impl RuntimeDiagnosticsSource {
             }
             match self.fetch_component(component, deadline, cancel).await {
                 Ok(view) => diagnostics.push(view),
-                Err(error) if error.code == ConnectorErrorCode::SourceUnavailable => missing.push(component),
+                Err(error) if error.failure() == ConnectorFailure::SourceUnavailable => missing.push(component),
                 Err(error) => return Err(error),
             }
         }
@@ -171,19 +171,19 @@ impl RuntimeDiagnosticsSource {
                 )
                 .send()
                 .await
-                .map_err(|_| component_source_unavailable())?;
+                .map_err(ConnectorError::source_error)?;
             match response.status() {
                 reqwest::StatusCode::OK => {}
                 reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
                     return Err(ConnectorError::new(
-                        ConnectorErrorCode::UnauthorizedScope,
+                        ConnectorFailure::UnauthorizedScope,
                         false,
                         "runtime diagnostics credential or scope was rejected",
                     ));
                 }
                 reqwest::StatusCode::PAYLOAD_TOO_LARGE => {
                     return Err(ConnectorError::new(
-                        ConnectorErrorCode::OutputTooLarge,
+                        ConnectorFailure::OutputTooLarge,
                         false,
                         "runtime diagnostics response exceeded the configured bound",
                     ));
@@ -195,7 +195,7 @@ impl RuntimeDiagnosticsSource {
                 .is_some_and(|length| length > max_response_bytes as u64)
             {
                 return Err(ConnectorError::new(
-                    ConnectorErrorCode::OutputTooLarge,
+                    ConnectorFailure::OutputTooLarge,
                     false,
                     "runtime diagnostics response exceeded the configured bound",
                 ));
@@ -205,24 +205,24 @@ impl RuntimeDiagnosticsSource {
                 .and_then(|length| usize::try_from(length).ok())
                 .unwrap_or_default();
             let mut body = Vec::with_capacity(response_capacity);
-            while let Some(chunk) = response.chunk().await.map_err(|_| component_source_unavailable())? {
+            while let Some(chunk) = response.chunk().await.map_err(ConnectorError::source_error)? {
                 let next_length = body.len().checked_add(chunk.len()).ok_or_else(|| {
                     ConnectorError::new(
-                        ConnectorErrorCode::OutputTooLarge,
+                        ConnectorFailure::OutputTooLarge,
                         false,
                         "runtime diagnostics response exceeded the configured bound",
                     )
                 })?;
                 if next_length > max_response_bytes {
                     return Err(ConnectorError::new(
-                        ConnectorErrorCode::OutputTooLarge,
+                        ConnectorFailure::OutputTooLarge,
                         false,
                         "runtime diagnostics response exceeded the configured bound",
                     ));
                 }
                 body.extend_from_slice(&chunk);
             }
-            serde_json::from_slice::<Value>(&body).map_err(|_| schema_mismatch("component runtime"))
+            serde_json::from_slice::<Value>(&body).map_err(schema_mismatch_source)
         })
         .await?;
         project_component_view(response, component)
@@ -230,8 +230,7 @@ impl RuntimeDiagnosticsSource {
 }
 
 fn project_component_view(raw: Value, expected_component: &str) -> Result<RuntimeDiagnosticsViewV1, ConnectorError> {
-    let envelope: ComponentRuntimeEnvelope =
-        serde_json::from_value(raw).map_err(|_| schema_mismatch("component runtime"))?;
+    let envelope: ComponentRuntimeEnvelope = serde_json::from_value(raw).map_err(schema_mismatch_source)?;
     if envelope.schema_version != rocketmq_observability::RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA
         || envelope.source != COMPONENT_SOURCE
         || envelope.data.schema_version != RuntimeDiagnosticsViewV1::SCHEMA_VERSION
@@ -270,14 +269,14 @@ fn component_name(component: RuntimeComponent) -> &'static str {
 
 fn component_source_unavailable() -> ConnectorError {
     ConnectorError::new(
-        ConnectorErrorCode::SourceUnavailable,
+        ConnectorFailure::SourceUnavailable,
         true,
         "protected runtime diagnostics source is unavailable",
     )
 }
 
 fn project_runtime(raw: Value) -> Result<SourceOutput, ConnectorError> {
-    let diagnostics: RuntimeDiagnosticsViewV1 = serde_json::from_value(raw).map_err(|_| schema_mismatch("runtime"))?;
+    let diagnostics: RuntimeDiagnosticsViewV1 = serde_json::from_value(raw).map_err(schema_mismatch_source)?;
     if diagnostics.schema_version != RuntimeDiagnosticsViewV1::SCHEMA_VERSION {
         return Err(schema_mismatch("runtime"));
     }
@@ -294,8 +293,7 @@ fn project_runtime(raw: Value) -> Result<SourceOutput, ConnectorError> {
 }
 
 fn project_observability(raw: Value) -> Result<SourceOutput, ConnectorError> {
-    let status: ObservabilityStatusViewV1 =
-        serde_json::from_value(raw).map_err(|_| schema_mismatch("observability"))?;
+    let status: ObservabilityStatusViewV1 = serde_json::from_value(raw).map_err(schema_mismatch_source)?;
     if status.schema_version != ObservabilityStatusViewV1::SCHEMA_VERSION {
         return Err(schema_mismatch("observability"));
     }
@@ -313,10 +311,17 @@ fn project_observability(raw: Value) -> Result<SourceOutput, ConnectorError> {
 
 fn schema_mismatch(kind: &str) -> ConnectorError {
     ConnectorError::new(
-        ConnectorErrorCode::UnsupportedSchemaMajor,
+        ConnectorFailure::UnsupportedSchemaMajor,
         false,
         format!("MCP {kind} diagnostics contract is incompatible"),
     )
+}
+
+fn schema_mismatch_source<E>(source: E) -> ConnectorError
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    ConnectorError::from_source(ConnectorFailure::UnsupportedSchemaMajor, false, source)
 }
 
 #[cfg(test)]

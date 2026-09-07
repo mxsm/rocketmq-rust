@@ -23,7 +23,7 @@ use super::support::exercise_mode_name;
 use super::support::exercise_state_name;
 use super::support::finding_from_row;
 use super::support::finding_severity_name;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::dr::model::DrActionItemQuery;
 use crate::dr::model::DrExerciseQuery;
 use crate::dr::model::bounded_limit;
@@ -39,7 +39,10 @@ use rocketmq_sre_contracts::RecoveryCheckpoint;
 use rocketmq_sre_contracts::TenantId;
 
 impl DrRepository {
-    pub(in crate::dr) async fn create_exercise(&self, exercise: &DrExercise) -> Result<DrExercise, ControlPlaneError> {
+    pub(in crate::dr) async fn create_exercise(
+        &self,
+        exercise: &DrExercise,
+    ) -> Result<DrExercise, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "INSERT INTO dr_exercises (
                 id, plan_id, tenant_id, region_id, cluster_id, exercise_mode,
@@ -75,13 +78,13 @@ impl DrRepository {
         &self,
         tenant_id: TenantId,
         id: DrExerciseId,
-    ) -> Result<DrExercise, ControlPlaneError> {
+    ) -> Result<DrExercise, ControlPlaneRequestFailure> {
         let row = sqlx::query("SELECT * FROM dr_exercises WHERE tenant_id = $1 AND id = $2")
             .bind(tenant_id.as_uuid())
             .bind(id.as_uuid())
             .fetch_optional(&self.pool)
             .await?
-            .ok_or(ControlPlaneError::NotFound)?;
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         exercise_from_row(&row)
     }
 
@@ -89,7 +92,7 @@ impl DrRepository {
         &self,
         tenant_id: TenantId,
         query: &DrExerciseQuery,
-    ) -> Result<(Vec<DrExercise>, bool), ControlPlaneError> {
+    ) -> Result<(Vec<DrExercise>, bool), ControlPlaneRequestFailure> {
         let limit = bounded_limit(query.limit);
         let state = query.state.map(exercise_state_name);
         let rows = sqlx::query(
@@ -123,7 +126,7 @@ impl DrRepository {
         actual_rpo_seconds: Option<u64>,
         evidence_ids: &[rocketmq_sre_contracts::EvidenceId],
         now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<DrExercise, ControlPlaneError> {
+    ) -> Result<DrExercise, ControlPlaneRequestFailure> {
         let started_at = (next_state == DrExerciseState::Running && current.started_at.is_none()).then_some(now);
         let completed_at = next_state.is_terminal().then_some(now);
         let row = sqlx::query(
@@ -166,7 +169,7 @@ impl DrRepository {
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "dr_exercise_state_conflict",
                 "exercise state changed before the transition was persisted",
             )
@@ -177,7 +180,7 @@ impl DrRepository {
     pub(in crate::dr) async fn record_checkpoint(
         &self,
         checkpoint: &RecoveryCheckpoint,
-    ) -> Result<RecoveryCheckpoint, ControlPlaneError> {
+    ) -> Result<RecoveryCheckpoint, ControlPlaneRequestFailure> {
         let row = sqlx::query(
             "INSERT INTO dr_recovery_checkpoints (
                 id, exercise_id, sequence_number, checkpoint_key, title,
@@ -195,7 +198,7 @@ impl DrRepository {
         .bind(checkpoint.id.as_uuid())
         .bind(checkpoint.exercise_id.as_uuid())
         .bind(i32::try_from(checkpoint.sequence).map_err(|_| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "invalid_recovery_checkpoint",
                 "checkpoint sequence exceeds the supported range",
             )
@@ -237,7 +240,7 @@ impl DrRepository {
         &self,
         tenant_id: TenantId,
         exercise_id: DrExerciseId,
-    ) -> Result<Vec<RecoveryCheckpoint>, ControlPlaneError> {
+    ) -> Result<Vec<RecoveryCheckpoint>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT checkpoint.*
              FROM dr_recovery_checkpoints checkpoint
@@ -257,7 +260,7 @@ impl DrRepository {
         tenant_id: TenantId,
         exercise_id: DrExerciseId,
         code: &str,
-    ) -> Result<Option<DrFinding>, ControlPlaneError> {
+    ) -> Result<Option<DrFinding>, ControlPlaneRequestFailure> {
         sqlx::query(
             "SELECT finding.*, action.id AS action_item_id
              FROM dr_findings finding
@@ -279,7 +282,7 @@ impl DrRepository {
         &self,
         finding: &DrFinding,
         action: &DrActionItem,
-    ) -> Result<(DrFinding, DrActionItem), ControlPlaneError> {
+    ) -> Result<(DrFinding, DrActionItem), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO dr_findings (
@@ -330,7 +333,7 @@ impl DrRepository {
         &self,
         tenant_id: TenantId,
         exercise_id: DrExerciseId,
-    ) -> Result<Vec<DrFinding>, ControlPlaneError> {
+    ) -> Result<Vec<DrFinding>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT finding.*, action.id AS action_item_id
              FROM dr_findings finding
@@ -349,7 +352,7 @@ impl DrRepository {
         &self,
         tenant_id: TenantId,
         query: &DrActionItemQuery,
-    ) -> Result<(Vec<DrActionItem>, bool), ControlPlaneError> {
+    ) -> Result<(Vec<DrActionItem>, bool), ControlPlaneRequestFailure> {
         let limit = bounded_limit(query.limit);
         let status = query.status.map(action_item_status_name);
         let rows = sqlx::query(
@@ -379,13 +382,13 @@ impl DrRepository {
         &self,
         tenant_id: TenantId,
         id: DrActionItemId,
-    ) -> Result<DrActionItem, ControlPlaneError> {
+    ) -> Result<DrActionItem, ControlPlaneRequestFailure> {
         let row = sqlx::query("SELECT * FROM dr_action_items WHERE tenant_id = $1 AND id = $2")
             .bind(tenant_id.as_uuid())
             .bind(id.as_uuid())
             .fetch_optional(&self.pool)
             .await?
-            .ok_or(ControlPlaneError::NotFound)?;
+            .ok_or(ControlPlaneRequestFailure::not_found())?;
         action_item_from_row(&row)
     }
 
@@ -393,7 +396,7 @@ impl DrRepository {
         &self,
         current: &DrActionItem,
         next: &DrActionItem,
-    ) -> Result<DrActionItem, ControlPlaneError> {
+    ) -> Result<DrActionItem, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
             "UPDATE dr_action_items
@@ -420,7 +423,7 @@ impl DrRepository {
         .fetch_optional(&mut *transaction)
         .await?
         .ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "dr_action_item_state_conflict",
                 "DR action item changed before the update was persisted",
             )
@@ -452,12 +455,12 @@ impl DrRepository {
     }
 }
 
-fn i64_value(value: u64, name: &str) -> Result<i64, ControlPlaneError> {
+fn i64_value(value: u64, name: &str) -> Result<i64, ControlPlaneRequestFailure> {
     i64::try_from(value).map_err(|_| {
-        ControlPlaneError::validation("invalid_dr_measurement", format!("{name} exceeds the supported range"))
+        ControlPlaneRequestFailure::validation("invalid_dr_measurement", format!("{name} exceeds the supported range"))
     })
 }
 
-fn optional_i64(value: Option<u64>, name: &str) -> Result<Option<i64>, ControlPlaneError> {
+fn optional_i64(value: Option<u64>, name: &str) -> Result<Option<i64>, ControlPlaneRequestFailure> {
     value.map(|number| i64_value(number, name)).transpose()
 }

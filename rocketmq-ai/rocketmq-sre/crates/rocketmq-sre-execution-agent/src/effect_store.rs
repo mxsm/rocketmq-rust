@@ -30,7 +30,8 @@ use sqlx::PgPool;
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::AgentStoreError;
+use crate::error::AgentStoreError;
+use crate::error::AgentStoreFailure;
 use crate::error::database_message;
 
 /// Idempotent Prepared effect result.
@@ -84,18 +85,18 @@ impl AgentEffectStore {
     ///
     /// Rejects missing identity, stale/equal-but-different epochs, and lease
     /// drift.
-    pub async fn accept_fence(
+    pub(crate) async fn accept_fence(
         &self,
         tenant_id: TenantId,
         lease_id: LeaseId,
         ack: &FenceAck,
-    ) -> Result<bool, AgentStoreError> {
+    ) -> Result<bool, AgentStoreFailure> {
         if ack.epoch.0 == 0
             || ack.pending_nonce.trim().is_empty()
             || ack.agent_subject.trim().is_empty()
             || ack.signature.trim().is_empty()
         {
-            return Err(AgentStoreError::InvalidInput(
+            return Err(AgentStoreFailure::invalid_input(
                 "fence acknowledgement identity is incomplete".to_owned(),
             ));
         }
@@ -122,7 +123,7 @@ impl AgentEffectStore {
         .fetch_one(&mut *transaction)
         .await?;
         if !lease_exists {
-            return Err(AgentStoreError::FenceRejected);
+            return Err(AgentStoreFailure::fence_rejected());
         }
         let current = sqlx::query(
             "SELECT highest_epoch, lease_id
@@ -138,7 +139,7 @@ impl AgentEffectStore {
             let current_lease: Uuid = row.try_get("lease_id")?;
             let proposed = epoch_i64(ack.epoch)?;
             if highest > proposed || (highest == proposed && current_lease != lease_id.as_uuid()) {
-                return Err(AgentStoreError::FenceRejected);
+                return Err(AgentStoreFailure::fence_rejected());
             }
             if highest == proposed {
                 transaction.commit().await?;
@@ -179,12 +180,12 @@ impl AgentEffectStore {
     ///
     /// Rejects stale fences and conflicting idempotency keys. A persistence
     /// error means the caller must not invoke a driver.
-    pub async fn prepare(
+    pub(crate) async fn prepare(
         &self,
         tenant_id: TenantId,
         request: &AgentStepRequest,
         prepared_at: DateTime<Utc>,
-    ) -> Result<EffectCreation, AgentStoreError> {
+    ) -> Result<EffectCreation, AgentStoreFailure> {
         if request.intent.idempotency_key.trim().is_empty()
             || request.target.trim().is_empty()
             || request.target != request.intent.step.resource
@@ -204,7 +205,7 @@ impl AgentEffectStore {
             || request.descriptor_version != request.intent.step.descriptor_version
             || request.parameters != request.intent.step.parameters
         {
-            return Err(AgentStoreError::InvalidInput(
+            return Err(AgentStoreFailure::invalid_input(
                 "effect request target, action, version, idempotency, or fence is invalid".to_owned(),
             ));
         }
@@ -239,7 +240,7 @@ impl AgentEffectStore {
         let result = match insert {
             Ok(result) => result,
             Err(error) if database_message(&error) == Some("agent_effect_fence_rejected") => {
-                return Err(AgentStoreError::FenceRejected);
+                return Err(AgentStoreFailure::fence_rejected());
             }
             Err(error) => return Err(error.into()),
         };
@@ -277,7 +278,7 @@ impl AgentEffectStore {
         .await?;
         let existing_snapshot: Value = row.try_get("request_snapshot")?;
         if existing_snapshot != snapshot {
-            return Err(AgentStoreError::IdempotencyConflict);
+            return Err(AgentStoreFailure::idempotency_conflict());
         }
         Ok(EffectCreation {
             effect: self.effect(&request.intent.idempotency_key).await?,
@@ -291,14 +292,14 @@ impl AgentEffectStore {
     ///
     /// Rejects missing operation IDs and non-Prepared effects. On any error the
     /// caller must not send an external write.
-    pub async fn mark_dispatched(
+    pub(crate) async fn mark_dispatched(
         &self,
         idempotency_key: &str,
         operation_id: &str,
         dispatched_at: DateTime<Utc>,
-    ) -> Result<(), AgentStoreError> {
+    ) -> Result<(), AgentStoreFailure> {
         if operation_id.trim().is_empty() {
-            return Err(AgentStoreError::InvalidInput(
+            return Err(AgentStoreFailure::invalid_input(
                 "dispatch requires a stable operation id".to_owned(),
             ));
         }
@@ -316,7 +317,7 @@ impl AgentEffectStore {
         .execute(&self.pool)
         .await?;
         if result.rows_affected() == 0 {
-            return Err(AgentStoreError::InvalidTransition);
+            return Err(AgentStoreFailure::invalid_transition());
         }
         Ok(())
     }
@@ -326,7 +327,11 @@ impl AgentEffectStore {
     /// # Errors
     ///
     /// Rejects terminal/missing effects.
-    pub async fn mark_unknown(&self, idempotency_key: &str, updated_at: DateTime<Utc>) -> Result<(), AgentStoreError> {
+    pub(crate) async fn mark_unknown(
+        &self,
+        idempotency_key: &str,
+        updated_at: DateTime<Utc>,
+    ) -> Result<(), AgentStoreFailure> {
         let result = sqlx::query(
             "UPDATE execution_agent_effects
              SET state = 'unknown', updated_at = $2
@@ -337,7 +342,7 @@ impl AgentEffectStore {
         .execute(&self.pool)
         .await?;
         if result.rows_affected() == 0 {
-            return Err(AgentStoreError::InvalidTransition);
+            return Err(AgentStoreFailure::invalid_transition());
         }
         Ok(())
     }
@@ -347,15 +352,15 @@ impl AgentEffectStore {
     /// # Errors
     ///
     /// Rejects blank bounded results and effects outside Dispatched/Unknown.
-    pub async fn confirm(
+    pub(crate) async fn confirm(
         &self,
         idempotency_key: &str,
         outcome_code: &str,
         sanitized_summary: &str,
         confirmed_at: DateTime<Utc>,
-    ) -> Result<(), AgentStoreError> {
+    ) -> Result<(), AgentStoreFailure> {
         if outcome_code.trim().is_empty() || sanitized_summary.trim().is_empty() || sanitized_summary.len() > 2048 {
-            return Err(AgentStoreError::InvalidInput(
+            return Err(AgentStoreFailure::invalid_input(
                 "confirmed effect requires a bounded outcome and sanitized summary".to_owned(),
             ));
         }
@@ -375,7 +380,7 @@ impl AgentEffectStore {
         .execute(&self.pool)
         .await?;
         if result.rows_affected() == 0 {
-            return Err(AgentStoreError::InvalidTransition);
+            return Err(AgentStoreFailure::invalid_transition());
         }
         Ok(())
     }
@@ -385,7 +390,7 @@ impl AgentEffectStore {
     /// # Errors
     ///
     /// Returns not-found, database, or invalid stored-state failures.
-    pub async fn effect(&self, idempotency_key: &str) -> Result<AgentEffectRecord, AgentStoreError> {
+    pub(crate) async fn effect(&self, idempotency_key: &str) -> Result<AgentEffectRecord, AgentStoreFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, execution_id, step_id, lease_id,
                     epoch, idempotency_key, action_id, target, state,
@@ -397,7 +402,7 @@ impl AgentEffectStore {
         .bind(idempotency_key)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(AgentStoreError::NotFound)?;
+        .ok_or(AgentStoreFailure::not_found())?;
         effect_from_row(&row)
     }
 
@@ -406,7 +411,7 @@ impl AgentEffectStore {
     /// # Errors
     ///
     /// Returns not-found, database, or snapshot decoding failures.
-    pub async fn request(&self, idempotency_key: &str) -> Result<AgentStepRequest, AgentStoreError> {
+    pub(crate) async fn request(&self, idempotency_key: &str) -> Result<AgentStepRequest, AgentStoreFailure> {
         let snapshot: Value = sqlx::query_scalar(
             "SELECT request_snapshot
              FROM execution_agent_effects
@@ -415,8 +420,8 @@ impl AgentEffectStore {
         .bind(idempotency_key)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(AgentStoreError::NotFound)?;
-        serde_json::from_value(snapshot).map_err(AgentStoreError::SnapshotDecoding)
+        .ok_or(AgentStoreFailure::not_found())?;
+        Ok(serde_json::from_value(snapshot).map_err(AgentStoreError::SnapshotDecoding)?)
     }
 
     /// Loads the exact persisted FenceAck for idempotent fence retries.
@@ -424,7 +429,7 @@ impl AgentEffectStore {
     /// # Errors
     ///
     /// Returns not-found, database, or snapshot decoding failures.
-    pub async fn fence_ack(&self, cluster_id: ClusterId) -> Result<FenceAck, AgentStoreError> {
+    pub(crate) async fn fence_ack(&self, cluster_id: ClusterId) -> Result<FenceAck, AgentStoreFailure> {
         let snapshot: Value = sqlx::query_scalar(
             "SELECT fence_ack_snapshot
              FROM execution_agent_fences
@@ -433,8 +438,8 @@ impl AgentEffectStore {
         .bind(cluster_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(AgentStoreError::NotFound)?;
-        serde_json::from_value(snapshot).map_err(AgentStoreError::SnapshotDecoding)
+        .ok_or(AgentStoreFailure::not_found())?;
+        Ok(serde_json::from_value(snapshot).map_err(AgentStoreError::SnapshotDecoding)?)
     }
 
     /// Performs the minimal PostgreSQL readiness probe.
@@ -442,7 +447,7 @@ impl AgentEffectStore {
     /// # Errors
     ///
     /// Returns a database error when durable fencing cannot be reached.
-    pub async fn ready(&self) -> Result<(), AgentStoreError> {
+    pub(crate) async fn ready(&self) -> Result<(), AgentStoreFailure> {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
         Ok(())
     }
@@ -452,7 +457,11 @@ impl AgentEffectStore {
     /// # Errors
     ///
     /// Returns database or invalid stored-state failures.
-    pub async fn unfinished(&self, limit: u32) -> Result<Vec<AgentEffectRecord>, AgentStoreError> {
+    #[allow(
+        dead_code,
+        reason = "private recovery sweep support remains intentionally available to the Agent service"
+    )]
+    pub(crate) async fn unfinished(&self, limit: u32) -> Result<Vec<AgentEffectRecord>, AgentStoreFailure> {
         let rows = sqlx::query(
             "SELECT id, tenant_id, cluster_id, execution_id, step_id, lease_id,
                     epoch, idempotency_key, action_id, target, state,
@@ -474,12 +483,12 @@ impl AgentEffectStore {
     /// # Errors
     ///
     /// Returns database or invalid stored-state failures.
-    pub async fn unfinished_before_epoch(
+    pub(crate) async fn unfinished_before_epoch(
         &self,
         cluster_id: ClusterId,
         pending_epoch: LeaseEpoch,
         limit: u32,
-    ) -> Result<Vec<AgentEffectRecord>, AgentStoreError> {
+    ) -> Result<Vec<AgentEffectRecord>, AgentStoreFailure> {
         let rows = sqlx::query(
             "SELECT id, tenant_id, cluster_id, execution_id, step_id, lease_id,
                     epoch, idempotency_key, action_id, target, state,
@@ -505,7 +514,7 @@ impl AgentEffectStore {
     /// # Errors
     ///
     /// Returns database or invalid epoch failures.
-    pub async fn highest_epoch(&self, cluster_id: ClusterId) -> Result<Option<LeaseEpoch>, AgentStoreError> {
+    pub(crate) async fn highest_epoch(&self, cluster_id: ClusterId) -> Result<Option<LeaseEpoch>, AgentStoreFailure> {
         let epoch: Option<i64> = sqlx::query_scalar(
             "SELECT highest_epoch
              FROM execution_agent_fences
@@ -518,13 +527,100 @@ impl AgentEffectStore {
             .map(|value| {
                 u64::try_from(value)
                     .map(LeaseEpoch)
-                    .map_err(|_| AgentStoreError::InvalidInput("stored fence epoch is negative".to_owned()))
+                    .map_err(|_| AgentStoreFailure::invalid_input("stored fence epoch is negative".to_owned()))
             })
             .transpose()
     }
 }
 
-fn effect_from_row(row: &sqlx::postgres::PgRow) -> Result<AgentEffectRecord, AgentStoreError> {
+/// Public Agent effect-store operations with closed, non-error failure codes.
+#[allow(
+    async_fn_in_trait,
+    reason = "durable Agent fencing is asynchronous and callers must handle closed failures"
+)]
+pub trait AgentEffectStoreOperations {
+    async fn accept_fence(
+        &self,
+        tenant_id: TenantId,
+        lease_id: LeaseId,
+        ack: &FenceAck,
+    ) -> Result<bool, AgentStoreFailure>;
+
+    async fn prepare(
+        &self,
+        tenant_id: TenantId,
+        request: &AgentStepRequest,
+        prepared_at: DateTime<Utc>,
+    ) -> Result<EffectCreation, AgentStoreFailure>;
+
+    async fn mark_dispatched(
+        &self,
+        idempotency_key: &str,
+        operation_id: &str,
+        dispatched_at: DateTime<Utc>,
+    ) -> Result<(), AgentStoreFailure>;
+
+    async fn confirm(
+        &self,
+        idempotency_key: &str,
+        outcome_code: &str,
+        sanitized_summary: &str,
+        confirmed_at: DateTime<Utc>,
+    ) -> Result<(), AgentStoreFailure>;
+
+    async fn effect(&self, idempotency_key: &str) -> Result<AgentEffectRecord, AgentStoreFailure>;
+
+    async fn highest_epoch(&self, cluster_id: ClusterId) -> Result<Option<LeaseEpoch>, AgentStoreFailure>;
+}
+
+impl AgentEffectStoreOperations for AgentEffectStore {
+    async fn accept_fence(
+        &self,
+        tenant_id: TenantId,
+        lease_id: LeaseId,
+        ack: &FenceAck,
+    ) -> Result<bool, AgentStoreFailure> {
+        AgentEffectStore::accept_fence(self, tenant_id, lease_id, ack).await
+    }
+
+    async fn prepare(
+        &self,
+        tenant_id: TenantId,
+        request: &AgentStepRequest,
+        prepared_at: DateTime<Utc>,
+    ) -> Result<EffectCreation, AgentStoreFailure> {
+        AgentEffectStore::prepare(self, tenant_id, request, prepared_at).await
+    }
+
+    async fn mark_dispatched(
+        &self,
+        idempotency_key: &str,
+        operation_id: &str,
+        dispatched_at: DateTime<Utc>,
+    ) -> Result<(), AgentStoreFailure> {
+        AgentEffectStore::mark_dispatched(self, idempotency_key, operation_id, dispatched_at).await
+    }
+
+    async fn confirm(
+        &self,
+        idempotency_key: &str,
+        outcome_code: &str,
+        sanitized_summary: &str,
+        confirmed_at: DateTime<Utc>,
+    ) -> Result<(), AgentStoreFailure> {
+        AgentEffectStore::confirm(self, idempotency_key, outcome_code, sanitized_summary, confirmed_at).await
+    }
+
+    async fn effect(&self, idempotency_key: &str) -> Result<AgentEffectRecord, AgentStoreFailure> {
+        AgentEffectStore::effect(self, idempotency_key).await
+    }
+
+    async fn highest_epoch(&self, cluster_id: ClusterId) -> Result<Option<LeaseEpoch>, AgentStoreFailure> {
+        AgentEffectStore::highest_epoch(self, cluster_id).await
+    }
+}
+
+fn effect_from_row(row: &sqlx::postgres::PgRow) -> Result<AgentEffectRecord, AgentStoreFailure> {
     let epoch: i64 = row.try_get("epoch")?;
     let state: String = row.try_get("state")?;
     Ok(AgentEffectRecord {
@@ -536,7 +632,7 @@ fn effect_from_row(row: &sqlx::postgres::PgRow) -> Result<AgentEffectRecord, Age
         lease_id: LeaseId::from_uuid(row.try_get("lease_id")?),
         epoch: LeaseEpoch(
             u64::try_from(epoch)
-                .map_err(|_| AgentStoreError::InvalidInput("stored effect epoch is negative".to_owned()))?,
+                .map_err(|_| AgentStoreFailure::invalid_input("stored effect epoch is negative".to_owned()))?,
         ),
         idempotency_key: row.try_get("idempotency_key")?,
         action_id: row.try_get("action_id")?,
@@ -551,17 +647,17 @@ fn effect_from_row(row: &sqlx::postgres::PgRow) -> Result<AgentEffectRecord, Age
     })
 }
 
-fn epoch_i64(epoch: LeaseEpoch) -> Result<i64, AgentStoreError> {
-    i64::try_from(epoch.0).map_err(|_| AgentStoreError::InvalidInput("fence epoch exceeds BIGINT".to_owned()))
+fn epoch_i64(epoch: LeaseEpoch) -> Result<i64, AgentStoreFailure> {
+    i64::try_from(epoch.0).map_err(|_| AgentStoreFailure::invalid_input("fence epoch exceeds BIGINT".to_owned()))
 }
 
-fn parse_effect_state(value: &str) -> Result<EffectState, AgentStoreError> {
+fn parse_effect_state(value: &str) -> Result<EffectState, AgentStoreFailure> {
     match value {
         "prepared" => Ok(EffectState::Prepared),
         "dispatched" => Ok(EffectState::Dispatched),
         "confirmed" => Ok(EffectState::Confirmed),
         "unknown" => Ok(EffectState::Unknown),
-        _ => Err(AgentStoreError::InvalidInput(
+        _ => Err(AgentStoreFailure::invalid_input(
             "stored effect state is unsupported".to_owned(),
         )),
     }

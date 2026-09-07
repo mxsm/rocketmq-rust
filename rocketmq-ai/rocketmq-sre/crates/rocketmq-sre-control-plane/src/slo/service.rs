@@ -52,6 +52,7 @@ use serde_json::Value;
 use super::SloConfiguration;
 use super::repository::FleetHealthRecord;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::OnboardingState;
 use crate::PostgresRepository;
 use crate::alerting::AlertingService;
@@ -83,7 +84,7 @@ impl SloService {
         connector: PostgresConnectorChannelService,
         evidence: EvidenceService,
         alerting: AlertingService,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         Ok(Self {
             repository,
             connector,
@@ -102,7 +103,7 @@ impl SloService {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
-    ) -> Result<ClusterHealthReport, ControlPlaneError> {
+    ) -> Result<ClusterHealthReport, ControlPlaneRequestFailure> {
         if let Some(report) = self.repository.latest_health_snapshot(auth, cluster_id).await?
             && Utc::now()
                 .signed_duration_since(report.observed_at)
@@ -123,16 +124,16 @@ impl SloService {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
-    ) -> Result<ClusterHealthReport, ControlPlaneError> {
+    ) -> Result<ClusterHealthReport, ControlPlaneRequestFailure> {
         if !auth.clusters.contains(&cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "SLO cluster is outside the authenticated scope",
             ));
         }
         let cluster = self.repository.get(cluster_id).await?;
         if cluster.tenant_id != auth.tenant_id.to_string() || cluster.state == OnboardingState::Offboarded {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "SLO cluster is offboarded or belongs to another tenant",
             ));
@@ -146,11 +147,8 @@ impl SloService {
                     EvidenceContent::Inline(content) => content.clone(),
                     EvidenceContent::Reference(_) => {
                         let bytes = self.evidence.content(auth, snapshot.evidence_id).await?;
-                        serde_json::from_slice(&bytes).map_err(|_| {
-                            ControlPlaneError::validation(
-                                "invalid_slo_evidence",
-                                "externalized SLO evidence is not valid JSON",
-                            )
+                        serde_json::from_slice(&bytes).map_err(|source| {
+                            ControlPlaneRequestFailure::validation_source("invalid_slo_evidence", source)
                         })?
                     }
                 };
@@ -159,7 +157,7 @@ impl SloService {
             None => Vec::new(),
         };
         let slis = evaluate_burn_rates(&self.config.slo_policy, &points, now.timestamp()).map_err(|reason| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "invalid_slo_evidence",
                 format!("SLO burn-rate evidence is invalid: {reason}"),
             )
@@ -216,17 +214,17 @@ impl SloService {
         &self,
         auth: &AuthContext,
         region: Option<&str>,
-    ) -> Result<FleetHealthReport, ControlPlaneError> {
+    ) -> Result<FleetHealthReport, ControlPlaneRequestFailure> {
         let region = region.map(str::trim).filter(|value| !value.is_empty());
         if region.is_some_and(|value| value.len() > 128 || value.chars().any(char::is_control)) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "fleet region must be a bounded plain-text value",
             ));
         }
         let records = self.repository.fleet_health_records(auth, region).await?;
         if records.len() > MAX_FLEET_CLUSTERS {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "output_too_large",
                 "fleet health is bounded to 500 clusters",
             ));
@@ -274,7 +272,7 @@ impl SloService {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
-    ) -> Result<Option<EvidenceSnapshot>, ControlPlaneError> {
+    ) -> Result<Option<EvidenceSnapshot>, ControlPlaneRequestFailure> {
         let now = Utc::now();
         let resource = self.config.resource();
         let query = EvidenceQuery {
@@ -284,12 +282,10 @@ impl SloService {
             cluster_id,
             source: "prometheus".to_owned(),
             resource: resource.clone(),
-            time_range: TimeRange::new(now, now)
-                .map_err(|_| ControlPlaneError::configuration("SLO evidence time range cannot be constructed"))?,
+            time_range: TimeRange::new(now, now).map_err(ControlPlaneError::configuration_source)?,
         };
         let deadline = now
-            + chrono::Duration::from_std(self.config.query_timeout)
-                .map_err(|_| ControlPlaneError::configuration("SLO query timeout cannot be represented"))?;
+            + chrono::Duration::from_std(self.config.query_timeout).map_err(ControlPlaneError::configuration_source)?;
         match self
             .connector
             .query_and_wait(auth.tenant_id, cluster_id, query, deadline)
@@ -298,7 +294,7 @@ impl SloService {
             Ok(response) => {
                 if let Some(snapshot) = response.evidence {
                     if snapshot.source != "prometheus" || snapshot.resource != resource {
-                        return Err(ControlPlaneError::validation(
+                        return Err(ControlPlaneRequestFailure::validation(
                             "invalid_slo_evidence",
                             "connector returned evidence from an unexpected source or resource",
                         ));
@@ -331,12 +327,12 @@ fn parse_burn_rate_points(
     snapshot: &EvidenceSnapshot,
     content: &Value,
     config: &SloConfiguration,
-) -> Result<Vec<BurnRatePoint>, ControlPlaneError> {
+) -> Result<Vec<BurnRatePoint>, ControlPlaneRequestFailure> {
     if content.get("schema_version").and_then(Value::as_str) != Some(PROMETHEUS_SCHEMA_VERSION)
         || content.get("query_kind").and_then(Value::as_str) != Some("instant")
         || content.get("metric").and_then(Value::as_str) != Some(config.recording_metric.as_str())
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_slo_evidence",
             "SLO Prometheus evidence schema or metric is incompatible",
         ));
@@ -347,19 +343,18 @@ fn parse_burn_rate_points(
         .iter()
         .map(|sli| (sli.id.as_str(), sli.dimension))
         .collect::<BTreeMap<_, _>>();
-    let series = content
-        .get("series")
-        .and_then(Value::as_array)
-        .ok_or_else(|| ControlPlaneError::validation("invalid_slo_evidence", "SLO Prometheus series are missing"))?;
+    let series = content.get("series").and_then(Value::as_array).ok_or_else(|| {
+        ControlPlaneRequestFailure::validation("invalid_slo_evidence", "SLO Prometheus series are missing")
+    })?;
     let mut points = Vec::new();
     for item in series {
         let labels = item.get("labels").and_then(Value::as_object).ok_or_else(|| {
-            ControlPlaneError::validation("invalid_slo_evidence", "SLO Prometheus labels are missing")
+            ControlPlaneRequestFailure::validation("invalid_slo_evidence", "SLO Prometheus labels are missing")
         })?;
         let sli_id = label(labels, "sli")?;
         let dimension = parse_dimension(label(labels, "dimension")?)?;
         if policies.get(sli_id).copied() != Some(dimension) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_slo_evidence",
                 "SLO series references an unknown SLI or mismatched dimension",
             ));
@@ -369,14 +364,14 @@ fn parse_burn_rate_points(
             "short" => WindowRole::Short,
             "long" => WindowRole::Long,
             _ => {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "invalid_slo_evidence",
                     "SLO series window role is unsupported",
                 ));
             }
         };
         let samples = item.get("samples").and_then(Value::as_array).ok_or_else(|| {
-            ControlPlaneError::validation("invalid_slo_evidence", "SLO Prometheus samples are missing")
+            ControlPlaneRequestFailure::validation("invalid_slo_evidence", "SLO Prometheus samples are missing")
         })?;
         for sample in samples {
             let observed_at = sample
@@ -384,12 +379,11 @@ fn parse_burn_rate_points(
                 .and_then(Value::as_str)
                 .and_then(|value| value.parse::<DateTime<Utc>>().ok())
                 .ok_or_else(|| {
-                    ControlPlaneError::validation("invalid_slo_evidence", "SLO sample timestamp is invalid")
+                    ControlPlaneRequestFailure::validation("invalid_slo_evidence", "SLO sample timestamp is invalid")
                 })?;
-            let value = sample
-                .get("value")
-                .and_then(Value::as_f64)
-                .ok_or_else(|| ControlPlaneError::validation("invalid_slo_evidence", "SLO sample value is invalid"))?;
+            let value = sample.get("value").and_then(Value::as_f64).ok_or_else(|| {
+                ControlPlaneRequestFailure::validation("invalid_slo_evidence", "SLO sample value is invalid")
+            })?;
             points.push(BurnRatePoint {
                 sli_id: sli_id.to_owned(),
                 window_id: window_id.to_owned(),
@@ -404,16 +398,19 @@ fn parse_burn_rate_points(
     Ok(points)
 }
 
-fn label<'a>(labels: &'a serde_json::Map<String, Value>, key: &'static str) -> Result<&'a str, ControlPlaneError> {
+fn label<'a>(
+    labels: &'a serde_json::Map<String, Value>,
+    key: &'static str,
+) -> Result<&'a str, ControlPlaneRequestFailure> {
     labels.get(key).and_then(Value::as_str).ok_or_else(|| {
-        ControlPlaneError::validation(
+        ControlPlaneRequestFailure::validation(
             "invalid_slo_evidence",
             format!("SLO Prometheus label `{key}` is missing"),
         )
     })
 }
 
-fn parse_dimension(value: &str) -> Result<SloDimension, ControlPlaneError> {
+fn parse_dimension(value: &str) -> Result<SloDimension, ControlPlaneRequestFailure> {
     match value {
         "traffic" => Ok(SloDimension::Traffic),
         "consumer" => Ok(SloDimension::Consumer),
@@ -423,7 +420,7 @@ fn parse_dimension(value: &str) -> Result<SloDimension, ControlPlaneError> {
         "routing_proxy" => Ok(SloDimension::RoutingProxy),
         "security" => Ok(SloDimension::Security),
         "platform" => Ok(SloDimension::Platform),
-        _ => Err(ControlPlaneError::validation(
+        _ => Err(ControlPlaneRequestFailure::validation(
             "invalid_slo_evidence",
             "SLO Prometheus dimension is unsupported",
         )),

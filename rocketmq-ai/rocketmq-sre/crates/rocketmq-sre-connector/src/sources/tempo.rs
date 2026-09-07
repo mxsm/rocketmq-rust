@@ -74,7 +74,7 @@ impl TempoSource {
             .or_else(|| resource.strip_prefix("tempo/service/"))
             .ok_or_else(|| {
                 ConnectorError::new(
-                    crate::ConnectorErrorCode::InvalidEvidenceQuery,
+                    crate::ConnectorFailure::InvalidEvidenceQuery,
                     false,
                     "Tempo queries must use a bounded service name, not a raw trace identifier",
                 )
@@ -82,7 +82,7 @@ impl TempoSource {
         validate_identifier(service, "service name")?;
         let endpoint = base_url
             .join("api/search")
-            .map_err(|_| ConnectorError::configuration("Tempo query URL cannot be constructed"))?;
+            .map_err(ConnectorError::configuration_source)?;
         let traceql = trace_selector(cluster, service);
         let request = self.client.get(endpoint).query(&[
             ("q", traceql),
@@ -91,10 +91,7 @@ impl TempoSource {
             ("limit", max_rows.to_string()),
         ]);
         let response = bounded_future(deadline, cancel, async {
-            request
-                .send()
-                .await
-                .map_err(|_| ConnectorError::source("Tempo query failed"))
+            request.send().await.map_err(ConnectorError::source_error)
         })
         .await?;
         if !response.status().is_success() {

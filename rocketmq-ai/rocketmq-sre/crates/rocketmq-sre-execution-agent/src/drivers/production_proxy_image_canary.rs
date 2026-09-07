@@ -80,10 +80,12 @@ impl ProductionProxyImageCanaryClient {
         {
             return Err(ExecutionAgentError::Configuration);
         }
-        let mut config = Config::infer().await.map_err(|_| ExecutionAgentError::Configuration)?;
+        let mut config = Config::infer()
+            .await
+            .map_err(ExecutionAgentError::configuration_source)?;
         config.proxy_url = None;
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = Client::try_from(config).map_err(|_| ExecutionAgentError::Configuration)?;
+        let client = Client::try_from(config).map_err(ExecutionAgentError::configuration_source)?;
         Ok(Self {
             client,
             allowed_targets: Arc::new(allowed_targets),
@@ -91,45 +93,57 @@ impl ProductionProxyImageCanaryClient {
         })
     }
 
-    fn require_target(&self, namespace: &str, workload: &str) -> Result<(), ExecutionAgentError> {
+    fn require_target(&self, namespace: &str, workload: &str) -> Result<(), crate::ExecutionAgentRequestFailure> {
         self.allowed_targets
             .contains(&format!("{namespace}/{workload}"))
             .then_some(())
-            .ok_or(ExecutionAgentError::InvalidRequest)
+            .ok_or(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 
-    fn canary_name(&self, namespace: &str, workload: &str) -> Result<String, ExecutionAgentError> {
+    fn canary_name(&self, namespace: &str, workload: &str) -> Result<String, crate::ExecutionAgentRequestFailure> {
         self.require_target(namespace, workload)?;
         Ok(format!("{workload}{CANARY_SUFFIX}"))
     }
 
-    async fn deployment(&self, namespace: &str, workload: &str) -> Result<Deployment, ExecutionAgentError> {
+    async fn deployment(
+        &self,
+        namespace: &str,
+        workload: &str,
+    ) -> Result<Deployment, crate::ExecutionAgentRequestFailure> {
         self.require_target(namespace, workload)?;
         Api::<Deployment>::namespaced(self.client.clone(), namespace)
             .get(workload)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)
     }
 
-    async fn canary(&self, namespace: &str, workload: &str) -> Result<Option<Deployment>, ExecutionAgentError> {
+    async fn canary(
+        &self,
+        namespace: &str,
+        workload: &str,
+    ) -> Result<Option<Deployment>, crate::ExecutionAgentRequestFailure> {
         let name = self.canary_name(namespace, workload)?;
         Api::<Deployment>::namespaced(self.client.clone(), namespace)
             .get_opt(&name)
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)
     }
 
-    async fn pdb_healthy(&self, namespace: &str, deployment: &Deployment) -> Result<bool, ExecutionAgentError> {
+    async fn pdb_healthy(
+        &self,
+        namespace: &str,
+        deployment: &Deployment,
+    ) -> Result<bool, crate::ExecutionAgentRequestFailure> {
         let labels = deployment
             .spec
             .as_ref()
             .and_then(|spec| spec.template.metadata.as_ref())
             .and_then(|metadata| metadata.labels.as_ref())
-            .ok_or(ExecutionAgentError::DriverFailed)?;
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         let budgets = Api::<PodDisruptionBudget>::namespaced(self.client.clone(), namespace)
             .list(&ListParams::default())
             .await
-            .map_err(|_| ExecutionAgentError::DriverFailed)?;
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         let matching = budgets
             .items
             .iter()
@@ -148,7 +162,7 @@ impl ProductionProxyImageCanaryClient {
         &self,
         request: &ProxyImageCanaryWrite,
         state: &CanaryBeforeState,
-    ) -> Result<CanaryBeforeState, ExecutionAgentError> {
+    ) -> Result<CanaryBeforeState, crate::ExecutionAgentRequestFailure> {
         sqlx::query(
             "INSERT INTO execution_agent_proxy_canary_before_states (
                  id, execution_id, plan_step_id, namespace, workload,
@@ -165,21 +179,21 @@ impl ProductionProxyImageCanaryClient {
         .bind(&state.workload)
         .bind(&state.container)
         .bind(&state.operation_id)
-        .bind(i64::try_from(state.base_generation).map_err(|_| ExecutionAgentError::InvalidRequest)?)
+        .bind(i64::try_from(state.base_generation).map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?)
         .bind(&state.previous_image)
         .bind(&state.image_digest)
-        .bind(i32::try_from(state.original_replicas).map_err(|_| ExecutionAgentError::InvalidRequest)?)
+        .bind(i32::try_from(state.original_replicas).map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?)
         .bind(Utc::now())
         .execute(&self.pool)
         .await
-        .map_err(|_| ExecutionAgentError::DriverFailed)?;
+        .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         let stored = self
             .load_before(&request.execution_id.as_uuid(), &request.plan_step_id.as_uuid())
             .await?;
         if stored == *state {
             Ok(stored)
         } else {
-            Err(ExecutionAgentError::DriverFailed)
+            Err(crate::ExecutionAgentRequestFailure::DriverFailed)
         }
     }
 
@@ -187,7 +201,7 @@ impl ProductionProxyImageCanaryClient {
         &self,
         execution_id: &Uuid,
         plan_step_id: &Uuid,
-    ) -> Result<CanaryBeforeState, ExecutionAgentError> {
+    ) -> Result<CanaryBeforeState, crate::ExecutionAgentRequestFailure> {
         let row = sqlx::query(
             "SELECT namespace, workload, container_name, operation_id,
                     base_generation, previous_image, candidate_image_digest,
@@ -199,35 +213,37 @@ impl ProductionProxyImageCanaryClient {
         .bind(plan_step_id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|_| ExecutionAgentError::DriverFailed)?
-        .ok_or(ExecutionAgentError::DriverFailed)?;
+        .map_err(crate::ExecutionAgentRequestFailure::driver_source)?
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         Ok(CanaryBeforeState {
             namespace: row
                 .try_get("namespace")
-                .map_err(|_| ExecutionAgentError::DriverFailed)?,
-            workload: row.try_get("workload").map_err(|_| ExecutionAgentError::DriverFailed)?,
+                .map_err(crate::ExecutionAgentRequestFailure::driver_source)?,
+            workload: row
+                .try_get("workload")
+                .map_err(crate::ExecutionAgentRequestFailure::driver_source)?,
             container: row
                 .try_get("container_name")
-                .map_err(|_| ExecutionAgentError::DriverFailed)?,
+                .map_err(crate::ExecutionAgentRequestFailure::driver_source)?,
             operation_id: row
                 .try_get("operation_id")
-                .map_err(|_| ExecutionAgentError::DriverFailed)?,
+                .map_err(crate::ExecutionAgentRequestFailure::driver_source)?,
             base_generation: u64::try_from(
                 row.try_get::<i64, _>("base_generation")
-                    .map_err(|_| ExecutionAgentError::DriverFailed)?,
+                    .map_err(crate::ExecutionAgentRequestFailure::driver_source)?,
             )
-            .map_err(|_| ExecutionAgentError::DriverFailed)?,
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?,
             previous_image: row
                 .try_get("previous_image")
-                .map_err(|_| ExecutionAgentError::DriverFailed)?,
+                .map_err(crate::ExecutionAgentRequestFailure::driver_source)?,
             image_digest: row
                 .try_get("candidate_image_digest")
-                .map_err(|_| ExecutionAgentError::DriverFailed)?,
+                .map_err(crate::ExecutionAgentRequestFailure::driver_source)?,
             original_replicas: u32::try_from(
                 row.try_get::<i32, _>("original_replicas")
-                    .map_err(|_| ExecutionAgentError::DriverFailed)?,
+                    .map_err(crate::ExecutionAgentRequestFailure::driver_source)?,
             )
-            .map_err(|_| ExecutionAgentError::DriverFailed)?,
+            .map_err(crate::ExecutionAgentRequestFailure::driver_source)?,
         })
     }
 
@@ -237,7 +253,7 @@ impl ProductionProxyImageCanaryClient {
         canary_name: &str,
         canary_uid: Option<&str>,
         ready: bool,
-    ) -> Result<(), ExecutionAgentError> {
+    ) -> Result<(), crate::ExecutionAgentRequestFailure> {
         self.insert_result(
             &request.execution_id.as_uuid(),
             &request.plan_step_id.as_uuid(),
@@ -266,7 +282,7 @@ impl ProductionProxyImageCanaryClient {
         canary_uid: Option<&str>,
         image_digest: &str,
         ready: bool,
-    ) -> Result<(), ExecutionAgentError> {
+    ) -> Result<(), crate::ExecutionAgentRequestFailure> {
         sqlx::query(
             "INSERT INTO execution_agent_proxy_canary_results (
                  execution_id, plan_step_id, namespace, workload, canary_name,
@@ -289,7 +305,7 @@ impl ProductionProxyImageCanaryClient {
         .bind(Utc::now())
         .execute(&self.pool)
         .await
-        .map_err(|_| ExecutionAgentError::DriverFailed)?;
+        .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
         Ok(())
     }
 
@@ -300,7 +316,7 @@ impl ProductionProxyImageCanaryClient {
         previous_image: &str,
         target_image: &str,
         original_replicas: u32,
-    ) -> Result<Deployment, ExecutionAgentError> {
+    ) -> Result<Deployment, crate::ExecutionAgentRequestFailure> {
         let canary_name = self.canary_name(&request.namespace, &request.workload)?;
         let mut canary = main.clone();
         canary.metadata.name = Some(canary_name);
@@ -329,7 +345,10 @@ impl ProductionProxyImageCanaryClient {
         annotations.insert(PREVIOUS_IMAGE_ANNOTATION.to_owned(), previous_image.to_owned());
         annotations.insert(IMAGE_DIGEST_ANNOTATION.to_owned(), request.image_digest.clone());
 
-        let spec = canary.spec.as_mut().ok_or(ExecutionAgentError::DriverFailed)?;
+        let spec = canary
+            .spec
+            .as_mut()
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
         spec.replicas = Some(1);
         let selector = spec.selector.match_labels.get_or_insert_with(BTreeMap::new);
         selector.insert(CANARY_LABEL.to_owned(), operation_label.clone());
@@ -346,13 +365,13 @@ impl ProductionProxyImageCanaryClient {
             .template
             .spec
             .as_mut()
-            .ok_or(ExecutionAgentError::DriverFailed)?
+            .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?
             .containers
             .as_mut_slice();
         let container = containers
             .iter_mut()
             .find(|container| container.name == request.container)
-            .ok_or(ExecutionAgentError::InvalidRequest)?;
+            .ok_or(crate::ExecutionAgentRequestFailure::InvalidRequest)?;
         container.image = Some(target_image.to_owned());
         Ok(canary)
     }
@@ -386,16 +405,16 @@ impl ProxyImageCanaryClient for ProductionProxyImageCanaryClient {
             };
             let base_generation = annotation_u64(&canary, BASE_GENERATION_ANNOTATION)?;
             let original_replicas = annotation_u32(&canary, ORIGINAL_REPLICAS_ANNOTATION)?;
-            let previous_image =
-                annotation(&canary, PREVIOUS_IMAGE_ANNOTATION).ok_or(ExecutionAgentError::DriverFailed)?;
-            let candidate_digest =
-                annotation(&canary, IMAGE_DIGEST_ANNOTATION).ok_or(ExecutionAgentError::DriverFailed)?;
+            let previous_image = annotation(&canary, PREVIOUS_IMAGE_ANNOTATION)
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
+            let candidate_digest = annotation(&canary, IMAGE_DIGEST_ANNOTATION)
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
             let ready_canary_replicas = canary
                 .status
                 .as_ref()
                 .and_then(|status| status.ready_replicas)
                 .map_or(Ok(0), |value| {
-                    u32::try_from(value).map_err(|_| ExecutionAgentError::DriverFailed)
+                    u32::try_from(value).map_err(crate::ExecutionAgentRequestFailure::driver_source)
                 })?;
             let canary_ready = deployment_ready(&canary)? && ready_canary_replicas == 1;
             let old_replicas_unchanged = main_generation == base_generation
@@ -405,11 +424,11 @@ impl ProxyImageCanaryClient for ProductionProxyImageCanaryClient {
             Ok(ProxyImageCanaryState {
                 generation: base_generation
                     .checked_add(1)
-                    .ok_or(ExecutionAgentError::DriverFailed)?,
+                    .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?,
                 observed_generation: if canary_ready {
                     base_generation
                         .checked_add(1)
-                        .ok_or(ExecutionAgentError::DriverFailed)?
+                        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?
                 } else {
                     base_generation
                 },
@@ -426,17 +445,18 @@ impl ProxyImageCanaryClient for ProductionProxyImageCanaryClient {
     fn rollout_proxy_image_canary<'a>(&'a self, request: &'a ProxyImageCanaryWrite) -> DriverFuture<'a, ()> {
         Box::pin(async move {
             if request.canary_replicas != 1 || !valid_digest(&request.image_digest) {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let main = self.deployment(&request.namespace, &request.workload).await?;
             if generation(&main)? != request.expected_generation
                 || !deployment_ready(&main)?
                 || !self.pdb_healthy(&request.namespace, &main).await?
             {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             let previous_image = container_image(&main, &request.container)?;
-            let repository = image_repository(&previous_image).ok_or(ExecutionAgentError::DriverFailed)?;
+            let repository =
+                image_repository(&previous_image).ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
             let target_image = format!("{repository}@{}", request.image_digest);
             let original_replicas = desired_replicas(&main)?;
             let before = CanaryBeforeState {
@@ -457,22 +477,22 @@ impl ProxyImageCanaryClient for ProductionProxyImageCanaryClient {
                 {
                     return Ok(());
                 }
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
             let canary = self.build_canary(&main, request, &previous_image, &target_image, original_replicas)?;
             let created = Api::<Deployment>::namespaced(self.client.clone(), &request.namespace)
                 .create(&PostParams::default(), &canary)
                 .await
-                .map_err(|_| ExecutionAgentError::DriverFailed)?;
+                .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
             let uid = created
                 .metadata
                 .uid
                 .as_deref()
-                .ok_or(ExecutionAgentError::DriverUnknown)?;
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverUnknown)?;
             if annotation(&created, OPERATION_ANNOTATION) != Some(request.operation_id.as_str())
                 || container_image(&created, &request.container)? != target_image
             {
-                return Err(ExecutionAgentError::DriverUnknown);
+                return Err(crate::ExecutionAgentRequestFailure::DriverUnknown);
             }
             self.append_result(request, &canary_name, Some(uid), false).await
         })
@@ -487,7 +507,7 @@ impl ProxyImageCanaryClient for ProductionProxyImageCanaryClient {
                 || before.workload != request.workload
                 || before.container != request.container
             {
-                return Err(ExecutionAgentError::InvalidRequest);
+                return Err(crate::ExecutionAgentRequestFailure::InvalidRequest);
             }
             let canary_name = self.canary_name(&request.namespace, &request.workload)?;
             let Some(canary) = self.canary(&request.namespace, &request.workload).await? else {
@@ -500,9 +520,13 @@ impl ProxyImageCanaryClient for ProductionProxyImageCanaryClient {
                 || annotation(&canary, PLAN_STEP_ANNOTATION) != Some(plan_step_id.as_str())
                 || annotation(&canary, IMAGE_DIGEST_ANNOTATION) != Some(before.image_digest.as_str())
             {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(crate::ExecutionAgentRequestFailure::DriverFailed);
             }
-            let uid = canary.metadata.uid.clone().ok_or(ExecutionAgentError::DriverFailed)?;
+            let uid = canary
+                .metadata
+                .uid
+                .clone()
+                .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
             Api::<Deployment>::namespaced(self.client.clone(), &request.namespace)
                 .delete(
                     &canary_name,
@@ -516,7 +540,7 @@ impl ProxyImageCanaryClient for ProductionProxyImageCanaryClient {
                     },
                 )
                 .await
-                .map_err(|_| ExecutionAgentError::DriverFailed)?;
+                .map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
             self.insert_result(
                 &request.execution_id.as_uuid(),
                 &request.plan_step_id.as_uuid(),
@@ -534,47 +558,54 @@ impl ProxyImageCanaryClient for ProductionProxyImageCanaryClient {
     }
 }
 
-fn generation(deployment: &Deployment) -> Result<u64, ExecutionAgentError> {
+fn generation(deployment: &Deployment) -> Result<u64, crate::ExecutionAgentRequestFailure> {
     deployment
         .metadata
         .generation
         .and_then(|value| u64::try_from(value).ok())
         .filter(|value| *value > 0)
-        .ok_or(ExecutionAgentError::DriverFailed)
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
 }
 
-fn observed_generation(deployment: &Deployment) -> Result<u64, ExecutionAgentError> {
+fn observed_generation(deployment: &Deployment) -> Result<u64, crate::ExecutionAgentRequestFailure> {
     deployment
         .status
         .as_ref()
         .and_then(|status| status.observed_generation)
         .and_then(|value| u64::try_from(value).ok())
-        .ok_or(ExecutionAgentError::DriverFailed)
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
 }
 
-fn desired_replicas(deployment: &Deployment) -> Result<u32, ExecutionAgentError> {
+fn desired_replicas(deployment: &Deployment) -> Result<u32, crate::ExecutionAgentRequestFailure> {
     deployment
         .spec
         .as_ref()
         .and_then(|spec| spec.replicas)
         .and_then(|value| u32::try_from(value).ok())
         .filter(|value| *value > 0)
-        .ok_or(ExecutionAgentError::DriverFailed)
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
 }
 
-fn deployment_ready(deployment: &Deployment) -> Result<bool, ExecutionAgentError> {
-    let desired = i32::try_from(desired_replicas(deployment)?).map_err(|_| ExecutionAgentError::DriverFailed)?;
+fn deployment_ready(deployment: &Deployment) -> Result<bool, crate::ExecutionAgentRequestFailure> {
+    let desired =
+        i32::try_from(desired_replicas(deployment)?).map_err(crate::ExecutionAgentRequestFailure::driver_source)?;
     let generation = deployment
         .metadata
         .generation
-        .ok_or(ExecutionAgentError::DriverFailed)?;
-    let status = deployment.status.as_ref().ok_or(ExecutionAgentError::DriverFailed)?;
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
+    let status = deployment
+        .status
+        .as_ref()
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)?;
     Ok(status.observed_generation == Some(generation)
         && status.ready_replicas == Some(desired)
         && status.unavailable_replicas.unwrap_or_default() == 0)
 }
 
-fn container_image(deployment: &Deployment, container_name: &str) -> Result<String, ExecutionAgentError> {
+fn container_image(
+    deployment: &Deployment,
+    container_name: &str,
+) -> Result<String, crate::ExecutionAgentRequestFailure> {
     deployment
         .spec
         .as_ref()
@@ -586,7 +617,7 @@ fn container_image(deployment: &Deployment, container_name: &str) -> Result<Stri
         })
         .and_then(|container| container.image.clone())
         .filter(|image| !image.is_empty() && image.len() <= 512)
-        .ok_or(ExecutionAgentError::DriverFailed)
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
 }
 
 fn image_repository(image: &str) -> Option<&str> {
@@ -615,7 +646,7 @@ fn valid_digest(value: &str) -> bool {
     })
 }
 
-fn label_value(value: &str) -> Result<String, ExecutionAgentError> {
+fn label_value(value: &str) -> Result<String, crate::ExecutionAgentRequestFailure> {
     let valid = !value.is_empty()
         && value.len() <= 63
         && value
@@ -628,7 +659,7 @@ fn label_value(value: &str) -> Result<String, ExecutionAgentError> {
             .is_some_and(|(first, last)| first.is_ascii_alphanumeric() && last.is_ascii_alphanumeric());
     valid
         .then(|| value.to_owned())
-        .ok_or(ExecutionAgentError::InvalidRequest)
+        .ok_or(crate::ExecutionAgentRequestFailure::InvalidRequest)
 }
 
 fn annotation<'a>(deployment: &'a Deployment, key: &str) -> Option<&'a str> {
@@ -640,16 +671,16 @@ fn annotation<'a>(deployment: &'a Deployment, key: &str) -> Option<&'a str> {
         .map(String::as_str)
 }
 
-fn annotation_u64(deployment: &Deployment, key: &str) -> Result<u64, ExecutionAgentError> {
+fn annotation_u64(deployment: &Deployment, key: &str) -> Result<u64, crate::ExecutionAgentRequestFailure> {
     annotation(deployment, key)
         .and_then(|value| value.parse().ok())
-        .ok_or(ExecutionAgentError::DriverFailed)
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
 }
 
-fn annotation_u32(deployment: &Deployment, key: &str) -> Result<u32, ExecutionAgentError> {
+fn annotation_u32(deployment: &Deployment, key: &str) -> Result<u32, crate::ExecutionAgentRequestFailure> {
     annotation(deployment, key)
         .and_then(|value| value.parse().ok())
-        .ok_or(ExecutionAgentError::DriverFailed)
+        .ok_or(crate::ExecutionAgentRequestFailure::DriverFailed)
 }
 
 fn selector_matches(selector: &LabelSelector, labels: &BTreeMap<String, String>) -> bool {

@@ -12,9 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_sre_contracts::ContractError;
 use rocketmq_sre_contracts::ExecutionState;
 use rocketmq_sre_contracts::ExecutionTransition;
+use std::fmt;
+
+/// Closed result for an invalid in-memory execution transition.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum ExecutionStateRejection {
+    InvalidTransition,
+}
+
+impl fmt::Display for ExecutionStateRejection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SRE operation was rejected")
+    }
+}
+
+impl fmt::Debug for ExecutionStateRejection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, formatter)
+    }
+}
 
 /// Deterministic in-memory projection of append-only execution transitions.
 #[derive(Clone, Debug)]
@@ -38,14 +56,13 @@ impl ExecutionStateMachine {
     /// # Errors
     ///
     /// Rejects illegal state graph edges.
-    pub fn apply(&mut self, transition: ExecutionTransition) -> Result<&ExecutionTransition, ContractError> {
+    pub fn apply(&mut self, transition: ExecutionTransition) -> Result<&ExecutionTransition, ExecutionStateRejection> {
         if transition.from != self.current {
-            return Err(ContractError::InvalidStateTransition {
-                from: format!("{:?}", self.current),
-                to: format!("{:?}", transition.to),
-            });
+            return Err(ExecutionStateRejection::InvalidTransition);
         }
-        transition.validate()?;
+        transition
+            .validate()
+            .map_err(|_| ExecutionStateRejection::InvalidTransition)?;
         self.current = transition.to;
         let appended_index = self.transitions.len();
         self.transitions.push(transition);
@@ -98,12 +115,12 @@ mod tests {
     }
 
     #[test]
-    fn stale_from_state_is_rejected_with_typed_error() {
+    fn stale_from_state_is_rejected_as_closed_outcome() {
         let mut machine = ExecutionStateMachine::default();
 
         assert!(matches!(
             machine.apply(transition(ExecutionState::Prechecking, ExecutionState::IntentPersisted)),
-            Err(ContractError::InvalidStateTransition { .. })
+            Err(ExecutionStateRejection::InvalidTransition)
         ));
     }
 }

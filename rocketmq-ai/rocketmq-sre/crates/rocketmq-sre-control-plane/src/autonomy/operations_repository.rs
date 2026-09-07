@@ -34,6 +34,7 @@ use super::operations::ModelUsageMetrics;
 use super::operations::OPERATIONS_SCHEMA_VERSION;
 use super::operations::VersionEffectComparison;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 const MAX_BREAKDOWN_ROWS: i64 = 201;
@@ -141,19 +142,15 @@ impl PostgresRepository {
     pub(super) async fn persist_autonomy_operational_report(
         &self,
         report: &AutonomyOperationalReport,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         if !report.window.complete {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "open_report_period",
                 "only completed UTC report periods can be persisted",
             ));
         }
-        let snapshot = serde_json::to_value(report).map_err(|_| {
-            ControlPlaneError::validation(
-                "invalid_operational_report",
-                "autonomy operational report cannot be represented as JSON",
-            )
-        })?;
+        let snapshot = serde_json::to_value(report)
+            .map_err(|source| ControlPlaneError::validation_source("invalid_operational_report", source))?;
         let inserted = sqlx::query(
             "INSERT INTO autonomy_operational_reports (
                 id, tenant_id, period_kind, period_start, period_end,
@@ -617,9 +614,8 @@ fn non_negative(value: Option<f64>) -> Option<f64> {
     value.filter(|value| value.is_finite() && *value >= 0.0)
 }
 
-fn parse_json<T: serde::de::DeserializeOwned>(value: Value, name: &'static str) -> Result<T, ControlPlaneError> {
-    serde_json::from_value(value)
-        .map_err(|_| ControlPlaneError::configuration(format!("database contains an incompatible {name} snapshot")))
+fn parse_json<T: serde::de::DeserializeOwned>(value: Value, _name: &'static str) -> Result<T, ControlPlaneError> {
+    serde_json::from_value(value).map_err(ControlPlaneError::configuration_source)
 }
 
 const fn outcome_class_name(class: AutonomyOutcomeClass) -> &'static str {

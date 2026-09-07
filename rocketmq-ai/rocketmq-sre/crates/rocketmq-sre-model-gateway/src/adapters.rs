@@ -19,7 +19,9 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::error::ProviderError;
-use crate::error::ProviderErrorCode;
+use crate::error::ProviderOperationalFailure;
+use crate::error::ProviderRejection;
+use crate::error::ProviderStatusOutcome;
 use crate::error::map_provider_status;
 use crate::ir::CanonicalEmbeddingRequest;
 use crate::ir::CanonicalEmbeddingResponse;
@@ -63,17 +65,14 @@ impl ProtocolAdapter {
         profile: ProviderProfile,
         transport: Arc<dyn ModelTransport>,
         secrets: Arc<dyn SecretProvider>,
-    ) -> Result<Self, ProviderError> {
+    ) -> Result<Self, ProviderStatusOutcome> {
         profile.validate()?;
         if profile
             .credential_ref
             .as_ref()
             .is_some_and(|reference| matches!(reference.kind(), SecretReferenceKind::Adapter))
         {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "built-in provider credentials must be gateway-owned",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         Ok(Self {
             profile,
@@ -87,7 +86,7 @@ impl ProtocolAdapter {
         context: &InvocationContext,
         path: String,
         body: Value,
-    ) -> Result<TransportRequest, ProviderError> {
+    ) -> Result<TransportRequest, ProviderStatusOutcome> {
         let credential = self
             .profile
             .credential_ref
@@ -110,7 +109,7 @@ impl ProtocolAdapter {
         &self,
         context: &InvocationContext,
         request: &CanonicalModelRequest,
-    ) -> Result<CanonicalModelResponse, ProviderError> {
+    ) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
         let credential = self
             .profile
             .credential_ref
@@ -126,7 +125,7 @@ impl ProtocolAdapter {
         &self,
         context: &InvocationContext,
         request: &CanonicalModelRequest,
-    ) -> Result<BoundedModelStream, ProviderError> {
+    ) -> Result<BoundedModelStream, ProviderStatusOutcome> {
         context.ensure_active()?;
         let mut stream_request = request.clone();
         stream_request.stream = true;
@@ -152,8 +151,8 @@ impl ProtocolAdapter {
                 bedrock_request(&stream_request),
             ),
             ProviderFamily::ProviderSpi => {
-                return Err(ProviderError::capability_unsupported(
-                    "provider SPI requires ProviderSpiClient",
+                return Err(ProviderStatusOutcome::rejected(
+                    ProviderRejection::CapabilityUnsupported,
                 ));
             }
         };
@@ -166,7 +165,7 @@ impl ProtocolAdapter {
         &self,
         context: &InvocationContext,
         request: &CanonicalEmbeddingRequest,
-    ) -> Result<CanonicalEmbeddingResponse, ProviderError> {
+    ) -> Result<CanonicalEmbeddingResponse, ProviderStatusOutcome> {
         context.ensure_active()?;
         if !self
             .profile
@@ -174,8 +173,8 @@ impl ProtocolAdapter {
             .supported
             .contains(&crate::profile::ProviderCapability::Embeddings)
         {
-            return Err(ProviderError::capability_unsupported(
-                "provider profile does not support embeddings",
+            return Err(ProviderStatusOutcome::rejected(
+                ProviderRejection::CapabilityUnsupported,
             ));
         }
         let body = json!({
@@ -217,7 +216,7 @@ impl ProtocolAdapter {
         &self,
         context: &InvocationContext,
         request: &CanonicalRerankRequest,
-    ) -> Result<CanonicalRerankResponse, ProviderError> {
+    ) -> Result<CanonicalRerankResponse, ProviderStatusOutcome> {
         context.ensure_active()?;
         if !self
             .profile
@@ -225,8 +224,8 @@ impl ProtocolAdapter {
             .supported
             .contains(&crate::profile::ProviderCapability::Rerank)
         {
-            return Err(ProviderError::capability_unsupported(
-                "provider profile does not support reranking",
+            return Err(ProviderStatusOutcome::rejected(
+                ProviderRejection::CapabilityUnsupported,
             ));
         }
         let body = json!({
@@ -296,12 +295,9 @@ macro_rules! define_chat_adapter {
                 profile: ProviderProfile,
                 transport: Arc<dyn ModelTransport>,
                 secrets: Arc<dyn SecretProvider>,
-            ) -> Result<Self, ProviderError> {
+            ) -> Result<Self, ProviderStatusOutcome> {
                 if !matches!(profile.provider_family, $family) {
-                    return Err(ProviderError::new(
-                        ProviderErrorCode::ProfileInvalid,
-                        "provider profile family does not match adapter",
-                    ));
+                    return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
                 }
                 Ok(Self {
                     inner: ProtocolAdapter::new(profile, transport, secrets)?,
@@ -326,7 +322,7 @@ macro_rules! define_chat_adapter {
                 &self,
                 context: &InvocationContext,
                 request: &CanonicalModelRequest,
-            ) -> Result<CanonicalModelResponse, ProviderError> {
+            ) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
                 self.inner.invoke_chat(context, request)
             }
 
@@ -334,7 +330,7 @@ macro_rules! define_chat_adapter {
                 &self,
                 context: &InvocationContext,
                 request: &CanonicalModelRequest,
-            ) -> Result<BoundedModelStream, ProviderError> {
+            ) -> Result<BoundedModelStream, ProviderStatusOutcome> {
                 self.inner.invoke_chat_stream(context, request)
             }
         }
@@ -355,7 +351,7 @@ impl EmbeddingProvider for OpenAiCompatibleAdapter {
         &self,
         context: &InvocationContext,
         request: &CanonicalEmbeddingRequest,
-    ) -> Result<CanonicalEmbeddingResponse, ProviderError> {
+    ) -> Result<CanonicalEmbeddingResponse, ProviderStatusOutcome> {
         self.inner.invoke_embedding(context, request)
     }
 }
@@ -369,7 +365,7 @@ impl RerankProvider for OpenAiCompatibleAdapter {
         &self,
         context: &InvocationContext,
         request: &CanonicalRerankRequest,
-    ) -> Result<CanonicalRerankResponse, ProviderError> {
+    ) -> Result<CanonicalRerankResponse, ProviderStatusOutcome> {
         self.inner.invoke_rerank(context, request)
     }
 }
@@ -384,16 +380,13 @@ pub fn adapter_for_profile(
     profile: ProviderProfile,
     transport: Arc<dyn ModelTransport>,
     secrets: Arc<dyn SecretProvider>,
-) -> Result<Arc<dyn ChatModelProvider>, ProviderError> {
+) -> Result<Arc<dyn ChatModelProvider>, ProviderStatusOutcome> {
     match profile.provider_family {
         ProviderFamily::OpenAiCompatible => Ok(Arc::new(OpenAiCompatibleAdapter::new(profile, transport, secrets)?)),
         ProviderFamily::Anthropic => Ok(Arc::new(AnthropicMessagesAdapter::new(profile, transport, secrets)?)),
         ProviderFamily::Gemini => Ok(Arc::new(GeminiNativeAdapter::new(profile, transport, secrets)?)),
         ProviderFamily::Bedrock => Ok(Arc::new(BedrockConverseAdapter::new(profile, transport, secrets)?)),
-        ProviderFamily::ProviderSpi => Err(ProviderError::new(
-            ProviderErrorCode::ProfileInvalid,
-            "provider SPI profiles require ProviderSpiClient",
-        )),
+        ProviderFamily::ProviderSpi => Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid)),
     }
 }
 
@@ -402,7 +395,7 @@ pub(crate) fn build_chat_transport_request(
     context: &InvocationContext,
     request: &CanonicalModelRequest,
     credential: Option<crate::secret::SecretMaterial>,
-) -> Result<TransportRequest, ProviderError> {
+) -> Result<TransportRequest, ProviderStatusOutcome> {
     context.ensure_active()?;
     profile.capabilities.ensure_request_supported(request)?;
     let (path, body) = match profile.provider_family {
@@ -417,8 +410,8 @@ pub(crate) fn build_chat_transport_request(
             bedrock_request(request),
         ),
         ProviderFamily::ProviderSpi => {
-            return Err(ProviderError::capability_unsupported(
-                "provider SPI requires ProviderSpiClient",
+            return Err(ProviderStatusOutcome::rejected(
+                ProviderRejection::CapabilityUnsupported,
             ));
         }
     };
@@ -438,21 +431,21 @@ pub(crate) fn parse_chat_transport_response(
     profile: &ProviderProfile,
     response: TransportResponse,
     max_response_bytes: usize,
-) -> Result<CanonicalModelResponse, ProviderError> {
+) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
     ensure_response_bound(&response, max_response_bytes)?;
     if !(200..300).contains(&response.status) {
         return Err(map_provider_status(response.status));
     }
     match profile.provider_family {
         ProviderFamily::OpenAiCompatible if profile.dialect == ProviderDialect::DeepSeekResponses => {
-            parse_deepseek_responses_response(profile, response.body)
+            parse_deepseek_responses_response(profile, response.body).map_err(Into::into)
         }
-        ProviderFamily::OpenAiCompatible => parse_openai_response(profile, response.body),
-        ProviderFamily::Anthropic => parse_anthropic_response(profile, response.body),
-        ProviderFamily::Gemini => parse_gemini_response(profile, response.body),
-        ProviderFamily::Bedrock => parse_bedrock_response(profile, response.body),
-        ProviderFamily::ProviderSpi => Err(ProviderError::capability_unsupported(
-            "provider SPI requires ProviderSpiClient",
+        ProviderFamily::OpenAiCompatible => parse_openai_response(profile, response.body).map_err(Into::into),
+        ProviderFamily::Anthropic => parse_anthropic_response(profile, response.body).map_err(Into::into),
+        ProviderFamily::Gemini => parse_gemini_response(profile, response.body).map_err(Into::into),
+        ProviderFamily::Bedrock => parse_bedrock_response(profile, response.body).map_err(Into::into),
+        ProviderFamily::ProviderSpi => Err(ProviderStatusOutcome::rejected(
+            ProviderRejection::CapabilityUnsupported,
         )),
     }
 }
@@ -989,10 +982,11 @@ fn bedrock_request(request: &CanonicalModelRequest) -> Value {
 }
 
 fn ensure_response_bound(response: &TransportResponse, max_bytes: usize) -> Result<(), ProviderError> {
-    let bytes = serde_json::to_vec(&response.body).map_err(|_| protocol_error())?;
+    let bytes = serde_json::to_vec(&response.body)
+        .map_err(|source| ProviderError::from_source(ProviderOperationalFailure::ProtocolError, source))?;
     if bytes.len() > max_bytes {
         Err(ProviderError::new(
-            ProviderErrorCode::OutputTooLarge,
+            ProviderOperationalFailure::OutputTooLarge,
             "provider response exceeded configured bounds",
         ))
     } else {
@@ -1413,7 +1407,7 @@ fn u32_field(value: &Value, field: &str) -> Option<u32> {
 
 fn protocol_error() -> ProviderError {
     ProviderError::new(
-        ProviderErrorCode::ProtocolError,
+        ProviderOperationalFailure::ProtocolError,
         "provider response did not match its declared protocol",
     )
 }

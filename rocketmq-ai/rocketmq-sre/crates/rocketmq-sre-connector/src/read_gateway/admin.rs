@@ -19,7 +19,7 @@ use super::ReadAdapter;
 use super::ReadAdapterKind;
 use super::ReadContext;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 use crate::config::AdminSourceConfig;
 use crate::sources::AdminQuerySource;
 use crate::sources::SourceOutput;
@@ -84,7 +84,7 @@ impl ReadAdapter for AdminReadAdapter {
                     .await
             }
             CanonicalRead::Mcp(_) | CanonicalRead::McpSystemResource(_) => Err(ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
+                ConnectorFailure::InvalidEvidenceQuery,
                 false,
                 "MCP request cannot be routed to the Admin read adapter",
             )

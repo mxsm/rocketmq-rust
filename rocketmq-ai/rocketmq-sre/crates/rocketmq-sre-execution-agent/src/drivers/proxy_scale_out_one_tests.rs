@@ -38,6 +38,7 @@ use rocketmq_sre_contracts::VerificationSpec;
 use serde_json::json;
 
 use super::*;
+use crate::ExecutionAgentRequestFailure;
 
 struct FakeScaleClient {
     state: Mutex<ProxyScaleState>,
@@ -74,7 +75,7 @@ impl ProxyScaleClient for FakeScaleClient {
             if state.desired_replicas != request.expected_replicas
                 || request.target_replicas != request.expected_replicas + 1
             {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(ExecutionAgentRequestFailure::DriverFailed);
             }
             state.desired_replicas = request.target_replicas;
             state.ready_replicas = request.target_replicas;
@@ -88,7 +89,7 @@ impl ProxyScaleClient for FakeScaleClient {
         Box::pin(async move {
             let mut state = self.state.lock().expect("fake state lock");
             if state.desired_replicas != request.original_replicas + 1 {
-                return Err(ExecutionAgentError::DriverFailed);
+                return Err(ExecutionAgentRequestFailure::DriverFailed);
             }
             state.desired_replicas = request.original_replicas;
             state.ready_replicas = request.original_replicas;

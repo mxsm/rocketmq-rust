@@ -49,7 +49,7 @@ use super::policy::ForecastAggregation;
 use super::policy::ForecastTarget;
 use super::policy::ForecastTargetKind;
 use super::policy::ForecastWindowPolicy;
-use crate::ControlPlaneError;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 const PROMETHEUS_SCHEMA: &str = "rocketmq.prometheus-evidence.v1";
 
@@ -59,7 +59,7 @@ pub(super) fn parse_prometheus_points(
     window: ForecastWindow,
     aggregation: ForecastAggregation,
     max_points: usize,
-) -> Result<Vec<ObservedPoint>, ControlPlaneError> {
+) -> Result<Vec<ObservedPoint>, ControlPlaneRequestFailure> {
     let object = content.as_object().ok_or_else(invalid_evidence)?;
     let expected_kind = match window {
         ForecastWindow::SevenDays => "trend_7d",
@@ -76,7 +76,7 @@ pub(super) fn parse_prometheus_points(
         .and_then(Value::as_array)
         .ok_or_else(invalid_evidence)?;
     if series.len() > max_points {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "output_too_large",
             "Prometheus forecast series exceed the configured bound",
         ));
@@ -91,7 +91,7 @@ pub(super) fn parse_prometheus_points(
         for sample in samples {
             scanned = scanned.saturating_add(1);
             if scanned > max_points {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "output_too_large",
                     "Prometheus forecast samples exceed the configured bound",
                 ));
@@ -158,23 +158,31 @@ pub(super) fn capacity_forecast(
     evidence_ids: Vec<EvidenceId>,
     algorithm_version: &str,
     now: DateTime<Utc>,
-) -> Result<CapacityForecast, ControlPlaneError> {
-    let threshold = target
-        .threshold
-        .ok_or_else(|| ControlPlaneError::configuration("capacity forecast target does not define a threshold"))?;
+) -> Result<CapacityForecast, ControlPlaneRequestFailure> {
+    let threshold = target.threshold.ok_or_else(|| {
+        ControlPlaneRequestFailure::configuration("capacity forecast target does not define a threshold")
+    })?;
     let (evaluation, advisories) = match target.kind {
         ForecastTargetKind::Capacity => {
             let capacity = evaluate_capacity(points, window.trend, threshold, now.timestamp()).map_err(|reason| {
-                ControlPlaneError::configuration(format!("capacity trend policy cannot be evaluated: {reason}"))
+                ControlPlaneRequestFailure::configuration(format!(
+                    "capacity trend policy cannot be evaluated: {reason}"
+                ))
             })?;
             (capacity.trend, capacity.advisories)
         }
         ForecastTargetKind::Expiry => {
             let direction = target.threshold_direction.ok_or_else(|| {
-                ControlPlaneError::configuration("expiry forecast target does not define a threshold direction")
+                ControlPlaneRequestFailure::configuration(
+                    "expiry forecast target does not define a threshold direction",
+                )
             })?;
             let trend = evaluate_trend(points, window.trend, Some((threshold, direction)), now.timestamp()).map_err(
-                |reason| ControlPlaneError::configuration(format!("expiry trend policy cannot be evaluated: {reason}")),
+                |reason| {
+                    ControlPlaneRequestFailure::configuration(format!(
+                        "expiry trend policy cannot be evaluated: {reason}"
+                    ))
+                },
             )?;
             let advisory = if trend.exhaustion_at_seconds.is_some() {
                 "rotate_or_review_before_expiry"
@@ -186,7 +194,7 @@ pub(super) fn capacity_forecast(
             (trend, vec![advisory.to_owned()])
         }
         ForecastTargetKind::Backlog => {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "backlog target cannot be projected as capacity",
             ));
         }
@@ -232,9 +240,9 @@ pub(super) fn backlog_forecast(
     evidence_ids: Vec<EvidenceId>,
     algorithm_version: &str,
     now: DateTime<Utc>,
-) -> Result<BacklogEta, ControlPlaneError> {
+) -> Result<BacklogEta, ControlPlaneRequestFailure> {
     let evaluation = evaluate_backlog(points, window.trend, now.timestamp()).map_err(|reason| {
-        ControlPlaneError::configuration(format!("backlog trend policy cannot be evaluated: {reason}"))
+        ControlPlaneRequestFailure::configuration(format!("backlog trend policy cannot be evaluated: {reason}"))
     })?;
     let (sample_start, sample_end) = sample_range(&evaluation.trend, window, now)?;
     Ok(BacklogEta {
@@ -276,10 +284,10 @@ pub(super) fn baseline_artifacts(
     evidence_ids: &[EvidenceId],
     algorithm_version: &str,
     now: DateTime<Utc>,
-) -> Result<(Option<AnomalyBaseline>, AnomalyAssessment), ControlPlaneError> {
+) -> Result<(Option<AnomalyBaseline>, AnomalyAssessment), ControlPlaneRequestFailure> {
     let reference = points.last().map_or(now.timestamp(), |point| point.at_seconds);
     let baseline = build_baseline(points, reference, policy).map_err(|reason| {
-        ControlPlaneError::configuration(format!("seasonal baseline policy cannot be evaluated: {reason}"))
+        ControlPlaneRequestFailure::configuration(format!("seasonal baseline policy cannot be evaluated: {reason}"))
     })?;
     let current = points.last().map(|point| point.value);
     let anomaly = assess_anomaly(&baseline, current, policy);
@@ -301,7 +309,7 @@ pub(super) fn change_point_artifact(
     score_threshold: f64,
     evidence_ids: Vec<EvidenceId>,
     algorithm_version: &str,
-) -> Result<Option<ChangePoint>, ControlPlaneError> {
+) -> Result<Option<ChangePoint>, ControlPlaneRequestFailure> {
     detect_change_point(points, window_samples, score_threshold)
         .map(|change| {
             Ok(ChangePoint {
@@ -329,7 +337,7 @@ fn baseline_contract(
     baseline: &BaselineEvaluation,
     algorithm_version: &str,
     now: DateTime<Utc>,
-) -> Result<Option<AnomalyBaseline>, ControlPlaneError> {
+) -> Result<Option<AnomalyBaseline>, ControlPlaneRequestFailure> {
     let (Some(median), Some(mad)) = (baseline.median, baseline.median_absolute_deviation) else {
         return Ok(None);
     };
@@ -348,13 +356,15 @@ fn baseline_contract(
         algorithm_version: algorithm_version.to_owned(),
         valid_from: now
             - Duration::seconds(
-                i64::try_from(policy.history_window_seconds)
-                    .map_err(|_| ControlPlaneError::configuration("baseline history window cannot be represented"))?,
+                i64::try_from(policy.history_window_seconds).map_err(|source| {
+                    ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source))
+                })?,
             ),
         valid_until: now
             + Duration::seconds(
-                i64::try_from(policy.period_seconds)
-                    .map_err(|_| ControlPlaneError::configuration("baseline period cannot be represented"))?,
+                i64::try_from(policy.period_seconds).map_err(|source| {
+                    ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source))
+                })?,
             ),
     }))
 }
@@ -397,7 +407,7 @@ fn sample_range(
     evaluation: &TrendEvaluation,
     window: &ForecastWindowPolicy,
     now: DateTime<Utc>,
-) -> Result<(DateTime<Utc>, DateTime<Utc>), ControlPlaneError> {
+) -> Result<(DateTime<Utc>, DateTime<Utc>), ControlPlaneRequestFailure> {
     let start = evaluation
         .sample_start_seconds
         .map(required_datetime)
@@ -411,7 +421,7 @@ fn sample_range(
     Ok((start, end))
 }
 
-fn contract_points(evaluation: &TrendEvaluation) -> Result<Vec<ForecastPoint>, ControlPlaneError> {
+fn contract_points(evaluation: &TrendEvaluation) -> Result<Vec<ForecastPoint>, ControlPlaneRequestFailure> {
     evaluation
         .observed_points
         .iter()
@@ -432,18 +442,18 @@ fn contract_points(evaluation: &TrendEvaluation) -> Result<Vec<ForecastPoint>, C
         .collect()
 }
 
-fn required_datetime(seconds: i64) -> Result<DateTime<Utc>, ControlPlaneError> {
+fn required_datetime(seconds: i64) -> Result<DateTime<Utc>, ControlPlaneRequestFailure> {
     DateTime::from_timestamp(seconds, 0).ok_or_else(|| {
-        ControlPlaneError::validation("invalid_forecast", "forecast timestamp is outside the supported range")
+        ControlPlaneRequestFailure::validation("invalid_forecast", "forecast timestamp is outside the supported range")
     })
 }
 
-fn optional_datetime(seconds: Option<i64>) -> Result<Option<DateTime<Utc>>, ControlPlaneError> {
+fn optional_datetime(seconds: Option<i64>) -> Result<Option<DateTime<Utc>>, ControlPlaneRequestFailure> {
     seconds.map(required_datetime).transpose()
 }
 
-fn invalid_evidence() -> ControlPlaneError {
-    ControlPlaneError::validation(
+fn invalid_evidence() -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::validation(
         "invalid_forecast_evidence",
         "Prometheus forecast evidence does not match the canonical schema",
     )

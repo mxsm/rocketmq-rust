@@ -33,7 +33,6 @@ use super::CredentialRotationClient;
 use super::CredentialRotationState;
 use super::DriverDispatchOutcome;
 use super::DriverFuture;
-use crate::ExecutionAgentError;
 
 /// Exact parameters accepted by `security.credential_rotate_overlap.v1`.
 ///
@@ -105,7 +104,7 @@ where
                 reasons.push("active_credential_unhealthy".to_owned());
             }
             let candidate_secret_ref_hash = canonical_precondition_hash(&parameters.candidate_secret_ref)
-                .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+                .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
             let precondition_hash = canonical_precondition_hash(&CredentialPrecondition {
                 schema_version: "rocketmq-sre.credential-overlap-precondition.v1",
                 action: request.action,
@@ -118,7 +117,7 @@ where
                 validation_probe_topic: &parameters.validation_probe_topic,
                 live_state: &state,
             })
-            .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+            .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
             Ok(AgentReadResult {
                 schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
                 action: request.action,
@@ -241,16 +240,16 @@ where
     }
 }
 
-fn require_action(action: ExecutionAction) -> Result<(), ExecutionAgentError> {
+fn require_action(action: ExecutionAction) -> Result<(), crate::ExecutionAgentRequestFailure> {
     if action == ExecutionAction::SecurityCredentialRotateOverlap {
         Ok(())
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 
-fn parameters(value: &serde_json::Value) -> Result<CredentialRotationParameters, ExecutionAgentError> {
-    serde_json::from_value(value.clone()).map_err(|_| ExecutionAgentError::InvalidRequest)
+fn parameters(value: &serde_json::Value) -> Result<CredentialRotationParameters, crate::ExecutionAgentRequestFailure> {
+    serde_json::from_value(value.clone()).map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)
 }
 
 fn validate_parameters(parameters: &CredentialRotationParameters) -> Vec<String> {
@@ -284,11 +283,11 @@ fn validate_parameters(parameters: &CredentialRotationParameters) -> Vec<String>
     reasons
 }
 
-fn validate_for_mutation(parameters: &CredentialRotationParameters) -> Result<(), ExecutionAgentError> {
+fn validate_for_mutation(parameters: &CredentialRotationParameters) -> Result<(), crate::ExecutionAgentRequestFailure> {
     if validate_parameters(parameters).is_empty() {
         Ok(())
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 

@@ -73,8 +73,8 @@ pub(crate) async fn middleware(State(state): State<AppState>, mut request: Reque
 }
 
 fn audit_error_class(error: &ControlPlaneError) -> &'static str {
-    match error {
-        ControlPlaneError::Database(_) => "database",
+    match error.failure() {
+        crate::ControlPlaneFailure::Database => "database",
         _ => "unexpected",
     }
 }
@@ -377,7 +377,11 @@ mod tests {
     #[tokio::test]
     async fn error_body_and_header_share_the_request_correlation_id() {
         let correlation = CorrelationContext::from_id(CorrelationId::new());
-        let response = response_with_correlation(ControlPlaneError::Unauthorized.into_response(), correlation).await;
+        let response = response_with_correlation(
+            crate::ControlPlaneRequestFailure::unauthorized().into_response(),
+            correlation,
+        )
+        .await;
         let header = response
             .headers()
             .get(CORRELATION_ID_HEADER)

@@ -15,7 +15,6 @@
 use std::collections::BTreeSet;
 
 use super::LeaseAuthorityService;
-use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::supervised_execution::signing::GrantSigner;
@@ -90,13 +89,11 @@ async fn postgres_authority_requires_agent_ack_before_activation_and_rejects_for
         lease_id: pending.lease.id,
         fence_ack: ack.clone(),
     };
-    assert!(matches!(
-        authority.activate(&executor, &activation).await,
-        Err(ControlPlaneError::Forbidden {
-            code: "invalid_grant_signature",
-            ..
-        })
-    ));
+    let invalid_signature = authority
+        .activate(&executor, &activation)
+        .await
+        .expect_err("invalid grant signature must fail");
+    assert_eq!(invalid_signature.code(), "invalid_grant_signature");
 
     GrantSigner::new(AGENT_ACK_KEY)
         .expect("Agent acknowledgement signer")
@@ -106,13 +103,11 @@ async fn postgres_authority_requires_agent_ack_before_activation_and_rejects_for
         fence_ack: ack.clone(),
         ..activation
     };
-    assert!(matches!(
-        authority.activate(&executor, &activation).await,
-        Err(ControlPlaneError::Conflict {
-            code: "fence_ack_rejected",
-            ..
-        })
-    ));
+    let rejected_ack = authority
+        .activate(&executor, &activation)
+        .await
+        .expect_err("rejected fence ack must fail");
+    assert_eq!(rejected_ack.code(), "fence_ack_rejected");
 
     sqlx::query(
         "INSERT INTO execution_agent_fences (
@@ -156,21 +151,17 @@ async fn lease_takeover_requires_executor_workload_role_and_exact_cluster_scope(
         requested_ttl_seconds: 60,
     };
     let operator = auth(tenant_id, cluster_id, "ordinary-operator", "operator");
-    assert!(matches!(
-        authority.begin_takeover(&operator, &request).await,
-        Err(ControlPlaneError::Forbidden {
-            code: "unauthorized_workload_identity",
-            ..
-        })
-    ));
+    let unauthorized = authority
+        .begin_takeover(&operator, &request)
+        .await
+        .expect_err("ordinary operator must be rejected");
+    assert_eq!(unauthorized.code(), "unauthorized_workload_identity");
     let wrong_cluster = auth(tenant_id, ClusterId::new(), "executor-wrong-scope", "executor_service");
-    assert!(matches!(
-        authority.begin_takeover(&wrong_cluster, &request).await,
-        Err(ControlPlaneError::Forbidden {
-            code: "cluster_not_allowed",
-            ..
-        })
-    ));
+    let wrong_scope = authority
+        .begin_takeover(&wrong_cluster, &request)
+        .await
+        .expect_err("wrong cluster must be rejected");
+    assert_eq!(wrong_scope.code(), "cluster_not_allowed");
 
     cleanup_cluster(&repository, cluster_id).await;
 }

@@ -36,6 +36,7 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::ExecutionAgentError;
+use crate::ExecutionAgentRequestFailure;
 use crate::config::validate_internal_service_url;
 
 const MAX_AUTHORITY_RESPONSE_BYTES: usize = 64 * 1024;
@@ -57,7 +58,7 @@ pub trait LeaseAuthorityClient: Send + Sync {
 }
 
 pub type AuthorityFuture<'a, T = GrantVerification> =
-    Pin<Box<dyn Future<Output = Result<T, ExecutionAgentError>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = Result<T, ExecutionAgentRequestFailure>> + Send + 'a>>;
 
 /// Authenticated HTTP client that never receives the Authority signing key.
 #[derive(Clone)]
@@ -107,7 +108,7 @@ impl HttpLeaseAuthorityClient {
         tenant_id: TenantId,
         cluster_id: rocketmq_sre_contracts::ClusterId,
         body: &T,
-    ) -> Result<R, ExecutionAgentError>
+    ) -> Result<R, ExecutionAgentRequestFailure>
     where
         T: Serialize + ?Sized,
         R: DeserializeOwned,
@@ -127,26 +128,26 @@ impl HttpLeaseAuthorityClient {
             .send()
             .await?;
         if response.status().is_client_error() {
-            return Err(ExecutionAgentError::AuthorityRejected);
+            return Err(crate::ExecutionAgentRequestFailure::AuthorityRejected);
         }
         if response.status() != StatusCode::OK {
-            return Err(ExecutionAgentError::AuthorityUnavailable);
+            return Err(ExecutionAgentError::AuthorityUnavailable.into());
         }
         if response
             .content_length()
             .is_some_and(|length| length > MAX_AUTHORITY_RESPONSE_BYTES as u64)
         {
-            return Err(ExecutionAgentError::AuthorityRejected);
+            return Err(ExecutionAgentError::AuthorityUnavailable.into());
         }
         let mut response = response;
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await? {
             if bytes.len().saturating_add(chunk.len()) > MAX_AUTHORITY_RESPONSE_BYTES {
-                return Err(ExecutionAgentError::AuthorityRejected);
+                return Err(ExecutionAgentError::AuthorityUnavailable.into());
             }
             bytes.extend_from_slice(&chunk);
         }
-        serde_json::from_slice(&bytes).map_err(|_| ExecutionAgentError::AuthorityRejected)
+        serde_json::from_slice(&bytes).map_err(|error| ExecutionAgentError::authority_decode(error).into())
     }
 }
 
@@ -218,7 +219,7 @@ impl LeaseAuthorityClient for HttpLeaseAuthorityClient {
                 || verification.expires_at != decision.expires_at
                 || verification.expires_at <= chrono::Utc::now()
             {
-                return Err(ExecutionAgentError::AuthorityRejected);
+                return Err(crate::ExecutionAgentRequestFailure::AuthorityRejected);
             }
             Ok(verification)
         })
@@ -240,7 +241,7 @@ fn validate_verification(
     verification: &GrantVerification,
     cluster_id: rocketmq_sre_contracts::ClusterId,
     epoch: rocketmq_sre_contracts::LeaseEpoch,
-) -> Result<(), ExecutionAgentError> {
+) -> Result<(), ExecutionAgentRequestFailure> {
     if verification.schema_version == LEASE_AUTHORITY_SCHEMA_VERSION
         && verification.valid
         && verification.cluster_id == cluster_id
@@ -249,12 +250,14 @@ fn validate_verification(
     {
         Ok(())
     } else {
-        Err(ExecutionAgentError::AuthorityRejected)
+        Err(crate::ExecutionAgentRequestFailure::AuthorityRejected)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::*;
 
     #[test]
@@ -287,5 +290,21 @@ mod tests {
         let debug = format!("{client:?}");
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("authority-workload-secret"));
+    }
+
+    #[test]
+    fn malformed_authority_response_remains_an_operational_error() {
+        let error = serde_json::from_slice::<GrantVerification>(b"not-json")
+            .map_err(ExecutionAgentError::authority_decode)
+            .expect_err("invalid authority JSON must fail decoding");
+        assert!(error.source().is_some_and(|source| source.is::<serde_json::Error>()));
+        assert_eq!(
+            error.http_classification(),
+            (axum::http::StatusCode::SERVICE_UNAVAILABLE, "source_unavailable", true)
+        );
+        assert!(matches!(
+            ExecutionAgentRequestFailure::from(error),
+            ExecutionAgentRequestFailure::Operational(_)
+        ));
     }
 }

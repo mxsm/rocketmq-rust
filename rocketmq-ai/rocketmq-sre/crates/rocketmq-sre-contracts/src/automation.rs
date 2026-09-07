@@ -24,13 +24,13 @@ use uuid::Uuid;
 use crate::AutomationFeedbackId;
 use crate::AutomationRunId;
 use crate::ClusterId;
-use crate::ContractError;
 use crate::CorrelationId;
 use crate::EvidenceId;
 use crate::IncidentId;
 use crate::InspectionRunId;
 use crate::ModelInvocationId;
 use crate::RecommendationId;
+use crate::SreContractError;
 use crate::TenantId;
 
 pub const AUTOMATION_SCHEMA_VERSION: &str = "rocketmq-sre.automation.v1";
@@ -92,7 +92,7 @@ impl AutomationBudget {
     /// # Errors
     ///
     /// Rejects zero or excessive call, output, and runtime bounds.
-    pub fn validate(self) -> Result<(), ContractError> {
+    pub fn validate(self) -> Result<(), SreContractError> {
         if self.max_model_calls > 4
             || !(1_024..=262_144).contains(&self.max_output_bytes)
             || !(1..=300).contains(&self.timeout_seconds)
@@ -129,7 +129,7 @@ impl NoSideEffectAutomationRequest {
     ///
     /// Rejects unknown schema, missing scope, duplicate Evidence, unsafe
     /// identity text, and unbounded execution budgets.
-    pub fn validate(&self) -> Result<(), ContractError> {
+    pub fn validate(&self) -> Result<(), SreContractError> {
         let unique_evidence = self.evidence_ids.iter().collect::<BTreeSet<_>>();
         let incident_required = matches!(
             self.kind,
@@ -199,7 +199,7 @@ impl NoSideEffectAutomationRun {
     ///
     /// Rejects mismatched terminal timestamps, sensitive summaries, duplicate
     /// artifacts, and unbounded result fields.
-    pub fn validate(&self) -> Result<(), ContractError> {
+    pub fn validate(&self) -> Result<(), SreContractError> {
         let artifacts = self
             .artifacts
             .iter()
@@ -250,7 +250,7 @@ impl PreventiveAutomationRequest {
     /// # Errors
     ///
     /// Rejects unknown schema, missing identities, or unbounded request data.
-    pub fn validate(&self) -> Result<(), ContractError> {
+    pub fn validate(&self) -> Result<(), SreContractError> {
         if self.schema_version != AUTOMATION_SCHEMA_VERSION
             || self.id.as_uuid().is_nil()
             || self.tenant_id.as_uuid().is_nil()
@@ -295,7 +295,7 @@ impl PreventiveAutomationRun {
     ///
     /// Rejects invalid identities, duplicate recommendations, sensitive or
     /// unbounded summaries, and inconsistent lifecycle timestamps.
-    pub fn validate(&self) -> Result<(), ContractError> {
+    pub fn validate(&self) -> Result<(), SreContractError> {
         let recommendations = self.recommendation_ids.iter().collect::<BTreeSet<_>>();
         let terminal_time_valid = self.status.is_terminal() == self.completed_at.is_some()
             && self
@@ -371,7 +371,7 @@ impl AutomationOperatorFeedback {
     ///
     /// Rejects unknown schema, nil identities, sensitive comments, and
     /// unbounded actor-controlled text.
-    pub fn validate(&self) -> Result<(), ContractError> {
+    pub fn validate(&self) -> Result<(), SreContractError> {
         let comment_valid = self
             .comment
             .as_ref()
@@ -415,10 +415,8 @@ fn contains_sensitive_marker(value: &str) -> bool {
     .any(|marker| normalized.contains(marker))
 }
 
-fn invalid(reason: &'static str) -> ContractError {
-    ContractError::InvalidDescriptor {
-        reason: reason.to_owned(),
-    }
+fn invalid(_reason: &'static str) -> SreContractError {
+    crate::SreContractError::new(crate::PublicErrorCode::InvalidDescriptor)
 }
 
 #[cfg(test)]

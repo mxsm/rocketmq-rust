@@ -27,7 +27,7 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::ControlPlaneError;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 const MAX_ASSETS_PER_SNAPSHOT: usize = 20_000;
 const MAX_EDGES_PER_SNAPSHOT: usize = 50_000;
@@ -115,7 +115,7 @@ impl Display for AssetKind {
 }
 
 impl FromStr for AssetKind {
-    type Err = ControlPlaneError;
+    type Err = ControlPlaneRequestFailure;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
@@ -167,7 +167,7 @@ impl AssetSource {
 }
 
 impl FromStr for AssetSource {
-    type Err = ControlPlaneError;
+    type Err = ControlPlaneRequestFailure;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
@@ -189,7 +189,7 @@ pub(crate) struct AssetKey {
 }
 
 impl AssetKey {
-    pub(crate) fn new(kind: AssetKind, external_key: impl Into<String>) -> Result<Self, ControlPlaneError> {
+    pub(crate) fn new(kind: AssetKind, external_key: impl Into<String>) -> Result<Self, ControlPlaneRequestFailure> {
         let key = Self {
             kind,
             external_key: external_key.into(),
@@ -202,14 +202,14 @@ impl AssetKey {
         format!("{}:{}", self.kind.as_str(), self.external_key)
     }
 
-    pub(super) fn parse_canonical(value: &str) -> Result<Self, ControlPlaneError> {
+    pub(super) fn parse_canonical(value: &str) -> Result<Self, ControlPlaneRequestFailure> {
         let (kind, external_key) = value
             .split_once(':')
             .ok_or_else(|| invalid_stored_inventory("asset key"))?;
         Self::new(kind.parse()?, external_key)
     }
 
-    fn validate(&self) -> Result<(), ControlPlaneError> {
+    fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         validate_text("asset external key", &self.external_key, 512)
     }
 }
@@ -248,7 +248,7 @@ impl TopologyRelation {
 }
 
 impl FromStr for TopologyRelation {
-    type Err = ControlPlaneError;
+    type Err = ControlPlaneRequestFailure;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
@@ -282,7 +282,7 @@ pub(crate) struct AssetObservation {
 }
 
 impl AssetObservation {
-    pub(super) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(super) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         AssetKey::new(self.kind, self.external_key.clone())?;
         validate_text("asset display name", &self.display_name, 512)?;
         validate_attributes(self.kind, &self.attributes)
@@ -316,9 +316,9 @@ pub(crate) struct IngestInventoryRequest {
 }
 
 impl IngestInventoryRequest {
-    pub(super) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(super) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         if self.assets.len() > MAX_ASSETS_PER_SNAPSHOT || self.edges.len() > MAX_EDGES_PER_SNAPSHOT {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "output_too_large",
                 "inventory snapshot exceeds the supported asset or edge bound",
             ));
@@ -328,7 +328,7 @@ impl IngestInventoryRequest {
             asset.validate()?;
             let key = AssetKey::new(asset.kind, asset.external_key.clone())?;
             if !assets.insert(key) {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "invalid_request",
                     "inventory snapshot contains a duplicate asset identity",
                 ));
@@ -339,20 +339,20 @@ impl IngestInventoryRequest {
             edge.from.validate()?;
             edge.to.validate()?;
             if edge.from == edge.to {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "invalid_request",
                     "topology self-edges are not supported",
                 ));
             }
             let identity = (edge.from.clone(), edge.to.clone(), edge.relation);
             if !edges.insert(identity) {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "invalid_request",
                     "inventory snapshot contains a duplicate topology edge",
                 ));
             }
             if !self.partial && (!assets.contains(&edge.from) || !assets.contains(&edge.to)) {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "invalid_request",
                     "complete topology snapshots must contain both edge endpoints",
                 ));
@@ -451,10 +451,10 @@ pub(crate) struct AssetListQuery {
 }
 
 impl AssetListQuery {
-    pub(super) fn bounded_limit(&self) -> Result<u32, ControlPlaneError> {
+    pub(super) fn bounded_limit(&self) -> Result<u32, ControlPlaneRequestFailure> {
         let limit = self.limit.unwrap_or(100);
         if !(1..=500).contains(&limit) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "asset page limit must be between 1 and 500",
             ));
@@ -473,14 +473,14 @@ pub(crate) struct AssetPage {
     pub partial: bool,
 }
 
-pub(crate) fn invalid_stored_inventory(field: &str) -> ControlPlaneError {
-    ControlPlaneError::validation("source_unavailable", format!("stored inventory {field} is invalid"))
+pub(crate) fn invalid_stored_inventory(field: &str) -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::validation("source_unavailable", format!("stored inventory {field} is invalid"))
 }
 
-fn validate_text(name: &str, value: &str, max_chars: usize) -> Result<(), ControlPlaneError> {
+fn validate_text(name: &str, value: &str, max_chars: usize) -> Result<(), ControlPlaneRequestFailure> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > max_chars || value.chars().any(char::is_control) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             format!("{name} must be non-empty, bounded, and contain no control characters"),
         ));
@@ -488,17 +488,18 @@ fn validate_text(name: &str, value: &str, max_chars: usize) -> Result<(), Contro
     Ok(())
 }
 
-fn validate_attributes(kind: AssetKind, attributes: &Value) -> Result<(), ControlPlaneError> {
+fn validate_attributes(kind: AssetKind, attributes: &Value) -> Result<(), ControlPlaneRequestFailure> {
     if !attributes.is_object() {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             "asset attributes must be a JSON object",
         ));
     }
-    let encoded = serde_json::to_vec(attributes)
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "asset attributes cannot be serialized"))?;
+    let encoded = serde_json::to_vec(attributes).map_err(|source| {
+        ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("invalid_request", source))
+    })?;
     if encoded.len() > MAX_ATTRIBUTE_BYTES {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "output_too_large",
             "asset attributes exceed the supported byte bound",
         ));
@@ -506,13 +507,13 @@ fn validate_attributes(kind: AssetKind, attributes: &Value) -> Result<(), Contro
     reject_sensitive_attributes(attributes, 0)?;
     if kind == AssetKind::ConfigVersion {
         let digest = attributes.get("digest").and_then(Value::as_str).ok_or_else(|| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "config version assets require a content digest instead of raw configuration",
             )
         })?;
         if !is_sha256(digest) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "config version digest must use sha256:<hex>",
             ));
@@ -521,9 +522,9 @@ fn validate_attributes(kind: AssetKind, attributes: &Value) -> Result<(), Contro
     Ok(())
 }
 
-fn reject_sensitive_attributes(value: &Value, depth: usize) -> Result<(), ControlPlaneError> {
+fn reject_sensitive_attributes(value: &Value, depth: usize) -> Result<(), ControlPlaneRequestFailure> {
     if depth > 12 {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             "asset attributes exceed the supported nesting depth",
         ));
@@ -533,7 +534,7 @@ fn reject_sensitive_attributes(value: &Value, depth: usize) -> Result<(), Contro
             for (key, value) in values {
                 let normalized = key.to_ascii_lowercase().replace('-', "_");
                 if is_sensitive_key(&normalized) {
-                    return Err(ControlPlaneError::validation(
+                    return Err(ControlPlaneRequestFailure::validation(
                         "sensitive_data_rejected",
                         "asset attributes contain a prohibited sensitive field",
                     ));

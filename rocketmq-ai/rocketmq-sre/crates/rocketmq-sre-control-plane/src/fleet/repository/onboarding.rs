@@ -25,6 +25,7 @@ use sqlx::Row;
 use super::FleetRepository;
 use super::support::environment_name;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::fleet::model::FleetOnboardingRequest;
 use crate::fleet::model::FleetQuotaDecisionQuery;
 use crate::fleet::model::bounded_limit;
@@ -35,7 +36,7 @@ impl FleetRepository {
         tenant_id: TenantId,
         fleet_id: rocketmq_sre_contracts::FleetId,
         region_id: rocketmq_sre_contracts::RegionId,
-    ) -> Result<bool, ControlPlaneError> {
+    ) -> Result<bool, ControlPlaneRequestFailure> {
         let exists = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (
                 SELECT 1
@@ -60,7 +61,7 @@ impl FleetRepository {
     pub(in crate::fleet) async fn store_onboarding_assessment(
         &self,
         assessment: &FleetOnboardingAssessment,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         sqlx::query(
             "INSERT INTO fleet_onboarding_assessments (
                 id, fleet_id, tenant_id, region_id, cluster_id,
@@ -99,10 +100,10 @@ impl FleetRepository {
         tenant_id: TenantId,
         request: &FleetOnboardingRequest,
         degraded: bool,
-    ) -> Result<ClusterRegistration, ControlPlaneError> {
+    ) -> Result<ClusterRegistration, ControlPlaneRequestFailure> {
         let state = if degraded { "read_only_degraded" } else { "active" };
         let residency_tags = serde_json::to_value(&request.residency_tags)
-            .map_err(|_| ControlPlaneError::validation("invalid_request", "residency tags are invalid"))?;
+            .map_err(|source| ControlPlaneRequestFailure::validation_source("invalid_request", source))?;
         let row = sqlx::query(
             "INSERT INTO fleet_cluster_registrations (
                 cluster_id, fleet_id, tenant_id, region_id, environment,
@@ -138,7 +139,7 @@ impl FleetRepository {
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| {
-            ControlPlaneError::conflict_code(
+            ControlPlaneRequestFailure::conflict_code(
                 "fleet_registration_conflict",
                 "cluster cannot be registered outside its immutable Fleet and tenant scope",
             )
@@ -151,7 +152,7 @@ impl FleetRepository {
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let pending = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*)
              FROM executions
@@ -163,7 +164,7 @@ impl FleetRepository {
         .fetch_one(&self.pool)
         .await?;
         if pending > 0 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "offboarding_pending_execution",
                 "cluster has an execution that must be reconciled before offboarding",
             ));
@@ -181,7 +182,7 @@ impl FleetRepository {
         .execute(&self.pool)
         .await?;
         if updated.rows_affected() != 1 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "fleet_registration_terminal",
                 "Fleet registration is already offboarding or retired",
             ));
@@ -193,7 +194,7 @@ impl FleetRepository {
         &self,
         tenant_id: TenantId,
         cluster_id: ClusterId,
-    ) -> Result<ClusterRegistration, ControlPlaneError> {
+    ) -> Result<ClusterRegistration, ControlPlaneRequestFailure> {
         sqlx::query(
             "UPDATE fleet_cluster_registrations
              SET lifecycle_state = 'retired',
@@ -212,7 +213,7 @@ impl FleetRepository {
     pub(in crate::fleet) async fn store_quota_decision(
         &self,
         decision: &FleetQuotaDecisionRecord,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         sqlx::query(
             "INSERT INTO fleet_quota_decisions (
                 id, policy_id, tenant_id, cluster_id, work_kind,
@@ -245,7 +246,7 @@ impl FleetRepository {
         &self,
         tenant_id: TenantId,
         query: &FleetQuotaDecisionQuery,
-    ) -> Result<(Vec<FleetQuotaDecisionRecord>, bool), ControlPlaneError> {
+    ) -> Result<(Vec<FleetQuotaDecisionRecord>, bool), ControlPlaneRequestFailure> {
         let requested = i64::from(bounded_limit(query.limit));
         let rows = sqlx::query(
             "SELECT id, policy_id, tenant_id, cluster_id, work_kind,
@@ -274,7 +275,9 @@ impl FleetRepository {
     }
 }
 
-fn quota_decision_from_row(row: &sqlx::postgres::PgRow) -> Result<FleetQuotaDecisionRecord, ControlPlaneError> {
+fn quota_decision_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<FleetQuotaDecisionRecord, ControlPlaneRequestFailure> {
     Ok(FleetQuotaDecisionRecord {
         id: FleetQuotaDecisionId::from_uuid(row.try_get("id")?),
         policy_id: rocketmq_sre_contracts::QuotaPolicyId::from_uuid(row.try_get("policy_id")?),
@@ -316,7 +319,7 @@ fn work_kind_name(kind: FleetQuotaWorkKind) -> &'static str {
     }
 }
 
-fn parse_work_kind(value: String) -> Result<FleetQuotaWorkKind, ControlPlaneError> {
+fn parse_work_kind(value: String) -> Result<FleetQuotaWorkKind, ControlPlaneRequestFailure> {
     match value.as_str() {
         "active_incident" => Ok(FleetQuotaWorkKind::ActiveIncident),
         "verification" => Ok(FleetQuotaWorkKind::Verification),
@@ -328,9 +331,7 @@ fn parse_work_kind(value: String) -> Result<FleetQuotaWorkKind, ControlPlaneErro
         "model_explanation" => Ok(FleetQuotaWorkKind::ModelExplanation),
         "notification" => Ok(FleetQuotaWorkKind::Notification),
         "automatic_action" => Ok(FleetQuotaWorkKind::AutomaticAction),
-        _ => Err(ControlPlaneError::configuration(
-            "Fleet quota work kind contains an invalid persisted value",
-        )),
+        _ => Err(ControlPlaneError::configuration("Fleet quota work kind contains an invalid persisted value").into()),
     }
 }
 
@@ -346,7 +347,7 @@ fn quota_resource_name(resource: FleetQuotaResource) -> &'static str {
     }
 }
 
-fn parse_quota_resource(value: String) -> Result<FleetQuotaResource, ControlPlaneError> {
+fn parse_quota_resource(value: String) -> Result<FleetQuotaResource, ControlPlaneRequestFailure> {
     match value.as_str() {
         "query" => Ok(FleetQuotaResource::Query),
         "model_token" => Ok(FleetQuotaResource::ModelToken),
@@ -355,12 +356,10 @@ fn parse_quota_resource(value: String) -> Result<FleetQuotaResource, ControlPlan
         "evidence_byte" => Ok(FleetQuotaResource::EvidenceByte),
         "notification" => Ok(FleetQuotaResource::Notification),
         "automatic_action" => Ok(FleetQuotaResource::AutomaticAction),
-        _ => Err(ControlPlaneError::configuration(
-            "Fleet quota resource contains an invalid persisted value",
-        )),
+        _ => Err(ControlPlaneError::configuration("Fleet quota resource contains an invalid persisted value").into()),
     }
 }
 
-fn unsigned(value: i64, field: &str) -> Result<u64, ControlPlaneError> {
-    u64::try_from(value).map_err(|_| ControlPlaneError::configuration(format!("{field} is invalid")))
+fn unsigned(value: i64, _field: &str) -> Result<u64, ControlPlaneRequestFailure> {
+    Ok(u64::try_from(value).map_err(ControlPlaneError::configuration_source)?)
 }

@@ -35,7 +35,7 @@ use super::report_support::incident_link;
 use super::report_support::mean_error;
 use super::report_support::normalized_owner;
 use super::report_support::scoped_clusters;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 
 const HANDOFF_SCHEMA: &str = "rocketmq-sre.shift-handoff.v1";
@@ -55,7 +55,7 @@ impl OperationsReportRepository {
         &self,
         auth: &AuthContext,
         cluster_id: Option<ClusterId>,
-    ) -> Result<ShiftHandoffSummary, ControlPlaneError> {
+    ) -> Result<ShiftHandoffSummary, ControlPlaneRequestFailure> {
         let clusters = scoped_clusters(auth, cluster_id)?;
         let generated_at = Utc::now();
         let window_start = generated_at - Duration::hours(12);
@@ -116,7 +116,7 @@ impl OperationsReportRepository {
         auth: &AuthContext,
         cluster_id: Option<ClusterId>,
         window: OperationsReportWindow,
-    ) -> Result<OperationsReport, ControlPlaneError> {
+    ) -> Result<OperationsReport, ControlPlaneRequestFailure> {
         let clusters = scoped_clusters(auth, cluster_id)?;
         let window_end = Utc::now();
         let window_start = window_end
@@ -171,7 +171,7 @@ impl OperationsReportRepository {
         clusters: &[Uuid],
         _window_start: DateTime<Utc>,
         now: DateTime<Utc>,
-    ) -> Result<ReportSection, ControlPlaneError> {
+    ) -> Result<ReportSection, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT id, cluster_id, title, resource, severity, owner_name,
                     status, created_at, sla_ack_due_at, sla_resolve_due_at
@@ -227,7 +227,7 @@ impl OperationsReportRepository {
         clusters: &[Uuid],
         start: DateTime<Utc>,
         end: DateTime<Utc>,
-    ) -> Result<ReportSection, ControlPlaneError> {
+    ) -> Result<ReportSection, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT p.cluster_id, p.metric, p.before_value, p.after_value,
                     p.score, p.detected_at, c.owner_name
@@ -270,7 +270,7 @@ impl OperationsReportRepository {
         clusters: &[Uuid],
         start: DateTime<Utc>,
         end: DateTime<Utc>,
-    ) -> Result<ReportSection, ControlPlaneError> {
+    ) -> Result<ReportSection, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT t.cluster_id, t.incident_id, t.event_type, t.summary,
                     t.occurred_at, c.owner_name
@@ -318,7 +318,7 @@ impl OperationsReportRepository {
         clusters: &[Uuid],
         now: DateTime<Utc>,
         expiry_only: bool,
-    ) -> Result<ReportSection, ControlPlaneError> {
+    ) -> Result<ReportSection, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT f.cluster_id, f.metric, f.status, f.exhaustion_at,
                     f.coverage_ratio, f.observed_at, c.owner_name
@@ -395,7 +395,7 @@ impl OperationsReportRepository {
         auth: &AuthContext,
         clusters: &[Uuid],
         now: DateTime<Utc>,
-    ) -> Result<ReportSection, ControlPlaneError> {
+    ) -> Result<ReportSection, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT a.cluster_id, a.incident_id, a.title, a.owner_name,
                     a.due_at, a.updated_at, c.owner_name AS cluster_owner
@@ -434,7 +434,11 @@ impl OperationsReportRepository {
         })
     }
 
-    async fn source_gaps(&self, auth: &AuthContext, clusters: &[Uuid]) -> Result<ReportSection, ControlPlaneError> {
+    async fn source_gaps(
+        &self,
+        auth: &AuthContext,
+        clusters: &[Uuid],
+    ) -> Result<ReportSection, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT c.id AS cluster_id, c.owner_name, latest.data_sources,
                     latest.observed_at
@@ -506,7 +510,11 @@ impl OperationsReportRepository {
         Ok(ReportSection { items, truncated })
     }
 
-    async fn worst_clusters(&self, auth: &AuthContext, clusters: &[Uuid]) -> Result<ReportSection, ControlPlaneError> {
+    async fn worst_clusters(
+        &self,
+        auth: &AuthContext,
+        clusters: &[Uuid],
+    ) -> Result<ReportSection, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT DISTINCT ON (h.cluster_id)
                     h.cluster_id, h.score, h.status, h.data_quality,
@@ -560,7 +568,7 @@ impl OperationsReportRepository {
         clusters: &[Uuid],
         start: DateTime<Utc>,
         end: DateTime<Utc>,
-    ) -> Result<ReportSection, ControlPlaneError> {
+    ) -> Result<ReportSection, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT h.cluster_id, h.report, h.observed_at, c.owner_name
              FROM cluster_health_snapshots h
@@ -628,7 +636,7 @@ impl OperationsReportRepository {
         clusters: &[Uuid],
         start: DateTime<Utc>,
         end: DateTime<Utc>,
-    ) -> Result<ReportSection, ControlPlaneError> {
+    ) -> Result<ReportSection, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT r.cluster_id, r.incident_id, r.pack_id, r.output,
                     r.completed_at, c.owner_name
@@ -694,7 +702,7 @@ impl OperationsReportRepository {
         clusters: &[Uuid],
         start: DateTime<Utc>,
         end: DateTime<Utc>,
-    ) -> Result<ReportSection, ControlPlaneError> {
+    ) -> Result<ReportSection, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT i.id, i.cluster_id, i.title, i.resource, i.severity,
                     i.owner_name, i.occurrence_count, i.reopened_from_incident_id,
@@ -745,7 +753,7 @@ impl OperationsReportRepository {
         clusters: &[Uuid],
         start: DateTime<Utc>,
         end: DateTime<Utc>,
-    ) -> Result<ReportSection, ControlPlaneError> {
+    ) -> Result<ReportSection, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT o.cluster_id, o.metric, o.forecast_window,
                     o.predicted_value, o.actual_value, o.absolute_error,

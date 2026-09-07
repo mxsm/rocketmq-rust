@@ -30,7 +30,7 @@ use rocketmq_sre_contracts::TenantId;
 
 use super::repository::GovernanceRepository;
 use super::signer::GovernanceSigner;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 const MAX_GOVERNANCE_DEPENDENCIES: usize = 128;
@@ -51,7 +51,7 @@ impl GovernanceAdmissionGuard {
     pub(crate) fn new(
         repository: PostgresRepository,
         signing_key: impl AsRef<[u8]>,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         Ok(Self {
             repository: GovernanceRepository::new(repository.pool),
             signer: GovernanceSigner::new(signing_key)?,
@@ -65,7 +65,7 @@ impl GovernanceAdmissionGuard {
         access_path: GovernanceAccessPath,
         required_version_ids: &[GovernanceVersionId],
         now: DateTime<Utc>,
-    ) -> Result<GovernanceAdmission, ControlPlaneError> {
+    ) -> Result<GovernanceAdmission, ControlPlaneRequestFailure> {
         let mut versions = Vec::with_capacity(required_version_ids.len());
         let mut initial_reasons = BTreeSet::new();
         if required_version_ids.is_empty() {
@@ -74,7 +74,7 @@ impl GovernanceAdmissionGuard {
         for id in required_version_ids {
             match self.repository.get_version(tenant_id, *id).await {
                 Ok(version) => versions.push(version),
-                Err(ControlPlaneError::NotFound) => {
+                Err(error) if error.failure() == crate::ControlPlaneFailure::NotFound => {
                     initial_reasons.insert("governance_version_unknown".to_owned());
                 }
                 Err(error) => return Err(error),
@@ -90,7 +90,7 @@ impl GovernanceAdmissionGuard {
         cluster_id: ClusterId,
         requirements: &[GovernanceRequirement<'_>],
         now: DateTime<Utc>,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut versions = Vec::new();
         let mut reasons = BTreeSet::new();
         for requirement in requirements {
@@ -126,7 +126,7 @@ impl GovernanceAdmissionGuard {
         if decision.allowed {
             Ok(())
         } else {
-            Err(ControlPlaneError::forbidden(
+            Err(ControlPlaneRequestFailure::forbidden(
                 "governance_admission_denied",
                 format!(
                     "high-privilege execution was denied by governance: {}",
@@ -141,7 +141,7 @@ impl GovernanceAdmissionGuard {
         tenant_id: TenantId,
         dependencies: &BTreeSet<GovernanceDependency>,
         now: DateTime<Utc>,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         if dependencies.is_empty() {
             return Ok(());
         }
@@ -172,7 +172,7 @@ impl GovernanceAdmissionGuard {
         if decision.allowed {
             Ok(())
         } else {
-            Err(ControlPlaneError::conflict_code(
+            Err(ControlPlaneRequestFailure::conflict_code(
                 "governance_dependency_not_active",
                 format!(
                     "governance dependencies are not eligible for activation: {}",
@@ -190,7 +190,7 @@ impl GovernanceAdmissionGuard {
         initial_versions: Vec<GovernanceVersion>,
         mut reasons: BTreeSet<String>,
         now: DateTime<Utc>,
-    ) -> Result<GovernanceAdmission, ControlPlaneError> {
+    ) -> Result<GovernanceAdmission, ControlPlaneRequestFailure> {
         let mut hard_denied = !reasons.is_empty();
         let mut queue = initial_versions;
         let mut seen = BTreeSet::new();

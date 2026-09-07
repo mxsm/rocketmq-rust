@@ -19,7 +19,7 @@ use super::ReadAdapter;
 use super::ReadAdapterKind;
 use super::ReadContext;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 use crate::mcp::McpGateway;
 use crate::sources::McpSource;
 use crate::sources::SourceOutput;
@@ -64,7 +64,7 @@ where
             CanonicalRead::Admin(_)
             | CanonicalRead::AdminProducerConnections { .. }
             | CanonicalRead::AdminConsumerConnections { .. } => Err(ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
+                ConnectorFailure::InvalidEvidenceQuery,
                 false,
                 "Admin request cannot be routed to the MCP read adapter",
             )

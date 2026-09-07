@@ -271,6 +271,11 @@ gate.
 | Standalone applications | `rocketmq-sre-model-gateway` | 1 | 1 | 0 | 0 | 0 | 1 | 0 | 0 |
 | Standalone applications | `rocketmq-sre-probe` | 8 | 7 | 1 | 4 | 1 | 2 | 0 | 0 |
 
+> **Current-main SRE reconciliation (E7-4):** the rows above are frozen discovery counts, not the
+> post-migration public API. Issue #10144 reduces the SRE workspace to ten public operational Error
+> facades, with zero public Error implementations in `rocketmq-sre-core`; see the authoritative
+> reconciliation table in the SRE section below.
+
 ### Itemized `Error` inventory
 
 
@@ -773,6 +778,32 @@ Post-baseline E7-3 reconciliation (excluded from the frozen counts above):
 | `rocketmq_sre_probe::scenario::ProbeScenarioParseError` | `rocketmq-sre-probe` — [rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-probe/src/scenario.rs:101](../../rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-probe/src/scenario.rs#L101) | pub; Rustdoc/API reachability checked | same crate only | Contract | `SreContractError` | N/A | N/A — FromStr::Err retains only invalid scenario category | Standalone applications / rocketmq-sre-probe | 5 (Standalone) | pending implementation |
 | `rocketmq_sre_probe::scenario::ProbeDriverError` | `rocketmq-sre-probe` — [rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-probe/src/scenario.rs:141](../../rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-probe/src/scenario.rs#L141) | pub; Rustdoc/API reachability checked | same crate only | Facade | `opaque ProbeDriverError` | deferred | repair — public ProbeDriver returns this type; retain stable code and attach a private driver cause | Standalone applications / rocketmq-sre-probe | 5 (Standalone) | pending implementation |
 | `rocketmq_sre_probe::scenario::ProbeBudgetError` | `rocketmq-sre-probe` — [rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-probe/src/scenario.rs:221](../../rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-probe/src/scenario.rs#L221) | pub; Rustdoc/API reachability checked | same crate only | Outcome | `ProbeBudgetOutcome` | N/A | N/A — retain message/payload/duration budget dimension | Standalone applications / rocketmq-sre-probe | 5 (Standalone) | pending implementation |
+
+Post-baseline E7-4 reconciliation (authoritative for the SRE rows above):
+
+The SRE workspace now exposes exactly ten public operational `Error` facades: `SreContractError`,
+`ProviderError`, `ControlPlaneError`, `ConnectorError`, `ExecutorError`, `ExecutionAgentError`,
+`EvalError`, `ProbeDriverError`, `ClientError`, and `CliError`. `rocketmq-sre-core` exports no
+`std::error::Error`; its catalog, state-transition, registry, release, diagnostic, incident,
+integration, plan, postmortem, and runbook decisions are closed non-Error rejection/outcome types.
+All module-level runtime causes are private typed leaves promoted once into the owning facade.
+
+| Current owner | Public operational Error | Expected-result representation | Boundary/source rule | Status |
+| --- | --- | --- | --- | --- |
+| contracts | `SreContractError` | `PublicErrorCode` / `PublicErrorView` are non-Error projections | deterministic contract detail only | implemented by issue #10144 |
+| core | none | closed rejection/outcome types | no operational facade is owned by the pure domain crate | implemented by issue #10144 |
+| model gateway | `ProviderError` | `ProviderStatusOutcome` / `ProviderRejection`; stream outcomes remain closed | only `ProviderOperationalFailure` can construct the facade; typed transport, codec, secret, and cache causes use fixed redacted projections | implemented by issue #10144 |
+| control plane | `ControlPlaneError` | `ControlPlaneRequestFailure` / `ControlPlaneRejection` plus closed service/repository decisions | typed SQL, HTTP, codec, object-store, executor, and I/O causes; fixed HTTP projection | implemented by issue #10144 |
+| connector | `ConnectorError` | `ConnectorAdmissionOutcome` and closed capability decisions | typed HTTP, RMCP, RocketMQ admin, codec, and I/O causes; no Error-to-rejection round trip | implemented by issue #10144 |
+| executor | `ExecutorError` | `ExecutorRequestFailure`, `ExecutorOperationOutcome`, and `ExecutorRejection` | expected authority, agent, verification, precondition, journal, and reconciliation states are produced directly as non-Error results | implemented by issue #10144 |
+| execution agent | `ExecutionAgentError` | `ExecutionAgentRequestFailure`, `ExecutionAgentOperationOutcome`, and `ExecutionAgentRejection` | expected authorization, fence, authority, driver, store, and effect states are produced directly as non-Error results | implemented by issue #10144 |
+| eval | `EvalError` | `EvalOutcome` / `EvalRejection`, required-signal parse outcomes, and replay assertions | private typed fixture, I/O, JSON/YAML, provider, and SQL causes; qualification and shadow refusals never enter `EvalError` | implemented by issue #10144 |
+| probe | `ProbeDriverError` | closed config/scenario/budget decisions and a non-Error process completion channel | typed RocketMQ, evidence, codec, timeout, runtime, and driver causes remain typed; expected CLI/config/scenario results do not implement Error | implemented by issue #10144 |
+| client / CLI | `ClientError`, `CliError` | stable remote/CLI failure classifications | fixed HTTP/CLI status and message projection; stderr does not use arbitrary `Debug` termination | implemented by issue #10144 |
+
+The historical SRE rows above remain as baseline evidence, but their `pending implementation`
+labels are superseded by this reconciliation. HTTP, gRPC, and CLI mappings use the current domain
+status policy; RocketMQ remoting numeric response codes are unchanged.
 
 ### `ErrorKind` disposition inventory
 

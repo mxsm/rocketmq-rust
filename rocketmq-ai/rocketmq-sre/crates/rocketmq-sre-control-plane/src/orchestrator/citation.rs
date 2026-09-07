@@ -18,14 +18,14 @@ use rocketmq_sre_contracts::EvidenceId;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 use rocketmq_sre_core::diagnostics::DiagnosticReport;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
 /// Verifies that every deterministic conclusion cites evidence in the
 /// authorized input pack.
 pub(super) fn validate_report_citations(
     report: &DiagnosticReport,
     evidence: &[EvidenceSnapshot],
-) -> Result<Vec<EvidenceId>, ControlPlaneError> {
+) -> Result<Vec<EvidenceId>, ControlPlaneRequestFailure> {
     let authorized = evidence
         .iter()
         .map(|snapshot| snapshot.evidence_id)
@@ -35,7 +35,7 @@ pub(super) fn validate_report_citations(
     for finding in &report.findings {
         for citation in finding.supporting_evidence.iter().chain(&finding.counter_evidence) {
             if !authorized.contains(&citation.evidence_id) {
-                return Err(ControlPlaneError::validation(
+                return Err(ControlPlaneRequestFailure::validation(
                     "invalid_evidence_citation",
                     "diagnosis cited evidence outside the authorized evidence pack",
                 ));

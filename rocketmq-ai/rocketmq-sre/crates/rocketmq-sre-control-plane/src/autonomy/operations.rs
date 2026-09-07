@@ -93,7 +93,7 @@ pub(crate) struct OperationsAnalyticsQuery {
 }
 
 impl OperationsAnalyticsQuery {
-    pub(super) fn validate(&self) -> Result<(), crate::ControlPlaneError> {
+    pub(super) fn validate(&self) -> Result<(), crate::ControlPlaneRequestFailure> {
         validate_dimension("scenario", self.scenario.as_deref(), 128)?;
         validate_dimension("provider_family", self.provider_family.as_deref(), 128)?;
         validate_dimension("model_family", self.model_family.as_deref(), 128)?;
@@ -344,7 +344,7 @@ fn validate_dimension(
     name: &'static str,
     value: Option<&str>,
     max_chars: usize,
-) -> Result<(), crate::ControlPlaneError> {
+) -> Result<(), crate::ControlPlaneRequestFailure> {
     let Some(value) = value else {
         return Ok(());
     };
@@ -354,7 +354,7 @@ fn validate_dimension(
     if valid {
         Ok(())
     } else {
-        Err(crate::ControlPlaneError::validation(
+        Err(crate::ControlPlaneRequestFailure::validation(
             "invalid_operations_dimension",
             format!("{name} must contain 1 to {max_chars} non-control characters without surrounding whitespace"),
         ))

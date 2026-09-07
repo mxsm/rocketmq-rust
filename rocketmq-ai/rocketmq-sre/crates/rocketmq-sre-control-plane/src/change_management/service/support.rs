@@ -31,7 +31,7 @@ use rocketmq_sre_contracts::TenantId;
 use uuid::Uuid;
 
 use super::super::model::ScheduleEvent;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 
 const MAX_PAGE_SIZE: u32 = 256;
@@ -72,13 +72,13 @@ pub(super) fn validate_schedule_window(
     now: DateTime<Utc>,
     starts_at: DateTime<Utc>,
     ends_at: DateTime<Utc>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if starts_at < now
         || ends_at <= starts_at
         || starts_at > now + Duration::days(MAX_SCHEDULE_HORIZON_DAYS)
         || ends_at - starts_at > Duration::days(MAX_SCHEDULE_DURATION_DAYS)
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_change_schedule",
             "schedule must start within 90 days and have a positive duration no longer than 7 days",
         ));
@@ -86,52 +86,52 @@ pub(super) fn validate_schedule_window(
     Ok(())
 }
 
-pub(super) fn validate_version(value: &str) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_version(value: &str) -> Result<(), ControlPlaneRequestFailure> {
     rocketmq_sre_contracts::DescriptorVersion::parse(value)
         .map(|_| ())
-        .map_err(|_| ControlPlaneError::validation("invalid_runbook_version", "runbook version must be semantic"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_runbook_version", "runbook version is invalid"))
 }
 
-pub(super) fn bounded_limit(limit: Option<u32>) -> Result<(i64, usize), ControlPlaneError> {
+pub(super) fn bounded_limit(limit: Option<u32>) -> Result<(i64, usize), ControlPlaneRequestFailure> {
     let page_limit = limit.unwrap_or(100);
     if page_limit == 0 || page_limit > MAX_PAGE_SIZE {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_limit",
             "page limit must be between 1 and 256",
         ));
     }
     let query_limit = i64::from(page_limit) + 1;
     let page_limit = usize::try_from(page_limit)
-        .map_err(|_| ControlPlaneError::validation("invalid_limit", "page limit is unsupported on this platform"))?;
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_limit", "page limit is invalid"))?;
     Ok((query_limit, page_limit))
 }
 
-pub(super) fn require_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneError> {
+pub(super) fn require_cluster(auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneRequestFailure> {
     if auth.clusters.contains(&cluster_id) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "cluster is outside the authenticated scope",
         ))
     }
 }
 
-pub(super) fn require_role(auth: &AuthContext, role: &str) -> Result<(), ControlPlaneError> {
+pub(super) fn require_role(auth: &AuthContext, role: &str) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.contains(role) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             format!("{role} role is required"),
         ))
     }
 }
 
-pub(super) fn validate_reason(reason: &str) -> Result<(), ControlPlaneError> {
+pub(super) fn validate_reason(reason: &str) -> Result<(), ControlPlaneRequestFailure> {
     let trimmed = reason.trim();
     if trimmed.is_empty() || trimmed.chars().count() > 2048 || trimmed.chars().any(char::is_control) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_reason",
             "reason must contain 1 to 2048 visible characters",
         ));
@@ -148,7 +148,7 @@ pub(super) fn validate_reason(reason: &str) -> Result<(), ControlPlaneError> {
     .iter()
     .any(|marker| normalized.contains(marker))
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "sensitive_data_rejected",
             "reason contains prohibited sensitive material",
         ));

@@ -25,6 +25,55 @@ use uuid::Uuid;
 
 use super::*;
 
+#[tokio::test]
+async fn read_admin_startup_failure_retains_its_typed_source() {
+    use std::error::Error;
+
+    let runtime = RuntimeContext::from_current("topic-admin-startup-source");
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+        .expect("syntactically valid lazy PostgreSQL URL");
+    let namesrv_addr = (0..65)
+        .map(|port| format!("127.0.0.1:{}", 11_000 + port))
+        .collect::<Vec<_>>()
+        .join(";");
+
+    let error = match ProductionTopicConfigPatchClient::start(
+        &BrokerAdminDriverConfig {
+            namesrv_addr,
+            use_tls: false,
+            request_timeout: Duration::from_secs(1),
+            shutdown_timeout: Duration::from_secs(1),
+            read_credentials: None,
+            mutation_credentials: None,
+        },
+        pool,
+        runtime.service_context("topic-config-driver"),
+    )
+    .await
+    {
+        Ok(client) => {
+            client.shutdown().await;
+            panic!("too many NameServers must reject read admin startup")
+        }
+        Err(error) => error,
+    };
+
+    assert!(
+        error
+            .source()
+            .is_some_and(|source| source.is::<rocketmq_admin_core::core::AdminError>())
+    );
+    assert_eq!(
+        error.http_classification(),
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "source_unavailable",
+            false
+        )
+    );
+}
+
 #[test]
 fn before_snapshot_contains_only_topic_fields_changed_by_the_plan() {
     let live = TopicConfigPatch {
@@ -55,10 +104,12 @@ fn missing_live_topic_field_fails_closed_before_any_write() {
         ..TopicConfigPatch::default()
     };
 
-    assert!(matches!(
-        select_before_values(TopicConfigPatch::default(), &requested),
-        Err(ExecutionAgentError::DriverFailed)
-    ));
+    assert_eq!(
+        select_before_values(TopicConfigPatch::default(), &requested)
+            .expect_err("missing topic configuration must fail the read")
+            .stable_code(),
+        "source_unavailable"
+    );
 }
 
 #[tokio::test]

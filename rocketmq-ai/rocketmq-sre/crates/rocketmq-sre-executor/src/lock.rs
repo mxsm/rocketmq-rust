@@ -26,7 +26,7 @@ use sqlx::PgPool;
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::JournalError;
+use crate::error::JournalFailure;
 use crate::error::database_message;
 use crate::error::has_database_code;
 
@@ -64,6 +64,7 @@ pub struct ResourceSafetyStore {
     pool: PgPool,
 }
 
+#[allow(dead_code, reason = "private lock operations are retained for fenced recovery")]
 impl ResourceSafetyStore {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
@@ -75,9 +76,9 @@ impl ResourceSafetyStore {
     /// # Errors
     ///
     /// Rejects invalid windows, active quarantine, and lock contention.
-    pub async fn acquire(&self, request: &ResourceLockRequest) -> Result<ResourceLock, JournalError> {
+    pub(crate) async fn acquire(&self, request: &ResourceLockRequest) -> Result<ResourceLock, JournalFailure> {
         if request.resource_key.trim().is_empty() || request.expires_at <= request.acquired_at {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "resource lock requires a target and positive validity window".to_owned(),
             ));
         }
@@ -110,15 +111,15 @@ impl ResourceSafetyStore {
         match insert {
             Ok(_) => transaction.commit().await?,
             Err(error) if database_message(&error) == Some("resource_quarantined") => {
-                return Err(JournalError::ResourceQuarantined);
+                return Err(JournalFailure::resource_quarantined());
             }
             Err(error) if database_message(&error) == Some("invalid_resource_lock_scope") => {
-                return Err(JournalError::InvalidInput(
+                return Err(JournalFailure::invalid_input(
                     "resource lock scope does not match its execution".to_owned(),
                 ));
             }
             Err(error) if has_database_code(&error, "23505") => {
-                return Err(JournalError::ResourceLocked);
+                return Err(JournalFailure::resource_locked());
             }
             Err(error) => return Err(error.into()),
         }
@@ -141,15 +142,15 @@ impl ResourceSafetyStore {
     /// # Errors
     ///
     /// Rejects expired, released, missing, or non-owner locks.
-    pub async fn renew(
+    pub(crate) async fn renew(
         &self,
         id: ResourceLockId,
         holder: ExecutionId,
         renewed_at: DateTime<Utc>,
         expires_at: DateTime<Utc>,
-    ) -> Result<(), JournalError> {
+    ) -> Result<(), JournalFailure> {
         if expires_at <= renewed_at {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "renewed lock expiry must be in the future".to_owned(),
             ));
         }
@@ -168,7 +169,7 @@ impl ResourceSafetyStore {
         .execute(&self.pool)
         .await?;
         if result.rows_affected() == 0 {
-            return Err(JournalError::ResourceLocked);
+            return Err(JournalFailure::resource_locked());
         }
         Ok(())
     }
@@ -178,15 +179,15 @@ impl ResourceSafetyStore {
     /// # Errors
     ///
     /// Rejects blank reasons and non-owner/missing locks.
-    pub async fn release(
+    pub(crate) async fn release(
         &self,
         id: ResourceLockId,
         holder: ExecutionId,
         released_at: DateTime<Utc>,
         reason: &str,
-    ) -> Result<(), JournalError> {
+    ) -> Result<(), JournalFailure> {
         if reason.trim().is_empty() {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "resource lock release requires a reason".to_owned(),
             ));
         }
@@ -202,7 +203,7 @@ impl ResourceSafetyStore {
         .execute(&self.pool)
         .await?;
         if result.rows_affected() == 0 {
-            return Err(JournalError::NotFound);
+            return Err(JournalFailure::not_found());
         }
         Ok(())
     }
@@ -215,7 +216,10 @@ impl ResourceSafetyStore {
     /// # Errors
     ///
     /// Returns database failures.
-    pub async fn unreleased_for_execution(&self, execution_id: ExecutionId) -> Result<Vec<ResourceLock>, JournalError> {
+    pub(crate) async fn unreleased_for_execution(
+        &self,
+        execution_id: ExecutionId,
+    ) -> Result<Vec<ResourceLock>, JournalFailure> {
         let rows = sqlx::query(
             "SELECT id, tenant_id, cluster_id, resource_key, action_id,
                     holder_execution_id, acquired_at, renewed_at, expires_at,
@@ -235,13 +239,13 @@ impl ResourceSafetyStore {
     /// # Errors
     ///
     /// Rejects cleared/incomplete input and active duplicate quarantine.
-    pub async fn quarantine(&self, quarantine: &ResourceQuarantine) -> Result<bool, JournalError> {
+    pub(crate) async fn quarantine(&self, quarantine: &ResourceQuarantine) -> Result<bool, JournalFailure> {
         if !quarantine.is_active()
             || quarantine.resource_key.trim().is_empty()
             || quarantine.reason_code.trim().is_empty()
             || quarantine.created_by.trim().is_empty()
         {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "new quarantine must be active and contain resource, reason, and actor".to_owned(),
             ));
         }
@@ -279,7 +283,7 @@ impl ResourceSafetyStore {
         let result = match insert {
             Ok(result) => result,
             Err(error) if database_message(&error) == Some("invalid_quarantine_source_scope") => {
-                return Err(JournalError::InvalidInput(
+                return Err(JournalFailure::invalid_input(
                     "quarantine source scope does not match its execution".to_owned(),
                 ));
             }
@@ -293,16 +297,16 @@ impl ResourceSafetyStore {
     /// # Errors
     ///
     /// Rejects incomplete evidence or inactive/missing quarantine.
-    pub async fn clear_quarantine(
+    pub(crate) async fn clear_quarantine(
         &self,
         id: ResourceQuarantineId,
         approver: &str,
         reason: &str,
         evidence_ids: &[EvidenceId],
         cleared_at: DateTime<Utc>,
-    ) -> Result<(), JournalError> {
+    ) -> Result<(), JournalFailure> {
         if approver.trim().is_empty() || reason.trim().is_empty() || evidence_ids.is_empty() {
-            return Err(JournalError::InvalidInput(
+            return Err(JournalFailure::invalid_input(
                 "quarantine clear requires approver, reason, and verification evidence".to_owned(),
             ));
         }
@@ -328,7 +332,7 @@ impl ResourceSafetyStore {
         .execute(&self.pool)
         .await?;
         if result.rows_affected() == 0 {
-            return Err(JournalError::NotFound);
+            return Err(JournalFailure::not_found());
         }
         Ok(())
     }
@@ -338,7 +342,10 @@ impl ResourceSafetyStore {
     /// # Errors
     ///
     /// Returns not-found or database errors.
-    pub async fn quarantine_by_id(&self, id: ResourceQuarantineId) -> Result<ResourceQuarantine, JournalError> {
+    pub(crate) async fn quarantine_by_id(
+        &self,
+        id: ResourceQuarantineId,
+    ) -> Result<ResourceQuarantine, JournalFailure> {
         let row = sqlx::query(
             "SELECT id, tenant_id, cluster_id, resource_key, action_id,
                     reason_code, source_execution_id, evidence_ids,
@@ -350,8 +357,73 @@ impl ResourceSafetyStore {
         .bind(id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(JournalError::NotFound)?;
+        .ok_or(JournalFailure::not_found())?;
         Ok(quarantine_from_row(&row)?)
+    }
+}
+
+/// Public resource-safety operations with closed, non-error failure codes.
+#[allow(
+    async_fn_in_trait,
+    reason = "resource safety persistence is asynchronous and must remain fail-closed"
+)]
+pub trait ResourceSafetyOperations {
+    async fn acquire(&self, request: &ResourceLockRequest) -> Result<ResourceLock, JournalFailure>;
+
+    async fn release(
+        &self,
+        id: ResourceLockId,
+        holder: ExecutionId,
+        released_at: DateTime<Utc>,
+        reason: &str,
+    ) -> Result<(), JournalFailure>;
+
+    async fn unreleased_for_execution(&self, execution_id: ExecutionId) -> Result<Vec<ResourceLock>, JournalFailure>;
+
+    async fn quarantine(&self, quarantine: &ResourceQuarantine) -> Result<bool, JournalFailure>;
+
+    async fn clear_quarantine(
+        &self,
+        id: ResourceQuarantineId,
+        approver: &str,
+        reason: &str,
+        evidence_ids: &[EvidenceId],
+        cleared_at: DateTime<Utc>,
+    ) -> Result<(), JournalFailure>;
+}
+
+impl ResourceSafetyOperations for ResourceSafetyStore {
+    async fn acquire(&self, request: &ResourceLockRequest) -> Result<ResourceLock, JournalFailure> {
+        ResourceSafetyStore::acquire(self, request).await
+    }
+
+    async fn release(
+        &self,
+        id: ResourceLockId,
+        holder: ExecutionId,
+        released_at: DateTime<Utc>,
+        reason: &str,
+    ) -> Result<(), JournalFailure> {
+        ResourceSafetyStore::release(self, id, holder, released_at, reason).await
+    }
+
+    async fn unreleased_for_execution(&self, execution_id: ExecutionId) -> Result<Vec<ResourceLock>, JournalFailure> {
+        ResourceSafetyStore::unreleased_for_execution(self, execution_id).await
+    }
+
+    async fn quarantine(&self, quarantine: &ResourceQuarantine) -> Result<bool, JournalFailure> {
+        ResourceSafetyStore::quarantine(self, quarantine).await
+    }
+
+    async fn clear_quarantine(
+        &self,
+        id: ResourceQuarantineId,
+        approver: &str,
+        reason: &str,
+        evidence_ids: &[EvidenceId],
+        cleared_at: DateTime<Utc>,
+    ) -> Result<(), JournalFailure> {
+        ResourceSafetyStore::clear_quarantine(self, id, approver, reason, evidence_ids, cleared_at).await
     }
 }
 
@@ -384,7 +456,7 @@ fn quarantine_from_row(row: &sqlx::postgres::PgRow) -> Result<ResourceQuarantine
     })
 }
 
-fn resource_lock_from_row(row: sqlx::postgres::PgRow) -> Result<ResourceLock, JournalError> {
+fn resource_lock_from_row(row: sqlx::postgres::PgRow) -> Result<ResourceLock, JournalFailure> {
     Ok(ResourceLock {
         id: ResourceLockId::from_uuid(row.try_get("id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),

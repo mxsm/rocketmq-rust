@@ -19,7 +19,9 @@ use std::sync::Arc;
 use rocketmq_sre_contracts::CorrelationId;
 
 use crate::error::ProviderError;
-use crate::error::ProviderErrorCode;
+use crate::error::ProviderOperationalFailure;
+use crate::error::ProviderRejection;
+use crate::error::ProviderStatusOutcome;
 use crate::ir::CanonicalModelRequest;
 use crate::ir::CanonicalModelResponse;
 use crate::profile::ProviderCapabilities;
@@ -102,19 +104,19 @@ pub struct SpiHealth {
 /// credentials or RocketMQ/MCP/executor authority.
 pub trait ProviderSpi: Send + Sync {
     /// Negotiates wire version, capabilities, identity, and credential owner.
-    fn handshake(&self, request: &SpiHandshakeRequest) -> Result<SpiHandshakeResponse, ProviderError>;
+    fn handshake(&self, request: &SpiHandshakeRequest) -> Result<SpiHandshakeResponse, ProviderStatusOutcome>;
 
     /// Executes a bounded unary invocation.
-    fn invoke(&self, request: &SpiInvokeRequest) -> Result<CanonicalModelResponse, ProviderError>;
+    fn invoke(&self, request: &SpiInvokeRequest) -> Result<CanonicalModelResponse, ProviderStatusOutcome>;
 
     /// Starts a bounded stream over the process-external transport.
-    fn invoke_stream(&self, request: &SpiStreamRequest) -> Result<BoundedModelStream, ProviderError>;
+    fn invoke_stream(&self, request: &SpiStreamRequest) -> Result<BoundedModelStream, ProviderStatusOutcome>;
 
     /// Cancels one invocation.
-    fn cancel(&self, request: &SpiCancelRequest) -> Result<(), ProviderError>;
+    fn cancel(&self, request: &SpiCancelRequest) -> Result<(), ProviderStatusOutcome>;
 
     /// Returns current adapter and credential-version health.
-    fn health(&self) -> Result<SpiHealth, ProviderError>;
+    fn health(&self) -> Result<SpiHealth, ProviderStatusOutcome>;
 }
 
 /// Fail-closed provider SPI client configuration.
@@ -139,21 +141,15 @@ impl SpiClientConfig {
         }
     }
 
-    fn validate(&self) -> Result<(), ProviderError> {
+    fn validate(&self) -> Result<(), ProviderStatusOutcome> {
         if !self.gateway_identity.starts_with("spiffe://")
             || !self.expected_adapter_identity.starts_with("spiffe://")
             || self.gateway_identity == self.expected_adapter_identity
         {
-            return Err(ProviderError::new(
-                ProviderErrorCode::MutualTlsFailed,
-                "provider SPI requires distinct trusted SPIFFE identities",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::MutualTlsFailed));
         }
         if self.max_payload_bytes == 0 {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "provider SPI payload bound must be non-zero",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         Ok(())
     }
@@ -186,7 +182,7 @@ impl ProviderSpiClient {
     ///
     /// Fails closed on version drift, identity mismatch, gateway-owned
     /// credentials, or an invalid payload bound.
-    pub fn connect(adapter: Arc<dyn ProviderSpi>, config: SpiClientConfig) -> Result<Self, ProviderError> {
+    pub fn connect(adapter: Arc<dyn ProviderSpi>, config: SpiClientConfig) -> Result<Self, ProviderStatusOutcome> {
         config.validate()?;
         let request = SpiHandshakeRequest {
             wire_version: config.wire_version.clone(),
@@ -196,22 +192,15 @@ impl ProviderSpiClient {
         };
         let handshake = adapter.handshake(&request)?;
         if handshake.wire_version != config.wire_version {
-            return Err(ProviderError::new(
-                ProviderErrorCode::UnsupportedWireVersion,
-                "provider SPI wire version is incompatible",
+            return Err(ProviderStatusOutcome::rejected(
+                ProviderRejection::UnsupportedWireVersion,
             ));
         }
         if handshake.adapter_identity != config.expected_adapter_identity {
-            return Err(ProviderError::new(
-                ProviderErrorCode::MutualTlsFailed,
-                "provider SPI adapter identity did not match the trusted identity",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::MutualTlsFailed));
         }
         if handshake.credential_owner != CredentialOwner::Adapter {
-            return Err(ProviderError::new(
-                ProviderErrorCode::AuthorizationFailed,
-                "provider SPI adapter must own its model credential",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::AuthorizationFailed));
         }
         Ok(Self {
             adapter,
@@ -242,7 +231,7 @@ impl ProviderSpiClient {
         &self,
         context: &InvocationContext,
         request: &CanonicalModelRequest,
-    ) -> Result<CanonicalModelResponse, ProviderError> {
+    ) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
         context.ensure_active()?;
         self.ensure_payload_bound(request)?;
         let response = self.adapter.invoke(&SpiInvokeRequest {
@@ -251,17 +240,14 @@ impl ProviderSpiClient {
             deadline_unix_ms: context.deadline_unix_ms,
             request: request.clone(),
         })?;
-        let response_bytes = serde_json::to_vec(&response).map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::ProtocolError,
-                "provider SPI response could not be encoded",
-            )
-        })?;
+        let response_bytes = serde_json::to_vec(&response)
+            .map_err(|source| ProviderError::from_source(ProviderOperationalFailure::ProtocolError, source))?;
         if response_bytes.len() > context.max_response_bytes {
             return Err(ProviderError::new(
-                ProviderErrorCode::OutputTooLarge,
+                ProviderOperationalFailure::OutputTooLarge,
                 "provider SPI response exceeded configured bounds",
-            ));
+            )
+            .into());
         }
         Ok(response)
     }
@@ -276,7 +262,7 @@ impl ProviderSpiClient {
         &self,
         context: &InvocationContext,
         request: &CanonicalModelRequest,
-    ) -> Result<BoundedModelStream, ProviderError> {
+    ) -> Result<BoundedModelStream, ProviderStatusOutcome> {
         context.ensure_active()?;
         self.ensure_payload_bound(request)?;
         self.adapter.invoke_stream(&SpiStreamRequest {
@@ -293,7 +279,11 @@ impl ProviderSpiClient {
     /// # Errors
     ///
     /// Returns the adapter's stable cancellation error.
-    pub fn cancel(&self, invocation_id: impl Into<String>, correlation_id: CorrelationId) -> Result<(), ProviderError> {
+    pub fn cancel(
+        &self,
+        invocation_id: impl Into<String>,
+        correlation_id: CorrelationId,
+    ) -> Result<(), ProviderStatusOutcome> {
         self.adapter.cancel(&SpiCancelRequest {
             invocation_id: invocation_id.into(),
             correlation_id,
@@ -305,20 +295,16 @@ impl ProviderSpiClient {
     /// # Errors
     ///
     /// Returns a stable adapter error.
-    pub fn health(&self) -> Result<SpiHealth, ProviderError> {
+    pub fn health(&self) -> Result<SpiHealth, ProviderStatusOutcome> {
         self.adapter.health()
     }
 
     fn ensure_payload_bound(&self, request: &CanonicalModelRequest) -> Result<(), ProviderError> {
-        let bytes = serde_json::to_vec(request).map_err(|_| {
-            ProviderError::new(
-                ProviderErrorCode::ProtocolError,
-                "provider SPI request could not be encoded",
-            )
-        })?;
+        let bytes = serde_json::to_vec(request)
+            .map_err(|source| ProviderError::from_source(ProviderOperationalFailure::ProtocolError, source))?;
         if bytes.len() > self.config.max_payload_bytes {
             Err(ProviderError::new(
-                ProviderErrorCode::OutputTooLarge,
+                ProviderOperationalFailure::OutputTooLarge,
                 "provider SPI request exceeded configured bounds",
             ))
         } else {
@@ -340,7 +326,7 @@ impl ProviderSpiChatAdapter {
     ///
     /// Returns a profile error unless the profile uses `provider_spi` and its
     /// declared capabilities are a subset of the negotiated capabilities.
-    pub fn new(profile: ProviderProfile, client: ProviderSpiClient) -> Result<Self, ProviderError> {
+    pub fn new(profile: ProviderProfile, client: ProviderSpiClient) -> Result<Self, ProviderStatusOutcome> {
         profile.validate()?;
         if profile.provider_family != ProviderFamily::ProviderSpi
             || profile
@@ -348,16 +334,10 @@ impl ProviderSpiChatAdapter {
                 .as_ref()
                 .is_none_or(|reference| reference.kind() != SecretReferenceKind::Adapter)
         {
-            return Err(ProviderError::new(
-                ProviderErrorCode::ProfileInvalid,
-                "provider SPI profile must use an adapter-owned credential reference",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         if !client.capabilities().supports_all(&profile.capabilities.supported) {
-            return Err(ProviderError::new(
-                ProviderErrorCode::CapabilityUnsupported,
-                "provider SPI profile exceeds negotiated capabilities",
-            ));
+            return Err(ProviderStatusOutcome::rejected(ProviderRejection::ProfileInvalid));
         }
         Ok(Self { profile, client })
     }
@@ -382,7 +362,7 @@ impl ChatModelProvider for ProviderSpiChatAdapter {
         &self,
         context: &InvocationContext,
         request: &CanonicalModelRequest,
-    ) -> Result<CanonicalModelResponse, ProviderError> {
+    ) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
         self.profile.capabilities.ensure_request_supported(request)?;
         self.client.invoke(context, request)
     }
@@ -391,7 +371,7 @@ impl ChatModelProvider for ProviderSpiChatAdapter {
         &self,
         context: &InvocationContext,
         request: &CanonicalModelRequest,
-    ) -> Result<BoundedModelStream, ProviderError> {
+    ) -> Result<BoundedModelStream, ProviderStatusOutcome> {
         self.client.invoke_stream(context, request)
     }
 }

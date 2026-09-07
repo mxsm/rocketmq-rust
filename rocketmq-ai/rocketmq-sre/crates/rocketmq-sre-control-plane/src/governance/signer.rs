@@ -25,6 +25,7 @@ use sha2::Digest;
 use sha2::Sha256;
 
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
 const ALGORITHM: &str = "hmac-sha256";
 
@@ -35,12 +36,12 @@ pub(super) struct GovernanceSigner {
 }
 
 impl GovernanceSigner {
-    pub(super) fn new(key: impl AsRef<[u8]>) -> Result<Self, ControlPlaneError> {
+    pub(super) fn new(key: impl AsRef<[u8]>) -> Result<Self, ControlPlaneRequestFailure> {
         let key = key.as_ref();
         if key.len() < 32 {
-            return Err(ControlPlaneError::configuration(
-                "governance signing key must contain at least 32 bytes",
-            ));
+            return Err(
+                ControlPlaneError::configuration("governance signing key must contain at least 32 bytes").into(),
+            );
         }
         let digest = Sha256::digest(key);
         let short_digest = digest[..8].iter().map(|byte| format!("{byte:02x}")).collect::<String>();
@@ -50,11 +51,12 @@ impl GovernanceSigner {
         })
     }
 
-    pub(super) fn sign(&self, payload: &GovernanceSignaturePayload) -> Result<GovernanceSignature, ControlPlaneError> {
-        let encoded = serde_jcs::to_vec(payload)
-            .map_err(|_| ControlPlaneError::configuration("governance signature payload cannot be encoded"))?;
-        let mut mac = Hmac::<Sha256>::new_from_slice(&self.key)
-            .map_err(|_| ControlPlaneError::configuration("governance signing key is invalid"))?;
+    pub(super) fn sign(
+        &self,
+        payload: &GovernanceSignaturePayload,
+    ) -> Result<GovernanceSignature, ControlPlaneRequestFailure> {
+        let encoded = serde_jcs::to_vec(payload).map_err(ControlPlaneError::configuration_source)?;
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.key).map_err(ControlPlaneError::configuration_source)?;
         mac.update(&encoded);
         Ok(GovernanceSignature {
             algorithm: ALGORITHM.to_owned(),
@@ -67,26 +69,24 @@ impl GovernanceSigner {
         &self,
         payload: &GovernanceSignaturePayload,
         signature: &GovernanceSignature,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         if signature.algorithm != ALGORITHM || signature.key_id.as_str() != self.key_id.as_ref() {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "governance_signature_invalid",
                 "governance signature metadata is invalid",
             ));
         }
         let signature_bytes = URL_SAFE_NO_PAD.decode(signature.value.as_bytes()).map_err(|_| {
-            ControlPlaneError::forbidden(
+            ControlPlaneRequestFailure::forbidden(
                 "governance_signature_invalid",
                 "governance signature encoding is invalid",
             )
         })?;
-        let encoded = serde_jcs::to_vec(payload)
-            .map_err(|_| ControlPlaneError::configuration("governance signature payload cannot be encoded"))?;
-        let mut mac = Hmac::<Sha256>::new_from_slice(&self.key)
-            .map_err(|_| ControlPlaneError::configuration("governance signing key is invalid"))?;
+        let encoded = serde_jcs::to_vec(payload).map_err(ControlPlaneError::configuration_source)?;
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.key).map_err(ControlPlaneError::configuration_source)?;
         mac.update(&encoded);
         mac.verify_slice(&signature_bytes).map_err(|_| {
-            ControlPlaneError::forbidden(
+            ControlPlaneRequestFailure::forbidden(
                 "governance_signature_invalid",
                 "governance signature verification failed",
             )

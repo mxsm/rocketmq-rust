@@ -38,6 +38,7 @@ use super::model::FleetReleaseTransition;
 use super::model::FleetReleaseView;
 use super::model::bounded_limit;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::fleet::repository::FleetRepository;
 
 impl FleetRepository {
@@ -46,7 +47,7 @@ impl FleetRepository {
         release: &FleetRelease,
         targets: &[FleetReleaseTarget],
         actor_subject: &str,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO fleet_releases (
@@ -111,7 +112,7 @@ impl FleetRepository {
         tenant_id: TenantId,
         id: FleetReleaseId,
         allowed_clusters: &[ClusterId],
-    ) -> Result<FleetReleaseView, ControlPlaneError> {
+    ) -> Result<FleetReleaseView, ControlPlaneRequestFailure> {
         let allowed = cluster_uuids(allowed_clusters);
         let row = sqlx::query(
             "SELECT release.*
@@ -130,7 +131,7 @@ impl FleetRepository {
         .bind(&allowed)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         let release = release_from_row(&self.pool, &row).await?;
         let targets = self.fleet_release_targets(tenant_id, id).await?;
         Ok(FleetReleaseView {
@@ -145,7 +146,7 @@ impl FleetRepository {
         tenant_id: TenantId,
         allowed_clusters: &[ClusterId],
         query: &FleetReleaseQuery,
-    ) -> Result<(Vec<FleetRelease>, u64), ControlPlaneError> {
+    ) -> Result<(Vec<FleetRelease>, u64), ControlPlaneRequestFailure> {
         let allowed = cluster_uuids(allowed_clusters);
         let limit = i64::from(bounded_limit(query.limit));
         let offset = i64::from(query.offset);
@@ -191,8 +192,7 @@ impl FleetRepository {
         .bind(&allowed)
         .fetch_one(&self.pool)
         .await?;
-        let total =
-            u64::try_from(total).map_err(|_| ControlPlaneError::configuration("Fleet release count is invalid"))?;
+        let total = u64::try_from(total).map_err(ControlPlaneError::configuration_source)?;
         Ok((items, total))
     }
 
@@ -201,7 +201,7 @@ impl FleetRepository {
         tenant_id: TenantId,
         cluster_id: ClusterId,
         release_id: ReleaseId,
-    ) -> Result<ReleaseStatus, ControlPlaneError> {
+    ) -> Result<ReleaseStatus, ControlPlaneRequestFailure> {
         let status = sqlx::query_scalar::<_, String>(
             "SELECT status
              FROM release_workflows
@@ -212,7 +212,7 @@ impl FleetRepository {
         .bind(release_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         parse_linked_release_status(&status)
     }
 
@@ -220,7 +220,7 @@ impl FleetRepository {
         &self,
         previous: &FleetReleaseView,
         transition: &FleetReleaseTransition,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let updated = sqlx::query(
             "UPDATE fleet_releases
@@ -239,7 +239,7 @@ impl FleetRepository {
         .await?
         .rows_affected();
         if updated != 1 {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "fleet_release_state_changed",
                 "Fleet release was changed by another operator",
             ));
@@ -300,7 +300,7 @@ impl FleetRepository {
         &self,
         tenant_id: TenantId,
         id: FleetReleaseId,
-    ) -> Result<Vec<FleetReleaseTarget>, ControlPlaneError> {
+    ) -> Result<Vec<FleetReleaseTarget>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT *
              FROM fleet_release_targets
@@ -319,7 +319,7 @@ async fn insert_batch(
     transaction: &mut Transaction<'_, Postgres>,
     release_id: FleetReleaseId,
     batch: &FleetReleaseBatch,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let clusters = batch.cluster_ids.iter().map(|id| id.as_uuid()).collect::<Vec<_>>();
     sqlx::query(
         "INSERT INTO fleet_release_batches (
@@ -341,7 +341,7 @@ async fn insert_batch(
 async fn insert_target(
     transaction: &mut Transaction<'_, Postgres>,
     target: &FleetReleaseTarget,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO fleet_release_targets (
             fleet_release_id, tenant_id, cluster_id, region_id,
@@ -371,7 +371,7 @@ async fn update_target(
     transaction: &mut Transaction<'_, Postgres>,
     current: &FleetReleaseTarget,
     next: &FleetReleaseTarget,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let updated = sqlx::query(
         "UPDATE fleet_release_targets
          SET target_state = $5, release_id = $6,
@@ -395,7 +395,7 @@ async fn update_target(
     .await?
     .rows_affected();
     if updated != 1 {
-        return Err(ControlPlaneError::conflict_code(
+        return Err(ControlPlaneRequestFailure::conflict_code(
             "fleet_release_target_changed",
             "Fleet release target was changed by another operator",
         ));
@@ -420,7 +420,7 @@ async fn insert_event(
     actor_subject: &str,
     details: serde_json::Value,
     occurred_at: DateTime<Utc>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     sqlx::query(
         "INSERT INTO fleet_release_events (
             id, fleet_release_id, tenant_id, cluster_id,
@@ -446,7 +446,10 @@ async fn insert_event(
     Ok(())
 }
 
-async fn release_from_row(pool: &PgPool, row: &sqlx::postgres::PgRow) -> Result<FleetRelease, ControlPlaneError> {
+async fn release_from_row(
+    pool: &PgPool,
+    row: &sqlx::postgres::PgRow,
+) -> Result<FleetRelease, ControlPlaneRequestFailure> {
     let id = FleetReleaseId::from_uuid(row.try_get("id")?);
     Ok(FleetRelease {
         schema_version: super::model::FLEET_RELEASE_SCHEMA_VERSION.to_owned(),
@@ -470,7 +473,7 @@ async fn release_from_row(pool: &PgPool, row: &sqlx::postgres::PgRow) -> Result<
     })
 }
 
-async fn batches(pool: &PgPool, id: FleetReleaseId) -> Result<Vec<FleetReleaseBatch>, ControlPlaneError> {
+async fn batches(pool: &PgPool, id: FleetReleaseId) -> Result<Vec<FleetReleaseBatch>, ControlPlaneRequestFailure> {
     let rows = sqlx::query(
         "SELECT batch_sequence, region_id, cluster_ids, max_concurrency, canary
          FROM fleet_release_batches
@@ -494,7 +497,7 @@ async fn batches(pool: &PgPool, id: FleetReleaseId) -> Result<Vec<FleetReleaseBa
         .collect()
 }
 
-fn target_from_row(row: &sqlx::postgres::PgRow) -> Result<FleetReleaseTarget, ControlPlaneError> {
+fn target_from_row(row: &sqlx::postgres::PgRow) -> Result<FleetReleaseTarget, ControlPlaneRequestFailure> {
     Ok(FleetReleaseTarget {
         fleet_release_id: FleetReleaseId::from_uuid(row.try_get("fleet_release_id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -515,11 +518,11 @@ fn cluster_uuids(values: &[ClusterId]) -> Vec<Uuid> {
     values.iter().map(|id| id.as_uuid()).collect()
 }
 
-fn required_u32(value: i32, field: &str) -> Result<u32, ControlPlaneError> {
-    u32::try_from(value).map_err(|_| ControlPlaneError::configuration(format!("{field} is invalid")))
+fn required_u32(value: i32, _field: &str) -> Result<u32, ControlPlaneRequestFailure> {
+    Ok(u32::try_from(value).map_err(ControlPlaneError::configuration_source)?)
 }
 
-fn optional_u32(value: Option<i32>, field: &str) -> Result<Option<u32>, ControlPlaneError> {
+fn optional_u32(value: Option<i32>, field: &str) -> Result<Option<u32>, ControlPlaneRequestFailure> {
     value.map(|value| required_u32(value, field)).transpose()
 }
 
@@ -540,7 +543,7 @@ pub(super) const fn release_status_name(status: FleetReleaseStatus) -> &'static 
     }
 }
 
-fn parse_release_status(value: &str) -> Result<FleetReleaseStatus, ControlPlaneError> {
+fn parse_release_status(value: &str) -> Result<FleetReleaseStatus, ControlPlaneRequestFailure> {
     match value {
         "planned" => Ok(FleetReleaseStatus::Planned),
         "readiness_checking" => Ok(FleetReleaseStatus::ReadinessChecking),
@@ -554,9 +557,7 @@ fn parse_release_status(value: &str) -> Result<FleetReleaseStatus, ControlPlaneE
         "completed" => Ok(FleetReleaseStatus::Completed),
         "manual_takeover" => Ok(FleetReleaseStatus::ManualTakeover),
         "failed" => Ok(FleetReleaseStatus::Failed),
-        _ => Err(ControlPlaneError::configuration(
-            "Fleet release contains an invalid persisted status",
-        )),
+        _ => Err(ControlPlaneError::configuration("Fleet release contains an invalid persisted status").into()),
     }
 }
 
@@ -577,7 +578,7 @@ pub(super) const fn target_state_name(state: FleetReleaseTargetState) -> &'stati
     }
 }
 
-fn parse_target_state(value: &str) -> Result<FleetReleaseTargetState, ControlPlaneError> {
+fn parse_target_state(value: &str) -> Result<FleetReleaseTargetState, ControlPlaneRequestFailure> {
     match value {
         "pending" => Ok(FleetReleaseTargetState::Pending),
         "readiness_checking" => Ok(FleetReleaseTargetState::ReadinessChecking),
@@ -591,13 +592,11 @@ fn parse_target_state(value: &str) -> Result<FleetReleaseTargetState, ControlPla
         "completed" => Ok(FleetReleaseTargetState::Completed),
         "skipped" => Ok(FleetReleaseTargetState::Skipped),
         "failed" => Ok(FleetReleaseTargetState::Failed),
-        _ => Err(ControlPlaneError::configuration(
-            "Fleet release target contains an invalid persisted state",
-        )),
+        _ => Err(ControlPlaneError::configuration("Fleet release target contains an invalid persisted state").into()),
     }
 }
 
-fn parse_linked_release_status(value: &str) -> Result<ReleaseStatus, ControlPlaneError> {
+fn parse_linked_release_status(value: &str) -> Result<ReleaseStatus, ControlPlaneRequestFailure> {
     match value {
         "planned" => Ok(ReleaseStatus::Planned),
         "readiness_checking" => Ok(ReleaseStatus::ReadinessChecking),
@@ -610,8 +609,8 @@ fn parse_linked_release_status(value: &str) -> Result<ReleaseStatus, ControlPlan
         "completed" => Ok(ReleaseStatus::Completed),
         "manual_takeover" => Ok(ReleaseStatus::ManualTakeover),
         "failed" => Ok(ReleaseStatus::Failed),
-        _ => Err(ControlPlaneError::configuration(
-            "linked release workflow contains an invalid persisted status",
-        )),
+        _ => {
+            Err(ControlPlaneError::configuration("linked release workflow contains an invalid persisted status").into())
+        }
     }
 }

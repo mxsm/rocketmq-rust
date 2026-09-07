@@ -30,7 +30,7 @@ use super::model::KnowledgePage;
 use super::model::KnowledgeReviewRequest;
 use super::model::KnowledgeSearchPage;
 use super::model::KnowledgeSearchQuery;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -50,7 +50,7 @@ impl KnowledgeService {
         &self,
         auth: &AuthContext,
         request: ImportKnowledgeRequest,
-    ) -> Result<KnowledgeImportResult, ControlPlaneError> {
+    ) -> Result<KnowledgeImportResult, ControlPlaneRequestFailure> {
         validate_import(&request)?;
         let chunks = chunk_markdown(&request.markdown)?;
         let now = Utc::now();
@@ -86,7 +86,7 @@ impl KnowledgeService {
         &self,
         auth: &AuthContext,
         id: KnowledgeItemId,
-    ) -> Result<KnowledgeItem, ControlPlaneError> {
+    ) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
         self.repository.knowledge_item(auth, id).await
     }
 
@@ -94,7 +94,7 @@ impl KnowledgeService {
         &self,
         auth: &AuthContext,
         query: &KnowledgeListQuery,
-    ) -> Result<KnowledgePage, ControlPlaneError> {
+    ) -> Result<KnowledgePage, ControlPlaneRequestFailure> {
         self.repository.list_knowledge(auth, query).await
     }
 
@@ -102,9 +102,9 @@ impl KnowledgeService {
         &self,
         auth: &AuthContext,
         query: &KnowledgeSearchQuery,
-    ) -> Result<KnowledgeSearchPage, ControlPlaneError> {
+    ) -> Result<KnowledgeSearchPage, ControlPlaneRequestFailure> {
         if query.q.trim().is_empty() || query.q.len() > 500 {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "knowledge query must contain between 1 and 500 bytes",
             ));
@@ -117,9 +117,9 @@ impl KnowledgeService {
         auth: &AuthContext,
         id: KnowledgeItemId,
         request: &KnowledgeReviewRequest,
-    ) -> Result<KnowledgeItem, ControlPlaneError> {
+    ) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
         if request.reason.trim().is_empty() || request.reason.len() > 2_000 {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "knowledge review reason must contain between 1 and 2000 bytes",
             ));
@@ -136,9 +136,9 @@ impl KnowledgeService {
         auth: &AuthContext,
         id: KnowledgeItemId,
         request: &KnowledgeFeedbackRequest,
-    ) -> Result<KnowledgeItem, ControlPlaneError> {
+    ) -> Result<KnowledgeItem, ControlPlaneRequestFailure> {
         if request.comment.as_ref().is_some_and(|comment| comment.len() > 2_000) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "knowledge feedback comment exceeds 2000 bytes",
             ));
@@ -147,7 +147,7 @@ impl KnowledgeService {
     }
 }
 
-fn validate_import(request: &ImportKnowledgeRequest) -> Result<(), ControlPlaneError> {
+fn validate_import(request: &ImportKnowledgeRequest) -> Result<(), ControlPlaneRequestFailure> {
     for (name, value, max) in [
         ("title", request.title.as_str(), 300),
         ("component", request.component.as_str(), 100),
@@ -156,20 +156,20 @@ fn validate_import(request: &ImportKnowledgeRequest) -> Result<(), ControlPlaneE
         ("owner", request.owner.as_str(), 200),
     ] {
         if value.trim().is_empty() || value.len() > max {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 format!("knowledge {name} must contain between 1 and {max} bytes"),
             ));
         }
     }
     VersionReq::parse(request.rocketmq_version_range.trim()).map_err(|_| {
-        ControlPlaneError::validation(
+        ControlPlaneRequestFailure::validation(
             "invalid_request",
             "knowledge RocketMQ version range must be a semantic version requirement",
         )
     })?;
     if request.markdown.trim().is_empty() || request.markdown.len() > MAX_MARKDOWN_BYTES {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "output_too_large",
             "knowledge Markdown must contain at most 1048576 bytes",
         ));
@@ -179,13 +179,13 @@ fn validate_import(request: &ImportKnowledgeRequest) -> Result<(), ControlPlaneE
         || lowercase_markdown.contains("-----begin rsa private key-----")
         || lowercase_markdown.contains("authorization: bearer ")
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "sensitive_content_rejected",
             "knowledge Markdown contains forbidden credential material",
         ));
     }
     if request.review_due_at <= Utc::now() {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             "knowledge review due date must be in the future",
         ));
@@ -195,13 +195,13 @@ fn validate_import(request: &ImportKnowledgeRequest) -> Result<(), ControlPlaneE
         .zip(request.valid_until)
         .is_some_and(|(from, until)| until <= from)
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             "knowledge validity end must be later than its start",
         ));
     }
     if request.review_status == KnowledgeReviewStatus::Validated && (!request.human_validated || request.ai_generated) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "human_validation_required",
             "AI-generated or unconfirmed knowledge cannot be imported as validated",
         ));
@@ -213,7 +213,7 @@ fn validate_transition(
     current: KnowledgeReviewStatus,
     next: KnowledgeReviewStatus,
     human_confirmed: bool,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let allowed = matches!(
         (current, next),
         (KnowledgeReviewStatus::Draft, KnowledgeReviewStatus::InReview)
@@ -224,13 +224,13 @@ fn validate_transition(
             )
     );
     if !allowed {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_state_transition",
             "knowledge review lifecycle transition is not allowed",
         ));
     }
     if next == KnowledgeReviewStatus::Validated && !human_confirmed {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "human_validation_required",
             "knowledge validation requires explicit human confirmation",
         ));
@@ -255,13 +255,8 @@ mod tests {
     fn validation_requires_human_confirmation() {
         let error = validate_transition(KnowledgeReviewStatus::InReview, KnowledgeReviewStatus::Validated, false)
             .expect_err("validation should require human confirmation");
-        assert!(matches!(
-            error,
-            ControlPlaneError::Validation {
-                code: "human_validation_required",
-                ..
-            }
-        ));
+        assert_eq!(error.failure(), crate::ControlPlaneFailure::Validation);
+        assert_eq!(error.code(), "human_validation_required");
     }
 
     #[test]

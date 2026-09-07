@@ -33,7 +33,7 @@ use super::common::parse_json;
 use super::common::require_label;
 use super::common::validate_identifier;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 
 const PROMETHEUS_EVIDENCE_SCHEMA: &str = "rocketmq.prometheus-evidence.v1";
 const TELEMETRY_CLUSTER_LABEL: &str = "rocketmq_cluster";
@@ -165,7 +165,7 @@ impl PrometheusSource {
             validate_identifier(value, "Prometheus label value")?;
             if label == TELEMETRY_CLUSTER_LABEL {
                 return Err(ConnectorError::new(
-                    ConnectorErrorCode::InvalidEvidenceQuery,
+                    ConnectorFailure::InvalidEvidenceQuery,
                     false,
                     "canonical Prometheus query cannot override the cluster matcher",
                 ));
@@ -174,7 +174,7 @@ impl PrometheusSource {
         }
         let endpoint = base_url
             .join(kind.endpoint())
-            .map_err(|_| ConnectorError::configuration("Prometheus query URL cannot be constructed"))?;
+            .map_err(ConnectorError::configuration_source)?;
         let expression = metric_expression(metric, &selector.join(","));
         let (start, end) = kind.effective_range(requested_start, requested_end);
         if end
@@ -183,7 +183,7 @@ impl PrometheusSource {
             .map_or(true, |range| range > self.max_time_range)
         {
             return Err(ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
+                ConnectorFailure::InvalidEvidenceQuery,
                 false,
                 "Prometheus effective query range exceeds the configured source bound",
             ));
@@ -199,10 +199,7 @@ impl PrometheusSource {
             ]);
         }
         let response = bounded_future(deadline, cancel, async {
-            request
-                .send()
-                .await
-                .map_err(|_| ConnectorError::source("Prometheus query failed"))
+            request.send().await.map_err(ConnectorError::source_error)
         })
         .await?;
         if !response.status().is_success() {
@@ -384,7 +381,7 @@ fn parse_resource(resource: &str) -> Result<(PrometheusQueryKind, &str), Connect
         .or_else(|| (!resource.contains('/')).then_some((PrometheusQueryKind::Range, resource)))
         .ok_or_else(|| {
             ConnectorError::new(
-                ConnectorErrorCode::InvalidEvidenceQuery,
+                ConnectorFailure::InvalidEvidenceQuery,
                 false,
                 "Prometheus resource must be an instant, range, 7d trend, or 30d trend metric",
             )
@@ -399,7 +396,7 @@ fn validate_metric(metric: &str) -> Result<(), ConnectorError> {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b':' | b'.'))
     {
         return Err(ConnectorError::new(
-            ConnectorErrorCode::InvalidEvidenceQuery,
+            ConnectorFailure::InvalidEvidenceQuery,
             false,
             "Prometheus metric name is invalid",
         ));
@@ -425,7 +422,7 @@ fn validate_label(label: &str) -> Result<(), ConnectorError> {
             .all(|(index, byte)| byte.is_ascii_alphabetic() || byte == b'_' || (index > 0 && byte.is_ascii_digit()))
     {
         return Err(ConnectorError::new(
-            ConnectorErrorCode::InvalidEvidenceQuery,
+            ConnectorFailure::InvalidEvidenceQuery,
             false,
             "Prometheus label name is invalid",
         ));

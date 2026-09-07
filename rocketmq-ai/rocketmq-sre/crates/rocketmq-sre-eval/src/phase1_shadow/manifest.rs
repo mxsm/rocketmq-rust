@@ -23,7 +23,7 @@ use rocketmq_sre_contracts::TenantId;
 use serde::Deserialize;
 use serde::Serialize;
 
-use super::ShadowEvalError;
+use super::ShadowEvalFailure;
 
 /// Version of the Phase 01 offline shadow manifest.
 pub const SHADOW_MANIFEST_SCHEMA: &str = "rocketmq-sre.shadow-eval.v1";
@@ -80,21 +80,28 @@ impl ShadowPolicy {
     ///
     /// # Errors
     ///
-    /// Returns [`ShadowEvalError::UnsafePolicy`] for mutation, Executor, or
-    /// unknown model tool exposure.
-    pub fn validate(&self) -> Result<(), ShadowEvalError> {
+    /// Returns an opaque evaluation failure for mutation, Executor, or unknown
+    /// model tool exposure.
+    pub fn validate(&self) -> Result<crate::EvalOutcome<()>, crate::EvalError> {
+        match self.validate_inner() {
+            Ok(()) => Ok(crate::EvalOutcome::Completed(())),
+            Err(failure) => failure.into_boundary(),
+        }
+    }
+
+    pub(super) fn validate_inner(&self) -> Result<(), ShadowEvalFailure> {
         if self.mutation_supported {
-            return Err(ShadowEvalError::UnsafePolicy(
+            return Err(ShadowEvalFailure::UnsafePolicy(
                 "mutation_supported must remain false".to_owned(),
             ));
         }
         if self.executor_connected {
-            return Err(ShadowEvalError::UnsafePolicy(
+            return Err(ShadowEvalFailure::UnsafePolicy(
                 "executor_connected must remain false".to_owned(),
             ));
         }
         if self.connector_identity != "read_only" {
-            return Err(ShadowEvalError::UnsafePolicy(
+            return Err(ShadowEvalFailure::UnsafePolicy(
                 "connector_identity must be read_only".to_owned(),
             ));
         }
@@ -106,7 +113,7 @@ impl ShadowPolicy {
             "search_knowledge".to_owned(),
         ]);
         if let Some(tool) = self.model_visible_tools.difference(&allowed).next() {
-            return Err(ShadowEvalError::UnsafePolicy(format!(
+            return Err(ShadowEvalFailure::UnsafePolicy(format!(
                 "tool `{tool}` is outside the Phase 01 read-only surface"
             )));
         }
@@ -131,26 +138,33 @@ impl ShadowManifest {
     ///
     /// Fails closed on schema drift, duplicate packs, incomplete cases, or
     /// unsafe fixture paths.
-    pub fn validate(&self) -> Result<(), ShadowEvalError> {
+    pub fn validate(&self) -> Result<crate::EvalOutcome<()>, crate::EvalError> {
+        match self.validate_inner() {
+            Ok(()) => Ok(crate::EvalOutcome::Completed(())),
+            Err(failure) => failure.into_boundary(),
+        }
+    }
+
+    pub(super) fn validate_inner(&self) -> Result<(), ShadowEvalFailure> {
         if self.schema_version != SHADOW_MANIFEST_SCHEMA {
-            return Err(ShadowEvalError::InvalidManifest(format!(
+            return Err(ShadowEvalFailure::InvalidManifest(format!(
                 "schema `{}` is unsupported; expected `{SHADOW_MANIFEST_SCHEMA}`",
                 self.schema_version
             )));
         }
-        self.policy.validate()?;
+        self.policy.validate_inner()?;
 
         let mut packs = BTreeSet::new();
         let mut scenario_ids = BTreeSet::new();
         for scenario in &self.scenarios {
             if !scenario_ids.insert(&scenario.id) {
-                return Err(ShadowEvalError::InvalidManifest(format!(
+                return Err(ShadowEvalFailure::InvalidManifest(format!(
                     "duplicate scenario id `{}`",
                     scenario.id
                 )));
             }
             if !packs.insert(scenario.pack.as_str()) {
-                return Err(ShadowEvalError::InvalidManifest(format!(
+                return Err(ShadowEvalFailure::InvalidManifest(format!(
                     "duplicate pack `{}`",
                     scenario.pack
                 )));
@@ -158,7 +172,7 @@ impl ShadowManifest {
             let mut classes = BTreeSet::new();
             for case in &scenario.cases {
                 if !classes.insert(case.class) {
-                    return Err(ShadowEvalError::InvalidManifest(format!(
+                    return Err(ShadowEvalFailure::InvalidManifest(format!(
                         "{} contains duplicate {:?} case",
                         scenario.pack, case.class
                     )));
@@ -167,7 +181,7 @@ impl ShadowManifest {
             }
             let required = BTreeSet::from([ScenarioClass::Normal, ScenarioClass::Fault, ScenarioClass::Missing]);
             if classes != required {
-                return Err(ShadowEvalError::InvalidManifest(format!(
+                return Err(ShadowEvalFailure::InvalidManifest(format!(
                     "{} must contain exactly normal, fault, and missing cases",
                     scenario.pack
                 )));
@@ -176,7 +190,7 @@ impl ShadowManifest {
 
         let expected = WAVE_A_PACKS.into_iter().collect::<BTreeSet<_>>();
         if packs != expected {
-            return Err(ShadowEvalError::InvalidManifest(format!(
+            return Err(ShadowEvalFailure::InvalidManifest(format!(
                 "Wave A pack surface mismatch: expected {expected:?}, found {packs:?}"
             )));
         }
@@ -189,25 +203,24 @@ impl ShadowManifest {
 /// # Errors
 ///
 /// Returns a redacted I/O, YAML, schema, policy, or coverage error.
-pub fn load_shadow_manifest(path: &Path) -> Result<ShadowManifest, ShadowEvalError> {
-    let raw = fs::read_to_string(path).map_err(|source| ShadowEvalError::Io {
-        path: path.to_path_buf(),
+pub(super) fn load_shadow_manifest(path: &Path) -> Result<ShadowManifest, ShadowEvalFailure> {
+    let raw = fs::read_to_string(path).map_err(|source| ShadowEvalFailure::Io {
+        _path: path.to_path_buf(),
         source,
     })?;
-    let manifest = serde_yaml::from_str::<ShadowManifest>(&raw)
-        .map_err(|error| ShadowEvalError::InvalidManifest(error.to_string()))?;
-    manifest.validate()?;
+    let manifest = serde_yaml::from_str::<ShadowManifest>(&raw).map_err(ShadowEvalFailure::ManifestDecode)?;
+    manifest.validate_inner()?;
     Ok(manifest)
 }
 
-fn validate_fixture_path(path: &Path) -> Result<(), ShadowEvalError> {
+fn validate_fixture_path(path: &Path) -> Result<(), ShadowEvalFailure> {
     if path.as_os_str().is_empty()
         || path.is_absolute()
         || path
             .components()
             .any(|component| !matches!(component, Component::Normal(_)))
     {
-        return Err(ShadowEvalError::InvalidManifest(format!(
+        return Err(ShadowEvalFailure::InvalidManifest(format!(
             "fixture path `{}` must be a non-empty relative path without traversal",
             path.display()
         )));

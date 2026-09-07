@@ -38,7 +38,7 @@ use rocketmq_sre_contracts::VerifyReconcileGrantRequest;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 use crate::supervised_execution::signing::GrantSigner;
 
@@ -61,7 +61,7 @@ impl LeaseAuthorityService {
         pool: PgPool,
         grant_signing_key: impl AsRef<[u8]>,
         agent_ack_verification_key: impl AsRef<[u8]>,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         Ok(Self {
             repository: LeaseAuthorityRepository::new(pool),
             grant_signer: GrantSigner::new(grant_signing_key)?,
@@ -73,11 +73,11 @@ impl LeaseAuthorityService {
         &self,
         auth: &AuthContext,
         request: &BeginLeaseTakeoverRequest,
-    ) -> Result<BeginLeaseTakeoverResponse, ControlPlaneError> {
+    ) -> Result<BeginLeaseTakeoverResponse, ControlPlaneRequestFailure> {
         require_role(auth, "executor_service")?;
-        request
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_lease_request", error.to_string()))?;
+        request.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_lease_request", error)
+        })?;
         require_scope(auth, request.tenant_id, request.cluster_id)?;
         let acquired_at = Utc::now();
         let expires_at = acquired_at + TimeDelta::seconds(i64::from(request.requested_ttl_seconds));
@@ -116,11 +116,11 @@ impl LeaseAuthorityService {
         &self,
         auth: &AuthContext,
         request: &ActivateLeaseRequest,
-    ) -> Result<ExecutorLease, ControlPlaneError> {
+    ) -> Result<ExecutorLease, ControlPlaneRequestFailure> {
         require_role(auth, "executor_service")?;
-        request
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_fence_ack", error.to_string()))?;
+        request.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_fence_ack", error)
+        })?;
         let lease = self.repository.lease(request.lease_id).await?;
         require_scope(auth, request.tenant_id, lease.cluster_id)?;
         if lease.tenant_id != request.tenant_id
@@ -130,7 +130,7 @@ impl LeaseAuthorityService {
             || request.fence_ack.epoch != lease.epoch
             || request.fence_ack.pending_nonce != lease.pending_nonce
         {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "fence_ack_rejected",
                 "FenceAck does not bind the current pending owner and epoch",
             ));
@@ -142,7 +142,7 @@ impl LeaseAuthorityService {
             .await?
             > 0
         {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "unresolved_old_effects",
                 "old epoch effects must be reconciled before lease activation",
             ));
@@ -154,11 +154,15 @@ impl LeaseAuthorityService {
         &self,
         auth: &AuthContext,
         request: &IssueFenceGrantRequest,
-    ) -> Result<LeaseFenceGrant, ControlPlaneError> {
+    ) -> Result<LeaseFenceGrant, ControlPlaneRequestFailure> {
         require_role(auth, "executor_service")?;
-        request
-            .validate()
-            .map_err(|error| ControlPlaneError::validation("invalid_fence_grant_request", error.to_string()))?;
+        request.validate().map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_fence_grant_request",
+                error,
+            )
+        })?;
         require_scope(auth, request.tenant_id, request.cluster_id)?;
         let lease = self.repository.lease(request.lease_id).await?;
         let issued_at = Utc::now();
@@ -169,7 +173,7 @@ impl LeaseAuthorityService {
             || lease.state != LeaseState::Active
             || lease.expires_at <= issued_at
         {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "stale_lease_epoch",
                 "only the current active owner can request a dispatch grant",
             ));
@@ -204,17 +208,20 @@ impl LeaseAuthorityService {
         &self,
         auth: &AuthContext,
         request: &VerifyExecutionRequest,
-    ) -> Result<GrantVerification, ControlPlaneError> {
+    ) -> Result<GrantVerification, ControlPlaneRequestFailure> {
         require_role(auth, "executor_service")?;
         require_schema(&request.schema_version)?;
         require_scope(auth, request.execution.tenant_id, request.execution.cluster_id)?;
         let now = Utc::now();
-        request
-            .execution
-            .validate_at(now, EXECUTOR_AUDIENCE)
-            .map_err(|error| ControlPlaneError::validation("invalid_execution_request", error.to_string()))?;
+        request.execution.validate_at(now, EXECUTOR_AUDIENCE).map_err(|error| {
+            ControlPlaneRequestFailure::contract(
+                crate::ControlPlaneFailure::Validation,
+                "invalid_execution_request",
+                error,
+            )
+        })?;
         if request.execution.issuer != CONTROL_PLANE_ISSUER {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "invalid_execution_issuer",
                 "execution request was not issued by the Control Plane",
             ));
@@ -222,7 +229,7 @@ impl LeaseAuthorityService {
         self.grant_signer.verify_execution(&request.execution)?;
         if let Some(grant) = &request.execution.autonomy_grant {
             if grant.issuer != CONTROL_PLANE_ISSUER {
-                return Err(ControlPlaneError::forbidden(
+                return Err(ControlPlaneRequestFailure::forbidden(
                     "invalid_autonomy_grant_issuer",
                     "autonomy grant was not issued by the Control Plane",
                 ));
@@ -232,7 +239,7 @@ impl LeaseAuthorityService {
         } else {
             for approval in &request.execution.approvals {
                 if approval.issuer != CONTROL_PLANE_ISSUER {
-                    return Err(ControlPlaneError::forbidden(
+                    return Err(ControlPlaneRequestFailure::forbidden(
                         "invalid_approval_issuer",
                         "approval grant was not issued by the Control Plane",
                     ));
@@ -254,7 +261,7 @@ impl LeaseAuthorityService {
         &self,
         auth: &AuthContext,
         request: &VerifyFenceGrantRequest,
-    ) -> Result<GrantVerification, ControlPlaneError> {
+    ) -> Result<GrantVerification, ControlPlaneRequestFailure> {
         require_role(auth, "execution_agent")?;
         require_schema(&request.schema_version)?;
         require_scope(auth, request.tenant_id, request.grant.cluster_id)?;
@@ -266,7 +273,7 @@ impl LeaseAuthorityService {
             || request.grant.issued_at > now
             || request.grant.expires_at <= now
         {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "invalid_fence_grant",
                 "dispatch grant identity, audience, or validity window is invalid",
             ));
@@ -289,7 +296,7 @@ impl LeaseAuthorityService {
         &self,
         auth: &AuthContext,
         request: &VerifyReconcileGrantRequest,
-    ) -> Result<GrantVerification, ControlPlaneError> {
+    ) -> Result<GrantVerification, ControlPlaneRequestFailure> {
         require_role(auth, "execution_agent")?;
         require_schema(&request.schema_version)?;
         require_scope(auth, request.tenant_id, request.grant.cluster_id)?;
@@ -300,7 +307,7 @@ impl LeaseAuthorityService {
             || request.grant.issued_at > now
             || request.grant.expires_at <= now
         {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "invalid_reconcile_grant",
                 "reconcile grant identity, audience, or validity window is invalid",
             ));
@@ -321,7 +328,7 @@ impl LeaseAuthorityService {
     async fn execution_step(
         &self,
         request: &IssueFenceGrantRequest,
-    ) -> Result<(rocketmq_sre_contracts::ExecutionAction, String), ControlPlaneError> {
+    ) -> Result<(rocketmq_sre_contracts::ExecutionAction, String), ControlPlaneRequestFailure> {
         self.repository
             .execution_step(
                 request.tenant_id,
@@ -345,11 +352,11 @@ impl Debug for LeaseAuthorityService {
     }
 }
 
-fn require_role(auth: &AuthContext, role: &'static str) -> Result<(), ControlPlaneError> {
+fn require_role(auth: &AuthContext, role: &'static str) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.contains(role) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_workload_identity",
             "the authenticated workload role is not permitted for this operation",
         ))
@@ -360,22 +367,22 @@ fn require_scope(
     auth: &AuthContext,
     tenant_id: rocketmq_sre_contracts::TenantId,
     cluster_id: rocketmq_sre_contracts::ClusterId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if auth.tenant_id == tenant_id && auth.clusters.contains(&cluster_id) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "workload identity does not own the requested tenant and cluster scope",
         ))
     }
 }
 
-fn require_schema(schema: &str) -> Result<(), ControlPlaneError> {
+fn require_schema(schema: &str) -> Result<(), ControlPlaneRequestFailure> {
     if schema == LEASE_AUTHORITY_SCHEMA_VERSION {
         Ok(())
     } else {
-        Err(ControlPlaneError::validation(
+        Err(ControlPlaneRequestFailure::validation(
             "unsupported_schema_major",
             "lease authority schema version is unsupported",
         ))

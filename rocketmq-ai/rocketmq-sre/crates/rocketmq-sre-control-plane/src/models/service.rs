@@ -49,11 +49,14 @@ use rocketmq_sre_model_gateway::ProviderCapabilities;
 use rocketmq_sre_model_gateway::ProviderCapability;
 use rocketmq_sre_model_gateway::ProviderDialect;
 use rocketmq_sre_model_gateway::ProviderError;
-use rocketmq_sre_model_gateway::ProviderErrorCode;
+use rocketmq_sre_model_gateway::ProviderFailure;
 use rocketmq_sre_model_gateway::ProviderHealth;
+use rocketmq_sre_model_gateway::ProviderOperationalFailure;
 use rocketmq_sre_model_gateway::ProviderProfile;
 use rocketmq_sre_model_gateway::ProviderRegistry;
+use rocketmq_sre_model_gateway::ProviderRejection;
 use rocketmq_sre_model_gateway::ProviderRouter;
+use rocketmq_sre_model_gateway::ProviderStatusOutcome;
 use rocketmq_sre_model_gateway::ResponseFormat;
 use rocketmq_sre_model_gateway::RoutingPolicy;
 use rocketmq_sre_model_gateway::RoutingRequirements;
@@ -83,6 +86,7 @@ use super::model::RuntimeModelProfile;
 use super::model::StructuredModelDiagnosis;
 use super::repository::provider_label;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::knowledge::KnowledgeSearchQuery;
@@ -98,6 +102,13 @@ use crate::observability::SreObservability;
 use crate::repository::ClusterRepository;
 
 const MAX_EVIDENCE_PROMPT_ITEMS: usize = 32;
+
+fn provider_error(failure: ProviderOperationalFailure, _detail: impl Into<String>) -> ProviderError {
+    ProviderError::from_operational_failure(failure)
+}
+
+use super::provider_configuration_failure;
+use super::provider_rejection_failure as control_plane_provider_rejection;
 const MAX_EVIDENCE_VALUE_DEPTH: usize = 6;
 const MAX_EVIDENCE_OBJECT_FIELDS: usize = 64;
 const MAX_EVIDENCE_ARRAY_ITEMS: usize = 64;
@@ -193,7 +204,7 @@ impl ModelGatewayService {
         repository: PostgresRepository,
         dev_auth_enabled: bool,
         metadata_io: BlockingExecutor,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         let config = ModelRuntimeConfig::from_env(dev_auth_enabled)?;
         if !config.enabled {
             return Ok(Self::disabled(repository));
@@ -208,12 +219,7 @@ impl ModelGatewayService {
                     .with_body_limits(config.max_request_bytes, config.max_response_bytes)
                     .with_insecure_non_loopback_http(config.allow_insecure_non_loopback_http),
             )
-            .map_err(|error| {
-                ControlPlaneError::configuration(format!(
-                    "model HTTP transport configuration is invalid: {:?}",
-                    error.code
-                ))
-            })?,
+            .map_err(provider_configuration_failure)?,
         );
         let secret_provider = build_secret_provider(&config)?;
         Ok(Self {
@@ -230,7 +236,7 @@ impl ModelGatewayService {
     pub(crate) async fn capabilities_status(
         &self,
         auth: &AuthContext,
-    ) -> Result<ModelCapabilitiesStatus, ControlPlaneError> {
+    ) -> Result<ModelCapabilitiesStatus, ControlPlaneRequestFailure> {
         let profiles = self.routable_profiles(auth).await?;
         let statuses = self.repository.model_profile_statuses(auth.tenant_id).await?;
         Ok(ModelCapabilitiesStatus {
@@ -242,7 +248,7 @@ impl ModelGatewayService {
             fallback_order: profiles.iter().map(|profile| profile.profile.id.clone()).collect(),
             profiles: statuses,
             providers: serde_json::to_value(rocketmq_sre_model_gateway::phase00_provider_descriptors())
-                .map_err(|_| ControlPlaneError::configuration("provider descriptors cannot be serialized"))?,
+                .map_err(ControlPlaneError::configuration_source)?,
             observed_at: Utc::now(),
         })
     }
@@ -251,11 +257,14 @@ impl ModelGatewayService {
         &self,
         auth: &AuthContext,
         query: &ModelInvocationListQuery,
-    ) -> Result<ModelInvocationPage, ControlPlaneError> {
+    ) -> Result<ModelInvocationPage, ControlPlaneRequestFailure> {
         self.repository.list_model_invocations(auth, query).await
     }
 
-    pub(crate) async fn health_samples(&self, limit: u32) -> Result<Vec<ProviderHealthSample>, ControlPlaneError> {
+    pub(crate) async fn health_samples(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<ProviderHealthSample>, ControlPlaneRequestFailure> {
         if !self.config.enabled {
             return Ok(Vec::new());
         }
@@ -276,7 +285,7 @@ impl ModelGatewayService {
         evidence: &[EvidenceSnapshot],
         correlation_id: CorrelationId,
         max_model_calls: Option<u8>,
-    ) -> Result<ModelPostmortemDecision, ControlPlaneError> {
+    ) -> Result<ModelPostmortemDecision, ControlPlaneRequestFailure> {
         let report = json!({
             "schema_version": "rocketmq-sre.postmortem-draft-input.v1",
             "summary": deterministic.summary,
@@ -309,7 +318,7 @@ impl ModelGatewayService {
             .await?;
         if let Some(value) = decision.conclusion {
             let structured = serde_json::from_value::<StructuredModelDiagnosis>(value)
-                .map_err(|_| ControlPlaneError::configuration("validated model diagnosis cannot be decoded"))?;
+                .map_err(ControlPlaneError::configuration_source)?;
             if !structured.cited_evidence_ids.is_empty() {
                 deterministic.summary = structured.summary;
                 deterministic.conclusions.push(PostmortemConclusion {
@@ -339,7 +348,7 @@ impl ModelGatewayService {
         rules_report: &Value,
         evidence: &[EvidenceSnapshot],
         correlation_id: CorrelationId,
-    ) -> Result<ModelDiagnosisDecision, ControlPlaneError> {
+    ) -> Result<ModelDiagnosisDecision, ControlPlaneRequestFailure> {
         self.diagnose_with_model_call_limit(
             auth,
             incident_id,
@@ -369,7 +378,7 @@ impl ModelGatewayService {
         evidence: &[EvidenceSnapshot],
         correlation_id: CorrelationId,
         max_model_calls: Option<u8>,
-    ) -> Result<ModelDiagnosisDecision, ControlPlaneError> {
+    ) -> Result<ModelDiagnosisDecision, ControlPlaneRequestFailure> {
         if !self.config.enabled {
             return Ok(ModelDiagnosisDecision::rules_only());
         }
@@ -396,8 +405,7 @@ impl ModelGatewayService {
             "validated_knowledge": knowledge_prompt,
             "output_example": diagnosis_output_example(&evidence_ids),
         });
-        let prompt_text = serde_json::to_string(&prompt)
-            .map_err(|_| ControlPlaneError::configuration("model diagnosis prompt cannot be serialized"))?;
+        let prompt_text = serde_json::to_string(&prompt).map_err(ControlPlaneError::configuration_source)?;
         if prompt_text.len() > self.config.max_request_bytes {
             tracing::warn!("bounded diagnosis prompt exceeded the configured model request limit");
             return Ok(ModelDiagnosisDecision::rules_only());
@@ -430,7 +438,10 @@ impl ModelGatewayService {
             let attempt_started_at = Utc::now();
             let credential = match self.resolve_credential(&profile.profile).await {
                 Ok(credential) => credential,
-                Err(error) => {
+                Err(ProviderStatusOutcome::Rejected { rejection, .. }) => {
+                    return Err(control_plane_provider_rejection(rejection));
+                }
+                Err(ProviderStatusOutcome::Operational(error)) => {
                     self.record_failure(
                         auth,
                         cluster_id,
@@ -485,11 +496,17 @@ impl ModelGatewayService {
 
             let client = match &self.transport {
                 Some(transport) => AsyncBuiltinProviderClient::new(profile.profile.clone(), transport.clone()),
-                None => Err(ProviderError::service_unavailable("model transport is not configured")),
+                None => Err(ProviderStatusOutcome::from(provider_error(
+                    ProviderOperationalFailure::ServiceUnavailable,
+                    "model transport is not configured",
+                ))),
             };
             let client = match client {
                 Ok(client) => client,
-                Err(error) => {
+                Err(ProviderStatusOutcome::Rejected { rejection, .. }) => {
+                    return Err(control_plane_provider_rejection(rejection));
+                }
+                Err(ProviderStatusOutcome::Operational(error)) => {
                     self.record_failure(
                         auth,
                         cluster_id,
@@ -543,10 +560,6 @@ impl ModelGatewayService {
                 }
                 Ok(rejected_response) => {
                     accumulate_response_usage(&rejected_response, &mut total_input_tokens, &mut total_output_tokens);
-                    let error = ProviderError::new(
-                        ProviderErrorCode::SafetyRefusal,
-                        "model provider refused the diagnosis for safety reasons",
-                    );
                     self.record_invalid_response(
                         auth,
                         cluster_id,
@@ -561,16 +574,15 @@ impl ModelGatewayService {
                         DIAGNOSIS_PROMPT_VERSION,
                         None,
                         &rejected_response,
-                        &error,
+                        ProviderFailure::SafetyRefusal,
                     )
                     .await;
-                    return Ok(ModelDiagnosisDecision::rules_only_with_usage(
-                        total_input_tokens,
-                        total_output_tokens,
-                        schema_repairs_used,
-                    ));
+                    return Err(control_plane_provider_rejection(ProviderRejection::SafetyRefusal));
                 }
-                Err(error) => {
+                Err(ProviderStatusOutcome::Rejected { rejection, .. }) => {
+                    return Err(control_plane_provider_rejection(rejection));
+                }
+                Err(ProviderStatusOutcome::Operational(error)) => {
                     self.record_failure(
                         auth,
                         cluster_id,
@@ -617,9 +629,10 @@ impl ModelGatewayService {
                         DIAGNOSIS_PROMPT_VERSION,
                         attempt_started_at,
                     ),
-                    Err(error)
-                        if error.code == ProviderErrorCode::SchemaValidationFailed && schema_repairs_used == 0 =>
-                    {
+                    Err(ProviderStatusOutcome::Rejected {
+                        rejection: ProviderRejection::SchemaValidationFailed,
+                        ..
+                    }) if schema_repairs_used == 0 => {
                         let failed_invocation_id = self
                             .record_invalid_response(
                                 auth,
@@ -635,7 +648,7 @@ impl ModelGatewayService {
                                 DIAGNOSIS_PROMPT_VERSION,
                                 None,
                                 &response,
-                                &error,
+                                ProviderFailure::SchemaValidationFailed,
                             )
                             .await;
                         let repair_request = build_repair_request(
@@ -690,10 +703,6 @@ impl ModelGatewayService {
                                     &mut total_input_tokens,
                                     &mut total_output_tokens,
                                 );
-                                let repair_error = ProviderError::new(
-                                    ProviderErrorCode::SafetyRefusal,
-                                    "model provider refused schema repair for safety reasons",
-                                );
                                 self.record_invalid_response(
                                     auth,
                                     cluster_id,
@@ -708,16 +717,15 @@ impl ModelGatewayService {
                                     DIAGNOSIS_REPAIR_PROMPT_VERSION,
                                     Some(failed_invocation_id),
                                     &rejected_response,
-                                    &repair_error,
+                                    ProviderFailure::SafetyRefusal,
                                 )
                                 .await;
-                                return Ok(ModelDiagnosisDecision::rules_only_with_usage(
-                                    total_input_tokens,
-                                    total_output_tokens,
-                                    schema_repairs_used,
-                                ));
+                                return Err(control_plane_provider_rejection(ProviderRejection::SafetyRefusal));
                             }
-                            Err(repair_error) => {
+                            Err(ProviderStatusOutcome::Rejected { rejection, .. }) => {
+                                return Err(control_plane_provider_rejection(rejection));
+                            }
+                            Err(ProviderStatusOutcome::Operational(repair_error)) => {
                                 self.record_repair_failure(
                                     auth,
                                     cluster_id,
@@ -762,7 +770,10 @@ impl ModelGatewayService {
                                 DIAGNOSIS_REPAIR_PROMPT_VERSION,
                                 repair_started_at,
                             ),
-                            Err(repair_error) => {
+                            Err(ProviderStatusOutcome::Rejected { rejection, .. }) => {
+                                return Err(control_plane_provider_rejection(rejection));
+                            }
+                            Err(ProviderStatusOutcome::Operational(repair_error)) => {
                                 self.record_invalid_response(
                                     auth,
                                     cluster_id,
@@ -777,7 +788,7 @@ impl ModelGatewayService {
                                     DIAGNOSIS_REPAIR_PROMPT_VERSION,
                                     Some(failed_invocation_id),
                                     &repair_response,
-                                    &repair_error,
+                                    repair_error.failure(),
                                 )
                                 .await;
                                 return Ok(ModelDiagnosisDecision::rules_only_with_usage(
@@ -788,31 +799,10 @@ impl ModelGatewayService {
                             }
                         }
                     }
-                    Err(error) if error.code == ProviderErrorCode::SchemaValidationFailed => {
-                        self.record_invalid_response(
-                            auth,
-                            cluster_id,
-                            incident_id,
-                            requested_profile_id,
-                            profile,
-                            &profiles,
-                            &fallback_attempts,
-                            correlation_id,
-                            attempt_started_at,
-                            PRIMARY_DIAGNOSIS_PURPOSE,
-                            DIAGNOSIS_PROMPT_VERSION,
-                            None,
-                            &response,
-                            &error,
-                        )
-                        .await;
-                        return Ok(ModelDiagnosisDecision::rules_only_with_usage(
-                            total_input_tokens,
-                            total_output_tokens,
-                            schema_repairs_used,
-                        ));
+                    Err(ProviderStatusOutcome::Rejected { rejection, .. }) => {
+                        return Err(control_plane_provider_rejection(rejection));
                     }
-                    Err(error) => {
+                    Err(ProviderStatusOutcome::Operational(error)) => {
                         self.record_failure(
                             auth,
                             cluster_id,
@@ -905,10 +895,7 @@ impl ModelGatewayService {
             return Ok(ModelDiagnosisDecision {
                 mode: "model_assisted",
                 reason: MODEL_ADOPTED_REASON,
-                conclusion: Some(
-                    serde_json::to_value(diagnosis)
-                        .map_err(|_| ControlPlaneError::configuration("model diagnosis cannot be serialized"))?,
-                ),
+                conclusion: Some(serde_json::to_value(diagnosis).map_err(ControlPlaneError::configuration_source)?),
                 invocation_id: Some(invocation_id),
                 input_tokens: total_input_tokens,
                 output_tokens: total_output_tokens,
@@ -923,7 +910,10 @@ impl ModelGatewayService {
         ))
     }
 
-    async fn configured_profiles(&self, auth: &AuthContext) -> Result<Vec<RuntimeModelProfile>, ControlPlaneError> {
+    async fn configured_profiles(
+        &self,
+        auth: &AuthContext,
+    ) -> Result<Vec<RuntimeModelProfile>, ControlPlaneRequestFailure> {
         if !self.config.enabled {
             return Ok(Vec::new());
         }
@@ -932,7 +922,10 @@ impl ModelGatewayService {
             .await
     }
 
-    async fn routable_profiles(&self, auth: &AuthContext) -> Result<Vec<RuntimeModelProfile>, ControlPlaneError> {
+    async fn routable_profiles(
+        &self,
+        auth: &AuthContext,
+    ) -> Result<Vec<RuntimeModelProfile>, ControlPlaneRequestFailure> {
         let profiles = self.configured_profiles(auth).await?;
         let routable_profile_ids = self
             .repository
@@ -948,21 +941,27 @@ impl ModelGatewayService {
             .collect())
     }
 
-    async fn resolve_credential(&self, profile: &ProviderProfile) -> Result<Option<SecretMaterial>, ProviderError> {
+    async fn resolve_credential(
+        &self,
+        profile: &ProviderProfile,
+    ) -> Result<Option<SecretMaterial>, ProviderStatusOutcome> {
         let Some(reference) = profile.credential_ref.clone() else {
             return Ok(None);
         };
         let Some(metadata_io) = &self.metadata_io else {
-            return Err(ProviderError::new(
-                ProviderErrorCode::SecretUnavailable,
+            return Err(provider_error(
+                ProviderOperationalFailure::SecretUnavailable,
                 "model secret resolution lane is unavailable",
-            ));
+            )
+            .into());
         };
         let provider = self.secret_provider.clone();
         metadata_io
             .spawn_io("sre-model-secret-resolve", move || provider.resolve(&reference))
             .await
-            .map_err(|_| ProviderError::new(ProviderErrorCode::SecretUnavailable, "model secret resolution failed"))?
+            .map_err(|source| {
+                ProviderError::from_operational_source(ProviderOperationalFailure::SecretUnavailable, source)
+            })?
             .map(Some)
     }
 
@@ -974,7 +973,7 @@ impl ModelGatewayService {
         context: &InvocationContext,
         request: &CanonicalModelRequest,
         credential: Option<SecretMaterial>,
-    ) -> Result<CanonicalModelResponse, ProviderError> {
+    ) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
         let provider = provider_family_label(profile);
         let correlation = crate::observability::CorrelationContext::from_id(context.correlation_id);
         let span = self.observability.model_invoke_span(correlation, provider, purpose);
@@ -982,9 +981,11 @@ impl ModelGatewayService {
         let result = async {
             match tokio::time::timeout(self.config.request_timeout, client.invoke(context, request, credential)).await {
                 Ok(result) => result,
-                Err(_) => Err(ProviderError::timeout(
+                Err(_) => Err(provider_error(
+                    ProviderOperationalFailure::Timeout,
                     "model invocation exceeded the control-plane deadline",
-                )),
+                )
+                .into()),
             }
         }
         .instrument(span)
@@ -1028,13 +1029,13 @@ impl ModelGatewayService {
         prompt_version: &'static str,
         parent_invocation_id: Option<ModelInvocationId>,
         response: &CanonicalModelResponse,
-        error: &ProviderError,
+        failure: ProviderFailure,
     ) -> ModelInvocationId {
         let invocation_id = ModelInvocationId::new();
         let fallback_chain = fallback_profile_ids(profiles, prior_attempts);
         let input_tokens = response.usage.input_tokens.or(response.input_tokens);
         let output_tokens = response.usage.output_tokens.or(response.output_tokens);
-        let error_code = enum_name(error.code);
+        let error_code = enum_name(failure);
         if let Err(database_error) = self
             .repository
             .persist_model_invocation(&PersistInvocation {
@@ -1070,11 +1071,10 @@ impl ModelGatewayService {
         {
             tracing::warn!(
                 error = %database_error,
-                provider_error = ?error.code,
+                provider_failure = ?failure,
                 "invalid model response provenance could not be persisted"
             );
         }
-        self.record_failure_health(auth, profile, error).await;
         invocation_id
     }
 
@@ -1170,7 +1170,7 @@ impl ModelGatewayService {
         error: &ProviderError,
     ) {
         let fallback_chain = fallback_profile_ids(profiles, prior_attempts);
-        let error_code = enum_name(error.code);
+        let error_code = enum_name(error.failure());
         if let Err(database_error) = self
             .repository
             .persist_model_invocation(&PersistInvocation {
@@ -1206,7 +1206,7 @@ impl ModelGatewayService {
         {
             tracing::warn!(
                 error = %database_error,
-                provider_error = ?error.code,
+                provider_error = ?error.failure(),
                 "failed model invocation provenance could not be persisted"
             );
         }
@@ -1215,10 +1215,10 @@ impl ModelGatewayService {
 
     async fn record_failure_health(&self, auth: &AuthContext, profile: &RuntimeModelProfile, error: &ProviderError) {
         let health = if matches!(
-            error.code,
-            ProviderErrorCode::AuthenticationFailed
-                | ProviderErrorCode::AuthorizationFailed
-                | ProviderErrorCode::SecretAccessDenied
+            error.failure(),
+            ProviderFailure::AuthenticationFailed
+                | ProviderFailure::AuthorizationFailed
+                | ProviderFailure::SecretAccessDenied
         ) {
             ProviderHealth::Quarantined
         } else {
@@ -1231,7 +1231,7 @@ impl ModelGatewayService {
         {
             tracing::warn!(
                 error = %database_error,
-                provider_error = ?error.code,
+                provider_error = ?error.failure(),
                 "model provider failure health could not be persisted"
             );
         }
@@ -1290,7 +1290,7 @@ impl ModelGatewayService {
     }
 }
 
-fn build_secret_provider(config: &ModelRuntimeConfig) -> Result<Arc<dyn SecretProvider>, ControlPlaneError> {
+fn build_secret_provider(config: &ModelRuntimeConfig) -> Result<Arc<dyn SecretProvider>, ControlPlaneRequestFailure> {
     match &config.secret_provider {
         ModelSecretProviderConfig::None => Ok(Arc::new(DevSecretProvider::new(false, "ROCKETMQ_SRE_MODEL_", None))),
         ModelSecretProviderConfig::Development { env_prefix, file_root } => Ok(Arc::new(DevSecretProvider::new(
@@ -1307,11 +1307,11 @@ fn build_secret_provider(config: &ModelRuntimeConfig) -> Result<Arc<dyn SecretPr
         } => {
             let mut client = VaultAgentFileSecretClient::new(root)
                 .and_then(|client| client.with_max_secret_bytes(*max_secret_bytes))
-                .map_err(secret_provider_configuration_error)?;
+                .map_err(provider_configuration_failure)?;
             if let Some(suffix) = version_sidecar_suffix {
                 client = client
                     .with_required_version_sidecar(suffix.clone())
-                    .map_err(secret_provider_configuration_error)?;
+                    .map_err(provider_configuration_failure)?;
             }
             Ok(Arc::new(ExternalSecretManagerProvider::new(
                 Arc::new(client),
@@ -1320,13 +1320,6 @@ fn build_secret_provider(config: &ModelRuntimeConfig) -> Result<Arc<dyn SecretPr
             )))
         }
     }
-}
-
-fn secret_provider_configuration_error(error: ProviderError) -> ControlPlaneError {
-    ControlPlaneError::configuration(format!(
-        "model secret provider configuration is invalid: {:?}",
-        error.code
-    ))
 }
 
 fn fallback_profile_ids(
@@ -1428,7 +1421,7 @@ fn validate_diagnosis_response(
         Box<rocketmq_sre_model_gateway::ModelInvocationResult>,
         StructuredModelDiagnosis,
     ),
-    ProviderError,
+    ProviderStatusOutcome,
 > {
     let normalized = normalize_with_router(
         profile,
@@ -1440,16 +1433,11 @@ fn validate_diagnosis_response(
         incident_id,
         fallback_attempts,
     )?;
-    let diagnosis: StructuredModelDiagnosis = serde_json::from_str(&normalized.response.content).map_err(|_| {
-        ProviderError::new(
-            ProviderErrorCode::SchemaValidationFailed,
-            "model diagnosis output could not be decoded",
-        )
-    })?;
+    let diagnosis: StructuredModelDiagnosis = serde_json::from_str(&normalized.response.content)
+        .map_err(|_| ProviderStatusOutcome::rejected(ProviderRejection::SchemaValidationFailed))?;
     if !diagnosis.validate(allowed_evidence_ids) {
-        return Err(ProviderError::new(
-            ProviderErrorCode::SchemaValidationFailed,
-            "model diagnosis output violated local provenance bounds",
+        return Err(ProviderStatusOutcome::rejected(
+            ProviderRejection::SchemaValidationFailed,
         ));
     }
     Ok((normalized, diagnosis))
@@ -1490,11 +1478,11 @@ fn cost_aware_profile_order(profile: &RuntimeModelProfile) -> (u16, u64, String)
 
 fn fallback_safe(error: &ProviderError) -> bool {
     matches!(
-        error.code,
-        ProviderErrorCode::Timeout
-            | ProviderErrorCode::RateLimited
-            | ProviderErrorCode::ServiceUnavailable
-            | ProviderErrorCode::TransportFailed
+        error.failure(),
+        ProviderFailure::Timeout
+            | ProviderFailure::RateLimited
+            | ProviderFailure::ServiceUnavailable
+            | ProviderFailure::TransportFailed
     )
 }
 
@@ -1505,8 +1493,8 @@ fn fallback_attempt(profile: &RuntimeModelProfile, error: &ProviderError) -> Fal
         model_family: profile.profile.model_family.clone(),
         model_revision: profile.profile.model_revision.clone(),
         endpoint_instance: profile.profile.endpoint_instance.clone(),
-        error_code: error.code,
-        retryable: error.retryable,
+        error_code: error.failure(),
+        retryable: error.retryable(),
     }
 }
 
@@ -1523,7 +1511,7 @@ fn normalize_with_router(
     deadline_unix_ms: u64,
     incident_id: IncidentId,
     fallback_attempts: Vec<FallbackAttempt>,
-) -> Result<Box<rocketmq_sre_model_gateway::ModelInvocationResult>, ProviderError> {
+) -> Result<Box<rocketmq_sre_model_gateway::ModelInvocationResult>, ProviderStatusOutcome> {
     let provider = Arc::new(PrecomputedProvider {
         profile_id: profile.profile.id.clone(),
         capabilities: profile.profile.capabilities.clone(),
@@ -1550,9 +1538,11 @@ fn normalize_with_router(
             result.record.fallback_chain = fallback_attempts;
             Ok(result)
         }
-        ModelInvocationOutcome::RulesOnly(_) => Err(ProviderError::service_unavailable(
+        ModelInvocationOutcome::RulesOnly(_) => Err(provider_error(
+            ProviderOperationalFailure::ServiceUnavailable,
             "model result could not be normalized",
-        )),
+        )
+        .into()),
     }
 }
 
@@ -1580,7 +1570,7 @@ impl ChatModelProvider for PrecomputedProvider {
         &self,
         _context: &InvocationContext,
         _request: &CanonicalModelRequest,
-    ) -> Result<CanonicalModelResponse, ProviderError> {
+    ) -> Result<CanonicalModelResponse, ProviderStatusOutcome> {
         Ok(self.response.clone())
     }
 }
@@ -1799,7 +1789,7 @@ fn provider_family_label(profile: &ProviderProfile) -> ProviderFamilyLabel {
     }
 }
 
-fn model_result_class(result: &Result<CanonicalModelResponse, ProviderError>) -> ResultClass {
+fn model_result_class(result: &Result<CanonicalModelResponse, ProviderStatusOutcome>) -> ResultClass {
     match result {
         Ok(response) => match response.finish_reason {
             FinishReason::Length
@@ -1811,28 +1801,28 @@ fn model_result_class(result: &Result<CanonicalModelResponse, ProviderError>) ->
             FinishReason::Cancelled => ResultClass::Cancelled,
             FinishReason::Stop => ResultClass::Success,
         },
-        Err(error) => match error.code {
-            ProviderErrorCode::Timeout => ResultClass::Timeout,
-            ProviderErrorCode::RateLimited => ResultClass::RateLimited,
-            ProviderErrorCode::AuthenticationFailed
-            | ProviderErrorCode::AuthorizationFailed
-            | ProviderErrorCode::SecretAccessDenied => ResultClass::Unauthorized,
-            ProviderErrorCode::ServiceUnavailable
-            | ProviderErrorCode::TransportFailed
-            | ProviderErrorCode::SecretUnavailable
-            | ProviderErrorCode::MutualTlsFailed => ResultClass::Unavailable,
-            ProviderErrorCode::Cancelled => ResultClass::Cancelled,
-            ProviderErrorCode::SafetyRefusal
-            | ProviderErrorCode::ProtocolError
-            | ProviderErrorCode::OutputTooLarge
-            | ProviderErrorCode::StreamBackpressure
-            | ProviderErrorCode::SchemaValidationFailed
-            | ProviderErrorCode::UnsupportedWireVersion => ResultClass::InvalidResponse,
-            ProviderErrorCode::InvalidRequest
-            | ProviderErrorCode::PolicyDenied
-            | ProviderErrorCode::CapabilityUnsupported
-            | ProviderErrorCode::DataResidencyDenied
-            | ProviderErrorCode::ProfileInvalid => ResultClass::OtherError,
+        Err(error) => match error.failure() {
+            ProviderFailure::Timeout => ResultClass::Timeout,
+            ProviderFailure::RateLimited => ResultClass::RateLimited,
+            ProviderFailure::AuthenticationFailed
+            | ProviderFailure::AuthorizationFailed
+            | ProviderFailure::SecretAccessDenied => ResultClass::Unauthorized,
+            ProviderFailure::ServiceUnavailable
+            | ProviderFailure::TransportFailed
+            | ProviderFailure::SecretUnavailable
+            | ProviderFailure::MutualTlsFailed => ResultClass::Unavailable,
+            ProviderFailure::Cancelled => ResultClass::Cancelled,
+            ProviderFailure::SafetyRefusal
+            | ProviderFailure::ProtocolError
+            | ProviderFailure::OutputTooLarge
+            | ProviderFailure::StreamBackpressure
+            | ProviderFailure::SchemaValidationFailed
+            | ProviderFailure::UnsupportedWireVersion => ResultClass::InvalidResponse,
+            ProviderFailure::InvalidRequest
+            | ProviderFailure::PolicyDenied
+            | ProviderFailure::CapabilityUnsupported
+            | ProviderFailure::DataResidencyDenied
+            | ProviderFailure::ProfileInvalid => ResultClass::OtherError,
         },
     }
 }
@@ -1886,13 +1876,13 @@ mod tests {
     use super::*;
 
     struct ScriptedAsyncTransport {
-        response: Mutex<Option<Result<TransportResponse, ProviderError>>>,
+        response: Mutex<Option<Result<TransportResponse, ProviderStatusOutcome>>>,
     }
 
     impl ScriptedAsyncTransport {
         fn returning(response: Result<TransportResponse, ProviderError>) -> Self {
             Self {
-                response: Mutex::new(Some(response)),
+                response: Mutex::new(Some(response.map_err(Into::into))),
             }
         }
     }
@@ -2016,21 +2006,25 @@ mod tests {
     #[test]
     fn fallback_is_limited_to_network_rate_and_availability_failures() {
         for code in [
-            ProviderErrorCode::Timeout,
-            ProviderErrorCode::RateLimited,
-            ProviderErrorCode::ServiceUnavailable,
-            ProviderErrorCode::TransportFailed,
+            ProviderOperationalFailure::Timeout,
+            ProviderOperationalFailure::RateLimited,
+            ProviderOperationalFailure::ServiceUnavailable,
+            ProviderOperationalFailure::TransportFailed,
         ] {
-            assert!(fallback_safe(&ProviderError::new(code, "redacted")));
+            assert!(fallback_safe(&provider_error(code, "redacted")));
         }
-        for code in [
-            ProviderErrorCode::PolicyDenied,
-            ProviderErrorCode::SafetyRefusal,
-            ProviderErrorCode::InvalidRequest,
-            ProviderErrorCode::SchemaValidationFailed,
-        ] {
-            assert!(!fallback_safe(&ProviderError::new(code, "redacted")));
-        }
+        assert!(!fallback_safe(&provider_error(
+            ProviderOperationalFailure::ProtocolError,
+            "redacted",
+        )));
+        assert_eq!(
+            ProviderStatusOutcome::rejected(ProviderRejection::PolicyDenied).fallback_decision(),
+            rocketmq_sre_model_gateway::ProviderFallbackDecision::DoNotFallback
+        );
+        assert_eq!(
+            ProviderStatusOutcome::rejected(ProviderRejection::SchemaValidationFailed).fallback_decision(),
+            rocketmq_sre_model_gateway::ProviderFallbackDecision::DoNotFallback
+        );
     }
 
     #[test]
@@ -2278,7 +2272,7 @@ mod tests {
             .await
             .expect_err("429 must fail");
 
-        assert_eq!(error.code, ProviderErrorCode::RateLimited);
+        assert_eq!(error.failure(), ProviderFailure::RateLimited);
         let rendered = metrics.render_prometheus();
         assert!(rendered.contains(
             "rocketmq_sre_model_requests_total{provider=\"deepseek\",purpose=\"diagnosis\",result=\"rate_limited\"} 1"

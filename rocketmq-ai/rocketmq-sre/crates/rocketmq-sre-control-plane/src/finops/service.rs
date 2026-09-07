@@ -53,7 +53,7 @@ use super::model::FinOpsLedgerQuery;
 use super::model::FinOpsReportQuery;
 use super::model::RecordFinOpsCostRequest;
 use super::repository::FinOpsRepository;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -76,7 +76,7 @@ impl FinOpsService {
         &self,
         auth: &AuthContext,
         request: &RecordFinOpsCostRequest,
-    ) -> Result<FinOpsCostEntry, ControlPlaneError> {
+    ) -> Result<FinOpsCostEntry, ControlPlaneRequestFailure> {
         require_finops_writer(auth)?;
         require_cluster(auth, request.cluster_id)?;
         validate_cost_request(request)?;
@@ -106,7 +106,7 @@ impl FinOpsService {
             recorded_at: now,
         };
         if !self.repository.scope_exists(&entry).await? {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "finops_scope_mismatch",
                 "FinOps Fleet, tenant, region, and cluster dimensions are inconsistent",
             ));
@@ -118,7 +118,7 @@ impl FinOpsService {
         &self,
         auth: &AuthContext,
         query: &FinOpsLedgerQuery,
-    ) -> Result<FinOpsLedgerPage, ControlPlaneError> {
+    ) -> Result<FinOpsLedgerPage, ControlPlaneRequestFailure> {
         require_finops_read(auth)?;
         require_cluster(auth, query.cluster_id)?;
         validate_window(query.from, query.to)?;
@@ -134,7 +134,7 @@ impl FinOpsService {
         &self,
         auth: &AuthContext,
         request: &CreateFinOpsBudgetRequest,
-    ) -> Result<FinOpsBudget, ControlPlaneError> {
+    ) -> Result<FinOpsBudget, ControlPlaneRequestFailure> {
         require_finops_writer(auth)?;
         validate_budget_request(auth, request)?;
         let scope_key = request.scope_key.trim().to_owned();
@@ -163,7 +163,7 @@ impl FinOpsService {
         &self,
         auth: &AuthContext,
         query: &FinOpsBudgetQuery,
-    ) -> Result<FinOpsBudgetPage, ControlPlaneError> {
+    ) -> Result<FinOpsBudgetPage, ControlPlaneRequestFailure> {
         require_finops_read(auth)?;
         let (items, truncated) = self.repository.budgets(auth.tenant_id, query).await?;
         Ok(FinOpsBudgetPage {
@@ -177,12 +177,12 @@ impl FinOpsService {
         &self,
         auth: &AuthContext,
         request: &EvaluateFinOpsBudgetRequest,
-    ) -> Result<FinOpsBudgetDecisionView, ControlPlaneError> {
+    ) -> Result<FinOpsBudgetDecisionView, ControlPlaneRequestFailure> {
         require_finops_read(auth)?;
         require_cluster(auth, request.cluster_id)?;
         let budget = self.repository.budget(auth.tenant_id, request.budget_id).await?;
         if !budget.active {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "finops_budget_inactive",
                 "inactive FinOps budgets cannot authorize new work",
             ));
@@ -210,9 +210,9 @@ impl FinOpsService {
             protected_controls: FinOpsBudgetDecision::required_protected_controls(),
             evaluated_at: now,
         };
-        decision
-            .validate_safety_boundary()
-            .map_err(|detail| ControlPlaneError::configuration(format!("FinOps safety invariant failed: {detail}")))?;
+        decision.validate_safety_boundary().map_err(|detail| {
+            ControlPlaneRequestFailure::configuration(format!("FinOps safety invariant failed: {detail}"))
+        })?;
         Ok(FinOpsBudgetDecisionView {
             schema_version: FINOPS_API_SCHEMA_VERSION,
             decision: self.repository.record_decision(&decision).await?,
@@ -223,7 +223,7 @@ impl FinOpsService {
         &self,
         auth: &AuthContext,
         request: &CreateFinOpsAllocationPolicyRequest,
-    ) -> Result<FinOpsAllocationPolicyView, ControlPlaneError> {
+    ) -> Result<FinOpsAllocationPolicyView, ControlPlaneRequestFailure> {
         require_finops_writer(auth)?;
         validate_allocation_request(auth, request)?;
         let version = self.repository.next_allocation_version(auth.tenant_id).await?;
@@ -250,7 +250,7 @@ impl FinOpsService {
     pub(crate) async fn allocation_policy(
         &self,
         auth: &AuthContext,
-    ) -> Result<FinOpsAllocationPolicyView, ControlPlaneError> {
+    ) -> Result<FinOpsAllocationPolicyView, ControlPlaneRequestFailure> {
         require_finops_read(auth)?;
         let policy = self
             .repository
@@ -267,7 +267,7 @@ impl FinOpsService {
         &self,
         auth: &AuthContext,
         query: &FinOpsReportQuery,
-    ) -> Result<FinOpsReport, ControlPlaneError> {
+    ) -> Result<FinOpsReport, ControlPlaneRequestFailure> {
         require_finops_read(auth)?;
         require_cluster(auth, query.cluster_id)?;
         validate_report_window(query)?;
@@ -346,7 +346,11 @@ impl FinOpsService {
         })
     }
 
-    async fn forecast(&self, budget: &FinOpsBudget, now: DateTime<Utc>) -> Result<FinOpsForecast, ControlPlaneError> {
+    async fn forecast(
+        &self,
+        budget: &FinOpsBudget,
+        now: DateTime<Utc>,
+    ) -> Result<FinOpsForecast, ControlPlaneRequestFailure> {
         let (from, to) = period_window(budget.period, now)?;
         let (observed, samples) = self.repository.budget_cost(budget, from, to).await?;
         let elapsed_millis = (now - from).num_milliseconds().max(1) as u128;
@@ -402,7 +406,7 @@ fn budget_outcome(
 fn period_window(
     period: FinOpsBudgetPeriod,
     now: DateTime<Utc>,
-) -> Result<(DateTime<Utc>, DateTime<Utc>), ControlPlaneError> {
+) -> Result<(DateTime<Utc>, DateTime<Utc>), ControlPlaneRequestFailure> {
     let start = match period {
         FinOpsBudgetPeriod::Hourly => now
             .with_minute(0)
@@ -413,7 +417,7 @@ fn period_window(
             .single(),
         FinOpsBudgetPeriod::Monthly => Utc.with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0).single(),
     }
-    .ok_or_else(|| ControlPlaneError::configuration("FinOps period boundary is invalid"))?;
+    .ok_or_else(|| ControlPlaneRequestFailure::configuration("FinOps period boundary is invalid"))?;
     let end = match period {
         FinOpsBudgetPeriod::Hourly => start + Duration::hours(1),
         FinOpsBudgetPeriod::Daily => start + Duration::days(1),
@@ -425,34 +429,34 @@ fn period_window(
             };
             Utc.with_ymd_and_hms(year, month, 1, 0, 0, 0)
                 .single()
-                .ok_or_else(|| ControlPlaneError::configuration("FinOps month boundary is invalid"))?
+                .ok_or_else(|| ControlPlaneRequestFailure::configuration("FinOps month boundary is invalid"))?
         }
     };
     Ok((start, end))
 }
 
-fn validate_cost_request(request: &RecordFinOpsCostRequest) -> Result<(), ControlPlaneError> {
+fn validate_cost_request(request: &RecordFinOpsCostRequest) -> Result<(), ControlPlaneRequestFailure> {
     validate_text("FinOps idempotency key", &request.idempotency_key, 256)?;
     if request.source == FinOpsCostSource::ModelInvocation {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "finops_model_cost_is_derived",
             "model invocation cost is derived from the canonical model invocation ledger",
         ));
     }
     if request.provider_profile.is_some() || request.model_family.is_some() {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_finops_cost",
             "infrastructure cost entries cannot declare model provider dimensions",
         ));
     }
     if request.error_count > request.request_count && request.request_count != 0 {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_finops_cost",
             "FinOps error count cannot exceed request count",
         ));
     }
     if request.occurred_at > Utc::now() + Duration::minutes(MAX_CLOCK_SKEW_MINUTES) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_finops_cost",
             "FinOps occurrence time is too far in the future",
         ));
@@ -463,30 +467,33 @@ fn validate_cost_request(request: &RecordFinOpsCostRequest) -> Result<(), Contro
     Ok(())
 }
 
-fn validate_budget_request(auth: &AuthContext, request: &CreateFinOpsBudgetRequest) -> Result<(), ControlPlaneError> {
+fn validate_budget_request(
+    auth: &AuthContext,
+    request: &CreateFinOpsBudgetRequest,
+) -> Result<(), ControlPlaneRequestFailure> {
     validate_text("FinOps scope key", &request.scope_key, 256)?;
     validate_text("FinOps budget owner", &request.owner, 256)?;
     if request.owner.trim() != auth.subject {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "finops_owner_mismatch",
             "the authenticated operator must own a newly created FinOps budget",
         ));
     }
     if request.hard_limit_micros == 0 || request.soft_limit_micros > request.hard_limit_micros {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_finops_budget",
             "FinOps budget requires 0 <= soft limit <= non-zero hard limit",
         ));
     }
     if request.scope_kind == FinOpsBudgetScopeKind::Tenant && request.scope_key.trim() != auth.tenant_id.to_string() {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "tenant_mismatch",
             "tenant budget scope must match the authenticated tenant",
         ));
     }
     if request.scope_kind == FinOpsBudgetScopeKind::Cluster {
         let cluster_id = request.scope_key.trim().parse().map_err(|_| {
-            ControlPlaneError::validation("invalid_finops_budget", "cluster budget scope must be a UUID")
+            ControlPlaneRequestFailure::validation("invalid_finops_budget", "cluster budget scope must be a UUID")
         })?;
         require_cluster(auth, Some(cluster_id))?;
     }
@@ -497,19 +504,17 @@ fn validate_budget_cluster_scope(
     auth: &AuthContext,
     budget: &FinOpsBudget,
     requested_cluster: Option<rocketmq_sre_contracts::ClusterId>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if budget.scope_kind != FinOpsBudgetScopeKind::Cluster {
         return Ok(());
     }
-    let budget_cluster = budget.scope_key.parse().map_err(|_| {
-        ControlPlaneError::validation(
-            "invalid_persisted_finops_state",
-            "persisted cluster budget scope is not a UUID",
-        )
-    })?;
+    let budget_cluster = budget
+        .scope_key
+        .parse()
+        .map_err(|source| ControlPlaneRequestFailure::state_source("invalid_persisted_finops_state", source))?;
     require_cluster(auth, Some(budget_cluster))?;
     if requested_cluster.is_some_and(|cluster_id| cluster_id != budget_cluster) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "FinOps budget does not apply to the requested cluster",
         ));
@@ -520,10 +525,10 @@ fn validate_budget_cluster_scope(
 fn validate_allocation_request(
     auth: &AuthContext,
     request: &CreateFinOpsAllocationPolicyRequest,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     validate_text("FinOps allocation owner", &request.owner, 256)?;
     if request.owner.trim() != auth.subject {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "finops_owner_mismatch",
             "the authenticated operator must own the allocation policy",
         ));
@@ -546,7 +551,7 @@ fn validate_allocation_request(
             .iter()
             .all(|key| supported.contains(key.as_str()))
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_finops_allocation",
             "FinOps allocation keys contain unsupported or excessive dimensions",
         ));
@@ -554,7 +559,7 @@ fn validate_allocation_request(
     if request.mode == FinOpsAllocationMode::Chargeback
         && (!request.organization_confirmed || request.allocation_keys.is_empty())
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "chargeback_confirmation_required",
             "chargeback requires organization-confirmed allocation keys",
         ));
@@ -562,10 +567,10 @@ fn validate_allocation_request(
     Ok(())
 }
 
-fn validate_report_window(query: &FinOpsReportQuery) -> Result<(), ControlPlaneError> {
+fn validate_report_window(query: &FinOpsReportQuery) -> Result<(), ControlPlaneRequestFailure> {
     validate_window(Some(query.from), Some(query.to))?;
     if query.to - query.from > Duration::days(MAX_REPORT_WINDOW_DAYS) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_finops_window",
             "FinOps report window exceeds 366 days",
         ));
@@ -573,9 +578,9 @@ fn validate_report_window(query: &FinOpsReportQuery) -> Result<(), ControlPlaneE
     Ok(())
 }
 
-fn validate_window(from: Option<DateTime<Utc>>, to: Option<DateTime<Utc>>) -> Result<(), ControlPlaneError> {
+fn validate_window(from: Option<DateTime<Utc>>, to: Option<DateTime<Utc>>) -> Result<(), ControlPlaneRequestFailure> {
     if from.zip(to).is_some_and(|(from, to)| from >= to) {
-        Err(ControlPlaneError::validation(
+        Err(ControlPlaneRequestFailure::validation(
             "invalid_finops_window",
             "FinOps window end must be after its start",
         ))
@@ -624,7 +629,7 @@ fn coverage_basis_points(covered: u64, total: u64) -> Option<u32> {
     (total > 0).then(|| (u128::from(covered) * 10_000 / u128::from(total)).min(u128::from(10_000_u32)) as u32)
 }
 
-fn require_finops_read(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn require_finops_read(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.iter().any(|role| {
         matches!(
             role.as_str(),
@@ -633,18 +638,18 @@ fn require_finops_read(auth: &AuthContext) -> Result<(), ControlPlaneError> {
     }) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "FinOps reads require diagnose, operator, or finops access",
         ))
     }
 }
 
-fn require_finops_writer(auth: &AuthContext) -> Result<(), ControlPlaneError> {
+fn require_finops_writer(auth: &AuthContext) -> Result<(), ControlPlaneRequestFailure> {
     if auth.roles.contains("operator") || auth.roles.contains("finops") {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "FinOps changes require an operator or finops role",
         ))
@@ -654,21 +659,21 @@ fn require_finops_writer(auth: &AuthContext) -> Result<(), ControlPlaneError> {
 fn require_cluster(
     auth: &AuthContext,
     cluster_id: Option<rocketmq_sre_contracts::ClusterId>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if cluster_id.is_none_or(|cluster_id| auth.clusters.contains(&cluster_id)) {
         Ok(())
     } else {
-        Err(ControlPlaneError::forbidden(
+        Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "the authenticated identity cannot access this FinOps cluster",
         ))
     }
 }
 
-fn validate_text(name: &str, value: &str, max: usize) -> Result<(), ControlPlaneError> {
+fn validate_text(name: &str, value: &str, max: usize) -> Result<(), ControlPlaneRequestFailure> {
     let value = value.trim();
     if value.is_empty() || value.len() > max {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_finops_request",
             format!("{name} must contain between 1 and {max} bytes"),
         ));

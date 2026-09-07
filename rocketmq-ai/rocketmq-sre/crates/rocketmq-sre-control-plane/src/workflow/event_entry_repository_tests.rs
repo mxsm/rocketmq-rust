@@ -37,7 +37,6 @@ use super::WorkflowService;
 use super::event_entry_model::ChangeEventKind;
 use super::event_entry_model::EVENT_ENTRY_SCHEMA;
 use super::event_entry_model::ExternalEventChannel;
-use crate::ControlPlaneError;
 use crate::PostgresRepository;
 use crate::alerting::AlertingService;
 use crate::auth::AuthContext;
@@ -195,13 +194,8 @@ async fn five_event_sources_create_replay_and_isolate_workflow_targets() {
         .ingest(&auth, &conflicting, CorrelationId::new())
         .await
         .expect_err("same key with different content must fail");
-    assert!(matches!(
-        conflict,
-        ControlPlaneError::Conflict {
-            code: "event_entry_idempotency_conflict",
-            ..
-        }
-    ));
+    assert_eq!(conflict.failure(), crate::ControlPlaneFailure::Conflict);
+    assert_eq!(conflict.code(), "event_entry_idempotency_conflict");
     let after_conflict: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM investigations WHERE tenant_id = $1 AND cluster_id = $2")
             .bind(tenant_id.as_uuid())
@@ -223,13 +217,8 @@ async fn five_event_sources_create_replay_and_isolate_workflow_targets() {
         .ingest(&cross_tenant_auth, &cross_tenant_request, CorrelationId::new())
         .await
         .expect_err("database tenant scope must fail closed");
-    assert!(matches!(
-        cross_tenant_error,
-        ControlPlaneError::Forbidden {
-            code: "cluster_not_allowed",
-            ..
-        }
-    ));
+    assert_eq!(cross_tenant_error.failure(), crate::ControlPlaneFailure::Forbidden);
+    assert_eq!(cross_tenant_error.code(), "cluster_not_allowed");
 }
 
 async fn seed_cluster(repository: &PostgresRepository, tenant_id: TenantId, cluster_id: ClusterId) {

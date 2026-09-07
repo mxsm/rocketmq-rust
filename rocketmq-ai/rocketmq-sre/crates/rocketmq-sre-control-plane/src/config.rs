@@ -55,26 +55,22 @@ impl ControlPlaneConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`ControlPlaneError::Configuration`] for missing or malformed
-    /// required values.
+    /// Returns [`ControlPlaneError`] for missing or malformed required values.
     pub fn from_env() -> Result<Self, ControlPlaneError> {
         let bind_addr = std::env::var("ROCKETMQ_SRE_BIND_ADDR")
             .unwrap_or_else(|_| format!("0.0.0.0:{DEFAULT_CONTROL_PLANE_PORT}"))
             .parse()
-            .map_err(|error| ControlPlaneError::configuration(format!("ROCKETMQ_SRE_BIND_ADDR is invalid: {error}")))?;
+            .map_err(ControlPlaneError::configuration_source)?;
         let connector_bind_addr = std::env::var("ROCKETMQ_SRE_CONNECTOR_BIND_ADDR")
             .unwrap_or_else(|_| format!("127.0.0.1:{DEFAULT_CONNECTOR_CHANNEL_PORT}"))
             .parse()
-            .map_err(|error| {
-                ControlPlaneError::configuration(format!("ROCKETMQ_SRE_CONNECTOR_BIND_ADDR is invalid: {error}"))
-            })?;
+            .map_err(ControlPlaneError::configuration_source)?;
         if bind_addr == connector_bind_addr {
             return Err(ControlPlaneError::configuration(
                 "public and Connector-only listeners must use different addresses",
             ));
         }
-        let database_url = std::env::var("DATABASE_URL")
-            .map_err(|_| ControlPlaneError::configuration("DATABASE_URL must be configured"))?;
+        let database_url = std::env::var("DATABASE_URL").map_err(ControlPlaneError::configuration_source)?;
         if database_url.trim().is_empty() {
             return Err(ControlPlaneError::configuration("DATABASE_URL must not be empty"));
         }
@@ -90,8 +86,8 @@ impl ControlPlaneConfig {
                 "ROCKETMQ_SRE_SHUTDOWN_SECONDS must be greater than zero",
             ));
         }
-        let internal_token = std::env::var("ROCKETMQ_SRE_INTERNAL_TOKEN")
-            .map_err(|_| ControlPlaneError::configuration("ROCKETMQ_SRE_INTERNAL_TOKEN must be configured"))?;
+        let internal_token =
+            std::env::var("ROCKETMQ_SRE_INTERNAL_TOKEN").map_err(ControlPlaneError::configuration_source)?;
         if internal_token.trim().is_empty() {
             return Err(ControlPlaneError::configuration(
                 "ROCKETMQ_SRE_INTERNAL_TOKEN must not be empty",
@@ -127,11 +123,7 @@ impl ControlPlaneConfig {
             }
         };
         let executor_url: Option<Url> = optional_env("ROCKETMQ_SRE_EXECUTOR_URL")
-            .map(|value| {
-                value.parse().map_err(|error| {
-                    ControlPlaneError::configuration(format!("ROCKETMQ_SRE_EXECUTOR_URL is invalid: {error}"))
-                })
-            })
+            .map(|value| value.parse().map_err(ControlPlaneError::configuration_source))
             .transpose()?;
         let executor_token = optional_env("ROCKETMQ_SRE_CONTROL_PLANE_EXECUTOR_TOKEN");
         if executor_url.is_some() != executor_token.is_some() {
@@ -157,11 +149,7 @@ impl ControlPlaneConfig {
         let oidc_issuer = optional_env("ROCKETMQ_SRE_OIDC_ISSUER");
         let oidc_audience = optional_env("ROCKETMQ_SRE_OIDC_AUDIENCE");
         let oidc_jwks_url = optional_env("ROCKETMQ_SRE_OIDC_JWKS_URL")
-            .map(|value| {
-                value.parse().map_err(|error| {
-                    ControlPlaneError::configuration(format!("ROCKETMQ_SRE_OIDC_JWKS_URL is invalid: {error}"))
-                })
-            })
+            .map(|value| value.parse().map_err(ControlPlaneError::configuration_source))
             .transpose()?;
         let oidc_ca_path = optional_env("ROCKETMQ_SRE_OIDC_CA_PATH").map(PathBuf::from);
         let dashboard_deep_link_origins = optional_env("ROCKETMQ_SRE_DASHBOARD_ORIGINS")
@@ -375,16 +363,12 @@ pub(crate) fn validate_internal_service_url(url: &Url, allow_insecure_http: bool
 fn parse_env<T>(name: &str, default: T) -> Result<T, ControlPlaneError>
 where
     T: std::str::FromStr,
-    T::Err: std::fmt::Display,
+    T::Err: std::error::Error + Send + Sync + 'static,
 {
     match std::env::var(name) {
-        Ok(value) => value
-            .parse()
-            .map_err(|error| ControlPlaneError::configuration(format!("{name} is invalid: {error}"))),
+        Ok(value) => value.parse().map_err(ControlPlaneError::configuration_source),
         Err(std::env::VarError::NotPresent) => Ok(default),
-        Err(error) => Err(ControlPlaneError::configuration(format!(
-            "{name} cannot be read: {error}"
-        ))),
+        Err(error) => Err(ControlPlaneError::configuration_source(error)),
     }
 }
 

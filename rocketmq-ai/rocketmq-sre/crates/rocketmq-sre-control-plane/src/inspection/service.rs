@@ -36,6 +36,7 @@ use serde_json::json;
 use super::InspectionPackRun;
 use super::NewRecommendation;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::evidence::EvidenceListQuery;
@@ -69,10 +70,8 @@ impl InspectionService {
         repository: PostgresRepository,
         workflow: WorkflowService,
         evidence: EvidenceService,
-    ) -> Result<Self, ControlPlaneError> {
-        let registry = full_registry().map_err(|error| {
-            ControlPlaneError::configuration(format!("built-in diagnostic registry is invalid: {error}"))
-        })?;
+    ) -> Result<Self, ControlPlaneRequestFailure> {
+        let registry = full_registry().map_err(|_| ControlPlaneError::configuration("diagnostic registry rejected"))?;
         Ok(Self {
             repository,
             workflow,
@@ -86,7 +85,7 @@ impl InspectionService {
         auth: &AuthContext,
         request: &InspectionCreateRequest,
         correlation_id: CorrelationId,
-    ) -> Result<InspectionView, ControlPlaneError> {
+    ) -> Result<InspectionView, ControlPlaneRequestFailure> {
         let view = self.create_persisted(auth, request, correlation_id).await?;
         if request.schedule.is_none() {
             self.execute(auth, view.run.id, correlation_id).await
@@ -100,7 +99,7 @@ impl InspectionService {
         auth: &AuthContext,
         request: &InspectionCreateRequest,
         correlation_id: CorrelationId,
-    ) -> Result<InspectionView, ControlPlaneError> {
+    ) -> Result<InspectionView, ControlPlaneRequestFailure> {
         self.workflow.create_inspection(auth, request, correlation_id).await
     }
 
@@ -114,7 +113,7 @@ impl InspectionService {
         auth: &AuthContext,
         id: InspectionRunId,
         correlation_id: CorrelationId,
-    ) -> Result<InspectionView, ControlPlaneError> {
+    ) -> Result<InspectionView, ControlPlaneRequestFailure> {
         self.workflow.ensure_operator(auth)?;
         let run = self.repository.claim_inspection(auth, id).await?;
         let query = EvidenceListQuery {
@@ -126,12 +125,7 @@ impl InspectionService {
         };
         let page = tokio::time::timeout(EVIDENCE_TIMEOUT, self.evidence.list(auth, &query))
             .await
-            .map_err(|_| {
-                ControlPlaneError::validation(
-                    "source_unavailable",
-                    "inspection evidence collection exceeded its deadline",
-                )
-            })??;
+            .map_err(ControlPlaneRequestFailure::unavailable_source)??;
 
         let mut pack_runs = Vec::new();
         let mut recommendations = Vec::new();
@@ -179,10 +173,11 @@ impl InspectionService {
         }
         for pack_id in template_packs(run.template) {
             let started_at = Utc::now();
-            let report = self.diagnostics.evaluate(pack_id, &page.items).map_err(|error| {
-                ControlPlaneError::validation(
+            let report = self.diagnostics.evaluate(pack_id, &page.items).map_err(|source| {
+                ControlPlaneRequestFailure::contract(
+                    crate::ControlPlaneFailure::Validation,
                     "diagnostic_evaluation_failed",
-                    format!("inspection diagnostic evaluation failed: {error}"),
+                    source,
                 )
             })?;
             let completed_at = Utc::now();
@@ -213,7 +208,7 @@ impl InspectionService {
         auth: &AuthContext,
         id: InspectionRunId,
         format: &str,
-    ) -> Result<InspectionReport, ControlPlaneError> {
+    ) -> Result<InspectionReport, ControlPlaneRequestFailure> {
         let view = self.workflow.inspection(auth, id).await?;
         match format {
             "markdown" | "md" => Ok(InspectionReport {
@@ -228,7 +223,7 @@ impl InspectionService {
                 file_name: format!("inspection-{id}.html"),
                 content: html_report(&view),
             }),
-            _ => Err(ControlPlaneError::validation(
+            _ => Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "inspection report format must be markdown or html",
             )),

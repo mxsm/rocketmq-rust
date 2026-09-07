@@ -23,7 +23,7 @@ use rocketmq_sre_contracts::CriticGateState;
 use rocketmq_sre_contracts::CriticReviewStatus;
 use rocketmq_sre_contracts::PlanStatus;
 use rocketmq_sre_model_gateway::AsyncModelTransport;
-use rocketmq_sre_model_gateway::ProviderError;
+use rocketmq_sre_model_gateway::ProviderStatusOutcome;
 use rocketmq_sre_model_gateway::TransportFuture;
 use rocketmq_sre_model_gateway::TransportRequest;
 use rocketmq_sre_model_gateway::TransportResponse;
@@ -43,11 +43,11 @@ use crate::workflow::WorkflowEventBus;
 use crate::workflow::WorkflowService;
 
 struct ScriptedTransport {
-    responses: Mutex<VecDeque<Result<TransportResponse, ProviderError>>>,
+    responses: Mutex<VecDeque<Result<TransportResponse, ProviderStatusOutcome>>>,
 }
 
 impl ScriptedTransport {
-    fn new(responses: impl IntoIterator<Item = Result<TransportResponse, ProviderError>>) -> Self {
+    fn new(responses: impl IntoIterator<Item = Result<TransportResponse, ProviderStatusOutcome>>) -> Self {
         Self {
             responses: Mutex::new(responses.into_iter().collect()),
         }

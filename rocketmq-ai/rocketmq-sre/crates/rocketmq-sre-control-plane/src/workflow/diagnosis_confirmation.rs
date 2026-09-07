@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 use super::repository::append_timeline;
 use super::repository::append_workflow_event;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -44,9 +44,9 @@ pub(crate) struct ConfirmDiagnosisExecutionRequest {
 }
 
 impl ConfirmDiagnosisExecutionRequest {
-    pub(crate) fn validate(&self) -> Result<(), ControlPlaneError> {
+    pub(crate) fn validate(&self) -> Result<(), ControlPlaneRequestFailure> {
         if !self.human_confirmed {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "human_confirmation_required",
                 "execution eligibility requires an explicit human confirmation",
             ));
@@ -56,7 +56,7 @@ impl ConfirmDiagnosisExecutionRequest {
             || reason.chars().any(char::is_control)
             || reason.len() != self.reason.len()
         {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_confirmation_reason",
                 "confirmation reason must contain 8 to 2048 non-control characters without surrounding whitespace",
             ));
@@ -90,7 +90,7 @@ impl PostgresRepository {
         source_revision_id: DiagnosisRevisionId,
         request: &ConfirmDiagnosisExecutionRequest,
         correlation_id: CorrelationId,
-    ) -> Result<DiagnosisExecutionConfirmation, ControlPlaneError> {
+    ) -> Result<DiagnosisExecutionConfirmation, ControlPlaneRequestFailure> {
         let mut transaction = self.pool.begin().await?;
         let row = sqlx::query(
             "SELECT i.cluster_id, i.investigation_id, i.status AS incident_status,
@@ -110,29 +110,29 @@ impl PostgresRepository {
         .bind(auth.tenant_id.as_uuid())
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
 
         let cluster_id = ClusterId::from_uuid(row.try_get("cluster_id")?);
         if !auth.clusters.contains(&cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "diagnosis is outside the authenticated cluster scope",
             ));
         }
         if row.try_get::<String, _>("incident_status")? != "monitoring" {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "diagnosis_not_confirmable",
                 "only a non-terminal monitoring incident can be confirmed for execution",
             ));
         }
         if row.try_get::<bool, _>("partial")? {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "diagnosis_partial",
                 "a partial diagnosis cannot be confirmed for execution",
             ));
         }
         if row.try_get::<bool, _>("execution_eligible")? {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "diagnosis_already_execution_eligible",
                 "the selected diagnosis revision is already execution eligible",
             ));
@@ -140,7 +140,7 @@ impl PostgresRepository {
 
         let evidence_uuids = row.try_get::<Vec<Uuid>, _>("evidence_ids")?;
         if evidence_uuids.is_empty() {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "diagnosis_evidence_missing",
                 "execution eligibility requires at least one persisted Evidence snapshot",
             ));
@@ -148,7 +148,7 @@ impl PostgresRepository {
         let primary_invocation_uuid = row
             .try_get::<Option<Uuid>, _>("primary_model_invocation_id")?
             .ok_or_else(|| {
-                ControlPlaneError::conflict_code(
+                ControlPlaneRequestFailure::conflict_code(
                     "RulesOnlyDiagnosisNotExecutable",
                     "rules-only diagnosis cannot be confirmed for execution",
                 )
@@ -156,7 +156,7 @@ impl PostgresRepository {
         if row.try_get::<Option<String>, _>("invocation_purpose")?.as_deref() != Some("primary_diagnosis")
             || row.try_get::<Option<Uuid>, _>("invocation_diagnosis_revision_id")? != Some(source_revision_id.as_uuid())
         {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "model_lineage_mismatch",
                 "primary model invocation is not bound to the selected diagnosis revision",
             ));
@@ -172,19 +172,19 @@ impl PostgresRepository {
         .fetch_one(&mut *transaction)
         .await?;
         if latest_revision != source_revision {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "diagnosis_revision_stale",
                 "only the latest diagnosis revision can be confirmed for execution",
             ));
         }
         let confirmed_revision = source_revision.checked_add(1).ok_or_else(|| {
-            ControlPlaneError::validation("diagnosis_revision_overflow", "diagnosis revision exceeds INTEGER")
+            ControlPlaneRequestFailure::validation("diagnosis_revision_overflow", "diagnosis revision exceeds INTEGER")
         })?;
         let confirmed_revision_id = DiagnosisRevisionId::new();
         let confirmed_at = Utc::now();
         let mut rule_result = row.try_get::<Value, _>("rule_result")?;
         let rule_result_object = rule_result.as_object_mut().ok_or_else(|| {
-            ControlPlaneError::validation("source_unavailable", "diagnosis rule result is not a JSON object")
+            ControlPlaneRequestFailure::validation("source_unavailable", "diagnosis rule result is not a JSON object")
         })?;
         rule_result_object.insert(
             "execution_confirmation".to_owned(),
@@ -279,7 +279,7 @@ impl PostgresRepository {
             source_revision_id,
             confirmed_revision_id,
             revision: u32::try_from(confirmed_revision).map_err(|_| {
-                ControlPlaneError::validation(
+                ControlPlaneRequestFailure::validation(
                     "diagnosis_revision_overflow",
                     "diagnosis revision exceeds supported range",
                 )

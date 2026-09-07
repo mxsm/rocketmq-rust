@@ -33,7 +33,6 @@ use super::ProxyScaleClient;
 use super::ProxyScaleOutOneWrite;
 use super::ProxyScaleRestore;
 use super::ProxyScaleState;
-use crate::ExecutionAgentError;
 
 const MAX_ORIGINAL_REPLICAS: u32 = 999;
 
@@ -106,7 +105,7 @@ where
                 parameters: &parameters,
                 live_state: &state,
             })
-            .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+            .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
             let target_replicas = parameters.expected_replicas.saturating_add(1);
             Ok(AgentReadResult {
                 schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
@@ -144,7 +143,7 @@ where
             let target_replicas = parameters
                 .expected_replicas
                 .checked_add(1)
-                .ok_or(ExecutionAgentError::InvalidRequest)?;
+                .ok_or(crate::ExecutionAgentRequestFailure::InvalidRequest)?;
             self.client
                 .scale_out_one(&ProxyScaleOutOneWrite {
                     namespace: parameters.namespace,
@@ -238,16 +237,16 @@ where
     }
 }
 
-fn require_action(action: ExecutionAction) -> Result<(), ExecutionAgentError> {
+fn require_action(action: ExecutionAction) -> Result<(), crate::ExecutionAgentRequestFailure> {
     if action == ExecutionAction::ProxyScaleOutOne {
         Ok(())
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 
-fn parameters(value: &serde_json::Value) -> Result<ProxyScaleOutOneParameters, ExecutionAgentError> {
-    serde_json::from_value(value.clone()).map_err(|_| ExecutionAgentError::InvalidRequest)
+fn parameters(value: &serde_json::Value) -> Result<ProxyScaleOutOneParameters, crate::ExecutionAgentRequestFailure> {
+    serde_json::from_value(value.clone()).map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)
 }
 
 fn validate_parameters(parameters: &ProxyScaleOutOneParameters) -> Vec<String> {
@@ -264,11 +263,11 @@ fn validate_parameters(parameters: &ProxyScaleOutOneParameters) -> Vec<String> {
     reasons
 }
 
-fn validate_for_mutation(parameters: &ProxyScaleOutOneParameters) -> Result<(), ExecutionAgentError> {
+fn validate_for_mutation(parameters: &ProxyScaleOutOneParameters) -> Result<(), crate::ExecutionAgentRequestFailure> {
     if validate_parameters(parameters).is_empty() {
         Ok(())
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 

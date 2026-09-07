@@ -31,6 +31,7 @@ use tokio::sync::RwLock;
 
 use crate::ControlPlaneConfig;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
 #[derive(Clone, Debug)]
 pub(crate) struct AuthContext {
@@ -109,15 +110,17 @@ impl AuthService {
             .clone();
         let mut client_builder = reqwest::Client::builder().https_only(true);
         if let Some(path) = config.oidc_ca_path() {
-            let pem = std::fs::read(path)
-                .map_err(|_| ControlPlaneError::configuration("OIDC CA certificate cannot be read"))?;
-            let certificate = reqwest::Certificate::from_pem(&pem)
-                .map_err(|_| ControlPlaneError::configuration("OIDC CA certificate is invalid"))?;
+            let pem = std::fs::read(path).map_err(|source| {
+                ControlPlaneError::from_source(crate::ControlPlaneFailure::Configuration, "source_unavailable", source)
+            })?;
+            let certificate = reqwest::Certificate::from_pem(&pem).map_err(|source| {
+                ControlPlaneError::from_source(crate::ControlPlaneFailure::Configuration, "source_unavailable", source)
+            })?;
             client_builder = client_builder.add_root_certificate(certificate);
         }
-        let client = client_builder
-            .build()
-            .map_err(|_| ControlPlaneError::configuration("OIDC HTTP client cannot be built"))?;
+        let client = client_builder.build().map_err(|source| {
+            ControlPlaneError::from_source(crate::ControlPlaneFailure::Configuration, "source_unavailable", source)
+        })?;
         let keys = fetch_jwks(&client, &jwks_url).await?;
         Ok(Self {
             mode: Arc::new(AuthMode::Oidc {
@@ -134,7 +137,7 @@ impl AuthService {
         &self,
         headers: &HeaderMap,
         cluster: Option<ClusterId>,
-    ) -> Result<AuthContext, ControlPlaneError> {
+    ) -> Result<AuthContext, ControlPlaneRequestFailure> {
         match self.mode.as_ref() {
             AuthMode::Development { token } => authorize_development(headers, token, cluster),
             AuthMode::Oidc {
@@ -159,15 +162,15 @@ fn authorize_development(
     headers: &HeaderMap,
     expected_token: &str,
     cluster: Option<ClusterId>,
-) -> Result<AuthContext, ControlPlaneError> {
+) -> Result<AuthContext, ControlPlaneRequestFailure> {
     let token = bearer(headers)?;
     let matches = token.len() == expected_token.len() && bool::from(token.as_bytes().ct_eq(expected_token.as_bytes()));
     if !matches {
-        return Err(ControlPlaneError::Unauthorized);
+        return Err(ControlPlaneRequestFailure::unauthorized());
     }
     let tenant_id = required_header(headers, "x-rocketmq-tenant")?
         .parse()
-        .map_err(|_| ControlPlaneError::forbidden("tenant_mismatch", "tenant claim must be a UUID"))?;
+        .map_err(|_| ControlPlaneRequestFailure::forbidden("tenant_mismatch", "tenant claim must be a UUID"))?;
     let clusters = parse_clusters(required_header(headers, "x-rocketmq-clusters")?)?;
     enforce_cluster_scope(&clusters, cluster)?;
     Ok(AuthContext {
@@ -197,26 +200,32 @@ async fn authorize_oidc(
     jwks_url: &url::Url,
     client: &reqwest::Client,
     keys: &RwLock<JwkSet>,
-) -> Result<AuthContext, ControlPlaneError> {
+) -> Result<AuthContext, ControlPlaneRequestFailure> {
     let token = bearer(headers)?;
-    let header = decode_header(token).map_err(|_| ControlPlaneError::Unauthorized)?;
+    let header = decode_header(token).map_err(|_| ControlPlaneRequestFailure::unauthorized())?;
     if header.alg != Algorithm::RS256 {
-        return Err(ControlPlaneError::Unauthorized);
+        return Err(ControlPlaneRequestFailure::unauthorized());
     }
-    let kid = header.kid.ok_or(ControlPlaneError::Unauthorized)?;
+    let kid = header.kid.ok_or_else(ControlPlaneRequestFailure::unauthorized)?;
     let mut jwk = keys.read().await.find(&kid).cloned();
     if jwk.is_none() {
         let refreshed = fetch_jwks(client, jwks_url).await?;
         jwk = refreshed.find(&kid).cloned();
         *keys.write().await = refreshed;
     }
-    let decoding_key = DecodingKey::from_jwk(jwk.as_ref().ok_or(ControlPlaneError::Unauthorized)?)
-        .map_err(|_| ControlPlaneError::Unauthorized)?;
+    let jwk = jwk.as_ref().ok_or_else(ControlPlaneRequestFailure::unauthorized)?;
+    let decoding_key = DecodingKey::from_jwk(jwk).map_err(|source| {
+        ControlPlaneError::from_source(
+            crate::ControlPlaneFailure::IdentityProvider,
+            "source_unavailable",
+            source,
+        )
+    })?;
     let mut validation = Validation::new(Algorithm::RS256);
     validation.set_issuer(&[issuer]);
     validation.set_audience(&[audience]);
     let claims = decode::<OidcClaims>(token, &decoding_key, &validation)
-        .map_err(|_| ControlPlaneError::Unauthorized)?
+        .map_err(|_| ControlPlaneRequestFailure::unauthorized())?
         .claims;
     if !claims.scope.split_ascii_whitespace().any(|scope| {
         matches!(
@@ -231,7 +240,7 @@ async fn authorize_oidc(
                 | "rocketmq:model-governance"
         )
     }) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "unauthorized_scope",
             "token does not grant RocketMQ SRE read or diagnose scope",
         ));
@@ -239,14 +248,14 @@ async fn authorize_oidc(
     let tenant_id = claims
         .rocketmq_tenant
         .parse()
-        .map_err(|_| ControlPlaneError::forbidden("tenant_mismatch", "tenant claim must be a UUID"))?;
+        .map_err(|_| ControlPlaneRequestFailure::forbidden("tenant_mismatch", "tenant claim must be a UUID"))?;
     let clusters = claims
         .rocketmq_clusters
         .iter()
         .map(|value| {
-            value
-                .parse()
-                .map_err(|_| ControlPlaneError::forbidden("cluster_not_allowed", "cluster claim must be a UUID"))
+            value.parse().map_err(|_| {
+                ControlPlaneRequestFailure::forbidden("cluster_not_allowed", "cluster claim must be a UUID")
+            })
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
     enforce_cluster_scope(&clusters, cluster)?;
@@ -326,15 +335,14 @@ async fn fetch_jwks(client: &reqwest::Client, url: &url::Url) -> Result<JwkSet, 
         .map_err(ControlPlaneError::from)
 }
 
-fn parse_clusters(value: &str) -> Result<BTreeSet<ClusterId>, ControlPlaneError> {
+fn parse_clusters(value: &str) -> Result<BTreeSet<ClusterId>, ControlPlaneRequestFailure> {
     value
         .split(',')
         .filter(|value| !value.trim().is_empty())
         .map(|value| {
-            value
-                .trim()
-                .parse()
-                .map_err(|_| ControlPlaneError::forbidden("cluster_not_allowed", "cluster scope must contain UUIDs"))
+            value.trim().parse().map_err(|_| {
+                ControlPlaneRequestFailure::forbidden("cluster_not_allowed", "cluster scope must contain UUIDs")
+            })
         })
         .collect()
 }
@@ -342,9 +350,9 @@ fn parse_clusters(value: &str) -> Result<BTreeSet<ClusterId>, ControlPlaneError>
 fn enforce_cluster_scope(
     clusters: &BTreeSet<ClusterId>,
     requested: Option<ClusterId>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     if requested.is_some_and(|cluster| !clusters.contains(&cluster)) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "requested cluster is outside the authenticated scope",
         ));
@@ -352,15 +360,15 @@ fn enforce_cluster_scope(
     Ok(())
 }
 
-fn bearer(headers: &HeaderMap) -> Result<&str, ControlPlaneError> {
+fn bearer(headers: &HeaderMap) -> Result<&str, ControlPlaneRequestFailure> {
     header(headers, axum::http::header::AUTHORIZATION.as_str())
         .and_then(|value| value.strip_prefix("Bearer "))
         .filter(|value| !value.is_empty())
-        .ok_or(ControlPlaneError::Unauthorized)
+        .ok_or_else(ControlPlaneRequestFailure::unauthorized)
 }
 
-fn required_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, ControlPlaneError> {
-    header(headers, name).ok_or(ControlPlaneError::Unauthorized)
+fn required_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, ControlPlaneRequestFailure> {
+    header(headers, name).ok_or_else(ControlPlaneRequestFailure::unauthorized)
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -397,13 +405,9 @@ mod tests {
             .authorize(&headers, Some(ClusterId::new()))
             .await
             .expect_err("cross-cluster access must fail");
-        assert!(matches!(
-            denied,
-            ControlPlaneError::Forbidden {
-                code: "cluster_not_allowed",
-                ..
-            }
-        ));
+        let rejection = denied.rejection().expect("scope denial is not an operational failure");
+        assert_eq!(rejection.kind(), crate::error::ControlPlaneRejectionKind::Forbidden);
+        assert_eq!(rejection.code(), "cluster_not_allowed");
     }
 
     #[test]

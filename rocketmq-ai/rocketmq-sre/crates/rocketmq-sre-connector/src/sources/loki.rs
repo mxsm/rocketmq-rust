@@ -76,7 +76,7 @@ impl LokiSource {
         validate_identifier(service_name, "service name")?;
         let endpoint = base_url
             .join("loki/api/v1/query_range")
-            .map_err(|_| ConnectorError::configuration("Loki query URL cannot be constructed"))?;
+            .map_err(ConnectorError::configuration_source)?;
         let expression = log_selector(cluster, service_name);
         let request = self.client.get(endpoint).query(&[
             ("query", expression),
@@ -97,10 +97,7 @@ impl LokiSource {
             ("direction", "backward".to_owned()),
         ]);
         let response = bounded_future(deadline, cancel, async {
-            request
-                .send()
-                .await
-                .map_err(|_| ConnectorError::source("Loki query failed"))
+            request.send().await.map_err(ConnectorError::source_error)
         })
         .await?;
         if !response.status().is_success() {

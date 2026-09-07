@@ -56,6 +56,7 @@ use super::model::RecordFleetTargetReadinessRequest;
 use super::model::StartFleetReleaseBatchRequest;
 use super::model::bounded_limit;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::auth::AuthContext;
 use crate::fleet::FleetService;
 
@@ -66,7 +67,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         request: &CreateFleetReleaseRequest,
-    ) -> Result<FleetReleaseView, ControlPlaneError> {
+    ) -> Result<FleetReleaseView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         validate_create_request(request)?;
         let mut seen = BTreeSet::new();
@@ -86,7 +87,7 @@ impl FleetService {
                     ClusterRegistrationState::Active | ClusterRegistrationState::ReadOnlyDegraded
                 )
             {
-                return Err(ControlPlaneError::forbidden(
+                return Err(ControlPlaneRequestFailure::forbidden(
                     "fleet_release_scope_mismatch",
                     "Fleet release target does not match an active tenant, Fleet, and region registration",
                 ));
@@ -148,7 +149,7 @@ impl FleetService {
                     updated_at: now,
                 })
             })
-            .collect::<Result<Vec<_>, ControlPlaneError>>()?;
+            .collect::<Result<Vec<_>, ControlPlaneRequestFailure>>()?;
         targets.sort_by_key(|target| (target.batch_sequence, target.cluster_id));
         self.repository
             .create_fleet_release(&release, &targets, &auth.subject)
@@ -164,7 +165,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         query: &FleetReleaseQuery,
-    ) -> Result<FleetReleasePage, ControlPlaneError> {
+    ) -> Result<FleetReleasePage, ControlPlaneRequestFailure> {
         require_read_role(auth)?;
         let (items, total) = self
             .repository
@@ -183,7 +184,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         id: FleetReleaseId,
-    ) -> Result<FleetReleaseView, ControlPlaneError> {
+    ) -> Result<FleetReleaseView, ControlPlaneRequestFailure> {
         require_read_role(auth)?;
         self.repository
             .fleet_release(auth.tenant_id, id, &allowed_clusters(auth))
@@ -194,7 +195,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         id: FleetReleaseId,
-    ) -> Result<FleetReleaseView, ControlPlaneError> {
+    ) -> Result<FleetReleaseView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let current = self.fleet_release(auth, id).await?;
         if current.release.status != FleetReleaseStatus::Planned {
@@ -226,7 +227,7 @@ impl FleetService {
         id: FleetReleaseId,
         cluster_id: ClusterId,
         request: &RecordFleetTargetReadinessRequest,
-    ) -> Result<FleetReleaseView, ControlPlaneError> {
+    ) -> Result<FleetReleaseView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         authorize_cluster(auth, cluster_id)?;
         validate_reason_codes(&request.reason_codes)?;
@@ -241,7 +242,7 @@ impl FleetService {
             .iter()
             .position(|target| target.cluster_id == cluster_id)
         else {
-            return Err(ControlPlaneError::NotFound);
+            return Err(ControlPlaneRequestFailure::not_found());
         };
         if current.targets[index].state != FleetReleaseTargetState::ReadinessChecking {
             return Err(state_conflict("Fleet target readiness was already recorded"));
@@ -255,7 +256,7 @@ impl FleetService {
                 .linked_release_status(auth.tenant_id, cluster_id, release_id)
                 .await?;
             if linked_status != ReleaseStatus::Ready {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "fleet_release_target_not_ready",
                     "linked per-cluster release must pass readiness before Fleet scheduling",
                 ));
@@ -316,7 +317,7 @@ impl FleetService {
         auth: &AuthContext,
         id: FleetReleaseId,
         request: &StartFleetReleaseBatchRequest,
-    ) -> Result<FleetReleaseView, ControlPlaneError> {
+    ) -> Result<FleetReleaseView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         let current = self.fleet_release(auth, id).await?;
         if current.release.status != FleetReleaseStatus::Ready || current.release.active_batch.is_some() {
@@ -326,7 +327,7 @@ impl FleetService {
         }
         let now = Utc::now();
         if now < current.release.maintenance_window_start || now > current.release.maintenance_window_end {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "fleet_release_outside_window",
                 "Fleet release batch is outside the approved maintenance window",
             ));
@@ -344,7 +345,7 @@ impl FleetService {
             })
             .ok_or_else(|| state_conflict("Fleet release has no ready batch to start"))?;
         if next_batch.sequence != request.expected_sequence {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "fleet_release_batch_out_of_order",
                 "Fleet release batches must start in deterministic regional order",
             ));
@@ -357,7 +358,7 @@ impl FleetService {
             })
             .collect::<Vec<_>>();
         if ready_targets.len() > next_batch.max_concurrency as usize {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "fleet_release_batch_capacity_exceeded",
                 "Fleet release batch exceeds its regional concurrency bound",
             ));
@@ -372,7 +373,7 @@ impl FleetService {
                 .await?
                 != ReleaseStatus::Ready
             {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "fleet_release_linked_state_changed",
                     "linked per-cluster release changed after readiness and Fleet scheduling stopped",
                 ));
@@ -424,7 +425,7 @@ impl FleetService {
         id: FleetReleaseId,
         cluster_id: ClusterId,
         request: &RecordFleetTargetOutcomeRequest,
-    ) -> Result<FleetReleaseView, ControlPlaneError> {
+    ) -> Result<FleetReleaseView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         authorize_cluster(auth, cluster_id)?;
         validate_optional_safe_text(request.sanitized_outcome.as_deref(), "Fleet release outcome", 1_024)?;
@@ -434,7 +435,7 @@ impl FleetService {
             .iter()
             .position(|target| target.cluster_id == cluster_id)
         else {
-            return Err(ControlPlaneError::NotFound);
+            return Err(ControlPlaneRequestFailure::not_found());
         };
         validate_target_transition(
             current.targets[index].state,
@@ -477,7 +478,7 @@ impl FleetService {
         auth: &AuthContext,
         id: FleetReleaseId,
         request: &FleetReleaseReasonRequest,
-    ) -> Result<FleetReleaseView, ControlPlaneError> {
+    ) -> Result<FleetReleaseView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         validate_safe_text(&request.reason, "Fleet release pause reason", 512)?;
         let current = self.fleet_release(auth, id).await?;
@@ -518,7 +519,7 @@ impl FleetService {
         auth: &AuthContext,
         id: FleetReleaseId,
         request: &FleetReleaseReasonRequest,
-    ) -> Result<FleetReleaseView, ControlPlaneError> {
+    ) -> Result<FleetReleaseView, ControlPlaneRequestFailure> {
         require_operator(auth)?;
         validate_safe_text(&request.reason, "Fleet release resume reason", 512)?;
         let current = self.fleet_release(auth, id).await?;
@@ -526,7 +527,7 @@ impl FleetService {
             return Err(state_conflict("Fleet release resume requires a paused aggregate"));
         }
         if current.targets.iter().any(|target| target.regression_detected) {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "fleet_release_regression_unresolved",
                 "Fleet release cannot resume until every regression is rolled back or skipped",
             ));
@@ -558,7 +559,7 @@ impl FleetService {
         &self,
         auth: &AuthContext,
         id: FleetReleaseId,
-    ) -> Result<FleetReleaseReport, ControlPlaneError> {
+    ) -> Result<FleetReleaseReport, ControlPlaneRequestFailure> {
         let view = self.fleet_release(auth, id).await?;
         let mut state_counts = BTreeMap::new();
         let mut skipped_clusters = Vec::new();
@@ -590,7 +591,7 @@ impl FleetService {
         reason_code: &'static str,
         auth: &AuthContext,
         details: serde_json::Value,
-    ) -> Result<FleetReleaseView, ControlPlaneError> {
+    ) -> Result<FleetReleaseView, ControlPlaneRequestFailure> {
         let transition = FleetReleaseTransition {
             release,
             targets,

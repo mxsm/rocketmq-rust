@@ -35,7 +35,6 @@ use super::TopicConfigPatchClient;
 use super::TopicConfigPatchRestore;
 use super::TopicConfigPatchState;
 use super::TopicConfigPatchWrite;
-use crate::ExecutionAgentError;
 
 /// Exact parameters accepted by `topic.config.patch_allowlisted.v1`.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -97,7 +96,7 @@ where
                 parameters: &parameters,
                 live_state: &state,
             })
-            .map_err(|_| ExecutionAgentError::InvalidRequest)?;
+            .map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)?;
             Ok(AgentReadResult {
                 schema_version: EXECUTION_AGENT_SCHEMA_VERSION.to_owned(),
                 action: request.action,
@@ -246,16 +245,16 @@ fn dispatch_outcome(
     }
 }
 
-fn require_action(action: ExecutionAction) -> Result<(), ExecutionAgentError> {
+fn require_action(action: ExecutionAction) -> Result<(), crate::ExecutionAgentRequestFailure> {
     if action == ExecutionAction::TopicConfigPatchAllowlisted {
         Ok(())
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 
-fn parameters(value: &serde_json::Value) -> Result<TopicConfigPatchParameters, ExecutionAgentError> {
-    serde_json::from_value(value.clone()).map_err(|_| ExecutionAgentError::InvalidRequest)
+fn parameters(value: &serde_json::Value) -> Result<TopicConfigPatchParameters, crate::ExecutionAgentRequestFailure> {
+    serde_json::from_value(value.clone()).map_err(|_| crate::ExecutionAgentRequestFailure::InvalidRequest)
 }
 
 fn validate_parameters(parameters: &TopicConfigPatchParameters) -> Vec<String> {
@@ -280,11 +279,11 @@ fn validate_parameters(parameters: &TopicConfigPatchParameters) -> Vec<String> {
     reasons
 }
 
-fn validate_for_mutation(parameters: &TopicConfigPatchParameters) -> Result<(), ExecutionAgentError> {
+fn validate_for_mutation(parameters: &TopicConfigPatchParameters) -> Result<(), crate::ExecutionAgentRequestFailure> {
     if validate_parameters(parameters).is_empty() {
         Ok(())
     } else {
-        Err(ExecutionAgentError::InvalidRequest)
+        Err(crate::ExecutionAgentRequestFailure::InvalidRequest)
     }
 }
 

@@ -33,7 +33,7 @@ use super::model::PreventiveRunPage;
 use super::model::PreventiveScheduleRequest;
 use super::model::PreventiveScheduleView;
 use super::model::RecordAutomationFeedbackRequest;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -62,7 +62,7 @@ async fn submit_run(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<NoSideEffectAutomationRequest>,
-) -> Result<Json<NoSideEffectAutomationRun>, ControlPlaneError> {
+) -> Result<Json<NoSideEffectAutomationRun>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, request.cluster_id).await?;
     state.automation.submit(&auth, &request).await.map(Json)
 }
@@ -71,7 +71,7 @@ async fn list_runs(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<AutomationRunListQuery>,
-) -> Result<Json<AutomationRunPage>, ControlPlaneError> {
+) -> Result<Json<AutomationRunPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.automation.list(&auth, &query).await.map(Json)
 }
@@ -80,7 +80,7 @@ async fn record_feedback(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<RecordAutomationFeedbackRequest>,
-) -> Result<Json<AutomationOperatorFeedback>, ControlPlaneError> {
+) -> Result<Json<AutomationOperatorFeedback>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, request.cluster_id).await?;
     state.automation.record_feedback(&auth, &request).await.map(Json)
 }
@@ -89,7 +89,7 @@ async fn submit_preventive_run(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<PreventiveAutomationRequest>,
-) -> Result<Json<PreventiveAutomationRun>, ControlPlaneError> {
+) -> Result<Json<PreventiveAutomationRun>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.preventive_automation.submit(&auth, &request).await.map(Json)
 }
@@ -98,7 +98,7 @@ async fn list_preventive_runs(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<PreventiveRunListQuery>,
-) -> Result<Json<PreventiveRunPage>, ControlPlaneError> {
+) -> Result<Json<PreventiveRunPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, query.cluster_id).await?;
     state.preventive_automation.list(&auth, &query).await.map(Json)
 }
@@ -107,7 +107,7 @@ async fn schedule_preventive_run(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<PreventiveScheduleRequest>,
-) -> Result<Json<PreventiveScheduleView>, ControlPlaneError> {
+) -> Result<Json<PreventiveScheduleView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.preventive_automation.schedule(&auth, &request).await.map(Json)
 }

@@ -14,7 +14,6 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::error::Error;
 use std::fmt;
 
 use super::DIAGNOSTIC_OUTPUT_SCHEMA_FAMILY;
@@ -35,32 +34,24 @@ pub struct DiagnosticPackRegistry {
 }
 
 /// Diagnostic pack registration and lookup failures.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DiagnosticRegistryError {
+#[derive(Clone, Eq, PartialEq)]
+pub enum DiagnosticRegistryRejection {
     DuplicateVersion { id: String, version: PackVersion },
     NotFound { id: String },
     VersionNotFound { id: String, version: PackVersion },
     InvalidDescriptor { id: String, reason: String },
 }
 
-impl fmt::Display for DiagnosticRegistryError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateVersion { id, version } => {
-                write!(formatter, "diagnostic pack `{id}` version `{version}` already exists")
-            }
-            Self::NotFound { id } => write!(formatter, "diagnostic pack `{id}` was not found"),
-            Self::VersionNotFound { id, version } => {
-                write!(formatter, "diagnostic pack `{id}` version `{version}` was not found")
-            }
-            Self::InvalidDescriptor { id, reason } => {
-                write!(formatter, "diagnostic pack `{id}` is invalid: {reason}")
-            }
-        }
+impl fmt::Display for DiagnosticRegistryRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SRE operation was rejected")
     }
 }
-
-impl Error for DiagnosticRegistryError {}
+impl fmt::Debug for DiagnosticRegistryRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
 
 impl DiagnosticPackRegistry {
     /// Registers a pack version and activates it when it is the newest version.
@@ -68,7 +59,7 @@ impl DiagnosticPackRegistry {
     /// # Errors
     ///
     /// Rejects duplicate versions and incomplete or ambiguous descriptors.
-    pub fn register<P>(&mut self, pack: P) -> Result<(), DiagnosticRegistryError>
+    pub fn register<P>(&mut self, pack: P) -> Result<(), DiagnosticRegistryRejection>
     where
         P: DiagnosticPack + 'static,
     {
@@ -80,7 +71,7 @@ impl DiagnosticPackRegistry {
     /// # Errors
     ///
     /// Rejects duplicate versions and incomplete or ambiguous descriptors.
-    pub fn register_boxed(&mut self, pack: Box<dyn DiagnosticPack>) -> Result<(), DiagnosticRegistryError> {
+    pub fn register_boxed(&mut self, pack: Box<dyn DiagnosticPack>) -> Result<(), DiagnosticRegistryRejection> {
         validate_descriptor(pack.as_ref())?;
         let id = pack.id().to_owned();
         let version = pack.version();
@@ -89,7 +80,7 @@ impl DiagnosticPackRegistry {
             versions: BTreeMap::new(),
         });
         if entry.versions.contains_key(&version) {
-            return Err(DiagnosticRegistryError::DuplicateVersion { id, version });
+            return Err(DiagnosticRegistryRejection::DuplicateVersion { id, version });
         }
         entry.versions.insert(version, pack);
         if version > entry.active {
@@ -103,13 +94,13 @@ impl DiagnosticPackRegistry {
     /// # Errors
     ///
     /// Returns a lookup error for an unknown pack or version.
-    pub fn activate(&mut self, id: &str, version: PackVersion) -> Result<(), DiagnosticRegistryError> {
+    pub fn activate(&mut self, id: &str, version: PackVersion) -> Result<(), DiagnosticRegistryRejection> {
         let entry = self
             .packs
             .get_mut(id)
-            .ok_or_else(|| DiagnosticRegistryError::NotFound { id: id.to_owned() })?;
+            .ok_or_else(|| DiagnosticRegistryRejection::NotFound { id: id.to_owned() })?;
         if !entry.versions.contains_key(&version) {
-            return Err(DiagnosticRegistryError::VersionNotFound {
+            return Err(DiagnosticRegistryRejection::VersionNotFound {
                 id: id.to_owned(),
                 version,
             });
@@ -170,7 +161,7 @@ impl DiagnosticPackRegistry {
     }
 }
 
-fn validate_descriptor(pack: &dyn DiagnosticPack) -> Result<(), DiagnosticRegistryError> {
+fn validate_descriptor(pack: &dyn DiagnosticPack) -> Result<(), DiagnosticRegistryRejection> {
     let id = pack.id();
     if id.is_empty() || id.ends_with(".v1") || id.rsplit_once(".v").is_some() {
         return Err(invalid(id, "base ID must be non-empty and omit the `.vN` suffix"));
@@ -230,8 +221,8 @@ fn validate_descriptor(pack: &dyn DiagnosticPack) -> Result<(), DiagnosticRegist
     Ok(())
 }
 
-fn invalid(id: &str, reason: &str) -> DiagnosticRegistryError {
-    DiagnosticRegistryError::InvalidDescriptor {
+fn invalid(id: &str, reason: &str) -> DiagnosticRegistryRejection {
+    DiagnosticRegistryRejection::InvalidDescriptor {
         id: id.to_owned(),
         reason: reason.to_owned(),
     }
@@ -240,11 +231,11 @@ fn invalid(id: &str, reason: &str) -> DiagnosticRegistryError {
 #[cfg(test)]
 mod tests {
     use super::super::DiagnosticContext;
-    use super::super::DiagnosticError;
     use super::super::EvidenceRequirement;
     use super::super::FollowUpQuery;
     use super::super::RuleMatch;
     use super::*;
+    use rocketmq_sre_contracts::SreContractError;
 
     const REQUIRED: &[EvidenceRequirement] = &[EvidenceRequirement {
         key: "test",
@@ -293,7 +284,7 @@ mod tests {
             &[]
         }
 
-        fn evaluate(&self, _context: &DiagnosticContext<'_>) -> Result<Vec<RuleMatch>, DiagnosticError> {
+        fn evaluate(&self, _context: &DiagnosticContext<'_>) -> Result<Vec<RuleMatch>, SreContractError> {
             Ok(Vec::new())
         }
     }
@@ -327,7 +318,7 @@ mod tests {
             &[]
         }
 
-        fn evaluate(&self, _context: &DiagnosticContext<'_>) -> Result<Vec<RuleMatch>, DiagnosticError> {
+        fn evaluate(&self, _context: &DiagnosticContext<'_>) -> Result<Vec<RuleMatch>, SreContractError> {
             Ok(Vec::new())
         }
     }
@@ -362,7 +353,7 @@ mod tests {
         );
         assert_eq!(
             registry.register(TestPack(initial)),
-            Err(DiagnosticRegistryError::DuplicateVersion {
+            Err(DiagnosticRegistryRejection::DuplicateVersion {
                 id: "test-pack".to_owned(),
                 version: initial,
             })
@@ -374,7 +365,7 @@ mod tests {
         let mut registry = DiagnosticPackRegistry::default();
         assert!(matches!(
             registry.register(McpAliasPack),
-            Err(DiagnosticRegistryError::InvalidDescriptor { reason, .. })
+            Err(DiagnosticRegistryRejection::InvalidDescriptor { reason, .. })
                 if reason.contains("canonical `rocketmq-mcp`")
         ));
     }

@@ -20,9 +20,9 @@ use serde::Serialize;
 
 use crate::AlertSeverity;
 use crate::ClusterId;
-use crate::ContractError;
 use crate::Hypothesis;
 use crate::IncidentId;
+use crate::SreContractError;
 use crate::TenantId;
 
 /// Phase 00 incident lifecycle.
@@ -139,14 +139,13 @@ impl Incident {
     ///
     /// # Errors
     ///
-    /// Returns [`ContractError::InvalidStateTransition`] for skipped stages,
+    /// Returns [`crate::SreContractError`] for skipped stages,
     /// self-transitions, or any attempt to reopen a terminal incident.
-    pub fn transition(&mut self, next: IncidentStatus, at: DateTime<Utc>) -> Result<(), ContractError> {
+    pub fn transition(&mut self, next: IncidentStatus, at: DateTime<Utc>) -> Result<(), SreContractError> {
         if !self.status.permits(next) {
-            return Err(ContractError::InvalidStateTransition {
-                from: format!("{:?}", self.status).to_lowercase(),
-                to: format!("{next:?}").to_lowercase(),
-            });
+            return Err(crate::SreContractError::new(
+                crate::PublicErrorCode::InvalidStateTransition,
+            ));
         }
         self.status = next;
         self.updated_at = at;
@@ -158,7 +157,7 @@ impl Incident {
     /// # Errors
     ///
     /// Returns the same state-machine error as [`Self::transition`].
-    pub fn apply_transition(&mut self, transition: IncidentTransition) -> Result<(), ContractError> {
+    pub fn apply_transition(&mut self, transition: IncidentTransition) -> Result<(), SreContractError> {
         self.transition(transition.next, transition.at)
     }
 }
@@ -217,7 +216,7 @@ mod tests {
 
         assert!(matches!(
             incident.transition(IncidentStatus::Collecting, at),
-            Err(ContractError::InvalidStateTransition { .. })
+            Err(error) if error.code() == crate::PublicErrorCode::InvalidStateTransition
         ));
     }
 
@@ -228,7 +227,7 @@ mod tests {
 
         assert!(matches!(
             incident.transition(IncidentStatus::Diagnosing, at),
-            Err(ContractError::InvalidStateTransition { .. })
+            Err(error) if error.code() == crate::PublicErrorCode::InvalidStateTransition
         ));
     }
 }

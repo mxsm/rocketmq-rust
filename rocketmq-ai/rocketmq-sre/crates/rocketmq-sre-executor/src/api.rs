@@ -42,6 +42,8 @@ use crate::ExecutionVerifier;
 use crate::ExecutorActionRegistry;
 use crate::ExecutorConfig;
 use crate::ExecutorError;
+use crate::ExecutorOperationOutcome;
+use crate::ExecutorRejection;
 use crate::HttpExecutionAgentClient;
 use crate::HttpExecutionSliClient;
 use crate::HttpExecutorAuthorityClient;
@@ -113,7 +115,7 @@ pub async fn run(config: ExecutorConfig, service_context: ChildServiceContext) -
         .max_connections(16)
         .connect(&config.database_url)
         .await
-        .map_err(crate::JournalError::Database)?;
+        .map_err(crate::error::JournalError::Database)?;
     let authority = Arc::new(HttpExecutorAuthorityClient::new(
         config.authority_url.clone(),
         Arc::<str>::from(config.authority_token.as_str()),
@@ -184,7 +186,7 @@ pub async fn run(config: ExecutorConfig, service_context: ChildServiceContext) -
     })
     .await;
     service_context.task_group().cancel();
-    result.map_err(|_| ExecutorError::Io(std::io::Error::other("Change Executor server failed")))
+    result.map_err(ExecutorError::Io)
 }
 
 async fn health() -> Json<ServiceStatus> {
@@ -214,7 +216,7 @@ async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ServiceStatus
     }
 }
 
-async fn status(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<ExecutorStatus>, ExecutorError> {
+async fn status(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<ExecutorStatus>, ExecutorApiFailure> {
     authorize(&state, &headers)?;
     let metrics = state.executor.metrics();
     Ok(Json(ExecutorStatus {
@@ -232,60 +234,102 @@ async fn execute(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<ExecutionRequest>,
-) -> Result<Json<crate::ExecuteOutcome>, ExecutorError> {
+) -> Result<Json<crate::ExecuteOutcome>, ExecutorApiFailure> {
     authorize(&state, &headers)?;
-    state.executor.execute(&request).await.map(Json)
+    match state.executor.execute(&request).await? {
+        ExecutorOperationOutcome::Accepted(outcome) => Ok(Json(outcome)),
+        ExecutorOperationOutcome::Rejected(rejection) => Err(rejection.into()),
+    }
 }
 
 async fn read_precondition(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<AgentReadRequest>,
-) -> Result<Json<AgentReadResult>, ExecutorError> {
+) -> Result<Json<AgentReadResult>, ExecutorApiFailure> {
     authorize(&state, &headers)?;
-    state.executor.read_precondition(&request).await.map(Json)
+    match state.executor.read_precondition(&request).await? {
+        ExecutorOperationOutcome::Accepted(result) => Ok(Json(result)),
+        ExecutorOperationOutcome::Rejected(rejection) => Err(rejection.into()),
+    }
 }
 
 async fn recover_execution(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<crate::ExecuteOutcome>, ExecutorError> {
+) -> Result<Json<crate::ExecuteOutcome>, ExecutorApiFailure> {
     authorize(&state, &headers)?;
-    state
-        .executor
-        .recover_execution(parse_execution_id(&id)?)
-        .await
-        .map(Json)
+    match state.executor.recover_execution(parse_execution_id(&id)?).await? {
+        ExecutorOperationOutcome::Accepted(outcome) => Ok(Json(outcome)),
+        ExecutorOperationOutcome::Rejected(rejection) => Err(rejection.into()),
+    }
 }
 
-fn parse_execution_id(value: &str) -> Result<ExecutionId, ExecutorError> {
+fn parse_execution_id(value: &str) -> Result<ExecutionId, ExecutorRejection> {
     Uuid::parse_str(value)
         .map(ExecutionId::from_uuid)
-        .map_err(|_| ExecutorError::InvalidRequest)
+        .map_err(|_| ExecutorRejection::InvalidRequest)
 }
 
-fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ExecutorError> {
+fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ExecutorRejection> {
     let bearer = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .ok_or(ExecutorError::Unauthorized)?;
+        .ok_or(ExecutorRejection::Unauthorized)?;
     if bearer.len() != state.control_plane_token.len()
         || !bool::from(bearer.as_bytes().ct_eq(state.control_plane_token.as_bytes()))
     {
-        return Err(ExecutorError::Unauthorized);
+        return Err(ExecutorRejection::Unauthorized);
     }
     if state.require_mtls_identity {
         let identity = headers
             .get("x-forwarded-client-cert")
             .and_then(|value| value.to_str().ok())
-            .ok_or(ExecutorError::Unauthorized)?;
+            .ok_or(ExecutorRejection::Unauthorized)?;
         if !has_spiffe_identity(identity, "spiffe://rocketmq-sre/control-plane") {
-            return Err(ExecutorError::Unauthorized);
+            return Err(ExecutorRejection::Unauthorized);
         }
     }
     Ok(())
+}
+
+enum ExecutorApiFailure {
+    Rejected(ExecutorRejection),
+    Operational(ExecutorError),
+}
+
+impl From<ExecutorRejection> for ExecutorApiFailure {
+    fn from(rejection: ExecutorRejection) -> Self {
+        Self::Rejected(rejection)
+    }
+}
+
+impl From<ExecutorError> for ExecutorApiFailure {
+    fn from(error: ExecutorError) -> Self {
+        Self::Operational(error)
+    }
+}
+
+impl IntoResponse for ExecutorApiFailure {
+    fn into_response(self) -> Response {
+        let (status, code, retryable) = match self {
+            Self::Rejected(rejection) => rejection.http_classification(),
+            Self::Operational(error) => error.http_classification(),
+        };
+        (
+            status,
+            Json(ErrorEnvelope {
+                schema_version: "rocketmq-sre.error.v1",
+                code,
+                message: "Change Executor rejected the request without exposing target details",
+                retryable,
+                correlation_id: CorrelationId::new(),
+            }),
+        )
+            .into_response()
+    }
 }
 
 fn has_spiffe_identity(header: &str, expected: &str) -> bool {
@@ -302,22 +346,7 @@ fn has_spiffe_identity(header: &str, expected: &str) -> bool {
 
 impl IntoResponse for ExecutorError {
     fn into_response(self) -> Response {
-        let (status, code, retryable) = match self {
-            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized_workload_identity", false),
-            Self::InvalidRequest | Self::Catalog(_) => (StatusCode::BAD_REQUEST, "invalid_execution_request", false),
-            Self::AuthorityRejected => (StatusCode::FORBIDDEN, "execution_authority_rejected", false),
-            Self::AgentRejected => (StatusCode::CONFLICT, "execution_agent_rejected", false),
-            Self::VerificationRejected => (StatusCode::CONFLICT, "execution_verification_rejected", false),
-            Self::PreconditionChanged => (StatusCode::CONFLICT, "precondition_changed", false),
-            Self::ReconcileBlocked => (StatusCode::CONFLICT, "unresolved_old_effects", false),
-            Self::Configuration => (StatusCode::INTERNAL_SERVER_ERROR, "source_unavailable", false),
-            Self::AuthorityUnavailable
-            | Self::AgentUnavailable
-            | Self::VerificationUnavailable
-            | Self::Journal(_)
-            | Self::Http(_)
-            | Self::Io(_) => (StatusCode::SERVICE_UNAVAILABLE, "source_unavailable", true),
-        };
+        let (status, code, retryable) = self.http_classification();
         (
             status,
             Json(ErrorEnvelope {

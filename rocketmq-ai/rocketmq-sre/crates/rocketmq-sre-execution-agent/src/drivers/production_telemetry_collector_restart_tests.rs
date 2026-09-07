@@ -25,6 +25,55 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
 use super::*;
 
+#[tokio::test]
+async fn kubernetes_transport_failure_retains_source_and_is_not_a_refusal() {
+    use std::error::Error;
+
+    let service = tower::service_fn(|_request: axum::http::Request<kube::client::Body>| async {
+        Err::<axum::http::Response<axum::body::Body>, _>(std::io::Error::other("private-cluster-token"))
+    });
+    let client = ProductionTelemetryCollectorRestartClient {
+        client: Client::new(service, "default"),
+        allowed_targets: Arc::new(BTreeSet::from(["observability/otel-collector".to_owned()])),
+    };
+    let failure = client.deployment("observability", "otel-collector").await.unwrap_err();
+    let crate::ExecutionAgentRequestFailure::Operational(error) = failure else {
+        panic!("Kubernetes transport failures must remain operational");
+    };
+    assert!(error.source().unwrap().is::<kube::Error>());
+    assert!(!format!("{error} {error:?}").contains("private-cluster-token"));
+    assert_eq!(
+        error.http_classification(),
+        ExecutionAgentError::DriverFailed.http_classification()
+    );
+    assert!(matches!(
+        crate::ExecutionAgentRequestFailure::from(ExecutionAgentError::DriverFailed),
+        crate::ExecutionAgentRequestFailure::Operational(_)
+    ));
+}
+
+#[test]
+fn kubernetes_configuration_source_keeps_safe_classification() {
+    use std::error::Error;
+
+    let error = ExecutionAgentError::configuration_source(kube::Error::Api(Box::new(kube::core::Status {
+        message: "private-cluster-token".to_owned(),
+        reason: "private-cluster-token".to_owned(),
+        code: 500,
+        ..Default::default()
+    })));
+    assert!(error.source().unwrap().is::<kube::Error>());
+    assert_eq!(
+        error.http_classification(),
+        ExecutionAgentError::Configuration.http_classification()
+    );
+    assert!(!format!("{error} {error:?}").contains("private-cluster-token"));
+    assert!(matches!(
+        crate::ExecutionAgentRequestFailure::from(error),
+        crate::ExecutionAgentRequestFailure::Operational(_)
+    ));
+}
+
 #[test]
 fn simple_exact_selector_and_ready_state_are_accepted() {
     let deployment = ready_deployment();

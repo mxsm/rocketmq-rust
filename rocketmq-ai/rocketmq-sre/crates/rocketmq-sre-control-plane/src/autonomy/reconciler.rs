@@ -16,6 +16,7 @@ use rocketmq_sre_contracts::AutonomyOutcome;
 use serde_json::Value;
 
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 
 const RECONCILE_BATCH_LIMIT: i64 = 64;
@@ -74,14 +75,23 @@ impl AutonomyPauseReconciler {
         let candidates = u32::try_from(snapshots.len()).unwrap_or(u32::MAX);
         let mut repaired = 0_u32;
         for snapshot in snapshots {
-            let outcome: AutonomyOutcome = serde_json::from_value(snapshot).map_err(|_| {
-                ControlPlaneError::configuration(
-                    "stored autonomy outcome snapshot is incompatible with the current schema",
-                )
-            })?;
-            self.repository
+            let outcome: AutonomyOutcome =
+                serde_json::from_value(snapshot).map_err(ControlPlaneError::configuration_source)?;
+            match self
+                .repository
                 .record_autonomy_outcome(&outcome, RECONCILER_ACTOR)
-                .await?;
+                .await
+            {
+                Ok(()) => {}
+                Err(ControlPlaneRequestFailure::Rejected(_rejection)) => {
+                    tracing::warn!(
+                        error_class = "autonomy_reconcile_rejected",
+                        "autonomy pause reconciliation candidate was rejected"
+                    );
+                    continue;
+                }
+                Err(ControlPlaneRequestFailure::Operational(error)) => return Err(error),
+            }
             repaired = repaired.saturating_add(1);
         }
         Ok(AutonomyReconcileSummary { candidates, repaired })

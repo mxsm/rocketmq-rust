@@ -51,7 +51,7 @@ impl ModelGatewayService {
         primary: &ModelInvocationRecord,
         allowed_evidence_ids: &[EvidenceId],
         correlation_id: CorrelationId,
-    ) -> Result<ModelCriticDecision, ControlPlaneError> {
+    ) -> Result<ModelCriticDecision, ControlPlaneRequestFailure> {
         if !self.config.enabled {
             return degraded_decision(
                 plan,
@@ -66,14 +66,8 @@ impl ModelGatewayService {
             .iter()
             .map(|profile| profile.profile.clone())
             .collect::<Vec<_>>();
-        let ordered = heterogeneous_critic_profiles(&primary.model_family, &configured, DataClass::Internal).map_err(
-            |error| {
-                ControlPlaneError::configuration(format!(
-                    "Critic model-family configuration is invalid: {:?}",
-                    error.code
-                ))
-            },
-        )?;
+        let ordered = heterogeneous_critic_profiles(&primary.model_family, &configured, DataClass::Internal)
+            .map_err(provider_configuration_failure)?;
         let candidates = ordered
             .into_iter()
             .filter_map(|selected| profiles.iter().find(|candidate| candidate.profile.id == selected.id))
@@ -90,8 +84,7 @@ impl ModelGatewayService {
         let requested_profile_id = requested.id;
 
         let prompt = critic_prompt(plan, allowed_evidence_ids)?;
-        let prompt_text = serde_json::to_string(&prompt)
-            .map_err(|_| ControlPlaneError::configuration("Critic prompt cannot be serialized"))?;
+        let prompt_text = serde_json::to_string(&prompt).map_err(ControlPlaneError::configuration_source)?;
         if prompt_text.len() > self.config.max_request_bytes {
             return degraded_decision(
                 plan,
@@ -162,9 +155,8 @@ impl ModelGatewayService {
                             );
                         }
                     };
-                    let payload_hash = canonical_sha256(&assessment).map_err(|error| {
-                        ControlPlaneError::configuration(format!("Critic assessment cannot be hashed: {error}"))
-                    })?;
+                    let payload_hash =
+                        canonical_sha256(&assessment).map_err(ControlPlaneError::configuration_source)?;
                     let status = assessment_status(&assessment);
                     let reason_code = match status {
                         CriticReviewStatus::Valid => "critic_review_valid",
@@ -196,14 +188,13 @@ impl ModelGatewayService {
                             Some(identity),
                         );
                     }
-                    let status = if error.code == ProviderErrorCode::SchemaValidationFailed
-                        || error.code == ProviderErrorCode::SafetyRefusal
-                    {
-                        CriticReviewStatus::Invalid
-                    } else {
-                        CriticReviewStatus::Unavailable
-                    };
-                    return degraded_decision(plan, primary.id, status, "critic_provider_rejected", Some(identity));
+                    return degraded_decision(
+                        plan,
+                        primary.id,
+                        CriticReviewStatus::Unavailable,
+                        "critic_provider_rejected",
+                        Some(identity),
+                    );
                 }
             }
         }
@@ -232,7 +223,7 @@ impl ModelGatewayService {
         started_at: chrono::DateTime<Utc>,
         context: &InvocationContext,
         request: &CanonicalModelRequest,
-    ) -> Result<CriticCandidateResult, ControlPlaneError> {
+    ) -> Result<CriticCandidateResult, ControlPlaneRequestFailure> {
         let result = match self.resolve_credential(&profile.profile).await {
             Ok(credential) => match &self.transport {
                 Some(transport) => match AsyncBuiltinProviderClient::new(profile.profile.clone(), transport.clone()) {
@@ -249,7 +240,11 @@ impl ModelGatewayService {
                     }
                     Err(error) => Err(error),
                 },
-                None => Err(ProviderError::service_unavailable("model transport is not configured")),
+                None => Err(provider_error(
+                    ProviderOperationalFailure::ServiceUnavailable,
+                    "model transport is not configured",
+                )
+                .into()),
             },
             Err(error) => Err(error),
         };
@@ -261,14 +256,23 @@ impl ModelGatewayService {
             {
                 (Some(response), None)
             }
-            Ok(response) => (
-                Some(response),
-                Some(ProviderError::new(
-                    ProviderErrorCode::SchemaValidationFailed,
-                    "Critic response was incomplete, refused, or exceeded bounds",
-                )),
-            ),
-            Err(error) => (None, Some(error)),
+            Ok(response)
+                if matches!(
+                    response.finish_reason,
+                    FinishReason::Safety | FinishReason::ContentFilter
+                ) =>
+            {
+                return Err(control_plane_provider_rejection(ProviderRejection::SafetyRefusal));
+            }
+            Ok(_) => {
+                return Err(control_plane_provider_rejection(
+                    ProviderRejection::SchemaValidationFailed,
+                ));
+            }
+            Err(ProviderStatusOutcome::Rejected { rejection, .. }) => {
+                return Err(control_plane_provider_rejection(rejection));
+            }
+            Err(ProviderStatusOutcome::Operational(error)) => (None, Some(error)),
         };
         let fallback_ids = attempted.iter().map(|candidate| candidate.id).collect::<Vec<_>>();
         let fallback_chain = attempted
@@ -278,7 +282,7 @@ impl ModelGatewayService {
         let invocation_id = ModelInvocationId::new();
         let provider_family = enum_name(profile.profile.provider_family);
         let model_family = rocketmq_sre_model_gateway::normalize_model_family(&profile.profile.model_family)
-            .map_err(|_| ControlPlaneError::configuration("Critic model family cannot be normalized"))?;
+            .map_err(provider_configuration_failure)?;
         let identity = CriticInvocationIdentity {
             id: invocation_id,
             provider_family: provider_family.clone(),
@@ -297,7 +301,7 @@ impl ModelGatewayService {
         let cost_micros = response.as_ref().and_then(|response| {
             response_invocation_cost(profile.profile.estimated_cost_microusd_per_1k_tokens, response)
         });
-        let error_code = error.as_ref().map(|error| enum_name(error.code));
+        let error_code = error.as_ref().map(|error| enum_name(error.failure()));
         self.repository
             .persist_model_invocation(&PersistInvocation {
                 id: invocation_id,
@@ -373,14 +377,14 @@ fn degraded_decision(
     status: CriticReviewStatus,
     reason_code: &'static str,
     invocation: Option<CriticInvocationIdentity>,
-) -> Result<ModelCriticDecision, ControlPlaneError> {
+) -> Result<ModelCriticDecision, ControlPlaneRequestFailure> {
     let payload_hash = canonical_sha256(&DegradedCriticPayload {
         plan_hash: &plan.plan_hash,
         primary_invocation_id,
         status,
         reason_code,
     })
-    .map_err(|error| ControlPlaneError::configuration(format!("Critic degradation cannot be hashed: {error}")))?;
+    .map_err(ControlPlaneError::configuration_source)?;
     Ok(ModelCriticDecision {
         status,
         conclusion: CriticConclusion::NeedsRevision,

@@ -30,7 +30,7 @@ use serde_json::json;
 use self::coverage::InventoryCoverage;
 use super::kubernetes::KubernetesSource;
 use crate::ConnectorError;
-use crate::ConnectorErrorCode;
+use crate::ConnectorFailure;
 use crate::mcp::McpGateway;
 use crate::read_gateway::ConnectorReadGateway;
 use crate::read_gateway::ReadSession;
@@ -287,7 +287,7 @@ impl InventoryUpload {
         }
         self.update_coverage(coverage, bounded);
 
-        while serde_json::to_vec(self).map_err(|_| schema_mismatch())?.len() > max_bytes {
+        while serde_json::to_vec(self).map_err(schema_mismatch_source)?.len() > max_bytes {
             if !self.edges.is_empty() {
                 self.edges.pop();
             } else if self.assets.len() > 1 {
@@ -295,7 +295,7 @@ impl InventoryUpload {
                 self.retain_observed_edges();
             } else {
                 return Err(ConnectorError::new(
-                    ConnectorErrorCode::OutputTooLarge,
+                    ConnectorFailure::OutputTooLarge,
                     false,
                     "minimum inventory upload exceeds the configured byte bound",
                 ));
@@ -360,17 +360,24 @@ pub(super) fn validate_inventory_name(value: &str) -> Result<(), ConnectorError>
 
 pub(super) fn schema_mismatch() -> ConnectorError {
     ConnectorError::capability(
-        ConnectorErrorCode::CapabilityMismatch,
+        ConnectorFailure::CapabilityMismatch,
         "inventory source response does not match the supported read-only schema",
     )
 }
 
+pub(super) fn schema_mismatch_source<E>(source: E) -> ConnectorError
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    ConnectorError::from_source(ConnectorFailure::CapabilityMismatch, false, source)
+}
+
 pub(super) fn recoverable_gap(error: &ConnectorError) -> bool {
     matches!(
-        error.code,
-        ConnectorErrorCode::SourceUnavailable
-            | ConnectorErrorCode::MissingRequiredFeature
-            | ConnectorErrorCode::DeadlineExceeded
+        error.failure(),
+        ConnectorFailure::SourceUnavailable
+            | ConnectorFailure::MissingRequiredFeature
+            | ConnectorFailure::DeadlineExceeded
     )
 }
 
@@ -427,8 +434,8 @@ fn log_collection_error(source: &'static str, stage: &'static str, error: &Conne
     tracing::warn!(
         source,
         stage,
-        code = error.code.as_str(),
-        retryable = error.retryable,
+        code = error.failure().as_str(),
+        retryable = error.retryable(),
         "read-only inventory collection stage failed"
     );
 }

@@ -18,10 +18,56 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use rocketmq_sre_eval::diagnostic_qualification::DiagnosticQualificationError;
+use rocketmq_sre_eval::EvalError;
+use rocketmq_sre_eval::EvalOutcome;
+use rocketmq_sre_eval::EvalRejection;
 use rocketmq_sre_eval::diagnostic_qualification::LiveQualificationConfig;
 use rocketmq_sre_eval::diagnostic_qualification::run_live_qualification;
 use rocketmq_sre_eval::diagnostic_qualification::write_generated_manifest;
+
+enum QualificationCommandError {
+    Eval(EvalError),
+    Rejected(EvalRejection),
+    InvalidArguments,
+    Io(std::io::Error),
+    Json(serde_json::Error),
+}
+
+impl QualificationCommandError {
+    const fn code(&self) -> &'static str {
+        match self {
+            Self::Eval(source) => source.code(),
+            Self::Rejected(rejection) => rejection.code(),
+            Self::InvalidArguments => "invalid_qualification_manifest",
+            Self::Io(source) => {
+                let _ = source;
+                "source_unavailable"
+            }
+            Self::Json(source) => {
+                let _ = source;
+                "invalid_qualification_manifest"
+            }
+        }
+    }
+}
+
+impl From<EvalError> for QualificationCommandError {
+    fn from(source: EvalError) -> Self {
+        Self::Eval(source)
+    }
+}
+
+impl From<std::io::Error> for QualificationCommandError {
+    fn from(source: std::io::Error) -> Self {
+        Self::Io(source)
+    }
+}
+
+impl From<serde_json::Error> for QualificationCommandError {
+    fn from(source: serde_json::Error) -> Self {
+        Self::Json(source)
+    }
+}
 
 const DEFAULT_TENANT: &str = "00000000-0000-4000-9000-000000008929";
 
@@ -30,39 +76,41 @@ async fn main() -> ExitCode {
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("{}: {error}", error.code());
+            eprintln!("diagnostic_qualification_failed: {}", error.code());
             ExitCode::FAILURE
         }
     }
 }
 
-async fn run() -> Result<(), DiagnosticQualificationError> {
+async fn run() -> Result<(), QualificationCommandError> {
     let mut arguments = env::args().skip(1);
     match arguments.next().as_deref() {
         Some("export-manifest") => {
-            let path = arguments.next().ok_or_else(|| {
-                DiagnosticQualificationError::InvalidManifest(
-                    "export-manifest requires an explicit output path".to_owned(),
-                )
-            })?;
+            let path = arguments.next().ok_or(QualificationCommandError::InvalidArguments)?;
             if arguments.next().is_some() {
-                return Err(DiagnosticQualificationError::InvalidManifest(
-                    "export-manifest accepts only one output path".to_owned(),
-                ));
+                return Err(QualificationCommandError::InvalidArguments);
             }
-            write_generated_manifest(Path::new(&path))?;
+            match write_generated_manifest(Path::new(&path))? {
+                EvalOutcome::Completed(()) => {}
+                EvalOutcome::Rejected(rejection) => {
+                    return Err(QualificationCommandError::Rejected(rejection));
+                }
+            }
             println!("DIAGNOSTIC_QUALIFICATION_MANIFEST_WRITTEN path={path}");
             Ok(())
         }
         Some("run") => {
             let output = required_output_path(arguments.next())?;
             if arguments.next().is_some() {
-                return Err(DiagnosticQualificationError::InvalidManifest(
-                    "run accepts only one report output path".to_owned(),
-                ));
+                return Err(QualificationCommandError::InvalidArguments);
             }
             let config = config_from_env()?;
-            let report = run_live_qualification(&config).await?;
+            let report = match run_live_qualification(&config).await? {
+                EvalOutcome::Completed(report) => report,
+                EvalOutcome::Rejected(rejection) => {
+                    return Err(QualificationCommandError::Rejected(rejection));
+                }
+            };
             write_report(&output, &report)?;
             println!(
                 "DIAGNOSTIC_PACK_QUALIFICATION_OK packs={} scenarios={} pack_scenarios={} \
@@ -84,13 +132,14 @@ async fn run() -> Result<(), DiagnosticQualificationError> {
             );
             Ok(())
         }
-        Some(command) => Err(DiagnosticQualificationError::InvalidManifest(format!(
-            "unknown command `{command}`"
-        ))),
+        Some(command) => {
+            let _ = command;
+            Err(QualificationCommandError::InvalidArguments)
+        }
     }
 }
 
-fn config_from_env() -> Result<LiveQualificationConfig, DiagnosticQualificationError> {
+fn config_from_env() -> Result<LiveQualificationConfig, QualificationCommandError> {
     Ok(LiveQualificationConfig {
         public_url: optional_env("ROCKETMQ_SRE_QUALIFICATION_PUBLIC_URL", "http://127.0.0.1:8090"),
         connector_url: optional_env("ROCKETMQ_SRE_QUALIFICATION_CONNECTOR_URL", "http://127.0.0.1:8093"),
@@ -102,11 +151,11 @@ fn config_from_env() -> Result<LiveQualificationConfig, DiagnosticQualificationE
     })
 }
 
-fn required_env(name: &'static str) -> Result<String, DiagnosticQualificationError> {
+fn required_env(name: &'static str) -> Result<String, QualificationCommandError> {
     env::var(name)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| DiagnosticQualificationError::InvalidManifest(format!("{name} must be configured")))
+        .ok_or(QualificationCommandError::InvalidArguments)
 }
 
 fn optional_env(name: &'static str, fallback: &'static str) -> String {
@@ -116,23 +165,19 @@ fn optional_env(name: &'static str, fallback: &'static str) -> String {
         .unwrap_or_else(|| fallback.to_owned())
 }
 
-fn parse_id<T>(name: &'static str, fallback: &'static str) -> Result<T, DiagnosticQualificationError>
+fn parse_id<T>(name: &'static str, fallback: &'static str) -> Result<T, QualificationCommandError>
 where
     T: std::str::FromStr,
 {
     optional_env(name, fallback)
         .parse()
-        .map_err(|_| DiagnosticQualificationError::InvalidManifest(format!("{name} must be a UUID")))
+        .map_err(|_| QualificationCommandError::InvalidArguments)
 }
 
-fn required_output_path(value: Option<String>) -> Result<PathBuf, DiagnosticQualificationError> {
-    let path = PathBuf::from(value.ok_or_else(|| {
-        DiagnosticQualificationError::InvalidManifest("run requires a machine-local report path".to_owned())
-    })?);
+fn required_output_path(value: Option<String>) -> Result<PathBuf, QualificationCommandError> {
+    let path = PathBuf::from(value.ok_or(QualificationCommandError::InvalidArguments)?);
     if !path.is_absolute() {
-        return Err(DiagnosticQualificationError::InvalidManifest(
-            "qualification report path must be absolute and outside the repository".to_owned(),
-        ));
+        return Err(QualificationCommandError::InvalidArguments);
     }
     Ok(path)
 }
@@ -140,18 +185,11 @@ fn required_output_path(value: Option<String>) -> Result<PathBuf, DiagnosticQual
 fn write_report(
     path: &Path,
     report: &rocketmq_sre_eval::diagnostic_qualification::DiagnosticQualificationReport,
-) -> Result<(), DiagnosticQualificationError> {
-    let parent = path.parent().ok_or_else(|| {
-        DiagnosticQualificationError::InvalidManifest("qualification report path has no parent".to_owned())
-    })?;
-    fs::create_dir_all(parent).map_err(|source| DiagnosticQualificationError::Io {
-        path: parent.to_path_buf(),
-        source,
-    })?;
+) -> Result<(), QualificationCommandError> {
+    let parent = path.parent().ok_or(QualificationCommandError::InvalidArguments)?;
+    fs::create_dir_all(parent)?;
     let mut encoded = serde_json::to_vec_pretty(report)?;
     encoded.push(b'\n');
-    fs::write(path, encoded).map_err(|source| DiagnosticQualificationError::Io {
-        path: path.to_path_buf(),
-        source,
-    })
+    fs::write(path, encoded)?;
+    Ok(())
 }

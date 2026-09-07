@@ -63,7 +63,7 @@ use super::model::CreateRunbookRequest;
 use super::model::ManualGateDecision;
 use super::model::ManualGateDecisionRecord;
 use super::model::RunbookPage;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 use crate::supervised_execution::SupervisedExecutionService;
@@ -80,7 +80,7 @@ impl ChangeManagementService {
     pub(crate) fn new(
         repository: PostgresRepository,
         supervised_execution: SupervisedExecutionService,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         Self::new_with_clock(repository, supervised_execution, Arc::new(Utc::now))
     }
 
@@ -88,15 +88,14 @@ impl ChangeManagementService {
         repository: PostgresRepository,
         supervised_execution: SupervisedExecutionService,
         clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
-    ) -> Result<Self, ControlPlaneError> {
+    ) -> Result<Self, ControlPlaneRequestFailure> {
         let mut catalog = ActionCatalog::default();
         for yaml in EMBEDDED_ACTION_DESCRIPTOR_YAMLS {
-            let descriptor: ActionDescriptor = serde_yaml::from_str(yaml).map_err(|_| {
-                ControlPlaneError::configuration("embedded action descriptor cannot be parsed for runbook validation")
-            })?;
-            catalog.register(descriptor).map_err(|error| {
-                ControlPlaneError::configuration(format!("embedded action descriptor is invalid: {error}"))
-            })?;
+            let descriptor: ActionDescriptor =
+                serde_yaml::from_str(yaml).map_err(ControlPlaneRequestFailure::configuration_source)?;
+            catalog
+                .register(descriptor)
+                .map_err(|_| ControlPlaneRequestFailure::configuration("embedded action catalog rejected"))?;
         }
         Ok(Self {
             repository,
@@ -111,13 +110,14 @@ impl ChangeManagementService {
         auth: &AuthContext,
         request: &CreateRunbookRequest,
         correlation_id: CorrelationId,
-    ) -> Result<RunbookDefinition, ControlPlaneError> {
+    ) -> Result<RunbookDefinition, ControlPlaneRequestFailure> {
         require_role(auth, "operator")?;
         require_cluster(auth, request.cluster_id)?;
         let mut definition = request.definition.clone();
         definition.created_at = self.now();
-        RunbookValidator::validate(&definition, &self.catalog)
-            .map_err(|error| ControlPlaneError::validation("invalid_runbook", error.to_string()))?;
+        RunbookValidator::validate(&definition, &self.catalog).map_err(|error| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_runbook", error)
+        })?;
         let audit = audit_event(
             auth,
             request.cluster_id,
@@ -147,7 +147,7 @@ impl ChangeManagementService {
         cluster_id: ClusterId,
         id: RunbookId,
         version: &str,
-    ) -> Result<RunbookDefinition, ControlPlaneError> {
+    ) -> Result<RunbookDefinition, ControlPlaneRequestFailure> {
         require_cluster(auth, cluster_id)?;
         validate_version(version)?;
         self.repository
@@ -160,7 +160,7 @@ impl ChangeManagementService {
         auth: &AuthContext,
         cluster_id: ClusterId,
         limit: Option<u32>,
-    ) -> Result<RunbookPage, ControlPlaneError> {
+    ) -> Result<RunbookPage, ControlPlaneRequestFailure> {
         require_cluster(auth, cluster_id)?;
         let (query_limit, page_limit) = bounded_limit(limit)?;
         let mut items = self
@@ -181,12 +181,12 @@ impl ChangeManagementService {
         auth: &AuthContext,
         request: &CreateChangeWindowRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ChangeWindow, ControlPlaneError> {
+    ) -> Result<ChangeWindow, ControlPlaneRequestFailure> {
         require_role(auth, "operator")?;
         require_cluster(auth, request.cluster_id)?;
         let now = self.now();
         request.timezone.parse::<chrono_tz::Tz>().map_err(|_| {
-            ControlPlaneError::validation(
+            ControlPlaneRequestFailure::validation(
                 "invalid_change_window",
                 "timezone must be a valid IANA timezone identifier",
             )
@@ -208,7 +208,7 @@ impl ChangeManagementService {
             created_at: now,
         };
         ChangeCalendar::validate_window(&window)
-            .map_err(|error| ControlPlaneError::validation("invalid_change_window", error.to_string()))?;
+            .map_err(|_| ControlPlaneRequestFailure::validation("invalid_change_window", "change window rejected"))?;
         let audit = audit_event(
             auth,
             request.cluster_id,
@@ -238,10 +238,10 @@ impl ChangeManagementService {
         from: DateTime<Utc>,
         to: DateTime<Utc>,
         limit: Option<u32>,
-    ) -> Result<ChangeWindowPage, ControlPlaneError> {
+    ) -> Result<ChangeWindowPage, ControlPlaneRequestFailure> {
         require_cluster(auth, cluster_id)?;
         if from >= to || to - from > Duration::days(366) {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_time_range",
                 "change window query must be a positive range no longer than 366 days",
             ));
@@ -265,7 +265,7 @@ impl ChangeManagementService {
         auth: &AuthContext,
         request: &CreateChangeScheduleRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ChangeSchedulePreview, ControlPlaneError> {
+    ) -> Result<ChangeSchedulePreview, ControlPlaneRequestFailure> {
         require_role(auth, "operator")?;
         require_cluster(auth, request.cluster_id)?;
         let definition = self
@@ -277,8 +277,9 @@ impl ChangeManagementService {
                 &request.runbook_version,
             )
             .await?;
-        RunbookValidator::validate(&definition, &self.catalog)
-            .map_err(|error| ControlPlaneError::validation("invalid_runbook", error.to_string()))?;
+        RunbookValidator::validate(&definition, &self.catalog).map_err(|error| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_runbook", error)
+        })?;
         validate_schedule_window(self.now(), request.scheduled_start, request.scheduled_end)?;
         let resource_keys = runbook_resources(&definition);
         let now = self.now();
@@ -306,10 +307,12 @@ impl ChangeManagementService {
             created_at: now,
             updated_at: now,
         };
-        ChangeCalendar::validate_schedule(&schedule)
-            .map_err(|error| ControlPlaneError::validation("invalid_change_schedule", error.to_string()))?;
-        RunbookValidator::validate_schedule_bindings(&definition, &schedule)
-            .map_err(|error| ControlPlaneError::validation("invalid_plan_binding", error.to_string()))?;
+        ChangeCalendar::validate_schedule(&schedule).map_err(|_| {
+            ControlPlaneRequestFailure::validation("invalid_change_schedule", "change schedule rejected")
+        })?;
+        RunbookValidator::validate_schedule_bindings(&definition, &schedule).map_err(|error| {
+            ControlPlaneRequestFailure::contract(crate::ControlPlaneFailure::Validation, "invalid_plan_binding", error)
+        })?;
         self.validate_bound_plans(auth, &definition, &schedule).await?;
         let windows = self
             .repository
@@ -330,8 +333,10 @@ impl ChangeManagementService {
                 request.scheduled_end,
             )
             .await?;
-        let conflicts = ChangeCalendar::conflicts(&schedule, definition.max_parallelism, &windows, &existing)
-            .map_err(|error| ControlPlaneError::validation("invalid_change_schedule", error.to_string()))?;
+        let conflicts =
+            ChangeCalendar::conflicts(&schedule, definition.max_parallelism, &windows, &existing).map_err(|_| {
+                ControlPlaneRequestFailure::validation("invalid_change_schedule", "change schedule rejected")
+            })?;
         Ok(ChangeSchedulePreview {
             schema_version: "rocketmq-sre.change-schedule-preview.v1",
             schedulable: conflicts.is_empty(),
@@ -345,10 +350,10 @@ impl ChangeManagementService {
         auth: &AuthContext,
         request: &CreateChangeScheduleRequest,
         correlation_id: CorrelationId,
-    ) -> Result<ChangeSchedule, ControlPlaneError> {
+    ) -> Result<ChangeSchedule, ControlPlaneRequestFailure> {
         let preview = self.preview_schedule(auth, request, correlation_id).await?;
         if !preview.conflicts.is_empty() {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "change_schedule_conflict",
                 "change schedule has one or more blocking calendar conflicts",
             ));
@@ -408,7 +413,7 @@ impl ChangeManagementService {
         &self,
         auth: &AuthContext,
         id: ChangeScheduleId,
-    ) -> Result<ChangeSchedule, ControlPlaneError> {
+    ) -> Result<ChangeSchedule, ControlPlaneRequestFailure> {
         let schedule = self.repository.change_schedule(auth.tenant_id, id).await?;
         require_cluster(auth, schedule.cluster_id)?;
         Ok(schedule)
@@ -420,7 +425,7 @@ impl ChangeManagementService {
         cluster_id: ClusterId,
         status: Option<ChangeScheduleStatus>,
         limit: Option<u32>,
-    ) -> Result<ChangeSchedulePage, ControlPlaneError> {
+    ) -> Result<ChangeSchedulePage, ControlPlaneRequestFailure> {
         require_cluster(auth, cluster_id)?;
         let (query_limit, page_limit) = bounded_limit(limit)?;
         let mut items = self
@@ -441,7 +446,7 @@ impl ChangeManagementService {
         auth: &AuthContext,
         id: ChangeScheduleId,
         reason: &str,
-    ) -> Result<ChangeSchedule, ControlPlaneError> {
+    ) -> Result<ChangeSchedule, ControlPlaneRequestFailure> {
         require_role(auth, "operator")?;
         self.transition(auth, id, reason, "SchedulePaused", |schedule, now| {
             ChangeCalendar::pause(schedule, now)
@@ -454,7 +459,7 @@ impl ChangeManagementService {
         auth: &AuthContext,
         id: ChangeScheduleId,
         reason: &str,
-    ) -> Result<ChangeSchedule, ControlPlaneError> {
+    ) -> Result<ChangeSchedule, ControlPlaneRequestFailure> {
         require_role(auth, "operator")?;
         self.transition(auth, id, reason, "ScheduleResumed", |schedule, now| {
             ChangeCalendar::resume(schedule, now)
@@ -467,7 +472,7 @@ impl ChangeManagementService {
         auth: &AuthContext,
         id: ChangeScheduleId,
         reason: &str,
-    ) -> Result<ChangeSchedule, ControlPlaneError> {
+    ) -> Result<ChangeSchedule, ControlPlaneRequestFailure> {
         require_role(auth, "operator")?;
         self.transition(auth, id, reason, "ScheduleCancelledOrSafeStopping", |schedule, now| {
             ChangeCalendar::cancel(schedule, now)
@@ -480,7 +485,7 @@ impl ChangeManagementService {
         auth: &AuthContext,
         id: ChangeScheduleId,
         reason: &str,
-    ) -> Result<ChangeSchedule, ControlPlaneError> {
+    ) -> Result<ChangeSchedule, ControlPlaneRequestFailure> {
         require_role(auth, "operator")?;
         self.transition(auth, id, reason, "ScheduleReconcileStarted", |schedule, now| {
             ChangeCalendar::begin_reconcile(schedule, now)
@@ -495,20 +500,20 @@ impl ChangeManagementService {
         step_id: RunbookStepId,
         decision: ManualGateDecision,
         reason: &str,
-    ) -> Result<ChangeSchedule, ControlPlaneError> {
+    ) -> Result<ChangeSchedule, ControlPlaneRequestFailure> {
         require_role(auth, "approver")?;
         validate_reason(reason)?;
         let mut schedule = self.repository.change_schedule(auth.tenant_id, schedule_id).await?;
         require_cluster(auth, schedule.cluster_id)?;
         if schedule.created_by == auth.subject {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "separation_of_duties_required",
                 "schedule creator cannot decide its manual gate",
             ));
         }
         if schedule.status != ChangeScheduleStatus::AwaitingManualGate || schedule.waiting_manual_gate != Some(step_id)
         {
-            return Err(ControlPlaneError::conflict_code(
+            return Err(ControlPlaneRequestFailure::conflict_code(
                 "manual_gate_not_active",
                 "requested manual gate is not the active schedule gate",
             ));
@@ -535,7 +540,10 @@ impl ChangeManagementService {
                 }
             })
             .ok_or_else(|| {
-                ControlPlaneError::conflict_code("manual_gate_not_active", "runbook manual gate no longer exists")
+                ControlPlaneRequestFailure::conflict_code(
+                    "manual_gate_not_active",
+                    "runbook manual gate no longer exists",
+                )
             })?;
         require_role(auth, required_role)?;
         let expected_updated_at = schedule.updated_at;
@@ -603,9 +611,9 @@ impl ChangeManagementService {
         reason: &str,
         reason_code: &'static str,
         transition: F,
-    ) -> Result<ChangeSchedule, ControlPlaneError>
+    ) -> Result<ChangeSchedule, ControlPlaneRequestFailure>
     where
-        F: FnOnce(&mut ChangeSchedule, DateTime<Utc>) -> Result<(), rocketmq_sre_core::ChangeCalendarError>,
+        F: FnOnce(&mut ChangeSchedule, DateTime<Utc>) -> Result<(), rocketmq_sre_core::ChangeCalendarRejection>,
     {
         validate_reason(reason)?;
         let mut schedule = self.repository.change_schedule(auth.tenant_id, id).await?;
@@ -613,8 +621,9 @@ impl ChangeManagementService {
         let expected_status = schedule.status;
         let expected_updated_at = schedule.updated_at;
         let now = next_timestamp(schedule.updated_at, self.now());
-        transition(&mut schedule, now)
-            .map_err(|error| ControlPlaneError::conflict_code("invalid_schedule_transition", error.to_string()))?;
+        transition(&mut schedule, now).map_err(|_| {
+            ControlPlaneRequestFailure::conflict_code("invalid_schedule_transition", "operation rejected")
+        })?;
         let event = schedule_event(
             &schedule,
             Some(expected_status),
@@ -645,13 +654,15 @@ impl ChangeManagementService {
         auth: &AuthContext,
         definition: &RunbookDefinition,
         schedule: &ChangeSchedule,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         for binding in &schedule.plan_bindings {
             let runbook_step = definition
                 .steps
                 .iter()
                 .find(|step| step.id == binding.step_id)
-                .ok_or_else(|| ControlPlaneError::validation("invalid_plan_binding", "runbook step does not exist"))?;
+                .ok_or_else(|| {
+                    ControlPlaneRequestFailure::validation("invalid_plan_binding", "runbook step does not exist")
+                })?;
             let view = self.supervised_execution.plan(auth, binding.plan_id).await?;
             let plan = view.plan;
             if plan.status != PlanStatus::Approved
@@ -660,12 +671,15 @@ impl ChangeManagementService {
                 || plan.plan_hash != binding.plan_hash
                 || plan.expires_at < schedule.scheduled_end
                 || plan.steps.len() != 1
-                || plan
-                    .compute_precondition_hash()
-                    .map_err(|error| ControlPlaneError::validation("invalid_plan_binding", error.to_string()))?
-                    != binding.precondition_hash
+                || plan.compute_precondition_hash().map_err(|error| {
+                    ControlPlaneRequestFailure::contract(
+                        crate::ControlPlaneFailure::Validation,
+                        "invalid_plan_binding",
+                        error,
+                    )
+                })? != binding.precondition_hash
             {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "approved_plan_binding_required",
                     "each runbook action requires one current, approved, same-scope plan binding",
                 ));
@@ -686,7 +700,7 @@ impl ChangeManagementService {
                 RunbookStepBody::ManualGate { .. } => false,
             };
             if !matches {
-                return Err(ControlPlaneError::conflict_code(
+                return Err(ControlPlaneRequestFailure::conflict_code(
                     "approved_plan_binding_required",
                     "approved plan content does not exactly match its runbook action step",
                 ));

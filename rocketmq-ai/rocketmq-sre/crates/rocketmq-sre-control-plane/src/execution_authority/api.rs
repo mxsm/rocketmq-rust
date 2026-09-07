@@ -28,7 +28,7 @@ use rocketmq_sre_contracts::VerifyExecutionRequest;
 use rocketmq_sre_contracts::VerifyFenceGrantRequest;
 use rocketmq_sre_contracts::VerifyReconcileGrantRequest;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -57,7 +57,7 @@ async fn begin_takeover(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<BeginLeaseTakeoverRequest>,
-) -> Result<Json<BeginLeaseTakeoverResponse>, ControlPlaneError> {
+) -> Result<Json<BeginLeaseTakeoverResponse>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.lease_authority.begin_takeover(&auth, &request).await.map(Json)
 }
@@ -66,7 +66,7 @@ async fn activate(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<ActivateLeaseRequest>,
-) -> Result<Json<ExecutorLease>, ControlPlaneError> {
+) -> Result<Json<ExecutorLease>, ControlPlaneRequestFailure> {
     let lease = state.lease_authority.repository.lease(request.lease_id).await?;
     let auth = state.auth.authorize(&headers, Some(lease.cluster_id)).await?;
     state.lease_authority.activate(&auth, &request).await.map(Json)
@@ -76,7 +76,7 @@ async fn issue_fence_grant(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<IssueFenceGrantRequest>,
-) -> Result<Json<LeaseFenceGrant>, ControlPlaneError> {
+) -> Result<Json<LeaseFenceGrant>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state.lease_authority.issue_fence_grant(&auth, &request).await.map(Json)
 }
@@ -85,7 +85,7 @@ async fn verify_execution(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<VerifyExecutionRequest>,
-) -> Result<Json<GrantVerification>, ControlPlaneError> {
+) -> Result<Json<GrantVerification>, ControlPlaneRequestFailure> {
     let auth = state
         .auth
         .authorize(&headers, Some(request.execution.cluster_id))
@@ -97,7 +97,7 @@ async fn verify_fence_grant(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<VerifyFenceGrantRequest>,
-) -> Result<Json<GrantVerification>, ControlPlaneError> {
+) -> Result<Json<GrantVerification>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.grant.cluster_id)).await?;
     state
         .lease_authority
@@ -110,7 +110,7 @@ async fn verify_reconcile_grant(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<VerifyReconcileGrantRequest>,
-) -> Result<Json<GrantVerification>, ControlPlaneError> {
+) -> Result<Json<GrantVerification>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.grant.cluster_id)).await?;
     state
         .lease_authority

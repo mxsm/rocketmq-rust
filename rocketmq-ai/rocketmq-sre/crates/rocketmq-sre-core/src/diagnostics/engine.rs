@@ -22,7 +22,6 @@ use rocketmq_sre_contracts::EvidenceRelation;
 use rocketmq_sre_contracts::EvidenceSnapshot;
 
 use super::ConfidenceInputs;
-use super::DiagnosticError;
 use super::DiagnosticFinding;
 use super::DiagnosticPack;
 use super::DiagnosticPackRegistry;
@@ -34,6 +33,7 @@ use super::PackVersion;
 use super::RuleEvidence;
 use super::calculate_confidence;
 use super::types::seal_evidence;
+use rocketmq_sre_contracts::SreContractError;
 
 #[derive(Debug, Default)]
 struct RequirementMatch<'a> {
@@ -260,13 +260,10 @@ impl DiagnosticEngine {
         &self,
         pack_reference: &str,
         evidence: &[EvidenceSnapshot],
-    ) -> Result<DiagnosticReport, DiagnosticError> {
-        let pack = self
-            .registry
-            .resolve(pack_reference)
-            .ok_or_else(|| DiagnosticError::UnknownPack {
-                id: pack_reference.to_owned(),
-            })?;
+    ) -> Result<DiagnosticReport, SreContractError> {
+        let pack = self.registry.resolve(pack_reference).ok_or_else(|| {
+            rocketmq_sre_contracts::SreContractError::new(rocketmq_sre_contracts::PublicErrorCode::DescriptorNotFound)
+        })?;
         self.evaluate_pack(pack, evidence)
     }
 
@@ -274,21 +271,17 @@ impl DiagnosticEngine {
     ///
     /// # Errors
     ///
-    /// Returns [`DiagnosticError::UnknownPackVersion`] when the version is not
+    /// Returns [`rocketmq_sre_contracts::SreContractError`] when the version is not
     /// registered, otherwise the same fail-closed errors as [`Self::evaluate`].
     pub fn evaluate_version(
         &self,
         id: &str,
         version: PackVersion,
         evidence: &[EvidenceSnapshot],
-    ) -> Result<DiagnosticReport, DiagnosticError> {
-        let pack = self
-            .registry
-            .get(id, version)
-            .ok_or_else(|| DiagnosticError::UnknownPackVersion {
-                id: id.to_owned(),
-                version,
-            })?;
+    ) -> Result<DiagnosticReport, SreContractError> {
+        let pack = self.registry.get(id, version).ok_or_else(|| {
+            rocketmq_sre_contracts::SreContractError::new(rocketmq_sre_contracts::PublicErrorCode::DescriptorNotFound)
+        })?;
         self.evaluate_pack(pack, evidence)
     }
 
@@ -296,7 +289,7 @@ impl DiagnosticEngine {
         &self,
         pack: &dyn DiagnosticPack,
         evidence: &[EvidenceSnapshot],
-    ) -> Result<DiagnosticReport, DiagnosticError> {
+    ) -> Result<DiagnosticReport, SreContractError> {
         validate_evidence_set(evidence)?;
         pack.validate_evidence(evidence)?;
         let context = DiagnosticContext::new(pack, evidence);
@@ -319,9 +312,9 @@ impl DiagnosticEngine {
 
         let rule_matches = pack.evaluate(&context)?;
         if missing_required.is_empty() && rule_matches.is_empty() {
-            return Err(DiagnosticError::PackReturnedNoConclusion {
-                pack_id: pack.qualified_id(),
-            });
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+            ));
         }
 
         let evidence_ids = evidence
@@ -331,10 +324,9 @@ impl DiagnosticEngine {
         let mut findings = Vec::with_capacity(rule_matches.len());
         for rule_match in rule_matches {
             if !pack.rule_codes().contains(&rule_match.reason_code) {
-                return Err(DiagnosticError::UndeclaredReasonCode {
-                    pack_id: pack.qualified_id(),
-                    reason_code: rule_match.reason_code.to_owned(),
-                });
+                return Err(rocketmq_sre_contracts::SreContractError::new(
+                    rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+                ));
             }
             findings.push(seal_finding(
                 pack,
@@ -377,27 +369,27 @@ impl DiagnosticEngine {
     }
 }
 
-fn validate_evidence_set(evidence: &[EvidenceSnapshot]) -> Result<(), DiagnosticError> {
+fn validate_evidence_set(evidence: &[EvidenceSnapshot]) -> Result<(), SreContractError> {
     let mut ids = BTreeSet::new();
     let mut tenant = None;
     let mut cluster = None;
 
     for snapshot in evidence {
-        if snapshot.verify_content_hash().is_err() {
-            return Err(DiagnosticError::InvalidEvidenceHash {
-                evidence_id: snapshot.evidence_id,
-            });
-        }
+        snapshot.verify_content_hash()?;
         if !ids.insert(snapshot.evidence_id) {
-            return Err(DiagnosticError::DuplicateEvidenceId {
-                evidence_id: snapshot.evidence_id,
-            });
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+            ));
         }
         if tenant.is_some_and(|expected| expected != snapshot.tenant_id) {
-            return Err(DiagnosticError::MixedTenantScope);
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::TenantMismatch,
+            ));
         }
         if cluster.is_some_and(|expected| expected != snapshot.cluster_id) {
-            return Err(DiagnosticError::MixedClusterScope);
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::ClusterNotAllowed,
+            ));
         }
         tenant.get_or_insert(snapshot.tenant_id);
         cluster.get_or_insert(snapshot.cluster_id);
@@ -406,18 +398,16 @@ fn validate_evidence_set(evidence: &[EvidenceSnapshot]) -> Result<(), Diagnostic
 }
 
 fn seal_finding(
-    pack: &dyn DiagnosticPack,
+    _pack: &dyn DiagnosticPack,
     rule_match: super::RuleMatch,
     context: &DiagnosticContext<'_>,
     missing_required: &[String],
     evidence_ids: &BTreeSet<EvidenceId>,
-) -> Result<DiagnosticFinding, DiagnosticError> {
-    let pack_id = pack.qualified_id();
+) -> Result<DiagnosticFinding, SreContractError> {
     if rule_match.supporting_evidence.is_empty() {
-        return Err(DiagnosticError::ConclusionWithoutEvidence {
-            pack_id,
-            reason_code: rule_match.reason_code.to_owned(),
-        });
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+        ));
     }
     for citation in rule_match
         .supporting_evidence
@@ -425,10 +415,9 @@ fn seal_finding(
         .chain(&rule_match.counter_evidence)
     {
         if !evidence_ids.contains(&citation.evidence_id) {
-            return Err(DiagnosticError::InvalidEvidenceCitation {
-                pack_id: pack.qualified_id(),
-                evidence_id: citation.evidence_id,
-            });
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+            ));
         }
     }
 

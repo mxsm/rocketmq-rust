@@ -29,7 +29,7 @@ use sqlx::Row;
 use sqlx::Transaction;
 
 use super::super::channel_schema;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
 const RETENTION_AGE_HOURS: i64 = 24;
 const INACTIVE_SESSION_GRACE_MINUTES: i64 = 5;
@@ -77,7 +77,7 @@ struct RetainedRecord {
 pub(super) async fn allocate_next_sequence(
     transaction: &mut Transaction<'_, Postgres>,
     session_id: ConnectorSessionId,
-) -> Result<u64, ControlPlaneError> {
+) -> Result<u64, ControlPlaneRequestFailure> {
     let sequence = sqlx::query_scalar::<_, i64>(
         "UPDATE connector_channel_sessions
          SET next_sequence = next_sequence + 1
@@ -90,17 +90,18 @@ pub(super) async fn allocate_next_sequence(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or_else(|| {
-        ControlPlaneError::conflict(
+        ControlPlaneRequestFailure::conflict_code(
+            "capability_mismatch",
             "connector channel retained-log limit reached; wait for completed response retention or reconnect",
         )
     })?;
-    u64::try_from(sequence).map_err(|_| ControlPlaneError::configuration("connector command sequence is invalid"))
+    u64::try_from(sequence).map_err(ControlPlaneRequestFailure::configuration_source)
 }
 
 pub(super) async fn resume_frontier(
     transaction: &mut Transaction<'_, Postgres>,
     session_id: ConnectorSessionId,
-) -> Result<u64, ControlPlaneError> {
+) -> Result<u64, ControlPlaneRequestFailure> {
     let frontier = sqlx::query_scalar::<_, i64>(
         "WITH command_state AS (
             SELECT
@@ -127,7 +128,7 @@ pub(super) async fn resume_frontier(
     .bind(session_id.as_uuid())
     .fetch_one(&mut **transaction)
     .await?;
-    u64::try_from(frontier).map_err(|_| ControlPlaneError::configuration("connector response frontier is invalid"))
+    u64::try_from(frontier).map_err(ControlPlaneRequestFailure::configuration_source)
 }
 
 pub(super) async fn maintain_retention(
@@ -138,7 +139,7 @@ pub(super) async fn maintain_retention(
     subject: &str,
     issuer: &str,
     now: DateTime<Utc>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let rows = sqlx::query(
         "SELECT session_id, compacted_through_sequence, next_sequence - 1 AS highest_allocated,
                 last_seen_at
@@ -181,7 +182,7 @@ async fn compact_session_prefix(
     state: &SessionState,
     inactive: bool,
     now: DateTime<Utc>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let pressure_cutoff = state
         .highest_allocated
         .saturating_sub(TARGET_RETAINED_COMMANDS)
@@ -219,7 +220,7 @@ async fn compact_session_prefix(
             response_received_at: row.try_get("response_received_at")?,
         };
         if record.sequence != expected_sequence {
-            return Err(ControlPlaneError::configuration(
+            return Err(ControlPlaneRequestFailure::configuration(
                 "connector channel retained log contains a non-contiguous sequence",
             ));
         }
@@ -246,10 +247,9 @@ async fn compact_session_prefix(
     }
 
     let from_sequence = records[0].sequence;
-    let through_sequence = records
-        .last()
-        .map(|record| record.sequence)
-        .ok_or_else(|| ControlPlaneError::configuration("connector retention batch unexpectedly became empty"))?;
+    let through_sequence = records.last().map(|record| record.sequence).ok_or_else(|| {
+        ControlPlaneRequestFailure::configuration("connector retention batch unexpectedly became empty")
+    })?;
     let correlations = records
         .iter()
         .map(|record| record.correlation_id)
@@ -269,12 +269,10 @@ async fn compact_session_prefix(
             "response_received_at": record.response_received_at,
         })).collect::<Vec<_>>(),
     });
-    let material_hash = canonical_sha256(&material)
-        .map_err(|_| ControlPlaneError::configuration("connector retention material cannot be canonicalized"))?;
-    let count = i64::try_from(records.len())
-        .map_err(|_| ControlPlaneError::configuration("connector retention batch exceeds the database bound"))?;
-    let correlation_count = i64::try_from(correlations.len())
-        .map_err(|_| ControlPlaneError::configuration("connector retention correlation count is invalid"))?;
+    let material_hash = canonical_sha256(&material).map_err(ControlPlaneRequestFailure::configuration_source)?;
+    let count = i64::try_from(records.len()).map_err(ControlPlaneRequestFailure::configuration_source)?;
+    let correlation_count =
+        i64::try_from(correlations.len()).map_err(ControlPlaneRequestFailure::configuration_source)?;
 
     sqlx::query(
         "INSERT INTO connector_channel_compaction_receipts (
@@ -345,19 +343,17 @@ async fn terminalize_inactive_command(
     session_id: ConnectorSessionId,
     record: &mut RetainedRecord,
     now: DateTime<Utc>,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let response = ConnectorResponseEnvelope {
         schema: channel_schema(),
         session_id,
         correlation_id: CorrelationId::from_uuid(record.correlation_id),
-        sequence: u64::try_from(record.sequence)
-            .map_err(|_| ControlPlaneError::configuration("connector command sequence is invalid"))?,
+        sequence: u64::try_from(record.sequence).map_err(ControlPlaneRequestFailure::configuration_source)?,
         evidence: None,
         error_code: Some("source_unavailable".to_owned()),
         retryable: true,
     };
-    let payload = serde_json::to_value(response)
-        .map_err(|_| ControlPlaneError::configuration("inactive connector terminal response cannot be serialized"))?;
+    let payload = serde_json::to_value(response).map_err(ControlPlaneRequestFailure::configuration_source)?;
     sqlx::query(
         "INSERT INTO connector_channel_responses (
             session_id, sequence, correlation_id, response_payload, received_at

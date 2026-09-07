@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::super::DiagnosticContext;
-use super::super::DiagnosticError;
 use super::super::DiagnosticPack;
 use super::super::EvidenceRequirement;
 use super::super::FindingOutcome;
@@ -22,6 +21,7 @@ use super::super::PackVersion;
 use super::super::RuleMatch;
 use super::super::Severity;
 use super::common;
+use rocketmq_sre_contracts::SreContractError;
 
 /// One compiled predicate. Configuration files document thresholds and
 /// windows, but cannot introduce new executable predicates.
@@ -124,7 +124,7 @@ impl DiagnosticPack for CatalogPack {
         self.spec.max_freshness_seconds
     }
 
-    fn evaluate(&self, context: &DiagnosticContext<'_>) -> Result<Vec<RuleMatch>, DiagnosticError> {
+    fn evaluate(&self, context: &DiagnosticContext<'_>) -> Result<Vec<RuleMatch>, SreContractError> {
         let primary = self.spec.required[0].key;
         if !context.is_available(primary) {
             return Ok(Vec::new());

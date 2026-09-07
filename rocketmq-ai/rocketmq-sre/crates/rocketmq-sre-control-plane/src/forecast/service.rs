@@ -55,7 +55,6 @@ use super::projection::baseline_artifacts;
 use super::projection::capacity_forecast;
 use super::projection::change_point_artifact;
 use super::projection::parse_prometheus_points;
-use crate::ControlPlaneError;
 use crate::OnboardingState;
 use crate::Phase2Repository;
 use crate::PostgresRepository;
@@ -67,6 +66,7 @@ use crate::connector_channel::PostgresConnectorChannelService;
 use crate::evidence::EvidenceService;
 use crate::repository::ClusterRepository;
 use crate::slo::SloService;
+use crate::{ControlPlaneError, ControlPlaneRequestFailure};
 
 const MAX_SIMULATION_RESOURCES: usize = 128;
 const MAX_READINESS_TEXT: usize = 128;
@@ -111,7 +111,7 @@ impl ForecastService {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
-    ) -> Result<ClusterForecastReport, ControlPlaneError> {
+    ) -> Result<ClusterForecastReport, ControlPlaneRequestFailure> {
         self.validate_cluster(auth, cluster_id).await?;
         self.repository.cluster_forecast_report(auth, cluster_id).await
     }
@@ -127,7 +127,7 @@ impl ForecastService {
         cluster_id: ClusterId,
         target: &ForecastTarget,
         window: &ForecastWindowPolicy,
-    ) -> Result<(), ControlPlaneError> {
+    ) -> Result<(), ControlPlaneRequestFailure> {
         self.validate_cluster(auth, cluster_id).await?;
         let now = Utc::now();
         let evidence = self.collect_evidence(auth, cluster_id, target, window, now).await?;
@@ -287,7 +287,7 @@ impl ForecastService {
         &self,
         auth: &AuthContext,
         request: WhatIfSimulationRequest,
-    ) -> Result<WhatIfSimulation, ControlPlaneError> {
+    ) -> Result<WhatIfSimulation, ControlPlaneRequestFailure> {
         self.validate_cluster(auth, request.cluster_id).await?;
         validate_simulation_request(&request)?;
         let inventory = self.assets.latest(auth, request.cluster_id).await?;
@@ -303,8 +303,8 @@ impl ForecastService {
             cluster_id: enriched.cluster_id,
             kind: enriched.kind,
             status: projection.status,
-            input: serde_json::to_value(&enriched).map_err(|_| {
-                ControlPlaneError::validation("invalid_request", "simulation request cannot be serialized")
+            input: serde_json::to_value(&enriched).map_err(|source| {
+                ControlPlaneRequestFailure::from(ControlPlaneError::validation_source("invalid_request", source))
             })?,
             assumptions: projection.assumptions,
             projected_utilization: json!({
@@ -330,7 +330,7 @@ impl ForecastService {
         auth: &AuthContext,
         cluster_id: ClusterId,
         target_version: &str,
-    ) -> Result<UpgradeReadinessReport, ControlPlaneError> {
+    ) -> Result<UpgradeReadinessReport, ControlPlaneRequestFailure> {
         validate_bounded_text("target version", target_version, MAX_READINESS_TEXT)?;
         self.validate_cluster(auth, cluster_id).await?;
         let health = self.slo.cluster_report(auth, cluster_id).await?;
@@ -369,12 +369,12 @@ impl ForecastService {
         target_region: Option<&str>,
         requested_rto_seconds: u64,
         requested_rpo_seconds: u64,
-    ) -> Result<DrReadinessReport, ControlPlaneError> {
+    ) -> Result<DrReadinessReport, ControlPlaneRequestFailure> {
         if let Some(region) = target_region {
             validate_bounded_text("target region", region, MAX_READINESS_TEXT)?;
         }
         if requested_rto_seconds > 30 * 86_400 || requested_rpo_seconds > 30 * 86_400 {
-            return Err(ControlPlaneError::validation(
+            return Err(ControlPlaneRequestFailure::validation(
                 "invalid_request",
                 "requested RTO and RPO must not exceed 30 days",
             ));
@@ -404,16 +404,20 @@ impl ForecastService {
         Ok(report)
     }
 
-    async fn validate_cluster(&self, auth: &AuthContext, cluster_id: ClusterId) -> Result<(), ControlPlaneError> {
+    async fn validate_cluster(
+        &self,
+        auth: &AuthContext,
+        cluster_id: ClusterId,
+    ) -> Result<(), ControlPlaneRequestFailure> {
         if !auth.clusters.contains(&cluster_id) {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "forecast cluster is outside the authenticated scope",
             ));
         }
         let cluster = self.repository.get(cluster_id).await?;
         if cluster.tenant_id != auth.tenant_id.to_string() || cluster.state == OnboardingState::Offboarded {
-            return Err(ControlPlaneError::forbidden(
+            return Err(ControlPlaneRequestFailure::forbidden(
                 "cluster_not_allowed",
                 "forecast cluster is offboarded or belongs to another tenant",
             ));
@@ -428,7 +432,7 @@ impl ForecastService {
         target: &ForecastTarget,
         window: &ForecastWindowPolicy,
         now: chrono::DateTime<Utc>,
-    ) -> Result<Option<EvidenceSnapshot>, ControlPlaneError> {
+    ) -> Result<Option<EvidenceSnapshot>, ControlPlaneRequestFailure> {
         let window_name = match window.window {
             rocketmq_sre_contracts::ForecastWindow::SevenDays => "7d",
             rocketmq_sre_contracts::ForecastWindow::ThirtyDays => "30d",
@@ -436,8 +440,9 @@ impl ForecastService {
         let resource = format!("trend/{window_name}/{}", target.metric);
         let start = now
             - Duration::seconds(
-                i64::try_from(window.trend.window_seconds)
-                    .map_err(|_| ControlPlaneError::configuration("forecast query window cannot be represented"))?,
+                i64::try_from(window.trend.window_seconds).map_err(|source| {
+                    ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source))
+                })?,
             );
         let query = EvidenceQuery {
             query_id: QueryId::new(),
@@ -447,11 +452,11 @@ impl ForecastService {
             source: "prometheus".to_owned(),
             resource: resource.clone(),
             time_range: TimeRange::new(start, now)
-                .map_err(|_| ControlPlaneError::configuration("forecast evidence range cannot be constructed"))?,
+                .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))?,
         };
         let deadline = now
             + Duration::from_std(self.config.query_timeout)
-                .map_err(|_| ControlPlaneError::configuration("forecast query timeout cannot be represented"))?;
+                .map_err(|source| ControlPlaneRequestFailure::from(ControlPlaneError::configuration_source(source)))?;
         match self
             .connector
             .query_and_wait(auth.tenant_id, cluster_id, query, deadline)
@@ -460,7 +465,7 @@ impl ForecastService {
             Ok(response) => {
                 if let Some(snapshot) = response.evidence {
                     if snapshot.source != "prometheus" || snapshot.resource != resource {
-                        return Err(ControlPlaneError::validation(
+                        return Err(ControlPlaneRequestFailure::validation(
                             "invalid_forecast_evidence",
                             "connector returned forecast evidence from an unexpected source or resource",
                         ));
@@ -486,23 +491,23 @@ impl ForecastService {
         &self,
         auth: &AuthContext,
         snapshot: &EvidenceSnapshot,
-    ) -> Result<Value, ControlPlaneError> {
+    ) -> Result<Value, ControlPlaneRequestFailure> {
         match &snapshot.content {
             EvidenceContent::Inline(content) => Ok(content.clone()),
             EvidenceContent::Reference(_) => {
                 let bytes = self.evidence.content(auth, snapshot.evidence_id).await?;
-                serde_json::from_slice(&bytes).map_err(|_| {
-                    ControlPlaneError::validation(
+                serde_json::from_slice(&bytes).map_err(|source| {
+                    ControlPlaneRequestFailure::from(ControlPlaneError::validation_source(
                         "invalid_forecast_evidence",
-                        "externalized forecast evidence is not valid JSON",
-                    )
+                        source,
+                    ))
                 })
             }
         }
     }
 }
 
-fn validate_simulation_request(request: &WhatIfSimulationRequest) -> Result<(), ControlPlaneError> {
+fn validate_simulation_request(request: &WhatIfSimulationRequest) -> Result<(), ControlPlaneRequestFailure> {
     if request.configuration_changes.len() > 64
         || request.affected_resource_keys.len() > MAX_SIMULATION_RESOURCES
         || request.evidence_ids.len() > 64
@@ -516,7 +521,7 @@ fn validate_simulation_request(request: &WhatIfSimulationRequest) -> Result<(), 
             .as_deref()
             .is_some_and(|value| validate_bounded_text("target version", value, MAX_READINESS_TEXT).is_err())
     {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             "simulation request contains an invalid or unbounded field",
         ));
@@ -734,10 +739,10 @@ fn attach_readiness_evidence(
     }
 }
 
-fn validate_bounded_text(name: &str, value: &str, max: usize) -> Result<(), ControlPlaneError> {
+fn validate_bounded_text(name: &str, value: &str, max: usize) -> Result<(), ControlPlaneRequestFailure> {
     let value = value.trim();
     if value.is_empty() || value.len() > max || value.chars().any(char::is_control) {
-        return Err(ControlPlaneError::validation(
+        return Err(ControlPlaneRequestFailure::validation(
             "invalid_request",
             format!("{name} must be non-empty, bounded, and contain no control characters"),
         ));

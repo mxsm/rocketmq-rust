@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_sre_contracts::SreContractError;
 use std::collections::BTreeSet;
-use std::fmt;
 
 use rocketmq_sre_contracts::ActionItemStatus;
 use rocketmq_sre_contracts::EvidenceId;
@@ -21,65 +21,34 @@ use rocketmq_sre_contracts::PostmortemConclusion;
 
 use super::PostmortemAssembly;
 
-/// Validation failure for human-controlled postmortem metadata.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PostmortemValidationError {
-    EmptyField(&'static str),
-    FieldTooLong(&'static str),
-    TooManyItems(&'static str),
-    MissingCitation(String),
-    UnknownCitation(EvidenceId),
-    InvalidActionTransition {
-        from: ActionItemStatus,
-        to: ActionItemStatus,
-    },
-    OwnerRequired,
-    CompletionVerificationRequired,
-}
-
-impl fmt::Display for PostmortemValidationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::EmptyField(field) => write!(formatter, "{field} cannot be empty"),
-            Self::FieldTooLong(field) => write!(formatter, "{field} exceeds its bounded length"),
-            Self::TooManyItems(field) => write!(formatter, "{field} contains too many items"),
-            Self::MissingCitation(code) => write!(formatter, "conclusion {code} has no Evidence citation"),
-            Self::UnknownCitation(id) => write!(formatter, "Evidence citation {id} is outside the Incident scope"),
-            Self::InvalidActionTransition { from, to } => {
-                write!(formatter, "action item cannot transition from {from:?} to {to:?}")
-            }
-            Self::OwnerRequired => formatter.write_str("action item owner is required"),
-            Self::CompletionVerificationRequired => {
-                formatter.write_str("completed action item requires verification text or Evidence")
-            }
-        }
-    }
-}
-
-impl std::error::Error for PostmortemValidationError {}
-
 /// Validates bounded content and all material Evidence citations.
 pub fn validate_revision(
     content: &PostmortemAssembly,
     allowed_evidence: &BTreeSet<EvidenceId>,
-) -> Result<(), PostmortemValidationError> {
-    for (field, value, max) in [
+) -> Result<(), SreContractError> {
+    for (_field, value, max) in [
         ("summary", content.summary.as_str(), 4_000),
         ("impact", content.impact.as_str(), 4_000),
         ("detection", content.detection.as_str(), 4_000),
         ("recovery", content.recovery.as_str(), 8_000),
     ] {
         if value.trim().is_empty() {
-            return Err(PostmortemValidationError::EmptyField(field));
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+            ));
         }
         if value.chars().count() > max {
-            return Err(PostmortemValidationError::FieldTooLong(field));
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+            ));
         }
     }
     if content.timeline.len() > 256 {
-        return Err(PostmortemValidationError::TooManyItems("timeline"));
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+        ));
     }
-    for (field, values, max) in [
+    for (_field, values, max) in [
         ("root_causes", content.root_causes.len(), 16),
         ("contributing_factors", content.contributing_factors.len(), 32),
         ("conclusions", content.conclusions.len(), 32),
@@ -88,7 +57,9 @@ pub fn validate_revision(
         ("evidence_ids", content.evidence_ids.len(), 128),
     ] {
         if values > max {
-            return Err(PostmortemValidationError::TooManyItems(field));
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+            ));
         }
     }
     for conclusion in content
@@ -101,7 +72,9 @@ pub fn validate_revision(
     }
     for evidence_id in &content.evidence_ids {
         if !allowed_evidence.contains(evidence_id) {
-            return Err(PostmortemValidationError::UnknownCitation(*evidence_id));
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+            ));
         }
     }
     Ok(())
@@ -114,7 +87,7 @@ pub fn validate_action_item_transition(
     owner: Option<&str>,
     verification: Option<&str>,
     evidence_ids: &[EvidenceId],
-) -> Result<(), PostmortemValidationError> {
+) -> Result<(), SreContractError> {
     let allowed = current == next
         || matches!(
             (current, next),
@@ -145,23 +118,26 @@ pub fn validate_action_item_transition(
             )
         );
     if !allowed {
-        return Err(PostmortemValidationError::InvalidActionTransition {
-            from: current,
-            to: next,
-        });
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+        ));
     }
     if matches!(
         next,
         ActionItemStatus::Assigned | ActionItemStatus::InProgress | ActionItemStatus::Completed
     ) && owner.is_none_or(|owner| owner.trim().is_empty())
     {
-        return Err(PostmortemValidationError::OwnerRequired);
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+        ));
     }
     if next == ActionItemStatus::Completed
         && verification.is_none_or(|value| value.trim().is_empty())
         && evidence_ids.is_empty()
     {
-        return Err(PostmortemValidationError::CompletionVerificationRequired);
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+        ));
     }
     Ok(())
 }
@@ -169,19 +145,27 @@ pub fn validate_action_item_transition(
 fn validate_conclusion(
     conclusion: &PostmortemConclusion,
     allowed_evidence: &BTreeSet<EvidenceId>,
-) -> Result<(), PostmortemValidationError> {
+) -> Result<(), SreContractError> {
     if conclusion.code.trim().is_empty() || conclusion.statement.trim().is_empty() {
-        return Err(PostmortemValidationError::EmptyField("conclusion"));
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+        ));
     }
     if conclusion.code.chars().count() > 128 || conclusion.statement.chars().count() > 2_000 {
-        return Err(PostmortemValidationError::FieldTooLong("conclusion"));
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+        ));
     }
     if conclusion.evidence_ids.is_empty() {
-        return Err(PostmortemValidationError::MissingCitation(conclusion.code.clone()));
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+        ));
     }
     for evidence_id in &conclusion.evidence_ids {
         if !allowed_evidence.contains(evidence_id) {
-            return Err(PostmortemValidationError::UnknownCitation(*evidence_id));
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+            ));
         }
     }
     Ok(())
@@ -194,14 +178,16 @@ mod tests {
     #[test]
     fn completing_an_action_requires_operator_verification() {
         assert_eq!(
-            validate_action_item_transition(
+            (validate_action_item_transition(
                 ActionItemStatus::InProgress,
                 ActionItemStatus::Completed,
                 Some("owner"),
                 None,
                 &[],
-            ),
-            Err(PostmortemValidationError::CompletionVerificationRequired)
+            ))
+            .unwrap_err()
+            .code(),
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor
         );
         assert!(
             validate_action_item_transition(
@@ -235,7 +221,7 @@ mod tests {
                 Some("verification"),
                 &[],
             ),
-            Err(PostmortemValidationError::InvalidActionTransition { .. })
+            Err(error) if error.code() == rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor
         ));
     }
 }

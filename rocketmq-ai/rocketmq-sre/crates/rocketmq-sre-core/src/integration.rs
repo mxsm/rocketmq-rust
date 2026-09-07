@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
-use std::fmt;
+use rocketmq_sre_contracts::SreContractError;
 
 use rocketmq_sre_contracts::DescriptorStatus;
 use rocketmq_sre_contracts::DescriptorVersion;
@@ -26,32 +25,6 @@ use rocketmq_sre_contracts::IntegrationEventKind;
 use rocketmq_sre_contracts::IntegrationTarget;
 use rocketmq_sre_contracts::SreTimestamp;
 use rocketmq_sre_contracts::is_sha256_digest;
-
-/// Fail-closed integration contract error.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum IntegrationError {
-    InvalidDescriptor(String),
-    InvalidTarget(String),
-    InvalidDelivery(String),
-    InvalidApproval(String),
-    SensitiveDataRejected,
-    ScopeMismatch,
-}
-
-impl fmt::Display for IntegrationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidDescriptor(reason) => write!(formatter, "invalid integration descriptor: {reason}"),
-            Self::InvalidTarget(reason) => write!(formatter, "invalid integration target: {reason}"),
-            Self::InvalidDelivery(reason) => write!(formatter, "invalid integration delivery: {reason}"),
-            Self::InvalidApproval(reason) => write!(formatter, "invalid external approval: {reason}"),
-            Self::SensitiveDataRejected => formatter.write_str("sensitive integration content was rejected"),
-            Self::ScopeMismatch => formatter.write_str("integration tenant or cluster scope does not match"),
-        }
-    }
-}
-
-impl Error for IntegrationError {}
 
 /// Validates external integration descriptors and their bounded wire records.
 pub struct IntegrationValidator;
@@ -66,7 +39,7 @@ impl IntegrationValidator {
     pub fn validate_target(
         target: &IntegrationTarget,
         descriptor: &IntegrationDescriptor,
-    ) -> Result<(), IntegrationError> {
+    ) -> Result<(), SreContractError> {
         if target.id.as_uuid().is_nil()
             || target.tenant_id.as_uuid().is_nil()
             || target.descriptor_id != descriptor.id
@@ -79,13 +52,13 @@ impl IntegrationValidator {
             || adapter_kind_name(target.adapter_kind) != descriptor.integration_kind
             || target.updated_at < target.created_at
         {
-            return Err(IntegrationError::InvalidTarget(
-                "identity, descriptor version, lifecycle, name, or adapter kind is invalid".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         if target.inbound_approval && !descriptor.inbound {
-            return Err(IntegrationError::InvalidDescriptor(
-                "target enables inbound approval but descriptor is outbound-only".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         if target.inbound_approval
@@ -94,26 +67,26 @@ impl IntegrationValidator {
                 IntegrationAdapterKind::MockItsm | IntegrationAdapterKind::SignedWebhookItsm
             )
         {
-            return Err(IntegrationError::InvalidTarget(
-                "only ITSM adapters may submit approval input".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         if !target.outbound_events.is_empty() && !descriptor.outbound {
-            return Err(IntegrationError::InvalidDescriptor(
-                "target enables outbound events but descriptor is inbound-only".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         if descriptor.outbound && target.outbound_events.is_empty() {
-            return Err(IntegrationError::InvalidTarget(
-                "outbound integration requires at least one allowlisted event".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         validate_endpoint(target.adapter_kind, &target.endpoint)?;
         if let Some(reference) = target.secret_reference.as_deref() {
             validate_secret_reference(reference)?;
         } else if !matches!(target.adapter_kind, IntegrationAdapterKind::MockItsm) {
-            return Err(IntegrationError::InvalidTarget(
-                "non-mock integration requires a secret reference".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         Ok(())
@@ -129,7 +102,7 @@ impl IntegrationValidator {
         delivery: &IntegrationDelivery,
         target: &IntegrationTarget,
         descriptor: &IntegrationDescriptor,
-    ) -> Result<(), IntegrationError> {
+    ) -> Result<(), SreContractError> {
         Self::validate_target(target, descriptor)?;
         if delivery.schema_version != INTEGRATION_DELIVERY_SCHEMA_VERSION
             || delivery.id.as_uuid().is_nil()
@@ -141,11 +114,13 @@ impl IntegrationValidator {
                 .cluster_id
                 .is_some_and(|cluster_id| delivery.cluster_id != cluster_id)
         {
-            return Err(IntegrationError::ScopeMismatch);
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::TenantMismatch,
+            ));
         }
         if !target.outbound_events.contains(&delivery.event_kind) {
-            return Err(IntegrationError::InvalidDelivery(
-                "event kind is not enabled for this target".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         if delivery.idempotency_key.trim().is_empty()
@@ -158,15 +133,15 @@ impl IntegrationValidator {
             || !delivery.deep_link.starts_with('/')
             || delivery.deep_link.starts_with("//")
         {
-            return Err(IntegrationError::InvalidDelivery(
-                "delivery key, summary, or SRE deep link is invalid".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         reject_sensitive(&delivery.sanitized_summary)?;
         reject_sensitive(&delivery.deep_link)?;
         if is_release_event(delivery.event_kind) && delivery.release_id.is_none() {
-            return Err(IntegrationError::InvalidDelivery(
-                "release event requires a release identifier".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         Ok(())
@@ -185,11 +160,11 @@ impl IntegrationValidator {
         descriptor: &IntegrationDescriptor,
         expected_plan_hash: &str,
         now: SreTimestamp,
-    ) -> Result<(), IntegrationError> {
+    ) -> Result<(), SreContractError> {
         Self::validate_target(target, descriptor)?;
         if !target.inbound_approval || !descriptor.inbound {
-            return Err(IntegrationError::InvalidApproval(
-                "integration is not enabled for inbound approvals".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         let approval_valid_for = input.expires_at.signed_duration_since(now).num_seconds();
@@ -211,8 +186,8 @@ impl IntegrationValidator {
             || !(1..=86_400).contains(&approval_valid_for)
             || occurred_ahead_by > 300
         {
-            return Err(IntegrationError::InvalidApproval(
-                "schema, identity, role, step-up, plan hash, or expiry is invalid".to_owned(),
+            return Err(rocketmq_sre_contracts::SreContractError::new(
+                rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
             ));
         }
         reject_sensitive(&input.external_ticket_key)?;
@@ -234,7 +209,7 @@ const fn adapter_kind_name(kind: IntegrationAdapterKind) -> &'static str {
     }
 }
 
-fn validate_endpoint(kind: IntegrationAdapterKind, endpoint: &str) -> Result<(), IntegrationError> {
+fn validate_endpoint(kind: IntegrationAdapterKind, endpoint: &str) -> Result<(), SreContractError> {
     let endpoint = endpoint.trim();
     if endpoint.is_empty()
         || endpoint.chars().count() > 2_048
@@ -242,8 +217,8 @@ fn validate_endpoint(kind: IntegrationAdapterKind, endpoint: &str) -> Result<(),
         || endpoint.contains('#')
         || endpoint.chars().any(char::is_control)
     {
-        return Err(IntegrationError::InvalidTarget(
-            "endpoint is empty, credential-bearing, fragmented, or too large".to_owned(),
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
         ));
     }
     match kind {
@@ -263,16 +238,16 @@ fn validate_endpoint(kind: IntegrationAdapterKind, endpoint: &str) -> Result<(),
         {
             Ok(())
         }
-        _ => Err(IntegrationError::InvalidTarget(
-            "adapter endpoint scheme or host is not allowed".to_owned(),
+        _ => Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
         )),
     }
 }
 
-fn validate_secret_reference(reference: &str) -> Result<(), IntegrationError> {
+fn validate_secret_reference(reference: &str) -> Result<(), SreContractError> {
     let Some(name) = reference.strip_prefix("env:") else {
-        return Err(IntegrationError::InvalidTarget(
-            "only env secret references are supported".to_owned(),
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
         ));
     };
     if name.is_empty()
@@ -281,14 +256,14 @@ fn validate_secret_reference(reference: &str) -> Result<(), IntegrationError> {
             .bytes()
             .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
     {
-        return Err(IntegrationError::InvalidTarget(
-            "secret reference name is invalid".to_owned(),
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
         ));
     }
     Ok(())
 }
 
-fn reject_sensitive(value: &str) -> Result<(), IntegrationError> {
+fn reject_sensitive(value: &str) -> Result<(), SreContractError> {
     let normalized = value.to_ascii_lowercase();
     if [
         "token=",
@@ -302,7 +277,9 @@ fn reject_sensitive(value: &str) -> Result<(), IntegrationError> {
     .iter()
     .any(|marker| normalized.contains(marker))
     {
-        return Err(IntegrationError::SensitiveDataRejected);
+        return Err(rocketmq_sre_contracts::SreContractError::new(
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor,
+        ));
     }
     Ok(())
 }
@@ -411,8 +388,10 @@ mod tests {
             ..delivery.clone()
         };
         assert_eq!(
-            IntegrationValidator::validate_delivery(&sensitive, &target, &descriptor),
-            Err(IntegrationError::SensitiveDataRejected)
+            (IntegrationValidator::validate_delivery(&sensitive, &target, &descriptor))
+                .unwrap_err()
+                .code(),
+            rocketmq_sre_contracts::PublicErrorCode::InvalidDescriptor
         );
 
         let unsupported = IntegrationDelivery {

@@ -44,7 +44,7 @@ use super::model::PrepareExecutionPreconditionRequest;
 use super::model::QuarantineListQuery;
 use super::model::QuarantinePage;
 use super::model::SubmitExecutionRequest;
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::api::AppState;
 use crate::observability::CORRELATION_ID_HEADER;
 use crate::workflow::ConfirmDiagnosisExecutionRequest;
@@ -92,7 +92,7 @@ async fn confirm_diagnosis_for_execution(
     Path((incident_id, revision_id)): Path<(String, String)>,
     headers: HeaderMap,
     Json(request): Json<ConfirmDiagnosisExecutionRequest>,
-) -> Result<Json<DiagnosisExecutionConfirmation>, ControlPlaneError> {
+) -> Result<Json<DiagnosisExecutionConfirmation>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .workflow
@@ -111,7 +111,7 @@ async fn create_plan(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<CreatePlanRequest>,
-) -> Result<Json<CreatePlanResponse>, ControlPlaneError> {
+) -> Result<Json<CreatePlanResponse>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state
         .supervised_execution
@@ -125,7 +125,7 @@ async fn prepare_execution_precondition(
     Path(incident_id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<PrepareExecutionPreconditionRequest>,
-) -> Result<Json<ExecutionPreconditionEvidenceView>, ControlPlaneError> {
+) -> Result<Json<ExecutionPreconditionEvidenceView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(request.cluster_id)).await?;
     state
         .supervised_execution
@@ -143,7 +143,7 @@ async fn get_plan(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<ActionPlanView>, ControlPlaneError> {
+) -> Result<Json<ActionPlanView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .supervised_execution
@@ -157,7 +157,7 @@ async fn approve_plan(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<ApprovalDecisionRequest>,
-) -> Result<Json<ApprovalDecisionResponse>, ControlPlaneError> {
+) -> Result<Json<ApprovalDecisionResponse>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .supervised_execution
@@ -171,7 +171,7 @@ async fn review_plan_with_critic(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<CriticReviewRequest>,
-) -> Result<Json<CriticReviewResponse>, ControlPlaneError> {
+) -> Result<Json<CriticReviewResponse>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .supervised_execution
@@ -185,7 +185,7 @@ async fn reject_plan(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<ApprovalDecisionRequest>,
-) -> Result<Json<ApprovalDecisionResponse>, ControlPlaneError> {
+) -> Result<Json<ApprovalDecisionResponse>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .supervised_execution
@@ -198,7 +198,7 @@ async fn submit_execution(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<SubmitExecutionRequest>,
-) -> Result<Json<ExecutionSubmissionView>, ControlPlaneError> {
+) -> Result<Json<ExecutionSubmissionView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .supervised_execution
@@ -211,7 +211,7 @@ async fn get_execution(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<ExecutionSubmissionView>, ControlPlaneError> {
+) -> Result<Json<ExecutionSubmissionView>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .supervised_execution
@@ -224,7 +224,7 @@ async fn get_audit(
     State(state): State<AppState>,
     Path(correlation_id): Path<String>,
     headers: HeaderMap,
-) -> Result<Json<AuditPage>, ControlPlaneError> {
+) -> Result<Json<AuditPage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .supervised_execution
@@ -237,7 +237,7 @@ async fn list_quarantines(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<QuarantineListQuery>,
-) -> Result<Json<QuarantinePage>, ControlPlaneError> {
+) -> Result<Json<QuarantinePage>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, Some(query.cluster_id)).await?;
     state.supervised_execution.quarantines(&auth, &query).await.map(Json)
 }
@@ -247,7 +247,7 @@ async fn clear_quarantine(
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(request): Json<ClearQuarantineRequest>,
-) -> Result<Json<ResourceQuarantine>, ControlPlaneError> {
+) -> Result<Json<ResourceQuarantine>, ControlPlaneRequestFailure> {
     let auth = state.auth.authorize(&headers, None).await?;
     state
         .supervised_execution
@@ -256,40 +256,40 @@ async fn clear_quarantine(
         .map(Json)
 }
 
-fn parse_plan_id(value: &str) -> Result<ActionPlanId, ControlPlaneError> {
+fn parse_plan_id(value: &str) -> Result<ActionPlanId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "plan identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "plan id is invalid"))
 }
 
-fn parse_incident_id(value: &str) -> Result<IncidentId, ControlPlaneError> {
+fn parse_incident_id(value: &str) -> Result<IncidentId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "incident identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "incident id is invalid"))
 }
 
-fn parse_diagnosis_revision_id(value: &str) -> Result<DiagnosisRevisionId, ControlPlaneError> {
+fn parse_diagnosis_revision_id(value: &str) -> Result<DiagnosisRevisionId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "diagnosis revision identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "diagnosis revision id is invalid"))
 }
 
-fn parse_execution_id(value: &str) -> Result<ExecutionId, ControlPlaneError> {
+fn parse_execution_id(value: &str) -> Result<ExecutionId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "execution identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "execution id is invalid"))
 }
 
-fn parse_correlation_id(value: &str) -> Result<CorrelationId, ControlPlaneError> {
+fn parse_correlation_id(value: &str) -> Result<CorrelationId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "correlation identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "correlation id is invalid"))
 }
 
-fn parse_quarantine_id(value: &str) -> Result<ResourceQuarantineId, ControlPlaneError> {
+fn parse_quarantine_id(value: &str) -> Result<ResourceQuarantineId, ControlPlaneRequestFailure> {
     value
         .parse()
-        .map_err(|_| ControlPlaneError::validation("invalid_request", "quarantine identifier must be a UUID"))
+        .map_err(|_| ControlPlaneRequestFailure::validation("invalid_request", "quarantine id is invalid"))
 }
 
 fn correlation_id(headers: &HeaderMap) -> CorrelationId {

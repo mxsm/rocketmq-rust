@@ -102,9 +102,8 @@ pub(crate) struct ForecastConfiguration {
 
 impl ForecastConfiguration {
     pub(crate) fn embedded() -> Result<Self, ControlPlaneError> {
-        let document: ForecastConfigurationDocument = serde_yaml::from_str(FORECAST_CONFIG).map_err(|error| {
-            ControlPlaneError::configuration(format!("embedded forecast configuration cannot be parsed: {error}"))
-        })?;
+        let document: ForecastConfigurationDocument =
+            serde_yaml::from_str(FORECAST_CONFIG).map_err(ControlPlaneError::configuration_source)?;
         if document.schema_version != SCHEMA_VERSION
             || document.algorithm_version.trim().is_empty()
             || document.worker_interval_seconds == 0

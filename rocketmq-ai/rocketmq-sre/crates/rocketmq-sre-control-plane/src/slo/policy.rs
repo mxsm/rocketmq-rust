@@ -53,9 +53,8 @@ impl SloConfiguration {
     }
 
     fn parse(input: &str) -> Result<Self, ControlPlaneError> {
-        let document: SloConfigurationDocument = serde_yaml::from_str(input).map_err(|error| {
-            ControlPlaneError::configuration(format!("embedded SLO configuration cannot be parsed: {error}"))
-        })?;
+        let document: SloConfigurationDocument =
+            serde_yaml::from_str(input).map_err(ControlPlaneError::configuration_source)?;
         if document.schema_version != SCHEMA_VERSION
             || document.algorithm_version.trim().is_empty()
             || document.recording_metric != EXPECTED_RECORDING_METRIC

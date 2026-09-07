@@ -53,6 +53,7 @@ use super::model::notification_summary;
 use super::model::resource_kind_name;
 use super::model::severity_name;
 use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 use crate::PostgresRepository;
 use crate::auth::AuthContext;
 
@@ -70,7 +71,7 @@ impl PostgresRepository {
         persisted_alert_id: rocketmq_sre_contracts::AlertEventId,
         correlation_id: CorrelationId,
         public_base_url: &str,
-    ) -> Result<CorrelationResult, ControlPlaneError> {
+    ) -> Result<CorrelationResult, ControlPlaneRequestFailure> {
         enforce_auth_scope(auth, event.tenant_id, event.cluster_id)?;
         let mut transaction = self.pool.begin().await?;
         ensure_cluster_scope(&mut transaction, auth.tenant_id, event.cluster_id).await?;
@@ -193,7 +194,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         incident_id: IncidentId,
-    ) -> Result<Vec<TimelineEvent>, ControlPlaneError> {
+    ) -> Result<Vec<TimelineEvent>, ControlPlaneRequestFailure> {
         let rows = sqlx::query(
             "SELECT event_id, tenant_id, cluster_id, investigation_id, incident_id,
                     event_type, summary, details, correlation_id, actor_subject,
@@ -211,7 +212,7 @@ impl PostgresRepository {
             .map(|row| {
                 let cluster_id = ClusterId::from_uuid(row.try_get("cluster_id")?);
                 if !auth.clusters.contains(&cluster_id) {
-                    return Err(ControlPlaneError::forbidden(
+                    return Err(ControlPlaneRequestFailure::forbidden(
                         "cluster_not_allowed",
                         "incident is outside the authenticated cluster scope",
                     ));
@@ -250,7 +251,7 @@ impl PostgresRepository {
         incident_id: IncidentId,
         note: &str,
         correlation_id: CorrelationId,
-    ) -> Result<TimelineEvent, ControlPlaneError> {
+    ) -> Result<TimelineEvent, ControlPlaneRequestFailure> {
         let cluster_id = ensure_incident_visible(&self.pool, auth, incident_id).await?;
         let event_id = TimelineEventId::new();
         let occurred_at = Utc::now();
@@ -314,7 +315,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         incident_id: IncidentId,
-    ) -> Result<IncidentTopologyView, ControlPlaneError> {
+    ) -> Result<IncidentTopologyView, ControlPlaneRequestFailure> {
         let cluster_id = ensure_incident_visible(&self.pool, auth, incident_id).await?;
         let alert_rows = sqlx::query(
             "SELECT a.affected_resource
@@ -330,7 +331,7 @@ impl PostgresRepository {
         let mut alert_counts = BTreeMap::<String, u32>::new();
         for row in alert_rows {
             let resource: ResourceRef = serde_json::from_value(row.try_get("affected_resource")?)
-                .map_err(|_| ControlPlaneError::configuration("stored alert resource is invalid"))?;
+                .map_err(ControlPlaneError::configuration_source)?;
             *alert_counts.entry(canonical_resource(&resource)).or_default() += 1;
         }
 
@@ -453,7 +454,7 @@ impl PostgresRepository {
         &self,
         auth: &AuthContext,
         cluster_id: ClusterId,
-    ) -> Result<ClusterIncidentHealth, ControlPlaneError> {
+    ) -> Result<ClusterIncidentHealth, ControlPlaneRequestFailure> {
         enforce_auth_scope(auth, auth.tenant_id, cluster_id)?;
         let row = sqlx::query(
             "SELECT
@@ -504,7 +505,7 @@ impl PostgresRepository {
         incident_id: IncidentId,
         target_id: NotificationTargetId,
         public_base_url: &str,
-    ) -> Result<(NotificationDeliveryId, bool, String, String), ControlPlaneError> {
+    ) -> Result<(NotificationDeliveryId, bool, String, String), ControlPlaneRequestFailure> {
         enforce_auth_scope(auth, auth.tenant_id, cluster_id)?;
         let row = sqlx::query(
             "SELECT i.title, t.enabled
@@ -519,9 +520,12 @@ impl PostgresRepository {
         .bind(target_id.as_uuid())
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ControlPlaneError::NotFound)?;
+        .ok_or(ControlPlaneRequestFailure::not_found())?;
         if !row.try_get::<bool, _>("enabled")? {
-            return Err(ControlPlaneError::conflict("notification target is disabled"));
+            return Err(ControlPlaneRequestFailure::conflict_code(
+                "capability_mismatch",
+                "notification target is disabled",
+            ));
         }
         let delivery_id = NotificationDeliveryId::new();
         let summary = "RocketMQ SRE notification channel test".to_owned();
@@ -789,7 +793,7 @@ async fn topology_candidate(
     let mut mapped = Vec::new();
     for row in &rows {
         let resource: ResourceRef = serde_json::from_value(row.try_get("affected_resource")?)
-            .map_err(|_| ControlPlaneError::configuration("stored alert resource is invalid"))?;
+            .map_err(ControlPlaneError::configuration_source)?;
         let distance = graph.distance_within(&event_resource, &canonical_resource(&resource), 3);
         if distance.is_some() {
             mapped.push(CorrelationCandidate {
@@ -810,7 +814,7 @@ async fn topology_candidate(
         id: selected
             .incident_key
             .parse()
-            .map_err(|_| ControlPlaneError::configuration("stored incident identifier is invalid"))?,
+            .map_err(ControlPlaneError::configuration_source)?,
         terminal: false,
     }))
 }
@@ -996,7 +1000,7 @@ async fn append_recent_changes(
         let change_id: Uuid = row.try_get("id")?;
         let source: String = row.try_get("source")?;
         let resource: ResourceRef = serde_json::from_value(row.try_get("affected_resource")?)
-            .map_err(|_| ControlPlaneError::configuration("stored change resource is invalid"))?;
+            .map_err(ControlPlaneError::configuration_source)?;
         insert_timeline(
             transaction,
             event,
@@ -1098,10 +1102,7 @@ async fn update_incident_aggregate(
     .bind(incident_id.as_uuid())
     .bind(severity_name(event.severity))
     .bind(owner)
-    .bind(
-        i32::try_from(occurrence_count)
-            .map_err(|_| ControlPlaneError::configuration("incident occurrence count exceeds PostgreSQL INTEGER"))?,
-    )
+    .bind(i32::try_from(occurrence_count).map_err(ControlPlaneError::configuration_source)?)
     .bind(event.occurred_at)
     .bind(event.tenant_id.as_uuid())
     .bind(event.cluster_id.as_uuid())
@@ -1353,7 +1354,7 @@ async fn ensure_cluster_scope(
     transaction: &mut Transaction<'_, Postgres>,
     tenant_id: TenantId,
     cluster_id: ClusterId,
-) -> Result<(), ControlPlaneError> {
+) -> Result<(), ControlPlaneRequestFailure> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS (
             SELECT 1 FROM clusters
@@ -1365,7 +1366,7 @@ async fn ensure_cluster_scope(
     .fetch_one(&mut **transaction)
     .await?;
     if !exists {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "cluster is outside the authenticated tenant or is offboarded",
         ));
@@ -1377,17 +1378,17 @@ async fn ensure_incident_visible(
     pool: &sqlx::PgPool,
     auth: &AuthContext,
     incident_id: IncidentId,
-) -> Result<ClusterId, ControlPlaneError> {
+) -> Result<ClusterId, ControlPlaneRequestFailure> {
     let cluster_id =
         sqlx::query_scalar::<_, Uuid>("SELECT cluster_id FROM sre_incidents WHERE id = $1 AND tenant_id = $2")
             .bind(incident_id.as_uuid())
             .bind(auth.tenant_id.as_uuid())
             .fetch_optional(pool)
             .await?
-            .ok_or(ControlPlaneError::NotFound)
+            .ok_or(ControlPlaneRequestFailure::not_found())
             .map(ClusterId::from_uuid)?;
     if !auth.clusters.contains(&cluster_id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "incident is outside the authenticated cluster scope",
         ));
@@ -1395,15 +1396,19 @@ async fn ensure_incident_visible(
     Ok(cluster_id)
 }
 
-fn enforce_auth_scope(auth: &AuthContext, tenant_id: TenantId, cluster_id: ClusterId) -> Result<(), ControlPlaneError> {
+fn enforce_auth_scope(
+    auth: &AuthContext,
+    tenant_id: TenantId,
+    cluster_id: ClusterId,
+) -> Result<(), ControlPlaneRequestFailure> {
     if auth.tenant_id != tenant_id {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "tenant_mismatch",
             "event tenant does not match the authenticated tenant",
         ));
     }
     if !auth.clusters.contains(&cluster_id) {
-        return Err(ControlPlaneError::forbidden(
+        return Err(ControlPlaneRequestFailure::forbidden(
             "cluster_not_allowed",
             "event cluster is outside the authenticated cluster scope",
         ));
@@ -1476,12 +1481,12 @@ fn parse_channel(value: String) -> Result<NotificationChannel, ControlPlaneError
     }
 }
 
-fn to_u32(value: i64, field: &'static str) -> Result<u32, ControlPlaneError> {
-    u32::try_from(value).map_err(|_| ControlPlaneError::configuration(format!("stored {field} is out of range")))
+fn to_u32(value: i64, _field: &'static str) -> Result<u32, ControlPlaneError> {
+    u32::try_from(value).map_err(ControlPlaneError::configuration_source)
 }
 
-fn to_u16(value: i32, field: &'static str) -> Result<u16, ControlPlaneError> {
-    u16::try_from(value).map_err(|_| ControlPlaneError::configuration(format!("stored {field} is out of range")))
+fn to_u16(value: i32, _field: &'static str) -> Result<u16, ControlPlaneError> {
+    u16::try_from(value).map_err(ControlPlaneError::configuration_source)
 }
 
 #[cfg(test)]
@@ -1744,13 +1749,8 @@ mod tests {
             )
             .await
             .expect_err("cross-tenant correlation must fail");
-        assert!(matches!(
-            denied,
-            ControlPlaneError::Forbidden {
-                code: "tenant_mismatch",
-                ..
-            }
-        ));
+        assert_eq!(denied.failure(), crate::ControlPlaneFailure::Forbidden);
+        assert_eq!(denied.code(), "tenant_mismatch");
     }
 
     #[tokio::test]

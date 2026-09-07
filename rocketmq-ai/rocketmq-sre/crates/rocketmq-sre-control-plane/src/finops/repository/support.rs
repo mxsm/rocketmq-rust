@@ -38,9 +38,9 @@ use sqlx::Row;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
-use crate::ControlPlaneError;
+use crate::ControlPlaneRequestFailure;
 
-pub(super) fn cost_entry_from_row(row: &PgRow) -> Result<FinOpsCostEntry, ControlPlaneError> {
+pub(super) fn cost_entry_from_row(row: &PgRow) -> Result<FinOpsCostEntry, ControlPlaneRequestFailure> {
     Ok(FinOpsCostEntry {
         id: FinOpsCostEntryId::from_uuid(row.try_get("id")?),
         idempotency_key: row.try_get("idempotency_key")?,
@@ -69,7 +69,7 @@ pub(super) fn cost_entry_from_row(row: &PgRow) -> Result<FinOpsCostEntry, Contro
     })
 }
 
-pub(super) fn budget_from_row(row: &PgRow) -> Result<FinOpsBudget, ControlPlaneError> {
+pub(super) fn budget_from_row(row: &PgRow) -> Result<FinOpsBudget, ControlPlaneRequestFailure> {
     Ok(FinOpsBudget {
         id: FinOpsBudgetId::from_uuid(row.try_get("id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -85,7 +85,7 @@ pub(super) fn budget_from_row(row: &PgRow) -> Result<FinOpsBudget, ControlPlaneE
     })
 }
 
-pub(super) fn decision_from_row(row: &PgRow) -> Result<FinOpsBudgetDecision, ControlPlaneError> {
+pub(super) fn decision_from_row(row: &PgRow) -> Result<FinOpsBudgetDecision, ControlPlaneRequestFailure> {
     let protected = row.try_get::<Vec<String>, _>("protected_controls")?;
     Ok(FinOpsBudgetDecision {
         id: FinOpsDecisionId::from_uuid(row.try_get("id")?),
@@ -109,13 +109,9 @@ pub(super) fn decision_from_row(row: &PgRow) -> Result<FinOpsBudgetDecision, Con
     })
 }
 
-pub(super) fn allocation_from_row(row: &PgRow) -> Result<FinOpsAllocationPolicy, ControlPlaneError> {
-    let allocation_keys: BTreeSet<String> = serde_json::from_value(row.try_get("allocation_keys")?).map_err(|_| {
-        ControlPlaneError::validation(
-            "invalid_persisted_finops_state",
-            "allocation keys do not match the FinOps contract",
-        )
-    })?;
+pub(super) fn allocation_from_row(row: &PgRow) -> Result<FinOpsAllocationPolicy, ControlPlaneRequestFailure> {
+    let allocation_keys: BTreeSet<String> = serde_json::from_value(row.try_get("allocation_keys")?)
+        .map_err(|source| ControlPlaneRequestFailure::state_source("invalid_persisted_finops_state", source))?;
     Ok(FinOpsAllocationPolicy {
         id: FinOpsAllocationPolicyId::from_uuid(row.try_get("id")?),
         tenant_id: TenantId::from_uuid(row.try_get("tenant_id")?),
@@ -204,7 +200,7 @@ pub(super) const fn allocation_mode_name(value: FinOpsAllocationMode) -> &'stati
     }
 }
 
-fn cost_source(value: String) -> Result<FinOpsCostSource, ControlPlaneError> {
+fn cost_source(value: String) -> Result<FinOpsCostSource, ControlPlaneRequestFailure> {
     match value.as_str() {
         "model_invocation" => Ok(FinOpsCostSource::ModelInvocation),
         "control_plane" => Ok(FinOpsCostSource::ControlPlane),
@@ -217,7 +213,7 @@ fn cost_source(value: String) -> Result<FinOpsCostSource, ControlPlaneError> {
     }
 }
 
-fn workload_kind(value: String) -> Result<FinOpsWorkloadKind, ControlPlaneError> {
+fn workload_kind(value: String) -> Result<FinOpsWorkloadKind, ControlPlaneRequestFailure> {
     match value.as_str() {
         "incident" => Ok(FinOpsWorkloadKind::Incident),
         "diagnostic_pack" => Ok(FinOpsWorkloadKind::DiagnosticPack),
@@ -231,7 +227,7 @@ fn workload_kind(value: String) -> Result<FinOpsWorkloadKind, ControlPlaneError>
     }
 }
 
-fn budget_scope(value: String) -> Result<FinOpsBudgetScopeKind, ControlPlaneError> {
+fn budget_scope(value: String) -> Result<FinOpsBudgetScopeKind, ControlPlaneRequestFailure> {
     match value.as_str() {
         "tenant" => Ok(FinOpsBudgetScopeKind::Tenant),
         "provider" => Ok(FinOpsBudgetScopeKind::Provider),
@@ -245,7 +241,7 @@ fn budget_scope(value: String) -> Result<FinOpsBudgetScopeKind, ControlPlaneErro
     }
 }
 
-fn budget_period(value: String) -> Result<FinOpsBudgetPeriod, ControlPlaneError> {
+fn budget_period(value: String) -> Result<FinOpsBudgetPeriod, ControlPlaneRequestFailure> {
     match value.as_str() {
         "hourly" => Ok(FinOpsBudgetPeriod::Hourly),
         "daily" => Ok(FinOpsBudgetPeriod::Daily),
@@ -254,7 +250,7 @@ fn budget_period(value: String) -> Result<FinOpsBudgetPeriod, ControlPlaneError>
     }
 }
 
-fn work_class(value: String) -> Result<FinOpsWorkClass, ControlPlaneError> {
+fn work_class(value: String) -> Result<FinOpsWorkClass, ControlPlaneRequestFailure> {
     match value.as_str() {
         "safety_check" => Ok(FinOpsWorkClass::SafetyCheck),
         "audit" => Ok(FinOpsWorkClass::Audit),
@@ -267,7 +263,7 @@ fn work_class(value: String) -> Result<FinOpsWorkClass, ControlPlaneError> {
     }
 }
 
-fn degradation(value: String) -> Result<FinOpsDegradation, ControlPlaneError> {
+fn degradation(value: String) -> Result<FinOpsDegradation, ControlPlaneRequestFailure> {
     match value.as_str() {
         "none" => Ok(FinOpsDegradation::None),
         "prefer_lower_cost_model" => Ok(FinOpsDegradation::PreferLowerCostModel),
@@ -278,7 +274,7 @@ fn degradation(value: String) -> Result<FinOpsDegradation, ControlPlaneError> {
     }
 }
 
-fn allocation_mode(value: String) -> Result<FinOpsAllocationMode, ControlPlaneError> {
+fn allocation_mode(value: String) -> Result<FinOpsAllocationMode, ControlPlaneRequestFailure> {
     match value.as_str() {
         "showback" => Ok(FinOpsAllocationMode::Showback),
         "chargeback" => Ok(FinOpsAllocationMode::Chargeback),
@@ -286,12 +282,13 @@ fn allocation_mode(value: String) -> Result<FinOpsAllocationMode, ControlPlaneEr
     }
 }
 
-fn unsigned(value: i64, field: &str) -> Result<u64, ControlPlaneError> {
-    u64::try_from(value).map_err(|_| invalid_persisted(field))
+fn unsigned(value: i64, _field: &str) -> Result<u64, ControlPlaneRequestFailure> {
+    u64::try_from(value)
+        .map_err(|source| ControlPlaneRequestFailure::state_source("invalid_persisted_finops_state", source))
 }
 
-fn invalid_persisted(field: &str) -> ControlPlaneError {
-    ControlPlaneError::validation(
+fn invalid_persisted(field: &str) -> ControlPlaneRequestFailure {
+    ControlPlaneRequestFailure::state(
         "invalid_persisted_finops_state",
         format!("persisted FinOps {field} is invalid"),
     )
