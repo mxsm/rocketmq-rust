@@ -48,7 +48,7 @@ serde_json.workspace = true
 serde_json_any_key.workspace = true
 simd-json = { version = "0.18", optional = true }
 thiserror.workspace = true
-zstd = "0.13"
+zstd = "0.14"
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
