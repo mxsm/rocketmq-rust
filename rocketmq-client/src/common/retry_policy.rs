@@ -391,6 +391,177 @@ mod tests {
     }
 
     #[test]
+    fn representative_retry_policy_decisions_are_deterministic() {
+        let retry_after = RetryFacts::Response {
+            code: ResponseCode::SystemBusy.to_i32(),
+            retry_after: Some(Duration::from_millis(1_500)),
+        };
+        let cases = [
+            (
+                "contract failures never retry",
+                context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3),
+                RetryFacts::Contract,
+                RetryAction::Stop,
+            ),
+            (
+                "remote rate pressure backs off",
+                context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3),
+                RetryFacts::Operational {
+                    descriptor: &rocketmq_error::TRANSPORT_REMOTE_RATE_LIMITED,
+                    stage: Some(OutboundRequestStage::BeforeWrite),
+                },
+                RetryAction::RetryAfter(Duration::from_millis(7)),
+            ),
+            (
+                "queue pressure backs off",
+                context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3),
+                RetryFacts::Rejected {
+                    reason: OutboundRequestRejectionReason::QueueSaturated,
+                    stage: OutboundRequestStage::BeforeWrite,
+                },
+                RetryAction::RetryAfter(Duration::from_millis(7)),
+            ),
+            (
+                "non-idempotent requests stop after writing",
+                context(RetryOperation::ProducerSend, RetryIdempotency::NonIdempotent, 1, 3),
+                RetryFacts::Operational {
+                    descriptor: &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+                    stage: Some(OutboundRequestStage::Writing),
+                },
+                RetryAction::Stop,
+            ),
+            (
+                "idempotent requests can retry after writing",
+                context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3),
+                RetryFacts::Operational {
+                    descriptor: &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+                    stage: Some(OutboundRequestStage::Writing),
+                },
+                RetryAction::RetryAfter(Duration::from_millis(7)),
+            ),
+            (
+                "route errors refresh route",
+                context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3),
+                RetryFacts::Operational {
+                    descriptor: &rocketmq_error::ROUTE_TOPIC_NOT_FOUND,
+                    stage: Some(OutboundRequestStage::BeforeWrite),
+                },
+                RetryAction::RefreshRoute,
+            ),
+            (
+                "leader errors refresh leader",
+                context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3),
+                RetryFacts::Operational {
+                    descriptor: &rocketmq_error::CONTROLLER_LEADERSHIP_NOT_LEADER,
+                    stage: Some(OutboundRequestStage::BeforeWrite),
+                },
+                RetryAction::RefreshLeader,
+            ),
+            (
+                "attempt exhaustion stops before retry",
+                context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 3, 3),
+                RetryFacts::Operational {
+                    descriptor: &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+                    stage: Some(OutboundRequestStage::BeforeWrite),
+                },
+                RetryAction::Stop,
+            ),
+            (
+                "deadline exhaustion stops before retry",
+                RetryContext {
+                    remaining: Duration::ZERO,
+                    ..context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3)
+                },
+                RetryFacts::Operational {
+                    descriptor: &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+                    stage: Some(OutboundRequestStage::BeforeWrite),
+                },
+                RetryAction::Stop,
+            ),
+            (
+                "retry budget exhaustion stops",
+                context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3),
+                RetryFacts::Operational {
+                    descriptor: &rocketmq_error::CLIENT_RETRY_BUDGET_EXHAUSTED,
+                    stage: Some(OutboundRequestStage::BeforeWrite),
+                },
+                RetryAction::Stop,
+            ),
+            (
+                "deadline-rejected requests stop",
+                context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3),
+                RetryFacts::Rejected {
+                    reason: OutboundRequestRejectionReason::DeadlineExpired,
+                    stage: OutboundRequestStage::BeforeWrite,
+                },
+                RetryAction::Stop,
+            ),
+            (
+                "cancelled requests stop",
+                context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3),
+                RetryFacts::Rejected {
+                    reason: OutboundRequestRejectionReason::Cancelled,
+                    stage: OutboundRequestStage::BeforeWrite,
+                },
+                RetryAction::Stop,
+            ),
+            (
+                "shutting down clients stop",
+                context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3),
+                RetryFacts::Rejected {
+                    reason: OutboundRequestRejectionReason::ClientStopping,
+                    stage: OutboundRequestStage::BeforeWrite,
+                },
+                RetryAction::Stop,
+            ),
+            (
+                "closed sessions stop",
+                context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3),
+                RetryFacts::Rejected {
+                    reason: OutboundRequestRejectionReason::SessionClosed,
+                    stage: OutboundRequestStage::BeforeWrite,
+                },
+                RetryAction::Stop,
+            ),
+            (
+                "trusted retry-after fits strictly inside the deadline",
+                RetryContext {
+                    remaining: Duration::from_millis(1_501),
+                    ..context(RetryOperation::NameServerKv, RetryIdempotency::Idempotent, 1, 3)
+                },
+                retry_after,
+                RetryAction::RetryAfter(Duration::from_millis(1_500)),
+            ),
+            (
+                "trusted retry-after equal to the deadline stops",
+                RetryContext {
+                    remaining: Duration::from_millis(1_500),
+                    ..context(RetryOperation::NameServerKv, RetryIdempotency::Idempotent, 1, 3)
+                },
+                retry_after,
+                RetryAction::Stop,
+            ),
+            (
+                "operational failures without a request stage fail closed",
+                context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3),
+                RetryFacts::Operational {
+                    descriptor: &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+                    stage: None,
+                },
+                RetryAction::Stop,
+            ),
+        ];
+
+        for (name, context, facts, expected) in cases {
+            assert_eq!(
+                RetryPolicy::decide_with_jitter(context, facts, |_| Duration::from_millis(7)),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
     fn non_idempotent_progress_stops_after_writing_but_not_before_write() {
         let context = context(RetryOperation::ProducerSend, RetryIdempotency::NonIdempotent, 1, 3);
         let retry = RetryPolicy::decide_with_jitter(

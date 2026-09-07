@@ -58,8 +58,20 @@ mod tests {
     use rocketmq_error::Error;
     use rocketmq_error::ErrorContext;
     use rocketmq_error::PublicErrorView;
+    use rocketmq_error::AUTH_CREDENTIALS_INVALID;
+    use rocketmq_error::AUTH_PERMISSION_DENIED;
+    use rocketmq_error::BROKER_TRANSACTION_REJECTED;
+    use rocketmq_error::CLIENT_LIFECYCLE_ALREADY_STARTED;
+    use rocketmq_error::CONTROLLER_LEADERSHIP_NOT_LEADER;
     use rocketmq_error::CORE_INTERNAL_FAILURE;
     use rocketmq_error::PROTOCOL_BODY_INVALID;
+    use rocketmq_error::PROTOCOL_HEADER_INVALID;
+    use rocketmq_error::ROUTE_TOPIC_NOT_FOUND;
+    use rocketmq_error::STORAGE_OPERATION_UNSUPPORTED;
+    use rocketmq_error::STORAGE_STATE_CORRUPTED;
+    use rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED;
+    use rocketmq_error::TRANSPORT_CONNECTION_TIMEOUT;
+    use rocketmq_error::TRANSPORT_START_FAILED;
     use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
     use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
     use rocketmq_protocol::protocol::SerializeType;
@@ -78,6 +90,40 @@ mod tests {
         assert!(response.is_response_type());
         assert_eq!(response.code(), 1);
         assert_eq!(response.remark().map(CheetahString::as_str), Some("Internal error"));
+    }
+
+    #[test]
+    fn representative_canonical_conditions_keep_remoting_codes_and_public_remarks() {
+        let factory = RemotingCommandFactory::new(RemotingCommandDefaults::default());
+        let cases = [
+            (&PROTOCOL_HEADER_INVALID, 29, "Request header is invalid"),
+            (&ROUTE_TOPIC_NOT_FOUND, 17, "Topic route was not found"),
+            (&CLIENT_LIFECYCLE_ALREADY_STARTED, 1, "Client is already started"),
+            (&AUTH_CREDENTIALS_INVALID, 16, "Authentication credentials are invalid"),
+            (&AUTH_PERMISSION_DENIED, 16, "Permission was denied"),
+            (
+                &TRANSPORT_ADMISSION_QUEUE_SATURATED,
+                2,
+                "Transport admission queue is saturated",
+            ),
+            (&CONTROLLER_LEADERSHIP_NOT_LEADER, 2007, "Controller is not the leader"),
+            (&BROKER_TRANSACTION_REJECTED, 1, "Transaction message was rejected"),
+            (&TRANSPORT_START_FAILED, 1, "Transport server could not be started"),
+            (&TRANSPORT_CONNECTION_TIMEOUT, 2, "Transport connection timed out"),
+            (&STORAGE_STATE_CORRUPTED, 1, "Storage state is corrupted"),
+            (&STORAGE_OPERATION_UNSUPPORTED, 3, "Storage operation is unsupported"),
+            (&CORE_INTERNAL_FAILURE, 1, "Internal error"),
+        ];
+
+        for (descriptor, expected_code, expected_remark) in cases {
+            let response = error_response(
+                PublicErrorView::descriptor_only(descriptor),
+                RemotingErrorTarget::Fresh(&factory),
+            );
+
+            assert_eq!(response.code(), expected_code);
+            assert_eq!(response.remark().map(CheetahString::as_str), Some(expected_remark));
+        }
     }
 
     #[test]
