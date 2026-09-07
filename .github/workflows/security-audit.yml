@@ -64,6 +64,10 @@ jobs:
             lockfile: rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.lock
           - project: dashboard-web-backend
             lockfile: rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.lock
+            # RUSTSEC-2023-0071 affects RSA private-key operations. SQLx 0.8.6
+            # only uses the dependency to encrypt MySQL passwords with a public
+            # key, and production MySQL connections require verified TLS.
+            ignored_advisories: --ignore RUSTSEC-2023-0071
           - project: fuzz
             lockfile: fuzz/Cargo.lock
 
