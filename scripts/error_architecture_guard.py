@@ -19,11 +19,16 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import dataclasses
+import functools
 import re
 import sys
 from pathlib import Path
 from typing import Iterable
+
+import environment_write_guard as rust_source
+import rust_hygiene_guard
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -278,6 +283,7 @@ class Finding:
         return f"{rel}:{self.line}: {self.message}"
 
 
+@functools.cache
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -309,57 +315,141 @@ def is_test_source_path(path: Path) -> bool:
     )
 
 
+BUILTIN_TEST_CFG = re.compile(r"\s*test\s*")
+BROKER_TEST_SUPPORT_CFG = re.compile(
+    r'\s*any\s*\(\s*test\s*,\s*feature\s*=\s*"test-support"\s*\)\s*'
+)
+UNIT_TEST_MODULE = re.compile(
+    r"(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+tests\s*(?P<opening>\{)"
+)
+BROKER_TEST_SUPPORT_MODULE = re.compile(r"pub\s+mod\s+test_support\s*(?P<opening>\{)")
+BROKER_TEST_SUPPORT_PATH = "rocketmq-broker/src/lib.rs"
+
+
+@dataclasses.dataclass(frozen=True)
+class RustSourceAnalysis:
+    source: str
+    masked: str
+    lines: tuple[str, ...]
+    masked_lines: tuple[str, ...]
+    line_starts: tuple[int, ...]
+    test_ranges: tuple[tuple[int, int], ...]
+
+
+def skip_outer_attributes(masked: str, cursor: int) -> int:
+    """Skip whitespace and attributes between a cfg and its item."""
+    while True:
+        whitespace = re.match(r"\s*", masked[cursor:])
+        cursor += len(whitespace.group(0)) if whitespace is not None else 0
+        if not masked.startswith("#[", cursor):
+            return cursor
+        closing = rust_hygiene_guard.matching_delimiter(masked, cursor + 1, "[", "]")
+        if closing is None:
+            return len(masked)
+        cursor = closing + 1
+
+
+def exact_test_module_ranges(source: str, masked: str, relative_path: str) -> tuple[tuple[int, int], ...]:
+    """Find only the repository's two explicitly recognized inline test modules."""
+    ranges: list[tuple[int, int]] = []
+    for cfg in rust_hygiene_guard.CFG_ATTRIBUTE.finditer(masked):
+        body = source[cfg.start("body") : cfg.end("body")]
+        if BUILTIN_TEST_CFG.fullmatch(body):
+            module_pattern = UNIT_TEST_MODULE
+        elif relative_path == BROKER_TEST_SUPPORT_PATH and BROKER_TEST_SUPPORT_CFG.fullmatch(body):
+            module_pattern = BROKER_TEST_SUPPORT_MODULE
+        else:
+            continue
+
+        cursor = skip_outer_attributes(masked, cfg.end())
+        module = module_pattern.match(masked, cursor)
+        if module is None:
+            continue
+        opening = module.start("opening")
+        closing = rust_hygiene_guard.matching_delimiter(masked, opening, "{", "}")
+        if closing is not None:
+            ranges.append((cfg.start(), closing + 1))
+    return tuple(ranges)
+
+
+@functools.cache
+def rust_source_analysis(path: Path, relative_path: str) -> RustSourceAnalysis:
+    """Read, mask, and classify a Rust source file once."""
+    source = read_text(path)
+    masked = rust_source.mask_comments_and_literals(source)
+    lines = tuple(source.splitlines())
+    line_starts = [0]
+    line_starts.extend(match.end() for match in re.finditer("\n", source))
+    ranges = (
+        ((0, len(source)),)
+        if is_test_source_path(path)
+        else exact_test_module_ranges(source, masked, relative_path)
+    )
+    return RustSourceAnalysis(
+        source,
+        masked,
+        lines,
+        tuple(masked.splitlines()),
+        tuple(line_starts[: len(lines)]),
+        ranges,
+    )
+
+
+def analysis_for(path: Path) -> RustSourceAnalysis:
+    return rust_source_analysis(path, rel_path(path))
+
+
+def line_bounds(analysis: RustSourceAnalysis, line_number: int) -> tuple[int, int] | None:
+    if line_number < 1 or line_number > len(analysis.lines):
+        return None
+    start = analysis.line_starts[line_number - 1]
+    return start, start + len(analysis.lines[line_number - 1])
+
+
+def overlaps_test_range(start: int, end: int, ranges: tuple[tuple[int, int], ...]) -> bool:
+    return any(range_start < end and start < range_end for range_start, range_end in ranges)
+
+
+def without_test_ranges(line: str, start: int, ranges: tuple[tuple[int, int], ...]) -> tuple[str, bool]:
+    """Blank test-module spans on one line while preserving production on partial lines."""
+    characters = list(line)
+    end = start + len(line)
+    overlapped = False
+    for range_start, range_end in ranges:
+        overlap_start = max(start, range_start)
+        overlap_end = min(end, range_end)
+        if overlap_start >= overlap_end:
+            continue
+        overlapped = True
+        characters[overlap_start - start : overlap_end - start] = " " * (overlap_end - overlap_start)
+    return "".join(characters), overlapped
+
+
+def iter_non_test_line_pairs(path: Path) -> Iterable[tuple[int, str, str]]:
+    """Yield aligned original/masked production lines from one cached source analysis."""
+    analysis = analysis_for(path)
+    for line_number, (line, masked_line, start) in enumerate(
+        zip(analysis.lines, analysis.masked_lines, analysis.line_starts),
+        start=1,
+    ):
+        production_line, overlapped = without_test_ranges(line, start, analysis.test_ranges)
+        production_masked, _ = without_test_ranges(masked_line, start, analysis.test_ranges)
+        if overlapped and not production_line.strip():
+            continue
+        yield line_number, production_line, production_masked
+
+
 def is_test_context(path: Path, line_number: int) -> bool:
-    """Best-effort detector for unit-test modules inside Rust source files."""
-    if is_test_source_path(path):
-        return True
-
-    depth = 0
-    test_module_depth: int | None = None
-    pending_test_cfg = False
-    for current_line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        stripped = line.strip()
-        if stripped == "#[cfg(test)]":
-            pending_test_cfg = True
-        elif pending_test_cfg and re.match(r"(pub\([^)]*\)\s+|pub\s+)?mod\s+tests\b", stripped):
-            test_module_depth = depth + stripped.count("{") - stripped.count("}")
-            pending_test_cfg = False
-        elif stripped and not stripped.startswith("#"):
-            pending_test_cfg = False
-
-        if current_line_number == line_number:
-            return test_module_depth is not None
-
-        depth += line.count("{") - line.count("}")
-        if test_module_depth is not None and depth < test_module_depth:
-            test_module_depth = None
-    return False
+    """Return whether a line overlaps an exactly recognized test-only module."""
+    analysis = analysis_for(path)
+    bounds = line_bounds(analysis, line_number)
+    return bounds is not None and overlaps_test_range(*bounds, analysis.test_ranges)
 
 
 def iter_non_test_lines(path: Path) -> Iterable[tuple[int, str]]:
-    """Yield source lines while skipping test-only modules in one pass."""
-    if is_test_source_path(path):
-        return
-
-    depth = 0
-    test_module_depth: int | None = None
-    pending_test_cfg = False
-    for line_number, line in enumerate(read_text(path).splitlines(), start=1):
-        stripped = line.strip()
-        if stripped == "#[cfg(test)]":
-            pending_test_cfg = True
-        elif pending_test_cfg and re.match(r"(pub\([^)]*\)\s+|pub\s+)?mod\s+tests\b", stripped):
-            test_module_depth = depth + stripped.count("{") - stripped.count("}")
-            pending_test_cfg = False
-        elif stripped and not stripped.startswith("#"):
-            pending_test_cfg = False
-
-        if test_module_depth is None:
-            yield line_number, line
-
-        depth += line.count("{") - line.count("}")
-        if test_module_depth is not None and depth < test_module_depth:
-            test_module_depth = None
+    """Yield production source lines from one cached masked/range analysis."""
+    for line_number, line, _ in iter_non_test_line_pairs(path):
+        yield line_number, line
 
 
 def is_anyhow_result_allowlisted(path: Path) -> bool:
@@ -486,6 +576,17 @@ def sensitive_debug_field_name(field_name: str) -> bool:
     return any(term in lower for term in SENSITIVE_DEBUG_FIELD_TERMS)
 
 
+def is_known_non_sensitive_debug_field(path: Path, struct_name: str, field_name: str, declaration: str) -> bool:
+    """Recognize exact field/type pairs whose token name does not carry secret data."""
+    if (
+        rel_path(path) != "rocketmq-transport/src/clients/rocketmq_tokio_client/endpoint_state.rs"
+        or struct_name != "EndpointLease"
+        or field_name != "identity_token"
+    ):
+        return False
+    return re.fullmatch(r"identity_token\s*:\s*Arc\s*<\s*\(\s*\)\s*>\s*,?", declaration) is not None
+
+
 def find_sensitive_derive_debug_fields(paths: Iterable[Path]) -> list[Finding]:
     findings: list[Finding] = []
     field_pattern = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*:")
@@ -504,15 +605,26 @@ def find_sensitive_derive_debug_fields(paths: Iterable[Path]) -> list[Finding]:
             if stripped.startswith("#[") or not stripped:
                 continue
 
-            if not struct_pattern.match(stripped):
+            struct_match = struct_pattern.match(stripped)
+            if struct_match is None:
                 pending_debug_derive_line = None
                 continue
+            struct_name = struct_match.group(1)
 
             depth = line.count("{") - line.count("}")
             for field_index in range(index + 1, len(lines)):
                 _, field_line = lines[field_index]
                 field_match = field_pattern.match(field_line.strip())
-                if field_match and sensitive_debug_field_name(field_match.group(1)):
+                if (
+                    field_match
+                    and sensitive_debug_field_name(field_match.group(1))
+                    and not is_known_non_sensitive_debug_field(
+                        path,
+                        struct_name,
+                        field_match.group(1),
+                        field_line.strip(),
+                    )
+                ):
                     findings.append(
                         Finding(
                             path,
@@ -1043,18 +1155,79 @@ def is_source_stringification_allowlisted(path: Path) -> bool:
     return rel in SOURCE_STRINGIFICATION_ALLOWLIST
 
 
-def source_stringification_message(relative_path: str, line: str) -> str | None:
-    backend_root = any(
+FORMAT_MACRO = re.compile(r"\bformat\s*!\s*(?P<opening>\()")
+FORMAT_STRING_LITERAL = re.compile(
+    r'\s*(?:"(?:\\.|[^"\\])*"|r(?P<hash>#{0,255})".*?"(?P=hash))',
+    re.DOTALL,
+)
+SOURCE_INTERPOLATION = re.compile(r"\{(error|err|e|source)(?::[^}]*)?\}")
+
+
+def is_backend_source_path(relative_path: str) -> bool:
+    return any(
         relative_path == root or relative_path.startswith(f"{root}/")
         for root in ("rocketmq-store-rocksdb", "rocketmq-tieredstore")
     )
-    backend_source_to_text = backend_root and (
-        re.search(r"\b(error|err|e|source)\.to_string\(\)", line) is not None
-        or re.search(r"\{(error|err|e|source)(?::[^}]*)?\}", line) is not None
+
+
+def source_stringification_message(
+    relative_path: str,
+    code: str,
+    *,
+    format_source_interpolation: bool = False,
+) -> str | None:
+    backend_source_to_text = is_backend_source_path(relative_path) and (
+        re.search(r"\b(error|err|e|source)\.to_string\(\)", code) is not None
+        or format_source_interpolation
     )
-    if (backend_source_to_text or is_source_stringification_line(line)) and relative_path not in SOURCE_STRINGIFICATION_ALLOWLIST:
+    if (backend_source_to_text or is_source_stringification_line(code)) and relative_path not in SOURCE_STRINGIFICATION_ALLOWLIST:
         return "source stringification requires a typed source wrapper or SOURCE_STRINGIFICATION_ALLOWLIST entry"
     return None
+
+
+def source_interpolating_format_ranges(analysis: RustSourceAnalysis) -> tuple[tuple[int, int], ...]:
+    """Find real format! calls whose first string literal interpolates a source."""
+    ranges: list[tuple[int, int]] = []
+    for macro in FORMAT_MACRO.finditer(analysis.masked):
+        if any(start <= macro.start() < end for start, end in analysis.test_ranges):
+            continue
+        opening = macro.start("opening")
+        closing = rust_hygiene_guard.matching_delimiter(analysis.masked, opening, "(", ")")
+        if closing is None:
+            continue
+        arguments = analysis.source[opening + 1 : closing]
+        format_string = FORMAT_STRING_LITERAL.match(arguments)
+        if format_string is not None and SOURCE_INTERPOLATION.search(format_string.group(0)) is not None:
+            ranges.append((macro.start(), closing + 1))
+    return tuple(ranges)
+
+
+def find_source_stringification(paths: Iterable[Path]) -> list[Finding]:
+    """Find source-to-text promotion outside narrowly recognized test modules."""
+    findings: list[Finding] = []
+    for path in paths:
+        relative_path = rel_path(path)
+        analysis = analysis_for(path)
+        format_ranges = (
+            source_interpolating_format_ranges(analysis)
+            if is_backend_source_path(relative_path)
+            else ()
+        )
+        for start, _ in format_ranges:
+            message = source_stringification_message(
+                relative_path,
+                "",
+                format_source_interpolation=True,
+            )
+            if message is not None:
+                findings.append(Finding(path, bisect.bisect_right(analysis.line_starts, start), message))
+        for line_number, _, masked_line in iter_non_test_line_pairs(path):
+            line_start = analysis.line_starts[line_number - 1]
+            code, _ = without_test_ranges(masked_line, line_start, format_ranges)
+            message = source_stringification_message(relative_path, code)
+            if message is not None:
+                findings.append(Finding(path, line_number, message))
+    return sorted(findings, key=lambda finding: (finding.path, finding.line, finding.message))
 
 
 def is_source_stringification_line(line: str) -> bool:
@@ -1188,20 +1361,7 @@ def check_source_stringification_allowlist() -> list[Finding]:
     ]
     findings.extend(check_store_error_detail_stringification(store_facade_paths))
     findings.extend(check_backend_source_preservation())
-    for path in domain_paths:
-        for line_number, line in enumerate(read_text(path).splitlines(), start=1):
-            stripped = line.strip()
-            if stripped.startswith("//") or stripped.startswith("///") or is_test_context(path, line_number):
-                continue
-            message = source_stringification_message(rel_path(path), line)
-            if message is not None:
-                findings.append(
-                    Finding(
-                        path,
-                        line_number,
-                        message,
-                    )
-                )
+    findings.extend(find_source_stringification(domain_paths))
     return findings
 
 
@@ -1329,7 +1489,7 @@ def check_redaction_guards() -> list[Finding]:
             "REDACTED",
         ],
         ROOT / "rocketmq-dashboard" / "rocketmq-dashboard-web" / "backend" / "src" / "model" / "auth_model.rs": [
-            "auth_model_debug_redacts_password_and_session_id",
+            "auth_model_debug_redacts_password",
             "REDACTED",
         ],
         ROOT / "rocketmq-dashboard" / "rocketmq-dashboard-web" / "backend" / "src" / "config" / "app_config.rs": [
