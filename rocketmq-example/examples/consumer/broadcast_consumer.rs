@@ -20,6 +20,7 @@ use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::ClientConfig;
+use rocketmq_client_rust::ClientError;
 use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::ConsumeConcurrentlyStatus;
@@ -76,10 +77,12 @@ fn broadcast_client_config() -> ClientResult<ClientConfig> {
     let offset_dir = local_offset_store_dir()
         .join(client_config.build_mq_client_id())
         .join(CONSUMER_GROUP);
-    std::fs::create_dir_all(&offset_dir)?;
+    std::fs::create_dir_all(&offset_dir)
+        .map_err(|error| ClientError::internal("create broadcast offset directory", error))?;
     let offset_file = offset_dir.join("offsets.json");
     if !offset_file.exists() {
-        std::fs::write(offset_file, r#"{"offsetTable":{}}"#)?;
+        std::fs::write(offset_file, r#"{"offsetTable":{}}"#)
+            .map_err(|error| ClientError::internal("initialize broadcast offset file", error))?;
     }
 
     Ok(client_config)
