@@ -18,6 +18,7 @@
 
 //! Embedded Broker-backed local adapter for RocketMQ Proxy Core ports.
 
+mod command_control;
 mod config;
 mod execution;
 mod local;

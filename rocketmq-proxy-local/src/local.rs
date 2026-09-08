@@ -140,6 +140,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+use crate::command_control::RequestControl;
 use crate::config::LocalConfig;
 use crate::execution::run_local_execution;
 use crate::execution::LocalCommandHandler;
@@ -159,13 +160,14 @@ pub struct LocalBrokerFacadeClient {
     byte_budget: Arc<Semaphore>,
     rejected: Arc<AtomicU64>,
     broker_name: String,
+    context_deadline: Option<Instant>,
+    cancellation: CancellationToken,
 }
 
 pub(crate) struct QueuedLocalBrokerCommand {
     pub(crate) command: LocalBrokerCommand,
     pub(crate) enqueued_at: Instant,
-    pub(crate) deadline_at: Option<Instant>,
-    pub(crate) timeout_budget: Option<Duration>,
+    pub(crate) control: RequestControl,
     pub(crate) _count_permit: OwnedSemaphorePermit,
     pub(crate) _byte_permit: OwnedSemaphorePermit,
 }
@@ -221,11 +223,11 @@ impl QueuedLocalBrokerCommand {
     }
 
     pub(crate) fn deadline_expired(&self, now: Instant) -> bool {
-        self.deadline_at.is_some_and(|deadline| now >= deadline)
+        self.control.deadline_at.is_some_and(|deadline| now >= deadline)
     }
 
     pub(crate) fn apply_remaining_deadline(&mut self, now: Instant) {
-        let Some(deadline_at) = self.deadline_at else {
+        let Some(deadline_at) = self.control.deadline_at else {
             return;
         };
         if let LocalBrokerCommand::ProcessRemoting { timeout, .. } = &mut self.command {
@@ -238,6 +240,7 @@ impl LocalBrokerCommand {
     fn timeout(&self) -> Option<Duration> {
         match self {
             Self::ProcessRemoting { timeout, .. } => Some(*timeout),
+            Self::SendMessage { request, .. } => request.timeout,
             _ => None,
         }
     }
@@ -480,7 +483,15 @@ impl LocalBrokerFacadeClient {
             byte_budget,
             rejected,
             broker_name,
+            context_deadline: None,
+            cancellation: service_context.task_group().cancellation_token(),
         })
+    }
+
+    fn with_context(&self, context: &ProxyContext) -> Self {
+        let mut client = self.clone();
+        client.context_deadline = context.deadline_at();
+        client
     }
 
     pub fn broker_name(&self) -> &str {
@@ -621,18 +632,30 @@ impl LocalBrokerFacadeClient {
         &self,
         build: impl FnOnce(oneshot::Sender<ProxyResult<T>>) -> LocalBrokerCommand,
     ) -> ProxyResult<T> {
-        let reply_rx = self.enqueue(build)?;
-        reply_rx
-            .await
-            .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?
+        let (reply_rx, control) = self.enqueue(build)?;
+        let _caller = control.cancellation.clone().drop_guard();
+        tokio::select! {
+            biased;
+            reply = reply_rx => reply.map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?,
+            () = control.expired() => Err(control.timeout_error()),
+            () = control.cancellation.cancelled() => Err(ProxyError::Transport { message: "local broker request cancelled".to_owned() }),
+        }
     }
 
     fn enqueue<T>(
         &self,
         build: impl FnOnce(oneshot::Sender<ProxyResult<T>>) -> LocalBrokerCommand,
-    ) -> ProxyResult<oneshot::Receiver<ProxyResult<T>>> {
+    ) -> ProxyResult<(oneshot::Receiver<ProxyResult<T>>, RequestControl)> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let command = build(reply_tx);
+        let enqueued_at = Instant::now();
+        let control = RequestControl::new(
+            enqueued_at,
+            self.context_deadline,
+            command.timeout(),
+            &self.cancellation,
+        )?;
+        control.check()?;
         let estimated_bytes = command.estimated_bytes();
         let count_permit = Arc::clone(&self.count_budget)
             .try_acquire_owned()
@@ -641,14 +664,10 @@ impl LocalBrokerFacadeClient {
         let byte_permit = Arc::clone(&self.byte_budget)
             .try_acquire_many_owned(byte_permits)
             .map_err(|_| self.queue_overloaded())?;
-        let timeout_budget = command.timeout();
-        let enqueued_at = Instant::now();
-        let deadline_at = timeout_budget.map(|timeout| enqueued_at.checked_add(timeout).unwrap_or(enqueued_at));
         let queued = QueuedLocalBrokerCommand {
             command,
             enqueued_at,
-            deadline_at,
-            timeout_budget,
+            control: control.clone(),
             _count_permit: count_permit,
             _byte_permit: byte_permit,
         };
@@ -661,7 +680,7 @@ impl LocalBrokerFacadeClient {
                 });
             }
         }
-        Ok(reply_rx)
+        Ok((reply_rx, control))
     }
 
     fn queue_overloaded(&self) -> ProxyError {
@@ -701,11 +720,11 @@ impl LocalRouteService {
 impl RouteService for LocalRouteService {
     fn query_route<'a>(
         &'a self,
-        _context: &'a ProxyContext,
+        context: &'a ProxyContext,
         topic: &'a ResourceIdentity,
         _endpoints: &'a [ResolvedEndpoint],
     ) -> ProxyServiceFuture<'a, TopicRouteData> {
-        Box::pin(async move { self.client.query_route(topic.clone()).await })
+        Box::pin(async move { self.client.with_context(context).query_route(topic.clone()).await })
     }
 }
 
@@ -723,19 +742,29 @@ impl LocalMetadataService {
 impl MetadataService for LocalMetadataService {
     fn topic_message_type<'a>(
         &'a self,
-        _context: &'a ProxyContext,
+        context: &'a ProxyContext,
         topic: &'a ResourceIdentity,
     ) -> ProxyServiceFuture<'a, ProxyTopicMessageType> {
-        Box::pin(async move { self.client.query_topic_message_type(topic.clone()).await })
+        Box::pin(async move {
+            self.client
+                .with_context(context)
+                .query_topic_message_type(topic.clone())
+                .await
+        })
     }
 
     fn subscription_group<'a>(
         &'a self,
-        _context: &'a ProxyContext,
+        context: &'a ProxyContext,
         topic: &'a ResourceIdentity,
         group: &'a ResourceIdentity,
     ) -> ProxyServiceFuture<'a, Option<SubscriptionGroupMetadata>> {
-        Box::pin(async move { self.client.query_subscription_group(topic.clone(), group.clone()).await })
+        Box::pin(async move {
+            self.client
+                .with_context(context)
+                .query_subscription_group(topic.clone(), group.clone())
+                .await
+        })
     }
 }
 
@@ -764,6 +793,7 @@ impl AssignmentService for LocalAssignmentService {
     ) -> ProxyServiceFuture<'a, Option<Vec<MessageQueueAssignment>>> {
         Box::pin(async move {
             self.client
+                .with_context(context)
                 .query_assignment(
                     topic.clone(),
                     group.clone(),
@@ -794,6 +824,7 @@ impl MessageService for LocalMessageService {
     ) -> ProxyServiceFuture<'a, Vec<SendMessageResultEntry>> {
         Box::pin(async move {
             self.client
+                .with_context(context)
                 .send_message(
                     request.clone(),
                     context.client_id().map(ToOwned::to_owned),
@@ -810,6 +841,7 @@ impl MessageService for LocalMessageService {
     ) -> ProxyServiceFuture<'a, RecallMessagePlan> {
         Box::pin(async move {
             self.client
+                .with_context(context)
                 .recall_message(
                     request.clone(),
                     context.client_id().map(ToOwned::to_owned),
@@ -843,6 +875,7 @@ impl TransactionService for LocalTransactionService {
     ) -> ProxyServiceFuture<'a, EndTransactionPlan> {
         Box::pin(async move {
             self.client
+                .with_context(context)
                 .end_transaction(
                     request.clone(),
                     context.client_id().map(ToOwned::to_owned),
@@ -867,11 +900,13 @@ impl LocalConsumerService {
 impl ConsumerService for LocalConsumerService {
     fn sync_lite_subscription<'a>(
         &'a self,
-        _context: &'a ProxyContext,
+        context: &'a ProxyContext,
         client_id: &'a str,
         request: &'a LiteSubscriptionSyncRequest,
     ) -> ProxyServiceFuture<'a, ()> {
-        Box::pin(async move { sync_lite_subscription_via_broker(&self.client, client_id, request).await })
+        Box::pin(async move {
+            sync_lite_subscription_via_broker(&self.client.with_context(context), client_id, request).await
+        })
     }
 
     fn receive_message<'a>(
@@ -879,7 +914,9 @@ impl ConsumerService for LocalConsumerService {
         context: &'a ProxyContext,
         request: &'a ReceiveMessageRequest,
     ) -> ProxyServiceFuture<'a, ReceiveMessagePlan> {
-        Box::pin(async move { receive_message_via_broker(&self.client, request, context.deadline()).await })
+        Box::pin(async move {
+            receive_message_via_broker(&self.client.with_context(context), request, context.deadline()).await
+        })
     }
 
     fn pull_message<'a>(
@@ -887,55 +924,59 @@ impl ConsumerService for LocalConsumerService {
         context: &'a ProxyContext,
         request: &'a PullMessageRequest,
     ) -> ProxyServiceFuture<'a, PullMessagePlan> {
-        Box::pin(async move { pull_message_via_broker(&self.client, request, context.deadline()).await })
+        Box::pin(async move {
+            pull_message_via_broker(&self.client.with_context(context), request, context.deadline()).await
+        })
     }
 
     fn ack_message<'a>(
         &'a self,
-        _context: &'a ProxyContext,
+        context: &'a ProxyContext,
         request: &'a AckMessageRequest,
     ) -> ProxyServiceFuture<'a, Vec<AckMessageResultEntry>> {
-        Box::pin(async move { ack_message_via_broker(&self.client, request).await })
+        Box::pin(async move { ack_message_via_broker(&self.client.with_context(context), request).await })
     }
 
     fn forward_message_to_dead_letter_queue<'a>(
         &'a self,
-        _context: &'a ProxyContext,
+        context: &'a ProxyContext,
         request: &'a ForwardMessageToDeadLetterQueueRequest,
     ) -> ProxyServiceFuture<'a, ForwardMessageToDeadLetterQueuePlan> {
-        Box::pin(async move { forward_message_to_dead_letter_queue_via_broker(&self.client, request).await })
+        Box::pin(async move {
+            forward_message_to_dead_letter_queue_via_broker(&self.client.with_context(context), request).await
+        })
     }
 
     fn change_invisible_duration<'a>(
         &'a self,
-        _context: &'a ProxyContext,
+        context: &'a ProxyContext,
         request: &'a ChangeInvisibleDurationRequest,
     ) -> ProxyServiceFuture<'a, ChangeInvisibleDurationPlan> {
-        Box::pin(async move { change_invisible_duration_via_broker(&self.client, request).await })
+        Box::pin(async move { change_invisible_duration_via_broker(&self.client.with_context(context), request).await })
     }
 
     fn update_offset<'a>(
         &'a self,
-        _context: &'a ProxyContext,
+        context: &'a ProxyContext,
         request: &'a UpdateOffsetRequest,
     ) -> ProxyServiceFuture<'a, UpdateOffsetPlan> {
-        Box::pin(async move { update_offset_via_broker(&self.client, request).await })
+        Box::pin(async move { update_offset_via_broker(&self.client.with_context(context), request).await })
     }
 
     fn get_offset<'a>(
         &'a self,
-        _context: &'a ProxyContext,
+        context: &'a ProxyContext,
         request: &'a GetOffsetRequest,
     ) -> ProxyServiceFuture<'a, GetOffsetPlan> {
-        Box::pin(async move { get_offset_via_broker(&self.client, request).await })
+        Box::pin(async move { get_offset_via_broker(&self.client.with_context(context), request).await })
     }
 
     fn query_offset<'a>(
         &'a self,
-        _context: &'a ProxyContext,
+        context: &'a ProxyContext,
         request: &'a QueryOffsetRequest,
     ) -> ProxyServiceFuture<'a, QueryOffsetPlan> {
-        Box::pin(async move { query_offset_via_broker(&self.client, request).await })
+        Box::pin(async move { query_offset_via_broker(&self.client.with_context(context), request).await })
     }
 }
 
@@ -1065,8 +1106,8 @@ struct BrokerLocalCommandHandler {
 }
 
 impl LocalCommandHandler for BrokerLocalCommandHandler {
-    async fn handle(&self, command: LocalBrokerCommand) {
-        handle_local_broker_command(&self.facade, self.startup_error.as_ref(), command).await;
+    async fn handle(&self, command: LocalBrokerCommand, control: RequestControl) {
+        handle_local_broker_command(&self.facade, self.startup_error.as_ref(), command, control).await;
     }
 }
 
@@ -1096,8 +1137,7 @@ async fn drain_local_commands(
         let QueuedLocalBrokerCommand {
             command,
             enqueued_at: _,
-            deadline_at: _,
-            timeout_budget: _,
+            control,
             _count_permit,
             _byte_permit,
         } = queued;
@@ -1105,9 +1145,12 @@ async fn drain_local_commands(
             command.reject_with_transport(message.to_owned());
             continue;
         }
-        if tokio::time::timeout(deadline.remaining(), handle_local_broker_command(facade, None, command))
-            .await
-            .is_err()
+        if tokio::time::timeout(
+            deadline.remaining(),
+            handle_local_broker_command(facade, None, command, control),
+        )
+        .await
+        .is_err()
         {
             break;
         }
@@ -1118,7 +1161,12 @@ async fn handle_local_broker_command(
     facade: &ProxyBrokerFacade,
     startup_error: Option<&rocketmq_error::SharedError>,
     command: LocalBrokerCommand,
+    control: RequestControl,
 ) {
+    if let Err(error) = control.check() {
+        command.reject_with(error);
+        return;
+    }
     match command {
         LocalBrokerCommand::QueryRoute { topic, reply } => {
             let _ = reply.send(startup_error.map_or_else(
@@ -1158,7 +1206,7 @@ async fn handle_local_broker_command(
             let result = if let Some(error) = startup_error {
                 Err(ProxyError::from(Arc::clone(error)))
             } else {
-                query_assignment(facade, topic, group, client_id, strategy_name).await
+                query_assignment(facade, topic, group, client_id, strategy_name, &control).await
             };
             let _ = reply.send(result);
         }
@@ -1171,7 +1219,7 @@ async fn handle_local_broker_command(
             let result = if let Some(error) = startup_error {
                 Err(ProxyError::from(Arc::clone(error)))
             } else {
-                send_message(facade, request, client_id, request_id).await
+                send_message(facade, request, client_id, request_id, &control).await
             };
             let _ = reply.send(result);
         }
@@ -1184,7 +1232,7 @@ async fn handle_local_broker_command(
             let result = if let Some(error) = startup_error {
                 Err(ProxyError::from(Arc::clone(error)))
             } else {
-                recall_message(facade, request, client_id, request_id).await
+                recall_message(facade, request, client_id, request_id, &control).await
             };
             let _ = reply.send(result);
         }
@@ -1197,7 +1245,7 @@ async fn handle_local_broker_command(
             let result = if let Some(error) = startup_error {
                 Err(ProxyError::from(Arc::clone(error)))
             } else {
-                end_transaction(facade, request, client_id, request_id).await
+                end_transaction(facade, request, client_id, request_id, &control).await
             };
             let _ = reply.send(result);
         }
@@ -1257,6 +1305,7 @@ async fn query_assignment(
     group: ResourceIdentity,
     client_id: String,
     strategy_name: String,
+    control: &RequestControl,
 ) -> ProxyResult<Option<Vec<MessageQueueAssignment>>> {
     let request_body = QueryAssignmentRequestBody {
         topic: CheetahString::from(topic.to_string()),
@@ -1271,7 +1320,8 @@ async fn query_assignment(
             .encode()
             .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?,
     );
-    let response = facade_embedded_response(facade, request, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
+    let response =
+        facade_embedded_response(facade, request, control.remaining(LOCAL_REMOTING_RESPONSE_TIMEOUT)?).await?;
     if ResponseCode::from(response.response_code()) != ResponseCode::Success {
         return Err(broker_operation_error("queryAssignment", &response));
     }
@@ -1289,18 +1339,39 @@ async fn send_message(
     request: SendMessageRequest,
     client_id: Option<String>,
     request_id: String,
+    control: &RequestControl,
 ) -> ProxyResult<Vec<SendMessageResultEntry>> {
     let producer_group = build_local_proxy_producer_group(client_id.as_deref(), request_id.as_str());
     let broker_name = facade.broker_config().broker_identity.broker_name.clone();
     let entries = request.messages;
     if compatible_batch_entries(&entries) {
-        return Ok(send_compatible_batch(facade, &broker_name, producer_group.as_str(), entries).await);
+        return Ok(send_compatible_batch(facade, &broker_name, producer_group.as_str(), entries, control).await);
     }
+    Ok(send_entries(entries, control, |entry| {
+        send_message_entry(facade, &broker_name, producer_group.as_str(), entry, control)
+    })
+    .await)
+}
+
+async fn send_entries<F>(
+    entries: Vec<SendMessageEntry>,
+    control: &RequestControl,
+    mut send: impl FnMut(SendMessageEntry) -> F,
+) -> Vec<SendMessageResultEntry>
+where
+    F: std::future::Future<Output = SendMessageResultEntry>,
+{
     let mut results = Vec::with_capacity(entries.len());
     for entry in entries {
-        results.push(send_message_entry(facade, &broker_name, producer_group.as_str(), entry).await);
+        results.push(match control.check() {
+            Ok(()) => send(entry).await,
+            Err(error) => SendMessageResultEntry {
+                status: ProxyStatusMapper::from_error_payload(&error),
+                send_result: None,
+            },
+        });
     }
-    Ok(results)
+    results
 }
 
 async fn sync_lite_subscription_via_broker(
@@ -1345,10 +1416,12 @@ async fn send_compatible_batch(
     broker_name: &CheetahString,
     producer_group: &str,
     entries: Vec<SendMessageEntry>,
+    control: &RequestControl,
 ) -> Vec<SendMessageResultEntry> {
     let result = async {
         let request = build_send_batch_message_request(broker_name, producer_group, &entries)?;
-        let response = facade_embedded_response(facade, request, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
+        let response =
+            facade_embedded_response(facade, request, control.remaining(LOCAL_REMOTING_RESPONSE_TIMEOUT)?).await?;
         build_send_result(entries[0].topic.clone(), broker_name, response)
     }
     .await;
@@ -1396,8 +1469,9 @@ async fn send_message_entry(
     broker_name: &CheetahString,
     producer_group: &str,
     entry: SendMessageEntry,
+    control: &RequestControl,
 ) -> SendMessageResultEntry {
-    match send_message_entry_inner(facade, broker_name, producer_group, entry).await {
+    match send_message_entry_inner(facade, broker_name, producer_group, entry, control).await {
         Ok(send_result) => SendMessageResultEntry {
             status: ProxyStatusMapper::from_send_result_payload(&send_result),
             send_result: Some(send_result),
@@ -1414,10 +1488,12 @@ async fn send_message_entry_inner(
     broker_name: &CheetahString,
     producer_group: &str,
     mut entry: SendMessageEntry,
+    control: &RequestControl,
 ) -> ProxyResult<SendResult> {
     attach_transaction_producer_group(&mut entry.message, producer_group);
     let request = build_send_message_request(broker_name, producer_group, &entry)?;
-    let response = facade_embedded_response(facade, request, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
+    let response =
+        facade_embedded_response(facade, request, control.remaining(LOCAL_REMOTING_RESPONSE_TIMEOUT)?).await?;
     build_send_result(entry.topic, broker_name, response)
 }
 
@@ -1426,6 +1502,7 @@ async fn recall_message(
     request: RecallMessageRequest,
     client_id: Option<String>,
     request_id: String,
+    control: &RequestControl,
 ) -> ProxyResult<RecallMessagePlan> {
     let producer_group = build_local_proxy_producer_group(client_id.as_deref(), request_id.as_str());
     let header = RecallMessageRequestHeader::new(
@@ -1435,7 +1512,8 @@ async fn recall_message(
     );
     let mut command = RemotingCommand::create_request_command(RequestCode::RecallMessage, header);
     command.make_custom_header_to_net();
-    let response = facade_embedded_response(facade, command, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
+    let response =
+        facade_embedded_response(facade, command, control.remaining(LOCAL_REMOTING_RESPONSE_TIMEOUT)?).await?;
     if ResponseCode::from(response.response_code()) != ResponseCode::Success {
         return Err(broker_operation_error("recallMessage", &response));
     }
@@ -1455,6 +1533,7 @@ async fn end_transaction(
     request: EndTransactionRequest,
     client_id: Option<String>,
     request_id: String,
+    control: &RequestControl,
 ) -> ProxyResult<EndTransactionPlan> {
     let producer_group = request
         .producer_group
@@ -1490,7 +1569,8 @@ async fn end_transaction(
     let mut command = RemotingCommand::create_request_command(RequestCode::EndTransaction, header)
         .set_remark(CheetahString::from(request.trace_context.as_deref().unwrap_or("")));
     command.make_custom_header_to_net();
-    let response = facade_embedded_response(facade, command, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
+    let response =
+        facade_embedded_response(facade, command, control.remaining(LOCAL_REMOTING_RESPONSE_TIMEOUT)?).await?;
     if ResponseCode::from(response.response_code()) != ResponseCode::Success {
         return Err(broker_operation_error("endTransaction", &response));
     }
@@ -3106,6 +3186,8 @@ mod tests {
             byte_budget: Arc::new(tokio::sync::Semaphore::new(4_096)),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
+            context_deadline: None,
+            cancellation: tokio_util::sync::CancellationToken::new(),
         };
         let _first_reply = client
             .enqueue(|reply| super::LocalBrokerCommand::QueryRoute {
@@ -3137,6 +3219,8 @@ mod tests {
             byte_budget: Arc::new(tokio::sync::Semaphore::new(4_096)),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
+            context_deadline: None,
+            cancellation: tokio_util::sync::CancellationToken::new(),
         };
         let backend = LocalRemotingBackend::new(client);
         let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig).set_opaque(9_852);
@@ -3186,6 +3270,8 @@ mod tests {
             byte_budget: Arc::new(tokio::sync::Semaphore::new(4_096)),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
+            context_deadline: None,
+            cancellation: tokio_util::sync::CancellationToken::new(),
         };
         let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig).set_opaque(9_857);
 
@@ -3244,8 +3330,13 @@ mod tests {
                 reply,
             },
             enqueued_at,
-            deadline_at: None,
-            timeout_budget: None,
+            control: super::RequestControl::new(
+                Instant::now(),
+                None,
+                None,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .unwrap(),
             _count_permit: count_permit,
             _byte_permit: permit,
         };
@@ -3305,5 +3396,78 @@ mod tests {
         assert!(report.is_healthy(), "{}", report.to_json());
         assert!(report.to_json().contains("command-lanes"), "{}", report.to_json());
         assert_eq!(service.task_group().task_count(), 0);
+    }
+    #[tokio::test]
+    async fn caller_drop_cancels_envelope_but_keeps_queue_budget() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let count_budget = Arc::new(tokio::sync::Semaphore::new(1));
+        let client = LocalBrokerFacadeClient {
+            sender,
+            count_budget: count_budget.clone(),
+            byte_budget: Arc::new(tokio::sync::Semaphore::new(4096)),
+            rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            broker_name: "broker-a".to_owned(),
+            context_deadline: None,
+            cancellation: tokio_util::sync::CancellationToken::new(),
+        };
+        let mut call = Box::pin(client.query_route(ResourceIdentity::new("", "topic")));
+        tokio::select! { result = &mut call => panic!("must wait for worker: {result:?}"), () = tokio::task::yield_now() => {} }
+        let queued = receiver.recv().await.unwrap();
+        drop(call);
+        assert!(queued.control.cancellation.is_cancelled());
+        assert_eq!(
+            count_budget.available_permits(),
+            0,
+            "caller cannot release an envelope's payload budget"
+        );
+        drop(queued);
+        assert_eq!(count_budget.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn typed_send_rejects_expired_deadline_before_admission() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let client = LocalBrokerFacadeClient {
+            sender,
+            count_budget: Arc::new(tokio::sync::Semaphore::new(1)),
+            byte_budget: Arc::new(tokio::sync::Semaphore::new(4096)),
+            rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            broker_name: "broker-a".to_owned(),
+            context_deadline: Some(Instant::now()),
+            cancellation: tokio_util::sync::CancellationToken::new(),
+        };
+        let error = client
+            .send_message(
+                super::SendMessageRequest {
+                    messages: Vec::new(),
+                    timeout: Some(Duration::from_secs(3)),
+                    validate_message_type: false,
+                },
+                None,
+                "expired".to_owned(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_OPERATION_TIMED_OUT);
+        assert!(receiver.try_recv().is_err());
+    }
+    #[tokio::test]
+    async fn batch_control_preserves_completed_entry_and_prevents_next_dispatch() {
+        let control =
+            super::RequestControl::new(Instant::now(), None, None, &tokio_util::sync::CancellationToken::new())
+                .unwrap();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let results = super::send_entries(vec![batch_entry("first"), batch_entry("second")], &control, |_| async {
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            control.cancellation.cancel();
+            super::SendMessageResultEntry {
+                status: super::ProxyStatusMapper::ok_payload(),
+                send_result: None,
+            }
+        })
+        .await;
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert!(results[0].status.is_ok());
+        assert!(!results[1].status.is_ok());
     }
 }

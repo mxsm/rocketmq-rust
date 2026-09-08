@@ -39,6 +39,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+use crate::command_control::RequestControl;
 use crate::config::LocalConfig;
 use crate::local::LocalBrokerCommand;
 use crate::local::QueuedLocalBrokerCommand;
@@ -89,7 +90,7 @@ impl LocalExecutionPolicy {
 }
 
 pub(crate) trait LocalCommandHandler: Send + Sync + 'static {
-    fn handle(&self, command: LocalBrokerCommand) -> impl Future<Output = ()> + Send;
+    fn handle(&self, command: LocalBrokerCommand, control: RequestControl) -> impl Future<Output = ()> + Send;
 }
 
 struct LocalExecutionLimits {
@@ -280,13 +281,19 @@ fn dispatch_to_lane<H>(
 ) where
     H: LocalCommandHandler,
 {
+    if queued.control.cancellation.is_cancelled() {
+        queued.command.reject_unavailable();
+        return;
+    }
     let now = Instant::now();
     if queued.is_expired(now, policy.max_queue_age) {
         queued.command.reject_overload();
         return;
     }
     if queued.deadline_expired(now) {
-        queued.command.reject_timeout(queued.timeout_budget.unwrap_or_default());
+        queued
+            .command
+            .reject_timeout(queued.control.timeout_budget.unwrap_or_default());
         return;
     }
     let key = queued.command.ordering_key();
@@ -421,13 +428,19 @@ async fn execute_queued_command<H>(
 ) where
     H: LocalCommandHandler,
 {
+    if queued.control.cancellation.is_cancelled() {
+        queued.command.reject_unavailable();
+        return;
+    }
     let now = Instant::now();
     if queued.is_expired(now, max_queue_age) {
         queued.command.reject_overload();
         return;
     }
     if queued.deadline_expired(now) {
-        queued.command.reject_timeout(queued.timeout_budget.unwrap_or_default());
+        queued
+            .command
+            .reject_timeout(queued.control.timeout_budget.unwrap_or_default());
         return;
     }
     let class = queued.command.execution_class();
@@ -435,6 +448,14 @@ async fn execute_queued_command<H>(
         biased;
         () = cancellation.cancelled() => {
             queued.command.reject_unavailable();
+            return;
+        }
+        () = queued.control.cancellation.cancelled() => {
+            queued.command.reject_unavailable();
+            return;
+        }
+        () = queued.control.expired() => {
+            queued.command.reject_timeout(queued.control.timeout_budget.unwrap_or_default());
             return;
         }
         permit = limits.acquire(class) => permit,
@@ -445,15 +466,19 @@ async fn execute_queued_command<H>(
     };
     let now = Instant::now();
     if queued.deadline_expired(now) {
-        queued.command.reject_timeout(queued.timeout_budget.unwrap_or_default());
+        queued
+            .command
+            .reject_timeout(queued.control.timeout_budget.unwrap_or_default());
+        return;
+    }
+    if cancellation.is_cancelled() || queued.control.cancellation.is_cancelled() {
+        queued.command.reject_unavailable();
         return;
     }
     queued.apply_remaining_deadline(now);
-    tokio::select! {
-        biased;
-        () = cancellation.cancelled() => {}
-        () = handler.handle(queued.command) => {}
-    }
+    // Once Broker execution begins, its lane owns the payload and permits until it exits.
+    // Caller cancellation stops waiting and subsequent batch entries, not a committed write.
+    handler.handle(queued.command, queued.control).await;
 }
 
 fn reject_lane(receiver: &mut mpsc::Receiver<QueuedLocalBrokerCommand>) {
@@ -632,7 +657,7 @@ mod tests {
     }
 
     impl LocalCommandHandler for BlockingHandler {
-        async fn handle(&self, command: LocalBrokerCommand) {
+        async fn handle(&self, command: LocalBrokerCommand, _control: RequestControl) {
             let id = match &command {
                 LocalBrokerCommand::ProcessRemoting { request, .. } => request.opaque(),
                 LocalBrokerCommand::QueryRoute { .. } => -1,
@@ -655,8 +680,7 @@ mod tests {
         QueuedLocalBrokerCommand {
             command,
             enqueued_at: Instant::now(),
-            deadline_at: None,
-            timeout_budget: None,
+            control: RequestControl::new(Instant::now(), None, None, &CancellationToken::new()).unwrap(),
             _count_permit: count.try_acquire_owned().expect("count permit"),
             _byte_permit: bytes.try_acquire_owned().expect("byte permit"),
         }
@@ -821,5 +845,80 @@ mod tests {
         assert_eq!(handler.maximum.load(Ordering::Acquire), 1);
         let report = service.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
+    }
+    #[tokio::test]
+    async fn cancelled_or_expired_commands_never_enter_handler() {
+        let (entered, mut events) = mpsc::channel(1);
+        let handler = BlockingHandler {
+            entered,
+            release: Arc::new(Semaphore::new(1)),
+            current: AtomicUsize::new(0),
+            maximum: AtomicUsize::new(0),
+        };
+        let limits = LocalExecutionLimits::new(LocalExecutionPolicy::from_config(&LocalConfig::default()));
+        for expired in [false, true] {
+            let mut command = queued(route_command());
+            if expired {
+                command.control.deadline_at = Some(Instant::now());
+            } else {
+                command.control.cancellation.cancel();
+            }
+            execute_queued_command(
+                command,
+                Duration::from_secs(60),
+                &limits,
+                &handler,
+                &CancellationToken::new(),
+            )
+            .await;
+            assert!(events.try_recv().is_err());
+            assert_eq!(handler.maximum.load(Ordering::Acquire), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_slot_wait_without_releasing_running_owner() {
+        let (entered, mut events) = mpsc::channel(2);
+        let release = Arc::new(Semaphore::new(0));
+        let handler = BlockingHandler {
+            entered,
+            release: release.clone(),
+            current: AtomicUsize::new(0),
+            maximum: AtomicUsize::new(0),
+        };
+        let limits = LocalExecutionLimits::new(LocalExecutionPolicy::from_config(&LocalConfig::default()));
+        let command = queued(route_command());
+        let caller = command.control.cancellation.clone();
+        let cancellation = CancellationToken::new();
+        let running = execute_queued_command(command, Duration::from_secs(60), &limits, &handler, &cancellation);
+        let observe = async {
+            events.recv().await.unwrap();
+            caller.cancel();
+            tokio::task::yield_now().await;
+            assert_eq!(
+                handler.current.load(Ordering::Acquire),
+                1,
+                "started handler remains owned"
+            );
+            release.add_permits(1);
+        };
+        tokio::join!(running, observe);
+        assert_eq!(handler.current.load(Ordering::Acquire), 0);
+        let held = limits
+            .total_inflight
+            .clone()
+            .acquire_many_owned(limits.total_inflight.available_permits() as u32)
+            .await
+            .unwrap();
+        let command = queued(route_command());
+        let caller = command.control.cancellation.clone();
+        let waiting = execute_queued_command(command, Duration::from_secs(60), &limits, &handler, &cancellation);
+        let cancel = async {
+            tokio::task::yield_now().await;
+            caller.cancel();
+        };
+        tokio::join!(waiting, cancel);
+        assert!(events.try_recv().is_err());
+        drop(held);
     }
 }

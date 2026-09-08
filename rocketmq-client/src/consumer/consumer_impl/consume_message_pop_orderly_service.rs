@@ -47,6 +47,7 @@ use tracing::warn;
 use crate::base::client_config::ClientConfig;
 use crate::consumer::ack_result::AckResult;
 use crate::consumer::consumer_impl::bounded_consume_scheduler::BoundedConsumeScheduler;
+use crate::consumer::consumer_impl::bounded_consume_scheduler::ConsumeDisposition;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
@@ -73,12 +74,12 @@ pub struct ConsumeMessagePopOrderlyService {
     pub(crate) message_listener: ArcMessageListenerOrderly,
     pub(crate) concurrency_limiter: Arc<Semaphore>,
     pub(crate) max_concurrency: Arc<AtomicUsize>,
-    pub(self) consume_request_set: Arc<DashSet<ConsumeRequest>>,
+    pub(self) consume_request_set: Arc<DashSet<PopConsumeKey>>,
     pub(crate) message_queue_lock: MessageQueueLock,
     pub(crate) stopped: Arc<AtomicBool>,
     pub(crate) active_tasks: Arc<AtomicUsize>,
     pub(crate) lock_refresh_task: Arc<Mutex<Option<PopOrderlyTaskHandle>>>,
-    consume_scheduler: BoundedConsumeScheduler<ConsumeRequest>,
+    consume_scheduler: BoundedConsumeScheduler<RegisteredRequest>,
 }
 
 const POP_ORDERLY_SCHEDULER_CAPACITY: usize = 4_096;
@@ -201,10 +202,6 @@ impl ConsumeMessagePopOrderlyService {
         self.default_mqpush_consumer_impl.as_ref().and_then(Weak::upgrade)
     }
 
-    fn remove_consume_request(&self, request: &ConsumeRequest) {
-        self.consume_request_set.remove(request);
-    }
-
     pub async fn lock_mq_periodically(&self) {
         if self.stopped.load(Ordering::Acquire) {
             return;
@@ -306,44 +303,22 @@ impl ConsumeMessagePopOrderlyService {
         }
     }
 
-    async fn submit_consume_request(&self, _this: Arc<Self>, request: ConsumeRequest, force: bool) {
-        if !force && !self.consume_request_set.insert(request.clone()) {
+    async fn submit_consume_request(&self, _this: Arc<Self>, request: ConsumeRequest, _force: bool) {
+        let key = request.key();
+        if !self.consume_request_set.insert(key.clone()) {
             return;
         }
-        if let Err(error) = self.consume_scheduler.schedule(request).await {
-            let request = error.into_item();
-            self.consume_request_set.remove(&request);
-            request.process_queue.dec_found_msg(request.msgs.len());
-            warn!(
-                "POP orderly consume request rejected during shutdown, group={}, mq={}, msgs={}",
-                self.consumer_group,
-                request.message_queue,
-                request.msgs.len()
-            );
-        }
-    }
-
-    async fn submit_consume_request_later(
-        &self,
-        _this: Arc<Self>,
-        request: ConsumeRequest,
-        mut suspend_time_millis: u64,
-    ) {
-        suspend_time_millis = suspend_time_millis.clamp(10, 30_000);
-        if let Err(error) = self
-            .consume_scheduler
-            .schedule_after(request, Duration::from_millis(suspend_time_millis))
-            .await
-        {
-            let request = error.into_item();
-            self.consume_request_set.remove(&request);
-            request.process_queue.dec_found_msg(request.msgs.len());
-            warn!(
-                "POP orderly retry rejected during shutdown, group={}, mq={}, msgs={}",
-                self.consumer_group,
-                request.message_queue,
-                request.msgs.len()
-            );
+        let registered = RegisteredRequest {
+            request,
+            _registration: PopRegistration {
+                key,
+                registrations: Arc::clone(&self.consume_request_set),
+            },
+        };
+        if let Err(error) = self.consume_scheduler.schedule(registered).await {
+            let rejected = error.into_item();
+            warn!(group = %self.consumer_group, mq = %rejected.request.message_queue,
+                "POP orderly consume request rejected during shutdown");
         }
     }
 
@@ -362,28 +337,23 @@ impl ConsumeMessagePopOrderlyService {
         }
     }
 
-    async fn check_reconsume_times(&self, msgs: &mut [Arc<MessageExt>]) -> bool {
-        let mut suspend = false;
+    async fn check_reconsume_times(&self, msgs: &mut Vec<Arc<MessageExt>>) -> bool {
+        let mut retry = Vec::with_capacity(msgs.len());
         let max_times = self.get_max_reconsume_times();
-
-        for msg in msgs {
+        for mut msg in std::mem::take(msgs) {
             let reconsume_times = msg.reconsume_times;
             if reconsume_times >= max_times {
-                MessageAccessor::set_reconsume_time(
-                    Arc::make_mut(msg),
-                    CheetahString::from_string(reconsume_times.to_string()),
-                );
-                if !self.send_message_back(msg.as_ref()).await {
-                    suspend = true;
-                    Arc::make_mut(msg).reconsume_times = reconsume_times + 1;
+                MessageAccessor::set_reconsume_time(Arc::make_mut(&mut msg), reconsume_times.to_string().into());
+                if self.send_message_back(msg.as_ref()).await {
+                    self.ack_messages(std::slice::from_ref(&msg)).await;
+                    continue;
                 }
-            } else {
-                suspend = true;
-                Arc::make_mut(msg).reconsume_times = reconsume_times + 1;
             }
+            Arc::make_mut(&mut msg).reconsume_times = reconsume_times.saturating_add(1);
+            retry.push(msg);
         }
-
-        suspend
+        *msgs = retry;
+        !msgs.is_empty()
     }
 
     async fn send_message_back(&self, msg: &MessageExt) -> bool {
@@ -547,12 +517,12 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
                 let service = Arc::clone(&worker_service);
                 async move {
                     if service.stopped.load(Ordering::Acquire) {
-                        return;
+                        return ConsumeDisposition::Complete;
                     }
                     let limiter = Arc::clone(&service.concurrency_limiter);
                     let permit = match limiter.acquire_owned().await {
                         Ok(permit) => permit,
-                        Err(_) => return,
+                        Err(_) => return ConsumeDisposition::Complete,
                     };
                     service.active_tasks.fetch_add(1, Ordering::SeqCst);
                     struct ActiveTaskGuard(Arc<AtomicUsize>);
@@ -562,8 +532,12 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
                         }
                     }
                     let _active = ActiveTaskGuard(Arc::clone(&service.active_tasks));
-                    request.run(Arc::clone(&service)).await;
+                    let retry = request.request.run(Arc::clone(&service)).await;
                     drop(permit);
+                    match retry {
+                        Some(after) => ConsumeDisposition::Retry { item: request, after },
+                        None => ConsumeDisposition::Complete,
+                    }
                 }
             },
         ) {
@@ -755,6 +729,36 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct PopConsumeKey {
+    process_queue: usize,
+    message_queue: MessageQueue,
+    sharding_key_index: i32,
+}
+
+struct PopRegistration {
+    key: PopConsumeKey,
+    registrations: Arc<DashSet<PopConsumeKey>>,
+}
+
+impl Drop for PopRegistration {
+    fn drop(&mut self) {
+        self.registrations.remove(&self.key);
+    }
+}
+
+struct RegisteredRequest {
+    request: ConsumeRequest,
+    _registration: PopRegistration,
+}
+
+impl Drop for RegisteredRequest {
+    fn drop(&mut self) {
+        // Completion, rejected admission, and cancellation release the same batch owner.
+        self.request.process_queue.dec_found_msg(self.request.msgs.len());
+    }
+}
+
 #[derive(Clone)]
 struct ConsumeRequest {
     process_queue: Arc<PopProcessQueue>,
@@ -773,6 +777,14 @@ impl std::fmt::Debug for ConsumeRequest {
 }
 
 impl ConsumeRequest {
+    fn key(&self) -> PopConsumeKey {
+        PopConsumeKey {
+            process_queue: Arc::as_ptr(&self.process_queue) as usize,
+            message_queue: self.message_queue.clone(),
+            sharding_key_index: self.sharding_key_index,
+        }
+    }
+
     pub fn new(process_queue: Arc<PopProcessQueue>, message_queue: MessageQueue, msgs: Vec<Arc<MessageExt>>) -> Self {
         Self {
             process_queue,
@@ -782,14 +794,16 @@ impl ConsumeRequest {
         }
     }
 
-    pub async fn run(&mut self, consume_message_pop_orderly_service: Arc<ConsumeMessagePopOrderlyService>) {
+    pub async fn run(
+        &mut self,
+        consume_message_pop_orderly_service: Arc<ConsumeMessagePopOrderlyService>,
+    ) -> Option<Duration> {
         if self.process_queue.is_dropped() {
             warn!(
                 "run, message queue not be able to consume, because it's dropped. {}",
                 self.message_queue
             );
-            consume_message_pop_orderly_service.remove_consume_request(self);
-            return;
+            return None;
         }
 
         let lock = consume_message_pop_orderly_service
@@ -801,26 +815,29 @@ impl ConsumeRequest {
         let msgs = &mut self.msgs;
 
         if msgs.is_empty() {
-            consume_message_pop_orderly_service
-                .submit_consume_request_later(consume_message_pop_orderly_service.clone(), self.clone(), 1000)
-                .await;
-            return;
+            return None;
         }
-
-        let suspend = consume_message_pop_orderly_service.check_reconsume_times(msgs).await;
-        if suspend {
-            consume_message_pop_orderly_service
-                .submit_consume_request_later(
-                    consume_message_pop_orderly_service.clone(),
-                    self.clone(),
-                    consume_message_pop_orderly_service
-                        .consumer_config
-                        .suspend_current_queue_time_millis,
-                )
-                .await;
-            return;
+        // A receipt may expire while queued or waiting for the queue lock.
+        for msg in msgs.iter() {
+            let Some(extra) = msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK)) else {
+                return None;
+            };
+            let parts = rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil::split(&extra);
+            use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
+            let (Ok(pop_time), Ok(invisible)) = (
+                ExtraInfoUtil::get_pop_time(&parts),
+                ExtraInfoUtil::get_invisible_time(&parts),
+            ) else {
+                return None;
+            };
+            if pop_time <= 0
+                || invisible <= 0
+                || rocketmq_runtime::common::time_utils::current_millis().saturating_sub(pop_time as u64)
+                    >= invisible as u64
+            {
+                return None;
+            }
         }
-
         let begin_timestamp = Instant::now();
         let listener = consume_message_pop_orderly_service.message_listener.clone();
         let msgs_for_blocking = msgs.clone();
@@ -871,11 +888,15 @@ impl ConsumeRequest {
             .await;
 
         if continue_consume {
-            drop(_guard);
-            consume_message_pop_orderly_service
-                .submit_consume_request(consume_message_pop_orderly_service.clone(), self.clone(), false)
-                .await;
+            // Successfully acknowledged receipts must never re-enter the listener.
+            None
         } else {
+            let previous = msgs.len();
+            let retry = consume_message_pop_orderly_service.check_reconsume_times(msgs).await;
+            self.process_queue.dec_found_msg(previous - msgs.len());
+            if !retry {
+                return None;
+            }
             let suspend_time = if context.get_suspend_current_queue_time_millis() > 0 {
                 context.get_suspend_current_queue_time_millis() as u64
             } else {
@@ -883,10 +904,7 @@ impl ConsumeRequest {
                     .consumer_config
                     .suspend_current_queue_time_millis
             };
-            drop(_guard);
-            consume_message_pop_orderly_service
-                .submit_consume_request_later(consume_message_pop_orderly_service.clone(), self.clone(), suspend_time)
-                .await;
+            Some(Duration::from_millis(suspend_time.clamp(10, 30_000)))
         }
     }
 }
@@ -910,7 +928,7 @@ impl Eq for ConsumeRequest {}
 impl Hash for ConsumeRequest {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.sharding_key_index.hash(state);
-        self.process_queue.as_ref().hash(state);
+        (Arc::as_ptr(&self.process_queue) as usize).hash(state);
         self.message_queue.hash(state);
     }
 }
@@ -1248,5 +1266,75 @@ mod tests {
             r1, r2,
             "Different process queues with same message queue should not be equal"
         );
+    }
+    #[tokio::test]
+    async fn registration_deduplicates_without_retaining_payload_and_clears_on_shutdown() {
+        let service = Arc::new(new_service(None));
+        let pq = Arc::new(PopProcessQueue::new());
+        let message = Arc::new(MessageExt::default());
+        let first = ConsumeRequest::new(pq.clone(), message_queue(), vec![message.clone()]);
+        let key = first.key();
+        pq.inc_found_msg(1);
+        service.submit_consume_request(service.clone(), first, false).await;
+        assert_eq!(Arc::strong_count(&message), 2, "only scheduler owns the payload");
+        pq.set_last_pop_timestamp(1);
+        assert!(
+            service.consume_request_set.contains(&key),
+            "mutable queue state cannot change registration hash"
+        );
+        let duplicate_message = Arc::new(MessageExt::default());
+        let duplicate = ConsumeRequest::new(pq.clone(), message_queue(), vec![duplicate_message.clone()]);
+        service.submit_consume_request(service.clone(), duplicate, false).await;
+        assert_eq!(
+            Arc::strong_count(&duplicate_message),
+            1,
+            "existing same-key admission behavior is preserved"
+        );
+        assert_eq!(service.consume_scheduler.queued(), 1);
+        service.start(service.clone());
+        service.shutdown(100).await;
+        assert!(service.consume_request_set.is_empty());
+        assert_eq!(Arc::strong_count(&message), 1);
+        assert_eq!(pq.get_wai_ack_msg_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn expired_pop_receipt_completes_without_retry() {
+        use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
+        let service = Arc::new(new_service(None));
+        let mut request = consume_request();
+        let mut msg = MessageExt::default();
+        MessageAccessor::put_property(
+            &mut msg,
+            MessageConst::PROPERTY_POP_CK.into(),
+            ExtraInfoUtil::build_extra_info(0, 1, 1, 0, "topic", "broker-a", 0).into(),
+        );
+        request.msgs.push(Arc::new(msg));
+        assert!(request.run(service).await.is_none());
+        assert_eq!(request.msgs[0].reconsume_times(), 0);
+    }
+    #[tokio::test]
+    async fn successful_pop_listener_completes_without_retrying_acknowledged_payload() {
+        use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
+        let service = Arc::new(new_service(None));
+        let mut request = consume_request();
+        let mut msg = MessageExt::default();
+        MessageAccessor::put_property(
+            &mut msg,
+            MessageConst::PROPERTY_POP_CK.into(),
+            ExtraInfoUtil::build_extra_info(
+                0,
+                rocketmq_runtime::common::time_utils::current_millis() as i64,
+                60000,
+                0,
+                "topic",
+                "broker-a",
+                0,
+            )
+            .into(),
+        );
+        request.msgs.push(Arc::new(msg));
+        assert!(request.run(service.clone()).await.is_none());
+        assert_eq!(request.msgs[0].reconsume_times(), 0);
     }
 }

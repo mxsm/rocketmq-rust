@@ -42,6 +42,7 @@ use crate::base::client_config::ClientConfig;
 use crate::consumer::ack_callback::AckCallback;
 use crate::consumer::ack_result::AckResult;
 use crate::consumer::consumer_impl::bounded_consume_scheduler::BoundedConsumeScheduler;
+use crate::consumer::consumer_impl::bounded_consume_scheduler::ConsumeDisposition;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
@@ -140,15 +141,16 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
                 let service = Arc::clone(&worker_service);
                 async move {
                     if service.stopped.load(Ordering::Acquire) {
-                        return;
+                        return ConsumeDisposition::Complete;
                     }
                     let limiter = Arc::clone(&service.concurrency_limiter);
                     let permit = match limiter.acquire_owned().await {
                         Ok(permit) => permit,
-                        Err(_) => return,
+                        Err(_) => return ConsumeDisposition::Complete,
                     };
                     request.run(Arc::clone(&service)).await;
                     drop(permit);
+                    ConsumeDisposition::Complete
                 }
             },
         ) {
@@ -338,38 +340,6 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
 }
 
 impl ConsumeMessagePopConcurrentlyService {
-    /// Submit consume request after 5 seconds delay for retry
-    async fn submit_pop_consume_request_later(
-        &self,
-        _this: Arc<Self>,
-        msgs: Vec<MessageExt>,
-        process_queue: Arc<PopProcessQueue>,
-        message_queue: MessageQueue,
-    ) {
-        let request = ConsumeRequest::new(
-            msgs,
-            process_queue,
-            message_queue,
-            self.consumer_group.clone(),
-            self.message_listener.clone(),
-            self.consumer_impl(),
-        );
-        if let Err(error) = self
-            .consume_scheduler
-            .schedule_after(request, Duration::from_secs(5))
-            .await
-        {
-            let request = error.into_item();
-            request.process_queue.inc_found_msg(request.msgs.len());
-            warn!(
-                "POP concurrent retry rejected during shutdown, group={}, mq={}, msgs={}",
-                self.consumer_group,
-                request.message_queue,
-                request.msgs.len()
-            );
-        }
-    }
-
     async fn process_consume_result(
         &self,
         _this: Arc<Self>,

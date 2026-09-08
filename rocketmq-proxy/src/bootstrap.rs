@@ -261,7 +261,7 @@ impl ProxyRuntimeBuilder {
             &telemetry,
             rocketmq_observability::PROXY_METER_SCOPE,
         );
-        let response_guards = grpc_guards.clone();
+        let response_guards = grpc_guards.guards.clone();
         let response_capacity_items = self.config.runtime.consumer_response_permits as u64;
         let response_capacity_bytes = self.config.runtime.consumer_response_bytes as u64;
         resource_metrics.register_queue("proxy-grpc", "consumer-response", "stream", move || {
@@ -414,7 +414,7 @@ where
         hooks: ProxyHookChain,
         metrics: ProxyMetrics,
         transport_telemetry: rocketmq_transport::api::TransportTelemetry,
-        grpc_guards: rocketmq_proxy_core::ingress::grpc::service::ExecutionGuards,
+        grpc_guards: crate::grpc::service::GrpcExecutionResources,
         remoting_backend: Option<Arc<dyn ProxyRemotingBackend>>,
         backend_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,
@@ -498,6 +498,7 @@ where
     where
         F: Future<Output = ShutdownDeadline> + Send + 'static,
     {
+        let _decode_pool_shutdown = self.grpc_service.decode_pool_shutdown_guard();
         let ProxyRuntime {
             config,
             processor,

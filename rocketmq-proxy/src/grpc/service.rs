@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::io::Read;
 use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -270,7 +269,13 @@ const DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS: [u64; 18] = [
     600_000, 1_200_000, 1_800_000, 3_600_000, 7_200_000,
 ];
 
+pub(crate) struct GrpcExecutionResources {
+    pub(crate) guards: ExecutionGuards,
+    gzip_pool: super::gzip_decode::GzipDecodePool,
+}
+
 pub struct ProxyGrpcService<P> {
+    gzip_pool: super::gzip_decode::GzipDecodePool,
     config: Arc<ProxyConfig>,
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
@@ -293,6 +298,7 @@ impl<P> Clone for ProxyGrpcService<P> {
             processor: Arc::clone(&self.processor),
             sessions: self.sessions.clone(),
             guards: self.guards.clone(),
+            gzip_pool: self.gzip_pool.clone(),
             reap_schedule: self.reap_schedule.clone(),
             auth_runtime: self.auth_runtime.clone(),
             hooks: self.hooks.clone(),
@@ -308,7 +314,7 @@ impl<P> ProxyGrpcService<P>
 where
     P: MessagingProcessor + 'static,
 {
-    pub(crate) fn try_execution_guards(config: &ProxyConfig) -> ProxyResult<ExecutionGuards> {
+    pub(crate) fn try_execution_guards(config: &ProxyConfig) -> ProxyResult<GrpcExecutionResources> {
         config.grpc.tls.validate()?;
         #[cfg(not(feature = "tls"))]
         if config.grpc.tls.enabled {
@@ -318,14 +324,16 @@ where
             )
             .into());
         }
-        ExecutionGuards::try_from_config(&config.runtime)
+        let guards = ExecutionGuards::try_with_resident_slots(&config.runtime, config.grpc.gzip_decode_slots)?;
+        let gzip_pool = super::gzip_decode::GzipDecodePool::new(&config.grpc, &guards)?;
+        Ok(GrpcExecutionResources { guards, gzip_pool })
     }
 
     pub(crate) fn from_execution_guards(
         config: Arc<ProxyConfig>,
         processor: Arc<P>,
         sessions: ClientSessionRegistry,
-        guards: ExecutionGuards,
+        resources: GrpcExecutionResources,
     ) -> Self {
         let interval_ms = Self::housekeeping_interval_from_config(config.as_ref())
             .as_millis()
@@ -335,7 +343,8 @@ where
             Arc::clone(&processor),
         ));
         Self {
-            guards,
+            guards: resources.guards,
+            gzip_pool: resources.gzip_pool,
             config,
             processor,
             sessions,
@@ -406,27 +415,31 @@ where
     async fn normalize_send_body_encodings(
         &self,
         request: v2::SendMessageRequest,
+        permit: ResourcePermit,
     ) -> ProxyResult<v2::SendMessageRequest> {
-        let needs_gzip = request.messages.iter().any(|message| {
-            message.system_properties.as_ref().is_some_and(|properties| {
-                v2::Encoding::try_from(properties.body_encoding).unwrap_or(v2::Encoding::Unspecified)
-                    == v2::Encoding::Gzip
-            })
-        });
-        if !needs_gzip {
-            return Ok(request);
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let _caller = cancellation.clone().drop_guard();
+        let lease = self.gzip_pool.lease_for(&request)?;
+        if lease.is_none() {
+            return self
+                .gzip_pool
+                .decode(request, &self.config.grpc, permit, &cancellation, lease);
         }
-
         let Some(executor) = self.cpu_crypto.clone() else {
             return Err(ProxyError::not_implemented("SendMessage(gzip executor unavailable)"));
         };
-        let max_body_size = self.config.grpc.max_message_body_size;
+        let pool = self.gzip_pool.clone();
+        let config = self.config.clone();
         executor
             .spawn("proxy.grpc.decode_gzip", BlockingKind::CpuBound, move || {
-                decode_gzip_message_bodies(request, max_body_size)
+                pool.decode(request, &config.grpc, permit, &cancellation, lease)
             })
             .await
             .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?
+    }
+
+    pub(crate) fn decode_pool_shutdown_guard(&self) -> super::gzip_decode::DecodePoolShutdown {
+        self.gzip_pool.shutdown_guard()
     }
 
     pub fn metrics_snapshot(&self) -> ProxyMetricsSnapshot {
@@ -1136,38 +1149,6 @@ where
     }
 }
 
-fn decode_gzip_message_bodies(
-    mut request: v2::SendMessageRequest,
-    max_body_size: usize,
-) -> ProxyResult<v2::SendMessageRequest> {
-    for message in &mut request.messages {
-        let Some(system) = message.system_properties.as_mut() else {
-            continue;
-        };
-        let encoding = v2::Encoding::try_from(system.body_encoding).unwrap_or(v2::Encoding::Unspecified);
-        if encoding != v2::Encoding::Gzip {
-            continue;
-        }
-
-        let mut decoded = Vec::with_capacity(message.body.len().min(max_body_size));
-        let decoder = flate2::read::GzDecoder::new(message.body.as_ref());
-        let limit = u64::try_from(max_body_size).unwrap_or(u64::MAX).saturating_add(1);
-        decoder
-            .take(limit)
-            .read_to_end(&mut decoded)
-            .map_err(canonical::argument_with_source)?;
-        if decoded.len() > max_body_size {
-            return Err(canonical::argument(format!(
-                "decoded message body exceeds the configured maximum {max_body_size} bytes"
-            ))
-            .into());
-        }
-        message.body = decoded.into();
-        system.body_encoding = v2::Encoding::Identity as i32;
-    }
-    Ok(request)
-}
-
 fn proxy_span_outcome(outcome: &ProxyRequestOutcome) -> rocketmq_observability::trace::proxy::ProxySpanOutcome {
     match outcome {
         ProxyRequestOutcome::Payload(status) if status.is_ok() => {
@@ -1289,11 +1270,17 @@ where
             if let Err(error) = self.validate_client_context(&context) {
                 return adapter::error_send_message_response(ProxyStatusMapper::from_error(&error));
             }
-            let _permit = match self.guards.try_producer(estimated_protobuf_retained_bytes(&request)) {
+            let retained_bytes = match super::gzip_decode::validate_request(&request, &self.config.grpc)
+                .and_then(|()| super::gzip_decode::retained_input_bytes(&request, &self.config.grpc))
+            {
+                Ok(bytes) => bytes,
+                Err(error) => return adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
+            };
+            let permit = match self.guards.try_producer(retained_bytes) {
                 Ok(permit) => permit,
                 Err(error) => return adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
             };
-            let request = match self.normalize_send_body_encodings(request).await {
+            let request = match self.normalize_send_body_encodings(request, permit).await {
                 Ok(request) => request,
                 Err(error) => return adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
             };
@@ -2118,7 +2105,6 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::io::Write;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -2147,7 +2133,6 @@ mod tests {
     use tonic::metadata::MetadataValue;
     use tonic::Request;
 
-    use super::decode_gzip_message_bodies;
     use super::ProxyGrpcService;
     use super::DEFAULT_CONSUMER_CUSTOMIZED_BACKOFF_MS;
     use super::DEFAULT_CONSUMER_MAX_ATTEMPTS;
@@ -2208,54 +2193,6 @@ mod tests {
     use rocketmq_proxy_core::SettingsBackoffPolicy;
     use rocketmq_proxy_core::SettingsPolicyProvider;
 
-    fn gzip_body(body: &[u8]) -> Bytes {
-        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-        encoder.write_all(body).expect("write gzip body");
-        Bytes::from(encoder.finish().expect("finish gzip body"))
-    }
-
-    #[test]
-    fn gzip_message_body_decodes_to_identity_with_a_hard_limit() {
-        let request = v2::SendMessageRequest {
-            messages: vec![v2::Message {
-                system_properties: Some(v2::SystemProperties {
-                    body_encoding: v2::Encoding::Gzip as i32,
-                    ..Default::default()
-                }),
-                body: gzip_body(b"hello"),
-                ..Default::default()
-            }],
-        };
-
-        let decoded = decode_gzip_message_bodies(request, 5).expect("decode gzip");
-
-        assert_eq!(decoded.messages[0].body.as_ref(), b"hello");
-        assert_eq!(
-            decoded.messages[0]
-                .system_properties
-                .as_ref()
-                .expect("system properties")
-                .body_encoding,
-            v2::Encoding::Identity as i32
-        );
-    }
-
-    #[test]
-    fn gzip_message_body_rejects_invalid_and_oversized_payloads() {
-        let request_with = |body: Bytes| v2::SendMessageRequest {
-            messages: vec![v2::Message {
-                system_properties: Some(v2::SystemProperties {
-                    body_encoding: v2::Encoding::Gzip as i32,
-                    ..Default::default()
-                }),
-                body,
-                ..Default::default()
-            }],
-        };
-
-        assert!(decode_gzip_message_bodies(request_with(Bytes::from_static(b"invalid")), 16).is_err());
-        assert!(decode_gzip_message_bodies(request_with(gzip_body(b"too large")), 4).is_err());
-    }
     use crate::PreparedTransactionRegistration;
     use rocketmq_proxy_core::ProxyContext as CoreProxyContext;
     use rocketmq_proxy_core::ProxyMessage;
@@ -3203,6 +3140,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gzip_send_uses_owned_executor_and_returns_send_result() {
+        use std::io::Write;
+        let runtime = rocketmq_runtime::RuntimeContext::try_from_current("gzip-send-test").unwrap();
+        let context = runtime.service_context("gzip-send-service").component("decode");
+        let service = test_service_with_message_service(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+        )
+        .with_cpu_crypto_executor(context.cpu_crypto().clone());
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(b"hello").unwrap();
+        let mut request = Request::new(v2::SendMessageRequest {
+            messages: vec![v2::Message {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                system_properties: Some(v2::SystemProperties {
+                    message_id: "gzip-msg".to_owned(),
+                    body_encoding: v2::Encoding::Gzip as i32,
+                    ..Default::default()
+                }),
+                body: encoder.finish().unwrap().into(),
+                ..Default::default()
+            }],
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let response = service.send_message(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(response.entries[0].message_id, "gzip-msg");
+        assert!(context.task_group().shutdown(Duration::from_secs(1)).await.is_healthy());
+    }
+
+    #[tokio::test]
     async fn recall_message_returns_recalled_message_id() {
         let service = test_service_with_message_service(
             StaticRouteService::default(),
@@ -3227,9 +3201,11 @@ mod tests {
 
     #[tokio::test]
     async fn send_message_tracks_prepared_transactions_for_transactional_entries() {
+        let metadata = StaticMetadataService::default();
+        metadata.set_topic_message_type(ResourceIdentity::new("", "TopicA"), ProxyTopicMessageType::Transaction);
         let service = test_service_with_all_services(
             StaticRouteService::default(),
-            StaticMetadataService::default(),
+            metadata,
             Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
             Arc::new(DefaultConsumerService),
             Arc::new(TestTransactionService::default()),
@@ -4834,9 +4810,11 @@ mod tests {
     #[tokio::test]
     async fn end_transaction_uses_prepared_transaction_state_and_clears_it() {
         let transaction_service = Arc::new(TestTransactionService::default());
+        let metadata = StaticMetadataService::default();
+        metadata.set_topic_message_type(ResourceIdentity::new("", "TopicA"), ProxyTopicMessageType::Transaction);
         let service = test_service_with_all_services(
             StaticRouteService::default(),
-            StaticMetadataService::default(),
+            metadata,
             Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
             Arc::new(DefaultConsumerService),
             transaction_service.clone(),

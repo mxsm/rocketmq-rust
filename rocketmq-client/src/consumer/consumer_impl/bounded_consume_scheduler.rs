@@ -39,6 +39,12 @@ struct ScheduledItem<T> {
     _queued_permit: OwnedSemaphorePermit,
 }
 
+/// A retry transfers the admitted item without acquiring another capacity slot.
+pub(crate) enum ConsumeDisposition<T> {
+    Complete,
+    Retry { item: T, after: Duration },
+}
+
 type DelayedCommand<T> = (ScheduledItem<T>, Duration);
 
 impl<T> ScheduledItem<T> {
@@ -118,7 +124,7 @@ where
     ) -> ClientResult<()>
     where
         H: Fn(T) -> F + Send + Sync + Clone + 'static,
-        F: Future<Output = ()> + Send + 'static,
+        F: Future<Output = ConsumeDisposition<T>> + Send + 'static,
     {
         if worker_count == 0 {
             return Err(crate::mq_client_err!(
@@ -213,10 +219,11 @@ where
     ) -> ClientResult<()>
     where
         H: Fn(T) -> F + Send + Sync + 'static,
-        F: Future<Output = ()> + Send + 'static,
+        F: Future<Output = ConsumeDisposition<T>> + Send + 'static,
     {
         let stopping = self.stopping.clone();
         let force_stop = self.force_stop.clone();
+        let delayed_tx = self.delayed_tx.clone();
         let task = self.tasks.track_future(async move {
             loop {
                 let scheduled = tokio::select! {
@@ -230,11 +237,24 @@ where
                 let Some(scheduled) = scheduled else {
                     break;
                 };
-                let item = scheduled.into_item();
-                tokio::select! {
+                let ScheduledItem { item, _queued_permit } = scheduled;
+                let disposition = tokio::select! {
                     biased;
                     _ = force_stop.cancelled() => break,
-                    () = handler(item) => {}
+                    disposition = handler(item) => disposition,
+                };
+                if let ConsumeDisposition::Retry { item, after } = disposition {
+                    if stopping.is_cancelled() {
+                        break;
+                    }
+                    // Every ready, running, and delayed item owns one of K permits.
+                    // This transfer therefore always fits in the K-sized channel.
+                    let scheduled = ScheduledItem { item, _queued_permit };
+                    if let Err(error) = delayed_tx.try_send((scheduled, after)) {
+                        let (_unfinished, _) = error.into_inner();
+                        warn!("consume retry transfer rejected; unfinished messages remain uncommitted");
+                        break;
+                    }
                 }
             }
         });
@@ -295,6 +315,15 @@ where
 
     pub(crate) async fn shutdown(&self, timeout: Duration) -> bool {
         self.stopping.cancel();
+        self.queued_slots.close();
+        self.ready_rx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        self.delayed_rx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         self.tasks.close();
         if tokio::time::timeout(timeout, self.tasks.wait()).await.is_ok() {
             return true;
@@ -371,6 +400,7 @@ mod tests {
                             active.fetch_sub(1, Ordering::AcqRel);
                             completed.fetch_add(1, Ordering::AcqRel);
                             changed.notify_waiters();
+                            ConsumeDisposition::Complete
                         }
                     }
                 },
@@ -412,6 +442,7 @@ mod tests {
                         async move {
                             completed.fetch_add(1, Ordering::AcqRel);
                             changed.notify_waiters();
+                            ConsumeDisposition::Complete
                         }
                     }
                 },
@@ -449,7 +480,7 @@ mod tests {
                         async move {
                             active.store(true, Ordering::Release);
                             entered.notify_waiters();
-                            futures::future::pending::<()>().await;
+                            futures::future::pending::<ConsumeDisposition<usize>>().await
                         }
                     }
                 },
@@ -464,8 +495,7 @@ mod tests {
             }
             notified.await;
         }
-        scheduler.schedule(2).await.expect("one queued item should fit");
-        let blocked = scheduler.schedule(3);
+        let blocked = scheduler.schedule(2);
         tokio::pin!(blocked);
         tokio::select! {
             result = &mut blocked => panic!("admission should wait while the queue is full: {result:?}"),
@@ -474,7 +504,61 @@ mod tests {
 
         assert!(scheduler.shutdown(Duration::ZERO).await);
         let rejected = blocked.await.expect_err("shutdown must reject blocked admission");
-        assert_eq!(rejected.into_item(), 3);
+        assert_eq!(rejected.into_item(), 2);
         assert_eq!(scheduler.queued(), 0);
+    }
+    #[tokio::test(start_paused = true)]
+    async fn saturated_workers_retry_with_original_capacity_and_release_on_shutdown() {
+        for workers in [1, 2] {
+            let scheduler = BoundedConsumeScheduler::new(2).unwrap();
+            let entered = Arc::new(AtomicUsize::new(0));
+            let changed = Arc::new(Notify::new());
+            let releases = Arc::new(Semaphore::new(0));
+            let runs = Arc::new(AtomicUsize::new(0));
+            let runtime = rocketmq_runtime::RuntimeContext::try_from_current("saturated-retry").unwrap();
+            let context = runtime.service_context("saturated-retry-service").component("consume");
+            scheduler
+                .start(&context, workers, {
+                    let entered = entered.clone();
+                    let changed = changed.clone();
+                    let releases = releases.clone();
+                    let runs = runs.clone();
+                    move |(item, attempt)| {
+                        let entered = entered.clone();
+                        let changed = changed.clone();
+                        let releases = releases.clone();
+                        let runs = runs.clone();
+                        async move {
+                            if attempt == 0 {
+                                entered.fetch_add(1, Ordering::AcqRel);
+                                changed.notify_waiters();
+                                releases.acquire().await.unwrap().forget();
+                            }
+                            runs.fetch_add(1, Ordering::AcqRel);
+                            changed.notify_waiters();
+                            ConsumeDisposition::Retry {
+                                item: (item, attempt + 1),
+                                after: Duration::from_secs(5),
+                            }
+                        }
+                    }
+                })
+                .unwrap();
+            scheduler.schedule((0, 0)).await.unwrap();
+            scheduler.schedule((1, 0)).await.unwrap();
+            wait_for(&entered, workers, &changed).await;
+            assert_eq!(scheduler.queued(), 2, "running items retain their permits");
+            releases.add_permits(2);
+            wait_for(&runs, 2, &changed).await;
+            for expected in [4, 6, 8] {
+                tokio::time::timeout(Duration::from_secs(6), wait_for(&runs, expected, &changed))
+                    .await
+                    .unwrap();
+                assert_eq!(scheduler.queued(), 2, "retries must not grow admission");
+            }
+            assert!(scheduler.shutdown(Duration::from_secs(1)).await);
+            assert_eq!(scheduler.queued(), 0);
+            assert_eq!(scheduler.task_count(), 0);
+        }
     }
 }

@@ -40,6 +40,7 @@ use crate::RuntimeConfig;
 /// Admission-control permits shared by the neutral gRPC handlers.
 #[derive(Clone)]
 pub struct ExecutionGuards {
+    root: ResourceBudget,
     route: ResourceBudget,
     producer: ResourceBudget,
     consumer: ResourceBudget,
@@ -70,6 +71,11 @@ impl ExecutionGuards {
     }
 
     pub fn try_from_config(config: &RuntimeConfig) -> ProxyResult<Self> {
+        Self::try_with_resident_slots(config, 0)
+    }
+
+    /// Adds count capacity for resident transformation arenas without producer rate charges.
+    pub fn try_with_resident_slots(config: &RuntimeConfig, resident_slots: usize) -> ProxyResult<Self> {
         if config.consumer_response_permits == 0 {
             return Err(ProxyError::invalid_metadata(
                 "consumerResponsePermits must be greater than zero",
@@ -104,7 +110,10 @@ impl ExecutionGuards {
         let control_permits = config
             .client_manager_permits
             .saturating_add(config.telemetry_queue_capacity);
-        let total_permits = data_permits.saturating_add(control_permits);
+        let total_permits = data_permits
+            .checked_add(control_permits)
+            .and_then(|count| count.checked_add(resident_slots))
+            .ok_or_else(|| ProxyError::invalid_metadata("proxy permit capacity overflow"))?;
         let tree = ResourceBudgetTree::new(
             "proxy",
             BudgetLimit::new(total_permits, managed_bytes.max(1), FullPolicy::Reject)
@@ -167,6 +176,7 @@ impl ExecutionGuards {
             .map_err(|error| ProxyError::from(canonical::invalid_metadata_with_source(error)))?;
 
         Ok(Self {
+            root,
             route,
             producer,
             consumer,
@@ -175,6 +185,27 @@ impl ExecutionGuards {
             telemetry_parent,
             telemetry_limits,
         })
+    }
+
+    /// Creates a resident byte budget under the same process-memory owner.
+    pub fn resident_budget(&self, slots: usize, bytes: usize) -> ProxyResult<ResourceBudget> {
+        self.root
+            .child("gzip-decode-pool", BudgetLimit::new(slots, bytes, FullPolicy::Reject))
+            .map_err(|error| ProxyError::from(canonical::invalid_metadata_with_source(error)))
+    }
+
+    /// Checks that resident arenas leave room for one input and the control reserve.
+    pub fn validate_resident_bytes(&self, resident: usize, input: usize) -> ProxyResult<()> {
+        let probe = self
+            .root
+            .try_acquire_data(
+                resident
+                    .checked_add(input)
+                    .ok_or_else(|| ProxyError::invalid_metadata("gzip pool capacity overflow"))?,
+            )
+            .map_err(|_| ProxyError::invalid_metadata("gzip pool and maximum input exceed the managed data budget"))?;
+        drop(probe);
+        Ok(())
     }
 
     pub fn try_route(&self, retained_bytes: usize) -> ProxyResult<ResourcePermit> {

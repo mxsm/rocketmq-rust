@@ -323,6 +323,24 @@ class PackagePublishWorkspaceTests(unittest.TestCase):
         with self.assertRaisesRegex(self.planner.PlannerError, "cycle"):
             self.planner.build_plan(metadata, scope, selector=None)
 
+    def test_dev_cycle_does_not_block_normal_build_optional_or_renamed_edges(self) -> None:
+        metadata = {
+            "workspace_members": ["a 1", "b 1"],
+            "packages": [
+                {"id": "a 1", "name": "a", "version": "1.0.0", "manifest_path": str(ROOT / "Cargo.toml"),
+                 "dependencies": [{"name": "b", "kind": "build", "optional": True, "rename": "helper", "target": "cfg(windows)"}]},
+                {"id": "b 1", "name": "b", "version": "1.0.0", "manifest_path": str(ROOT / "Cargo.toml"),
+                 "dependencies": [{"name": "a", "kind": "dev"}]},
+            ],
+        }
+        scope = {"core_packages": [{"name": name, "path": name, "classification": "registry-publish"} for name in ("a", "b")]}
+        plan = self.planner.build_plan(metadata, scope, selector="a")
+        self.assertEqual(["b", "a"], [entry["name"] for entry in plan["packages"]])
+        self.assertEqual(["a"], plan["packages"][0]["internal_dev_dependencies"])
+        metadata["packages"][1]["dependencies"][0]["kind"] = "normal"
+        with self.assertRaisesRegex(self.planner.PlannerError, "cycle"):
+            self.planner.build_plan(metadata, scope, selector=None)
+
     def test_unclassified_workspace_package_is_rejected(self) -> None:
         metadata = {
             "workspace_members": ["a 1", "new 1"],

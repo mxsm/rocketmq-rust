@@ -43,6 +43,7 @@ use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::bounded_consume_scheduler::BoundedConsumeScheduler;
+use crate::consumer::consumer_impl::bounded_consume_scheduler::ConsumeDisposition;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
@@ -224,13 +225,30 @@ impl ConsumeMessageConcurrentlyService {
 
     async fn process_consume_result(
         &self,
-        this: Arc<Self>,
+        _this: Arc<Self>,
         status: ConsumeConcurrentlyStatus,
         context: &ConsumeConcurrentlyContext,
         consume_request: &mut ConsumeRequest,
-    ) {
+    ) -> Vec<Arc<MessageExt>> {
+        self.process_consume_result_with(status, context, consume_request, |mut msg| async move {
+            let sent = self.send_message_back(Arc::make_mut(&mut msg), context).await;
+            (msg, sent)
+        })
+        .await
+    }
+
+    async fn process_consume_result_with<F>(
+        &self,
+        status: ConsumeConcurrentlyStatus,
+        context: &ConsumeConcurrentlyContext,
+        consume_request: &mut ConsumeRequest,
+        mut send_back: impl FnMut(Arc<MessageExt>) -> F,
+    ) -> Vec<Arc<MessageExt>>
+    where
+        F: Future<Output = (Arc<MessageExt>, bool)> + Send,
+    {
         if consume_request.msgs.is_empty() {
-            return;
+            return Vec::new();
         }
         let ack_index = normalize_ack_index(status, context.ack_index, consume_request.msgs.len());
 
@@ -256,6 +274,7 @@ impl ConsumeMessageConcurrentlyService {
             }
         }
 
+        let mut msg_back_failed = Vec::new();
         match self.consumer_config.message_model {
             MessageModel::Broadcasting => {
                 for i in ((ack_index + 1) as usize)..consume_request.msgs.len() {
@@ -269,9 +288,8 @@ impl ConsumeMessageConcurrentlyService {
                 }
             }
             MessageModel::Clustering => {
-                let mut msg_back_failed = Vec::new();
                 let pending = consume_request.msgs.split_off((ack_index + 1) as usize);
-                for mut msg in pending {
+                for msg in pending {
                     if !consume_request.process_queue.contains_message(&msg).await {
                         info!(
                             "Message is not found in its process queue; skip send-back-procedure, topic={}, \
@@ -285,7 +303,7 @@ impl ConsumeMessageConcurrentlyService {
                         continue;
                     }
 
-                    let sent = self.send_message_back(Arc::make_mut(&mut msg), context).await;
+                    let (mut msg, sent) = send_back(msg).await;
                     if sent {
                         consume_request.msgs.push(msg);
                     } else {
@@ -293,15 +311,6 @@ impl ConsumeMessageConcurrentlyService {
                         Arc::make_mut(&mut msg).set_reconsume_times(times);
                         msg_back_failed.push(msg);
                     }
-                }
-                if !msg_back_failed.is_empty() {
-                    self.submit_consume_request_later(
-                        msg_back_failed,
-                        this,
-                        consume_request.process_queue.clone(),
-                        consume_request.message_queue.clone(),
-                    )
-                    .await;
                 }
             }
         }
@@ -315,51 +324,20 @@ impl ConsumeMessageConcurrentlyService {
                     "consume offset update skipped: DefaultMQPushConsumerImpl is not initialized, group={}, mq={}",
                     self.consumer_group, consume_request.message_queue
                 );
-                return;
+                return msg_back_failed;
             };
             let Some(offset_store) = default_mqpush_consumer_impl.offset_store() else {
                 warn!(
                     "consume offset update skipped: OffsetStore is not initialized, group={}, mq={}",
                     self.consumer_group, consume_request.message_queue
                 );
-                return;
+                return msg_back_failed;
             };
             offset_store
                 .update_offset(&consume_request.message_queue, offset, true)
                 .await;
         }
-    }
-
-    async fn submit_consume_request_later(
-        &self,
-        msgs: Vec<Arc<MessageExt>>,
-        _this: Arc<Self>,
-        process_queue: Arc<ProcessQueue>,
-        message_queue: MessageQueue,
-    ) {
-        let request = ConsumeRequest {
-            msgs,
-            message_listener: self.message_listener.clone(),
-            process_queue: process_queue.clone(),
-            message_queue: message_queue.clone(),
-            dispatch_to_consume: true,
-            consumer_group: self.consumer_group.clone(),
-            default_mqpush_consumer_impl: self.consumer_impl(),
-        };
-        if let Err(error) = self
-            .consume_scheduler
-            .schedule_after(request, Duration::from_secs(5))
-            .await
-        {
-            let request = error.into_item();
-            request.process_queue.set_consuming(false);
-            warn!(
-                "concurrent consume retry rejected during shutdown, group={}, mq={}, msgs={}",
-                self.consumer_group,
-                request.message_queue,
-                request.msgs.len()
-            );
-        }
+        msg_back_failed
     }
 
     pub async fn send_message_back(&self, msg: &mut MessageExt, context: &ConsumeConcurrentlyContext) -> bool {
@@ -395,19 +373,23 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                 let service = Arc::clone(&worker_service);
                 async move {
                     if service.shutdown_token.is_cancelled() {
-                        return;
+                        return ConsumeDisposition::Complete;
                     }
                     let limiter = Arc::clone(&service.consume_semaphore);
                     let permit = tokio::select! {
                         biased;
-                        _ = service.shutdown_token.cancelled() => return,
+                        _ = service.shutdown_token.cancelled() => return ConsumeDisposition::Complete,
                         permit = limiter.acquire_owned() => match permit {
                             Ok(permit) => permit,
-                            Err(_) => return,
+                            Err(_) => return ConsumeDisposition::Complete,
                         }
                     };
-                    request.run(Arc::clone(&service)).await;
+                    let retry = request.run(Arc::clone(&service)).await;
                     drop(permit);
+                    match retry {
+                        Some(after) => ConsumeDisposition::Retry { item: request, after },
+                        None => ConsumeDisposition::Complete,
+                    }
                 }
             },
         ) {
@@ -666,13 +648,16 @@ struct ConsumeRequest {
 }
 
 impl ConsumeRequest {
-    async fn run(&mut self, consume_message_concurrently_service: Arc<ConsumeMessageConcurrentlyService>) {
+    async fn run(
+        &mut self,
+        consume_message_concurrently_service: Arc<ConsumeMessageConcurrentlyService>,
+    ) -> Option<Duration> {
         if self.process_queue.is_dropped() {
             info!(
                 "the message queue not be able to consume, because it's dropped. group={} {}",
                 self.consumer_group, self.message_queue,
             );
-            return;
+            return None;
         }
         let mut context = ConsumeConcurrentlyContext {
             message_queue: self.message_queue.clone(),
@@ -687,7 +672,7 @@ impl ConsumeRequest {
                 self.message_queue,
                 self.msgs.len()
             );
-            return;
+            return None;
         };
         DefaultMQPushConsumerImpl::try_reset_pop_retry_topic(&mut self.msgs, self.consumer_group.as_str());
         default_mqpush_consumer_impl.reset_retry_and_namespace(&mut self.msgs, self.consumer_group.as_str());
@@ -865,10 +850,15 @@ impl ConsumeRequest {
             );
         } else {
             let this = consume_message_concurrently_service.clone();
-            consume_message_concurrently_service
+            let failed = consume_message_concurrently_service
                 .process_consume_result(this, final_status, &context, self)
                 .await;
+            if !failed.is_empty() {
+                self.msgs = failed;
+                return Some(Duration::from_secs(5));
+            }
         }
+        None
     }
 }
 
@@ -1270,5 +1260,96 @@ mod tests {
                 &mut request,
             )
             .await;
+    }
+    #[tokio::test]
+    async fn send_back_partial_failure_preserves_queue_and_persisted_offset() {
+        use crate::consumer::store::offset_store::OffsetStore;
+        use crate::consumer::store::read_offset_type::ReadOffsetType;
+        let consumer = new_default_impl();
+        let offsets = Arc::new(OffsetStore::new_test());
+        consumer.set_offset_store(Some(offsets.clone()));
+        let service = new_service(Some(consumer.clone()));
+        let mut request = consume_request(Some(consumer));
+        request.msgs = (10..13)
+            .map(|offset| {
+                let mut msg = MessageExt::default();
+                msg.set_queue_offset(offset);
+                Arc::new(msg)
+            })
+            .collect();
+        request.process_queue.put_message(&request.msgs).await;
+        let originals = request.msgs.clone();
+        let context = ConsumeConcurrentlyContext::new(request.message_queue.clone());
+        let failed = service
+            .process_consume_result_with(
+                ConsumeConcurrentlyStatus::ReconsumeLater,
+                &context,
+                &mut request,
+                |msg| async move {
+                    let sent = msg.queue_offset() != 11;
+                    (msg, sent)
+                },
+            )
+            .await;
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].queue_offset(), 11);
+        assert_eq!(failed[0].reconsume_times(), 1);
+        assert!(!request.process_queue.contains_message(&originals[0]).await);
+        assert!(request.process_queue.contains_message(&originals[1]).await);
+        assert!(!request.process_queue.contains_message(&originals[2]).await);
+        assert_eq!(
+            offsets
+                .read_offset(&request.message_queue, ReadOffsetType::ReadFromMemory)
+                .await,
+            11
+        );
+        offsets
+            .persist_all(&std::collections::HashSet::from([request.message_queue.clone()]))
+            .await;
+        assert_eq!(offsets.test_persisted_offset(&request.message_queue), Some(11));
+        request.msgs = failed;
+        assert!(service
+            .process_consume_result_with(
+                ConsumeConcurrentlyStatus::ReconsumeLater,
+                &context,
+                &mut request,
+                |msg| async move { (msg, true) },
+            )
+            .await
+            .is_empty());
+        assert!(!request.process_queue.contains_message(&originals[1]).await);
+        assert_eq!(
+            offsets
+                .read_offset(&request.message_queue, ReadOffsetType::ReadFromMemory)
+                .await,
+            13
+        );
+        offsets
+            .persist_all(&std::collections::HashSet::from([request.message_queue.clone()]))
+            .await;
+        assert_eq!(offsets.test_persisted_offset(&request.message_queue), Some(13));
+    }
+
+    #[tokio::test]
+    async fn logical_fallback_failure_from_consume_result_never_removes_message() {
+        let consumer = new_default_impl();
+        let service = new_service(Some(consumer.clone()));
+        let mut request = consume_request(Some(consumer));
+        Arc::make_mut(&mut request.msgs[0]).broker_name =
+            format!("{}broker", mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX).into();
+        request.process_queue.put_message(&request.msgs).await;
+        let original = request.msgs[0].clone();
+        let context = ConsumeConcurrentlyContext::new(request.message_queue.clone());
+        let failed = service
+            .process_consume_result(
+                Arc::new(new_service(None)),
+                ConsumeConcurrentlyStatus::ReconsumeLater,
+                &context,
+                &mut request,
+            )
+            .await;
+        assert_eq!(failed.len(), 1);
+        assert!(request.process_queue.contains_message(&original).await);
+        assert!(request.msgs.is_empty());
     }
 }

@@ -1742,7 +1742,7 @@ impl DefaultMQPushConsumerImpl {
         let queue_is_logical =
             mq.is_some_and(|mq| mq.broker_name().starts_with(mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX));
         if broker_is_logical || queue_is_logical {
-            let _ = self.send_message_back_as_normal_message(msg).await;
+            return self.send_message_back_as_normal_message(msg).await;
         } else {
             let broker_addr = if let Some(ref broker_name_) = broker_name {
                 let Some(client_instance) = self.get_mq_client_factory() else {
@@ -2928,7 +2928,7 @@ mod tests {
             .await
             .expect_err("missing client instance should make fallback send fail");
 
-        assert!(error.to_string().contains("MQClientInstance"));
+        assert!(error.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
         assert_eq!(msg.topic().as_str(), "TopicA");
     }
 
@@ -2942,7 +2942,7 @@ mod tests {
         consumer
             .send_message_back(&mut msg, 3, &mq)
             .await
-            .expect("logical broker name from message should use Java normal-message fallback path");
+            .expect_err("logical broker fallback must propagate producer failure");
     }
 
     #[test]
