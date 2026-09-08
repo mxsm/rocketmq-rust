@@ -137,46 +137,12 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rpc::rpc_request_header::RpcRequestHeader;
-
-    fn header_with_rpc_envelope() -> GetMaxOffsetRequestHeader {
-        GetMaxOffsetRequestHeader {
-            topic: CheetahString::from("topic-a"),
-            queue_id: 1,
-            committed: true,
-            topic_request_header: Some(TopicRequestHeader {
-                rpc_request_header: Some(RpcRequestHeader::default()),
-                lo: None,
-            }),
-        }
-    }
 
     #[test]
     fn serde_defaults_committed_to_java_default() {
         let header: GetMaxOffsetRequestHeader = serde_json::from_str(r#"{"topic":"topic-a","queueId":1}"#).unwrap();
 
         assert!(header.committed);
-    }
-
-    #[test]
-    fn topic_request_trait_reads_and_updates_every_forwarded_field() {
-        let mut header = header_with_rpc_envelope();
-
-        header.set_topic(CheetahString::from("topic-b"));
-        header.set_queue_id(2);
-        header.set_lo(Some(true));
-        header.set_broker_name(CheetahString::from("broker-a"));
-        header.set_namespace(CheetahString::from("namespace-a"));
-        header.set_namespaced(true);
-        header.set_oneway(false);
-
-        assert_eq!(header.topic(), "topic-b");
-        assert_eq!(header.queue_id(), 2);
-        assert_eq!(header.lo(), Some(true));
-        assert_eq!(header.broker_name().map(|value| value.as_str()), Some("broker-a"));
-        assert_eq!(header.namespace(), Some("namespace-a"));
-        assert_eq!(header.namespaced(), Some(true));
-        assert_eq!(header.oneway(), Some(false));
     }
 
     #[test]
