@@ -240,6 +240,7 @@ impl ProxyAuthConfig {
 #[serde(default, rename_all = "camelCase")]
 pub struct ProxyConfig {
     pub mode: ProxyMode,
+    pub dependency_health: crate::dependency_health::DependencyHealthConfig,
     pub enable_acl_rpc_hook_for_cluster_mode: bool,
     pub grpc: GrpcConfig,
     pub remoting: RemotingConfig,
@@ -258,6 +259,7 @@ impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
             mode: default_compiled_proxy_mode(),
+            dependency_health: crate::dependency_health::DependencyHealthConfig::default(),
             enable_acl_rpc_hook_for_cluster_mode: false,
             grpc: GrpcConfig::default(),
             remoting: RemotingConfig::default(),

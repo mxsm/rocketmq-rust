@@ -63,6 +63,15 @@ const STATE_DRAINING: u8 = 2;
 const STATE_STOPPED: u8 = 3;
 const STATE_FAILED: u8 = 4;
 
+/// Aggregate dependency readiness, independent of maintenance and process shutdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DependencyReadiness {
+    /// Required dependencies currently satisfy the caller's health policy.
+    Ready,
+    /// Required dependencies are unavailable or their evidence has expired.
+    Degraded,
+}
+
 /// Stable process lifecycle states used by readiness and liveness probes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceLifecycleState {
@@ -213,6 +222,7 @@ struct ServiceLifecycleInner {
     config: ServiceLifecycleConfig,
     state: AtomicU8,
     maintenance_readiness_suspended: AtomicBool,
+    dependencies_ready: AtomicBool,
     started_at: Instant,
     last_progress_millis: AtomicU64,
     shutdown_request: Mutex<Option<ShutdownRequest>>,
@@ -274,6 +284,7 @@ impl ServiceLifecycle {
                 config,
                 state: AtomicU8::new(STATE_STARTING),
                 maintenance_readiness_suspended: AtomicBool::new(false),
+                dependencies_ready: AtomicBool::new(true),
                 started_at: Instant::now(),
                 last_progress_millis: AtomicU64::new(0),
                 shutdown_request: Mutex::new(None),
@@ -395,6 +406,24 @@ impl ServiceLifecycle {
     pub fn is_ready(&self) -> bool {
         self.state() == ServiceLifecycleState::Ready
             && !self.inner.maintenance_readiness_suspended.load(Ordering::Acquire)
+            && self.inner.dependencies_ready.load(Ordering::Acquire)
+    }
+
+    /// Publishes the aggregate dependency decision without changing lifecycle state.
+    /// A healthy dependency cannot undo maintenance, drain, failure, or stop.
+    pub fn set_dependency_readiness(&self, readiness: DependencyReadiness) {
+        self.inner
+            .dependencies_ready
+            .store(matches!(readiness, DependencyReadiness::Ready), Ordering::Release);
+    }
+
+    /// Returns the latest aggregate dependency decision independently of lifecycle state.
+    pub fn dependency_readiness(&self) -> DependencyReadiness {
+        if self.inner.dependencies_ready.load(Ordering::Acquire) {
+            DependencyReadiness::Ready
+        } else {
+            DependencyReadiness::Degraded
+        }
     }
 
     /// Returns whether live.
@@ -696,6 +725,26 @@ mod tests {
         assert!(lifecycle.restore_readiness_after_maintenance().is_err());
         assert!(!lifecycle.is_ready());
         assert_eq!(lifecycle.state(), ServiceLifecycleState::Draining);
+    }
+
+    #[test]
+    fn dependency_recovery_cannot_restore_maintenance_or_shutdown_readiness() {
+        let lifecycle = ServiceLifecycle::new(config(None));
+        lifecycle.set_dependency_readiness(DependencyReadiness::Degraded);
+        lifecycle.mark_ready().unwrap();
+        assert!(!lifecycle.is_ready());
+        assert!(lifecycle.is_live());
+        lifecycle.set_dependency_readiness(DependencyReadiness::Ready);
+        assert!(lifecycle.is_ready());
+        lifecycle.suspend_readiness_for_maintenance().unwrap();
+        lifecycle.set_dependency_readiness(DependencyReadiness::Degraded);
+        lifecycle.set_dependency_readiness(DependencyReadiness::Ready);
+        assert!(!lifecycle.is_ready());
+        lifecycle.restore_readiness_after_maintenance().unwrap();
+        assert!(lifecycle.is_ready());
+        lifecycle.request_shutdown(ShutdownReason::Internal);
+        lifecycle.set_dependency_readiness(DependencyReadiness::Ready);
+        assert!(!lifecycle.is_ready());
     }
 
     #[test]

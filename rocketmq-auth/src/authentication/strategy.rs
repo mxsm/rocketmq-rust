@@ -25,7 +25,6 @@ pub mod stateless_authentication_strategy;
 
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
 use crate::authentication::provider::AuthenticationProvider;
-use crate::AuthFailureKind;
 use crate::AuthOperation;
 use crate::AuthServiceError;
 use crate::AuthServiceResult;
@@ -43,7 +42,8 @@ pub(super) async fn authenticate_with_provider<P>(
 where
     P: AuthenticationProvider<Context = DefaultAuthenticationContext> + Send + Sync + 'static,
 {
-    provider.authenticate(context).await.map_err(|source| {
-        AuthServiceError::with_source(AuthOperation::Authenticate, AuthFailureKind::Unavailable, source)
-    })
+    provider
+        .authenticate(context)
+        .await
+        .map_err(|source| AuthServiceError::with_source(AuthOperation::Authenticate, source.kind(), source))
 }

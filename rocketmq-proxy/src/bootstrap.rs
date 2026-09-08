@@ -37,6 +37,7 @@ use crate::cluster::ClusterRemotingBackend;
 use crate::cluster::RocketmqClusterClient;
 use crate::config::ProxyConfig;
 use crate::config::ProxyMode;
+use crate::dependency_health::{DependencyHealth, DependencyHealthMonitor};
 use crate::error::canonical;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
@@ -118,21 +119,6 @@ fn publish_listener_ready(readiness: Option<LifecycleReadiness>) -> ProxyResult<
         Some(readiness) => readiness.listener_bound(),
         None => Ok(()),
     }
-}
-
-async fn verify_cluster_route_and_security(
-    mode: ProxyMode,
-    metadata_service: Option<&Arc<dyn MetadataService>>,
-) -> ProxyResult<()> {
-    if !matches!(mode, ProxyMode::Cluster) {
-        return Ok(());
-    }
-
-    let metadata_service = metadata_service.ok_or_else(|| ProxyError::Transport {
-        message: "Proxy Cluster readiness requires a metadata service".to_string(),
-    })?;
-    metadata_service.readiness_check().await?;
-    Ok(())
 }
 
 fn require_healthy_grpc_shutdown(report: server::ProxyGrpcServerShutdownReport) -> ProxyResult<()> {
@@ -233,6 +219,7 @@ impl ProxyRuntimeBuilder {
     }
 
     fn build_inner(self) -> ProxyResult<ProxyRuntime<DefaultMessagingProcessor>> {
+        self.config.dependency_health.validate()?;
         if self.config.remoting.enabled {
             self.config.remoting.validate()?;
         }
@@ -305,6 +292,7 @@ impl ProxyRuntimeBuilder {
 
 pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
     config: Arc<ProxyConfig>,
+    dependency_health: DependencyHealthMonitor,
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     grpc_service: ProxyGrpcService<P>,
@@ -382,6 +370,7 @@ where
         backend_context: Option<ChildServiceContext>,
         service_context: ChildServiceContext,
     ) -> ProxyResult<Self> {
+        config.dependency_health.validate()?;
         let grpc_guards = ProxyGrpcService::<P>::try_execution_guards(&config)?;
         Ok(Self::from_processor_with_local_mode_support_and_guards(
             config,
@@ -430,6 +419,7 @@ where
                 .with_metrics(metrics)
                 .with_cpu_crypto_executor(service_context.cpu_crypto().clone());
         Self {
+            dependency_health: DependencyHealthMonitor::new(config.dependency_health.clone(), config.mode),
             config,
             processor: processor_ref,
             sessions,
@@ -447,6 +437,17 @@ where
 
     pub fn config(&self) -> &ProxyConfig {
         self.config.as_ref()
+    }
+
+    pub fn dependency_health(&self) -> DependencyHealth {
+        self.dependency_health.handle()
+    }
+
+    /// Supplies the actual backend metadata and readiness port for a custom messaging processor.
+    /// This port is also used for remote authentication metadata when configured.
+    pub fn with_metadata_service(mut self, metadata: Arc<dyn MetadataService>) -> Self {
+        self.auth_metadata_service = Some(metadata);
+        self
     }
 
     pub async fn serve(self) -> ProxyResult<()> {
@@ -501,6 +502,7 @@ where
         let _decode_pool_shutdown = self.grpc_service.decode_pool_shutdown_guard();
         let ProxyRuntime {
             config,
+            mut dependency_health,
             processor,
             sessions,
             grpc_service,
@@ -524,7 +526,6 @@ where
                      runtime",
                 ));
             }
-            verify_cluster_route_and_security(config.mode, auth_metadata_service.as_ref()).await?;
             if let Some(lifecycle) = lifecycle.as_ref() {
                 drain
                     .attach_lifecycle(lifecycle.clone())
@@ -536,13 +537,19 @@ where
                 None => {
                     ProxyAuthRuntime::from_proxy_config_with_metadata_service(
                         &config.auth,
-                        auth_metadata_service,
+                        auth_metadata_service.clone(),
                         &auth_context,
                     )
                     .await?
                 }
             };
             auth_runtime_for_shutdown = effective_auth_runtime.clone();
+            let health_source = auth_metadata_service.ok_or_else(|| ProxyError::Transport {
+                message: "Proxy readiness requires an explicit backend metadata service".into(),
+            })?;
+            dependency_health
+                .start(health_source, &service_context, lifecycle.clone())
+                .await?;
             let grpc_service = grpc_service.with_auth_runtime(effective_auth_runtime.clone());
             let readiness = lifecycle
                 .map(|lifecycle| LifecycleReadiness::new(lifecycle, if config.remoting.enabled { 2 } else { 1 }));
@@ -609,6 +616,7 @@ where
         let deadline = resolve_shutdown_deadline(&shared_shutdown, lifecycle_for_shutdown.as_ref());
         finalize_proxy_run(
             listener_result,
+            Some(&mut dependency_health),
             backend_context.as_ref(),
             auth_runtime_for_shutdown.as_ref(),
             &auth_context,
@@ -633,14 +641,22 @@ fn resolve_shutdown_deadline(
 
 async fn finalize_proxy_run(
     primary_result: ProxyResult<()>,
+    dependency_health: Option<&mut DependencyHealthMonitor>,
     backend_context: Option<&ChildServiceContext>,
     auth_runtime: Option<&ProxyAuthRuntime>,
     auth_context: &ChildServiceContext,
     service_context: &ChildServiceContext,
     deadline: ShutdownDeadline,
 ) -> ProxyResult<()> {
-    let cleanup_result =
-        shutdown_proxy_components(backend_context, auth_runtime, auth_context, service_context, deadline).await;
+    let cleanup_result = shutdown_proxy_components(
+        dependency_health,
+        backend_context,
+        auth_runtime,
+        auth_context,
+        service_context,
+        deadline,
+    )
+    .await;
     match (primary_result, cleanup_result) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(primary), Ok(())) => Err(primary),
@@ -661,6 +677,7 @@ async fn finalize_proxy_run(
 }
 
 async fn shutdown_proxy_components(
+    dependency_health: Option<&mut DependencyHealthMonitor>,
     backend_context: Option<&ChildServiceContext>,
     auth_runtime: Option<&ProxyAuthRuntime>,
     auth_context: &ChildServiceContext,
@@ -668,6 +685,14 @@ async fn shutdown_proxy_components(
     deadline: ShutdownDeadline,
 ) -> ProxyResult<()> {
     let mut failures = Vec::new();
+
+    if let Some(health) = dependency_health {
+        if let Some(report) = health.shutdown_until(deadline).await {
+            if let Err(error) = require_healthy_component_shutdown("Proxy dependency health", report) {
+                failures.push(error);
+            }
+        }
+    }
 
     if let Some(backend_context) = backend_context {
         let report = backend_context.task_group().shutdown_until(deadline).await;
@@ -769,14 +794,12 @@ mod tests {
     use rocketmq_runtime::ServiceLifecycleState;
 
     use super::finalize_proxy_run;
-    use super::verify_cluster_route_and_security;
     use super::LifecycleReadiness;
     use super::ProxyRuntime;
     use super::ProxyRuntimeBuilder;
     use crate::config::ProxyConfig;
     use crate::config::ProxyMode;
     use crate::service::DefaultMetadataService;
-    use crate::service::MetadataService;
 
     fn lifecycle() -> ServiceLifecycle {
         ServiceLifecycle::new(ServiceLifecycleConfig {
@@ -805,30 +828,8 @@ mod tests {
         let readiness = LifecycleReadiness::new(lifecycle.clone(), 1);
         lifecycle.request_shutdown(rocketmq_runtime::ShutdownReason::Internal);
 
-        let error = readiness
-            .listener_bound()
-            .expect_err("readiness must fail closed once draining starts");
-
-        assert!(error.to_string().contains("failed to publish Proxy readiness"));
+        assert!(readiness.listener_bound().is_err());
         assert_eq!(lifecycle.state(), ServiceLifecycleState::Draining);
-    }
-
-    #[tokio::test]
-    async fn cluster_readiness_requires_a_healthy_metadata_path() {
-        assert!(
-            verify_cluster_route_and_security(ProxyMode::Cluster, None)
-                .await
-                .is_err(),
-            "Cluster mode must fail closed without a route and security metadata path"
-        );
-
-        let metadata: Arc<dyn MetadataService> = Arc::new(DefaultMetadataService);
-        verify_cluster_route_and_security(ProxyMode::Cluster, Some(&metadata))
-            .await
-            .expect("healthy metadata path should satisfy the readiness preflight");
-        verify_cluster_route_and_security(ProxyMode::Local, None)
-            .await
-            .expect("Local mode does not require a Cluster metadata preflight");
     }
 
     #[tokio::test]
@@ -873,11 +874,18 @@ mod tests {
             })
             .expect("test backend worker should start");
         started_rx.await.expect("test backend worker should be running");
+        let mut health = crate::dependency_health::DependencyHealthMonitor::new(Default::default(), ProxyMode::Local);
+        let health_handle = health.handle();
+        health
+            .start(Arc::new(DefaultMetadataService), &service_context, None)
+            .await
+            .unwrap();
 
         let result = finalize_proxy_run(
             Err(crate::error::ProxyError::not_implemented(
                 "test startup failure after backend creation",
             )),
+            Some(&mut health),
             Some(&backend_context),
             None,
             &auth_context,
@@ -885,6 +893,9 @@ mod tests {
             rocketmq_runtime::ShutdownDeadline::after(Duration::from_secs(1)),
         )
         .await;
+
+        assert_eq!(health_handle.snapshot().state, crate::DependencyHealthState::Stopped);
+        assert_eq!(health_handle.snapshot().mode, ProxyMode::Local);
 
         assert!(
             matches!(

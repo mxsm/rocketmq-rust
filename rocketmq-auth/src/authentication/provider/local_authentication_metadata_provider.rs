@@ -46,6 +46,18 @@ pub struct LocalAuthenticationMetadataProvider {
 }
 
 impl LocalAuthenticationMetadataProvider {
+    pub(crate) async fn flush_shared(&self) -> AuthServiceResult<()> {
+        let _writer = self.write_lock.lock().await;
+        let users = self.storage.read().await.clone();
+        self.persist_users(&users).await
+    }
+
+    pub(crate) async fn close_shared(&self) -> AuthServiceResult<()> {
+        let _writer = self.write_lock.lock().await;
+        self.storage.write().await.clear();
+        Ok(())
+    }
+
     /// Create a new local authentication metadata provider.
     pub fn new() -> Self {
         Self {

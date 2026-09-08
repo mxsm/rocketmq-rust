@@ -303,8 +303,8 @@ pub struct DefaultAuthorizationProvider {
     /// Metadata service supplier (reserved for future external providers)
     metadata_service: Option<Box<dyn std::any::Any + Send + Sync>>,
 
-    authentication_metadata_provider: Option<Arc<LocalAuthenticationMetadataProvider>>,
-    authorization_metadata_provider: Option<Arc<LocalAuthorizationMetadataProvider>>,
+    authentication_metadata_provider: Option<Arc<crate::UserMetadataHandle>>,
+    authorization_metadata_provider: Option<Arc<crate::AclMetadataHandle>>,
     context_builder: Option<DefaultAuthorizationContextBuilder>,
     metrics: AuthMetrics,
 }
@@ -322,11 +322,11 @@ impl DefaultAuthorizationProvider {
         }
     }
 
-    pub fn authentication_metadata_provider(&self) -> Option<Arc<LocalAuthenticationMetadataProvider>> {
+    pub fn authentication_metadata_provider(&self) -> Option<Arc<crate::UserMetadataHandle>> {
         self.authentication_metadata_provider.clone()
     }
 
-    pub fn authorization_metadata_provider(&self) -> Option<Arc<LocalAuthorizationMetadataProvider>> {
+    pub fn authorization_metadata_provider(&self) -> Option<Arc<crate::AclMetadataHandle>> {
         self.authorization_metadata_provider.clone()
     }
 
@@ -390,20 +390,30 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
     ) -> AuthServiceResult<()> {
         use tracing::debug;
 
+        if let Some(service) = metadata_service {
+            let registry = service.downcast_ref::<ProviderRegistry>().ok_or_else(|| {
+                AuthServiceError::new(AuthOperation::InitializeProvider, AuthFailureKind::Unsupported)
+            })?;
+            return self.initialize_with_registry(config, registry.clone());
+        }
         debug!("Initializing DefaultAuthorizationProvider");
         self.config = Some(config.clone());
-        self.metadata_service = metadata_service;
+        self.metadata_service = None;
         self.context_builder = Some(DefaultAuthorizationContextBuilder::new(config.clone()));
 
         let authentication_metadata_provider =
             LocalAuthenticationMetadataProvider::with_config(&config).map_err(|source| {
                 AuthServiceError::with_source(AuthOperation::InitializeProvider, AuthFailureKind::Unavailable, source)
             })?;
-        self.authentication_metadata_provider = Some(Arc::new(authentication_metadata_provider));
+        self.authentication_metadata_provider = Some(crate::UserMetadataHandle::legacy(Arc::new(
+            authentication_metadata_provider,
+        )));
 
         let mut authorization_metadata_provider = LocalAuthorizationMetadataProvider::new();
         authorization_metadata_provider.initialize(config, None)?;
-        self.authorization_metadata_provider = Some(Arc::new(authorization_metadata_provider));
+        self.authorization_metadata_provider = Some(crate::AclMetadataHandle::legacy(Arc::new(
+            authorization_metadata_provider,
+        )));
         self.metrics = AuthMetrics::default();
 
         Ok(())
@@ -491,7 +501,6 @@ mod tests {
     use super::*;
     use crate::authentication::enums::subject_type::SubjectType;
     use crate::authentication::provider::authentication_metadata_provider::AuthenticationMetadataProvider;
-    use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 
     #[tokio::test]
     async fn test_noop_provider_always_allows() {

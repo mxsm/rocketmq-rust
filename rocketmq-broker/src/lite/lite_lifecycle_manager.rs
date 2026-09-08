@@ -17,8 +17,6 @@ use std::collections::HashSet;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::lite::get_lite_topic;
 use rocketmq_store::BrokerReadStore;
-use rocketmq_store::ConsumeQueueStore;
-use rocketmq_store::ConsumeQueueStoreTrait;
 
 use crate::subscription::lite_subscription_registry::LiteSubscriptionRecord;
 
@@ -34,13 +32,7 @@ impl LiteLifecycleManager {
         let Some(message_store) = message_store else {
             return 0;
         };
-        if let Some(queue_store) = message_store.get_queue_store().downcast_ref::<ConsumeQueueStore>() {
-            let lmq_offset = queue_store.get_lmq_queue_offset(format!("{lmq_name}-0").as_str());
-            if lmq_offset > 0 {
-                return lmq_offset;
-            }
-        }
-        message_store.get_max_offset_in_queue(lmq_name, 0)
+        message_store.get_lmq_max_offset(lmq_name)
     }
 
     pub(crate) fn is_lmq_exist<MS: BrokerReadStore>(
@@ -51,11 +43,7 @@ impl LiteLifecycleManager {
         let Some(message_store) = message_store else {
             return false;
         };
-        if let Some(queue_store) = message_store.get_queue_store().downcast_ref::<ConsumeQueueStore>() {
-            return queue_store.is_lmq_exist(lmq_name.as_str())
-                || message_store.get_max_offset_in_queue(lmq_name, 0) > 0;
-        }
-        message_store.get_max_offset_in_queue(lmq_name, 0) > 0
+        message_store.is_lmq_exist(lmq_name)
     }
 
     pub(crate) fn get_lite_topic_count(

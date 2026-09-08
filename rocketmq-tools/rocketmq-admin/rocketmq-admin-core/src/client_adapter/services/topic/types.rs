@@ -297,84 +297,9 @@ pub struct TopicListResult {
     pub topics: Vec<TopicListItem>,
 }
 
-/// Request model for deleting a topic from a cluster.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DeleteTopicRequest {
-    topic: CheetahString,
-    cluster_name: CheetahString,
-    namesrv_addr: Option<String>,
-}
-
-impl DeleteTopicRequest {
-    pub fn try_new(topic: impl Into<String>, cluster_name: Option<String>) -> CanonicalResult<Self> {
-        let topic = trim_required_cheetah("topic", topic)?;
-        let cluster_name = trim_optional_string(cluster_name)
-            .map(CheetahString::from)
-            .ok_or_else(|| {
-                crate::client_adapter::services::errors::admin_validation_failed(
-                    "clusterName",
-                    "clusterName must be provided",
-                )
-            })?;
-
-        Ok(Self {
-            topic,
-            cluster_name,
-            namesrv_addr: None,
-        })
-    }
-
-    pub fn with_optional_namesrv_addr(mut self, namesrv_addr: Option<String>) -> Self {
-        self.namesrv_addr = trim_optional_string(namesrv_addr);
-        self
-    }
-
-    pub fn topic(&self) -> &CheetahString {
-        &self.topic
-    }
-
-    pub fn cluster_name(&self) -> &CheetahString {
-        &self.cluster_name
-    }
-
-    pub fn namesrv_addr(&self) -> Option<&str> {
-        self.namesrv_addr.as_deref()
-    }
-
-    pub(crate) fn admin_builder(&self) -> AdminBuilder {
-        let builder = AdminBuilder::new();
-        match self.namesrv_addr() {
-            Some(addr) => builder.namesrv_addr(addr),
-            None => builder,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeleteTopicResult {
-    pub topic: CheetahString,
-    pub cluster_name: CheetahString,
-    pub broker_addrs: Vec<CheetahString>,
-    pub failures: Vec<TopicOperationFailure>,
-    pub name_server_deleted: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TopicOperationFailure {
-    pub broker_addr: CheetahString,
-    pub error_code: String,
-    pub error: String,
-}
-
-impl DeleteTopicResult {
-    pub fn is_complete_success(&self) -> bool {
-        self.failures.is_empty() && self.name_server_deleted
-    }
-
-    pub fn is_partial_failure(&self) -> bool {
-        !self.broker_addrs.is_empty() && (!self.failures.is_empty() || !self.name_server_deleted)
-    }
-}
+pub use crate::core::topic::DeleteTopicRequest;
+pub use crate::core::topic::DeleteTopicResult;
+pub use crate::core::topic::TopicOperationFailure;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderConfMethod {

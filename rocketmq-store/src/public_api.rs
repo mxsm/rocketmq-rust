@@ -64,6 +64,7 @@ pub use crate::capability::BrokerReplicationStore;
 pub use crate::capability::BrokerStorePort;
 pub use crate::capability::BrokerWriteStore;
 pub use crate::capability::CommitLogReadMode;
+pub use crate::capability::ConsumeQueueStatistics;
 pub use crate::capability::MessageReadRequest;
 pub use crate::capability::MessageReadResult;
 pub use crate::capability::MessageStoreHealthCapability;

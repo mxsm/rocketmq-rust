@@ -74,14 +74,29 @@ const EVALUATOR_PREFIX: &str = "EVALUATOR_";
 
 /// Authentication factory for creating and managing authentication components
 ///
-/// This factory provides centralized creation logic with caching for efficiency.
-/// Instances are cached based on config name to avoid redundant creation.
+/// Calls without an injected registry retain the legacy cache by config name.
+/// An injected [`crate::ProviderRegistry`] always binds an independent strategy
+/// and evaluator to that runtime's metadata, generation, and admission owner.
 ///
 /// # Thread Safety
 ///
 /// All methods are thread-safe and can be called concurrently from multiple threads.
 /// The factory uses `OnceLock` and `Mutex` to ensure safe concurrent access.
 pub struct AuthenticationFactory;
+
+struct BoundAuthenticationStrategy {
+    strategy: Box<dyn AuthenticationStrategy>,
+    admission: Arc<crate::provider_owner::ProviderAdmission>,
+}
+
+impl AuthenticationStrategy for BoundAuthenticationStrategy {
+    fn authenticate<'a>(&'a self, context: &'a dyn crate::AuthenticationContext) -> crate::AuthenticationFuture<'a> {
+        Box::pin(async move {
+            let _operation = self.admission.enter()?;
+            self.strategy.authenticate(context).await
+        })
+    }
+}
 
 impl AuthenticationFactory {
     /// Get or create an authentication provider
@@ -159,6 +174,14 @@ impl AuthenticationFactory {
         config: &AuthConfig,
         metadata_service: Option<Arc<dyn Any + Send + Sync>>,
     ) -> AuthServiceResult<Option<Arc<dyn AuthenticationMetadataProvider>>> {
+        if let Some(service) = metadata_service {
+            let registry = service.downcast_ref::<crate::ProviderRegistry>().ok_or_else(|| {
+                AuthServiceError::new(AuthOperation::InitializeProvider, AuthFailureKind::Unsupported)
+            })?;
+            return Ok(Some(Arc::new(
+                crate::provider_owner::legacy::RegistryUserMetadata::new(registry),
+            )));
+        }
         let configured = config.authentication_metadata_provider.as_str();
         if configured.trim().is_empty() {
             return Ok(None);
@@ -177,7 +200,7 @@ impl AuthenticationFactory {
                 .map_err(|_| AuthServiceError::new(AuthOperation::InitializeProvider, AuthFailureKind::Internal))
                 .map(|provider| Some(provider as Arc<dyn AuthenticationMetadataProvider>));
         }
-        let provider = new_initialized_local_metadata_provider(config.clone(), metadata_service).await?;
+        let provider = new_initialized_local_metadata_provider(config.clone(), None).await?;
         Self::compute_if_absent(&key, || Ok(Arc::new(provider) as Arc<dyn Any + Send + Sync>))
             .and_then(|any_arc| {
                 any_arc
@@ -194,29 +217,52 @@ impl AuthenticationFactory {
     /// strategies and returns a configuration error for unsupported class names.
     pub async fn get_strategy(
         config: &AuthConfig,
-        _metadata_service: Option<Arc<dyn Any + Send + Sync>>,
+        metadata_service: Option<Arc<dyn Any + Send + Sync>>,
     ) -> AuthServiceResult<Box<dyn AuthenticationStrategy>> {
-        let provider = Self::get_provider(config).await?;
+        let registry = metadata_service
+            .as_ref()
+            .map(|service| {
+                service
+                    .downcast_ref::<crate::ProviderRegistry>()
+                    .cloned()
+                    .ok_or_else(|| {
+                        AuthServiceError::new(AuthOperation::InitializeProvider, AuthFailureKind::Unsupported)
+                    })
+            })
+            .transpose()?;
+        let provider = if metadata_service.is_some() {
+            Arc::new(new_initialized_default_provider(config.clone(), metadata_service).await?)
+        } else {
+            Self::get_provider(config).await?
+        };
         let strategy = config.authentication_strategy.as_str();
-        if strategy.trim().is_empty()
+        let strategy: Box<dyn AuthenticationStrategy> = if strategy.trim().is_empty()
             || strategy.ends_with("StatelessAuthenticationStrategy")
             || strategy.eq_ignore_ascii_case("stateless")
         {
-            return Ok(Box::new(StatelessAuthenticationStrategy::new(
+            Box::new(StatelessAuthenticationStrategy::new(config.clone(), Some(provider)))
+        } else if strategy.ends_with("StatefulAuthenticationStrategy") || strategy.eq_ignore_ascii_case("stateful") {
+            Box::new(StatefulAuthenticationStrategy::new_with_acl_generation(
                 config.clone(),
                 Some(provider),
-            )));
-        }
-        if strategy.ends_with("StatefulAuthenticationStrategy") || strategy.eq_ignore_ascii_case("stateful") {
-            return Ok(Box::new(StatefulAuthenticationStrategy::new(
-                config.clone(),
-                Some(provider),
-            )));
-        }
-        Err(AuthServiceError::new(
-            AuthOperation::InitializeProvider,
-            AuthFailureKind::Unsupported,
-        ))
+                registry
+                    .as_ref()
+                    .map(crate::ProviderRegistry::acl_generation_counter)
+                    .unwrap_or_default(),
+            ))
+        } else {
+            return Err(AuthServiceError::new(
+                AuthOperation::InitializeProvider,
+                AuthFailureKind::Unsupported,
+            ));
+        };
+        Ok(match registry {
+            Some(registry) => Box::new(BoundAuthenticationStrategy {
+                strategy,
+                admission: registry.admission(),
+            }),
+            None => strategy,
+        })
     }
 
     /// Get or create a cached authentication evaluator.
@@ -231,6 +277,11 @@ impl AuthenticationFactory {
         config: &AuthConfig,
         metadata_service: Option<Arc<dyn Any + Send + Sync>>,
     ) -> AuthServiceResult<Arc<AuthenticationEvaluator<Box<dyn AuthenticationStrategy>>>> {
+        if metadata_service.is_some() {
+            return Ok(Arc::new(AuthenticationEvaluator::new(
+                Self::get_strategy(config, metadata_service).await?,
+            )));
+        }
         let key = format!("{}{}", EVALUATOR_PREFIX, config.config_name);
         if let Some(cached) = Self::cached(&key)? {
             return cached

@@ -61,6 +61,7 @@ use crate::authentication::model::subject::Subject;
 use crate::authentication::provider::AuthenticationMetadataProvider;
 use crate::authorization::enums::policy_type::PolicyType;
 use crate::authorization::metadata_provider::local::LocalAuthorizationMetadataProvider;
+#[cfg(test)]
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::authorization::model::acl::Acl;
 use crate::authorization::model::environment::Environment;
@@ -117,13 +118,12 @@ pub struct AuthorizationMetadataManagerImpl {
     /// This provider handles all storage operations: create, read, update, delete.
     /// Must be initialized before the manager is used.
     ///
-    /// Note: Uses concrete `LocalAuthorizationMetadataProvider` type instead of trait object
-    /// because `AuthorizationMetadataProvider` is not dyn-compatible (has async methods with
-    /// generics).
-    authorization_provider: Arc<LocalAuthorizationMetadataProvider>,
+    /// The handle borrows the runtime's dynamic ACL port and admission owner.
+    authorization_provider: Arc<crate::AclMetadataHandle>,
 
     /// Authentication metadata provider used to validate USER subjects before ACL mutations.
-    authentication_provider: Option<Arc<dyn AuthenticationMetadataProvider>>,
+    authentication_provider: Option<Arc<dyn crate::UserMetadataRead>>,
+    owned_registry: Option<ProviderRegistry>,
 }
 
 impl AuthorizationMetadataManagerImpl {
@@ -145,8 +145,19 @@ impl AuthorizationMetadataManagerImpl {
         authentication_provider: Option<Arc<dyn AuthenticationMetadataProvider>>,
     ) -> Self {
         Self {
-            authorization_provider,
-            authentication_provider,
+            authorization_provider: crate::AclMetadataHandle::legacy(authorization_provider),
+            authentication_provider: authentication_provider.map(|port| {
+                Arc::new(crate::provider_ports::LegacyUserReader(port)) as Arc<dyn crate::UserMetadataRead>
+            }),
+            owned_registry: None,
+        }
+    }
+
+    pub fn with_registry(registry: &ProviderRegistry) -> Self {
+        Self {
+            authorization_provider: registry.authorization_metadata_provider(),
+            authentication_provider: Some(registry.authentication_metadata_provider()),
+            owned_registry: None,
         }
     }
 
@@ -172,12 +183,9 @@ impl AuthorizationMetadataManagerImpl {
                 error,
             )
         })?;
-        let authentication_provider: Arc<dyn AuthenticationMetadataProvider> =
-            registry.authentication_metadata_provider();
-        Ok(Self::new(
-            registry.authorization_metadata_provider(),
-            Some(authentication_provider),
-        ))
+        let mut manager = Self::with_registry(&registry);
+        manager.owned_registry = Some(registry);
+        Ok(manager)
     }
 
     /// Shutdown the manager and release resources.
@@ -196,19 +204,21 @@ impl AuthorizationMetadataManagerImpl {
     /// manager.shutdown().await;
     /// ```
     pub async fn shutdown(&mut self) {
-        debug!("Shutting down AuthorizationMetadataManagerImpl");
-
-        if self.authentication_provider.is_some() {
-            debug!("Authentication provider is shared; owner is responsible for provider shutdown");
+        if let Err(error) = self
+            .shutdown_until(rocketmq_runtime::ShutdownDeadline::after(
+                std::time::Duration::from_secs(5),
+            ))
+            .await
+        {
+            tracing::warn!(?error, "authorization metadata manager shutdown incomplete");
         }
+    }
 
-        // Shutdown authorization provider
-        // Note: shutdown() requires &mut self, but we have Arc<dyn AuthorizationMetadataProvider>
-        // This is a design limitation - providers should ideally have async fn shutdown(&self)
-        // For now, we'll log that shutdown was requested
-        debug!("Authorization provider shutdown requested (requires mutable reference)");
-
-        debug!("AuthorizationMetadataManagerImpl shutdown complete");
+    pub async fn shutdown_until(&self, deadline: rocketmq_runtime::ShutdownDeadline) -> AuthServiceResult<()> {
+        match &self.owned_registry {
+            Some(registry) => registry.shutdown_until(deadline).await,
+            None => Ok(()),
+        }
     }
 
     /// Create a new ACL.
@@ -711,7 +721,7 @@ impl AuthorizationMetadataManagerImpl {
             return Err(AuthServiceError::subject_not_found(subject_key));
         }
 
-        match provider.get_user(username).await {
+        match provider.lookup_user(username).await {
             Ok(_) => Ok(()),
             Err(error) if error.kind() == AuthFailureKind::NotFound => Err(AuthServiceError::subject_not_found(
                 format!("The subject of {subject_key} is not exist."),

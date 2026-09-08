@@ -491,6 +491,7 @@ fn reject_lane(receiver: &mut mpsc::Receiver<QueuedLocalBrokerCommand>) {
 impl LocalBrokerCommand {
     pub(crate) fn execution_class(&self) -> LocalExecutionClass {
         match self {
+            Self::ReadinessCheck { .. } => LocalExecutionClass::Control,
             Self::QueryRoute { .. }
             | Self::QueryTopicMessageType { .. }
             | Self::QuerySubscriptionGroup { .. }
@@ -513,6 +514,7 @@ impl LocalBrokerCommand {
 
     fn ordering_key(&self) -> LocalOrderingKey {
         match self {
+            Self::ReadinessCheck { .. } => LocalOrderingKey::new("health", std::iter::empty::<String>()),
             Self::QueryRoute { topic, .. } | Self::QueryTopicMessageType { topic, .. } => {
                 resource_key("topic", [topic])
             }

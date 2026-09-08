@@ -46,9 +46,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::RemotingSerializable;
-use rocketmq_store::BrokerReadWriteStore;
-use rocketmq_store::ConsumeQueueStore;
-use rocketmq_store::ConsumeQueueStoreTrait;
+use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_transport::api::error_response;
 use rocketmq_transport::api::HandlerOutcome;
@@ -93,11 +91,11 @@ impl LiteManagerPolicy {
     }
 }
 
-pub(crate) struct LiteManagerOffsetCapability<MS: BrokerReadWriteStore> {
+pub(crate) struct LiteManagerOffsetCapability<MS: BrokerAdminStore> {
     manager: Weak<ConsumerOffsetManager<MS>>,
 }
 
-impl<MS: BrokerReadWriteStore> LiteManagerOffsetCapability<MS> {
+impl<MS: BrokerAdminStore> LiteManagerOffsetCapability<MS> {
     pub(crate) fn new(manager: &Arc<ConsumerOffsetManager<MS>>) -> Self {
         Self {
             manager: Arc::downgrade(manager),
@@ -126,11 +124,11 @@ impl<MS: BrokerReadWriteStore> LiteManagerOffsetCapability<MS> {
     }
 }
 
-pub(crate) struct LiteManagerStoreCapability<MS: BrokerReadWriteStore> {
+pub(crate) struct LiteManagerStoreCapability<MS: BrokerAdminStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
 }
 
-impl<MS: BrokerReadWriteStore> LiteManagerStoreCapability<MS> {
+impl<MS: BrokerAdminStore> LiteManagerStoreCapability<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
@@ -147,27 +145,15 @@ impl<MS: BrokerReadWriteStore> LiteManagerStoreCapability<MS> {
 
     fn queue_store_stats(&self) -> (i32, i32) {
         self.with_store(|store| {
-            let Some(queue_store) = store.get_queue_store().downcast_ref::<ConsumeQueueStore>() else {
-                return (0, 0);
-            };
-
-            let consume_queue_table = queue_store.get_consume_queue_table();
-            let cq_table_size = consume_queue_table
-                .lock()
-                .values()
-                .map(|queue_map| queue_map.len() as i32)
-                .sum();
-            (queue_store.get_lmq_num(), cq_table_size)
+            let counts = store.consume_queue_statistics();
+            (counts.lite_queues, counts.consume_queues)
         })
         .unwrap_or_default()
     }
 
     fn active_lmq_names(&self, parent_topic: &CheetahString) -> HashSet<CheetahString> {
         self.with_store(|store| {
-            let Some(queue_store) = store.get_queue_store().downcast_ref::<ConsumeQueueStore>() else {
-                return HashSet::new();
-            };
-            queue_store
+            store
                 .get_lmq_topic_names()
                 .into_iter()
                 .filter(|lmq_name| get_parent_topic(lmq_name.as_str()).as_deref() == Some(parent_topic.as_str()))
@@ -210,7 +196,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerStoreCapability<MS> {
     }
 }
 
-pub(crate) struct LiteManagerContext<MS: BrokerReadWriteStore> {
+pub(crate) struct LiteManagerContext<MS: BrokerAdminStore> {
     command_factory: RemotingCommandFactory,
     policy: LiteManagerPolicy,
     topic_config_manager: Arc<TopicConfigManager>,
@@ -224,7 +210,7 @@ pub(crate) struct LiteManagerContext<MS: BrokerReadWriteStore> {
     pop_lite_message_processor: Weak<PopLiteMessageProcessor<MS>>,
 }
 
-impl<MS: BrokerReadWriteStore> LiteManagerContext<MS> {
+impl<MS: BrokerAdminStore> LiteManagerContext<MS> {
     #[allow(
         clippy::too_many_arguments,
         reason = "composition root wires explicit Lite manager capabilities"
@@ -268,7 +254,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerContext<MS> {
     }
 }
 
-impl<MS: BrokerReadWriteStore> LiteConsumerLagDataSource for LiteManagerContext<MS> {
+impl<MS: BrokerAdminStore> LiteConsumerLagDataSource for LiteManagerContext<MS> {
     fn offset_table_snapshot(&self) -> LiteOffsetTable {
         self.consumer_offset.offset_table_snapshot()
     }
@@ -282,17 +268,17 @@ impl<MS: BrokerReadWriteStore> LiteConsumerLagDataSource for LiteManagerContext<
     }
 }
 
-pub(crate) struct LiteManagerProcessor<MS: BrokerReadWriteStore> {
+pub(crate) struct LiteManagerProcessor<MS: BrokerAdminStore> {
     context: LiteManagerContext<MS>,
 }
 
-impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
+impl<MS: BrokerAdminStore> LiteManagerProcessor<MS> {
     pub(crate) fn new(context: LiteManagerContext<MS>) -> Self {
         Self { context }
     }
 }
 
-impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
+impl<MS: BrokerAdminStore> LiteManagerProcessor<MS> {
     /// processor business contract: it only builds a response command and never uses a transport handle.
     async fn process_command(
         &self,
@@ -319,13 +305,13 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     }
 }
 
-impl<MS: BrokerReadWriteStore + 'static> RequestProcessor for LiteManagerProcessor<MS> {
+impl<MS: BrokerAdminStore + 'static> RequestProcessor for LiteManagerProcessor<MS> {
     async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
 
-impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
+impl<MS: BrokerAdminStore> LiteManagerProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
@@ -342,7 +328,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     }
 }
 
-impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
+impl<MS: BrokerAdminStore> LiteManagerProcessor<MS> {
     fn get_broker_lite_info(
         &self,
         request: &RemotingCommand,

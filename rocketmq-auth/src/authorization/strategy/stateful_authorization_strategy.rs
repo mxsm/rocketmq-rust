@@ -191,7 +191,12 @@ impl StatefulAuthorizationStrategy {
         auth_config: AuthConfig,
         metadata_service: Option<Box<dyn Any + Send + Sync>>,
     ) -> AuthServiceResult<Self> {
-        Self::new_with_acl_generation(auth_config, metadata_service, Arc::new(AtomicU64::new(0)))
+        let acl_generation = metadata_service
+            .as_ref()
+            .and_then(|service| service.downcast_ref::<crate::ProviderRegistry>())
+            .map(crate::ProviderRegistry::acl_generation_counter)
+            .unwrap_or_default();
+        Self::new_with_acl_generation(auth_config, metadata_service, acl_generation)
     }
 
     /// Creates a new stateful authorization strategy bound to a shared ACL generation counter.
@@ -378,6 +383,7 @@ impl AuthorizationStrategy for StatefulAuthorizationStrategy {
     /// ```
     fn evaluate<'a>(&'a self, context: &'a DefaultAuthorizationContext) -> AuthorizationFuture<'a> {
         Box::pin(async move {
+            let _operation = self.base.enter_operation()?;
             // If no channel ID, bypass cache
             if context.channel_id().is_none_or(str::is_empty) {
                 debug!("No channel ID, bypassing cache");

@@ -27,6 +27,7 @@ mod bootstrap;
 mod cluster;
 mod config;
 mod context;
+mod dependency_health;
 mod error;
 mod grpc;
 #[cfg(feature = "local-mode")]
@@ -64,6 +65,9 @@ pub use context::GrpcTransportContext;
 pub use context::ProxyContext;
 pub use context::ResolvedAddressScheme;
 pub use context::ResolvedEndpoint;
+pub use dependency_health::{
+    DependencyHealth, DependencyHealthConfig, DependencyHealthReason, DependencyHealthSnapshot, DependencyHealthState,
+};
 pub use error::ProxyError;
 pub use error::ProxyResult;
 pub use grpc::server::serve as serve_grpc;

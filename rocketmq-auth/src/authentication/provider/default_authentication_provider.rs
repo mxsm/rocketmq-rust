@@ -48,7 +48,7 @@ pub struct DefaultAuthenticationProvider {
     metadata_service: Option<Arc<dyn Any + Send + Sync>>,
 
     /// Local metadata provider used by the default handler chain.
-    metadata_provider: Option<Arc<LocalAuthenticationMetadataProvider>>,
+    metadata_provider: Option<Arc<crate::UserMetadataHandle>>,
 
     /// Authentication context builder.
     authentication_context_builder: DefaultAuthenticationContextBuilder,
@@ -69,7 +69,7 @@ impl DefaultAuthenticationProvider {
         }
     }
 
-    pub fn metadata_provider(&self) -> Option<Arc<LocalAuthenticationMetadataProvider>> {
+    pub fn metadata_provider(&self) -> Option<Arc<crate::UserMetadataHandle>> {
         self.metadata_provider.clone()
     }
 
@@ -145,12 +145,18 @@ impl AuthenticationProvider for DefaultAuthenticationProvider {
         config: AuthConfig,
         metadata_service: Option<Arc<dyn Any + Send + Sync>>,
     ) -> AuthServiceResult<()> {
+        if let Some(service) = metadata_service {
+            let registry = service.downcast_ref::<ProviderRegistry>().ok_or_else(|| {
+                AuthServiceError::new(AuthOperation::InitializeProvider, AuthFailureKind::Unsupported)
+            })?;
+            return self.initialize_with_registry(config, registry.clone());
+        }
         self.auth_config = Some(config.clone());
-        self.metadata_service = metadata_service;
+        self.metadata_service = None;
         self.authentication_context_builder = DefaultAuthenticationContextBuilder::new();
         let mut provider = LocalAuthenticationMetadataProvider::new();
         provider.initialize(config, None).await?;
-        self.metadata_provider = Some(Arc::new(provider));
+        self.metadata_provider = Some(crate::UserMetadataHandle::legacy(Arc::new(provider)));
         self.metrics = AuthMetrics::default();
         Ok(())
     }
@@ -195,8 +201,6 @@ impl AuthenticationProvider for DefaultAuthenticationProvider {
 mod tests {
     use super::*;
     use cheetah_string::CheetahString;
-
-    use crate::authentication::provider::authentication_metadata_provider::AuthenticationMetadataProvider;
 
     #[tokio::test]
     async fn test_default_provider_initialization() {

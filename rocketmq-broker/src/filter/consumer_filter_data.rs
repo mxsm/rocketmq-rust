@@ -31,6 +31,8 @@ pub struct ConsumerFilterData {
     expression: Option<CheetahString>,
     expression_type: Option<CheetahString>,
     #[serde(skip)]
+    // Instance compilation wraps this expression in CompiledFilter, retaining
+    // the frozen registry across clones without changing persisted metadata.
     compiled_expression: Option<Arc<dyn Expression + 'static>>,
     born_time: u64,
     dead_time: u64,

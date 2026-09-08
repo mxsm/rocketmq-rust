@@ -28,12 +28,14 @@ use crate::authentication::chain::handler::AuthenticationHandler;
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
 use crate::authentication::enums::user_status::UserStatus;
 use crate::authentication::model::user::User;
+#[cfg(test)]
 use crate::authentication::provider::AuthenticationMetadataProvider;
 use crate::AuthFailureKind;
 use crate::AuthMetrics;
 use crate::AuthOperation;
 use crate::AuthServiceError;
 use crate::AuthServiceResult;
+use crate::UserMetadataRead;
 
 /// Default authentication handler.
 ///
@@ -41,14 +43,14 @@ use crate::AuthServiceResult;
 /// 1. Retrieve user from metadata provider
 /// 2. Check user status (enabled/disabled)
 /// 3. Calculate signature and verify against provided signature
-pub struct DefaultAuthenticationHandler<P: AuthenticationMetadataProvider> {
+pub struct DefaultAuthenticationHandler<P: UserMetadataRead + ?Sized> {
     authentication_metadata_provider: Arc<P>,
     signature_algorithm: SignatureAlgorithm,
     request_timestamp_expired_millis: u64,
     metrics: AuthMetrics,
 }
 
-impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
+impl<P: UserMetadataRead + ?Sized> DefaultAuthenticationHandler<P> {
     pub fn with_options(
         metadata_provider: Arc<P>,
         signature_algorithm: SignatureAlgorithm,
@@ -78,7 +80,7 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
         }
 
         self.authentication_metadata_provider
-            .get_user(username.as_str())
+            .lookup_user(username.as_str())
             .await
             .map_err(|source| {
                 let kind = source.kind();
@@ -171,7 +173,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     result == 0
 }
 
-impl<P: AuthenticationMetadataProvider> AuthenticationHandler for DefaultAuthenticationHandler<P> {
+impl<P: UserMetadataRead + ?Sized> AuthenticationHandler for DefaultAuthenticationHandler<P> {
     fn handle<'a>(
         &'a self,
         context: &'a DefaultAuthenticationContext,

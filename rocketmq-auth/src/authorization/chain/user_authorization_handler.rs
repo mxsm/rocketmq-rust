@@ -21,18 +21,20 @@ use crate::authentication::enums::subject_type::SubjectType;
 use crate::authentication::enums::user_status::UserStatus;
 use crate::authentication::enums::user_type::UserType;
 use crate::authentication::model::user::User;
+#[cfg(test)]
 use crate::authentication::provider::AuthenticationMetadataProvider;
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
 use crate::AuthFailureKind;
 use crate::AuthOperation;
 use crate::AuthServiceError;
 use crate::AuthServiceResult;
+use crate::UserMetadataRead;
 
-pub struct UserAuthorizationHandler<P: AuthenticationMetadataProvider> {
+pub struct UserAuthorizationHandler<P: UserMetadataRead + ?Sized> {
     authentication_metadata_provider: Arc<P>,
 }
 
-impl<P: AuthenticationMetadataProvider> UserAuthorizationHandler<P> {
+impl<P: UserMetadataRead + ?Sized> UserAuthorizationHandler<P> {
     pub fn new(authentication_metadata_provider: Arc<P>) -> Self {
         Self {
             authentication_metadata_provider,
@@ -53,7 +55,7 @@ impl<P: AuthenticationMetadataProvider> UserAuthorizationHandler<P> {
         }
 
         let username = User::username_from_subject_key(subject.subject_key());
-        let user = match self.authentication_metadata_provider.get_user(username).await {
+        let user = match self.authentication_metadata_provider.lookup_user(username).await {
             Ok(user) => user,
             Err(error) if error.kind() == AuthFailureKind::NotFound => {
                 return Ok(Some(AuthorizationDecision::Deny(AuthorizationDenial::SubjectUnknown)));

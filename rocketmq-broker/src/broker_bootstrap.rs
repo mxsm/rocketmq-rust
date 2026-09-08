@@ -170,6 +170,7 @@ pub struct Builder {
     service_context: ChildServiceContext,
     telemetry_runtime_guard: TelemetryRuntimeGuard,
     command_factory: RemotingCommandFactory,
+    filter_registry: Arc<rocketmq_filter::filter::FilterRegistrySnapshot>,
     release_identity_required: bool,
 }
 
@@ -181,6 +182,7 @@ impl Builder {
             service_context,
             telemetry_runtime_guard,
             command_factory: application_remoting_command_factory(),
+            filter_registry: rocketmq_filter::filter::FilterRegistrySnapshot::sql92(),
             release_identity_required: false,
         }
     }
@@ -204,14 +206,24 @@ impl Builder {
         self
     }
 
+    /// Binds immutable filter compilers before any subscription is accepted.
+    /// Replacing compiler bindings requires a new Broker instance.
+    pub fn with_filter_registry(mut self, registry: Arc<rocketmq_filter::filter::FilterRegistrySnapshot>) -> Self {
+        self.filter_registry = registry;
+        self
+    }
+
     #[inline]
     pub fn build(self) -> BrokerBootstrap<Configured> {
         let telemetry_handle = self.telemetry_runtime_guard.handle();
-        let mut broker_runtime = BrokerRuntime::new_with_validated_config_telemetry_and_factory(
+        let mut broker_runtime = BrokerRuntime::new_with_bindings(
             Arc::new(self.validated_config),
             self.service_context,
             telemetry_handle,
-            self.command_factory,
+            crate::broker_runtime::BrokerRuntimeBindings {
+                command_factory: self.command_factory,
+                filter_registry: self.filter_registry,
+            },
         );
         broker_runtime.set_telemetry_runtime_guard(self.telemetry_runtime_guard);
 

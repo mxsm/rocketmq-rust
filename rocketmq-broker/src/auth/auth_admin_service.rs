@@ -16,22 +16,20 @@ use std::sync::Arc;
 
 use crate::broker_error::BrokerResult as Result;
 use rocketmq_auth::Acl;
+use rocketmq_auth::AclMetadataHandle;
 use rocketmq_auth::AuthConfig;
 use rocketmq_auth::AuthFailureKind;
 #[cfg(test)]
 use rocketmq_auth::AuthOperation;
 use rocketmq_auth::AuthServiceError;
-use rocketmq_auth::AuthenticationMetadataProvider;
-use rocketmq_auth::AuthorizationMetadataProvider;
 use rocketmq_auth::FileAclConfigStore;
-use rocketmq_auth::LocalAuthenticationMetadataProvider;
-use rocketmq_auth::LocalAuthorizationMetadataProvider;
 use rocketmq_auth::PolicyResource;
 use rocketmq_auth::PolicyType;
 use rocketmq_auth::ProviderRegistry;
 use rocketmq_auth::Subject;
 use rocketmq_auth::SubjectType;
 use rocketmq_auth::User;
+use rocketmq_auth::UserMetadataHandle;
 use rocketmq_auth::UserStatus;
 use rocketmq_auth::UserType;
 use rocketmq_error::SharedError;
@@ -60,8 +58,8 @@ pub(crate) struct AuthAdminDiagnosticsSnapshot {
 pub struct AuthAdminService {
     auth_config: AuthConfig,
     provider_registry: ProviderRegistry,
-    authentication_provider: Arc<LocalAuthenticationMetadataProvider>,
-    authorization_provider: Arc<LocalAuthorizationMetadataProvider>,
+    authentication_provider: Arc<UserMetadataHandle>,
+    authorization_provider: Arc<AclMetadataHandle>,
 }
 
 impl AuthAdminService {
@@ -91,11 +89,11 @@ impl AuthAdminService {
         }
     }
 
-    pub fn authentication_provider(&self) -> Arc<LocalAuthenticationMetadataProvider> {
+    pub fn authentication_provider(&self) -> Arc<UserMetadataHandle> {
         self.authentication_provider.clone()
     }
 
-    pub fn authorization_provider(&self) -> Arc<LocalAuthorizationMetadataProvider> {
+    pub fn authorization_provider(&self) -> Arc<AclMetadataHandle> {
         self.authorization_provider.clone()
     }
 

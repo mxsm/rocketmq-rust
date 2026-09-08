@@ -64,8 +64,6 @@ use rocketmq_runtime::TaskKind;
 use rocketmq_store::get_delay_offset_store_path;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerWriteStore;
-use rocketmq_store::ConsumeQueueStore;
-use rocketmq_store::ConsumeQueueStoreTrait;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
@@ -886,13 +884,12 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         let delay_config = self.delay_level_config.load_full();
         for delay_level in delay_config.table.keys().copied() {
             let queue_id = delay_level_to_queue_id(delay_level);
-            let cq = self.delivery_runtime().with_message_store(|message_store| {
-                message_store
-                    .get_queue_store()
-                    .downcast_ref::<ConsumeQueueStore>()
-                    .expect("Failed to downcast to ConsumeQueueStore")
-                    .find_or_create_consume_queue(&topic, queue_id)
-            });
+            let Some(cq) = self
+                .delivery_runtime()
+                .with_message_store(|message_store| message_store.find_consume_queue(&topic, queue_id))
+            else {
+                return false;
+            };
 
             if let Some(current_delay_offset) = self.offset_state.offset(delay_level) {
                 let cq = cq.read();
@@ -1359,9 +1356,7 @@ impl<MS: BrokerWriteStore> DeliverDelayedMessageTimerTask<MS> {
                 );
 
                 let msg_store_time = delivery_runtime.with_message_store(|message_store| {
-                    message_store
-                        .get_commit_log()
-                        .pickup_store_timestamp(physical_offset, physical_size)
+                    message_store.pickup_store_timestamp(physical_offset, physical_size)
                 });
 
                 tags_code = schedule_service.compute_deliver_timestamp(self.delay_level, msg_store_time);

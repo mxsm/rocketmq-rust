@@ -57,6 +57,22 @@ where
     authorization_metadata_provider: Arc<RwLock<Option<B>>>,
 }
 
+impl
+    AuthenticationMetadataManagerImpl<
+        crate::LocalAuthenticationMetadataProvider,
+        crate::LocalAuthorizationMetadataProvider,
+    >
+{
+    /// Borrows the runtime's user and ACL ports for metadata management.
+    /// Shutting down the manager releases its handles; the runtime owns providers.
+    pub fn with_registry(registry: &crate::ProviderRegistry) -> impl AuthenticationMetadataManager {
+        AuthenticationMetadataManagerImpl::new(
+            Some(crate::provider_owner::legacy::RegistryUserMetadata::new(registry)),
+            Some(crate::provider_owner::legacy::RegistryAclMetadata::new(registry)),
+        )
+    }
+}
+
 impl<A, B> AuthenticationMetadataManagerImpl<A, B>
 where
     A: AuthenticationMetadataProvider,
@@ -158,10 +174,7 @@ where
         // Fall back to "username:password" format
         let parts: Vec<&str> = init_user_str.splitn(2, ':').collect();
         if parts.len() != 2 {
-            warn!(
-                "Invalid init_authentication_user format: '{}'. Expected 'username:password' or JSON",
-                init_user_str
-            );
+            warn!("Invalid init_authentication_user format; expected username:password or JSON");
             return Ok(()); // Don't fail initialization
         }
 
@@ -194,8 +207,8 @@ where
                 user.set_user_status(UserStatus::Enable);
                 self.create_user_if_not_exists(user, provider).await?;
             }
-            Err(e) => {
-                warn!("Failed to parse inner_client_authentication_credentials: {}", e);
+            Err(_) => {
+                warn!("Failed to parse inner_client_authentication_credentials");
             }
         }
 
@@ -209,11 +222,12 @@ where
                 info!("User '{}' already exists, skipping creation", user.username());
                 Ok(())
             }
-            Err(_) => {
+            Err(error) if error.kind() == AuthFailureKind::NotFound => {
                 provider.create_user(user.clone()).await?;
                 info!("Created super user '{}'", user.username());
                 Ok(())
             }
+            Err(error) => Err(error),
         }
     }
 }
@@ -286,11 +300,15 @@ where
         };
 
         // Check if user already exists
-        if let Ok(_existing) = provider.get_user(user.username().as_str()).await {
-            return Err(AuthServiceError::new(
-                AuthOperation::ManageMetadata,
-                AuthFailureKind::Conflict,
-            ));
+        match provider.get_user(user.username().as_str()).await {
+            Ok(_) => {
+                return Err(AuthServiceError::new(
+                    AuthOperation::ManageMetadata,
+                    AuthFailureKind::Conflict,
+                ))
+            }
+            Err(error) if error.kind() == AuthFailureKind::NotFound => {}
+            Err(error) => return Err(error),
         }
 
         // Set default values if not provided
@@ -326,9 +344,7 @@ where
         };
 
         // Get existing user first
-        let existing_user = provider.get_user(user.username().as_str()).await.map_err(|source| {
-            AuthServiceError::with_source(AuthOperation::ManageMetadata, AuthFailureKind::NotFound, source)
-        })?;
+        let existing_user = provider.get_user(user.username().as_str()).await?;
 
         // Merge fields: update only provided fields
         let mut updated_user = existing_user.clone();
@@ -435,7 +451,8 @@ where
 
         match self.get_user(username).await {
             Ok(user) => Ok(matches!(user.user_type(), Some(UserType::Super))),
-            Err(_) => Ok(false), // User not found = not super user
+            Err(error) if error.kind() == AuthFailureKind::NotFound => Ok(false),
+            Err(error) => Err(error),
         }
     }
 }
