@@ -28,7 +28,6 @@ use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_protocol::protocol::body::topic::topic_list::TopicList;
 
 use super::RouteInfoManager;
-use crate::route::error::RocketMQError;
 use crate::route::error::RouteResult;
 use crate::route::types::TopicName;
 
@@ -45,7 +44,7 @@ impl RouteInfoManager {
         let broker_names = self.cluster_addr_table.get_brokers(cluster_name);
 
         if broker_names.is_empty() {
-            return Err(RocketMQError::cluster_not_found(cluster_name));
+            return Err(crate::route::error::cluster_not_found(cluster_name));
         }
 
         let broker_names = broker_names.into_iter().collect::<HashSet<_>>();

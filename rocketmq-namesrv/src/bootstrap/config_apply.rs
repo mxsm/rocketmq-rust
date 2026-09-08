@@ -16,9 +16,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::NameServerResult;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoDurabilityOutcome;
 use rocketmq_runtime::MetadataWriteRequest;
@@ -66,7 +65,7 @@ impl ConfigGenerationState {
 pub(crate) async fn apply_runtime_updates(
     runtime: &NameServerRuntimeInner,
     updates: HashMap<CheetahString, CheetahString>,
-) -> RocketMQResult<ConfigApplyOutcome> {
+) -> NameServerResult<ConfigApplyOutcome> {
     let _transaction_guard = runtime.config_transaction_lock.lock().await;
     let classified = classify_runtime_updates(updates)?;
     let (current_desired, previous_generation, previous_effective_generation) = {
@@ -82,15 +81,20 @@ pub(crate) async fn apply_runtime_updates(
     let effective = apply_to_snapshot(&runtime.config_snapshot(), &classified, true)?;
     let desired_generation = previous_generation
         .checked_add(1)
-        .ok_or_else(|| RocketMQError::nameserver_config_invalid("NameServer configuration generation overflow"))?;
+        .ok_or_else(|| crate::namesrv_error::invalid_configuration("configGeneration"))?;
     let desired_bytes = format_runtime_config(&desired)?.into_bytes();
     let target = desired.name_server_config.config_store_path.clone();
     let actor = runtime
         .config_metadata_io
         .as_ref()
-        .ok_or_else(|| RocketMQError::storage_write_failed(&target, "metadata I/O actor is unavailable"))?
+        .ok_or_else(|| {
+            crate::namesrv_error::storage_write(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "metadata I/O actor is unavailable",
+            ))
+        })?
         .as_ref()
-        .map_err(|error| RocketMQError::storage_write_failed(&target, error.to_string()))?;
+        .map_err(|error| crate::namesrv_error::storage_write(error.clone()))?;
     let deadline = MetadataDeadline::after(CONFIG_PERSIST_TIMEOUT);
     let durable_generation = match actor
         .submit_durable(
@@ -98,14 +102,14 @@ pub(crate) async fn apply_runtime_updates(
             deadline,
         )
         .await
-        .map_err(|error| RocketMQError::storage_write_failed(&target, error.to_string()))?
+        .map_err(crate::namesrv_error::storage_write)?
     {
         MetadataIoDurabilityOutcome::Durable(generation) => generation.get(),
-        MetadataIoDurabilityOutcome::TargetConflict(request) => {
-            return Err(RocketMQError::storage_write_failed(
-                request.target().display().to_string(),
+        MetadataIoDurabilityOutcome::TargetConflict(_request) => {
+            return Err(crate::namesrv_error::storage_write(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
                 "metadata resource target conflict",
-            ));
+            )));
         }
     };
 
@@ -125,9 +129,9 @@ pub(crate) async fn apply_runtime_updates(
     let effective_generation = if applied_keys.is_empty() {
         previous_effective_generation
     } else {
-        previous_effective_generation.checked_add(1).ok_or_else(|| {
-            RocketMQError::nameserver_config_invalid("NameServer effective configuration generation overflow")
-        })?
+        previous_effective_generation
+            .checked_add(1)
+            .ok_or_else(|| crate::namesrv_error::invalid_configuration("effectiveConfigGeneration"))?
     };
     if !applied_keys.is_empty() {
         runtime.config.store(effective);
@@ -153,7 +157,7 @@ fn apply_to_snapshot(
     base: &NameServerRuntimeConfig,
     updates: &[ClassifiedConfigUpdate],
     live_only: bool,
-) -> RocketMQResult<Arc<NameServerRuntimeConfig>> {
+) -> NameServerResult<Arc<NameServerRuntimeConfig>> {
     let mut name_server_config = (*base.name_server_config).clone();
     let mut tokio_client_config = (*base.tokio_client_config).clone();
     let mut server_config = (*base.server_config).clone();
@@ -229,9 +233,7 @@ fn apply_to_snapshot(
                     (interval_millis > 0).then(|| Duration::from_millis(interval_millis));
             }
             _ => {
-                return Err(RocketMQError::nameserver_config_invalid(format!(
-                    "unknown configuration key '{key}'"
-                )));
+                return Err(crate::namesrv_error::invalid_configuration(key));
             }
         }
     }
@@ -248,7 +250,7 @@ fn apply_to_snapshot(
     }))
 }
 
-fn format_runtime_config(config_snapshot: &NameServerRuntimeConfig) -> RocketMQResult<String> {
+fn format_runtime_config(config_snapshot: &NameServerRuntimeConfig) -> NameServerResult<String> {
     let name_server_config = &config_snapshot.name_server_config;
     let server_config = &config_snapshot.server_config;
     let tokio_client_config = &config_snapshot.tokio_client_config;
@@ -498,22 +500,20 @@ pub(crate) struct ClassifiedConfigUpdate {
 
 pub(crate) fn classify_runtime_updates(
     updates: impl IntoIterator<Item = (CheetahString, CheetahString)>,
-) -> RocketMQResult<Vec<ClassifiedConfigUpdate>> {
+) -> NameServerResult<Vec<ClassifiedConfigUpdate>> {
     updates
         .into_iter()
         .map(|(key, value)| {
             let mutability = classify_runtime_update(&key, &value)?;
             if mutability == ConfigMutability::Unsupported {
-                return Err(RocketMQError::nameserver_config_invalid(format!(
-                    "configuration key '{key}' cannot be changed remotely"
-                )));
+                return Err(crate::namesrv_error::invalid_configuration(&key));
             }
             Ok(ClassifiedConfigUpdate { key, value, mutability })
         })
         .collect()
 }
 
-fn classify_runtime_update(key: &str, value: &str) -> RocketMQResult<ConfigMutability> {
+fn classify_runtime_update(key: &str, value: &str) -> NameServerResult<ConfigMutability> {
     if let Some(namesrv_key) = NamesrvConfigKey::from_java_name(key) {
         validate_namesrv_property(namesrv_key, value)?;
         return Ok(namesrv_key.mutability());
@@ -544,13 +544,11 @@ fn classify_runtime_update(key: &str, value: &str) -> RocketMQResult<ConfigMutab
             }
             Ok(ConfigMutability::RestartRequired)
         }
-        _ => Err(RocketMQError::nameserver_config_invalid(format!(
-            "unknown configuration key '{key}'"
-        ))),
+        _ => Err(crate::namesrv_error::invalid_configuration(key)),
     }
 }
 
-fn parse_bounded_u64(key: &str, value: &str, minimum: u64, maximum: u64) -> RocketMQResult<u64> {
+fn parse_bounded_u64(key: &str, value: &str, minimum: u64, maximum: u64) -> NameServerResult<u64> {
     let parsed = value
         .parse::<u64>()
         .map_err(|_| invalid_value(key, "expected a non-negative integer"))?;
@@ -560,8 +558,8 @@ fn parse_bounded_u64(key: &str, value: &str, minimum: u64, maximum: u64) -> Rock
     Ok(parsed)
 }
 
-fn invalid_value(key: &str, reason: &str) -> RocketMQError {
-    RocketMQError::nameserver_config_invalid(format!("invalid value for '{key}': {reason}"))
+fn invalid_value(key: &str, _reason: &str) -> rocketmq_error::SharedError {
+    crate::namesrv_error::invalid_configuration(key)
 }
 
 #[cfg(test)]

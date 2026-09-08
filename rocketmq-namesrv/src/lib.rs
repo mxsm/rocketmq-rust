@@ -28,19 +28,21 @@
 pub use self::config::NamesrvConfig;
 pub use self::kvconfig::kvconfig_mananger::KVConfigManager;
 pub use self::namesrv_config_parse::parse_command_and_config_file;
+pub use self::namesrv_error::NameServerResult;
 pub use self::route::route_info_manager::RouteInfoManager;
 
 pub mod bootstrap;
 pub mod config;
 mod kvconfig;
 mod namesrv_config_parse;
+mod namesrv_error;
 pub mod processor;
 pub mod route;
 mod route_info;
 pub mod security;
 
-pub(crate) fn runtime_to_rocketmq_error(
-    error: impl std::error::Error + Send + Sync + 'static,
-) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::IO(std::io::Error::other(error))
+pub(crate) fn runtime_error(error: rocketmq_runtime::RuntimeError) -> rocketmq_error::SharedError {
+    let descriptor = error.descriptor();
+    let context = error.context().clone();
+    namesrv_error::shared(rocketmq_error::Error::caused_by(descriptor, error).with_context(context))
 }

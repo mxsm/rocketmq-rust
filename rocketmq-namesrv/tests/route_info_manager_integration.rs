@@ -22,12 +22,12 @@ use std::time::Duration;
 use anyhow::bail;
 use anyhow::Context;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::utils::crc32_utils;
 use rocketmq_model::version::RocketMqVersion;
 use rocketmq_namesrv::bootstrap::Builder;
+use rocketmq_namesrv::NameServerResult;
 use rocketmq_namesrv::NamesrvConfig;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -66,7 +66,7 @@ struct NamesrvHarness {
     addr: CheetahString,
     client: Arc<TransportClient<DefaultRequestProcessor>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
-    server_task: JoinHandle<RocketMQResult<()>>,
+    server_task: JoinHandle<NameServerResult<()>>,
     runtime_context: rocketmq_runtime::RuntimeContext,
 }
 
@@ -206,7 +206,7 @@ fn isolated_namesrv_data_dir(port: u16) -> PathBuf {
 async fn wait_until_ready(
     addr: &CheetahString,
     client: &Arc<TransportClient<DefaultRequestProcessor>>,
-    server_task: &mut JoinHandle<RocketMQResult<()>>,
+    server_task: &mut JoinHandle<NameServerResult<()>>,
 ) -> Result<(), String> {
     let deadline = Instant::now() + Duration::from_secs(10);
 
@@ -248,7 +248,7 @@ async fn wait_until_ready(
     }
 }
 
-async fn describe_finished_server_task(server_task: &mut JoinHandle<RocketMQResult<()>>) -> String {
+async fn describe_finished_server_task(server_task: &mut JoinHandle<NameServerResult<()>>) -> String {
     match server_task.await {
         Ok(Ok(())) => "server task exited before readiness probe without an error".to_string(),
         Ok(Err(error)) => format!("server task exited before readiness probe: {}", error),

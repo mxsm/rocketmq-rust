@@ -29,6 +29,7 @@ use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::NameServerResult;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use rocketmq_auth::AuthRuntime;
@@ -37,9 +38,7 @@ use rocketmq_auth::AuthRuntimeBuilder;
 use rocketmq_controller::ControllerConfig;
 #[cfg(feature = "embedded-controller")]
 use rocketmq_controller::ControllerManager;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::UnifiedServiceError;
+use rocketmq_error::SharedError;
 use rocketmq_observability::metrics::namesrv::NameServerMetrics;
 use rocketmq_observability::TelemetryHandle;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -161,7 +160,7 @@ impl NameServerBootstrap {
     /// 2. Server startup
     /// 3. Graceful shutdown on signal
     #[instrument(skip(self), name = "nameserver_boot")]
-    pub async fn boot(self) -> RocketMQResult<()> {
+    pub async fn boot(self) -> NameServerResult<()> {
         self.boot_with_shutdown(wait_for_signal()).await
     }
 
@@ -170,7 +169,7 @@ impl NameServerBootstrap {
     /// This keeps the default `boot()` behavior unchanged while giving tests and
     /// embedding callers a deterministic shutdown path.
     #[instrument(skip(self, shutdown_signal), name = "nameserver_boot_with_shutdown")]
-    pub async fn boot_with_shutdown<F>(self, shutdown_signal: F) -> RocketMQResult<()>
+    pub async fn boot_with_shutdown<F>(self, shutdown_signal: F) -> NameServerResult<()>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -179,7 +178,7 @@ impl NameServerBootstrap {
 
     #[doc(hidden)]
     #[instrument(skip(self, shutdown_signal), name = "nameserver_boot_with_shutdown_report")]
-    pub async fn boot_with_shutdown_report<F>(self, shutdown_signal: F) -> RocketMQResult<NameServerShutdownReport>
+    pub async fn boot_with_shutdown_report<F>(self, shutdown_signal: F) -> NameServerResult<NameServerShutdownReport>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -192,7 +191,7 @@ impl NameServerBootstrap {
     /// # Errors
     ///
     /// Returns the NameServer startup error or a typed runtime lifecycle error.
-    pub async fn boot_with_lifecycle(self, lifecycle: ServiceLifecycle) -> RocketMQResult<NameServerShutdownReport> {
+    pub async fn boot_with_lifecycle(self, lifecycle: ServiceLifecycle) -> NameServerResult<NameServerShutdownReport> {
         let shutdown_lifecycle = lifecycle.clone();
         self.boot_with_shutdown_report_and_lifecycle(
             async move {
@@ -211,7 +210,7 @@ impl NameServerBootstrap {
         mut self,
         shutdown_signal: F,
         lifecycle: Option<ServiceLifecycle>,
-    ) -> RocketMQResult<NameServerShutdownReport>
+    ) -> NameServerResult<NameServerShutdownReport>
     where
         F: Future<Output = ()> + Send + 'static,
     {
@@ -298,10 +297,10 @@ impl NameServerBootstrap {
 
     async fn rollback_startup(
         &mut self,
-        primary_error: RocketMQError,
+        primary_error: SharedError,
         lifecycle: Option<&ServiceLifecycle>,
         startup_journal: &mut NameServerStartupJournal,
-    ) -> RocketMQError {
+    ) -> SharedError {
         let deadline = lifecycle.map_or_else(
             || ShutdownDeadline::after(Duration::from_secs(30)),
             |lifecycle| {
@@ -344,23 +343,19 @@ async fn shutdown_startup_relay_until(
     Some(relay_group.shutdown_until(deadline).await)
 }
 
-fn namesrv_startup_failed(operation: &'static str, error: impl std::fmt::Display) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
-        "NameServer {operation}: {error}"
-    )))
+fn namesrv_startup_failed(
+    operation: &'static str,
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> SharedError {
+    crate::namesrv_error::startup(operation, error)
 }
 
-fn namesrv_task_group_unavailable(operation: &'static str) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
-        "NameServer {operation}: task group is unavailable"
-    )))
+fn namesrv_task_group_unavailable(operation: &'static str) -> SharedError {
+    crate::namesrv_error::startup_state(operation)
 }
 
-fn namesrv_runtime_state_error(message: impl Into<String>) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
-        "NameServer runtime state: {}",
-        message.into()
-    )))
+fn namesrv_runtime_state_error(_message: impl Into<String>) -> SharedError {
+    crate::namesrv_error::startup_state("namesrv.runtime.state")
 }
 
 impl NameServerRuntime {
@@ -378,7 +373,7 @@ impl NameServerRuntime {
     ///
     /// Returns `Ok(())` if transition succeeds, `Err` if transition is invalid.
     #[inline]
-    fn transition_to(&self, next: RuntimeState) -> RocketMQResult<()> {
+    fn transition_to(&self, next: RuntimeState) -> NameServerResult<()> {
         let current = self.current_state();
 
         if !current.can_transition_to(next) {
@@ -402,7 +397,7 @@ impl NameServerRuntime {
 
     /// Validate that current state is one of the expected states
     #[inline]
-    fn validate_state(&self, expected: &[RuntimeState], operation: &str) -> RocketMQResult<()> {
+    fn validate_state(&self, expected: &[RuntimeState], operation: &str) -> NameServerResult<()> {
         let current = self.current_state();
 
         if !expected.contains(&current) {
@@ -428,7 +423,7 @@ impl NameServerRuntime {
     /// 3. Setup RPC hooks
     /// 4. Start scheduled health monitoring tasks
     #[instrument(skip(self), name = "runtime_initialize")]
-    pub async fn initialize(&mut self) -> RocketMQResult<()> {
+    pub async fn initialize(&mut self) -> NameServerResult<()> {
         // Validate we're in Created state
         self.validate_state(&[RuntimeState::Created], "initialize")?;
         self.validate_runtime_config()?;
@@ -458,58 +453,37 @@ impl NameServerRuntime {
         Ok(())
     }
 
-    fn validate_runtime_config(&self) -> RocketMQResult<()> {
+    fn validate_runtime_config(&self) -> NameServerResult<()> {
         let namesrv_config = self.inner.name_server_config();
         namesrv_config.validate_domains()?;
         self.inner.kvconfig_manager().validate_persistence_owner()?;
 
         #[cfg(not(feature = "embedded-controller"))]
         if namesrv_config.enable_controller_in_namesrv {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "enableControllerInNamesrv",
-                value: namesrv_config.enable_controller_in_namesrv.to_string(),
-                reason: "the NameServer binary was compiled without the `embedded-controller` feature".to_string(),
-            });
+            return Err(crate::namesrv_error::invalid_configuration("enableControllerInNamesrv"));
         }
 
         #[cfg(feature = "embedded-controller")]
         if namesrv_config.enable_controller_in_namesrv {
-            let controller_config =
-                self.inner
-                    .controller_config()
-                    .ok_or_else(|| RocketMQError::ConfigInvalidValue {
-                        key: "enableControllerInNamesrv",
-                        value: namesrv_config.enable_controller_in_namesrv.to_string(),
-                        reason: "controller config is missing".to_string(),
-                    })?;
+            let controller_config = self
+                .inner
+                .controller_config()
+                .ok_or_else(|| crate::namesrv_error::invalid_configuration("enableControllerInNamesrv"))?;
 
             let server_config = self.inner.server_config();
             if controller_conflicts_with_namesrv(controller_config.as_ref(), server_config.as_ref()) {
-                return Err(RocketMQError::ConfigInvalidValue {
-                    key: "enableControllerInNamesrv",
-                    value: namesrv_config.enable_controller_in_namesrv.to_string(),
-                    reason: format!(
-                        "controller listen address {} conflicts with namesrv address {}:{}",
-                        controller_config.listen_addr,
-                        self.inner.server_config().bind_address,
-                        self.inner.server_config().listen_port
-                    ),
-                });
+                return Err(crate::namesrv_error::invalid_configuration("enableControllerInNamesrv"));
             }
         }
 
         if namesrv_config.cluster_test && self.inner.cluster_test_route_lookup().is_none() {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "clusterTest",
-                value: namesrv_config.cluster_test.to_string(),
-                reason: "cluster-test route lookup requires an injected ChildServiceContext owner".to_string(),
-            });
+            return Err(crate::namesrv_error::invalid_configuration("clusterTest"));
         }
 
         Ok(())
     }
 
-    async fn load_config(&mut self) -> RocketMQResult<()> {
+    async fn load_config(&mut self) -> NameServerResult<()> {
         // KVConfigManager is now always initialized
         self.inner.kvconfig_manager().load().inspect_err(|error| {
             error!(error_code = %error.descriptor().code(), "KV config load failed");
@@ -541,17 +515,14 @@ impl NameServerRuntime {
                     self.inner.remoting_command_factory(),
                 )
                 .await
-                .map_err(|error| RocketMQError::Shared(Arc::new(error)))?,
+                .map_err(Arc::new)?,
             );
             self.inner.install_controller_manager(Arc::clone(&controller_manager))?;
-            let initialized = controller_manager
-                .initialize()
-                .await
-                .map_err(|error| RocketMQError::Shared(Arc::new(error)))?;
+            let initialized = controller_manager.initialize().await.map_err(Arc::new)?;
             if !initialized {
                 return Err(namesrv_startup_failed(
                     "initialize embedded controller",
-                    "controller manager initialization returned false",
+                    std::io::Error::other("controller manager initialization returned false"),
                 ));
             }
             debug!("Embedded controller initialized successfully");
@@ -559,7 +530,7 @@ impl NameServerRuntime {
         Ok(())
     }
 
-    async fn initialize_auth_runtime(&self) -> RocketMQResult<()> {
+    async fn initialize_auth_runtime(&self) -> NameServerResult<()> {
         let namesrv_config = self.inner.name_server_config();
         let mut auth_config = namesrv_config.auth_config.clone();
         if !auth_config.authentication_enabled && !auth_config.authorization_enabled {
@@ -581,7 +552,12 @@ impl NameServerRuntime {
         if let Some(Ok(metadata_io)) = self.inner.config_metadata_io.as_ref() {
             builder = builder.with_metadata_io_actor(metadata_io.clone());
         }
-        let auth_runtime = Arc::new(builder.build().await?);
+        let auth_runtime = Arc::new(
+            builder
+                .build()
+                .await
+                .map_err(|error| crate::namesrv_error::from_error(error.into()))?,
+        );
         self.inner
             .auth_runtime
             .set(auth_runtime)
@@ -618,7 +594,7 @@ impl NameServerRuntime {
     /// Start scheduled tasks for system health monitoring
     ///
     /// Schedules periodic broker health checks to detect and remove inactive brokers
-    fn start_schedule_service(&mut self) -> RocketMQResult<()> {
+    fn start_schedule_service(&mut self) -> NameServerResult<()> {
         let session_events = self.inner.session_registry.subscribe();
         let session_shutdown = self
             .shutdown_tx
@@ -682,7 +658,7 @@ impl NameServerRuntime {
     /// 5. Performs graceful shutdown
     #[instrument(skip(self), name = "runtime_start")]
     #[cfg(all(test, feature = "embedded-controller"))]
-    pub async fn start(&mut self) -> RocketMQResult<()> {
+    pub async fn start(&mut self) -> NameServerResult<()> {
         self.start_with_shutdown_report(None).await.map(|_| ())
     }
 
@@ -690,7 +666,7 @@ impl NameServerRuntime {
     async fn start_with_shutdown_report(
         &mut self,
         lifecycle: Option<&ServiceLifecycle>,
-    ) -> RocketMQResult<NameServerShutdownReport> {
+    ) -> NameServerResult<NameServerShutdownReport> {
         // Validate we're in Initialized state
         if let Err(e) = self.validate_state(&[RuntimeState::Initialized], "start") {
             error!("Cannot start: {}", e);
@@ -767,10 +743,7 @@ impl NameServerRuntime {
 
         #[cfg(feature = "embedded-controller")]
         if let Some(controller_manager) = self.inner.controller_manager() {
-            controller_manager
-                .start()
-                .await
-                .map_err(|error| RocketMQError::Shared(Arc::new(error)))?;
+            controller_manager.start().await.map_err(Arc::new)?;
         }
 
         // Transition to Running state
@@ -1425,7 +1398,7 @@ impl NameServerRuntimeHandle {
     pub(crate) fn update_name_server_config(
         &self,
         updates: HashMap<CheetahString, CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> NameServerResult<()> {
         self.runtime().update_name_server_config(updates)
     }
 
@@ -1464,7 +1437,7 @@ impl NameServerRuntimeHandle {
     pub(crate) async fn update_runtime_config(
         &self,
         updates: HashMap<CheetahString, CheetahString>,
-    ) -> RocketMQResult<ConfigApplyOutcome> {
+    ) -> NameServerResult<ConfigApplyOutcome> {
         self.runtime().update_runtime_config(updates).await
     }
 
@@ -1552,7 +1525,7 @@ impl NameServerRuntimeInner {
     pub(crate) fn update_name_server_config(
         &self,
         updates: HashMap<CheetahString, CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> NameServerResult<()> {
         let _update_guard = self.config_update_lock.lock();
         let current = self.config_snapshot();
         let mut name_server_config = (*current.name_server_config).clone();
@@ -1831,7 +1804,7 @@ impl NameServerRuntimeInner {
     pub async fn update_runtime_config(
         &self,
         updates: HashMap<CheetahString, CheetahString>,
-    ) -> RocketMQResult<ConfigApplyOutcome> {
+    ) -> NameServerResult<ConfigApplyOutcome> {
         config_apply::apply_runtime_updates(self, updates).await
     }
 
@@ -1864,7 +1837,7 @@ impl NameServerRuntimeInner {
     }
 
     #[cfg(feature = "embedded-controller")]
-    fn install_controller_manager(&self, controller_manager: Arc<ControllerManager>) -> RocketMQResult<()> {
+    fn install_controller_manager(&self, controller_manager: Arc<ControllerManager>) -> NameServerResult<()> {
         self.controller_manager
             .set(controller_manager)
             .map_err(|_| namesrv_runtime_state_error("embedded controller manager was already initialized"))
@@ -1876,14 +1849,9 @@ impl NameServerRuntimeInner {
     }
 }
 
-fn validate_startup_only_namesrv_config(current: &NamesrvConfig, candidate: &NamesrvConfig) -> RocketMQResult<()> {
+fn validate_startup_only_namesrv_config(current: &NamesrvConfig, candidate: &NamesrvConfig) -> NameServerResult<()> {
     if current.enable_controller_in_namesrv != candidate.enable_controller_in_namesrv {
-        return Err(RocketMQError::ConfigInvalidValue {
-            key: "enableControllerInNamesrv",
-            value: candidate.enable_controller_in_namesrv.to_string(),
-            reason: "embedded Controller topology is startup-only; restart a binary built with the required feature"
-                .to_string(),
-        });
+        return Err(crate::namesrv_error::invalid_configuration("enableControllerInNamesrv"));
     }
     Ok(())
 }
@@ -1909,14 +1877,14 @@ fn push_config_entry(entries: &mut Vec<(&'static str, String)>, key: &'static st
     entries.push((key, value.to_string()));
 }
 
-fn parse_config_value<T>(key: &str, value: &CheetahString) -> RocketMQResult<T>
+fn parse_config_value<T>(key: &str, value: &CheetahString) -> NameServerResult<T>
 where
     T: std::str::FromStr,
 {
     value
         .as_str()
         .parse()
-        .map_err(|_| RocketMQError::nameserver_config_invalid(format!("invalid configuration value for key '{key}'")))
+        .map_err(|_| crate::namesrv_error::invalid_configuration(key))
 }
 
 #[cfg(test)]
@@ -2309,7 +2277,7 @@ mod tests {
         shutdown_called: AtomicBool,
     }
 
-    type TestRouteLookupFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = RocketMQResult<T>> + Send + 'a>>;
+    type TestRouteLookupFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = NameServerResult<T>> + Send + 'a>>;
 
     impl PartiallyStartedRouteLookup {
         fn new(service_context: ChildServiceContext) -> Self {
@@ -2333,7 +2301,7 @@ mod tests {
                     .map_err(|error| namesrv_startup_failed("start test route lookup task", error))?;
                 Err(namesrv_startup_failed(
                     "start test partial route lookup",
-                    "simulated partial startup failure",
+                    std::io::Error::other("simulated partial startup failure"),
                 ))
             })
         }
@@ -2352,9 +2320,8 @@ mod tests {
                     .task_group
                     .shutdown_until(ShutdownDeadline::after(Duration::from_secs(1)))
                     .await;
-                report.assert_no_task_leak().map_err(|error| RocketMQError::Internal {
-                    operation: "shutdown test route lookup",
-                    source: Box::new(std::io::Error::other(error)),
+                report.assert_no_task_leak().map_err(|error| {
+                    crate::namesrv_error::startup("shutdown test route lookup", std::io::Error::other(error))
                 })
             })
         }
@@ -2460,13 +2427,7 @@ mod tests {
         let namesrv_error = runtime
             .update_name_server_config(update)
             .expect_err("NameServer-only update must reject an embedded Controller topology change");
-        assert!(matches!(
-            namesrv_error,
-            RocketMQError::ConfigInvalidValue {
-                key: "enableControllerInNamesrv",
-                ..
-            }
-        ));
+        assert_eq!(namesrv_error.code(), rocketmq_error::CORE_CONFIGURATION_INVALID.code());
         assert!(Arc::ptr_eq(&before, &runtime.config_snapshot()));
     }
 
@@ -2545,10 +2506,10 @@ mod tests {
 
     #[test]
     fn namesrv_startup_failed_uses_service_descriptor() {
-        let error = namesrv_startup_failed("spawn test service", "task group closed");
+        let error = namesrv_startup_failed("spawn test service", std::io::Error::other("task group closed"));
 
         assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERVICE_FAILED);
-        assert!(error.to_string().contains("NameServer spawn test service"));
+        assert!(std::error::Error::source(error.as_ref()).is_some());
     }
 
     #[test]
@@ -2556,7 +2517,6 @@ mod tests {
         let error = namesrv_task_group_unavailable("spawn test service");
 
         assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERVICE_FAILED);
-        assert!(error.to_string().contains("task group is unavailable"));
     }
 
     #[test]
@@ -2564,7 +2524,6 @@ mod tests {
         let error = namesrv_runtime_state_error("invalid Created -> Running transition");
 
         assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERVICE_FAILED);
-        assert!(error.to_string().contains("NameServer runtime state"));
     }
 
     #[test]
@@ -2576,7 +2535,6 @@ mod tests {
             .expect_err("Created -> Running should be invalid");
 
         assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERVICE_FAILED);
-        assert!(error.to_string().contains("Invalid state transition"));
     }
 
     #[tokio::test]

@@ -14,10 +14,9 @@
 
 use std::collections::HashMap;
 
+use crate::NameServerResult;
 use cheetah_string::CheetahString;
 use rocketmq_auth::AuthConfig;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
 use rocketmq_model::common::mix_all::ROCKETMQ_HOME_PROPERTY;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
@@ -292,7 +291,7 @@ impl NamesrvConfigKey {
     }
 }
 
-pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> RocketMQResult<()> {
+pub(crate) fn validate_namesrv_property(key: NamesrvConfigKey, value: &str) -> NameServerResult<()> {
     match key {
         NamesrvConfigKey::ClientRequestThreadPoolNums => {
             parse_bounded_i32(key, value, 1, MAX_THREAD_COUNT)?;
@@ -471,7 +470,7 @@ impl NamesrvConfigKey {
     }
 }
 
-fn parse_bounded_i32(key: NamesrvConfigKey, value: &str, minimum: i32, maximum: i32) -> RocketMQResult<i32> {
+fn parse_bounded_i32(key: NamesrvConfigKey, value: &str, minimum: i32, maximum: i32) -> NameServerResult<i32> {
     let value = value
         .parse::<i32>()
         .map_err(|_| invalid_value(key.java_name(), "expected an integer"))?;
@@ -484,7 +483,7 @@ fn parse_bounded_i32(key: NamesrvConfigKey, value: &str, minimum: i32, maximum: 
     Ok(value)
 }
 
-fn parse_bounded_u64(key: NamesrvConfigKey, value: &str, minimum: u64, maximum: u64) -> RocketMQResult<u64> {
+fn parse_bounded_u64(key: NamesrvConfigKey, value: &str, minimum: u64, maximum: u64) -> NameServerResult<u64> {
     let value = value
         .parse::<u64>()
         .map_err(|_| invalid_value(key.java_name(), "expected a positive integer"))?;
@@ -1112,7 +1111,7 @@ impl NamesrvConfig {
             .collect()
     }
 
-    pub fn update(&mut self, properties: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
+    pub fn update(&mut self, properties: HashMap<CheetahString, CheetahString>) -> NameServerResult<()> {
         let mut candidate = self.clone();
         candidate.apply_updates(properties)?;
         candidate.validate_domains()?;
@@ -1126,7 +1125,7 @@ impl NamesrvConfig {
     pub fn update_known_properties(
         &mut self,
         properties: &HashMap<CheetahString, CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> NameServerResult<()> {
         let namesrv_properties = properties
             .iter()
             .filter(|(key, _)| NamesrvConfigKey::from_java_name(key.as_str()).is_some())
@@ -1140,11 +1139,10 @@ impl NamesrvConfig {
         NamesrvConfigKey::from_java_name(key).is_some()
     }
 
-    fn apply_updates(&mut self, properties: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
+    fn apply_updates(&mut self, properties: HashMap<CheetahString, CheetahString>) -> NameServerResult<()> {
         for (key, value) in properties {
-            let config_key = NamesrvConfigKey::from_java_name(key.as_str()).ok_or_else(|| {
-                RocketMQError::nameserver_config_invalid(format!("unknown configuration key '{key}'"))
-            })?;
+            let config_key = NamesrvConfigKey::from_java_name(key.as_str())
+                .ok_or_else(|| crate::namesrv_error::invalid_configuration(&key))?;
             validate_namesrv_property(config_key, value.as_str())?;
             match config_key {
                 NamesrvConfigKey::RocketmqHome => self.rocketmq_home = value.to_string(),
@@ -1319,7 +1317,7 @@ impl NamesrvConfig {
         Ok(())
     }
 
-    pub(crate) fn validate_domains(&self) -> RocketMQResult<()> {
+    pub(crate) fn validate_domains(&self) -> NameServerResult<()> {
         for (key, value) in [
             (
                 NamesrvConfigKey::ClientRequestThreadPoolNums,
@@ -1429,7 +1427,7 @@ impl NamesrvConfig {
         Ok(())
     }
 
-    pub(crate) fn unregister_broker_queue_capacity(&self) -> RocketMQResult<usize> {
+    pub(crate) fn unregister_broker_queue_capacity(&self) -> NameServerResult<usize> {
         validate_namesrv_property(
             NamesrvConfigKey::UnregisterBrokerQueueCapacity,
             &self.unregister_broker_queue_capacity.to_string(),
@@ -1451,11 +1449,11 @@ impl NamesrvConfig {
     }
 }
 
-fn invalid_value(key: &str, reason: &str) -> RocketMQError {
-    RocketMQError::nameserver_config_invalid(format!("invalid value for '{key}': {reason}"))
+fn invalid_value(key: &str, _reason: &str) -> rocketmq_error::SharedError {
+    crate::namesrv_error::invalid_configuration(key)
 }
 
-pub fn reject_removed_transport_client_key(key: &str) -> RocketMQResult<()> {
+pub fn reject_removed_transport_client_key(key: &str) -> NameServerResult<()> {
     const REMOVED_KEYS: &[&str] = &[
         "clientWorkerThreads",
         "clientCallbackExecutorThreads",
@@ -1478,14 +1476,12 @@ pub fn reject_removed_transport_client_key(key: &str) -> RocketMQResult<()> {
     ];
     let key = key.trim();
     if REMOVED_KEYS.contains(&key) {
-        return Err(RocketMQError::nameserver_config_invalid(format!(
-            "'{key}' was removed because the Tokio transport never implemented its advertised Netty-style behavior"
-        )));
+        return Err(crate::namesrv_error::invalid_configuration(key));
     }
     Ok(())
 }
 
-pub fn validate_namesrv_config_source(source: &str) -> RocketMQResult<()> {
+pub fn validate_namesrv_config_source(source: &str) -> NameServerResult<()> {
     for line in source.lines() {
         let candidate = line
             .split_once('#')
@@ -1881,11 +1877,7 @@ productEnvName = "clientWorkerThreads"
         let error = validate_namesrv_config_source("clientWorkerThreads = 4")
             .expect_err("removed transport client field must fail");
 
-        assert!(matches!(
-            error,
-            RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
-        ));
-        assert!(error.to_string().contains("clientWorkerThreads"));
+        assert_eq!(error.code(), rocketmq_error::CORE_CONFIGURATION_INVALID.code());
     }
 
     #[test]
@@ -1898,10 +1890,7 @@ productEnvName = "clientWorkerThreads"
             )]))
             .expect_err("zero-capacity channel must be rejected before construction");
 
-        assert!(matches!(
-            error,
-            RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
-        ));
+        assert_eq!(error.code(), rocketmq_error::CORE_CONFIGURATION_INVALID.code());
     }
 
     #[test]

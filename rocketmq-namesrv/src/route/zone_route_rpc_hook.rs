@@ -59,7 +59,7 @@ impl RPCHook for ZoneRouteRPCHook {
         &self,
         _remote_addr: std::net::SocketAddr,
         _request: &mut rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::NameServerResult<()> {
         Ok(())
     }
 
@@ -68,7 +68,7 @@ impl RPCHook for ZoneRouteRPCHook {
         _remote_addr: std::net::SocketAddr,
         request: &rocketmq_protocol::protocol::remoting_command::RemotingCommand,
         response: &mut rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::NameServerResult<()> {
         if RequestCode::GetRouteinfoByTopic as i32 != request.code() {
             return Ok(());
         }
@@ -106,13 +106,18 @@ impl RPCHook for ZoneRouteRPCHook {
         let Some(response_body) = response.get_body() else {
             return Ok(());
         };
-        let original_route_data = TopicRouteData::decode(response_body)?;
+        let original_route_data = TopicRouteData::decode(response_body)
+            .map_err(|error| crate::namesrv_error::serialization("decode-zone-route", "json", error))?;
         let mut topic_route_data = original_route_data.clone();
         filter_by_zone_name(&mut topic_route_data, zone_name);
-        let body = topic_route_data.encode()?;
+        let body = topic_route_data
+            .encode()
+            .map_err(|error| crate::namesrv_error::serialization("encode-zone-route", "json", error))?;
         if typed_mode == Some(TYPED_ZONE_ROUTE_SHADOW) {
             let typed_route = filter_route_by_zone(&original_route_data, &ZoneRequest::enabled(zone_name.clone()));
-            let typed_body = typed_route.encode()?;
+            let typed_body = typed_route
+                .encode()
+                .map_err(|error| crate::namesrv_error::serialization("encode-typed-zone-route", "json", error))?;
             if typed_body != body {
                 warn!(
                     mode = "shadow",

@@ -169,7 +169,7 @@ use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_namesrv::NamesrvConfig;
 
-async fn run_namesrv() -> rocketmq_error::RocketMQResult<()> {
+async fn run_namesrv() -> rocketmq_namesrv::NameServerResult<()> {
     let namesrv_config = NamesrvConfig {
         rocketmq_home: "/opt/rocketmq".to_string(),
         ..NamesrvConfig::default()

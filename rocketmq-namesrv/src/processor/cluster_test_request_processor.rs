@@ -61,8 +61,10 @@ impl ClusterTestRequestProcessor {
     async fn get_route_info_by_topic(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header = request.decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
+    ) -> crate::NameServerResult<Option<RemotingCommand>> {
+        let request_header = request
+            .decode_command_custom_header::<GetRouteInfoRequestHeader>()
+            .map_err(crate::namesrv_error::from_error)?;
         let route_config = self.name_server_runtime_inner.name_server_config();
 
         let mut topic_route_data = match self
@@ -136,10 +138,11 @@ impl ClusterTestRequestProcessor {
     pub(crate) async fn handle_request(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let _runtime_guard = self.name_server_runtime_inner.upgrade().ok_or_else(|| {
-            rocketmq_error::RocketMQError::not_initialized("NameServer runtime is no longer available")
-        })?;
+    ) -> crate::NameServerResult<Option<RemotingCommand>> {
+        let _runtime_guard = self
+            .name_server_runtime_inner
+            .upgrade()
+            .ok_or_else(|| crate::namesrv_error::not_initialized("namesrv-runtime"))?;
         let request_code = RequestCode::from(request.code());
         debug!(
             "Name server ClusterTestRequestProcessor received request code: {:?}",
@@ -151,7 +154,7 @@ impl ClusterTestRequestProcessor {
 }
 
 impl RequestProcessor for ClusterTestRequestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<HandlerOutcome> {
         let response = self.handle_request(request.command_mut()).await?;
         crate::processor::response_outcome(response)
     }
@@ -196,9 +199,7 @@ mod tests {
             Box::pin(async move {
                 match result {
                     TestLookupResult::Outcome(outcome) => Ok(outcome),
-                    TestLookupResult::Failure => Err(rocketmq_error::RocketMQError::not_initialized(
-                        "private product lookup failure",
-                    )),
+                    TestLookupResult::Failure => Err(crate::namesrv_error::not_initialized("product-route-lookup")),
                 }
             })
         }

@@ -17,13 +17,11 @@ use std::mem::size_of;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::NameServerResult;
 use cheetah_string::CheetahString;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use moka::sync::SegmentedCache;
-use rocketmq_error::Error;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use tokio::sync::watch;
@@ -169,10 +167,10 @@ impl ClusterTestLookupCache {
         &self,
         key: LookupCacheKey,
         resolve: F,
-    ) -> RocketMQResult<RouteLookupOutcome<Option<TopicRouteData>>>
+    ) -> NameServerResult<RouteLookupOutcome<Option<TopicRouteData>>>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = RocketMQResult<RouteLookupOutcome<ResolvedRoute>>>,
+        Fut: Future<Output = NameServerResult<RouteLookupOutcome<ResolvedRoute>>>,
     {
         if let Some(entry) = self.entries.get(&key) {
             if entry.expires_at > Instant::now() {
@@ -226,9 +224,8 @@ impl ClusterTestLookupCache {
                 Ok(RouteLookupOutcome::Cancelled)
             }
             Err(error) => {
-                let error = capture_lookup_failure(error);
                 leader.complete(FlightState::Complete(Err(error.clone())));
-                Err(RocketMQError::Shared(error))
+                Err(error)
             }
         }
     }
@@ -244,29 +241,18 @@ impl ClusterTestLookupCache {
     }
 }
 
-async fn wait_for_flight(flight: &LookupFlight) -> RocketMQResult<RouteLookupOutcome<Option<TopicRouteData>>> {
+async fn wait_for_flight(flight: &LookupFlight) -> NameServerResult<RouteLookupOutcome<Option<TopicRouteData>>> {
     let mut state = flight.state.subscribe();
     loop {
         match state.borrow_and_update().clone() {
             FlightState::Pending => {}
             FlightState::Complete(Ok(route)) => return Ok(RouteLookupOutcome::Resolved(route.into_owned())),
-            FlightState::Complete(Err(error)) => return Err(RocketMQError::Shared(error)),
+            FlightState::Complete(Err(error)) => return Err(error),
             FlightState::Unavailable => return Ok(RouteLookupOutcome::Unavailable),
             FlightState::Cancelled => return Ok(RouteLookupOutcome::Cancelled),
         }
         if state.changed().await.is_err() {
             return Ok(RouteLookupOutcome::Cancelled);
-        }
-    }
-}
-
-fn capture_lookup_failure(error: RocketMQError) -> SharedError {
-    match error {
-        RocketMQError::Shared(error) => error,
-        error => {
-            let descriptor = error.descriptor();
-            let context = error.context();
-            Arc::new(Error::caused_by(descriptor, error).with_context(context))
         }
     }
 }
@@ -316,7 +302,6 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
 
-    use rocketmq_error::RocketMQError;
     use tokio::sync::Barrier;
     use tokio::sync::Notify;
 
@@ -438,13 +423,10 @@ mod tests {
         let canonical = Arc::new(rocketmq_error::Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED));
         let expected = Arc::clone(&canonical);
         let error = cache
-            .get_or_resolve(key("error"), || async { Err(RocketMQError::Shared(canonical)) })
+            .get_or_resolve(key("error"), || async { Err(canonical) })
             .await
             .expect_err("lookup failure must be returned");
-        let RocketMQError::Shared(actual) = error else {
-            panic!("lookup failure must retain the canonical shared error")
-        };
-        assert!(Arc::ptr_eq(&actual, &expected));
+        assert!(Arc::ptr_eq(&error, &expected));
         assert_eq!(cache.stats(), (0, 0, 0));
 
         let entered = Arc::new(Notify::new());
@@ -479,11 +461,8 @@ mod tests {
         let error = wait_for_flight(&flight)
             .await
             .expect_err("coalesced failure should be returned");
-        let RocketMQError::Shared(shared) = error else {
-            panic!("coalesced failures must retain the shared typed error");
-        };
-        assert!(Arc::ptr_eq(&shared, &expected));
-        assert!(std::error::Error::source(shared.as_ref()).is_some());
+        assert!(Arc::ptr_eq(&error, &expected));
+        assert!(std::error::Error::source(error.as_ref()).is_some());
     }
 
     #[tokio::test]

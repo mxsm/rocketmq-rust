@@ -22,7 +22,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -30,8 +29,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use crate::NameServerResult;
+use rocketmq_error::SharedError;
 use rocketmq_observability::metrics::namesrv::NameServerKvEvent;
 use rocketmq_observability::metrics::namesrv::NameServerMetrics;
 use rocketmq_protocol::protocol::RemotingSerializable;
@@ -120,22 +119,21 @@ pub(crate) struct KvCommitReceipt {
 enum KvCommitError {
     Metadata(RuntimeError),
     MetadataTargetConflict,
-    Serialization(Arc<str>),
+    Serialization(SharedError),
     WorkerStopped,
 }
 
 impl KvCommitError {
-    fn into_rocketmq_error(self) -> RocketMQError {
+    fn into_error(self) -> SharedError {
         match self {
-            Self::Metadata(error) => crate::runtime_to_rocketmq_error(error),
-            Self::MetadataTargetConflict => {
-                RocketMQError::storage_write_failed(KV_RESOURCE, "metadata resource target conflict")
-            }
-            Self::Serialization(message) => {
-                RocketMQError::IO(io::Error::new(io::ErrorKind::InvalidData, message.to_string()))
-            }
-            Self::WorkerStopped => RocketMQError::IO(io::Error::new(
-                io::ErrorKind::BrokenPipe,
+            Self::Metadata(error) => crate::runtime_error(error),
+            Self::MetadataTargetConflict => crate::namesrv_error::storage_write(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "metadata resource target conflict",
+            )),
+            Self::Serialization(error) => error,
+            Self::WorkerStopped => crate::namesrv_error::storage_write(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
                 "NameServer KV mutation worker stopped before commit",
             )),
         }
@@ -150,17 +148,17 @@ pub(crate) struct KvMutationReceipt {
 }
 
 impl KvMutationReceipt {
-    pub(crate) async fn wait_until(self, deadline: MetadataDeadline) -> RocketMQResult<KvCommitReceipt> {
+    pub(crate) async fn wait_until(self, deadline: MetadataDeadline) -> NameServerResult<KvCommitReceipt> {
         if deadline.is_expired() {
-            return Err(crate::runtime_to_rocketmq_error(RuntimeError::timed_out(
+            return Err(crate::runtime_error(RuntimeError::timed_out(
                 RuntimeOperation::AdmitKvMutation,
             )));
         }
         match tokio::time::timeout_at(deadline.instant(), self.completion).await {
             Ok(Ok(Ok(receipt))) => Ok(receipt),
-            Ok(Ok(Err(error))) => Err(error.into_rocketmq_error()),
-            Ok(Err(_)) => Err(KvCommitError::WorkerStopped.into_rocketmq_error()),
-            Err(_) => Err(crate::runtime_to_rocketmq_error(RuntimeError::timed_out(
+            Ok(Ok(Err(error))) => Err(error.into_error()),
+            Ok(Err(_)) => Err(KvCommitError::WorkerStopped.into_error()),
+            Err(_) => Err(crate::runtime_error(RuntimeError::timed_out(
                 RuntimeOperation::AdmitKvMutation,
             ))),
         }
@@ -269,15 +267,19 @@ impl KvMutationService {
         Ok(service)
     }
 
-    pub(crate) fn submit(&self, mutation: KvMutation, deadline: MetadataDeadline) -> RocketMQResult<KvMutationReceipt> {
+    pub(crate) fn submit(
+        &self,
+        mutation: KvMutation,
+        deadline: MetadataDeadline,
+    ) -> NameServerResult<KvMutationReceipt> {
         if deadline.is_expired() {
-            return Err(crate::runtime_to_rocketmq_error(RuntimeError::timed_out(
+            return Err(crate::runtime_error(RuntimeError::timed_out(
                 RuntimeOperation::AdmitKvMutation,
             )));
         }
         if !self.inner.accepting.load(Ordering::Acquire) {
             self.metrics.record_kv_event(NameServerKvEvent::Closed);
-            return Err(crate::runtime_to_rocketmq_error(RuntimeError::context_unavailable(
+            return Err(crate::runtime_error(RuntimeError::context_unavailable(
                 RuntimeOperation::KvMutationWorker,
             )));
         }
@@ -301,7 +303,7 @@ impl KvMutationService {
                         RuntimeError::capacity(RuntimeOperation::AdmitKvMutation)
                     }
                 };
-                return Err(crate::runtime_to_rocketmq_error(metadata_error));
+                return Err(crate::runtime_error(metadata_error));
             }
         };
 
@@ -364,14 +366,14 @@ impl KvMutationService {
     }
 }
 
-fn reserve_pending_bytes(inner: &MutationServiceInner, requested: usize) -> RocketMQResult<()> {
+fn reserve_pending_bytes(inner: &MutationServiceInner, requested: usize) -> NameServerResult<()> {
     let mut retained = inner.pending_bytes.load(Ordering::Acquire);
     loop {
-        let next = retained.checked_add(requested).ok_or_else(|| {
-            crate::runtime_to_rocketmq_error(RuntimeError::capacity(RuntimeOperation::AdmitKvMutationBytes))
-        })?;
+        let next = retained
+            .checked_add(requested)
+            .ok_or_else(|| crate::runtime_error(RuntimeError::capacity(RuntimeOperation::AdmitKvMutationBytes)))?;
         if next > inner.max_pending_bytes {
-            return Err(crate::runtime_to_rocketmq_error(RuntimeError::capacity(
+            return Err(crate::runtime_error(RuntimeError::capacity(
                 RuntimeOperation::AdmitKvMutationBytes,
             )));
         }
@@ -385,12 +387,12 @@ fn reserve_pending_bytes(inner: &MutationServiceInner, requested: usize) -> Rock
     }
 }
 
-fn next_generation(generation: &AtomicU64) -> RocketMQResult<u64> {
+fn next_generation(generation: &AtomicU64) -> NameServerResult<u64> {
     let mut current = generation.load(Ordering::Acquire);
     loop {
-        let next = current
-            .checked_add(1)
-            .ok_or_else(|| RocketMQError::IO(io::Error::other("NameServer KV mutation generation exhausted")))?;
+        let next = current.checked_add(1).ok_or_else(|| {
+            crate::namesrv_error::storage_write(std::io::Error::other("NameServer KV mutation generation exhausted"))
+        })?;
         match generation.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => return Ok(next),
             Err(observed) => current = observed,
@@ -495,7 +497,7 @@ async fn process_batch(
             Ok(bytes) => bytes,
             Err(error) => {
                 metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
-                finish_batch_with_error(inner, batch, KvCommitError::Serialization(error.to_string().into()));
+                finish_batch_with_error(inner, batch, KvCommitError::Serialization(error));
                 record_kv_snapshot(metrics, inner);
                 return;
             }
@@ -577,14 +579,15 @@ fn snapshot_table(config_table: &ConfigTable) -> HashMap<Namespace, ConfigMap> {
         .collect()
 }
 
-fn serialize_candidate(candidate: &HashMap<Namespace, ConfigMap>) -> RocketMQResult<Vec<u8>> {
+fn serialize_candidate(candidate: &HashMap<Namespace, ConfigMap>) -> NameServerResult<Vec<u8>> {
     let snapshot = candidate
         .iter()
         .map(|(namespace, values)| (namespace.clone(), values.clone()))
         .collect();
-    Ok(KVConfigSerializeWrapper::new_with_config_table(snapshot)
-        .serialize_json_pretty()?
-        .into_bytes())
+    KVConfigSerializeWrapper::new_with_config_table(snapshot)
+        .serialize_json_pretty()
+        .map(String::into_bytes)
+        .map_err(|error| crate::namesrv_error::serialization("encode-kv-config", "json", error))
 }
 
 fn apply_mutation(candidate: &mut HashMap<Namespace, ConfigMap>, mutation: &KvMutation) -> MutationOutcome {
