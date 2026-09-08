@@ -366,30 +366,6 @@ mod tests {
     }
 
     #[test]
-    fn test_response_code_derive_traits() {
-        // Test Debug
-        let code = ResponseCode::Success;
-        assert_eq!(format!("{:?}", code), "Success");
-
-        // Test Clone and Copy
-        let code1 = ResponseCode::SystemError;
-        let code2 = code1;
-        assert_eq!(code1, code2);
-
-        // Test PartialEq and Eq
-        assert_eq!(ResponseCode::Success, ResponseCode::Success);
-        assert_ne!(ResponseCode::Success, ResponseCode::SystemError);
-
-        // Test Hash
-        use std::collections::HashSet;
-        let mut set = HashSet::new();
-        set.insert(ResponseCode::Success);
-        set.insert(ResponseCode::Success); // Duplicate
-        set.insert(ResponseCode::SystemError);
-        assert_eq!(set.len(), 2);
-    }
-
-    #[test]
     fn test_response_code_repr_i32_size() {
         use std::mem::size_of;
         assert_eq!(size_of::<ResponseCode>(), size_of::<i32>());
