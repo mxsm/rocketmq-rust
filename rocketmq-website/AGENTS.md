@@ -12,18 +12,15 @@ This file applies to `rocketmq-website/`.
 - Keep website changes scoped to `rocketmq-website/` unless the user explicitly asks to update source docs, workflows, or shared repository instructions.
 - Do not commit generated Docusaurus build output.
 
-## Validation
-Run from `rocketmq-website/` before PR submission or final handoff for website changes:
+## Development validation
 
-```bash
-npm ci
-npm run build
-```
-
-For iteration when dependencies are already installed:
+Reuse installed dependencies. Run `npm ci` only when dependencies are missing or the lockfile changes.
+For changes to rendered content, TypeScript, routes, or build configuration, run from this directory:
 
 ```bash
 npm run build
 ```
 
-Documentation-only changes outside this directory do not require website validation. Changes inside this directory should be treated as website changes because Docusaurus routing, navigation, MDX rendering, and build configuration can fail independently of Cargo.
+Select existing focused tests for behavior changes. Instruction-only edits do not require a Node build.
+Documentation-only changes outside this directory do not require website validation. Website content uses
+Docusaurus routing and MDX, so validate relevant rendered pages and build output when they change.

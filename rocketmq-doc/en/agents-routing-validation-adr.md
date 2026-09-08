@@ -1,78 +1,47 @@
 # ADR: AGENTS Routing Validation
 
 ## Status
-Accepted
+
+Accepted; revised 2026-09-08 for scoped development validation.
 
 ## Context
-The RocketMQ Rust repository is broader than the root Cargo workspace. The root `Cargo.toml` owns the main workspace members, while several projects are intentionally standalone:
 
-- `rocketmq-example/`
-- `rocketmq-ai/rocketmq-mcp/`
-- `rocketmq-ai/rocketmq-mcp-control/`
-- `rocketmq-ai/rocketmq-sre/`
-- `rocketmq-dashboard/rocketmq-dashboard-gpui/`
-- `rocketmq-dashboard/rocketmq-dashboard-tauri/`
-- `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/`
-- `rocketmq-dashboard/rocketmq-dashboard-web/`
-- `rocketmq-dashboard/rocketmq-dashboard-web/backend/`
-- `rocketmq-dashboard/rocketmq-dashboard-web/frontend/`
-- `rocketmq-website/`
+The root `Cargo.toml` owns the main workspace. Standalone Cargo, Node, and Docusaurus projects
+have different commands and platform requirements. Agents need reliable ownership routes without
+automatically running every project, feature matrix, or historical architecture check.
 
-Root workspace commands such as `cargo fmt --all -- --check` and `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` do not validate all standalone Rust, Node/Vite, or Docusaurus projects. The repository also has specialized quality gates for runtime ownership, typed error architecture, observability feature combinations, RocksDB store behavior, and the feature/security boundary of the standalone `rocketmq-mcp` crate.
-
-Without an explicit routing model, agents can incorrectly treat the root Cargo workspace as the whole repository or skip project-specific validation after touching shared crates.
+Checking exact AGENTS sentences and command strings coupled the routing scripts to policy wording.
+Invoking dependency metadata from a routing check also introduced Cargo/toolchain work for instruction
+edits. Neither is needed to determine where a project belongs.
 
 ## Decision
-Use root `AGENTS.md` as the repository-level validation router.
 
-The root file must:
+Root `AGENTS.md` provides common engineering rules and one project map. The nearest local guide
+selects project-specific checks and replaces the root validation fallback. It does not stack complete
+root, local, and specialized profiles.
 
-- Identify the root workspace source of truth as the root `Cargo.toml`.
-- Route standalone Cargo, Node/Vite, Web Dashboard, Tauri, and Docusaurus work to the nearest project `AGENTS.md`.
-- Treat validation routes as cumulative: a manifest, shared crate, or cross-boundary change may require the root profile, a project-local profile, and one or more specialized gates.
-- List one canonical, non-mutating final format/Clippy profile for root workspace changes and a fallback profile for standalone Cargo projects.
-- Define when to run specialized guards and route `rocketmq-mcp` and the isolated `rocketmq-mcp-control`
-  foundation to their local validation profiles.
-- Require `scripts/check-agents-routing.ps1` on Windows or `scripts/check-agents-routing.sh` on Unix when project boundaries, validation commands, workflow routes, package manifests, either routing script, this ADR, or any `AGENTS.md` changes.
+For normal development, validate compilation, formatting, and relevant behavior in the affected scope.
+After those checks pass, finish unless new edits, failures, or a concrete unresolved risk justify more
+work. Shared changes require relevant consumers, selected from actual API, feature, and behavior impact.
 
-Add `rocketmq-website/AGENTS.md` so the Docusaurus website has a local validation contract.
+Keep specialist and integration commands in [the validation reference](agent-validation-reference.md).
+Full-workspace checks, dependency metadata audits, and long-running suites belong to the corresponding
+integration, CI, or release task. Instruction changes do not by themselves require Cargo or Node builds.
+Routine development does not require SHA, fingerprints, a clean worktree, or historical baseline closure.
 
-Add `scripts/check-agents-routing.ps1` and `scripts/check-agents-routing.sh` as lightweight drift checks. The scripts validate that:
+The equivalent `scripts/check-agents-routing.ps1` and `scripts/check-agents-routing.sh` check only:
 
-- Root `AGENTS.md` mentions all required standalone routes.
-- Every standalone Cargo project with its own `[workspace]` has a same-directory `AGENTS.md`.
-- Every discovered `package.json` project has a same-directory `AGENTS.md`.
-- Required workflow files exist and their project routes are represented in root `AGENTS.md`.
-- The shared-code list, cumulative validation policy, and specialized guard commands remain discoverable.
-- The `rocketmq-mcp` and `rocketmq-mcp-control` paths remain present in root guidance, while their exact
-  validation commands remain in their local `AGENTS.md` files.
+- Known standalone project routes and their local instruction files.
+- Discovered standalone Cargo projects with an explicit `[workspace]` and their root/local routes.
+- Discovered `package.json` projects and their root/local routes.
+- Required workflow files and the routing/reference documents.
 
-## Alternatives
-### Only Expand Root AGENTS.md
-This is simpler, but it leaves no automated signal when a new standalone project, `package.json`, workflow path, or shared validation route is added.
+The scripts do not enforce AGENTS wording, exact command profiles, workflow step contents, or dependency
+trigger closure. They do not invoke Python, Cargo metadata, builds, tests, or architecture baseline checks.
+The standalone metadata guard remains available as an explicit integration tool.
 
-### Rely Only on GitHub Actions
-CI validates pull requests but does not help agents choose the right local command before finishing work. It also does not explain routing intent or standalone project boundaries.
-
-### Duplicate Full Instructions Everywhere
-Copying root validation details into every subproject increases drift risk. The chosen model keeps root routing centralized and leaves project-specific details in nearest `AGENTS.md` files.
-
-## Consequences
-Benefits:
-
-- Agents can determine validation scope from path ownership instead of guessing.
-- Standalone project coverage becomes visible and checkable.
-- New project boundaries require an explicit AGENTS update.
-- Runtime, typed error, observability, RocksDB, and `rocketmq-mcp` security/feature guardrails are discoverable from the root workflow.
-
-Costs:
-
-- `scripts/check-agents-routing.ps1` and `scripts/check-agents-routing.sh` must be updated together when intentional validation topology changes.
-- The check is structural. It cannot prove every command is sufficient for every code change or that workflow path filters cover every shared path dependency.
-- CI remains the final cross-platform authority for Linux, macOS, Windows, and Node version behavior.
-
-## Validation
-Run from the repository root before PR submission or final handoff when changes touch project boundaries, validation commands, workflow routes, package manifests, either routing script, this ADR, or any `AGENTS.md`:
+Run the lightweight router after changing project layout, AGENTS routing, or either routing script.
+Use the appropriate platform command, plus `git diff --check`:
 
 ```powershell
 .\scripts\check-agents-routing.ps1
@@ -84,4 +53,16 @@ bash ./scripts/check-agents-routing.sh
 git diff --check
 ```
 
-Rust or Node validation is still required when the changed files affect Rust code, generated Rust, build configuration, examples, frontend behavior, website behavior, or documented commands that need verification.
+When editing the router, use `python -m unittest discover -s scripts/tests -p test_agents_routing.py`
+to exercise both available shells against temporary repositories. On Windows, set `AGENTS_TEST_BASH`
+to Git Bash's executable if the default `bash` is a WSL launcher; `AGENTS_TEST_PWSH` can select PowerShell.
+
+## Consequences
+
+Project ownership remains visible and missing instruction files are caught without native build setup.
+Local work can finish with evidence proportional to the change. Security, compatibility, unsafe-code,
+and task-lifecycle contracts still apply; simplifying development gates does not relax product boundaries.
+
+Both routing implementations must stay aligned when project topology changes. Structural checks cannot
+prove test adequacy or complete workflow path filters; use the separate integration tools when reviewing
+those properties. Existing workflow definitions are unchanged by this policy.

@@ -9,12 +9,10 @@ This file applies to `rocketmq-dashboard/rocketmq-dashboard-tauri/`.
 - Rust backend code is validated in `src-tauri/`.
 
 ## Frontend validation
-Before PR submission or final handoff for frontend changes, run from this directory:
 
-```bash
-npm ci
-npm run build
-```
+From this directory, run `npm run build` for frontend code or build changes.
+Reuse installed dependencies; run `npm ci` only when dependencies are missing or the lockfile changes.
+Instruction-only edits do not require frontend or Rust builds.
 
 ## Frontend test policy
 - Run only the affected frontend validation by default.

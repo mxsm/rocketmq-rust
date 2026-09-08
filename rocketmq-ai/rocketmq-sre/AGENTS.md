@@ -27,19 +27,23 @@ repository instructions also apply unless this file is more specific.
 - Do not expose credentials, message bodies, access tokens, TLS material, or
   full configuration values through logs, evidence, diagnostics, or errors.
 
-## Validation
+## Development validation
 
-Run from this directory:
+Choose the changed member(s) from this standalone workspace rather than running the entire workspace:
 
 ```powershell
-cargo fmt -p rocketmq-sre-contracts -p rocketmq-sre-core -p rocketmq-sre-model-gateway -p rocketmq-sre-control-plane -p rocketmq-sre-connector -p rocketmq-sre-executor -p rocketmq-sre-execution-agent -p rocketmq-sre-probe -p rocketmq-sre-eval -p rocketmq-sre-client -p rocketmq-sre-cli -- --check
-cargo check --locked --workspace
-cargo test --locked --workspace --all-features
-cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo doc --locked --workspace --no-deps
-python scripts/check_source_layout.py
-python scripts/check_execution_dependency_boundary.py
+cargo fmt -p <package> -- --check
+cargo check --locked -p <package>
+cargo test --locked -p <package> <test_name>
 ```
+
+A focused test build may replace the compile check. Select package Clippy and affected features when useful.
+Run `python scripts/check_source_layout.py` for module-layout changes, and
+`python scripts/check_execution_dependency_boundary.py` when execution boundaries or dependencies change.
+
+Shared contract/feature changes need their affected members or direct consumers. Whole-workspace
+tests, all features, and Rustdoc are integration/CI choices, not a default for every local handoff.
+The UI and TypeScript SDK use their own local guides without accumulating this Cargo profile.
 
 Schema artifacts are generated deliberately, not as part of a normal build:
 
