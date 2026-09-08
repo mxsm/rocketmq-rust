@@ -20,12 +20,14 @@ use std::sync::Arc;
 use clap::Args;
 use clap::Subcommand;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
+use rocketmq_admin_core::core::AdminError;
 use rocketmq_admin_core::core::release_checkpoint::ReleaseCheckpointSetBuilder;
 use rocketmq_admin_core::core::release_checkpoint::ValidatedMaintenanceCapabilities;
 use rocketmq_admin_core::core::release_checkpoint::decode_checkpoint_set;
 use rocketmq_admin_core::core::release_checkpoint::encode_checkpoint_set;
 use rocketmq_admin_core::core::release_checkpoint::verify_checkpoint_set_restore;
 use rocketmq_admin_core::core::security::AdminCredentials;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::Result as CanonicalResult;
 use rocketmq_error::Sensitive;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
@@ -73,8 +75,7 @@ pub struct CapabilitiesCommand {
 impl CapabilitiesCommand {
     async fn execute(&self) -> CanonicalResult<()> {
         let response: MaintenanceCapabilitiesResponse = read_json(&self.input, "maintenance capabilities").await?;
-        let capabilities = ValidatedMaintenanceCapabilities::try_from_response(response)
-            .map_err(|error| crate::errors::argument_invalid(error.to_string()))?;
+        let capabilities = ValidatedMaintenanceCapabilities::try_from_response(response).map_err(map_admin_error)?;
         println!(
             "{}",
             serde_json::to_string_pretty(capabilities.response())
@@ -138,9 +139,8 @@ impl CreateSetCommand {
                 rocketmq_runtime::common::time_utils::current_millis(),
             )
         })
-        .map_err(|error| crate::errors::argument_invalid(error.to_string()))?;
-        let bytes =
-            encode_checkpoint_set(&manifest).map_err(|error| crate::errors::argument_invalid(error.to_string()))?;
+        .map_err(map_admin_error)?;
+        let bytes = encode_checkpoint_set(&manifest).map_err(map_admin_error)?;
         write_new_file(&self.output, &bytes).await?;
         println!("{}", self.output.display());
         Ok(())
@@ -156,7 +156,7 @@ pub struct VerifySetCommand {
 impl VerifySetCommand {
     async fn execute(&self) -> CanonicalResult<()> {
         let bytes = read_file(&self.manifest, "checkpoint set").await?;
-        decode_checkpoint_set(&bytes).map_err(|error| crate::errors::argument_invalid(error.to_string()))?;
+        decode_checkpoint_set(&bytes).map_err(map_admin_error)?;
         println!("checkpoint set verified: {}", self.manifest.display());
         Ok(())
     }
@@ -173,14 +173,12 @@ pub struct RestoreVerifyCommand {
 impl RestoreVerifyCommand {
     async fn execute(&self) -> CanonicalResult<()> {
         let manifest_bytes = read_file(&self.manifest, "checkpoint set").await?;
-        let manifest = decode_checkpoint_set(&manifest_bytes)
-            .map_err(|error| crate::errors::argument_invalid(error.to_string()))?;
+        let manifest = decode_checkpoint_set(&manifest_bytes).map_err(map_admin_error)?;
         let mut proofs = Vec::with_capacity(self.proof.len());
         for path in &self.proof {
             proofs.push(read_json::<ReleaseCheckpointRestoreVerification>(path, "restore proof").await?);
         }
-        verify_checkpoint_set_restore(&manifest, &proofs)
-            .map_err(|error| crate::errors::argument_invalid(error.to_string()))?;
+        verify_checkpoint_set_restore(&manifest, &proofs).map_err(map_admin_error)?;
         println!("checkpoint restore proofs verified: {}", self.manifest.display());
         Ok(())
     }
@@ -218,10 +216,15 @@ async fn write_new_file(path: &Path, bytes: &[u8]) -> CanonicalResult<()> {
         .map_err(|error| crate::errors::storage_write_failed_by("release-checkpoint", error))
 }
 
+fn map_admin_error(error: AdminError) -> CanonicalError {
+    error.into_error()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
+    use std::error::Error as _;
 
     #[derive(Parser)]
     struct TestCli {
@@ -244,5 +247,13 @@ mod tests {
             ])
             .is_ok()
         );
+    }
+
+    #[test]
+    fn checkpoint_admin_error_conversion_preserves_typed_source() {
+        let admin_error = decode_checkpoint_set(b"not-json").expect_err("invalid checkpoint JSON");
+        let canonical = map_admin_error(admin_error);
+
+        assert!(canonical.source().expect("AdminError source").is::<AdminError>());
     }
 }

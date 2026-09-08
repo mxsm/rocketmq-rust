@@ -148,7 +148,7 @@ fn credentials_from_values(
         (Some(access_key), Some(secret_key), security_token) => {
             AdminCredentials::try_new(access_key, secret_key, security_token)
                 .map(Some)
-                .map_err(|error| crate::errors::argument_invalid(error.to_string()))
+                .map_err(|error| error.into_error())
         }
         _ => Err(crate::errors::argument_invalid(
             "ROCKETMQ_ACL_ACCESS_KEY and ROCKETMQ_ACL_SECRET_KEY must be supplied together; the security token is \
