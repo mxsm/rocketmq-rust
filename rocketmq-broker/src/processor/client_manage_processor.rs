@@ -93,7 +93,7 @@ impl<MS> RequestProcessor for ClientManageProcessor<MS>
 where
     MS: BrokerStorePort + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -102,7 +102,7 @@ impl<MS: BrokerStorePort> ClientManageProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let session_id = request.session().id();
         let remote_address = trusted_remote_address(request)?;
@@ -152,7 +152,7 @@ where
         session_id: SessionId,
         remote_address: String,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("ClientManageProcessor received request code: {:?}", request_code);
         match request_code {
@@ -187,7 +187,7 @@ where
         &self,
         request: &RemotingCommand,
         request_code: RequestCode,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         warn!(
             "ClientManageProcessor received unknown request code: {:?}",
             request_code
@@ -204,7 +204,7 @@ where
     fn check_client_config(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = self.command_factory.create_success_response_command();
         let Some(body) = request.body() else {
             return Ok(Some(response));
@@ -244,7 +244,7 @@ where
         &self,
         request_header: UnregisterClientRequestHeader,
         client: RegisteredClient,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let RegisteredClient::Session(client) = client;
         if let Some(ref group) = request_header.producer_group {
             self.producer_registration
@@ -274,7 +274,7 @@ where
         remote_address: String,
         heartbeat_data: HeartbeatData,
         client: RegisteredClient,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         if heartbeat_data.heartbeat_fingerprint != 0 {
             return self.heart_beat_v2(&remote_address, heartbeat_data, client).await;
         }
@@ -382,7 +382,7 @@ where
         _remote_address: &str,
         heartbeat_data: HeartbeatData,
         client: RegisteredClient,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let RegisteredClient::Session(session) = client;
         self.ensure_known_cross_role_session_identity(&session)?;
         let mut is_sub_change = false;
@@ -521,7 +521,7 @@ where
         &self,
         transition: &ClientSessionTransitionGuard<'_>,
         session: &ClientSessionInfo,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         assert!(
             self.session_transition_locks
                 .covers(transition, session.client_id(), session.session_id()),
@@ -534,12 +534,12 @@ where
         &self,
         transition: &ClientSessionTransitionGuard<'_>,
         session: &ClientSessionInfo,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         if !self
             .producer_registration
             .session_is_active(transition, session.client_id(), session.session_id())
         {
-            return Err(rocketmq_error::RocketMQError::request_body_invalid(
+            return Err(crate::broker_error::request_body_invalid(
                 "HEART_BEAT",
                 "the transport session generation is no longer active",
             ));
@@ -550,7 +550,7 @@ where
         {
             return Ok(());
         }
-        Err(rocketmq_error::RocketMQError::request_body_invalid(
+        Err(crate::broker_error::request_body_invalid(
             "HEART_BEAT",
             "the session generation is no longer the canonical client binding",
         ))
@@ -559,7 +559,7 @@ where
     fn ensure_known_cross_role_session_identity(
         &self,
         session: &ClientSessionInfo,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         let conflicts = [
             self.consumer_registration.client_id_for_session(session.session_id()),
             self.producer_registration.client_id_for_session(session.session_id()),
@@ -568,7 +568,7 @@ where
         .flatten()
         .any(|client_id| client_id.as_str() != session.client_id().as_str());
         if conflicts {
-            return Err(rocketmq_error::RocketMQError::request_body_invalid(
+            return Err(crate::broker_error::request_body_invalid(
                 "HEART_BEAT",
                 "a live SessionId cannot change client identity",
             ));
@@ -593,14 +593,14 @@ impl<MS: BrokerStorePort> Clone for ClientManageProcessor<MS> {
     }
 }
 
-fn decode_heartbeat(request: &RemotingCommand) -> rocketmq_error::RocketMQResult<HeartbeatData> {
+fn decode_heartbeat(request: &RemotingCommand) -> crate::broker_error::BrokerResult<HeartbeatData> {
     let body = request
         .body()
-        .ok_or_else(|| rocketmq_error::RocketMQError::request_body_invalid("HEART_BEAT", "request body is empty"))?;
-    SerdeJsonUtils::from_json_bytes(body.as_ref())
+        .ok_or_else(|| crate::broker_error::request_body_invalid("HEART_BEAT", "request body is empty"))?;
+    SerdeJsonUtils::from_json_bytes(body.as_ref()).map_err(crate::broker_error::from_canonical)
 }
 
-fn trusted_remote_address(request: &RemotingRequest) -> rocketmq_error::RocketMQResult<String> {
+fn trusted_remote_address(request: &RemotingRequest) -> crate::broker_error::BrokerResult<String> {
     let origin = match request.origin() {
         RequestOrigin::Network { peer } => TrustedOriginFact::Network(peer.address()),
         RequestOrigin::Embedded { .. } => TrustedOriginFact::Embedded,
@@ -631,13 +631,13 @@ enum TrustedSessionFact {
 fn trusted_remote_address_from_facts(
     origin: TrustedOriginFact,
     session: TrustedSessionFact,
-) -> rocketmq_error::RocketMQResult<String> {
+) -> crate::broker_error::BrokerResult<String> {
     match (origin, session) {
         (TrustedOriginFact::Network(peer), TrustedSessionFact::Network(remote_addr)) if peer == remote_addr => {
             Ok(remote_addr.to_string())
         }
         (TrustedOriginFact::Embedded, TrustedSessionFact::Embedded) => Ok("embedded".to_string()),
-        _ => Err(rocketmq_error::RocketMQError::invariant_violated(
+        _ => Err(crate::broker_error::invariant_violated(
             "client manager request origin does not match its session view",
         )),
     }

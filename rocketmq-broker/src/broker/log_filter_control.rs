@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error as StdError;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
@@ -55,11 +56,11 @@ pub(crate) const LOG_FILTER_KEYS: [&str; 5] = [
 #[derive(Debug, Error)]
 pub(crate) enum BrokerLogFilterControlError {
     #[error("log filter audit failed: {0}")]
-    Audit(String),
+    Audit(#[source] Box<dyn StdError + Send + Sync + 'static>),
     #[error("log filter TTL scheduling failed: {0}")]
-    Scheduling(String),
+    Scheduling(#[source] Box<dyn StdError + Send + Sync + 'static>),
     #[error("log filter reload failed: {0}")]
-    Reload(String),
+    Reload(#[source] Box<dyn StdError + Send + Sync + 'static>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,7 +297,7 @@ impl BrokerLogFilterControl {
                     cancellation,
                 }),
             )
-            .map_err(|error| BrokerLogFilterControlError::Scheduling(error.to_string()))?;
+            .map_err(|error| BrokerLogFilterControlError::Scheduling(Box::new(error)))?;
 
         Ok(Arc::new(Self {
             handle,
@@ -347,7 +348,7 @@ impl BrokerLogFilterControl {
                 runtime: request.filter.as_deref(),
                 ..LogFilterInputs::default()
             })
-            .map_err(|error| BrokerLogFilterControlError::Reload(error.to_string()))?
+            .map_err(|error| BrokerLogFilterControlError::Reload(Box::new(error)))?
         };
         let audit = AuditContext::from(&request);
         self.append_audit(AuditRecord::request(
@@ -386,10 +387,12 @@ impl BrokerLogFilterControl {
         let reload_result = if request.restore {
             self.handle.restore(&self.baseline)
         } else {
-            let filter = request
-                .filter
-                .as_deref()
-                .ok_or_else(|| BrokerLogFilterControlError::Reload("logFilter is required".to_string()))?;
+            let filter = request.filter.as_deref().ok_or_else(|| {
+                BrokerLogFilterControlError::Reload(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "logFilter is required",
+                )))
+            })?;
             self.handle.reload(LogFilterReloadRequest::new(filter))
         };
         let reload_duration_millis = reload_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
@@ -415,7 +418,7 @@ impl BrokerLogFilterControl {
                         .with_reload_duration(reload_duration_millis),
                     )
                     .await;
-                return Err(BrokerLogFilterControlError::Reload(error.to_string()));
+                return Err(BrokerLogFilterControlError::Reload(Box::new(error)));
             }
         };
         *self.active.lock().unwrap_or_else(|error| error.into_inner()) = scheduled;
@@ -507,10 +510,12 @@ impl BrokerLogFilterControl {
 
     async fn send_schedule(&self, active: Option<ActiveOverride>) -> Result<(), BrokerLogFilterControlError> {
         let command = active.map_or(TtlCommand::Clear, TtlCommand::Set);
-        self.ttl_sender
-            .send(command)
-            .await
-            .map_err(|error| BrokerLogFilterControlError::Scheduling(error.to_string()))
+        self.ttl_sender.send(command).await.map_err(|_| {
+            BrokerLogFilterControlError::Scheduling(Box::new(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "log filter TTL controller is unavailable",
+            )))
+        })
     }
 
     async fn append_audit(&self, record: AuditRecord) -> Result<(), BrokerLogFilterControlError> {
@@ -677,8 +682,8 @@ async fn append_audit(
 ) -> Result<(), BrokerLogFilterControlError> {
     let operation = move || write_audit_record(path.as_path(), &record);
     let result = match blocking.spawn_io("broker.log-filter-audit", operation).await {
-        Ok(result) => result.map_err(|error| BrokerLogFilterControlError::Audit(error.to_string())),
-        Err(error) => Err(BrokerLogFilterControlError::Audit(error.to_string())),
+        Ok(result) => result.map_err(|error| BrokerLogFilterControlError::Audit(Box::new(error))),
+        Err(error) => Err(BrokerLogFilterControlError::Audit(Box::new(error))),
     };
     if result.is_err() {
         log_filter.record_audit_failure();

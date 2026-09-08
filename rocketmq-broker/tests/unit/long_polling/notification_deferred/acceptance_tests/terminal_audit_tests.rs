@@ -99,7 +99,7 @@ async fn notification_deferred_execution_admission_rejects_before_handler_and_wr
                     RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                         ResponseCode::Success,
                     ))
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                    .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                 },
             )
             .await
@@ -214,7 +214,7 @@ async fn notification_deferred_service_shutdown_stops_accepted_handler_without_a
                         RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::Success,
                         ))
-                        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                     },
                 )
                 .await;
@@ -279,7 +279,7 @@ async fn notification_deferred_parent_cancel_stops_accepted_handler_without_a_fr
                         RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::Success,
                         ))
-                        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                     },
                 )
                 .await;

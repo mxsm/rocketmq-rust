@@ -17,7 +17,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
 use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_store::KeyValueStore;
@@ -143,7 +143,7 @@ pub(crate) struct RocksDbBrokerConfigManager {
 }
 
 impl RocksDbBrokerConfigManager {
-    pub(crate) fn open(config: RocksDbBrokerConfigManagerConfig) -> Result<Self, RocketMQError> {
+    pub(crate) fn open(config: RocksDbBrokerConfigManagerConfig) -> Result<Self, SharedError> {
         let rocksdb_config = build_rocksdb_config(&config);
         let store = RocksDbStore::open_with_existing_column_families(rocksdb_config.clone())
             .map_err(broker_storage_error)?
@@ -152,7 +152,7 @@ impl RocksDbBrokerConfigManager {
         Ok(Self::with_core(config, core))
     }
 
-    pub(crate) fn open_shared(configs: Vec<RocksDbBrokerConfigManagerConfig>) -> Result<Vec<Arc<Self>>, RocketMQError> {
+    pub(crate) fn open_shared(configs: Vec<RocksDbBrokerConfigManagerConfig>) -> Result<Vec<Arc<Self>>, SharedError> {
         if configs.is_empty() {
             return Ok(Vec::new());
         }
@@ -196,15 +196,15 @@ impl RocksDbBrokerConfigManager {
         &self.version_cf
     }
 
-    pub(crate) fn put_string(&self, key: &str, value: &str) -> Result<(), RocketMQError> {
+    pub(crate) fn put_string(&self, key: &str, value: &str) -> Result<(), SharedError> {
         self.put_cf_string(&self.default_cf, key, value)
     }
 
-    pub(crate) fn put_cf_string(&self, cf: &str, key: &str, value: &str) -> Result<(), RocketMQError> {
+    pub(crate) fn put_cf_string(&self, cf: &str, key: &str, value: &str) -> Result<(), SharedError> {
         self.put_cf_bytes(cf, key.as_bytes(), value.as_bytes())
     }
 
-    pub(crate) fn put_cf_bytes(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<(), RocketMQError> {
+    pub(crate) fn put_cf_bytes(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<(), SharedError> {
         self.create_cf_if_missing(cf)?;
         self.core
             .store
@@ -212,46 +212,46 @@ impl RocksDbBrokerConfigManager {
             .map_err(broker_storage_error)
     }
 
-    pub(crate) fn get_string(&self, key: &str) -> Result<Option<String>, RocketMQError> {
+    pub(crate) fn get_string(&self, key: &str) -> Result<Option<String>, SharedError> {
         self.get_cf_string(&self.default_cf, key)
     }
 
-    pub(crate) fn get_cf_string(&self, cf: &str, key: &str) -> Result<Option<String>, RocketMQError> {
+    pub(crate) fn get_cf_string(&self, cf: &str, key: &str) -> Result<Option<String>, SharedError> {
         self.get_cf_bytes(cf, key.as_bytes())?
             .map(|bytes| {
                 String::from_utf8(bytes.to_vec())
-                    .map_err(|error| codec_error(format!("config utf8 decode failed: {error}")))
+                    .map_err(|error| crate::broker_error::serialization_failed("decode_config_value", "utf8", error))
             })
             .transpose()
     }
 
-    pub(crate) fn get_cf_bytes(&self, cf: &str, key: &[u8]) -> Result<Option<bytes::Bytes>, RocketMQError> {
+    pub(crate) fn get_cf_bytes(&self, cf: &str, key: &[u8]) -> Result<Option<bytes::Bytes>, SharedError> {
         self.core
             .store
             .get_cf(StoreOperation::Admin, cf, key)
             .map_err(broker_storage_error)
     }
 
-    pub(crate) fn delete(&self, key: &str) -> Result<(), RocketMQError> {
+    pub(crate) fn delete(&self, key: &str) -> Result<(), SharedError> {
         self.delete_cf(&self.default_cf, key)
     }
 
-    pub(crate) fn delete_cf(&self, cf: &str, key: &str) -> Result<(), RocketMQError> {
+    pub(crate) fn delete_cf(&self, cf: &str, key: &str) -> Result<(), SharedError> {
         self.core
             .store
             .delete_cf(StoreOperation::Admin, cf, key.as_bytes())
             .map_err(broker_storage_error)
     }
 
-    pub(crate) fn load_data(&self) -> Result<ConfigRecords, RocketMQError> {
+    pub(crate) fn load_data(&self) -> Result<ConfigRecords, SharedError> {
         self.load_cf_data(&self.default_cf)
     }
 
-    pub(crate) fn default_cf_is_empty(&self) -> Result<bool, RocketMQError> {
+    pub(crate) fn default_cf_is_empty(&self) -> Result<bool, SharedError> {
         Ok(self.load_data()?.is_empty())
     }
 
-    pub(crate) fn load_cf_data(&self, cf: &str) -> Result<ConfigRecords, RocketMQError> {
+    pub(crate) fn load_cf_data(&self, cf: &str) -> Result<ConfigRecords, SharedError> {
         self.core
             .store
             .range_scan(
@@ -264,7 +264,7 @@ impl RocksDbBrokerConfigManager {
             .collect()
     }
 
-    pub(crate) fn load_data_version(&self) -> Result<Option<DataVersion>, RocketMQError> {
+    pub(crate) fn load_data_version(&self) -> Result<Option<DataVersion>, SharedError> {
         let Some(body) = self
             .core
             .store
@@ -274,29 +274,29 @@ impl RocksDbBrokerConfigManager {
             return Ok(None);
         };
         let data_version = serde_json::from_slice::<DataVersion>(&body)
-            .map_err(|error| codec_error(format!("config data version decode failed: {error}")))?;
+            .map_err(|error| crate::broker_error::serialization_failed("decode_config_data_version", "json", error))?;
         self.kv_data_version.lock().assign_new_one(&data_version);
         Ok(Some(data_version))
     }
 
-    pub(crate) fn update_kv_data_version(&self) -> Result<DataVersion, RocketMQError> {
+    pub(crate) fn update_kv_data_version(&self) -> Result<DataVersion, SharedError> {
         let mut data_version = self.kv_data_version.lock();
         data_version.next_version();
         let body = serde_json::to_vec(&*data_version)
-            .map_err(|error| codec_error(format!("config data version encode failed: {error}")))?;
+            .map_err(|error| crate::broker_error::serialization_failed("encode_config_data_version", "json", error))?;
         self.put_cf_bytes(&self.version_cf, KV_DATA_VERSION_KEY, &body)?;
         Ok(data_version.clone())
     }
 
-    pub(crate) fn set_kv_data_version(&self, data_version: DataVersion) -> Result<(), RocketMQError> {
+    pub(crate) fn set_kv_data_version(&self, data_version: DataVersion) -> Result<(), SharedError> {
         let body = serde_json::to_vec(&data_version)
-            .map_err(|error| codec_error(format!("config data version encode failed: {error}")))?;
+            .map_err(|error| crate::broker_error::serialization_failed("encode_config_data_version", "json", error))?;
         self.put_cf_bytes(&self.version_cf, KV_DATA_VERSION_KEY, &body)?;
         self.kv_data_version.lock().assign_new_one(&data_version);
         Ok(())
     }
 
-    pub(crate) fn batch_put_with_wal(&self, records: &[(Vec<u8>, Vec<u8>)]) -> Result<(), RocketMQError> {
+    pub(crate) fn batch_put_with_wal(&self, records: &[(Vec<u8>, Vec<u8>)]) -> Result<(), SharedError> {
         let mut batch = RocksDbWriteBatch::with_capacity(records.len());
         for (key, value) in records {
             batch.put_cf(self.default_cf.clone(), key.clone(), value.clone());
@@ -316,11 +316,11 @@ impl RocksDbBrokerConfigManager {
         &self,
         records: &[(Vec<u8>, Vec<u8>)],
         data_version: &DataVersion,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), SharedError> {
         let existing = self.load_data()?;
         let desired_keys = records.iter().map(|(key, _)| key.as_slice()).collect::<HashSet<_>>();
         let version_body = serde_json::to_vec(data_version)
-            .map_err(|error| codec_error(format!("config data version encode failed: {error}")))?;
+            .map_err(|error| crate::broker_error::serialization_failed("encode_config_data_version", "json", error))?;
         let mut batch = RocksDbWriteBatch::with_capacity(existing.len() + records.len() + 1);
         for (key, _) in existing {
             if !desired_keys.contains(key.as_slice()) {
@@ -339,14 +339,14 @@ impl RocksDbBrokerConfigManager {
         Ok(())
     }
 
-    pub(crate) fn flush_wal(&self) -> Result<(), RocketMQError> {
+    pub(crate) fn flush_wal(&self) -> Result<(), SharedError> {
         self.core
             .store
             .flush_wal(StoreOperation::Admin, false)
             .map_err(broker_storage_error)
     }
 
-    pub(crate) fn flush_memtable(&self) -> Result<(), RocketMQError> {
+    pub(crate) fn flush_memtable(&self) -> Result<(), SharedError> {
         self.core
             .store
             .flush(StoreOperation::Admin)
@@ -361,7 +361,7 @@ impl RocksDbBrokerConfigManager {
         Arc::as_ptr(&self.core) as usize
     }
 
-    fn create_cf_if_missing(&self, cf: &str) -> Result<(), RocketMQError> {
+    fn create_cf_if_missing(&self, cf: &str) -> Result<(), SharedError> {
         self.core
             .store
             .create_cf_if_missing(
@@ -372,20 +372,12 @@ impl RocksDbBrokerConfigManager {
     }
 }
 
-fn broker_storage_error(source: StoreError) -> RocketMQError {
-    RocketMQError::internal("broker RocksDB storage operation failed", source)
+fn broker_storage_error(source: StoreError) -> SharedError {
+    crate::broker_error::internal("broker RocksDB storage operation failed", source)
 }
 
-fn invalid_rocksdb_configuration() -> RocketMQError {
-    RocketMQError::ConfigInvalidValue {
-        key: "rocksdbConfig",
-        value: "redacted".to_owned(),
-        reason: "broker RocksDB configuration is invalid".to_owned(),
-    }
-}
-
-fn codec_error(reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::deserialization_failed("broker RocksDB configuration", reason.into())
+fn invalid_rocksdb_configuration() -> SharedError {
+    crate::broker_error::configuration_invalid("rocksdbConfig")
 }
 
 fn build_rocksdb_config(config: &RocksDbBrokerConfigManagerConfig) -> RocksDbConfig {
@@ -420,14 +412,14 @@ fn build_rocksdb_config(config: &RocksDbBrokerConfigManagerConfig) -> RocksDbCon
     }
 }
 
-fn build_shared_rocksdb_config(configs: &[RocksDbBrokerConfigManagerConfig]) -> Result<RocksDbConfig, RocketMQError> {
+fn build_shared_rocksdb_config(configs: &[RocksDbBrokerConfigManagerConfig]) -> Result<RocksDbConfig, SharedError> {
     let Some(first) = configs.first() else {
-        return Err(RocketMQError::illegal_argument(
+        return Err(crate::broker_error::invalid_argument(
             "rocksdb broker config manager requires at least one config",
         ));
     };
     if configs.iter().any(|config| config.path != first.path) {
-        return Err(RocketMQError::illegal_argument(
+        return Err(crate::broker_error::invalid_argument(
             "shared rocksdb broker config managers must use the same path",
         ));
     }

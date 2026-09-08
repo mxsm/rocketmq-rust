@@ -26,11 +26,11 @@ struct DeadlineProcessor {
 }
 
 impl RequestProcessor for DeadlineProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         self.deadlines
             .send(prepared.deadline())
-            .map_err(|_| RocketMQError::illegal_argument("PopLite deadline observer closed"))?;
+            .map_err(|_| crate::broker_error::invalid_argument("PopLite deadline observer closed"))?;
         let registration = registration_or_test_error(self.service.register(prepared, request))?;
         Ok(HandlerOutcome::Deferred(registration))
     }
@@ -92,7 +92,7 @@ async fn pop_lite_deferred_max_age_expires_as_business_timeout_and_drains() {
                     RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                         ResponseCode::PollingTimeout,
                     ))
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                    .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                 },
             )
             .await

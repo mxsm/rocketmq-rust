@@ -17,9 +17,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::UnifiedServiceError;
+use crate::broker_error::BrokerResult as Result;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
@@ -36,12 +34,7 @@ pub struct MessageQueueOpContext {
 }
 
 impl MessageQueueOpContext {
-    pub fn try_new(
-        timestamp: u64,
-        queue_length: usize,
-        queue_id: i32,
-        parent_budget: &ResourceBudget,
-    ) -> RocketMQResult<Self> {
+    pub fn try_new(timestamp: u64, queue_length: usize, queue_id: i32, parent_budget: &ResourceBudget) -> Result<Self> {
         let queue_bytes = parent_budget.limit().capacity.bytes;
         let budget = parent_budget
             .child(
@@ -50,11 +43,7 @@ impl MessageQueueOpContext {
                     .with_rate(RateLimit::new(queue_length as u64, queue_length as u64))
                     .with_max_age(Duration::from_secs(30)),
             )
-            .map_err(|error| RocketMQError::ConfigInvalidValue {
-                key: "broker.transaction.operationQueue",
-                value: queue_id.to_string(),
-                reason: error.to_string(),
-            })?;
+            .map_err(|_error| crate::broker_error::configuration_invalid("broker.transaction.operationQueue"))?;
         Ok(Self {
             total_size: AtomicU32::new(0),
             last_write_timestamp: AtomicU64::new(timestamp),
@@ -78,10 +67,10 @@ impl MessageQueueOpContext {
         self.last_write_timestamp.store(timestamp, Ordering::Release);
     }
 
-    pub async fn push(&self, msg: String) -> RocketMQResult<()> {
+    pub async fn push(&self, msg: String) -> Result<()> {
         let retained_bytes = std::mem::size_of::<String>().saturating_add(msg.capacity());
         match self.pending_operations.try_push_data(msg, retained_bytes) {
-            rocketmq_runtime::QueuePushOutcome::Rejected { .. } => Err(RocketMQError::broker_operation_failed(
+            rocketmq_runtime::QueuePushOutcome::Rejected { .. } => Err(crate::broker_error::broker_operation_failed(
                 "message_queue_push",
                 ResponseCode::SystemBusy as i32,
                 "transaction operation queue is full",
@@ -89,20 +78,22 @@ impl MessageQueueOpContext {
             _ => Ok(()),
         }
     }
-    pub async fn offer(&self, item: String, timeout: std::time::Duration) -> RocketMQResult<()> {
+    pub async fn offer(&self, item: String, timeout: std::time::Duration) -> Result<()> {
         if let Ok(res) = time::timeout(timeout, self.push(item)).await {
             return res;
         }
-        Err(RocketMQError::Timeout {
-            operation: "message_queue_offer",
-            timeout_ms: timeout.as_millis() as u64,
-        })
+        Err(crate::broker_error::timeout(
+            "message_queue_offer",
+            timeout.as_millis() as u64,
+        ))
     }
-    pub async fn pull(&self) -> RocketMQResult<String> {
+    pub async fn pull(&self) -> Result<String> {
         if let Some(item) = self.pending_operations.recv().await {
             return Ok(item);
         }
-        Err(RocketMQError::Service(UnifiedServiceError::Interrupted))
+        Err(crate::broker_error::service_failed(
+            "transaction_operation_queue_interrupted",
+        ))
     }
     pub async fn is_empty(&self) -> bool {
         self.pending_operations.is_empty()

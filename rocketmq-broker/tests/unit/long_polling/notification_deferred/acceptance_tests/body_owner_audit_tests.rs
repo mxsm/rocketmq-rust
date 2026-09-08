@@ -138,7 +138,7 @@ async fn notification_deferred_owner_backed_body_success_releases_once_without_r
                     response_attempts.fetch_add(1, Ordering::SeqCst);
                     let body = Bytes::from_owner(CountingBodyOwner::new(OWNER_BODY.to_vec(), response_owner_drops));
                     RemotingResponse::bytes(notification_head(), body)
-                        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                 },
             )
             .await
@@ -190,7 +190,7 @@ async fn notification_deferred_prewrite_failure_releases_owner_once_without_retr
                     response_owner_drops,
                 ));
                 RemotingResponse::bytes(notification_head(), body)
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                    .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
             },
         )
         .await
@@ -236,11 +236,11 @@ async fn notification_deferred_parent_cancel_releases_prepared_owner_once_withou
                         response_attempts.fetch_add(1, Ordering::SeqCst);
                         let body = Bytes::from_owner(CountingBodyOwner::new(OWNER_BODY.to_vec(), response_owner_drops));
                         let plan = RemotingResponse::bytes(notification_head(), body)
-                            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+                            .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))?;
                         let _ = plan_ready_tx.send(());
-                        release_plan_rx
-                            .await
-                            .map_err(|_| RocketMQError::illegal_argument("cancelled Notification plan release"))?;
+                        release_plan_rx.await.map_err(|_| {
+                            crate::broker_error::invalid_argument("cancelled Notification plan release")
+                        })?;
                         Ok(plan)
                     },
                 )
@@ -308,7 +308,7 @@ async fn notification_deferred_post_writer_claim_partial_releases_file_owner_onc
                 assert_eq!(reason, DeferredWakeReason::MessageArrived);
                 response_attempts.fetch_add(1, Ordering::SeqCst);
                 RemotingResponse::file_regions(notification_head(), regions)
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                    .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
             },
         )
         .await

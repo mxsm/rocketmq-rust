@@ -30,12 +30,12 @@ use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredPrepareRejec
 use crate::long_polling::pop_lite_deferred::prepare::PopLiteDeferredRegisterRejectionKind;
 use crate::long_polling::pop_lite_deferred::prepare::PreparedPopLiteRegistration;
 
-fn success_reply() -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+fn success_reply() -> crate::broker_error::BrokerResult<HandlerOutcome> {
     RemotingResponse::command(RemotingCommand::create_response_command_with_code(
         ResponseCode::Success,
     ))
     .map(HandlerOutcome::Reply)
-    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+    .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
 }
 
 #[derive(Default)]
@@ -50,7 +50,7 @@ struct ProvenanceProcessor {
 }
 
 impl RequestProcessor for ProvenanceProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         if let Some(prepared) = self.state.lock().prepared.take() {
             let rejection = match self.service.register(prepared, request) {
                 Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => rejection,
@@ -77,7 +77,7 @@ struct EmbeddedOriginProcessor {
 }
 
 impl RequestProcessor for EmbeddedOriginProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let rejection = match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
             Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => rejection,
             Ok(PopLiteDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
@@ -190,13 +190,13 @@ struct CapacityProbeProcessor {
 }
 
 impl RequestProcessor for CapacityProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
             Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => self.held.lock().push(*prepared),
             Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => {
                 self.observed.lock().push(rejection.kind());
             }
-            Err(error) => return Err(RocketMQError::illegal_argument(error.to_string())),
+            Err(error) => return Err(crate::broker_error::invalid_argument(error.to_string())),
         }
         success_reply()
     }

@@ -56,7 +56,7 @@ impl MessageRelatedHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let search_offset_request_header = request.decode_command_custom_header::<SearchOffsetRequestHeader>()?;
         let mapping_context = broker_runtime_inner
             .topic_queue_mapping_manager()
@@ -108,7 +108,7 @@ impl MessageRelatedHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<ResumeCheckHalfMessageRequestHeader>()?;
         let response = RemotingCommand::create_java_default_error_response_command();
 
@@ -179,7 +179,7 @@ impl MessageRelatedHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<QueryConsumeQueueRequestHeader>()?;
         let response = RemotingCommand::create_success_response_command();
         let Some(message_store) = broker_runtime_inner.message_store() else {
@@ -292,7 +292,7 @@ impl MessageRelatedHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_success_response_command();
         let Some(pop_message_processor) = broker_runtime_inner.pop_message_processor().cloned() else {
             return Ok(Some(response.set_code(ResponseCode::Success)));
@@ -320,7 +320,7 @@ impl MessageRelatedHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         request_header: &SearchOffsetRequestHeader,
         mapping_context: TopicQueueMappingContext,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         if mapping_context.mapping_detail.is_none() {
             return Ok(None);
         }
@@ -471,7 +471,7 @@ struct SerializableCqExtUnit<'a> {
     filter_bit_map: Option<&'a [u8]>,
 }
 
-fn serialize_cq_ext_unit(cq_ext_unit: &rocketmq_store::CqExtUnit) -> rocketmq_error::RocketMQResult<String> {
+fn serialize_cq_ext_unit(cq_ext_unit: &rocketmq_store::CqExtUnit) -> crate::broker_error::BrokerResult<String> {
     serde_json::to_string(&SerializableCqExtUnit {
         size: cq_ext_unit.size(),
         tags_code: cq_ext_unit.tags_code(),
@@ -482,8 +482,8 @@ fn serialize_cq_ext_unit(cq_ext_unit: &rocketmq_store::CqExtUnit) -> rocketmq_er
     .map_err(cq_ext_unit_response_serialize_error)
 }
 
-fn cq_ext_unit_response_serialize_error(error: serde_json::Error) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::response_process_failed("query_consume_queue.cq_ext_unit", error.to_string())
+fn cq_ext_unit_response_serialize_error(error: serde_json::Error) -> rocketmq_error::SharedError {
+    crate::broker_error::response_process_source("query_consume_queue.cq_ext_unit", error)
 }
 
 #[cfg(test)]

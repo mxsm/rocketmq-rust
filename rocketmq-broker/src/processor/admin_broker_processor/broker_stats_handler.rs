@@ -36,7 +36,7 @@ impl BrokerStatsHandler {
         &self,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<ViewBrokerStatsDataRequestHeader>()?;
 

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::broker_error::BrokerResult as Result;
 use cheetah_string::CheetahString;
 use rocketmq_auth::Acl;
 use rocketmq_auth::Environment;
@@ -21,8 +22,6 @@ use rocketmq_auth::PolicyEntry;
 use rocketmq_auth::PolicyResource;
 use rocketmq_auth::PolicyType;
 use rocketmq_auth::SubjectType;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::body::acl_info::PolicyEntryInfo;
 use rocketmq_protocol::protocol::body::acl_info::PolicyInfo;
@@ -31,7 +30,7 @@ use rocketmq_security_api::Action;
 pub struct AclConverter;
 
 impl AclConverter {
-    pub fn convert_acl_info(acl_info: &AclInfo, fallback_subject: &str) -> RocketMQResult<Acl> {
+    pub fn convert_acl_info(acl_info: &AclInfo, fallback_subject: &str) -> Result<Acl> {
         let subject = acl_info
             .subject
             .as_ref()
@@ -46,12 +45,12 @@ impl AclConverter {
                 policies
                     .iter()
                     .map(Self::convert_policy_info)
-                    .collect::<RocketMQResult<Vec<_>>>()
+                    .collect::<Result<Vec<_>>>()
             })
             .transpose()?
             .unwrap_or_default();
         if policies.is_empty() {
-            return Err(RocketMQError::illegal_argument("The policies is empty."));
+            return Err(crate::broker_error::invalid_argument("The policies is empty."));
         }
 
         Ok(Acl::of_with_policies(subject_key, subject_type, policies))
@@ -71,13 +70,14 @@ impl AclConverter {
         }
     }
 
-    fn convert_policy_info(policy: &PolicyInfo) -> RocketMQResult<Policy> {
+    fn convert_policy_info(policy: &PolicyInfo) -> Result<Policy> {
         let policy_type = policy
             .policy_type
             .as_ref()
             .map(|policy_type| {
-                PolicyType::get_by_name(policy_type.as_str())
-                    .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid policy type '{}'", policy_type)))
+                PolicyType::get_by_name(policy_type.as_str()).ok_or_else(|| {
+                    crate::broker_error::invalid_argument(format!("Invalid policy type '{}'", policy_type))
+                })
             })
             .transpose()?
             .unwrap_or(PolicyType::Custom);
@@ -88,12 +88,12 @@ impl AclConverter {
                 entries
                     .iter()
                     .map(Self::convert_policy_entry_info)
-                    .collect::<RocketMQResult<Vec<_>>>()
+                    .collect::<Result<Vec<_>>>()
             })
             .transpose()?
             .unwrap_or_default();
         if entries.is_empty() {
-            return Err(RocketMQError::illegal_argument("The policy entries is empty."));
+            return Err(crate::broker_error::invalid_argument("The policy entries is empty."));
         }
         Ok(Policy::of_entries(policy_type, entries))
     }
@@ -116,29 +116,29 @@ impl AclConverter {
         }
     }
 
-    fn convert_policy_entry_info(entry: &PolicyEntryInfo) -> RocketMQResult<PolicyEntry> {
+    fn convert_policy_entry_info(entry: &PolicyEntryInfo) -> Result<PolicyEntry> {
         let resource_key = entry
             .resource
             .as_ref()
-            .ok_or_else(|| RocketMQError::illegal_argument("The resource is null."))?;
+            .ok_or_else(|| crate::broker_error::invalid_argument("The resource is null."))?;
         let resource = PolicyResource::of_str(resource_key.as_str())
-            .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid resource '{}'", resource_key)))?;
+            .ok_or_else(|| crate::broker_error::invalid_argument(format!("Invalid resource '{}'", resource_key)))?;
 
         let actions = entry
             .actions
             .as_ref()
-            .ok_or_else(|| RocketMQError::illegal_argument("The actions is empty."))?
+            .ok_or_else(|| crate::broker_error::invalid_argument("The actions is empty."))?
             .iter()
             .flat_map(|action| action.as_str().split(','))
             .map(str::trim)
             .filter(|action| !action.is_empty())
             .map(|action| {
                 Action::get_by_name(action)
-                    .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid action '{action}'")))
+                    .ok_or_else(|| crate::broker_error::invalid_argument(format!("Invalid action '{action}'")))
             })
-            .collect::<RocketMQResult<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
         if actions.is_empty() {
-            return Err(RocketMQError::illegal_argument("The actions is empty."));
+            return Err(crate::broker_error::invalid_argument("The actions is empty."));
         }
 
         let environment = entry.source_ips.as_ref().and_then(|source_ips| {
@@ -157,31 +157,32 @@ impl AclConverter {
         let decision_name = entry
             .decision
             .as_ref()
-            .ok_or_else(|| RocketMQError::illegal_argument("The decision is null."))?;
+            .ok_or_else(|| crate::broker_error::invalid_argument("The decision is null."))?;
         let decision = PolicyDecision::get_by_name(decision_name.as_str())
-            .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid decision '{}'", decision_name)))?;
+            .ok_or_else(|| crate::broker_error::invalid_argument(format!("Invalid decision '{}'", decision_name)))?;
 
         Ok(PolicyEntry::of(resource, actions, environment, decision))
     }
 }
 
-fn parse_subject(subject: &str) -> RocketMQResult<(String, SubjectType)> {
+fn parse_subject(subject: &str) -> Result<(String, SubjectType)> {
     let trimmed = subject.trim();
     if trimmed.is_empty() {
-        return Err(RocketMQError::illegal_argument("The subject is blank"));
+        return Err(crate::broker_error::invalid_argument("The subject is blank"));
     }
 
     let (subject_type, subject_name) = match trimmed.split_once(':') {
         Some((subject_type, subject_name)) => (
-            SubjectType::get_by_name(subject_type)
-                .ok_or_else(|| RocketMQError::illegal_argument(format!("Unsupported subject type '{subject_type}'")))?,
+            SubjectType::get_by_name(subject_type).ok_or_else(|| {
+                crate::broker_error::invalid_argument(format!("Unsupported subject type '{subject_type}'"))
+            })?,
             subject_name.trim(),
         ),
         None => (SubjectType::User, trimmed),
     };
 
     if subject_name.is_empty() {
-        return Err(RocketMQError::illegal_argument("The subject name is blank"));
+        return Err(crate::broker_error::invalid_argument("The subject name is blank"));
     }
 
     Ok((format!("{}:{}", subject_type.name(), subject_name), subject_type))

@@ -277,18 +277,18 @@ where
     MS: BrokerWriteStore + BrokerMasterAddressStore + 'static,
     TS: TransactionalMessageService + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
 
-fn reply_request_peer(origin: &RequestOrigin) -> rocketmq_error::RocketMQResult<SocketAddr> {
+fn reply_request_peer(origin: &RequestOrigin) -> crate::broker_error::BrokerResult<SocketAddr> {
     match origin {
         RequestOrigin::Network { peer } => Ok(peer.address()),
-        RequestOrigin::Embedded { .. } => Err(rocketmq_error::RocketMQError::illegal_argument(
+        RequestOrigin::Embedded { .. } => Err(crate::broker_error::invalid_argument(
             "ReplyMessage requires a trusted network origin for the persisted born host",
         )),
-        _ => Err(rocketmq_error::RocketMQError::invariant_violated(
+        _ => Err(crate::broker_error::invariant_violated(
             "ReplyMessage received an unrecognized request origin",
         )),
     }
@@ -302,7 +302,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original = request.original_identity();
         let inbound_peer = reply_request_peer(request.origin())?;
         let result = self
@@ -362,7 +362,7 @@ where
         original_code: i32,
         original_opaque: i32,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let request_code = RequestCode::from(original_code);
         info!("ReplyMessageProcessor received request code: {:?}", request_code);
         match request_code {
@@ -387,7 +387,7 @@ where
         control: RequestControlView,
         original_opaque: i32,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let mut request_header = parse_request_header(request)?;
         let request_properties = MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
         let mut send_message_context = self
@@ -490,7 +490,7 @@ where
             }
         })
         .await
-        .map_err(|error| rocketmq_error::RocketMQError::internal("reply-message-store", error))?;
+        .map_err(|error| crate::broker_error::internal("reply-message-store", error))?;
         let (outcome, _) = reply.into_parts();
         Ok(outcome)
     }
@@ -499,7 +499,7 @@ where
         &self,
         mut response: RemotingCommand,
         mut send_message_context: SendMessageContext,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.inner
             .execute_send_message_hook_after(Some(&mut response), &mut send_message_context);
         BrokerResponseParts::from_command(response)?.into_handler_outcome()
@@ -725,7 +725,7 @@ fn build_reply_request_header<M: MessageTrait>(
     }
 }
 
-fn parse_request_header(request: &RemotingCommand) -> rocketmq_error::RocketMQResult<SendMessageRequestHeader> {
+fn parse_request_header(request: &RemotingCommand) -> crate::broker_error::BrokerResult<SendMessageRequestHeader> {
     let request_code = RequestCode::from(request.code());
     let mut request_header_v2 = None;
     if RequestCode::SendReplyMessageV2 == request_code || RequestCode::SendReplyMessage == request_code {
@@ -738,7 +738,9 @@ fn parse_request_header(request: &RemotingCommand) -> rocketmq_error::RocketMQRe
         Some(header) => Ok(SendMessageRequestHeaderV2::create_send_message_request_header_v1(
             &header,
         )),
-        None => request.decode_command_custom_header_fast::<SendMessageRequestHeader>(),
+        None => request
+            .decode_command_custom_header_fast::<SendMessageRequestHeader>()
+            .map_err(crate::broker_error::from_canonical),
     }
 }
 
@@ -813,7 +815,7 @@ mod tests {
         fn call_shared<'a>(
             leaf: &'a Arc<super::ReplyMessageProcessor<StorePorts, TransactionService>>,
             request: &'a mut super::RemotingRequest,
-        ) -> impl Future<Output = rocketmq_error::RocketMQResult<super::HandlerOutcome>> + 'a {
+        ) -> impl Future<Output = crate::broker_error::BrokerResult<super::HandlerOutcome>> + 'a {
             leaf.process_shared(request)
         }
 

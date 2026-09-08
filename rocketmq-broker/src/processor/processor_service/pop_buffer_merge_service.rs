@@ -24,13 +24,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::broker_error::BrokerResult as Result;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::UnifiedServiceError;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -137,21 +135,21 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
         revive_queue_id: i32,
         revive_queue_offset: i64,
         next_begin_offset: i64,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         let policy = self.context.policy.snapshot();
 
         if !policy.enable_pop_buffer_merge {
-            return Err(RocketMQError::ClientInvalidState {
-                expected: "buffer enabled",
-                actual: "buffer disabled".to_string(),
-            });
+            return Err(crate::broker_error::client_invalid_state(
+                "buffer enabled",
+                "buffer disabled".to_string(),
+            ));
         }
 
         if !self.serving.load(Ordering::Acquire) {
-            return Err(RocketMQError::ClientInvalidState {
-                expected: "serving",
-                actual: "not serving".to_string(),
-            });
+            return Err(crate::broker_error::client_invalid_state(
+                "serving",
+                "not serving".to_string(),
+            ));
         }
 
         let now = current_millis();
@@ -159,21 +157,16 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
             if policy.enable_pop_log {
                 warn!("[PopBuffer]add ck, timeout, {:?}, {}", point, now);
             }
-            return Err(RocketMQError::Timeout {
-                operation: "add_checkpoint",
-                timeout_ms: policy.pop_ck_stay_buffer_time_out,
-            });
+            return Err(crate::broker_error::timeout(
+                "add_checkpoint",
+                policy.pop_ck_stay_buffer_time_out,
+            ));
         }
 
         let current_counter = self.counter.load(Ordering::Acquire);
         if current_counter as i64 > policy.pop_ck_max_buffer_size {
             warn!("[PopBuffer]add ck, max size, {:?}, {}", point, current_counter);
-            return Err(RocketMQError::StorageOutOfSpace {
-                path: format!(
-                    "PopBuffer(current={}, max={})",
-                    current_counter, policy.pop_ck_max_buffer_size
-                ),
-            });
+            return Err(crate::broker_error::storage_exhausted());
         }
 
         let point_wrapper = Arc::new(PopCheckPointWrapper::new(
@@ -192,15 +185,15 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
                 Some(queue) => queue.lock().await.len(),
                 None => 0,
             };
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "add_checkpoint",
-                code: -1,
-                message: format!(
+            return Err(crate::broker_error::broker_operation_failed_with_address(
+                "add_checkpoint",
+                -1,
+                format!(
                     "Queue full: size={}, max={}",
                     queue_size, policy.pop_ck_offset_max_queue_size
                 ),
-                broker_addr: None,
-            });
+                None,
+            ));
         }
 
         let merge_key = point_wrapper.get_merge_key();
@@ -209,12 +202,12 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
                 "[PopBuffer]mergeKey conflict when add ck. ck:{:?}, mergeKey:{}",
                 point_wrapper, merge_key
             );
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "add_checkpoint",
-                code: -1,
-                message: format!("Merge key conflict: {}", merge_key),
-                broker_addr: None,
-            });
+            return Err(crate::broker_error::broker_operation_failed_with_address(
+                "add_checkpoint",
+                -1,
+                format!("Merge key conflict: {}", merge_key),
+                None,
+            ));
         }
 
         self.write_pop_records_for_checkpoint(point_wrapper.get_ck())?;
@@ -250,7 +243,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
         revive_queue_id: i32,
         revive_queue_offset: i64,
         next_begin_offset: i64,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         let point_wrapper = Arc::new(PopCheckPointWrapper::new_with_offset(
             revive_queue_id,
             revive_queue_offset,
@@ -265,12 +258,12 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
                 "[PopBuffer]mergeKey conflict when add ckJustOffset. ck:{:?}, mergeKey:{}",
                 point_wrapper, merge_key
             );
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "add_checkpoint_just_offset",
-                code: -1,
-                message: format!("Merge key conflict: {}", merge_key),
-                broker_addr: None,
-            });
+            return Err(crate::broker_error::broker_operation_failed_with_address(
+                "add_checkpoint_just_offset",
+                -1,
+                format!("Merge key conflict: {}", merge_key),
+                None,
+            ));
         }
 
         let should_run_in_current = !self.check_queue_ok(&point_wrapper).await;
@@ -853,7 +846,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
 
         let _ = self.put_offset_queue(Arc::new(point_wrapper)).await;
     }
-    async fn put_offset_queue(&self, point_wrapper: Arc<PopCheckPointWrapper>) -> RocketMQResult<()> {
+    async fn put_offset_queue(&self, point_wrapper: Arc<PopCheckPointWrapper>) -> Result<()> {
         let lock_key = point_wrapper.lock_key.clone();
         let pop_time = point_wrapper.get_ck().pop_time as u64;
 
@@ -872,22 +865,19 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
             .commit_offsets
             .get(&lock_key)
             .map(|queue| Arc::clone(queue.get()))
-            .ok_or_else(|| RocketMQError::StorageReadFailed {
-                path: "commit_offsets".to_string(),
-                reason: "Queue not found after insert".to_string(),
-            })?;
+            .ok_or_else(|| crate::broker_error::storage_read_failed())?;
 
         let mut guard = queue.lock().await;
 
         let max_size = self.context.policy.snapshot().pop_ck_offset_max_queue_size as usize;
 
         if guard.len() >= max_size {
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "put_offset_queue",
-                code: -1,
-                message: format!("Queue full: size={}, max={}", guard.len(), max_size),
-                broker_addr: None,
-            });
+            return Err(crate::broker_error::broker_operation_failed_with_address(
+                "put_offset_queue",
+                -1,
+                format!("Queue full: size={}, max={}", guard.len(), max_size),
+                None,
+            ));
         }
 
         guard.push_back(point_wrapper);
@@ -931,7 +921,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
         self.shutdown.notify_waiters();
     }
 
-    pub async fn wait_for_shutdown(&self, timeout: Duration) -> RocketMQResult<()> {
+    pub async fn wait_for_shutdown(&self, timeout: Duration) -> Result<()> {
         let start = Instant::now();
 
         info!(
@@ -948,10 +938,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
                     self.buffer.len(),
                     self.get_offset_total_size().await
                 );
-                return Err(RocketMQError::Timeout {
-                    operation: "shutdown",
-                    timeout_ms: timeout.as_millis() as u64,
-                });
+                return Err(crate::broker_error::timeout("shutdown", timeout.as_millis() as u64));
             }
 
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -968,9 +955,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
                     report = %report.to_json(),
                     "[PopBuffer]Shutdown task group report is unhealthy"
                 );
-                return Err(RocketMQError::Service(UnifiedServiceError::ShutdownFailed(
-                    report.to_json(),
-                )));
+                return Err(crate::broker_error::service_failed("pop_buffer_merge_shutdown"));
             }
         }
 
@@ -1063,7 +1048,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
     }
 
     #[cfg(feature = "rocksdb_store")]
-    fn write_pop_records_for_checkpoint(&self, point: &PopCheckPoint) -> RocketMQResult<()> {
+    fn write_pop_records_for_checkpoint(&self, point: &PopCheckPoint) -> Result<()> {
         let Some(store) = &self.pop_consumer_store else {
             return Ok(());
         };
@@ -1075,12 +1060,12 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
     }
 
     #[cfg(not(feature = "rocksdb_store"))]
-    fn write_pop_records_for_checkpoint(&self, _point: &PopCheckPoint) -> RocketMQResult<()> {
+    fn write_pop_records_for_checkpoint(&self, _point: &PopCheckPoint) -> Result<()> {
         Ok(())
     }
 
     #[cfg(feature = "rocksdb_store")]
-    fn delete_pop_records_for_ack(&self, point: &PopCheckPoint, ack_msg: &dyn AckMessage) -> RocketMQResult<()> {
+    fn delete_pop_records_for_ack(&self, point: &PopCheckPoint, ack_msg: &dyn AckMessage) -> Result<()> {
         let Some(store) = &self.pop_consumer_store else {
             return Ok(());
         };
@@ -1092,12 +1077,12 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
     }
 
     #[cfg(not(feature = "rocksdb_store"))]
-    fn delete_pop_records_for_ack(&self, _point: &PopCheckPoint, _ack_msg: &dyn AckMessage) -> RocketMQResult<()> {
+    fn delete_pop_records_for_ack(&self, _point: &PopCheckPoint, _ack_msg: &dyn AckMessage) -> Result<()> {
         Ok(())
     }
 
     #[cfg(feature = "rocksdb_store")]
-    fn delete_pop_records_for_checkpoint(&self, point: &PopCheckPoint) -> RocketMQResult<()> {
+    fn delete_pop_records_for_checkpoint(&self, point: &PopCheckPoint) -> Result<()> {
         let Some(store) = &self.pop_consumer_store else {
             return Ok(());
         };
@@ -1109,7 +1094,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
     }
 
     #[cfg(not(feature = "rocksdb_store"))]
-    fn delete_pop_records_for_checkpoint(&self, _point: &PopCheckPoint) -> RocketMQResult<()> {
+    fn delete_pop_records_for_checkpoint(&self, _point: &PopCheckPoint) -> Result<()> {
         Ok(())
     }
 }

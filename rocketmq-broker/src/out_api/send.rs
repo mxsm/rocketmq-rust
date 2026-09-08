@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::MessageConst;
@@ -60,7 +59,7 @@ pub(crate) fn process_send_response(
     queue_id: i32,
     topic: CheetahString,
     response: &RemotingCommand,
-) -> rocketmq_error::RocketMQResult<SendResult> {
+) -> crate::broker_error::BrokerResult<SendResult> {
     let status = match ResponseCode::from(response.code()) {
         ResponseCode::FlushDiskTimeout => Some(SendStatus::FlushDiskTimeout),
         ResponseCode::FlushSlaveTimeout => Some(SendStatus::FlushSlaveTimeout),
@@ -100,12 +99,12 @@ pub(crate) fn process_send_response(
         return Ok(result);
     }
 
-    Err(RocketMQError::BrokerOperationFailed {
-        operation: "send_message",
-        code: response.code(),
-        message: response.remark().map_or("".to_string(), |remark| remark.to_string()),
-        broker_addr: None,
-    })
+    Err(crate::broker_error::broker_operation_failed_with_address(
+        "send_message",
+        response.code(),
+        response.remark().map_or("".to_string(), |remark| remark.to_string()),
+        None,
+    ))
 }
 
 #[cfg(test)]

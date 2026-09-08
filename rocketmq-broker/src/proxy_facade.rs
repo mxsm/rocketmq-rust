@@ -175,33 +175,29 @@ impl ProxyBrokerFacade {
         self.runtime.broker_config()
     }
 
-    pub fn query_route(&self, topic: &str) -> rocketmq_error::RocketMQResult<TopicRouteData> {
+    pub fn query_route(&self, topic: &str) -> crate::broker_error::BrokerResult<TopicRouteData> {
         let topic_name = CheetahString::from(topic);
-        let topic_config =
-            self.runtime
-                .topic_config(&topic_name)
-                .ok_or_else(|| rocketmq_error::RocketMQError::TopicNotExist {
-                    topic: topic.to_owned(),
-                })?;
+        let topic_config = self
+            .runtime
+            .topic_config(&topic_name)
+            .ok_or_else(|| crate::broker_error::topic_not_found(topic.to_owned()))?;
 
         Ok(build_topic_route(&self.runtime.broker_config(), topic_config.as_ref()))
     }
 
-    pub fn query_topic_message_type(&self, topic: &str) -> rocketmq_error::RocketMQResult<TopicMessageType> {
+    pub fn query_topic_message_type(&self, topic: &str) -> crate::broker_error::BrokerResult<TopicMessageType> {
         let topic_name = CheetahString::from(topic);
-        let topic_config =
-            self.runtime
-                .topic_config(&topic_name)
-                .ok_or_else(|| rocketmq_error::RocketMQError::TopicNotExist {
-                    topic: topic.to_owned(),
-                })?;
+        let topic_config = self
+            .runtime
+            .topic_config(&topic_name)
+            .ok_or_else(|| crate::broker_error::topic_not_found(topic.to_owned()))?;
         Ok(topic_config.get_topic_message_type())
     }
 
     pub fn query_subscription_group(
         &self,
         group: &str,
-    ) -> rocketmq_error::RocketMQResult<Option<Arc<SubscriptionGroupConfig>>> {
+    ) -> crate::broker_error::BrokerResult<Option<Arc<SubscriptionGroupConfig>>> {
         Ok(self.runtime.subscription_group(&CheetahString::from(group)))
     }
 
@@ -221,7 +217,7 @@ impl ProxyBrokerFacade {
         &self,
         request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
         timeout: Duration,
-    ) -> rocketmq_error::RocketMQResult<EmbeddedDispatchOutcome> {
+    ) -> crate::broker_error::BrokerResult<EmbeddedDispatchOutcome> {
         self.process_request_with_deadline(request, RequestDeadline::after(timeout))
             .await
     }
@@ -230,7 +226,7 @@ impl ProxyBrokerFacade {
         &self,
         mut request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
         deadline: RequestDeadline,
-    ) -> rocketmq_error::RocketMQResult<EmbeddedDispatchOutcome> {
+    ) -> crate::broker_error::BrokerResult<EmbeddedDispatchOutcome> {
         request.make_custom_header_to_net();
         let dispatcher = self
             .runtime
@@ -246,31 +242,28 @@ impl ProxyBrokerFacade {
             .await;
         match result {
             Ok(outcome) => embedded_dispatch_request_outcome(outcome, deadline.budget()),
-            Err(error) => Err(rocketmq_error::RocketMQError::internal(
-                "embedded_broker_dispatch",
-                error,
-            )),
+            Err(error) => Err(crate::broker_error::internal("embedded_broker_dispatch", error)),
         }
     }
 }
 
-fn embedded_broker_request_processor_not_ready() -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::not_initialized("embedded_broker_request_processor")
+fn embedded_broker_request_processor_not_ready() -> rocketmq_error::SharedError {
+    crate::broker_error::not_initialized("embedded_broker_request_processor")
 }
 
 fn embedded_dispatch_request_outcome(
     outcome: EmbeddedDispatchOutcome,
     timeout: Duration,
-) -> rocketmq_error::RocketMQResult<EmbeddedDispatchOutcome> {
+) -> crate::broker_error::BrokerResult<EmbeddedDispatchOutcome> {
     match outcome {
         outcome @ (EmbeddedDispatchOutcome::Reply(_)
         | EmbeddedDispatchOutcome::OneWay { .. }
         | EmbeddedDispatchOutcome::Deferred { .. }
         | EmbeddedDispatchOutcome::NoReply { .. }) => Ok(outcome),
-        EmbeddedDispatchOutcome::DeadlineExceeded => Err(rocketmq_error::RocketMQError::Timeout {
-            operation: "embedded_broker_response",
-            timeout_ms: timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-        }),
+        EmbeddedDispatchOutcome::DeadlineExceeded => Err(crate::broker_error::timeout(
+            "embedded_broker_response",
+            timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+        )),
         EmbeddedDispatchOutcome::AdmissionRejected
         | EmbeddedDispatchOutcome::Cancelled
         | EmbeddedDispatchOutcome::SessionClosed
@@ -282,8 +275,8 @@ fn embedded_dispatch_request_outcome(
     }
 }
 
-fn embedded_dispatch_source_free_failure() -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::response_process_failed("embedded_broker_dispatch", "transport dispatch failed")
+fn embedded_dispatch_source_free_failure() -> rocketmq_error::SharedError {
+    crate::broker_error::response_process_failed("embedded_broker_dispatch", "transport dispatch failed")
 }
 
 fn build_topic_route(broker_config: &BrokerConfig, topic_config: &TopicConfig) -> TopicRouteData {
@@ -329,10 +322,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            rocketmq_error::RocketMQError::Timeout {
-                operation: "embedded_broker_response",
-                timeout_ms: 41,
-            }
+            crate::broker_error::timeout("embedded_broker_response", 41)
         ));
     }
 
@@ -348,13 +338,7 @@ mod tests {
             let error = embedded_dispatch_request_outcome(outcome, Duration::ZERO)
                 .expect_err("source-free control must not become an operational error");
 
-            assert!(matches!(
-                error,
-                rocketmq_error::RocketMQError::ResponseProcessFailed {
-                    operation: "embedded_broker_dispatch",
-                    reason,
-                } if reason == "transport dispatch failed"
-            ));
+            assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_RESPONSE_FAILED);
         }
     }
 }

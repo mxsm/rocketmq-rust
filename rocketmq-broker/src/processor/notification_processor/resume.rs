@@ -35,17 +35,17 @@ where
         &self,
         resume: ResumeNotification,
         reason: DeferredWakeReason,
-    ) -> rocketmq_error::RocketMQResult<RemotingResponse> {
+    ) -> crate::broker_error::BrokerResult<RemotingResponse> {
         let command = self.resume_notification_command(resume, reason).await?;
         RemotingResponse::command(command)
-            .map_err(|_| rocketmq_error::RocketMQError::invariant_violated("invalid Notification remoting response"))
+            .map_err(|_| crate::broker_error::invariant_violated("invalid Notification remoting response"))
     }
 
     async fn resume_notification_command(
         &self,
         resume: ResumeNotification,
         reason: DeferredWakeReason,
-    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    ) -> crate::broker_error::BrokerResult<RemotingCommand> {
         match reason {
             DeferredWakeReason::MessageArrived | DeferredWakeReason::Timeout | DeferredWakeReason::ForcedRefresh => {}
         }

@@ -14,9 +14,9 @@
 
 use std::sync::Arc;
 
+use crate::broker_error::BrokerResult as Result;
 use rocketmq_auth::Acl;
 use rocketmq_auth::AuthConfig;
-#[cfg(test)]
 use rocketmq_auth::AuthFailureKind;
 #[cfg(test)]
 use rocketmq_auth::AuthOperation;
@@ -34,8 +34,7 @@ use rocketmq_auth::SubjectType;
 use rocketmq_auth::User;
 use rocketmq_auth::UserStatus;
 use rocketmq_auth::UserType;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
 use rocketmq_runtime::ChildServiceContext;
@@ -66,7 +65,7 @@ pub struct AuthAdminService {
 }
 
 impl AuthAdminService {
-    pub async fn new(auth_config: AuthConfig, service_context: ChildServiceContext) -> Result<Self, RocketMQError> {
+    pub async fn new(auth_config: AuthConfig, service_context: ChildServiceContext) -> Result<Self> {
         let metadata_io = MetadataIoConfig::default()
             .into_plan()
             .expect("default metadata I/O config is valid")
@@ -74,7 +73,8 @@ impl AuthAdminService {
             .map_err(crate::runtime_to_rocketmq_error)?;
         let provider_registry =
             ProviderRegistry::load_with_metadata_io(&auth_config, metadata_io, service_context.metadata_io().clone())
-                .await?;
+                .await
+                .map_err(crate::broker_error::auth_service_error)?;
         Ok(Self::with_provider_registry_and_config(provider_registry, auth_config))
     }
 
@@ -113,10 +113,10 @@ impl AuthAdminService {
         }
     }
 
-    pub async fn create_user(&self, user: User) -> RocketMQResult<()> {
+    pub async fn create_user(&self, user: User) -> Result<()> {
         self.validate_username(user.username().as_str())?;
         if user.password().is_none_or(|password| password.trim().is_empty()) {
-            return Err(RocketMQError::authentication_failed("password can not be blank"));
+            return Err(crate::broker_error::authentication_failed("password can not be blank"));
         }
 
         if self
@@ -125,7 +125,7 @@ impl AuthAdminService {
             .await
             .is_ok()
         {
-            return Err(RocketMQError::authentication_failed("The user is existed"));
+            return Err(crate::broker_error::authentication_failed("The user is existed"));
         }
 
         let mut user = user;
@@ -135,17 +135,20 @@ impl AuthAdminService {
         if user.user_status().is_none() {
             user.set_user_status(UserStatus::Enable);
         }
-        self.authentication_provider.create_user(user).await
+        self.authentication_provider
+            .create_user(user)
+            .await
+            .map_err(crate::broker_error::auth_service_error)
     }
 
-    pub async fn update_user(&self, user: User) -> RocketMQResult<()> {
+    pub async fn update_user(&self, user: User) -> Result<()> {
         self.validate_username(user.username().as_str())?;
         let mut existing = match self.get_existing_user(user.username().as_str()).await {
             Ok(existing) => existing,
-            Err(RocketMQError::Authentication(rocketmq_error::AuthError::UserNotFound(_))) => {
-                return Err(RocketMQError::authentication_failed("The user is not exist"))
+            Err(error) if error.kind() == AuthFailureKind::NotFound => {
+                return Err(crate::broker_error::authentication_failed("The user is not exist"))
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(crate::broker_error::auth_service_error(error)),
         };
         if let Some(password) = user.password().filter(|password| !password.trim().is_empty()) {
             existing.set_password(password.clone());
@@ -156,12 +159,18 @@ impl AuthAdminService {
         if let Some(user_status) = user.user_status() {
             existing.set_user_status(user_status);
         }
-        self.authentication_provider.update_user(existing).await
+        self.authentication_provider
+            .update_user(existing)
+            .await
+            .map_err(crate::broker_error::auth_service_error)
     }
 
-    pub async fn delete_user(&self, username: &str) -> RocketMQResult<()> {
+    pub async fn delete_user(&self, username: &str) -> Result<()> {
         self.validate_username(username)?;
-        self.authentication_provider.delete_user(username).await?;
+        self.authentication_provider
+            .delete_user(username)
+            .await
+            .map_err(crate::broker_error::auth_service_error)?;
 
         let subject = SubjectRef::parse(username)?;
         self.authorization_provider
@@ -170,26 +179,26 @@ impl AuthAdminService {
             .map_err(map_authz_error)
     }
 
-    pub async fn get_user(&self, username: &str) -> RocketMQResult<Option<UserInfo>> {
+    pub async fn get_user(&self, username: &str) -> Result<Option<UserInfo>> {
         self.validate_username(username)?;
 
         match self.authentication_provider.get_user(username).await {
             Ok(user) => Ok(Some(UserConverter::convert_user_info(&user))),
-            Err(RocketMQError::Authentication(_)) => Ok(None),
-            Err(error) => Err(error),
+            Err(error) if error.kind() == AuthFailureKind::NotFound => Ok(None),
+            Err(error) => Err(crate::broker_error::auth_service_error(error)),
         }
     }
 
-    pub async fn list_users(&self, filter: Option<&str>) -> RocketMQResult<Vec<UserInfo>> {
-        let users = self.authentication_provider.list_user(filter).await?;
+    pub async fn list_users(&self, filter: Option<&str>) -> Result<Vec<UserInfo>> {
+        let users = self
+            .authentication_provider
+            .list_user(filter)
+            .await
+            .map_err(crate::broker_error::auth_service_error)?;
         Ok(users.iter().map(UserConverter::convert_user_info).collect())
     }
 
-    pub async fn list_acls(
-        &self,
-        subject_filter: Option<&str>,
-        resource_filter: Option<&str>,
-    ) -> RocketMQResult<Vec<AclInfo>> {
+    pub async fn list_acls(&self, subject_filter: Option<&str>, resource_filter: Option<&str>) -> Result<Vec<AclInfo>> {
         let acls = self
             .authorization_provider
             .list_acl(subject_filter, resource_filter)
@@ -198,15 +207,15 @@ impl AuthAdminService {
         Ok(acls.iter().map(AclConverter::convert_acl).collect())
     }
 
-    pub async fn create_acl(&self, acl: Acl) -> RocketMQResult<()> {
+    pub async fn create_acl(&self, acl: Acl) -> Result<()> {
         self.upsert_acl(acl).await
     }
 
-    pub async fn update_acl(&self, acl: Acl) -> RocketMQResult<()> {
+    pub async fn update_acl(&self, acl: Acl) -> Result<()> {
         self.upsert_acl(acl).await
     }
 
-    pub async fn get_acl(&self, subject: &str) -> RocketMQResult<Option<AclInfo>> {
+    pub async fn get_acl(&self, subject: &str) -> Result<Option<AclInfo>> {
         let subject = SubjectRef::parse(subject)?;
         self.ensure_subject_exists(&subject).await?;
 
@@ -218,12 +227,7 @@ impl AuthAdminService {
         Ok(acl.as_ref().map(AclConverter::convert_acl))
     }
 
-    pub async fn delete_acl(
-        &self,
-        subject: &str,
-        policy_type: Option<&str>,
-        resource: Option<&str>,
-    ) -> RocketMQResult<()> {
+    pub async fn delete_acl(&self, subject: &str, policy_type: Option<&str>, resource: Option<&str>) -> Result<()> {
         let subject = SubjectRef::parse(subject)?;
         self.ensure_subject_exists(&subject).await?;
 
@@ -239,13 +243,14 @@ impl AuthAdminService {
         let policy_type = policy_type
             .filter(|policy_type| !policy_type.trim().is_empty())
             .map(|policy_type| {
-                PolicyType::get_by_name(policy_type)
-                    .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid policy type '{policy_type}'")))
+                PolicyType::get_by_name(policy_type).ok_or_else(|| {
+                    crate::broker_error::invalid_argument(format!("Invalid policy type '{policy_type}'"))
+                })
             })
             .transpose()?
             .unwrap_or(PolicyType::Custom);
         let resource = PolicyResource::of_str(resource_key)
-            .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid resource '{resource_key}'")))?;
+            .ok_or_else(|| crate::broker_error::invalid_argument(format!("Invalid resource '{resource_key}'")))?;
 
         let Some(mut acl) = self
             .authorization_provider
@@ -273,7 +278,7 @@ impl AuthAdminService {
         Ok(())
     }
 
-    pub async fn is_super_user(&self, username: &str) -> RocketMQResult<bool> {
+    pub async fn is_super_user(&self, username: &str) -> Result<bool> {
         let Some(user_info) = self.get_user(username).await? else {
             return Ok(false);
         };
@@ -284,7 +289,7 @@ impl AuthAdminService {
             .is_some_and(|user_type| user_type == UserType::Super))
     }
 
-    pub async fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> RocketMQResult<u64>
+    pub async fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> Result<u64>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -295,31 +300,34 @@ impl AuthAdminService {
             .filter(|address| !address.is_empty())
             .collect();
         if addresses.is_empty() {
-            return Err(RocketMQError::illegal_argument("The globalWhiteAddrs is blank"));
+            return Err(crate::broker_error::invalid_argument("The globalWhiteAddrs is blank"));
         }
 
         let acl_file = self.auth_config.acl_file.as_str().trim();
         if !acl_file.is_empty() {
             FileAclConfigStore::new(acl_file)
                 .update_global_white_remote_addresses(&addresses)
-                .await?;
+                .await
+                .map_err(crate::broker_error::auth_service_error)?;
         }
 
-        self.provider_registry.update_global_white_remote_addresses(addresses)
+        self.provider_registry
+            .update_global_white_remote_addresses(addresses)
+            .map_err(crate::broker_error::auth_service_error)
     }
 
-    async fn get_existing_user(&self, username: &str) -> RocketMQResult<User> {
+    async fn get_existing_user(&self, username: &str) -> rocketmq_auth::AuthServiceResult<User> {
         self.authentication_provider.get_user(username).await
     }
 
-    fn validate_username(&self, username: &str) -> RocketMQResult<()> {
+    fn validate_username(&self, username: &str) -> Result<()> {
         if username.trim().is_empty() {
-            return Err(RocketMQError::illegal_argument("The username is blank"));
+            return Err(crate::broker_error::invalid_argument("The username is blank"));
         }
         Ok(())
     }
 
-    async fn upsert_acl(&self, acl: Acl) -> RocketMQResult<()> {
+    async fn upsert_acl(&self, acl: Acl) -> Result<()> {
         validate_acl(&acl)?;
         let subject = SubjectRef::parse(acl.subject_key())?;
         self.ensure_subject_exists(&subject).await?;
@@ -345,7 +353,7 @@ impl AuthAdminService {
         }
     }
 
-    async fn ensure_subject_exists(&self, subject: &SubjectRef) -> RocketMQResult<()> {
+    async fn ensure_subject_exists(&self, subject: &SubjectRef) -> Result<()> {
         match subject.subject_type() {
             SubjectType::User => {
                 let username = subject.name();
@@ -360,7 +368,7 @@ impl AuthAdminService {
         }
     }
 
-    async fn ensure_acl_exists(&self, subject: &SubjectRef) -> RocketMQResult<()> {
+    async fn ensure_acl_exists(&self, subject: &SubjectRef) -> Result<()> {
         if self
             .authorization_provider
             .get_acl(subject)
@@ -374,14 +382,12 @@ impl AuthAdminService {
     }
 }
 
-fn map_authz_error(error: AuthServiceError) -> RocketMQError {
-    RocketMQError::from(error)
+fn map_authz_error(error: AuthServiceError) -> SharedError {
+    crate::broker_error::auth_service_error(error)
 }
 
-fn permission_denied(message: impl Into<String>) -> RocketMQError {
-    RocketMQError::BrokerPermissionDenied {
-        operation: message.into(),
-    }
+fn permission_denied(message: impl Into<String>) -> SharedError {
+    crate::broker_error::permission_denied(message.into())
 }
 
 #[derive(Clone)]
@@ -392,16 +398,16 @@ struct SubjectRef {
 }
 
 impl SubjectRef {
-    fn parse(subject: &str) -> RocketMQResult<Self> {
+    fn parse(subject: &str) -> Result<Self> {
         let trimmed = subject.trim();
         if trimmed.is_empty() {
-            return Err(RocketMQError::illegal_argument("The subject is blank"));
+            return Err(crate::broker_error::invalid_argument("The subject is blank"));
         }
 
         let (subject_type, subject_name) = match trimmed.split_once(':') {
             Some((subject_type, subject_name)) => (
                 SubjectType::get_by_name(subject_type).ok_or_else(|| {
-                    RocketMQError::illegal_argument(format!("Unsupported subject type '{subject_type}'"))
+                    crate::broker_error::invalid_argument(format!("Unsupported subject type '{subject_type}'"))
                 })?,
                 subject_name.trim(),
             ),
@@ -409,7 +415,7 @@ impl SubjectRef {
         };
 
         if subject_name.is_empty() {
-            return Err(RocketMQError::illegal_argument("The subject name is blank"));
+            return Err(crate::broker_error::invalid_argument("The subject name is blank"));
         }
 
         Ok(Self {
@@ -434,25 +440,25 @@ impl Subject for SubjectRef {
     }
 }
 
-fn validate_acl(acl: &Acl) -> RocketMQResult<()> {
+fn validate_acl(acl: &Acl) -> Result<()> {
     if acl.policies().is_empty() {
-        return Err(RocketMQError::illegal_argument("The policies is empty."));
+        return Err(crate::broker_error::invalid_argument("The policies is empty."));
     }
 
     for policy in acl.policies() {
         if policy.entries().is_empty() {
-            return Err(RocketMQError::illegal_argument("The policy entries is empty."));
+            return Err(crate::broker_error::invalid_argument("The policy entries is empty."));
         }
 
         for entry in policy.entries() {
             if entry.resource().resource_key().is_none() {
-                return Err(RocketMQError::illegal_argument("The resource is null."));
+                return Err(crate::broker_error::invalid_argument("The resource is null."));
             }
             if entry.actions().is_empty() {
-                return Err(RocketMQError::illegal_argument("The actions is empty."));
+                return Err(crate::broker_error::invalid_argument("The actions is empty."));
             }
             if entry.actions().contains(&Action::Any) {
-                return Err(RocketMQError::illegal_argument("The actions can not be Any."));
+                return Err(crate::broker_error::invalid_argument("The actions can not be Any."));
             }
             if let Some(environment) = entry.environment() {
                 if environment
@@ -460,7 +466,7 @@ fn validate_acl(acl: &Acl) -> RocketMQResult<()> {
                     .iter()
                     .any(|source_ip| source_ip.trim().is_empty())
                 {
-                    return Err(RocketMQError::illegal_argument("The source ip is empty."));
+                    return Err(crate::broker_error::invalid_argument("The source ip is empty."));
                 }
             }
         }
@@ -674,13 +680,13 @@ mod tests {
 
     #[test]
     fn map_authz_error_preserves_admin_error_category() {
-        let invalid = map_authz_error(AuthServiceError::new(
+        let invalid = map_authz_error(AuthServicerocketmq_error::Error::new(
             AuthOperation::BuildContext,
             AuthFailureKind::InvalidInput,
         ));
         assert_eq!(invalid.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
 
-        let config = map_authz_error(AuthServiceError::new(
+        let config = map_authz_error(AuthServicerocketmq_error::Error::new(
             AuthOperation::Initialize,
             AuthFailureKind::InvalidConfiguration,
         ));
@@ -692,7 +698,7 @@ mod tests {
             std::io::Error::other("storage failed"),
         ));
         assert_eq!(storage.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
-        let RocketMQError::Shared(canonical) = storage else {
+        let crate::broker_error::from_shared(canonical) = storage else {
             panic!("canonical storage projection must use the shared carrier")
         };
         let auth = std::error::Error::source(canonical.as_ref()).expect("auth facade source");
@@ -771,7 +777,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, RocketMQError::IllegalArgument(_)));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[tokio::test]

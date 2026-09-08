@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::collections::TryReserveError;
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::atomic::AtomicBool;
@@ -443,8 +443,8 @@ impl fmt::Display for PendingArrivalInsertOperationalError {
     }
 }
 
-impl Error for PendingArrivalInsertOperationalError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for PendingArrivalInsertOperationalError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Allocation(source) => Some(source),
             Self::SizeOverflow => None,

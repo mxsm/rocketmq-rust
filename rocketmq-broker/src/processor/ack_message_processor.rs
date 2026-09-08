@@ -17,11 +17,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use crate::broker_error::BrokerResult as Result;
 use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use futures::future::join_all;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQResult;
 use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_model::common::key_builder::POP_ORDER_REVIVE_QUEUE;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -104,7 +104,11 @@ impl<MS: BrokerReadWriteStore> AckMessageStoreCapability<MS> {
         }
     }
 
-    fn queue_offsets(&self, topic: &CheetahString, queue_id: i32) -> Result<(i64, i64), MessageStoreUnavailable> {
+    fn queue_offsets(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+    ) -> std::result::Result<(i64, i64), MessageStoreUnavailable> {
         let bridge = self.escape_bridge.upgrade().ok_or(MessageStoreUnavailable)?;
         Ok((
             bridge.get_min_offset_from_local_store(topic, queue_id)?,
@@ -112,7 +116,10 @@ impl<MS: BrokerReadWriteStore> AckMessageStoreCapability<MS> {
         ))
     }
 
-    async fn put_message(&self, message: MessageExtBrokerInner) -> Result<PutMessageResult, MessageStoreUnavailable> {
+    async fn put_message(
+        &self,
+        message: MessageExtBrokerInner,
+    ) -> std::result::Result<PutMessageResult, MessageStoreUnavailable> {
         Ok(self
             .escape_bridge
             .upgrade()
@@ -294,7 +301,7 @@ impl<MS> RequestProcessor for AckMessageProcessor<MS>
 where
     MS: BrokerReadWriteStore + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -303,7 +310,7 @@ impl<MS: BrokerReadWriteStore> AckMessageProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let request_source = request_origin_label(request.origin());
@@ -334,7 +341,7 @@ where
         &self,
         request: &mut RemotingCommand,
         request_source: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("AckMessageProcessor received request code: {:?}", request_code);
         match request_code {
@@ -368,7 +375,7 @@ where
         request_code: RequestCode,
         request: &mut RemotingCommand,
         request_source: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::AckMessage => self.process_ack(request, request_source).await,
             RequestCode::BatchAckMessage => self.process_batch_ack(request, request_source).await,
@@ -423,7 +430,7 @@ where
         &self,
         request: &mut RemotingCommand,
         request_source: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<AckMessageRequestHeader>()?;
         let topic_config = self
             .context
@@ -496,7 +503,7 @@ where
         &self,
         request: &mut RemotingCommand,
         request_source: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
             return Ok(Some(
                 self.context
@@ -528,7 +535,7 @@ where
         batch_ack: Option<BatchAck>,
         request_source: &CheetahString,
         broker_name: Option<&CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         //handle single ack
         let (
             consume_group,
@@ -858,7 +865,7 @@ mod tests {
     use std::sync::atomic::AtomicU64;
 
     use super::*;
-    use rocketmq_error::RocketMQResult;
+    use crate::broker_error::BrokerResult as Result;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_runtime::RuntimeConfig;
@@ -902,7 +909,7 @@ mod tests {
     where
         P: RequestProcessor + Send,
     {
-        async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+        async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome> {
             Box::pin(self.processor.lock().await.process(request)).await
         }
     }
@@ -918,7 +925,7 @@ mod tests {
     async fn dispatch_embedded<P>(
         processor: P,
         command: RemotingCommand,
-    ) -> Result<EmbeddedDispatchOutcome, TransportError>
+    ) -> std::result::Result<EmbeddedDispatchOutcome, TransportError>
     where
         P: RequestProcessor + Send + 'static,
     {

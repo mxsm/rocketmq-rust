@@ -417,7 +417,7 @@ async fn persist_config_manager<T>(
     metadata_io: Option<MetadataIoActor>,
     blocking: BlockingExecutor,
     deadline: MetadataDeadline,
-) -> rocketmq_error::RocketMQResult<()>
+) -> crate::broker_error::BrokerResult<()>
 where
     T: ConfigManager + Send + Sync + 'static,
 {
@@ -439,7 +439,7 @@ where
     blocking
         .spawn_io(resource, move || manager.persist())
         .await
-        .map_err(|error| rocketmq_error::RocketMQError::IO(std::io::Error::other(error)))?
+        .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?
 }
 
 enum MessageStoreShutdownOutcome {

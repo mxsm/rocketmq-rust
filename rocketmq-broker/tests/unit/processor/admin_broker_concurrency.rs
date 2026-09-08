@@ -80,7 +80,7 @@ struct ObservedAdminProcessor {
 }
 
 impl RequestProcessor for ObservedAdminProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         if let Some(code) = self.mutate_command_code {
             request.command_mut().set_code_mut(code);
         }

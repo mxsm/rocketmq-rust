@@ -107,7 +107,7 @@ impl Clone for PollingInfoProcessor {
 }
 
 impl RequestProcessor for PollingInfoProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -116,7 +116,7 @@ impl PollingInfoProcessor {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.command_factory;
         let peer_label = request_peer_label(request.origin());
@@ -136,7 +136,7 @@ impl PollingInfoProcessor {
         &self,
         peer_label: &str,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let mut response = self.command_factory.create_java_default_error_response_command();
 
         // Decode request header

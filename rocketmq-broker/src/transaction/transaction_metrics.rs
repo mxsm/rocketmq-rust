@@ -23,11 +23,9 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crate::broker_error::BrokerResult as Result;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::SerializationError;
 use rocketmq_runtime::common::time_utils::current_millis;
 use serde::Deserialize;
 use serde::Serialize;
@@ -68,7 +66,7 @@ pub(crate) struct TransactionMetrics {
 }
 
 impl TransactionMetrics {
-    pub(crate) fn open(checkpoint_path: impl Into<PathBuf>) -> RocketMQResult<Self> {
+    pub(crate) fn open(checkpoint_path: impl Into<PathBuf>) -> Result<Self> {
         let checkpoint_path = checkpoint_path.into();
         let backup_path = backup_path(&checkpoint_path);
         let (checkpoint, recovered_from_backup) = match read_checkpoint(&checkpoint_path) {
@@ -124,7 +122,7 @@ impl TransactionMetrics {
             .collect()
     }
 
-    pub(crate) fn persist_if_dirty(&self) -> RocketMQResult<bool> {
+    pub(crate) fn persist_if_dirty(&self) -> Result<bool> {
         if !self.inner.dirty.load(Ordering::Acquire) {
             return Ok(false);
         }
@@ -132,7 +130,7 @@ impl TransactionMetrics {
         Ok(true)
     }
 
-    pub(crate) fn persist(&self) -> RocketMQResult<()> {
+    pub(crate) fn persist(&self) -> Result<()> {
         let _guard = self.inner.persist_lock.lock();
         let snapshot_revision = self.inner.revision.load(Ordering::Acquire);
         let generation = self.inner.generation.load(Ordering::Acquire).saturating_add(1);
@@ -141,8 +139,8 @@ impl TransactionMetrics {
             generation,
             topics: self.inner.topics.read().clone(),
         };
-        let body =
-            serde_json::to_vec(&checkpoint).map_err(|error| SerializationError::source("serialize", "JSON", error))?;
+        let body = serde_json::to_vec(&checkpoint)
+            .map_err(|error| crate::broker_error::serialization_failed("serialize", "JSON", error))?;
         write_checkpoint(&self.inner.checkpoint_path, &body)?;
         self.inner.generation.store(generation, Ordering::Release);
         if self.inner.revision.load(Ordering::Acquire) == snapshot_revision {
@@ -168,52 +166,44 @@ fn empty_checkpoint() -> (TransactionMetricsCheckpoint, bool) {
     )
 }
 
-fn read_checkpoint(path: &Path) -> RocketMQResult<Option<TransactionMetricsCheckpoint>> {
+fn read_checkpoint(path: &Path) -> Result<Option<TransactionMetricsCheckpoint>> {
     let body = match fs::read(path) {
         Ok(body) => body,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
+        Err(error) => return Err(crate::broker_error::io(error)),
     };
-    let checkpoint: TransactionMetricsCheckpoint =
-        serde_json::from_slice(&body).map_err(|error| SerializationError::source("deserialize", "JSON", error))?;
+    let checkpoint: TransactionMetricsCheckpoint = serde_json::from_slice(&body)
+        .map_err(|error| crate::broker_error::serialization_failed("deserialize", "JSON", error))?;
     if checkpoint.version != CHECKPOINT_VERSION {
-        return Err(RocketMQError::ConfigInvalidValue {
-            key: "transactionMetrics.version",
-            value: checkpoint.version.to_string(),
-            reason: format!(
-                "unsupported transaction metrics checkpoint version {}",
-                checkpoint.version
-            ),
-        });
+        return Err(crate::broker_error::configuration_invalid("transactionMetrics.version"));
     }
     Ok(Some(checkpoint))
 }
 
-fn write_checkpoint(path: &Path, body: &[u8]) -> RocketMQResult<()> {
-    let parent = path.parent().ok_or_else(|| RocketMQError::ConfigInvalidValue {
-        key: "transactionMetrics.path",
-        value: path.display().to_string(),
-        reason: "checkpoint path must have a parent directory".into(),
-    })?;
-    fs::create_dir_all(parent)?;
+fn write_checkpoint(path: &Path, body: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| crate::broker_error::configuration_invalid("transactionMetrics.path"))?;
+    fs::create_dir_all(parent).map_err(crate::broker_error::io)?;
     let temporary_path = temporary_path(path);
     let backup_path = backup_path(path);
     let mut temporary = OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
-        .open(&temporary_path)?;
-    temporary.write_all(body)?;
-    temporary.sync_all()?;
+        .open(&temporary_path)
+        .map_err(crate::broker_error::io)?;
+    temporary.write_all(body).map_err(crate::broker_error::io)?;
+    temporary.sync_all().map_err(crate::broker_error::io)?;
     drop(temporary);
 
     if path.exists() {
         if backup_path.exists() {
-            fs::remove_file(&backup_path)?;
+            fs::remove_file(&backup_path).map_err(crate::broker_error::io)?;
         }
-        fs::rename(path, &backup_path)?;
+        fs::rename(path, &backup_path).map_err(crate::broker_error::io)?;
     }
-    fs::rename(&temporary_path, path)?;
+    fs::rename(&temporary_path, path).map_err(crate::broker_error::io)?;
     Ok(())
 }
 
@@ -230,7 +220,7 @@ mod tests {
     use std::error::Error as StdError;
     use std::fs;
 
-    use rocketmq_error::RocketMQError;
+    use rocketmq_error::SharedError;
 
     use super::read_checkpoint;
 
@@ -243,17 +233,9 @@ mod tests {
         let error = read_checkpoint(&checkpoint_path).expect_err("invalid checkpoint must fail to decode");
 
         assert_eq!(error.to_string(), "deserialize failed (JSON)");
-        assert_eq!(error.boundary_view().message(), "Serialization failed");
-        assert!(StdError::source(&error)
+        assert_eq!(error.descriptor().public_message(), "Serialization failed");
+        assert!(StdError::source(error.as_ref())
             .expect("outer error must preserve the source")
-            .downcast_ref::<serde_json::Error>()
-            .is_some());
-
-        let RocketMQError::Serialization(serialization) = &error else {
-            panic!("invalid JSON must map to a serialization error");
-        };
-        assert!(StdError::source(serialization)
-            .expect("serialization error must preserve the JSON source")
             .downcast_ref::<serde_json::Error>()
             .is_some());
     }

@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
@@ -39,7 +39,7 @@ impl CreateAclRequestHandler {
         &self,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<CreateAclRequestHeader>()?;
         let response = RemotingCommand::create_java_default_error_response_command();
 
@@ -79,6 +79,6 @@ impl CreateAclRequestHandler {
     }
 }
 
-fn map_error_response(response: RemotingCommand, error: RocketMQError) -> RemotingCommand {
+fn map_error_response(response: RemotingCommand, error: SharedError) -> RemotingCommand {
     super::map_auth_admin_error_response(response, error)
 }

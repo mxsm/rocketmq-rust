@@ -86,7 +86,7 @@ impl ConsumerRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<GetConsumerConnectionListRequestHeader>()?;
         let consumer_group_info = broker_runtime_inner
@@ -130,7 +130,7 @@ impl ConsumerRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header =
             request.decode_required_header::<GetConsumeStatsRequestHeader>("decode consume-stats request header")?;
         let mut consume_stats = ConsumeStats::new();
@@ -244,7 +244,7 @@ impl ConsumerRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetConsumeStatsInBrokerHeader>()?;
         let mut broker_consume_stats_list = Vec::new();
         let mut total_diff = 0i64;
@@ -298,7 +298,7 @@ impl ConsumerRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<QueryCorrectionOffsetHeader>()?;
         let mut correction_offsets = broker_runtime_inner
             .consumer_offset_manager()
@@ -332,7 +332,7 @@ impl ConsumerRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<ConsumeMessageDirectlyResultRequestHeader>()?;
         let Some(client_id) = request_header
             .client_id
@@ -494,7 +494,7 @@ impl ConsumerRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let content = broker_runtime_inner.consumer_offset_manager().encode();
         if !content.is_empty() {
@@ -515,7 +515,7 @@ impl ConsumerRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let Some(query_assignment_processor) = broker_runtime_inner.query_assignment_processor() else {
             return Ok(Some(
@@ -549,7 +549,7 @@ impl ConsumerRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<ResetOffsetRequestHeader>()?;
 
         let response = if broker_runtime_inner.broker_config().use_server_side_reset_offset {
@@ -594,7 +594,7 @@ impl ConsumerRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetConsumerStatusRequestHeader>()?;
         Ok(Some(
             self.broker_to_client
@@ -613,7 +613,7 @@ impl ConsumerRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<QuerySubscriptionByConsumerRequestHeader>()?;
         let response_body = QuerySubscriptionResponseBody {
             subscription_data: broker_runtime_inner
@@ -633,7 +633,7 @@ impl ConsumerRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<QueryConsumeTimeSpanRequestHeader>()?;
         let topic = request_header.topic;
@@ -708,7 +708,7 @@ impl ConsumerRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<CloneGroupOffsetRequestHeader>()?;
         let mut topics = HashSet::new();
         if let Some(topic) = request_header.topic.clone().filter(|topic| !topic.is_empty()) {
@@ -762,7 +762,7 @@ impl ConsumerRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = match request.decode_command_custom_header::<GetConsumerRunningInfoRequestHeader>() {
             Ok(header) => header,
             Err(e) => {
@@ -789,7 +789,7 @@ impl ConsumerRequestHandler {
         request: RemotingCommand,
         consumer_group: &str,
         client_id: &str,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let mut response = self
             .broker_to_client
             .command_factory()

@@ -55,7 +55,7 @@ pub trait BrokerAttachedPlugin: Send + Sync {
     ///
     /// # Returns
     /// Result indicating success or an error if synchronization failed
-    fn sync_metadata_reverse(&self, broker_addr: &CheetahString) -> rocketmq_error::RocketMQResult<()>;
+    fn sync_metadata_reverse(&self, broker_addr: &CheetahString) -> crate::broker_error::BrokerResult<()>;
 
     /// Build runtime information for monitoring
     ///

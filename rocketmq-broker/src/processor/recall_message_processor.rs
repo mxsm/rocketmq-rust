@@ -20,7 +20,7 @@ use crate::config::broker_config::BrokerConfig;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -217,7 +217,7 @@ impl<MS> RequestProcessor for RecallMessageProcessor<MS>
 where
     MS: BrokerWriteStore + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -226,7 +226,7 @@ impl<MS: BrokerWriteStore> RecallMessageProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let remote_address = recall_remote_address(request.origin())?;
@@ -240,13 +240,13 @@ impl<MS: BrokerWriteStore> RecallMessageProcessor<MS> {
     }
 }
 
-fn recall_remote_address(origin: &RequestOrigin) -> rocketmq_error::RocketMQResult<std::net::SocketAddr> {
+fn recall_remote_address(origin: &RequestOrigin) -> crate::broker_error::BrokerResult<std::net::SocketAddr> {
     match origin {
         RequestOrigin::Network { peer } => Ok(peer.address()),
-        RequestOrigin::Embedded { .. } => Err(rocketmq_error::RocketMQError::illegal_argument(
+        RequestOrigin::Embedded { .. } => Err(crate::broker_error::invalid_argument(
             "RecallMessage requires a trusted network origin for the persisted born host",
         )),
-        _ => Err(rocketmq_error::RocketMQError::invariant_violated(
+        _ => Err(crate::broker_error::invariant_violated(
             "RecallMessage received an unrecognized request origin",
         )),
     }
@@ -261,7 +261,7 @@ where
         &self,
         request: &mut RemotingCommand,
         remote_address: std::net::SocketAddr,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("RecallMessageProcessor received request code: {:?}", request_code);
 
@@ -291,7 +291,7 @@ where
         &self,
         remote_address: std::net::SocketAddr,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    ) -> crate::broker_error::BrokerResult<RemotingCommand> {
         let mut response = self
             .context
             .command_factory
@@ -578,7 +578,7 @@ where
         begin_time_millis: u64,
         topic: CheetahString,
         message_id: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         let append_result = match put_message_result.append_message_result() {
             Some(result) => result,
             None => {
@@ -639,8 +639,8 @@ where
     }
 }
 
-fn recall_response_header_missing() -> RocketMQError {
-    RocketMQError::response_process_failed("RECALL_MESSAGE", "response header is missing")
+fn recall_response_header_missing() -> SharedError {
+    crate::broker_error::response_process_failed("RECALL_MESSAGE", "response header is missing")
 }
 
 #[cfg(test)]

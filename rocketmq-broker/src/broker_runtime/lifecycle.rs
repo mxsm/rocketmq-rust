@@ -507,7 +507,7 @@ impl BrokerRuntime {
                 )
                 .await
             } else {
-                Err(rocketmq_error::RocketMQError::not_initialized(
+                Err(crate::broker_error::not_initialized(
                     "broker consumer-filter persistence requires ChildServiceContext",
                 ))
             };
@@ -531,7 +531,7 @@ impl BrokerRuntime {
                 )
                 .await
             } else {
-                Err(rocketmq_error::RocketMQError::not_initialized(
+                Err(crate::broker_error::not_initialized(
                     "broker consumer-order persistence requires ChildServiceContext",
                 ))
             };
@@ -576,7 +576,7 @@ impl BrokerRuntime {
                 }
                 result
             } else {
-                Err(rocketmq_error::RocketMQError::not_initialized(
+                Err(crate::broker_error::not_initialized(
                     "broker subscription-group persistence requires ChildServiceContext",
                 ))
             };
@@ -631,7 +631,7 @@ impl BrokerRuntime {
             }
             result
         } else {
-            Err(rocketmq_error::RocketMQError::not_initialized(
+            Err(crate::broker_error::not_initialized(
                 "broker consumer-offset persistence requires ChildServiceContext",
             ))
         };

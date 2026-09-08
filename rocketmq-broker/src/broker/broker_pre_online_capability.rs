@@ -20,11 +20,11 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Duration;
 
+use crate::broker_error::BrokerResult as Result;
 use crate::config::broker_config::BrokerConfig;
 use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
@@ -181,31 +181,31 @@ impl<MS: BrokerReplicationStore> BrokerPreOnlineStoreCapability<MS> {
         }
     }
 
-    fn bridge(&self) -> RocketMQResult<Arc<EscapeBridge<MS>>> {
+    fn bridge(&self) -> Result<Arc<EscapeBridge<MS>>> {
         self.escape_bridge
             .upgrade()
             .ok_or_else(|| pre_online_unavailable("message store"))
     }
 
-    fn broker_init_max_offset(&self) -> RocketMQResult<i64> {
+    fn broker_init_max_offset(&self) -> Result<i64> {
         self.bridge()?
             .pre_online_broker_init_max_offset()
             .map_err(|_| pre_online_unavailable("message store"))
     }
 
-    fn master_flushed_offset(&self) -> RocketMQResult<i64> {
+    fn master_flushed_offset(&self) -> Result<i64> {
         self.bridge()?
             .pre_online_master_flushed_offset()
             .map_err(|_| pre_online_unavailable("message store"))
     }
 
-    fn set_master_flushed_offset(&self, offset: i64) -> RocketMQResult<()> {
+    fn set_master_flushed_offset(&self, offset: i64) -> Result<()> {
         self.bridge()?
             .pre_online_set_master_flushed_offset(offset)
             .map_err(|_| pre_online_unavailable("message store"))
     }
 
-    async fn wait_for_ha_transfer(&self, broker_addr: &CheetahString) -> RocketMQResult<bool> {
+    async fn wait_for_ha_transfer(&self, broker_addr: &CheetahString) -> Result<bool> {
         let (request, completion) = HAConnectionStateNotificationRequest::new(
             rocketmq_store::HAConnectionState::Transfer,
             &RemotingHelper::parse_host_from_address(Some(broker_addr.as_str())),
@@ -226,7 +226,7 @@ impl<MS: BrokerReplicationStore> BrokerPreOnlineStoreCapability<MS> {
         &self,
         master_ha_address: &CheetahString,
         master_address: &CheetahString,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         self.bridge()?
             .pre_online_update_master_addresses(master_ha_address, master_address)
             .await
@@ -280,7 +280,7 @@ impl<MS: BrokerReplicationStore> BrokerSpecialServiceCapability<MS> {
         }
     }
 
-    pub(crate) async fn change_status(&self, should_start: bool) -> RocketMQResult<()> {
+    pub(crate) async fn change_status(&self, should_start: bool) -> Result<()> {
         if self.shutdown.load(Ordering::Acquire) {
             return Err(pre_online_unavailable("broker lifecycle"));
         }
@@ -378,7 +378,7 @@ impl BrokerRegistrationCapability {
         }
     }
 
-    pub(crate) async fn register(&self) -> RocketMQResult<()> {
+    pub(crate) async fn register(&self) -> Result<()> {
         if self.shutdown.load(Ordering::Acquire) {
             return Err(pre_online_unavailable("broker lifecycle"));
         }
@@ -409,7 +409,7 @@ impl BrokerRegistrationCapability {
         &self,
         topic_config_manager: Arc<TopicConfigManager>,
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         if self.shutdown.load(Ordering::Acquire) {
             return Err(pre_online_unavailable("broker lifecycle"));
         }
@@ -616,7 +616,7 @@ impl<MS: BrokerReplicationStore> BrokerPreOnlineContext<MS> {
         }
     }
 
-    async fn persist_config_manager<T>(&self, resource: &'static str, manager: Arc<T>) -> RocketMQResult<()>
+    async fn persist_config_manager<T>(&self, resource: &'static str, manager: Arc<T>) -> Result<()>
     where
         T: ConfigManager + Send + Sync + 'static,
     {
@@ -643,14 +643,14 @@ impl<MS: BrokerReplicationStore> BrokerPreOnlineContext<MS> {
             return blocking
                 .spawn_io(resource, move || manager.persist())
                 .await
-                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
+                .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?;
         }
         manager.persist()
     }
 }
 
-fn pre_online_unavailable(component: &'static str) -> RocketMQError {
-    RocketMQError::broker_operation_failed(
+fn pre_online_unavailable(component: &'static str) -> SharedError {
+    crate::broker_error::broker_operation_failed(
         "broker_pre_online",
         -1,
         format!("{component} is unavailable during broker pre-online"),

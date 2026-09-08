@@ -99,15 +99,11 @@ impl<MS: BrokerWriteStore + BrokerMasterAddressStore> TransactionalMessageCheckS
 }
 
 impl<MS: BrokerWriteStore + BrokerMasterAddressStore> TransactionalMessageCheckService<MS> {
-    pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn start(&self) -> crate::broker_error::BrokerResult<()> {
         self.task_impl
             .start()
             .await
-            .map_err(|source| rocketmq_error::RocketMQError::BrokerAsyncTaskFailed {
-                task: "TransactionalMessageCheckService",
-                context: "failed to start runtime-owned service task".to_string(),
-                source: Box::new(source),
-            })
+            .map_err(|source| crate::broker_error::broker_task_failed("TransactionalMessageCheckService", source))
     }
 
     pub async fn shutdown(&self) {

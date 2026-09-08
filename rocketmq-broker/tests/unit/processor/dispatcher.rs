@@ -73,7 +73,7 @@ impl ProbeProcessor {
 }
 
 impl RequestProcessor for ProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.seen.lock().push((
             request.original_identity().original_code(),
@@ -112,7 +112,7 @@ struct PreMutatingRouter {
 }
 
 impl RequestProcessor for PreMutatingRouter {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         request.command_mut().set_code_mut(MUTATED_CODE);
         request.command_mut().set_opaque_mut(77_777);
         RequestProcessor::process(&mut self.inner, request).await
@@ -138,7 +138,7 @@ struct OrderingProbeRouter {
 }
 
 impl RequestProcessor for OrderingProbeRouter {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         RequestProcessor::process(&mut self.inner, request).await
     }
 

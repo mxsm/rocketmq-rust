@@ -53,15 +53,11 @@ where
         TransactionalOpBatchService { service_manager }
     }
 
-    pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn start(&self) -> crate::broker_error::BrokerResult<()> {
         self.service_manager
             .start()
             .await
-            .map_err(|source| rocketmq_error::RocketMQError::BrokerAsyncTaskFailed {
-                task: "TransactionalOpBatchService",
-                context: "failed to start runtime-owned service task".to_string(),
-                source: Box::new(source),
-            })
+            .map_err(|source| crate::broker_error::broker_task_failed("TransactionalOpBatchService", source))
     }
 
     pub async fn shutdown(&self) {

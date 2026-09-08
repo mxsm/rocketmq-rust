@@ -159,7 +159,7 @@ where
     MS: BrokerStorePort + Send + Sync + 'static,
     TS: TransactionalMessageService + Send + Sync + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match self {
             Self::Send(processor) => processor.process_shared(request).await,
             Self::Pull(processor) => processor.process_shared(request).await,
@@ -389,16 +389,14 @@ impl<P> RequestProcessor for BrokerRequestProcessor<P>
 where
     P: RequestProcessor + Clone + Sync + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original = request.original_identity();
         let request_code = original.original_code();
         let opaque = original.original_opaque();
         if is_privileged_maintenance_request(RequestCode::from(request_code))
             && !self.maintenance_routes.contains(&request_code)
         {
-            let error = rocketmq_error::RocketMQError::authentication_failed(
-                "Broker maintenance API is disabled or unavailable",
-            );
+            let error = crate::broker_error::authentication_failed("Broker maintenance API is disabled or unavailable");
             let context = error.context();
             let view = PublicErrorView::try_new(error.descriptor(), &context)
                 .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
@@ -415,8 +413,7 @@ where
         if !is_privileged_maintenance_request(RequestCode::from(request_code)) {
             match &self.auth {
                 BrokerAuthState::Unconfigured => {
-                    let error =
-                        rocketmq_error::RocketMQError::authentication_failed("Broker authentication is not configured");
+                    let error = crate::broker_error::authentication_failed("Broker authentication is not configured");
                     let context = error.context();
                     let view = PublicErrorView::try_new(error.descriptor(), &context)
                         .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
@@ -434,8 +431,8 @@ where
                     let auth_context = match RemotingAuthContext::from_request(request) {
                         Ok(auth_context) => auth_context,
                         Err(error) => {
-                            let context = error.context();
-                            let view = PublicErrorView::try_new(error.descriptor(), &context)
+                            let error = crate::broker_error::auth_service_error(error);
+                            let view = PublicErrorView::try_new(error.descriptor(), error.context())
                                 .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
                             let response = error_response(
                                 view,
@@ -451,8 +448,8 @@ where
                         .check_remoting_for_code(&auth_context, request.command(), request_code)
                         .await
                     {
-                        let context = error.context();
-                        let view = PublicErrorView::try_new(error.descriptor(), &context)
+                        let error = crate::broker_error::auth_service_error(error);
+                        let view = PublicErrorView::try_new(error.descriptor(), error.context())
                             .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
                         let response = error_response(
                             view,
@@ -533,7 +530,7 @@ where
         queue_kind: Option<crate::latency::broker_fast_failure::FastFailureQueueKind>,
         mut processor: P,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let Some(queue_kind) = queue_kind else {
             return processor.process(request).await;
         };
@@ -552,7 +549,7 @@ where
                 return rejection
                     .into_remoting_response()
                     .map(HandlerOutcome::Reply)
-                    .map_err(|error| rocketmq_error::RocketMQError::internal("broker-fast-failure", error));
+                    .map_err(|error| crate::broker_error::internal("broker-fast-failure", error));
             }
         };
         let run = match admission
@@ -564,10 +561,10 @@ where
                 return rejection
                     .into_remoting_response()
                     .map(HandlerOutcome::Reply)
-                    .map_err(|error| rocketmq_error::RocketMQError::internal("broker-fast-failure", error));
+                    .map_err(|error| crate::broker_error::internal("broker-fast-failure", error));
             }
             Err(fast_failure_dispatch::FastFailureAwaitError::LifecycleStopped) => {
-                return Err(rocketmq_error::RocketMQError::invariant_violated(
+                return Err(crate::broker_error::invariant_violated(
                     "fast-failure request lifecycle stopped before Broker dispatch",
                 ));
             }
@@ -595,9 +592,9 @@ where
 
 fn map_request_header_error(
     command_factory: &RemotingCommandFactory,
-    result: rocketmq_error::RocketMQResult<HandlerOutcome>,
+    result: crate::broker_error::BrokerResult<HandlerOutcome>,
     opaque: i32,
-) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+) -> crate::broker_error::BrokerResult<HandlerOutcome> {
     match result {
         Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
             let context = error.context();

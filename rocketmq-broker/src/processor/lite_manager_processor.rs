@@ -297,7 +297,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     async fn process_command(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         match RequestCode::from(request.code()) {
             RequestCode::GetBrokerLiteInfo => self.get_broker_lite_info(request),
             RequestCode::GetParentTopicInfo => self.get_parent_topic_info(request),
@@ -320,7 +320,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
 }
 
 impl<MS: BrokerReadWriteStore + 'static> RequestProcessor for LiteManagerProcessor<MS> {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -329,7 +329,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let result = self.process_command(request.command_mut()).await;
@@ -346,7 +346,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     fn get_broker_lite_info(
         &self,
         request: &RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let subscriptions = self.context.lite_subscription_registry.all_subscriptions();
         let topic_meta = self.build_lite_topic_meta();
         let group_meta = self.build_lite_group_meta();
@@ -371,7 +371,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     fn get_parent_topic_info(
         &self,
         request: &RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetParentTopicInfoRequestHeader>()?;
         let topic_config = match self.validate_lite_parent_topic(&request_header.topic) {
             Ok(topic_config) => topic_config,
@@ -404,7 +404,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     fn get_lite_topic_info(
         &self,
         request: &RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetLiteTopicInfoRequestHeader>()?;
         if let Err((code, remark)) = self.validate_lite_parent_topic(&request_header.parent_topic) {
             return Ok(Some(self.response_with_code(request, code, remark)));
@@ -456,7 +456,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     fn get_lite_client_info(
         &self,
         request: &RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetLiteClientInfoRequestHeader>()?;
         let Some(parent_topic) = request_header.parent_topic.filter(|topic| !topic.is_empty()) else {
             return Ok(Some(self.response_with_code(
@@ -531,7 +531,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     fn get_lite_group_info(
         &self,
         request: &RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetLiteGroupInfoRequestHeader>()?;
         let group = request_header.group;
         let lite_topic = request_header.lite_topic;
@@ -591,7 +591,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
     fn trigger_lite_dispatch(
         &self,
         request: &RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let TriggerLiteDispatchRequestHeader { group, client_id } =
             request.decode_command_custom_header::<TriggerLiteDispatchRequestHeader>()?;
         let bind_topic = match self.validate_lite_group(&group) {
@@ -943,7 +943,7 @@ impl<MS: BrokerReadWriteStore> LiteManagerProcessor<MS> {
         &self,
         request: &RemotingCommand,
         body: &T,
-    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    ) -> crate::broker_error::BrokerResult<RemotingCommand> {
         Ok(self
             .context
             .command_factory
@@ -1015,7 +1015,10 @@ mod tests {
     }
 
     impl RequestProcessor for SharedLiteManagerProcessor {
-        async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        async fn process(
+            &mut self,
+            request: &mut RemotingRequest,
+        ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
             self.inner.lock().await.process(request).await
         }
     }

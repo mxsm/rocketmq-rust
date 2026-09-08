@@ -32,7 +32,7 @@ pub(crate) fn attach_pop_response_header(
 pub(crate) fn pop_heap_response_parts(
     head: RemotingCommand,
     body: Option<Bytes>,
-) -> rocketmq_error::RocketMQResult<BrokerResponseParts> {
+) -> crate::broker_error::BrokerResult<BrokerResponseParts> {
     match body {
         Some(body) => BrokerResponseParts::bytes(head, body).map_err(Into::into),
         None => BrokerResponseParts::command(head).map_err(Into::into),
@@ -42,7 +42,7 @@ pub(crate) fn pop_heap_response_parts(
 pub(crate) fn pop_segmented_response_parts(
     head: RemotingCommand,
     body_segments: Vec<Bytes>,
-) -> rocketmq_error::RocketMQResult<BrokerResponseParts> {
+) -> crate::broker_error::BrokerResult<BrokerResponseParts> {
     BrokerResponseParts::segments(head, body_segments).map_err(Into::into)
 }
 

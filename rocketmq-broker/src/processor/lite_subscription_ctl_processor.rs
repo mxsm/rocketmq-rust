@@ -112,7 +112,7 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
     async fn process_command(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let body = match request.body() {
             Some(body) if !body.is_empty() => body,
             _ => {
@@ -273,7 +273,7 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
 }
 
 impl<MS: BrokerStorePort + 'static> RequestProcessor for LiteSubscriptionCtlProcessor<MS> {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -282,7 +282,7 @@ impl<MS: BrokerStorePort> LiteSubscriptionCtlProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let result = self.process_command(request.command_mut()).await;
@@ -529,7 +529,10 @@ mod tests {
     }
 
     impl RequestProcessor for SharedLiteSubscriptionProcessor {
-        async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        async fn process(
+            &mut self,
+            request: &mut RemotingRequest,
+        ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
             self.inner.lock().await.process(request).await
         }
     }

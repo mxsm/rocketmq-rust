@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::update_global_white_addrs_config_request_header::UpdateGlobalWhiteAddrsConfigRequestHeader;
@@ -36,7 +36,7 @@ impl UpdateGlobalWhiteAddrsConfigRequestHandler {
         &self,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<UpdateGlobalWhiteAddrsConfigRequestHeader>()?;
         let response = RemotingCommand::create_java_default_error_response_command();
         let global_white_addrs = parse_global_white_addrs(request_header.global_white_addrs.as_str());
@@ -67,7 +67,7 @@ impl UpdateGlobalWhiteAddrsConfigRequestHandler {
         }
     }
 
-    async fn is_not_super_user_login(&self, request: &RemotingCommand) -> rocketmq_error::RocketMQResult<bool> {
+    async fn is_not_super_user_login(&self, request: &RemotingCommand) -> crate::broker_error::BrokerResult<bool> {
         let Some(access_key) = request.ext_fields().and_then(|fields| fields.get("AccessKey")) else {
             return Ok(false);
         };
@@ -85,7 +85,7 @@ fn parse_global_white_addrs(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn map_error_response(response: RemotingCommand, error: RocketMQError) -> RemotingCommand {
+fn map_error_response(response: RemotingCommand, error: SharedError) -> RemotingCommand {
     super::map_auth_admin_error_response(response, error)
 }
 

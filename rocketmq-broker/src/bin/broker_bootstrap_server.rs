@@ -34,7 +34,6 @@ use rocketmq_broker::Builder;
 use rocketmq_error::fields;
 use rocketmq_error::CliErrorView;
 use rocketmq_error::CliVerbosity;
-use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::CORE_SERVICE_FAILED;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
@@ -95,7 +94,7 @@ fn print_release_version_if_requested(component: &str) -> bool {
 
 fn main() {
     if let Err(source) = try_main() {
-        let error = Error::new(&CORE_SERVICE_FAILED)
+        let error = rocketmq_error::Error::new(&CORE_SERVICE_FAILED)
             .with_boxed_source(source.into_boxed_dyn_error())
             .with_context(
                 ErrorContext::new()

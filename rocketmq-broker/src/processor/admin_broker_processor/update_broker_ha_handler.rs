@@ -35,7 +35,7 @@ impl UpdateBrokerHaHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let exchange_request_header = request
             .decode_command_custom_header::<ExchangeHAInfoRequestHeader>()
             .unwrap_or_default();

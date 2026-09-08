@@ -18,10 +18,8 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rocketmq_error::fields;
-use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::SerializationError;
+use rocketmq_error::SharedError;
 use rocketmq_error::CORE_CONFIGURATION_INVALID;
 use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
 use rocketmq_model::common::pop_retry_policy::PopRetryTopicVersion;
@@ -77,7 +75,7 @@ pub(crate) struct PopConsumerProfileStore {
 }
 
 impl PopConsumerProfileStore {
-    pub(crate) fn load(rocksdb: Arc<PopConsumerRocksDbStore>, capacity: usize) -> Result<Self, RocketMQError> {
+    pub(crate) fn load(rocksdb: Arc<PopConsumerRocksDbStore>, capacity: usize) -> Result<Self, SharedError> {
         if capacity == 0 {
             return Err(invalid_profile("capacity", "0", "capacity must be greater than zero"));
         }
@@ -142,7 +140,7 @@ impl PopConsumerProfileStore {
         mut subscriptions: Vec<SubscriptionData>,
         retry_policy: PopRetryPolicy,
         last_seen: i64,
-    ) -> Result<PopConsumerProfile, RocketMQError> {
+    ) -> Result<PopConsumerProfile, SharedError> {
         if group.is_empty() {
             return Err(invalid_profile("group", "", "group must not be empty"));
         }
@@ -195,7 +193,7 @@ impl PopConsumerProfileStore {
         Ok(profile)
     }
 
-    pub(crate) fn remove(&self, group: &CheetahString, last_seen: i64) -> Result<bool, RocketMQError> {
+    pub(crate) fn remove(&self, group: &CheetahString, last_seen: i64) -> Result<bool, SharedError> {
         let mut state = self.state.lock();
         if !state.profiles.contains_key(group) {
             return Ok(false);
@@ -241,7 +239,7 @@ impl PopConsumerProfileStore {
     }
 }
 
-fn validate_profile(profile: &PopConsumerProfile) -> Result<(), RocketMQError> {
+fn validate_profile(profile: &PopConsumerProfile) -> Result<(), SharedError> {
     validate_format_version(profile.format_version)?;
     pop_consumer_profile_key(profile.group.as_str()).map_err(broker_storage_error)?;
     if profile.subscriptions.is_empty() {
@@ -277,7 +275,7 @@ fn validate_profile(profile: &PopConsumerProfile) -> Result<(), RocketMQError> {
     Ok(())
 }
 
-fn normalize_retry_policy(profile: &mut PopConsumerProfile) -> Result<(), RocketMQError> {
+fn normalize_retry_policy(profile: &mut PopConsumerProfile) -> Result<(), SharedError> {
     if profile.retry_policy.is_none() {
         profile.retry_policy = Some(match PopRetryTopicVersion::from_number(profile.retry_version) {
             Some(PopRetryTopicVersion::V1) => PopRetryPolicy::v1_only(profile.generation),
@@ -298,7 +296,7 @@ fn next_retry_policy(
     existing: Option<&PopConsumerProfile>,
     requested: PopRetryPolicy,
     generation: u64,
-) -> Result<PopRetryPolicy, RocketMQError> {
+) -> Result<PopRetryPolicy, SharedError> {
     let requested_state = requested
         .state()
         .map_err(|error| invalid_profile_source("retryPolicy", error))?;
@@ -329,7 +327,7 @@ fn next_retry_policy(
     }
 }
 
-fn validate_format_version(format_version: u32) -> Result<(), RocketMQError> {
+fn validate_format_version(format_version: u32) -> Result<(), SharedError> {
     if format_version != POP_CONSUMER_PROFILE_FORMAT_VERSION {
         return Err(invalid_profile(
             "formatVersion",
@@ -340,35 +338,24 @@ fn validate_format_version(format_version: u32) -> Result<(), RocketMQError> {
     Ok(())
 }
 
-fn invalid_profile(key: &'static str, value: impl Into<String>, reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::ConfigInvalidValue {
-        key,
-        value: value.into(),
-        reason: reason.into(),
-    }
+fn invalid_profile(key: &'static str, _value: impl Into<String>, _reason: impl Into<String>) -> SharedError {
+    crate::broker_error::configuration_invalid(key)
 }
 
-fn codec_error(reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::deserialization_failed("POP consumer profile", reason.into())
+fn codec_error(_reason: impl Into<String>) -> SharedError {
+    crate::broker_error::serialization_failure("deserialize", "POP consumer profile")
 }
 
 fn codec_source_error(
     operation: &'static str,
     format: &'static str,
     source: impl std::error::Error + Send + Sync + 'static,
-) -> RocketMQError {
-    SerializationError::source(operation, format, source).into()
+) -> SharedError {
+    crate::broker_error::serialization_failed(operation, format, source)
 }
 
-fn invalid_profile_source(key: &'static str, source: impl std::error::Error + Send + Sync + 'static) -> RocketMQError {
-    RocketMQError::Shared(Arc::new(
-        Error::caused_by(&CORE_CONFIGURATION_INVALID, source).with_context(
-            ErrorContext::new()
-                .with_text(fields::KEY, key)
-                .with_secret_presence(fields::VALUE_PRESENT)
-                .with_secret_presence(fields::REASON_PRESENT),
-        ),
-    ))
+fn invalid_profile_source(key: &'static str, source: impl std::error::Error + Send + Sync + 'static) -> SharedError {
+    crate::broker_error::configuration_invalid_source(key, source)
 }
 
 #[cfg(test)]

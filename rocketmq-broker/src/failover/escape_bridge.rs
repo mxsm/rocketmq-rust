@@ -78,7 +78,7 @@ pub(crate) enum EscapeDispatchError {
     #[error("the controller role epoch changed before remote dispatch")]
     StaleRoleEpoch,
     #[error(transparent)]
-    Send(#[from] rocketmq_error::RocketMQError),
+    Send(#[from] rocketmq_error::SharedError),
 }
 
 ///### RocketMQ's EscapeBridge for Dead Letter Queue (DLQ) Mechanism

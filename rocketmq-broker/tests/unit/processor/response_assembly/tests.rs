@@ -121,8 +121,8 @@ fn command_conversion_extracts_the_body_before_response_validation() {
 
 #[test]
 fn immediate_leaf_mapper_turns_only_typed_header_failures_into_replies() {
-    let header_error = RocketMQError::request_header_error("malformed leaf header");
-    let expected_response_code = header_error.boundary_view().remoting().code.as_i32();
+    let header_error = crate::broker_error::request_header_error("malformed leaf header");
+    let expected_response_code = header_error.descriptor().projection().remoting().code.as_i32();
     let outcome = immediate_outcome_from_command_result(
         &rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory(),
         Err(header_error),
@@ -135,7 +135,7 @@ fn immediate_leaf_mapper_turns_only_typed_header_failures_into_replies() {
     };
     assert_eq!(response.response_code(), expected_response_code);
 
-    let non_header = RocketMQError::illegal_argument("business failure");
+    let non_header = crate::broker_error::invalid_argument("business failure");
     let result = immediate_outcome_from_command_result(
         &rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory(),
         Err(non_header),

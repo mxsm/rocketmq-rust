@@ -20,9 +20,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::broker_error::BrokerResult as Result;
 use crate::config::config_manager::ConfigManager;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 use rocketmq_runtime::blocking::BlockingTaskState;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
@@ -42,17 +42,17 @@ const COMMAND_CAPACITY: usize = 256;
 const TOPIC_CONFIG_BLOCKING_PREFIX: &str = "broker.topic-config.";
 const TOPIC_CONFIG_METADATA_RESOURCE: &str = "metadata-io:broker.topic-config";
 
-pub(crate) type TopicRegistrationFuture = Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'static>>;
+pub(crate) type TopicRegistrationFuture = Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>;
 pub(crate) type TopicRegistrationAction = Box<dyn FnOnce() -> TopicRegistrationFuture + Send + 'static>;
 
 enum TopicConfigCommand {
     Persist {
         registration: Option<TopicRegistrationAction>,
-        completion: Option<oneshot::Sender<RocketMQResult<()>>>,
+        completion: Option<oneshot::Sender<Result<()>>>,
         _pending: TopicConfigPendingGuard,
     },
     Finalize {
-        completion: oneshot::Sender<RocketMQResult<()>>,
+        completion: oneshot::Sender<Result<()>>,
     },
 }
 
@@ -207,7 +207,7 @@ impl TopicConfigCoordinator {
         }
     }
 
-    async fn ensure_started(&self) -> RocketMQResult<()> {
+    async fn ensure_started(&self) -> Result<()> {
         let mut lifecycle = self.lifecycle.lock().await;
         if lifecycle.finalized {
             return Err(topic_coordinator_error("coordinator is already finalized"));
@@ -236,53 +236,50 @@ impl TopicConfigCoordinator {
                     registration_failures,
                 ),
             )
-            .map_err(topic_coordinator_error)?;
+            .map_err(topic_coordinator_source)?;
         *self.admission.lock().await = Some(sender);
         lifecycle.run = Some(TopicConfigRun { worker });
         Ok(())
     }
 
-    pub(crate) async fn load(&self) -> RocketMQResult<bool> {
+    pub(crate) async fn load(&self) -> Result<bool> {
         self.ensure_started().await?;
         let manager = Arc::clone(&self.manager);
         self.runtime_capabilities()
             .blocking
             .spawn_io("broker.topic-config.load", move || manager.load())
             .await
-            .map_err(topic_coordinator_error)
+            .map_err(topic_coordinator_source)
     }
 
     #[cfg(feature = "rocksdb_store")]
-    pub(crate) async fn export_to_json(&self) -> RocketMQResult<()> {
+    pub(crate) async fn export_to_json(&self) -> Result<()> {
         self.ensure_started().await?;
         let manager = Arc::clone(&self.manager);
         self.runtime_capabilities()
             .blocking
             .spawn_io("broker.topic-config.export-json", move || manager.export_to_json())
             .await
-            .map_err(topic_coordinator_error)?
+            .map_err(topic_coordinator_source)?
     }
 
-    pub(crate) async fn persist_and_wait(&self) -> RocketMQResult<()> {
+    pub(crate) async fn persist_and_wait(&self) -> Result<()> {
         self.submit(None, true).await
     }
 
-    pub(crate) async fn persist_accepted(&self) -> RocketMQResult<()> {
+    pub(crate) async fn persist_accepted(&self) -> Result<()> {
         self.submit(None, false).await
     }
 
-    pub(crate) async fn persist_and_register_wait(&self, registration: TopicRegistrationAction) -> RocketMQResult<()> {
+    pub(crate) async fn persist_and_register_wait(&self, registration: TopicRegistrationAction) -> Result<()> {
         self.submit(Some(registration), true).await
     }
 
-    pub(crate) async fn persist_and_register_accepted(
-        &self,
-        registration: TopicRegistrationAction,
-    ) -> RocketMQResult<()> {
+    pub(crate) async fn persist_and_register_accepted(&self, registration: TopicRegistrationAction) -> Result<()> {
         self.submit(Some(registration), false).await
     }
 
-    async fn submit(&self, registration: Option<TopicRegistrationAction>, wait: bool) -> RocketMQResult<()> {
+    async fn submit(&self, registration: Option<TopicRegistrationAction>, wait: bool) -> Result<()> {
         self.ensure_started().await?;
         let (completion, receiver) = if wait {
             let (sender, receiver) = oneshot::channel();
@@ -459,7 +456,7 @@ async fn persist_stable(
     manager: &Arc<TopicConfigManager>,
     blocking: &BlockingExecutor,
     metadata_io: Option<&MetadataIoActor>,
-) -> RocketMQResult<()> {
+) -> Result<()> {
     loop {
         let persisted_version = if manager.supports_metadata_io_actor() {
             if let Some(metadata_io) = metadata_io {
@@ -482,7 +479,7 @@ async fn persist_stable(
                         manager_for_write.persist_latest_snapshot()
                     })
                     .await
-                    .map_err(topic_coordinator_error)??
+                    .map_err(topic_coordinator_source)??
             }
         } else {
             let manager_for_write = Arc::clone(manager);
@@ -491,7 +488,7 @@ async fn persist_stable(
                     manager_for_write.persist_latest_snapshot()
                 })
                 .await
-                .map_err(topic_coordinator_error)??
+                .map_err(topic_coordinator_source)??
         };
         if manager.data_version() == persisted_version {
             return Ok(());
@@ -499,8 +496,12 @@ async fn persist_stable(
     }
 }
 
-fn topic_coordinator_error(error: impl ToString) -> RocketMQError {
-    RocketMQError::not_initialized(format!("topic config coordinator: {}", error.to_string()))
+fn topic_coordinator_error(error: impl ToString) -> SharedError {
+    crate::broker_error::not_initialized(format!("topic config coordinator: {}", error.to_string()))
+}
+
+fn topic_coordinator_source(error: impl std::error::Error + Send + Sync + 'static) -> SharedError {
+    crate::broker_error::not_initialized_source("topic config coordinator", error)
 }
 
 #[cfg(test)]
@@ -626,8 +627,8 @@ mod tests {
                     .with_text(rocketmq_error::fields::PHASE, "connect")
                     .with_secret_presence(rocketmq_error::fields::REMOTE_ADDR_PRESENT)
                     .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT);
-                Err(rocketmq_error::RocketMQError::Shared(Arc::new(
-                    rocketmq_error::Error::caused_by(
+                Err(crate::broker_error::from_shared(Arc::new(
+                    rocketmq_error::rocketmq_error::Error::caused_by(
                         &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
                         std::io::Error::other("unavailable"),
                     )

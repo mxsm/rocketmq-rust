@@ -214,7 +214,7 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
 
     pub(super) fn build_pop_message_processor(
         &self,
-    ) -> Result<Arc<PopMessageProcessor<MS>>, rocketmq_error::RocketMQError> {
+    ) -> crate::broker_error::BrokerResult<Arc<PopMessageProcessor<MS>>> {
         let topics = self.topic_config_manager_handle();
         let subscriptions = self.subscription_group_manager().config_lookup();
         let offsets = self.consumer_offset_manager_handle().request_capability();
@@ -1020,7 +1020,10 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         }
     }
 
-    pub async fn change_schedule_service_status(&mut self, should_start: bool) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn change_schedule_service_status(
+        &mut self,
+        should_start: bool,
+    ) -> crate::broker_error::BrokerResult<()> {
         if self.is_schedule_service_start.load(Ordering::Relaxed) != should_start {
             info!("change_schedule_service_status changed to {}", should_start);
             if should_start {

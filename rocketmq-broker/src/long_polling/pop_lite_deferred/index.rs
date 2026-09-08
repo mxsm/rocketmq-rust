@@ -16,7 +16,7 @@ use std::alloc::Layout;
 use std::collections::HashMap;
 use std::collections::TryReserveError;
 use std::collections::VecDeque;
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicBool;
@@ -480,8 +480,8 @@ impl fmt::Display for PopLiteIndexOperationalError {
     }
 }
 
-impl Error for PopLiteIndexOperationalError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for PopLiteIndexOperationalError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Allocation(source) => Some(source),
             Self::AccountingOverflow | Self::SequenceExhausted => None,

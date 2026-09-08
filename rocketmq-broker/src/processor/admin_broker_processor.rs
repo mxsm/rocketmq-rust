@@ -41,12 +41,10 @@ use crate::processor::admin_broker_processor::update_broker_ha_handler::UpdateBr
 use crate::processor::admin_broker_processor::update_cold_data_flow_ctr_group_config::UpdateColdDataFlowCtrGroupConfigRequestHandler;
 use crate::processor::admin_broker_processor::update_global_white_addrs_config_request_handler::UpdateGlobalWhiteAddrsConfigRequestHandler;
 use crate::processor::admin_broker_processor::update_user_request_handler::UpdateUserRequestHandler;
-use rocketmq_error::AuthError;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_protocol::code::request_code::RequestCode;
-use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
@@ -133,7 +131,7 @@ impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome>
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome>
     where
         MS: 'static,
     {
@@ -156,7 +154,7 @@ impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
 where
     MS: BrokerAdminStore + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -180,7 +178,7 @@ impl AdminRequestMetadata {
         }
     }
 
-    fn try_from_request(request: &RemotingRequest) -> rocketmq_error::RocketMQResult<Self> {
+    fn try_from_request(request: &RemotingRequest) -> crate::broker_error::BrokerResult<Self> {
         let origin = match request.origin() {
             RequestOrigin::Network { peer } => AdminOriginFact::Network(peer.address()),
             RequestOrigin::Embedded {
@@ -237,7 +235,7 @@ enum AdminSessionFact {
 fn trusted_admin_metadata(
     origin: AdminOriginFact,
     session: AdminSessionFact,
-) -> rocketmq_error::RocketMQResult<AdminRequestMetadata> {
+) -> crate::broker_error::BrokerResult<AdminRequestMetadata> {
     match (origin, session) {
         (AdminOriginFact::Network(peer), AdminSessionFact::Network(remote_addr)) if peer == remote_addr => {
             Ok(AdminRequestMetadata {
@@ -247,7 +245,7 @@ fn trusted_admin_metadata(
         (AdminOriginFact::BrokerProxy, AdminSessionFact::Embedded) => Ok(AdminRequestMetadata {
             caller: AdminRequestCaller::BrokerProxy,
         }),
-        _ => Err(RocketMQError::invariant_violated(
+        _ => Err(crate::broker_error::invariant_violated(
             "Admin Broker request origin does not match its trusted session view",
         )),
     }
@@ -344,7 +342,7 @@ impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
         metadata: &AdminRequestMetadata,
         request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::UpdateAndCreateTopic => {
                 self.topic_request_handler
@@ -805,21 +803,14 @@ fn get_legacy_acl_cmd_response(request_code: RequestCode) -> Option<RemotingComm
     ))
 }
 
-fn map_auth_admin_error_response(response: RemotingCommand, error: RocketMQError) -> RemotingCommand {
-    if matches!(error, RocketMQError::Authentication(AuthError::UserNotFound(_))) {
-        return response
-            .set_code(ResponseCode::UserNotExist)
-            .set_remark("User does not exist");
-    }
-
-    let context = error.context();
-    let view = PublicErrorView::try_new(error.descriptor(), &context)
+fn map_auth_admin_error_response(response: RemotingCommand, error: SharedError) -> RemotingCommand {
+    let view = PublicErrorView::try_new(error.descriptor(), error.context())
         .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
     error_response(view, RemotingErrorTarget::Existing(response))
 }
 
-fn auth_admin_body_decode_error(operation: &'static str, error: RocketMQError) -> RocketMQError {
-    RocketMQError::request_body_invalid(operation, error.to_string())
+fn auth_admin_body_decode_error(operation: &'static str, error: rocketmq_error::Error) -> SharedError {
+    crate::broker_error::request_body_source(operation, error)
 }
 
 #[cfg(test)]
@@ -833,7 +824,7 @@ mod tests {
     use super::AdminRequestCaller;
     use super::AdminSessionFact;
     use bytes::Bytes;
-    use rocketmq_error::RocketMQError;
+    use rocketmq_error::SharedError;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -925,12 +916,12 @@ mod tests {
     fn auth_admin_error_response_maps_auth_and_config_errors_consistently() {
         let response = map_auth_admin_error_response(
             RemotingCommand::create_java_default_error_response_command(),
-            RocketMQError::user_not_found("alice"),
+            crate::broker_error::authentication_failed("alice"),
         );
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::UserNotExist);
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
         assert_eq!(
             response.remark().map(|remark| remark.as_str()),
-            Some("User does not exist")
+            Some("Authentication credentials are invalid")
         );
         assert!(!response.remark().is_some_and(|remark| remark.contains("alice")));
 
@@ -940,7 +931,8 @@ mod tests {
             .set_flag(0x24)
             .set_body(Bytes::from_static(b"preserved-body"));
         existing.add_ext_field("preserved-key", "preserved-value");
-        let response = map_auth_admin_error_response(existing, RocketMQError::authentication_failed("bad credentials"));
+        let response =
+            map_auth_admin_error_response(existing, crate::broker_error::authentication_failed("bad credentials"));
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
         assert_eq!(
             response.remark().map(|remark| remark.as_str()),
@@ -960,29 +952,25 @@ mod tests {
 
         let response = map_auth_admin_error_response(
             RemotingCommand::create_java_default_error_response_command(),
-            RocketMQError::ConfigInvalidValue {
-                key: "auth.authorization",
-                value: "local".to_owned(),
-                reason: "provider not ready".to_owned(),
-            },
+            crate::broker_error::configuration_invalid("auth.authorization"),
         );
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
 
         let response = map_auth_admin_error_response(
             RemotingCommand::create_java_default_error_response_command(),
-            RocketMQError::auth_config_invalid("auth.authorization", "provider not ready"),
+            crate::broker_error::auth_configuration_invalid("auth.authorization", "provider not ready"),
         );
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
 
         let response = map_auth_admin_error_response(
             RemotingCommand::create_java_default_error_response_command(),
-            RocketMQError::auth_hot_reload_failed("conf/plain_acl.yml", "watcher task failed"),
+            crate::broker_error::auth_reload_failed("conf/plain_acl.yml", "watcher task failed"),
         );
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
 
         let response = map_auth_admin_error_response(
             RemotingCommand::create_java_default_error_response_command(),
-            RocketMQError::request_body_invalid("decode", "malformed auth admin body"),
+            crate::broker_error::request_body_invalid("decode", "malformed auth admin body"),
         );
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::InvalidParameter);
     }

@@ -333,7 +333,10 @@ mod tests {
     }
 
     impl RequestProcessor for StartupProbe {
-        async fn process(&mut self, _request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        async fn process(
+            &mut self,
+            _request: &mut RemotingRequest,
+        ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(HandlerOutcome::Reply(RemotingResponse::empty_response(
                 ResponseCode::Success as i32,

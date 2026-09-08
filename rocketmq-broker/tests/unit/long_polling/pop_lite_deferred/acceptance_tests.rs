@@ -22,7 +22,6 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::key_builder::POP_ORDER_REVIVE_QUEUE;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -205,36 +204,36 @@ struct DeferredTestProcessor {
 
 fn prepared_or_test_error(
     result: Result<PopLiteDeferredPrepareOutcome, PopLiteDeferredPrepareFailure>,
-) -> rocketmq_error::RocketMQResult<PreparedPopLiteRegistration> {
+) -> crate::broker_error::BrokerResult<PreparedPopLiteRegistration> {
     match result {
         Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => Ok(*prepared),
         Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => {
-            Err(RocketMQError::illegal_argument(format!("{:?}", rejection.kind())))
+            Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())))
         }
-        Err(error) => Err(RocketMQError::illegal_argument(error.to_string())),
+        Err(error) => Err(crate::broker_error::invalid_argument(error.to_string())),
     }
 }
 
 fn registration_or_test_error(
     result: Result<PopLiteDeferredRegisterOutcome, PopLiteDeferredRegisterFailure>,
-) -> rocketmq_error::RocketMQResult<rocketmq_transport::api::DeferredRegistration> {
+) -> crate::broker_error::BrokerResult<rocketmq_transport::api::DeferredRegistration> {
     match result {
         Ok(PopLiteDeferredRegisterOutcome::Registered(registration)) => Ok(*registration),
         Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => {
-            Err(RocketMQError::illegal_argument(format!("{:?}", rejection.kind())))
+            Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())))
         }
-        Err(error) => Err(RocketMQError::illegal_argument(error.to_string())),
+        Err(error) => Err(crate::broker_error::invalid_argument(error.to_string())),
     }
 }
 
 impl RequestProcessor for DeferredTestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         let registration = registration_or_test_error(self.service.register(prepared, request))?;
         let id = registration.deferred_id();
         self.registrations
             .send(id)
-            .map_err(|_| RocketMQError::illegal_argument("PopLite registration observer closed"))?;
+            .map_err(|_| crate::broker_error::invalid_argument("PopLite registration observer closed"))?;
         Ok(HandlerOutcome::Deferred(registration))
     }
 
@@ -398,7 +397,7 @@ async fn pop_lite_deferred_event_claim_writes_one_frame() {
                             drops: body_drops_for_handler,
                         });
                         RemotingResponse::bytes(head, body)
-                            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                            .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                     },
                 )
                 .await;

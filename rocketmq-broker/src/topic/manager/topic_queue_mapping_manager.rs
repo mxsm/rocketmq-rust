@@ -16,12 +16,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::broker_error::BrokerResult as Result;
 use crate::config::broker_config::BrokerConfig;
 use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::topic_info_wrapper::topic_queue_wrapper::TopicQueueMappingSerializeWrapper;
 use rocketmq_protocol::protocol::data_version_facade::DataVersionExt;
@@ -376,12 +376,12 @@ impl TopicQueueMappingManager {
         true
     }
 
-    pub(crate) async fn persist_clean_result(&self) -> RocketMQResult<()> {
+    pub(crate) async fn persist_clean_result(&self) -> Result<()> {
         self.data_version.lock().next_version();
         self.persist_current().await
     }
 
-    pub(crate) async fn persist_current(&self) -> RocketMQResult<()> {
+    pub(crate) async fn persist_current(&self) -> Result<()> {
         let json = self.encode_pretty(true);
         if json.is_empty() {
             return Ok(());
@@ -433,8 +433,11 @@ impl TopicQueueMappingManager {
     }
 }
 
-fn topic_queue_mapping_persist_failed(path: &str, error: impl std::fmt::Display) -> RocketMQError {
-    RocketMQError::storage_write_failed(path, format!("persist clean result failed: {error}"))
+fn topic_queue_mapping_persist_failed(
+    _path: &str,
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> SharedError {
+    crate::broker_error::storage_write_source(error)
 }
 
 //Fully implemented will be removed
@@ -498,10 +501,10 @@ mod tests {
 
     #[test]
     fn topic_queue_mapping_persist_failed_uses_storage_write_error_kind() {
-        let error = topic_queue_mapping_persist_failed("topic_queue_mapping.json", "disk full");
+        let error = topic_queue_mapping_persist_failed("topic_queue_mapping.json", std::io::Error::other("disk full"));
 
         assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_WRITE_FAILED);
-        assert!(error.to_string().contains("topic_queue_mapping.json"));
+        assert!(std::error::Error::source(error.as_ref()).is_some());
     }
 
     #[tokio::test]

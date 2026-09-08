@@ -18,7 +18,7 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_store::KeyValueStore;
 use rocketmq_store::RocksDbColumnFamily;
 use rocketmq_store::RocksDbColumnFamilyConfig;
@@ -83,7 +83,7 @@ impl PopConsumerRecord {
         self.retry_flag != PopConsumerRetryType::NormalTopic.code()
     }
 
-    pub(crate) fn key_bytes(&self) -> Result<Vec<u8>, RocketMQError> {
+    pub(crate) fn key_bytes(&self) -> Result<Vec<u8>, SharedError> {
         validate_key_component("group_id", &self.group_id)?;
         validate_key_component("topic_id", &self.topic_id)?;
 
@@ -99,12 +99,14 @@ impl PopConsumerRecord {
         Ok(key)
     }
 
-    pub(crate) fn value_bytes(&self) -> Result<Vec<u8>, RocketMQError> {
-        serde_json::to_vec(self).map_err(|error| codec_error(format!("pop consumer record encode failed: {error}")))
+    pub(crate) fn value_bytes(&self) -> Result<Vec<u8>, SharedError> {
+        serde_json::to_vec(self)
+            .map_err(|error| crate::broker_error::serialization_failed("encode_pop_consumer_record", "json", error))
     }
 
-    pub(crate) fn decode(body: &[u8]) -> Result<Self, RocketMQError> {
-        serde_json::from_slice(body).map_err(|error| codec_error(format!("pop consumer record decode failed: {error}")))
+    pub(crate) fn decode(body: &[u8]) -> Result<Self, SharedError> {
+        serde_json::from_slice(body)
+            .map_err(|error| crate::broker_error::serialization_failed("decode_pop_consumer_record", "json", error))
     }
 }
 
@@ -119,11 +121,7 @@ pub(crate) struct PopConsumerProfileState {
 }
 
 impl PopConsumerRocksDbStore {
-    pub(crate) fn open(
-        path: PathBuf,
-        block_cache_size: usize,
-        write_buffer_size: usize,
-    ) -> Result<Self, RocketMQError> {
+    pub(crate) fn open(path: PathBuf, block_cache_size: usize, write_buffer_size: usize) -> Result<Self, SharedError> {
         let config = pop_rocksdb_config(path, block_cache_size, write_buffer_size);
         let store = RocksDbStore::open(config.clone())
             .map_err(broker_storage_error)?
@@ -139,7 +137,7 @@ impl PopConsumerRocksDbStore {
         &self.config.path
     }
 
-    pub(crate) fn write_records(&self, records: &[PopConsumerRecord]) -> Result<(), RocketMQError> {
+    pub(crate) fn write_records(&self, records: &[PopConsumerRecord]) -> Result<(), SharedError> {
         let pop_state_cf = RocksDbColumnFamily::PopState.name();
         let mut batch = RocksDbWriteBatch::with_capacity(records.len());
         for record in records {
@@ -150,7 +148,7 @@ impl PopConsumerRocksDbStore {
             .map_err(broker_storage_error)
     }
 
-    pub(crate) fn delete_records(&self, records: &[PopConsumerRecord]) -> Result<(), RocketMQError> {
+    pub(crate) fn delete_records(&self, records: &[PopConsumerRecord]) -> Result<(), SharedError> {
         let pop_state_cf = RocksDbColumnFamily::PopState.name();
         let mut batch = RocksDbWriteBatch::with_capacity(records.len());
         for record in records {
@@ -166,7 +164,7 @@ impl PopConsumerRocksDbStore {
         lower_bound: i64,
         upper_bound: i64,
         max_count: usize,
-    ) -> Result<Vec<PopConsumerRecord>, RocketMQError> {
+    ) -> Result<Vec<PopConsumerRecord>, SharedError> {
         if max_count == 0 || lower_bound >= upper_bound {
             return Ok(Vec::new());
         }
@@ -185,7 +183,7 @@ impl PopConsumerRocksDbStore {
             .collect()
     }
 
-    pub(crate) fn load_profile_state(&self) -> Result<PopConsumerProfileState, RocketMQError> {
+    pub(crate) fn load_profile_state(&self) -> Result<PopConsumerProfileState, SharedError> {
         let cf = RocksDbColumnFamily::PopConsumerProfile.name();
         let marker = self
             .store
@@ -210,7 +208,7 @@ impl PopConsumerRocksDbStore {
         marker: Vec<u8>,
         key: Vec<u8>,
         value: Vec<u8>,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), SharedError> {
         let cf = RocksDbColumnFamily::PopConsumerProfile.name();
         let mut batch = RocksDbWriteBatch::with_capacity(2);
         batch.put_cf(cf, POP_CONSUMER_PROFILE_MARKER_KEY.to_vec(), marker);
@@ -222,7 +220,7 @@ impl PopConsumerRocksDbStore {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn write_profile_marker_fixture(&self, marker: Vec<u8>) -> Result<(), RocketMQError> {
+    pub(crate) fn write_profile_marker_fixture(&self, marker: Vec<u8>) -> Result<(), SharedError> {
         self.store
             .put_cf(
                 StoreOperation::Admin,
@@ -237,7 +235,7 @@ impl PopConsumerRocksDbStore {
         self.store.close();
     }
 
-    fn persist_profile_format_inventory(&self) -> Result<(), RocketMQError> {
+    fn persist_profile_format_inventory(&self) -> Result<(), SharedError> {
         let store_root = self.config.path.parent().ok_or_else(|| {
             codec_error(format!(
                 "POP RocksDB path has no Store root: {}",
@@ -247,8 +245,9 @@ impl PopConsumerRocksDbStore {
         let inventory = store_root.join(STORAGE_FORMAT_INVENTORY);
         match fs::read(&inventory) {
             Ok(bytes) => {
-                let value: serde_json::Value = serde_json::from_slice(&bytes)
-                    .map_err(|error| codec_error(format!("storage format inventory is invalid: {error}")))?;
+                let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+                    crate::broker_error::serialization_failed("decode_storage_format_inventory", "json", error)
+                })?;
                 if value
                     .pointer("/popConsumerProfile/declared")
                     .and_then(serde_json::Value::as_bool)
@@ -261,30 +260,20 @@ impl PopConsumerRocksDbStore {
                 ));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(codec_error(format!(
-                    "read storage format inventory {}: {error}",
-                    inventory.display()
-                )));
-            }
+            Err(error) => return Err(crate::broker_error::storage_read_source(error)),
         }
 
         let parent = inventory
             .parent()
             .ok_or_else(|| codec_error("storage format inventory has no parent"))?;
-        fs::create_dir_all(parent).map_err(|error| {
-            codec_error(format!(
-                "create storage format inventory directory {}: {error}",
-                parent.display()
-            ))
-        })?;
+        fs::create_dir_all(parent).map_err(crate::broker_error::storage_write_source)?;
         let temporary = parent.join(format!(".storage-format-inventory.{}.tmp", std::process::id()));
         let body = b"{\n  \"popConsumerProfile\": {\n    \"declared\": true\n  }\n}\n";
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temporary)
-            .map_err(|error| codec_error(format!("create {}: {error}", temporary.display())))?;
+            .map_err(crate::broker_error::storage_write_source)?;
         let write_result = (|| -> std::io::Result<()> {
             file.write_all(body)?;
             file.sync_all()?;
@@ -295,29 +284,22 @@ impl PopConsumerRocksDbStore {
             if inventory.is_file() {
                 return self.persist_profile_format_inventory();
             }
-            return Err(codec_error(format!(
-                "publish storage format inventory {}: {error}",
-                inventory.display()
-            )));
+            return Err(crate::broker_error::storage_write_source(error));
         }
         Ok(())
     }
 }
 
-pub(super) fn broker_storage_error(source: StoreError) -> RocketMQError {
-    RocketMQError::internal("broker POP RocksDB operation failed", source)
+pub(super) fn broker_storage_error(source: StoreError) -> SharedError {
+    crate::broker_error::internal("broker POP RocksDB operation failed", source)
 }
 
-fn invalid_rocksdb_configuration() -> RocketMQError {
-    RocketMQError::ConfigInvalidValue {
-        key: "popRocksdbConfig",
-        value: "redacted".to_owned(),
-        reason: "POP RocksDB configuration is invalid".to_owned(),
-    }
+fn invalid_rocksdb_configuration() -> SharedError {
+    crate::broker_error::configuration_invalid("popRocksdbConfig")
 }
 
-fn codec_error(reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::deserialization_failed("POP RocksDB storage", reason.into())
+fn codec_error(reason: impl Into<String>) -> SharedError {
+    crate::broker_error::serialization_failure("POP RocksDB storage", reason.into())
 }
 
 fn pop_rocksdb_config(path: PathBuf, block_cache_size: usize, write_buffer_size: usize) -> RocksDbConfig {
@@ -351,20 +333,12 @@ fn pop_column_family_config(
     RocksDbColumnFamilyConfig::pop(name, block_cache_size, write_buffer_size)
 }
 
-fn validate_key_component(field: &'static str, value: &str) -> Result<(), RocketMQError> {
+fn validate_key_component(field: &'static str, value: &str) -> Result<(), SharedError> {
     if value.is_empty() {
-        return Err(RocketMQError::ConfigInvalidValue {
-            key: field,
-            value: value.to_string(),
-            reason: "Pop consumer record key component must not be empty".to_string(),
-        });
+        return Err(crate::broker_error::configuration_invalid(field));
     }
     if value.as_bytes().contains(&POP_RECORD_KEY_SEPARATOR) {
-        return Err(RocketMQError::ConfigInvalidValue {
-            key: field,
-            value: value.to_string(),
-            reason: "Pop consumer record key component must not contain '@'".to_string(),
-        });
+        return Err(crate::broker_error::configuration_invalid(field));
     }
     Ok(())
 }

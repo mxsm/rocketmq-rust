@@ -112,7 +112,7 @@ pub struct PullMessageProcessor<MS: BrokerReadStore> {
     pull_deferred_service: OnceLock<Arc<PullDeferredService>>,
 }
 
-fn pull_command(response: RemotingCommand) -> rocketmq_error::RocketMQResult<PullMessageResult> {
+fn pull_command(response: RemotingCommand) -> crate::broker_error::BrokerResult<PullMessageResult> {
     Ok(PullMessageResult::Reply(BrokerResponseParts::command(response)?))
 }
 
@@ -128,7 +128,7 @@ impl<MS> RequestProcessor for PullMessageProcessor<MS>
 where
     MS: BrokerReadStore + Send + Sync + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -141,7 +141,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let request_code = RequestCode::from(request.original_identity().original_code());
         info!(?request_code, "PullMessageProcessor received a request");
         match request_code {
@@ -804,7 +804,7 @@ where
         &self,
         request_code: RequestCode,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let effective_peer = trusted_pull_peer(request)?;
         let session_id = request.session().id();
         let request_header = request
@@ -883,7 +883,7 @@ where
         &self,
         opaque: i32,
         rejection: crate::long_polling::pull_deferred::PullDeferredRegisterRejection,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         use crate::long_polling::pull_deferred::PullDeferredRegisterRejection;
 
         match rejection {
@@ -917,7 +917,7 @@ where
         &self,
         opaque: i32,
         error: crate::long_polling::pull_deferred::PullDeferredRegisterError,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         use crate::long_polling::pull_deferred::PullDeferredRegisterError;
 
         match error {
@@ -931,17 +931,16 @@ where
                 ))?
                 .into_handler_outcome()
             }
-            PullDeferredRegisterError::RegistryContract(violation) => Err(rocketmq_error::RocketMQError::internal(
+            PullDeferredRegisterError::RegistryContract(violation) => Err(crate::broker_error::internal(
                 "register deferred Pull request",
                 violation,
             )),
-            PullDeferredRegisterError::RegistryOperational(error) => Err(rocketmq_error::RocketMQError::internal(
-                "register deferred Pull request",
-                error,
-            )),
+            PullDeferredRegisterError::RegistryOperational(error) => {
+                Err(crate::broker_error::internal("register deferred Pull request", error))
+            }
             PullDeferredRegisterError::Contract { violation, parts } => {
                 drop(parts);
-                Err(rocketmq_error::RocketMQError::internal(
+                Err(crate::broker_error::internal(
                     "register deferred Pull request",
                     violation,
                 ))
@@ -959,7 +958,7 @@ where
         hook_metadata: &PullHookMetadata,
         broadcast_client_resolver: &PullBroadcastClientResolver<'_>,
         broker_allow_suspend: bool,
-    ) -> rocketmq_error::RocketMQResult<PullMessageResult> {
+    ) -> crate::broker_error::BrokerResult<PullMessageResult> {
         let begin_time_mills = current_millis();
         let response = self
             .context
@@ -1308,19 +1307,16 @@ where
         &self,
         request_header: &PullMessageRequestHeader,
         session_id: SessionId,
-    ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
+    ) -> crate::broker_error::BrokerResult<Option<CheetahString>> {
         self.resolve_broadcast_client_id_with(request_header, || {
             let lookup = self.session_client_lookup.get().ok_or_else(|| {
-                rocketmq_error::RocketMQError::internal(
-                    "resume-pull-client-lookup",
-                    PullClientIdentityError::LookupUnavailable,
-                )
+                crate::broker_error::internal("resume-pull-client-lookup", PullClientIdentityError::LookupUnavailable)
             })?;
             lookup
                 .client_id(session_id, &request_header.consumer_group)
                 .map(Some)
                 .ok_or_else(|| {
-                    rocketmq_error::RocketMQError::internal(
+                    crate::broker_error::internal(
                         "resume-pull-client-lookup",
                         PullClientIdentityError::RegistrationMissing,
                     )
@@ -1331,8 +1327,8 @@ where
     fn resolve_broadcast_client_id_with(
         &self,
         request_header: &PullMessageRequestHeader,
-        resolve_normal_client: impl FnOnce() -> rocketmq_error::RocketMQResult<Option<CheetahString>>,
-    ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
+        resolve_normal_client: impl FnOnce() -> crate::broker_error::BrokerResult<Option<CheetahString>>,
+    ) -> crate::broker_error::BrokerResult<Option<CheetahString>> {
         if !self.context.policy().enable_broadcast_offset_store {
             return Ok(None);
         }
@@ -1351,7 +1347,7 @@ where
     }
 }
 
-fn trusted_pull_peer(request: &RemotingRequest) -> rocketmq_error::RocketMQResult<std::net::SocketAddr> {
+fn trusted_pull_peer(request: &RemotingRequest) -> crate::broker_error::BrokerResult<std::net::SocketAddr> {
     match (request.origin(), request.session()) {
         (
             RequestOrigin::Network { peer },
@@ -1361,7 +1357,7 @@ fn trusted_pull_peer(request: &RemotingRequest) -> rocketmq_error::RocketMQResul
                 ..
             },
         ) if peer.address() == *remote_addr => Ok(*remote_addr),
-        _ => Err(rocketmq_error::RocketMQError::invariant_violated(
+        _ => Err(crate::broker_error::invariant_violated(
             "Pull request origin does not match its network session view",
         )),
     }

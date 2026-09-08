@@ -237,7 +237,7 @@ impl SubscriptionGroupManager {
     }
 
     /// Persists a supervised mutation durably so its wire outcome can report applied truth.
-    pub(crate) async fn persist_supervised_snapshot(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub(crate) async fn persist_supervised_snapshot(&self) -> crate::broker_error::BrokerResult<()> {
         let Some(metadata_io) = self.metadata_io.as_ref() else {
             return self.persist();
         };
@@ -246,7 +246,7 @@ impl SubscriptionGroupManager {
         }
         let content = self.encode_pretty(true);
         if content.is_empty() {
-            return Err(rocketmq_error::RocketMQError::storage_write_failed(
+            return Err(crate::broker_error::storage_write_failed(
                 "subscription-group",
                 "encoded supervised snapshot is empty",
             ));
@@ -286,17 +286,13 @@ impl SubscriptionGroupManager {
     }
 
     #[cfg(feature = "rocksdb_store")]
-    pub(crate) fn export_to_json(&self) -> Result<(), rocketmq_error::RocketMQError> {
+    pub(crate) fn export_to_json(&self) -> crate::broker_error::BrokerResult<()> {
         let json = self.encode_pretty(true);
         if json.is_empty() {
             return Ok(());
         }
-        file_utils::string_to_file(json.as_str(), self.config_file_path().as_str()).map_err(|error| {
-            rocketmq_error::RocketMQError::storage_write_failed(
-                "rocksdb-subscription-group",
-                format!("export subscription group config to json failed: {error}"),
-            )
-        })
+        file_utils::string_to_file(json.as_str(), self.config_file_path().as_str())
+            .map_err(crate::broker_error::storage_write_source)
     }
 
     /// Initialize system default consumer groups
@@ -589,7 +585,7 @@ impl SubscriptionGroupManager {
     }
 
     #[cfg(feature = "rocksdb_store")]
-    fn persist_to_rocksdb(&self) -> Result<(), rocketmq_error::RocketMQError> {
+    fn persist_to_rocksdb(&self) -> crate::broker_error::BrokerResult<()> {
         let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
             return Ok(());
         };
@@ -598,12 +594,7 @@ impl SubscriptionGroupManager {
             .iter()
             .map(|entry| serde_json::to_vec(entry.value().as_ref()).map(|body| (entry.key().as_bytes().to_vec(), body)))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| {
-                rocketmq_error::RocketMQError::storage_write_failed(
-                    "rocksdb-subscription-group",
-                    format!("subscription group encode failed: {error}"),
-                )
-            })?;
+            .map_err(crate::broker_error::storage_write_source)?;
         rocksdb_config_manager.batch_put_with_wal(&records)?;
         self.persist_forbidden_to_rocksdb(rocksdb_config_manager)?;
         rocksdb_config_manager.set_kv_data_version(self.data_version.read().clone())?;
@@ -614,19 +605,14 @@ impl SubscriptionGroupManager {
     fn persist_forbidden_to_rocksdb(
         &self,
         rocksdb_config_manager: &RocksDbBrokerConfigManager,
-    ) -> Result<(), rocketmq_error::RocketMQError> {
+    ) -> crate::broker_error::BrokerResult<()> {
         for entry in self.forbidden_table.iter() {
             let topics = entry
                 .value()
                 .iter()
                 .map(|topic_entry| (topic_entry.key().clone(), *topic_entry.value()))
                 .collect::<HashMap<_, _>>();
-            let body = serde_json::to_string(&topics).map_err(|error| {
-                rocketmq_error::RocketMQError::storage_write_failed(
-                    "rocksdb-subscription-group",
-                    format!("forbidden table encode failed: {error}"),
-                )
-            })?;
+            let body = serde_json::to_string(&topics).map_err(crate::broker_error::storage_write_source)?;
             rocksdb_config_manager.put_cf_string("forbidden", entry.key().as_str(), &body)?;
         }
         Ok(())
@@ -636,7 +622,7 @@ impl SubscriptionGroupManager {
     fn flush_rocksdb_config_if_needed(
         &self,
         rocksdb_config_manager: &RocksDbBrokerConfigManager,
-    ) -> Result<(), rocketmq_error::RocketMQError> {
+    ) -> crate::broker_error::BrokerResult<()> {
         if self.config.real_time_persist_rocksdb_config {
             rocksdb_config_manager.flush_wal()?;
         }
@@ -644,7 +630,7 @@ impl SubscriptionGroupManager {
     }
 
     #[cfg(feature = "rocksdb_store")]
-    fn delete_group_from_rocksdb(&self, group_name: &str) -> Result<(), rocketmq_error::RocketMQError> {
+    fn delete_group_from_rocksdb(&self, group_name: &str) -> crate::broker_error::BrokerResult<()> {
         let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
             return Ok(());
         };
@@ -702,7 +688,7 @@ impl ConfigManager for SubscriptionGroupManager {
         self.load_from_config_file()
     }
 
-    fn persist(&self) -> rocketmq_error::RocketMQResult<()> {
+    fn persist(&self) -> crate::broker_error::BrokerResult<()> {
         #[cfg(feature = "rocksdb_store")]
         if self.rocksdb_config_manager.is_some() {
             return self.persist_to_rocksdb();

@@ -17,11 +17,9 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::broker_error::BrokerResult as Result;
 use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::SerializationError;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_protocol::protocol::body::epoch_entry_cache::EpochEntry;
@@ -323,7 +321,7 @@ impl ReplicasManager {
         })
     }
 
-    pub fn validate_registration_state(&self, config: &BrokerConfig) -> RocketMQResult<()> {
+    pub fn validate_registration_state(&self, config: &BrokerConfig) -> Result<()> {
         validate_metadata_record(self.metadata.as_ref(), config, "broker metadata")?;
         validate_temp_metadata_record(self.temp_metadata.as_ref(), config)?;
         Ok(())
@@ -333,7 +331,7 @@ impl ReplicasManager {
         &self,
         config: &BrokerConfig,
         next_broker_id: Option<u64>,
-    ) -> RocketMQResult<ControllerBrokerIdPersistencePlan> {
+    ) -> Result<ControllerBrokerIdPersistencePlan> {
         if !self.needs_broker_id_application() {
             return Ok(ControllerBrokerIdPersistencePlan::UseCurrent(self.broker_controller_id));
         }
@@ -346,7 +344,7 @@ impl ReplicasManager {
         }
 
         let broker_id = next_broker_id.ok_or_else(|| {
-            RocketMQError::illegal_argument(
+            crate::broker_error::invalid_argument(
                 "controller broker id preparation requires next broker id when no pending registration exists",
             )
         })?;
@@ -356,8 +354,8 @@ impl ReplicasManager {
             broker_id,
             register_check_code: format!("{};{}", self.broker_address, current_millis()),
         };
-        let content =
-            serde_json::to_vec(&record).map_err(|error| SerializationError::source("serialize", "JSON", error))?;
+        let content = serde_json::to_vec(&record)
+            .map_err(|error| crate::broker_error::serialization_failed("serialize", "JSON", error))?;
         Ok(ControllerBrokerIdPersistencePlan::PersistPending {
             target: self.temp_metadata_path.clone(),
             content,
@@ -368,10 +366,10 @@ impl ReplicasManager {
     pub(crate) fn publish_pending_broker_id(
         &mut self,
         record: TempBrokerMetadataRecord,
-    ) -> RocketMQResult<ControllerBrokerIdAction> {
+    ) -> Result<ControllerBrokerIdAction> {
         if let Some(existing) = self.temp_metadata.as_ref() {
             if existing != &record {
-                return Err(RocketMQError::illegal_argument(
+                return Err(crate::broker_error::invalid_argument(
                     "controller broker id pending metadata changed during durable persistence",
                 ));
             }
@@ -389,7 +387,7 @@ impl ReplicasManager {
     pub(crate) fn plan_controller_broker_id_commit(
         &self,
         config: &BrokerConfig,
-    ) -> RocketMQResult<Option<ControllerBrokerIdCommitSnapshot>> {
+    ) -> Result<Option<ControllerBrokerIdCommitSnapshot>> {
         let Some(temp_metadata) = self.temp_metadata.as_ref() else {
             return Ok(None);
         };
@@ -401,19 +399,19 @@ impl ReplicasManager {
         Ok(Some(ControllerBrokerIdCommitSnapshot {
             target: self.metadata_path.clone(),
             content: serde_json::to_vec(&record)
-                .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+                .map_err(|error| crate::broker_error::serialization_failed("serialize", "JSON", error))?,
             record,
             temporary: self.temp_metadata_path.clone(),
         }))
     }
 
-    pub(crate) fn publish_committed_broker_id(&mut self, record: BrokerMetadataRecord) -> RocketMQResult<u64> {
+    pub(crate) fn publish_committed_broker_id(&mut self, record: BrokerMetadataRecord) -> Result<u64> {
         if self
             .temp_metadata
             .as_ref()
             .is_some_and(|temporary| temporary.broker_id != record.broker_id)
         {
-            return Err(RocketMQError::illegal_argument(
+            return Err(crate::broker_error::invalid_argument(
                 "controller broker id changed during durable commit",
             ));
         }
@@ -433,7 +431,7 @@ impl ReplicasManager {
         };
     }
 
-    pub fn create_temp_metadata(&mut self, config: &BrokerConfig, broker_id: u64) -> RocketMQResult<()> {
+    pub fn create_temp_metadata(&mut self, config: &BrokerConfig, broker_id: u64) -> Result<()> {
         let temp_metadata = TempBrokerMetadataRecord {
             cluster_name: config.broker_identity.broker_cluster_name.to_string(),
             broker_name: config.broker_identity.broker_name.to_string(),
@@ -447,7 +445,7 @@ impl ReplicasManager {
         Ok(())
     }
 
-    pub fn clear_temp_metadata(&mut self) -> RocketMQResult<()> {
+    pub fn clear_temp_metadata(&mut self) -> Result<()> {
         delete_metadata_file(&self.temp_metadata_path)?;
         self.temp_metadata = None;
         self.register_state = if self.metadata.is_some() {
@@ -458,9 +456,9 @@ impl ReplicasManager {
         Ok(())
     }
 
-    pub fn commit_temp_metadata(&mut self, config: &BrokerConfig) -> RocketMQResult<u64> {
+    pub fn commit_temp_metadata(&mut self, config: &BrokerConfig) -> Result<u64> {
         let Some(temp_metadata) = self.temp_metadata.as_ref() else {
-            return Err(RocketMQError::illegal_argument(
+            return Err(crate::broker_error::invalid_argument(
                 "commit_temp_metadata called without temp metadata",
             ));
         };
@@ -486,14 +484,14 @@ impl ReplicasManager {
         &mut self,
         config: &BrokerConfig,
         next_broker_id: Option<u64>,
-    ) -> RocketMQResult<ControllerBrokerIdAction> {
+    ) -> Result<ControllerBrokerIdAction> {
         if !self.needs_broker_id_application() {
             return Ok(ControllerBrokerIdAction::UseCurrent(self.broker_controller_id));
         }
 
         if self.pending_registration().is_none() {
             let next_broker_id = next_broker_id.ok_or_else(|| {
-                RocketMQError::illegal_argument(
+                crate::broker_error::invalid_argument(
                     "controller broker id preparation requires next broker id when no pending registration exists",
                 )
             })?;
@@ -501,7 +499,9 @@ impl ReplicasManager {
         }
 
         let (broker_id, register_check_code) = self.pending_registration().ok_or_else(|| {
-            RocketMQError::illegal_argument("replicas manager did not retain pending controller registration metadata")
+            crate::broker_error::invalid_argument(
+                "replicas manager did not retain pending controller registration metadata",
+            )
         })?;
         Ok(ControllerBrokerIdAction::ApplyBrokerId {
             broker_id,
@@ -509,7 +509,7 @@ impl ReplicasManager {
         })
     }
 
-    pub fn complete_controller_broker_id_application(&mut self, config: &BrokerConfig) -> RocketMQResult<u64> {
+    pub fn complete_controller_broker_id_application(&mut self, config: &BrokerConfig) -> Result<u64> {
         if self.temp_metadata.is_some() {
             self.commit_temp_metadata(config)
         } else {
@@ -572,26 +572,26 @@ impl ReplicasManager {
         new_master_epoch: Option<i32>,
         sync_state_set_epoch: Option<i32>,
         sync_state_set: Option<&HashSet<i64>>,
-    ) -> RocketMQResult<RoleChangeOutcome> {
+    ) -> Result<RoleChangeOutcome> {
         if let Some(controller_leader_address) = controller_leader_address {
             self.set_controller_leader_address(controller_leader_address);
         }
 
         let Some(new_master_epoch_value) = new_master_epoch else {
-            return Err(RocketMQError::illegal_argument(
+            return Err(crate::broker_error::invalid_argument(
                 "notify broker role change missing master epoch",
             ));
         };
         let Some(master_broker_id) = new_master_broker_id else {
-            return Err(RocketMQError::illegal_argument(
+            return Err(crate::broker_error::invalid_argument(
                 "notify broker role change missing master broker id",
             ));
         };
         let new_master_epoch = MasterEpoch::try_from(new_master_epoch_value).map_err(|_| {
-            RocketMQError::illegal_argument("notify broker role change carries an invalid master epoch")
+            crate::broker_error::invalid_argument("notify broker role change carries an invalid master epoch")
         })?;
         let requested_authority = WriteAuthority::try_from_u64(master_broker_id, new_master_epoch).map_err(|_| {
-            RocketMQError::illegal_argument("notify broker role change carries an invalid master broker id")
+            crate::broker_error::invalid_argument("notify broker role change carries an invalid master broker id")
         })?;
 
         if let Some(current_authority) = self.write_authority {
@@ -601,7 +601,7 @@ impl ReplicasManager {
             if requested_authority.master_epoch() == current_authority.master_epoch()
                 && requested_authority != current_authority
             {
-                return Err(RocketMQError::illegal_argument(
+                return Err(crate::broker_error::invalid_argument(
                     "notify broker role change conflicts with the installed authority at the same epoch",
                 ));
             }
@@ -609,7 +609,9 @@ impl ReplicasManager {
 
         let next_sync_state_set_epoch = match sync_state_set_epoch {
             Some(epoch) => Some(SyncStateSetEpoch::try_from(epoch).map_err(|_| {
-                RocketMQError::illegal_argument("notify broker role change carries an invalid sync-state-set epoch")
+                crate::broker_error::invalid_argument(
+                    "notify broker role change carries an invalid sync-state-set epoch",
+                )
             })?),
             None => self.sync_state_set_epoch,
         };
@@ -618,22 +620,22 @@ impl ReplicasManager {
             .zip(next_sync_state_set_epoch)
             .is_some_and(|(current, next)| next < current)
         {
-            return Err(RocketMQError::illegal_argument(
+            return Err(crate::broker_error::invalid_argument(
                 "notify broker role change carries a stale sync-state-set epoch",
             ));
         }
         let sync_state_set_changed = next_sync_state_set_epoch > self.sync_state_set_epoch;
         let next_sync_state_set = if sync_state_set_changed {
             let members = sync_state_set.ok_or_else(|| {
-                RocketMQError::illegal_argument(
+                crate::broker_error::invalid_argument(
                     "notify broker role change advances sync-state-set epoch without membership",
                 )
             })?;
             let validated = HaSyncStateSet::try_new(members.iter().copied()).map_err(|_| {
-                RocketMQError::illegal_argument("notify broker role change carries an invalid sync-state set")
+                crate::broker_error::invalid_argument("notify broker role change carries an invalid sync-state set")
             })?;
             if !validated.contains(requested_authority.broker_id()) {
-                return Err(RocketMQError::illegal_argument(
+                return Err(crate::broker_error::invalid_argument(
                     "notify broker role change sync-state set does not contain the authorized master",
                 ));
             }
@@ -654,7 +656,9 @@ impl ReplicasManager {
             (BrokerReplicaRole::Master, self.broker_address.clone())
         } else {
             let master_address = new_master_address.ok_or_else(|| {
-                RocketMQError::illegal_argument("notify broker role change missing master address for slave transition")
+                crate::broker_error::invalid_argument(
+                    "notify broker role change missing master address for slave transition",
+                )
             })?;
             (BrokerReplicaRole::Slave, master_address)
         };
@@ -739,20 +743,16 @@ impl ReplicasManager {
     }
 }
 
-fn validate_metadata_record(
-    metadata: Option<&BrokerMetadataRecord>,
-    config: &BrokerConfig,
-    label: &str,
-) -> RocketMQResult<()> {
+fn validate_metadata_record(metadata: Option<&BrokerMetadataRecord>, config: &BrokerConfig, label: &str) -> Result<()> {
     if let Some(metadata) = metadata {
         if metadata.cluster_name != config.broker_identity.broker_cluster_name.as_str() {
-            return Err(RocketMQError::illegal_argument(format!(
+            return Err(crate::broker_error::invalid_argument(format!(
                 "{} cluster mismatch: persisted={}, config={}",
                 label, metadata.cluster_name, config.broker_identity.broker_cluster_name
             )));
         }
         if metadata.broker_name != config.broker_identity.broker_name.as_str() {
-            return Err(RocketMQError::illegal_argument(format!(
+            return Err(crate::broker_error::invalid_argument(format!(
                 "{} broker name mismatch: persisted={}, config={}",
                 label, metadata.broker_name, config.broker_identity.broker_name
             )));
@@ -761,19 +761,16 @@ fn validate_metadata_record(
     Ok(())
 }
 
-fn validate_temp_metadata_record(
-    metadata: Option<&TempBrokerMetadataRecord>,
-    config: &BrokerConfig,
-) -> RocketMQResult<()> {
+fn validate_temp_metadata_record(metadata: Option<&TempBrokerMetadataRecord>, config: &BrokerConfig) -> Result<()> {
     if let Some(metadata) = metadata {
         if metadata.cluster_name != config.broker_identity.broker_cluster_name.as_str() {
-            return Err(RocketMQError::illegal_argument(format!(
+            return Err(crate::broker_error::invalid_argument(format!(
                 "temp broker metadata cluster mismatch: persisted={}, config={}",
                 metadata.cluster_name, config.broker_identity.broker_cluster_name
             )));
         }
         if metadata.broker_name != config.broker_identity.broker_name.as_str() {
-            return Err(RocketMQError::illegal_argument(format!(
+            return Err(crate::broker_error::invalid_argument(format!(
                 "temp broker metadata broker name mismatch: persisted={}, config={}",
                 metadata.broker_name, config.broker_identity.broker_name
             )));
@@ -806,7 +803,7 @@ fn parse_controller_addresses(controller_addr: &CheetahString) -> Vec<CheetahStr
         .collect()
 }
 
-fn read_metadata_file<T>(path: &Path) -> RocketMQResult<Option<T>>
+fn read_metadata_file<T>(path: &Path) -> Result<Option<T>>
 where
     T: for<'de> Deserialize<'de>,
 {
@@ -814,45 +811,29 @@ where
         Ok(content) if content.trim().is_empty() => Ok(None),
         Ok(content) => serde_json::from_str(&content)
             .map(Some)
-            .map_err(|error| RocketMQError::illegal_argument(format!("decode metadata failed: {}", error))),
+            .map_err(crate::broker_error::invalid_argument_source),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(RocketMQError::illegal_argument(format!(
-            "read metadata file failed: {}",
-            error
-        ))),
+        Err(error) => Err(crate::broker_error::invalid_argument_source(error)),
     }
 }
 
-fn write_metadata_file<T>(path: &Path, value: &T) -> RocketMQResult<()>
+fn write_metadata_file<T>(path: &Path, value: &T) -> Result<()>
 where
     T: Serialize,
 {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            RocketMQError::illegal_argument(format!(
-                "create metadata directory failed for {}: {}",
-                parent.display(),
-                error
-            ))
-        })?;
+        fs::create_dir_all(parent).map_err(crate::broker_error::invalid_argument_source)?;
     }
-    let content = serde_json::to_string(value)
-        .map_err(|error| RocketMQError::illegal_argument(format!("encode metadata failed: {}", error)))?;
-    fs::write(path, content).map_err(|error| {
-        RocketMQError::illegal_argument(format!("write metadata file failed for {}: {}", path.display(), error))
-    })?;
+    let content = serde_json::to_string(value).map_err(crate::broker_error::invalid_argument_source)?;
+    fs::write(path, content).map_err(crate::broker_error::invalid_argument_source)?;
     Ok(())
 }
 
-fn delete_metadata_file(path: &Path) -> RocketMQResult<()> {
+fn delete_metadata_file(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(RocketMQError::illegal_argument(format!(
-            "delete metadata file failed for {}: {}",
-            path.display(),
-            error
-        ))),
+        Err(error) => Err(crate::broker_error::invalid_argument_source(error)),
     }
 }
 

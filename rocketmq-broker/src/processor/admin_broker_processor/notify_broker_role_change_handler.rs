@@ -39,7 +39,7 @@ impl NotifyBrokerRoleChangeHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_success_response_command();
         let Some(controller_leader_address) = metadata.network_remote_addr() else {
             warn!("Reject embedded notifyBrokerRoleChanged because the controller network peer is unavailable");

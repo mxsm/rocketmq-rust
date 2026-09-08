@@ -248,7 +248,7 @@ impl PopLiteDeferredService {
     ) -> Result<DeferredResumeOutcome, TransportError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason, LiteEventBatchExecution) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
     {
         let PopLiteEventClaim {
             claimed,
@@ -292,7 +292,7 @@ impl PopLiteDeferredService {
     ) -> Result<DeferredResumeOutcome, TransportError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
     {
         let retained = handler_retained.dynamic_bytes();
         let observations = Arc::clone(&self.observations);
@@ -314,7 +314,7 @@ impl PopLiteDeferredService {
     ) -> Result<DeferredResumeSubmitOutcome, TransportError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason, LiteEventBatchExecution) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
     {
         let PopLiteEventClaim {
             claimed,
@@ -357,7 +357,7 @@ impl PopLiteDeferredService {
     ) -> Result<DeferredResumeSubmitOutcome, TransportError>
     where
         F: FnOnce(ResumePopLite, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
     {
         let retained = handler_retained.dynamic_bytes();
         let accepted = ObservationGuard::accepted(Arc::clone(&self.observations), retained);

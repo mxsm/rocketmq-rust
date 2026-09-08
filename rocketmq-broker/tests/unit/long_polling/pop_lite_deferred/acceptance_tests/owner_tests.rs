@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_transport::api::AdmissionController;
@@ -82,7 +81,7 @@ async fn pop_lite_deferred_execution_admission_rejects_before_processor_and_writ
                     RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                         ResponseCode::Success,
                     ))
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                    .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                 },
             )
             .await
@@ -161,7 +160,7 @@ async fn pop_lite_deferred_handler_failure_drops_body_owner_once_and_rolls_back_
                         body: b"owner-backed-pop-lite-failure".to_vec(),
                         drops: owner_drops_for_handler,
                     });
-                    Err::<RemotingResponse, _>(RocketMQError::illegal_argument("PopLite owner failure"))
+                    Err::<RemotingResponse, _>(crate::broker_error::invalid_argument("PopLite owner failure"))
                 },
             )
             .await

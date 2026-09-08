@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use rocketmq_auth::UserType;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
@@ -40,7 +40,7 @@ impl CreateUserRequestHandler {
         &self,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<CreateUserRequestHeader>()?;
         let response = RemotingCommand::create_java_default_error_response_command();
 
@@ -86,7 +86,7 @@ impl CreateUserRequestHandler {
         }
     }
 
-    async fn is_not_super_user_login(&self, request: &RemotingCommand) -> rocketmq_error::RocketMQResult<bool> {
+    async fn is_not_super_user_login(&self, request: &RemotingCommand) -> crate::broker_error::BrokerResult<bool> {
         let Some(access_key) = request.ext_fields().and_then(|fields| fields.get("AccessKey")) else {
             return Ok(false);
         };
@@ -95,6 +95,6 @@ impl CreateUserRequestHandler {
     }
 }
 
-fn map_error_response(response: RemotingCommand, error: RocketMQError) -> RemotingCommand {
+fn map_error_response(response: RemotingCommand, error: SharedError) -> RemotingCommand {
     super::map_auth_admin_error_response(response, error)
 }

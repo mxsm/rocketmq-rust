@@ -29,7 +29,7 @@ use crate::long_polling::pull_deferred::PullSuspendTiming;
 use crate::processor::response_assembly::BrokerResponseParts;
 
 pub(crate) type PullBroadcastClientResolver<'a> =
-    dyn Fn(&PullMessageRequestHeader) -> rocketmq_error::RocketMQResult<Option<CheetahString>> + Send + Sync + 'a;
+    dyn Fn(&PullMessageRequestHeader) -> crate::broker_error::BrokerResult<Option<CheetahString>> + Send + Sync + 'a;
 
 /// Channel-free facts required to compose one Pull response.
 pub(crate) struct PullResponseContext<'a> {
@@ -98,7 +98,7 @@ pub(crate) trait PullMessageResultHandler: Sync + Send + Any + 'static {
         response: RemotingCommand,
         mapping_context: TopicQueueMappingContext,
         response_context: PullResponseContext<'_>,
-    ) -> rocketmq_error::RocketMQResult<PullMessageResult>;
+    ) -> crate::broker_error::BrokerResult<PullMessageResult>;
 
     /// Returns a mutable reference to `self` as a trait object of type `Any`.
     ///

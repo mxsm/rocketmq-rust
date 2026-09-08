@@ -22,7 +22,7 @@ struct ExpiryAttachmentFaultProcessor {
 }
 
 impl RequestProcessor for ExpiryAttachmentFaultProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         let rejection = match self.service.register(prepared, request) {
             Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => rejection,
@@ -34,8 +34,10 @@ impl RequestProcessor for ExpiryAttachmentFaultProcessor {
         drop(rejection);
         self.observed
             .send(kind)
-            .map_err(|_| RocketMQError::illegal_argument("post-take expiry observer closed"))?;
-        Err(RocketMQError::illegal_argument("injected post-take expiry rejection"))
+            .map_err(|_| crate::broker_error::invalid_argument("post-take expiry observer closed"))?;
+        Err(crate::broker_error::invalid_argument(
+            "injected post-take expiry rejection",
+        ))
     }
 }
 

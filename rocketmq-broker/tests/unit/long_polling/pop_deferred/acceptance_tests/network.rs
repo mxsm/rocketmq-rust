@@ -20,7 +20,6 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rocketmq_error::Error as CanonicalError;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::CORE_ARGUMENT_INVALID;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -185,14 +184,14 @@ struct DeferredTestProcessor {
 }
 
 impl RequestProcessor for DeferredTestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         if request.command().code() == SENTINEL_CODE {
             self.barrier.commit_observed.notify_one();
             return RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                 ResponseCode::Success,
             ))
             .map(HandlerOutcome::Reply)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()));
+            .map_err(|error| crate::broker_error::invalid_argument(error.to_string()));
         }
 
         let header = request
@@ -201,11 +200,11 @@ impl RequestProcessor for DeferredTestProcessor {
         let caller = match request.origin() {
             RequestOrigin::Network { peer } => peer.address(),
             RequestOrigin::Embedded { .. } => {
-                return Err(RocketMQError::illegal_argument(
+                return Err(crate::broker_error::invalid_argument(
                     "POP deferred test requires a trusted network peer",
                 ));
             }
-            _ => return Err(RocketMQError::illegal_argument("unsupported POP request origin")),
+            _ => return Err(crate::broker_error::invalid_argument("unsupported POP request origin")),
         };
         let filter_tag = header.exp.as_ref().and_then(|value| value.parse::<i64>().ok());
         let filter = filter_tag.map(|tag| Arc::new(MatchTagFilter(tag)) as rocketmq_store::ArcMessageFilter);
@@ -214,28 +213,34 @@ impl RequestProcessor for DeferredTestProcessor {
             .service
             .prepare(request, subscription, filter, PopRetainedEstimate::default())
             .map_err(|error| {
-                RocketMQError::Shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
+                crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
             })? {
             PopDeferredPrepareOutcome::Prepared(prepared) => *prepared,
             PopDeferredPrepareOutcome::Rejected(_) => {
-                return Err(RocketMQError::illegal_argument("unexpected POP preparation rejection"));
+                return Err(crate::broker_error::invalid_argument(
+                    "unexpected POP preparation rejection",
+                ));
             }
         };
         let registration = match self.service.register(prepared, request).map_err(|error| {
-            RocketMQError::Shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
+            crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
         })? {
             PopDeferredRegisterOutcome::Registered(registration) => *registration,
             PopDeferredRegisterOutcome::Rejected(_) => {
-                return Err(RocketMQError::illegal_argument("unexpected POP registration rejection"));
+                return Err(crate::broker_error::invalid_argument(
+                    "unexpected POP registration rejection",
+                ));
             }
         };
         let id = registration.deferred_id();
         self.registrations
             .send(RegistrationObservation { id, caller })
-            .map_err(|_| RocketMQError::illegal_argument("registration observer closed"))?;
+            .map_err(|_| crate::broker_error::invalid_argument("registration observer closed"))?;
         if self.rollback_registration {
             drop(registration);
-            return Err(RocketMQError::illegal_argument("intentional POP registration rollback"));
+            return Err(crate::broker_error::invalid_argument(
+                "intentional POP registration rollback",
+            ));
         }
         if self.hold_before_outcome {
             self.barrier.before_outcome.notify_one();
@@ -414,7 +419,7 @@ async fn prepared_arrival_and_timeout_reexecute_then_write_one_bound_frame() {
                             RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                                 ResponseCode::PollingTimeout,
                             ))
-                            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                            .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                         },
                     )
                     .await;
@@ -672,7 +677,7 @@ async fn service_shutdown_drains_accepted_resume_to_parent_cancelled_without_a_f
                         RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::PollingTimeout,
                         ))
-                        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                     },
                 )
                 .await;

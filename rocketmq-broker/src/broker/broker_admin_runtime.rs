@@ -471,7 +471,7 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
         new_master_epoch: Option<i32>,
         sync_state_set_epoch: Option<i32>,
         sync_state_set: HashSet<i64>,
-    ) -> rocketmq_error::RocketMQResult<bool> {
+    ) -> crate::broker_error::BrokerResult<bool> {
         self.controller
             .apply_controller_role_change(
                 controller_leader_address,

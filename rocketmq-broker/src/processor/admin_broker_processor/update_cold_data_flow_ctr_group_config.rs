@@ -36,7 +36,7 @@ impl UpdateColdDataFlowCtrGroupConfigRequestHandler {
         &self,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_success_response_command();
 
         let Some(body) = request.get_body() else {
@@ -74,7 +74,7 @@ impl UpdateColdDataFlowCtrGroupConfigRequestHandler {
         &self,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_success_response_command();
         let Some(body) = request.get_body() else {
             return Ok(Some(response.set_code(ResponseCode::Success)));
@@ -98,7 +98,7 @@ impl UpdateColdDataFlowCtrGroupConfigRequestHandler {
         &self,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let Some(service) = self.cold_data_cg_ctr_service.as_deref() else {
             return Ok(Some(

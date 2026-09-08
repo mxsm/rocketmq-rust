@@ -15,7 +15,7 @@
 use std::alloc::Layout;
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicBool;
@@ -1153,9 +1153,9 @@ impl fmt::Display for PopIndexOperationalError {
     }
 }
 
-impl Error for PopIndexOperationalError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.source.as_ref().map(|source| source as &(dyn Error + 'static))
+impl StdError for PopIndexOperationalError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.source.as_ref().map(|source| source as &(dyn StdError + 'static))
     }
 }
 

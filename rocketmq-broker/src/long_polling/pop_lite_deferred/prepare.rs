@@ -13,12 +13,11 @@
 // limitations under the License.
 
 use std::convert::Infallible;
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
@@ -376,7 +375,7 @@ pub(crate) enum PopLiteDeferredPrepareFailure {
     InvalidExpiryMargins,
     RetainedSizeOverflow,
     Deadline(PopLiteWaitDeadlineOperationalError),
-    Header(RocketMQError),
+    Header(rocketmq_error::Error),
     Index(PopLiteIndexOperationalError),
     Contract(TransportContractViolation),
 }
@@ -395,8 +394,8 @@ impl fmt::Display for PopLiteDeferredPrepareFailure {
     }
 }
 
-impl Error for PopLiteDeferredPrepareFailure {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for PopLiteDeferredPrepareFailure {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Header(source) => Some(source),
             Self::Index(source) => Some(source),
@@ -489,8 +488,8 @@ impl fmt::Display for PopLiteDeferredRegisterFailure {
     }
 }
 
-impl Error for PopLiteDeferredRegisterFailure {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for PopLiteDeferredRegisterFailure {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::RegistryContract(violation) => Some(violation),
             Self::RegistryOperational(error) => Some(error),

@@ -51,7 +51,7 @@ struct ProvenanceProcessor {
 }
 
 impl RequestProcessor for ProvenanceProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let prior = self.state.lock().prepared.take();
         if let Some(prior) = prior {
             let rejection = match self.service.register(prior, request) {
@@ -96,11 +96,13 @@ impl RequestProcessor for ProvenanceProcessor {
             ),
             PullRetainedEstimate::new(17, 23),
         )
-        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?
+        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))?
         {
             PullDeferredPrepareOutcome::Prepared(prepared) => prepared,
             PullDeferredPrepareOutcome::Rejected(_) => {
-                return Err(RocketMQError::illegal_argument("unexpected Pull preparation rejection"));
+                return Err(crate::broker_error::invalid_argument(
+                    "unexpected Pull preparation rejection",
+                ));
             }
         };
         self.state.lock().prepared = Some(registration);
@@ -163,7 +165,7 @@ struct PreTakeProbeProcessor {
 }
 
 impl RequestProcessor for PreTakeProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let header = request
             .command()
             .decode_command_custom_header::<PullMessageRequestHeader>()?;
@@ -186,7 +188,7 @@ impl RequestProcessor for PreTakeProbeProcessor {
                 self.observed.lock().push(rejection.kind());
                 Ok(HandlerOutcome::Reply(rejection.into_fallback()))
             }
-            Err(error) => Err(RocketMQError::illegal_argument(error.to_string())),
+            Err(error) => Err(crate::broker_error::invalid_argument(error.to_string())),
         }
     }
 }

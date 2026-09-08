@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
 use std::mem::size_of;
 use std::num::NonZeroUsize;
@@ -322,8 +322,8 @@ impl fmt::Display for PullContinuationError {
     }
 }
 
-impl Error for PullContinuationError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for PullContinuationError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Allocation(source) => Some(source),
             Self::SizeOverflow => None,

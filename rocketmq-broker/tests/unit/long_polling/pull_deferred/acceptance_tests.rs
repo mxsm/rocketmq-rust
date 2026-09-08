@@ -24,7 +24,6 @@ use cheetah_string::CheetahString;
 use futures::SinkExt;
 use parking_lot::Mutex;
 use rocketmq_error::Error as CanonicalError;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::CORE_ARGUMENT_INVALID;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -320,7 +319,7 @@ struct PullDeferredTestProcessor {
 }
 
 impl RequestProcessor for PullDeferredTestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         if request.command().code() == SENTINEL_CODE {
             self.barrier.commit_observed.notify_one();
             return success_reply();
@@ -331,7 +330,7 @@ impl RequestProcessor for PullDeferredTestProcessor {
         let peer = match request.origin() {
             rocketmq_transport::api::RequestOrigin::Network { peer } => peer.address(),
             _ => {
-                return Err(RocketMQError::illegal_argument(
+                return Err(crate::broker_error::invalid_argument(
                     "Pull deferred test requires TCP ingress",
                 ))
             }
@@ -346,7 +345,7 @@ impl RequestProcessor for PullDeferredTestProcessor {
         let fallback = RemotingResponse::command(RemotingCommand::create_response_command_with_code(
             ResponseCode::PullNotFound,
         ))
-        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))?;
         let prepared = match self
             .service
             .prepare(
@@ -363,19 +362,21 @@ impl RequestProcessor for PullDeferredTestProcessor {
                 PullRetainedEstimate::default(),
             )
             .map_err(|error| {
-                RocketMQError::Shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
+                crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
             })? {
             PullDeferredPrepareOutcome::Prepared(prepared) => prepared,
             PullDeferredPrepareOutcome::Rejected(_) => {
-                return Err(RocketMQError::illegal_argument("unexpected Pull preparation rejection"));
+                return Err(crate::broker_error::invalid_argument(
+                    "unexpected Pull preparation rejection",
+                ));
             }
         };
         let registration = match self.service.register(prepared, request).map_err(|error| {
-            RocketMQError::Shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
+            crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
         })? {
             PullDeferredRegisterOutcome::Registered(registration) => *registration,
             PullDeferredRegisterOutcome::Rejected(_) => {
-                return Err(RocketMQError::illegal_argument(
+                return Err(crate::broker_error::invalid_argument(
                     "unexpected Pull registration rejection",
                 ));
             }
@@ -385,10 +386,10 @@ impl RequestProcessor for PullDeferredTestProcessor {
                 id: registration.deferred_id(),
                 peer,
             })
-            .map_err(|_| RocketMQError::illegal_argument("Pull registration observer closed"))?;
+            .map_err(|_| crate::broker_error::invalid_argument("Pull registration observer closed"))?;
         if self.rollback_registration {
             drop(registration);
-            return Err(RocketMQError::illegal_argument(
+            return Err(crate::broker_error::invalid_argument(
                 "intentional Pull registration rollback",
             ));
         }
@@ -404,12 +405,12 @@ impl RequestProcessor for PullDeferredTestProcessor {
     }
 }
 
-fn success_reply() -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+fn success_reply() -> crate::broker_error::BrokerResult<HandlerOutcome> {
     RemotingResponse::command(RemotingCommand::create_response_command_with_code(
         ResponseCode::Success,
     ))
     .map(HandlerOutcome::Reply)
-    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+    .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
 }
 
 struct RunningServer {
@@ -608,13 +609,13 @@ async fn tcp_pending_arrival_and_timeout_reexecute_then_write_one_bound_frame() 
                                 Bytes::from_owner(CountingBodyOwner::new(RESPONSE_BODY.to_vec(), response_owner_drops));
                             let _ = plan_ready_tx.send(());
                             release_plan_rx.await.map_err(|_| {
-                                RocketMQError::illegal_argument("Pull remoting response release closed")
+                                crate::broker_error::invalid_argument("Pull remoting response release closed")
                             })?;
                             RemotingResponse::bytes(
                                 RemotingCommand::create_response_command_with_code(ResponseCode::PullNotFound),
                                 body,
                             )
-                            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                            .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                         },
                     )
                     .await;
@@ -748,12 +749,12 @@ async fn tcp_partial_write_drops_owner_once_without_retrying() {
                         let _ = plan_ready_tx.send(());
                         release_plan_rx
                             .await
-                            .map_err(|_| RocketMQError::illegal_argument("partial Pull plan release closed"))?;
+                            .map_err(|_| crate::broker_error::invalid_argument("partial Pull plan release closed"))?;
                         RemotingResponse::bytes(
                             RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                             body,
                         )
-                        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                     },
                 )
                 .await;

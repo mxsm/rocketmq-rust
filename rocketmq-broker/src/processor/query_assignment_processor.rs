@@ -94,7 +94,7 @@ pub struct QueryAssignmentProcessor {
 }
 
 impl RequestProcessor for QueryAssignmentProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -103,7 +103,7 @@ impl QueryAssignmentProcessor {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.command_factory;
         let peer_label = request_peer_label(request.origin());
@@ -123,7 +123,7 @@ impl QueryAssignmentProcessor {
         &self,
         request: &mut RemotingCommand,
         peer_label: &str,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("QueryAssignmentProcessor received request code: {:?}", request_code);
         match request_code {
@@ -255,7 +255,7 @@ impl QueryAssignmentProcessor {
         request_code: RequestCode,
         request: &mut RemotingCommand,
         peer_label: &str,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::QueryAssignment => self.query_assignment(request, peer_label).await,
             RequestCode::SetMessageRequestMode => self.set_message_request_mode(request).await,
@@ -281,7 +281,7 @@ impl QueryAssignmentProcessor {
         &self,
         request: &mut RemotingCommand,
         peer_label: &str,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
             return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::SystemError,
@@ -501,7 +501,7 @@ impl QueryAssignmentProcessor {
                     // allocate message queues for pull mode
                     match strategy.allocate(consumer_group, client_id, mq_all.as_slice(), cid_all.as_slice()) {
                         Ok(value) => Ok(value.into_iter().collect::<HashSet<MessageQueue>>()),
-                        Err(e) => Err(e),
+                        Err(error) => Err(crate::broker_error::from_canonical(error)),
                     }
                 };
                 result.ok()
@@ -517,7 +517,7 @@ impl QueryAssignmentProcessor {
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
         pop_share_queue_num: i32,
-    ) -> rocketmq_error::RocketMQResult<HashSet<MessageQueue>> {
+    ) -> crate::broker_error::BrokerResult<HashSet<MessageQueue>> {
         if pop_share_queue_num <= 0 || pop_share_queue_num >= cid_all.len() as i32 - 1 {
             //Each consumer can consume all queues, return all queues. Queue ID -1 means consume
             // all queues when consuming in Pop mode
@@ -549,7 +549,7 @@ impl QueryAssignmentProcessor {
     async fn set_message_request_mode(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
             return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::SystemError,
@@ -594,7 +594,7 @@ impl QueryAssignmentProcessor {
     async fn get_message_request_mode(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let Some(body) = request.body() else {
             return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::InvalidParameter,
@@ -646,7 +646,7 @@ impl QueryAssignmentProcessor {
     async fn set_message_request_mode_cas(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let Some(body) = request.body() else {
             return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::InvalidParameter,
@@ -826,19 +826,17 @@ fn allocate(
     current_cid: &CheetahString,
     mq_all: &[MessageQueue],
     cid_all: &[CheetahString],
-) -> rocketmq_error::RocketMQResult<HashSet<MessageQueue>> {
+) -> crate::broker_error::BrokerResult<HashSet<MessageQueue>> {
     if current_cid.is_empty() {
-        return Err(rocketmq_error::RocketMQError::IllegalArgument(
-            "currentCID is empty".to_string(),
-        ));
+        return Err(crate::broker_error::invalid_argument("currentCID is empty".to_string()));
     }
     if mq_all.is_empty() {
-        return Err(rocketmq_error::RocketMQError::IllegalArgument(
+        return Err(crate::broker_error::invalid_argument(
             "mqAll is null or mqAll empty".to_string(),
         ));
     }
     if cid_all.is_empty() {
-        return Err(rocketmq_error::RocketMQError::IllegalArgument(
+        return Err(crate::broker_error::invalid_argument(
             "cidAll is null or cidAll empty".to_string(),
         ));
     }

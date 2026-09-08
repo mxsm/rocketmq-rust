@@ -23,7 +23,7 @@ struct AfterTakeCloseProcessor {
 }
 
 impl RequestProcessor for AfterTakeCloseProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         let rejection = match self.service.register(prepared, request) {
             Ok(PopLiteDeferredRegisterOutcome::Rejected(rejection)) => rejection,
@@ -34,8 +34,8 @@ impl RequestProcessor for AfterTakeCloseProcessor {
         let kind = rejection.kind();
         self.observed
             .send(kind)
-            .map_err(|_| RocketMQError::illegal_argument("after-take observer closed"))?;
-        Err(RocketMQError::illegal_argument(
+            .map_err(|_| crate::broker_error::invalid_argument("after-take observer closed"))?;
+        Err(crate::broker_error::invalid_argument(
             "service closed after responder transfer",
         ))
     }
@@ -92,7 +92,7 @@ struct OneWayProbeProcessor {
 }
 
 impl RequestProcessor for OneWayProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let rejection = match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
             Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection)) => rejection,
             Ok(PopLiteDeferredPrepareOutcome::Prepared(_)) | Err(_) => {
@@ -101,12 +101,12 @@ impl RequestProcessor for OneWayProbeProcessor {
         };
         self.observed
             .send(rejection.kind())
-            .map_err(|_| RocketMQError::illegal_argument("one-way observer closed"))?;
+            .map_err(|_| crate::broker_error::invalid_argument("one-way observer closed"))?;
         RemotingResponse::command(RemotingCommand::create_response_command_with_code(
             ResponseCode::Success,
         ))
         .map(HandlerOutcome::Reply)
-        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
     }
 }
 

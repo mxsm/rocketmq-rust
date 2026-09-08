@@ -72,7 +72,7 @@ impl DefaultTransactionalMessageCheckListener {
 }
 
 impl TransactionalMessageCheckListener for DefaultTransactionalMessageCheckListener {
-    async fn send_check_message(&self, mut msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()> {
+    async fn send_check_message(&self, mut msg_ext: MessageExt) -> crate::broker_error::BrokerResult<()> {
         let msg_id = msg_ext.user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
         ));
@@ -112,7 +112,7 @@ impl TransactionalMessageCheckListener for DefaultTransactionalMessageCheckListe
         Ok(())
     }
 
-    async fn resolve_half_msg(&self, msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()> {
+    async fn resolve_half_msg(&self, msg_ext: MessageExt) -> crate::broker_error::BrokerResult<()> {
         let Some(task_owner) = self.task_owner.as_ref() else {
             self.send_check_message(msg_ext).await?;
             return Ok(());
@@ -130,11 +130,7 @@ impl TransactionalMessageCheckListener for DefaultTransactionalMessageCheckListe
                     });
                 },
             )
-            .map_err(|error| {
-                rocketmq_error::RocketMQError::Service(rocketmq_error::UnifiedServiceError::StartupFailed(format!(
-                    "failed to spawn transaction check message task: {error}"
-                )))
-            })?;
+            .map_err(|error| crate::broker_error::broker_task_failed("transaction_check_message", error))?;
         Ok(())
     }
 

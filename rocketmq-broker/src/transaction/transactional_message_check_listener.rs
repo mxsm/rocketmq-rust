@@ -26,14 +26,14 @@ pub trait TransactionalMessageCheckListenerInner: std::any::Any {
     ///
     /// # Returns
     ///
-    /// A `RocketMQResult<()>` indicating the success or failure of the operation.
+    /// A `Result<()>` indicating the success or failure of the operation.
     ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - The message cannot be sent
     /// - The broker encounters an issue during processing
-    async fn send_check_message(&self, msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()>;
+    async fn send_check_message(&self, msg_ext: MessageExt) -> crate::broker_error::BrokerResult<()>;
 
     /// Resolves a half message, typically used for transactional messages
     /// that are in an intermediate state and require further processing.
@@ -45,14 +45,14 @@ pub trait TransactionalMessageCheckListenerInner: std::any::Any {
     ///
     /// # Returns
     ///
-    /// A `RocketMQResult<()>` indicating the success or failure of the resolution.
+    /// A `Result<()>` indicating the success or failure of the resolution.
     ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - The message cannot be resolved
     /// - The broker encounters an issue during processing
-    async fn resolve_half_msg(&self, msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()>;
+    async fn resolve_half_msg(&self, msg_ext: MessageExt) -> crate::broker_error::BrokerResult<()>;
 
     fn as_any(&self) -> &dyn std::any::Any;
 
