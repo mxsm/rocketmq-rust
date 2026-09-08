@@ -48,3 +48,54 @@ impl Display for TraceType {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WIRE_NAMES: [(&str, TraceType); 5] = [
+        ("Pub", TraceType::Pub),
+        ("SubBefore", TraceType::SubBefore),
+        ("SubAfter", TraceType::SubAfter),
+        ("EndTransaction", TraceType::EndTransaction),
+        ("Recall", TraceType::Recall),
+    ];
+
+    #[test]
+    fn parse_maps_each_wire_name_to_its_variant() {
+        for (name, expected) in WIRE_NAMES {
+            assert_eq!(TraceType::parse(name), Some(expected), "parse({name:?})");
+        }
+    }
+
+    #[test]
+    fn parse_rejects_unknown_empty_and_case_variants() {
+        for input in [
+            "",
+            "Unknown",
+            "pub",
+            "PUB",
+            "subBefore",
+            "SUBAFTER",
+            " Pub",
+            "Pub ",
+            "Pub\u{1}",
+        ] {
+            assert_eq!(TraceType::parse(input), None, "parse({input:?}) should be None");
+        }
+    }
+
+    #[test]
+    fn display_prints_exact_wire_name_and_round_trips_through_parse() {
+        for (name, variant) in WIRE_NAMES {
+            let rendered = variant.to_string();
+            assert_eq!(rendered, name, "{variant:?} wire name");
+            assert_eq!(TraceType::parse(&rendered), Some(variant), "{variant:?} round trip");
+        }
+    }
+
+    #[test]
+    fn default_is_pub() {
+        assert_eq!(TraceType::default(), TraceType::Pub);
+    }
+}
