@@ -3,6 +3,7 @@
 Read this file when a change needs specialist or integration evidence. These are selectable tools,
 not cumulative development gates. Routine checks and the stopping rule live in the root
 [AGENTS.md](../../AGENTS.md); standalone project commands live in their nearest local guides.
+For automatic PR checks versus scheduled/manual integration, see the [CI policy](ci-validation-policy.md).
 
 Choose checks for the actual behavior, targets, and features being changed. Reuse a passing test or
 Clippy build as compilation evidence. Do not rerun equivalent checks or sweep unrelated historical
@@ -55,8 +56,9 @@ a repository-wide error cleanup.
 
 ## Observability features
 
-Select the affected `cargo check`, Clippy, and `cargo test -p rocketmq-observability` combinations
-from `.github/workflows/rocketmq-rust-ci.yaml`. Relevant combinations include `observability`,
+Select the affected package Clippy and `cargo test -p rocketmq-observability` combinations
+from `.github/workflows/rocketmq-rust-ci.yaml`. Clippy already covers compilation; do not add a
+duplicate workspace check for each combination. Relevant combinations include `observability`,
 `otlp-metrics`, `otel-metrics,prometheus`, `otlp-traces`, `otlp-logs`, and combined OTLP/Prometheus.
 Run the complete matrix for feature-wide integration, not an unrelated internal edit.
 

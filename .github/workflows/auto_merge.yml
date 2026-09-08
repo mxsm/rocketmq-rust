@@ -13,8 +13,16 @@ on:
     types:
       - completed
   status: { }
+concurrency:
+  group: merge-${{ github.event.pull_request.number || github.event.check_suite.head_sha || github.event.sha || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   automerge:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+      github.event.label.name == 'auto merge'
     runs-on: ubuntu-latest
     permissions:
       contents: write

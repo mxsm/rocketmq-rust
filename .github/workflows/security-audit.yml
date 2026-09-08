@@ -9,22 +9,12 @@ on:
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
-      - 'fuzz/**'
-      - 'rocketmq-broker/**'
-      - 'rocketmq-controller/**'
-      - 'rocketmq-protocol/**'
-      - 'rocketmq-store-local/**'
       - '.github/workflows/security-audit.yml'
   pull_request:
     branches: [ "main" ]
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
-      - 'fuzz/**'
-      - 'rocketmq-broker/**'
-      - 'rocketmq-controller/**'
-      - 'rocketmq-protocol/**'
-      - 'rocketmq-store-local/**'
       - '.github/workflows/security-audit.yml'
   schedule:
     # Run security audit daily at 00:00 UTC
@@ -33,7 +23,7 @@ on:
 
 # Cancel previous runs if a new commit is pushed
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

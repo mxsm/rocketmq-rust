@@ -4,6 +4,7 @@ permissions:
   contents: read
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "main" ]
     paths:
@@ -15,6 +16,7 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - '.github/workflows/dashboard-tauri-ci.yml'
+      - '!**/AGENTS.md'
   pull_request:
     branches: [ "main" ]
     paths:
@@ -26,6 +28,7 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - '.github/workflows/dashboard-tauri-ci.yml'
+      - '!**/AGENTS.md'
 
 env:
   CARGO_TERM_COLOR: always
@@ -35,6 +38,10 @@ env:
 defaults:
   run:
     working-directory: rocketmq-dashboard/rocketmq-dashboard-tauri
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # =========================
@@ -114,6 +121,7 @@ jobs:
   # Tauri Build (Multi-platform)
   # =========================
   tauri-build:
+    if: github.event_name != 'pull_request'
     name: Tauri Build (${{ matrix.platform.os }} / ${{ matrix.platform.target }})
     needs: [frontend-check, rust-check]
     

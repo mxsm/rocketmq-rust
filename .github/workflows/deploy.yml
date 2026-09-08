@@ -7,12 +7,6 @@ on:
     paths:
       - 'rocketmq-website/**'
       - '.github/workflows/deploy.yml'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'rocketmq-website/**'
-      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages

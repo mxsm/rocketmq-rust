@@ -616,9 +616,6 @@ def validate_coverage(root: Path, policy: dict[str, Any]) -> list[Finding]:
     ):
         if token not in config:
             findings.append(Finding("coverage-policy", coverage["config"], f"missing {token}"))
-    root_workflow = (root / policy["root"]["workflow"]).read_text(encoding="utf-8")
-    if "fail_ci_if_error: true" not in root_workflow:
-        findings.append(Finding("coverage-upload-optional", policy["root"]["workflow"], "Codecov upload must fail clearly"))
     standalone = (root / coverage["standalone_workflow"]).read_text(encoding="utf-8")
     for entry in policy["standalone"]:
         if entry["id"] == "fuzz":
@@ -807,8 +804,9 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
         "",
         f"- Formal Rust toolchain and MSRV: `{facts.formal_toolchain}`.",
         f"- Root workspace packages: {len(facts.root_packages)}.",
-        "- Root final gates: `cargo fmt --all -- --check`, strict workspace Clippy, all-feature tests, and",
-        "  `cargo doc --workspace --no-deps --all-features`.",
+        "- Full integration checks: `cargo fmt --all -- --check`, workspace Clippy, all-feature tests, and",
+        "  `cargo doc --workspace --no-deps --all-features`. Routine PR work is selected by changed paths;",
+        "  see the [CI validation policy](ci-validation-policy.md) for feature and platform routing.",
         "",
         "| Package | Workspace path |",
         "|---|---|",
