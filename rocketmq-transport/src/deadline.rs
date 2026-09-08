@@ -17,7 +17,9 @@
 use std::future::Future;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
+
+use crate::error_helpers::operation_timed_out;
 
 /// One absolute deadline frozen at the public request boundary.
 ///
@@ -98,7 +100,7 @@ impl RequestDeadline {
     /// # Errors
     ///
     /// Returns a typed before-send error once the immutable deadline has elapsed.
-    pub fn ensure_before_send(self) -> RocketMQResult<()> {
+    pub fn ensure_before_send(self) -> Result<(), rocketmq_error::SharedError> {
         if self.is_expired() {
             Err(self.elapsed_error())
         } else {
@@ -106,11 +108,8 @@ impl RequestDeadline {
         }
     }
 
-    pub(crate) fn elapsed_error(self) -> rocketmq_error::RocketMQError {
-        rocketmq_error::RocketMQError::Timeout {
-            operation: "transport_before_send",
-            timeout_ms: self.budget_millis(),
-        }
+    pub(crate) fn elapsed_error(self) -> SharedError {
+        operation_timed_out("transport_before_send", self.budget_millis())
     }
 
     /// Runs a future against this exact absolute deadline.

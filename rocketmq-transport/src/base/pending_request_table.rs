@@ -22,8 +22,6 @@ use std::time::Instant;
 
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_error::SharedError;
 use rocketmq_runtime::BudgetDimension;
 use rocketmq_runtime::BudgetLimit;
@@ -36,6 +34,7 @@ use rocketmq_runtime::ResourcePermit;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::deadline::RequestDeadline;
+use crate::error_helpers::configuration_invalid_caused_by;
 use crate::error_helpers::connection_failed_without_source;
 use crate::error_helpers::TransportStage;
 
@@ -198,17 +197,8 @@ pub(crate) enum PendingRequestCompletion {
 
 impl PendingRequestCompletion {
     #[track_caller]
-    pub(crate) fn operational(error: RocketMQError) -> Self {
-        match error {
-            RocketMQError::Shared(error) => Self::OperationalFailure(error),
-            source => {
-                let descriptor = source.descriptor();
-                let context = source.context();
-                Self::OperationalFailure(Arc::new(
-                    rocketmq_error::Error::caused_by(descriptor, source).with_context(context),
-                ))
-            }
-        }
+    pub(crate) fn operational(error: SharedError) -> Self {
+        Self::OperationalFailure(error)
     }
 }
 
@@ -252,16 +242,12 @@ impl PendingRequestTable {
     /// # Errors
     ///
     /// Returns a typed configuration error when budget validation fails.
-    pub fn try_with_limits(limits: PendingRequestLimits) -> RocketMQResult<Self> {
+    pub fn try_with_limits(limits: PendingRequestLimits) -> Result<Self, rocketmq_error::SharedError> {
         let process_budget = ResourceBudgetTree::new(
             "standalone-pending-request-process",
             BudgetLimit::new(limits.max_count.max(1), limits.max_bytes.max(1), FullPolicy::Reject),
         )
-        .map_err(|error| RocketMQError::ConfigInvalidValue {
-            key: "transport.pendingRequest.standalone",
-            value: limits.max_bytes.to_string(),
-            reason: error.to_string(),
-        })?
+        .map_err(|error| configuration_invalid_caused_by("transport.pendingRequest.standalone", error))?
         .root();
         Self::try_with_limits_and_budget(limits, &process_budget)
     }
@@ -274,7 +260,7 @@ impl PendingRequestTable {
     pub fn try_with_limits_and_budget(
         limits: PendingRequestLimits,
         process_budget: &ResourceBudget,
-    ) -> RocketMQResult<Self> {
+    ) -> Result<Self, rocketmq_error::SharedError> {
         let process_capacity = process_budget.limit().capacity;
         let max_count = limits.max_count.max(1).min(process_capacity.count);
         let max_bytes = limits.max_bytes.max(1).min(process_capacity.bytes);
@@ -288,14 +274,7 @@ impl PendingRequestTable {
                     .with_rate(RateLimit::new(request_rate, request_rate))
                     .with_max_age(max_request_age),
             )
-            .map_err(|error| RocketMQError::ConfigInvalidValue {
-                key: "transport.pendingRequest",
-                value: format!(
-                    "count={max_count},bytes={max_bytes},rate={request_rate},age_ms={}",
-                    max_request_age.as_millis()
-                ),
-                reason: error.to_string(),
-            })?;
+            .map_err(|error| configuration_invalid_caused_by("transport.pendingRequest", error))?;
         Ok(Self {
             inner: Arc::new(PendingRequestTableInner {
                 table_id,

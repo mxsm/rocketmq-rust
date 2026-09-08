@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
@@ -30,6 +30,10 @@ use crate::connection::ConnectionState;
 use crate::connection::SessionWriterDiagnostics;
 use crate::connection::SessionWriterSnapshot;
 use crate::deadline::RequestDeadline;
+use crate::error_helpers::argument_invalid;
+use crate::error_helpers::client_shutting_down;
+use crate::error_helpers::connection_failed;
+use crate::error_helpers::TransportStage;
 use crate::telemetry::TransportTelemetry;
 use crate::write_result::WriterFailure;
 use crate::write_strategy::OutboundPayload;
@@ -88,11 +92,9 @@ impl Default for WriterQueueConfig {
 }
 
 impl WriterQueueConfig {
-    pub(crate) fn validate(self) -> Result<Self, RocketMQError> {
+    pub(crate) fn validate(self) -> Result<Self, SharedError> {
         if self.max_write_stall.is_zero() {
-            return Err(RocketMQError::IllegalArgument(
-                "maximum write stall must be greater than zero".to_owned(),
-            ));
+            return Err(argument_invalid());
         }
         Ok(self)
     }
@@ -178,7 +180,7 @@ fn try_reserve_bytes(counter: &AtomicUsize, limit: usize, bytes: usize) -> bool 
 }
 
 struct CloseRequest {
-    completion: oneshot::Sender<rocketmq_error::RocketMQResult<()>>,
+    completion: oneshot::Sender<Result<(), rocketmq_error::SharedError>>,
 }
 
 /// Cloneable capability for the two bounded writer lanes and independent close signal.
@@ -208,7 +210,7 @@ impl WriterLanes {
 
     pub(crate) async fn close(
         &self,
-        completion: oneshot::Sender<rocketmq_error::RocketMQResult<()>>,
+        completion: oneshot::Sender<Result<(), rocketmq_error::SharedError>>,
     ) -> Result<(), mpsc::error::SendError<()>> {
         self.close
             .send(CloseRequest { completion })
@@ -465,7 +467,7 @@ impl WriterReceivers {
             let error = failure
                 .clone()
                 .into_shared_error()
-                .map_or(RocketMQError::ClientShuttingDown, RocketMQError::Shared);
+                .unwrap_or_else(|_| client_shutting_down());
             let _ = close.completion.send(Err(error));
         }
     }
@@ -489,7 +491,10 @@ pub(crate) async fn run_session_writer(
     let mut closing: Option<CloseRequest> = None;
     loop {
         if closing.is_some() && receivers.is_drained() {
-            let result = frame_writer.shutdown().await.map_err(Into::into);
+            let result = frame_writer
+                .shutdown()
+                .await
+                .map_err(|source| connection_failed(TransportStage::Closed, source));
             if let Some(close) = closing.take() {
                 let _ = close.completion.send(result);
             }
@@ -525,14 +530,14 @@ pub(crate) async fn run_session_writer(
                             let error = failure
                                 .clone()
                                 .into_shared_error()
-                                .map_or(RocketMQError::ClientShuttingDown, RocketMQError::Shared);
+                                .unwrap_or_else(|_| client_shutting_down());
                             let _ = close.completion.send(Err(error));
                         }
                         if let Some(close) = closing.take() {
                             let error = failure
                                 .clone()
                                 .into_shared_error()
-                                .map_or(RocketMQError::ClientShuttingDown, RocketMQError::Shared);
+                                .unwrap_or_else(|_| client_shutting_down());
                             let _ = close.completion.send(Err(error));
                         }
                         let _ = state.send(ConnectionState::Closed);

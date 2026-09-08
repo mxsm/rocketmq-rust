@@ -24,7 +24,6 @@ use std::time::Duration;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::SharedError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
@@ -201,7 +200,7 @@ enum ServerCommandDisposition {
     QueueSaturated,
     DeadlineExpired,
     SessionClosed,
-    EncodingFailed(RocketMQError),
+    EncodingFailed(SharedError),
     OperationalFailure {
         progress: crate::dispatch::WriteProgress,
         error: SharedError,
@@ -654,7 +653,7 @@ impl ServerRequestSender {
 fn request_transport_error(
     operation: crate::error::RequestOperation,
     stage: crate::request_outcome::OutboundRequestStage,
-    source: RocketMQError,
+    source: SharedError,
 ) -> TransportError {
     TransportError::request_failed(operation, stage, source)
 }
@@ -980,7 +979,7 @@ mod tests {
         let error = request_transport_error(
             crate::error::RequestOperation::Write,
             crate::request_outcome::OutboundRequestStage::Writing,
-            RocketMQError::Shared(Arc::clone(&stage)),
+            Arc::clone(&stage),
         );
 
         assert_eq!(error.code(), rocketmq_error::TRANSPORT_SESSION_FAILED.code());

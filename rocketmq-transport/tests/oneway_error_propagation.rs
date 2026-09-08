@@ -21,8 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::BudgetClass;
@@ -39,6 +38,14 @@ use rocketmq_transport::test_support::Connection;
 use socket2::SockRef;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
+
+fn argument_invalid() -> SharedError {
+    Arc::new(
+        rocketmq_error::Error::new(&rocketmq_error::CORE_ARGUMENT_INVALID).with_context(
+            rocketmq_error::ErrorContext::new().with_secret_presence(rocketmq_error::fields::MESSAGE_PRESENT),
+        ),
+    )
+}
 
 fn test_client(name: &'static str) -> TransportClient {
     TransportClient::builder(
@@ -86,9 +93,13 @@ struct RejectingHook {
 }
 
 impl RPCHook for RejectingHook {
-    fn do_before_request(&self, _remote_addr: SocketAddr, _request: &mut RemotingCommand) -> RocketMQResult<()> {
+    fn do_before_request(
+        &self,
+        _remote_addr: SocketAddr,
+        _request: &mut RemotingCommand,
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Err(RocketMQError::illegal_argument("injected one-way hook rejection"))
+        Err(argument_invalid())
     }
 
     fn do_after_response(
@@ -96,7 +107,7 @@ impl RPCHook for RejectingHook {
         _remote_addr: SocketAddr,
         _request: &RemotingCommand,
         _response: &mut RemotingCommand,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         Ok(())
     }
 }
@@ -198,5 +209,5 @@ async fn client_shutdown_is_returned_without_reconnecting() {
     client.shutdown();
     let target = unused_loopback_address().await;
     let result = client.invoke_request_oneway(&target, request(7), 200).await;
-    assert!(matches!(result, Err(RocketMQError::ClientNotStarted)));
+    assert!(result.is_err_and(|error| error.descriptor() == &rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }

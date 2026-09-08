@@ -21,7 +21,6 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use bytes::BytesMut;
-use rocketmq_error::SerializationError;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrame;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead;
 use rocketmq_runtime::BlockingExecutor;
@@ -32,6 +31,7 @@ use tokio::sync::oneshot;
 use crate::admission::AdmissionPermit;
 use crate::backend::WriteBackend;
 use crate::deadline::RequestDeadline;
+use crate::error_helpers::serialization_failed;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
 use crate::file_region::FileTransferMode;
@@ -246,14 +246,14 @@ pub(crate) struct PreparedStructuredResponseBody {
 }
 
 impl PreparedStructuredResponseBody {
-    pub(crate) fn empty() -> rocketmq_error::RocketMQResult<Self> {
+    pub(crate) fn empty() -> Result<Self, rocketmq_error::SharedError> {
         Ok(Self {
             body: StructuredResponseBody::Empty,
             checked_len: 0,
         })
     }
 
-    pub(crate) fn bytes(body: Bytes) -> rocketmq_error::RocketMQResult<Self> {
+    pub(crate) fn bytes(body: Bytes) -> Result<Self, rocketmq_error::SharedError> {
         let checked_len = body.len();
         Ok(Self {
             body: StructuredResponseBody::Bytes(body),
@@ -261,11 +261,11 @@ impl PreparedStructuredResponseBody {
         })
     }
 
-    pub(crate) fn segments(body: Vec<Bytes>) -> rocketmq_error::RocketMQResult<Self> {
+    pub(crate) fn segments(body: Vec<Bytes>) -> Result<Self, rocketmq_error::SharedError> {
         let checked_len = body.iter().try_fold(0_usize, |total, segment| {
-            total.checked_add(segment.len()).ok_or_else(|| {
-                SerializationError::encode_failed("structured-response-frame", "structured body length overflow")
-            })
+            total
+                .checked_add(segment.len())
+                .ok_or_else(|| serialization_failed("encode", "structured-response-frame"))
         })?;
         Ok(Self {
             body: StructuredResponseBody::Segments(body),
@@ -286,23 +286,16 @@ impl StructuredResponseFrame {
     pub(crate) fn new(
         head: EncodedFrameHead,
         body: PreparedStructuredResponseBody,
-    ) -> rocketmq_error::RocketMQResult<Self> {
+    ) -> Result<Self, rocketmq_error::SharedError> {
         let frame = Self { head, body };
         frame.validate_body_len()?;
         Ok(frame)
     }
 
-    fn validate_body_len(&self) -> rocketmq_error::RocketMQResult<()> {
+    fn validate_body_len(&self) -> Result<(), rocketmq_error::SharedError> {
         let actual = self.body.checked_len;
         if actual != self.head.body_len() {
-            return Err(SerializationError::encode_failed(
-                "structured-response-frame",
-                format!(
-                    "structured body length {actual} does not match encoded frame head body length {}",
-                    self.head.body_len()
-                ),
-            )
-            .into());
+            return Err(serialization_failed("encode", "structured-response-frame"));
         }
         Ok(())
     }
@@ -377,11 +370,11 @@ pub(crate) enum OutboundPayload {
 }
 
 impl OutboundPayload {
-    pub(crate) fn batch(frames: Vec<EncodedFrame>) -> rocketmq_error::RocketMQResult<Self> {
+    pub(crate) fn batch(frames: Vec<EncodedFrame>) -> Result<Self, rocketmq_error::SharedError> {
         let encoded_len = frames.iter().try_fold(0_usize, |total, frame| {
-            total.checked_add(frame.encoded_len()).ok_or_else(|| {
-                SerializationError::encode_failed("remoting-command-batch", "encoded batch length overflow")
-            })
+            total
+                .checked_add(frame.encoded_len())
+                .ok_or_else(|| serialization_failed("encode", "remoting-command-batch"))
         })?;
         Ok(Self::Batch { frames, encoded_len })
     }

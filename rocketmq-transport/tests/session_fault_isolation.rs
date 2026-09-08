@@ -23,8 +23,7 @@ use std::time::Duration;
 
 use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::ErrorContext;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
@@ -55,8 +54,8 @@ impl fmt::Display for InjectedProcessorFailure {
 
 impl std::error::Error for InjectedProcessorFailure {}
 
-fn injected_processor_failure() -> RocketMQError {
-    RocketMQError::Shared(Arc::new(
+fn injected_processor_failure() -> SharedError {
+    Arc::new(
         CanonicalError::caused_by(
             &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
             InjectedProcessorFailure {
@@ -69,14 +68,14 @@ fn injected_processor_failure() -> RocketMQError {
                 .with_secret_presence(rocketmq_error::fields::REMOTE_ADDR_PRESENT)
                 .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT),
         ),
-    ))
+    )
 }
 
 impl SessionProcessor for FaultSelectingProcessor {
     fn process(
         &self,
         request: RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
         Box::pin(async move {
             match request.opaque() {
                 2 => Err(injected_processor_failure()),
@@ -95,12 +94,12 @@ fn injected_fault_preserves_canonical_network_policy_and_typed_source() {
         rocketmq_error::TRANSPORT_CONNECTION_FAILED.code()
     );
     assert_eq!(
-        error.boundary_view().remoting().code.as_i32(),
+        error.descriptor().projection().remoting().code.as_i32(),
         2,
         "processor faults retain the legacy SystemError remoting code"
     );
 
-    let RocketMQError::Shared(canonical) = &error else {
+    let canonical = &error else {
         panic!("injected processor failure must remain a canonical Shared error")
     };
     assert_eq!(canonical.fault(), rocketmq_error::FaultAttribution::Dependency);

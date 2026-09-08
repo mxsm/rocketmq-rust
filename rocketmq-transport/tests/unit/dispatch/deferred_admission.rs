@@ -604,8 +604,8 @@ fn dispatcher_is_fail_closed_until_explicit_configuration_and_then_shares_owner(
         async fn process(
             &mut self,
             _request: &mut crate::dispatch::RemotingRequest,
-        ) -> rocketmq_error::RocketMQResult<crate::dispatch::HandlerOutcome> {
-            Err(rocketmq_error::RocketMQError::illegal_argument("unused test processor"))
+        ) -> Result<crate::dispatch::HandlerOutcome, rocketmq_error::SharedError> {
+            Err(crate::error_helpers::argument_invalid())
         }
     }
 

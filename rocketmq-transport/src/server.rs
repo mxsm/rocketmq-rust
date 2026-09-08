@@ -28,7 +28,6 @@ use std::time::Duration;
 
 use futures_util::FutureExt;
 use futures_util::StreamExt;
-use rocketmq_error::RocketMQResult;
 use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingCommandType;
@@ -70,6 +69,7 @@ use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RequestContext;
 use crate::dispatch::ResponseDeliveryContext;
 use crate::error_helpers::connection_failed;
+use crate::error_helpers::connection_failed_for_remote;
 use crate::error_helpers::connection_failed_without_source;
 use crate::error_helpers::TransportStage;
 use crate::file_region::FileTransferMode;
@@ -104,8 +104,8 @@ struct SessionWriterCompletionReport {
 }
 
 impl SessionWriterCompletionReport {
-    fn new(result: RocketMQResult<()>, snapshot: SessionWriterSnapshot) -> Self {
-        let failure = result.err().map(canonicalize_session_failure);
+    fn new(result: Result<(), rocketmq_error::SharedError>, snapshot: SessionWriterSnapshot) -> Self {
+        let failure = result.err();
         Self {
             health: if failure.is_some() {
                 SessionWriterCompletionHealth::Failed
@@ -311,7 +311,7 @@ impl SessionCloseCoordinator {
         self.completion.send_replace(Some(Arc::new(completion)));
     }
 
-    async fn completed(&self) -> RocketMQResult<Arc<SessionCloseCompletion>> {
+    async fn completed(&self) -> Result<Arc<SessionCloseCompletion>, rocketmq_error::SharedError> {
         let mut completion = self.completion.subscribe();
         loop {
             if let Some(completed) = completion.borrow().clone() {
@@ -333,16 +333,17 @@ impl SessionCloseCoordinator {
                 );
                 return Ok(completed);
             }
-            completion.changed().await.map_err(|source| {
-                rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::Closed, source))
-            })?;
+            completion
+                .changed()
+                .await
+                .map_err(|source| connection_failed(TransportStage::Closed, source))?;
         }
     }
 
-    async fn wait(&self) -> RocketMQResult<SessionCloseCompletionSnapshot> {
+    async fn wait(&self) -> Result<SessionCloseCompletionSnapshot, rocketmq_error::SharedError> {
         let completed = self.completed().await?;
         match &completed.error {
-            Some(error) => Err(rocketmq_error::RocketMQError::Shared(Arc::clone(error))),
+            Some(error) => Err(Arc::clone(error)),
             None => Ok(completed.snapshot),
         }
     }
@@ -430,18 +431,6 @@ impl SessionCloseReport {
     }
 }
 
-#[track_caller]
-fn canonicalize_session_failure(error: rocketmq_error::RocketMQError) -> SharedError {
-    match error {
-        rocketmq_error::RocketMQError::Shared(error) => error,
-        source => {
-            let descriptor = source.descriptor();
-            let context = source.context();
-            Arc::new(rocketmq_error::Error::caused_by(descriptor, source).with_context(context))
-        }
-    }
-}
-
 /// Bounded I/O budgets applied to every transport session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionIoPolicy {
@@ -461,11 +450,9 @@ impl Default for SessionIoPolicy {
 }
 
 impl SessionIoPolicy {
-    fn validate(self) -> RocketMQResult<Self> {
+    fn validate(self) -> Result<Self, rocketmq_error::SharedError> {
         if self.idle_timeout.is_zero() {
-            return Err(rocketmq_error::RocketMQError::Shared(connection_failed_without_source(
-                TransportStage::EndpointValidation,
-            )));
+            return Err(connection_failed_without_source(TransportStage::EndpointValidation));
         }
         self.writer_queue.validate()?;
         Ok(self)
@@ -480,7 +467,7 @@ pub trait SessionProcessor: Send + Sync + 'static {
     fn process(
         &self,
         request: RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>>;
 
     fn request_ordering(&self, _request: &RemotingCommand) -> RequestOrdering {
         RequestOrdering::Concurrent
@@ -694,7 +681,7 @@ impl SessionHandle {
     /// Returns an error if any stage of the server-owned close report is unhealthy or if the close
     /// coordinator terminates without publishing completion.
     #[allow(dead_code, reason = "exposed only through the feature-gated session harness")]
-    pub async fn retire(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn retire(&self) -> Result<(), rocketmq_error::SharedError> {
         self.request_close(SessionCloseCause::Administrative);
         self.wait_for_close_completion().await.map(|_| ())
     }
@@ -706,22 +693,27 @@ impl SessionHandle {
         outcome
     }
 
-    pub(crate) fn acquire_server_outbound(&self) -> RocketMQResult<ServerOutboundLease> {
-        self.send.server_outbound.acquire().ok_or_else(|| {
-            rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
-        })
+    pub(crate) fn acquire_server_outbound(&self) -> Result<ServerOutboundLease, rocketmq_error::SharedError> {
+        self.send
+            .server_outbound
+            .acquire()
+            .ok_or_else(|| connection_failed_without_source(TransportStage::Closed))
     }
 
     pub(crate) fn close_requested(&self) -> bool {
         self.send.server_outbound.is_closed()
     }
 
-    pub(crate) async fn wait_for_close_completion(&self) -> RocketMQResult<SessionCloseCompletionSnapshot> {
+    pub(crate) async fn wait_for_close_completion(
+        &self,
+    ) -> Result<SessionCloseCompletionSnapshot, rocketmq_error::SharedError> {
         self.send.close_coordinator.wait().await
     }
 
     #[cfg(test)]
-    pub(crate) async fn close_completion_snapshot(&self) -> RocketMQResult<SessionCloseCompletionSnapshot> {
+    pub(crate) async fn close_completion_snapshot(
+        &self,
+    ) -> Result<SessionCloseCompletionSnapshot, rocketmq_error::SharedError> {
         Ok(self.send.close_coordinator.completed().await?.snapshot)
     }
 
@@ -729,7 +721,7 @@ impl SessionHandle {
         self.send.close_coordinator.complete(report.completion());
     }
 
-    async fn retire_writer_owned(&self) -> rocketmq_error::RocketMQResult<()> {
+    async fn retire_writer_owned(&self) -> Result<(), rocketmq_error::SharedError> {
         self.retire_with_timeout_inner(SESSION_RETIREMENT_TIMEOUT, None).await
     }
 
@@ -737,15 +729,13 @@ impl SessionHandle {
         &self,
         timeout: Duration,
         started: Option<tokio::sync::oneshot::Sender<()>>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         let mut retirement_guard = SessionRetirementGuard::new(self);
         let result = match tokio::time::timeout(timeout, self.retire_inner(started)).await {
             Ok(result) => result,
             Err(_) => {
                 self.abort();
-                Err(rocketmq_error::RocketMQError::Shared(connection_failed_without_source(
-                    TransportStage::Closed,
-                )))
+                Err(connection_failed_without_source(TransportStage::Closed))
             }
         };
         retirement_guard.complete();
@@ -755,7 +745,7 @@ impl SessionHandle {
     async fn retire_inner(
         &self,
         started: Option<tokio::sync::oneshot::Sender<()>>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         if let Some(started) = started {
             let _ = started.send(());
         }
@@ -769,17 +759,11 @@ impl SessionHandle {
             self.request_operation.cancel();
             self.send.writer_operation.cancel();
             self.send.task_group.abort_task(self.send.writer_task_id);
-            return Err(rocketmq_error::RocketMQError::Shared(connection_failed(
-                TransportStage::Closed,
-                source,
-            )));
+            return Err(connection_failed(TransportStage::Closed, source));
         }
-        let close_result = result.await.unwrap_or_else(|source| {
-            Err(rocketmq_error::RocketMQError::Shared(connection_failed(
-                TransportStage::Closed,
-                source,
-            )))
-        });
+        let close_result = result
+            .await
+            .unwrap_or_else(|source| Err(connection_failed(TransportStage::Closed, source)));
         let _ = self.send.session_closed_tx.send(true);
         let _ = self.send.state_tx.send(ConnectionState::Closed);
         self.send.reader_cancellation.cancel();
@@ -807,13 +791,13 @@ impl SessionHandle {
     async fn retire_with_signal(
         &self,
         started: tokio::sync::oneshot::Sender<()>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.retire_with_timeout_inner(SESSION_RETIREMENT_TIMEOUT, Some(started))
             .await
     }
 
     #[cfg(test)]
-    async fn retire_with_timeout(&self, timeout: Duration) -> rocketmq_error::RocketMQResult<()> {
+    async fn retire_with_timeout(&self, timeout: Duration) -> Result<(), rocketmq_error::SharedError> {
         self.retire_with_timeout_inner(timeout, None).await
     }
 }
@@ -1061,7 +1045,7 @@ impl TransportListener {
         dead_code,
         reason = "custom frame limits are used by the feature-gated session harness"
     )]
-    pub fn try_with_frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
+    pub fn try_with_frame_limits(mut self, frame_limits: FrameLimits) -> Result<Self, rocketmq_error::SharedError> {
         frame_limits.validate()?;
         self.frame_limits = frame_limits;
         Ok(self)
@@ -1078,7 +1062,7 @@ impl TransportListener {
         dead_code,
         reason = "custom PROXY policy is used by the feature-gated session harness"
     )]
-    pub fn try_with_proxy_protocol(mut self, config: ProxyProtocolConfig) -> RocketMQResult<Self> {
+    pub fn try_with_proxy_protocol(mut self, config: ProxyProtocolConfig) -> Result<Self, rocketmq_error::SharedError> {
         config.validate()?;
         self.proxy_protocol = config;
         Ok(self)
@@ -1151,21 +1135,21 @@ impl TransportListener {
     }
 
     #[allow(dead_code, reason = "used by the feature-gated low-level session server")]
-    pub async fn run<H>(self, handler: Arc<H>) -> RocketMQResult<()>
+    pub async fn run<H>(self, handler: Arc<H>) -> Result<(), rocketmq_error::SharedError>
     where
         H: ConnectionHandler,
     {
         self.run_route(Arc::new(HandlerFrameRoute { handler })).await
     }
 
-    pub(crate) async fn run_authorized<R>(self, route: Arc<R>) -> RocketMQResult<()>
+    pub(crate) async fn run_authorized<R>(self, route: Arc<R>) -> Result<(), rocketmq_error::SharedError>
     where
         R: AuthorizedFrameRoute,
     {
         self.run_route(route).await
     }
 
-    async fn run_route<R>(self, route: Arc<R>) -> RocketMQResult<()>
+    async fn run_route<R>(self, route: Arc<R>) -> Result<(), rocketmq_error::SharedError>
     where
         R: AuthorizedFrameRoute,
     {
@@ -1182,12 +1166,12 @@ impl TransportListener {
                 tracing::warn!(%remote_addr, %error, "rejected transport socket with invalid required options");
                 continue;
             }
-            let local_addr = stream.local_addr()?;
+            let local_addr = stream.local_addr().map_err(|source| {
+                connection_failed_for_remote(remote_addr.to_string(), TransportStage::Connect, source)
+            })?;
             let Some(session_id) = reserve_session_owner() else {
                 drop(stream);
-                return Err(rocketmq_error::RocketMQError::Shared(connection_failed_without_source(
-                    TransportStage::Closed,
-                )));
+                return Err(connection_failed_without_source(TransportStage::Closed));
             };
             let scope = AdmissionScope::new(remote_addr.ip()).with_session(session_id);
             let crate::admission::AdmissionOutcome::Acquired(connection_permit) = admission.try_acquire(
@@ -1782,8 +1766,11 @@ pub async fn run_connected_session_with_io_policy<H>(
 
 async fn accept_transport_connection(
     listener: &tokio::net::TcpListener,
-) -> RocketMQResult<(tokio::net::TcpStream, SocketAddr)> {
-    listener.accept().await.map_err(Into::into)
+) -> Result<(tokio::net::TcpStream, SocketAddr), rocketmq_error::SharedError> {
+    listener
+        .accept()
+        .await
+        .map_err(|source| connection_failed(TransportStage::Connect, source))
 }
 
 #[derive(Debug, Clone)]
@@ -1928,7 +1915,7 @@ impl SessionTransportServer {
         config: SessionTransportServerConfig,
         processor: Arc<dyn SessionProcessor>,
         admission: Arc<AdmissionController>,
-    ) -> RocketMQResult<Arc<Self>> {
+    ) -> Result<Arc<Self>, rocketmq_error::SharedError> {
         Self::bind_with_frame_limits(service_context, config, FrameLimits::default(), processor, admission).await
     }
 
@@ -1938,7 +1925,7 @@ impl SessionTransportServer {
         frame_limits: FrameLimits,
         processor: Arc<dyn SessionProcessor>,
         admission: Arc<AdmissionController>,
-    ) -> RocketMQResult<Arc<Self>> {
+    ) -> Result<Arc<Self>, rocketmq_error::SharedError> {
         frame_limits.validate()?;
         Self::bind_with_capabilities(
             service_context,
@@ -1960,7 +1947,7 @@ impl SessionTransportServer {
         admission: Arc<AdmissionController>,
         security: Arc<TransportSecurity>,
         principal: Option<Principal>,
-    ) -> RocketMQResult<Arc<Self>> {
+    ) -> Result<Arc<Self>, rocketmq_error::SharedError> {
         Self::bind_with_security_and_telemetry(
             service_context,
             config,
@@ -1980,7 +1967,7 @@ impl SessionTransportServer {
         processor: Arc<dyn SessionProcessor>,
         admission: Arc<AdmissionController>,
         telemetry: TransportTelemetry,
-    ) -> RocketMQResult<Arc<Self>> {
+    ) -> Result<Arc<Self>, rocketmq_error::SharedError> {
         Self::bind_with_security_and_telemetry(
             service_context,
             config,
@@ -2002,7 +1989,7 @@ impl SessionTransportServer {
         security: Arc<TransportSecurity>,
         principal: Option<Principal>,
         telemetry: TransportTelemetry,
-    ) -> RocketMQResult<Arc<Self>> {
+    ) -> Result<Arc<Self>, rocketmq_error::SharedError> {
         Self::bind_with_capabilities(
             service_context,
             config,
@@ -2026,11 +2013,15 @@ impl SessionTransportServer {
         principal: Option<Principal>,
         telemetry: TransportTelemetry,
         frame_limits: FrameLimits,
-    ) -> RocketMQResult<Arc<Self>> {
+    ) -> Result<Arc<Self>, rocketmq_error::SharedError> {
         config.io_policy.validate()?;
         frame_limits.validate()?;
-        let listener = tokio::net::TcpListener::bind(config.bind_address).await?;
-        let local_addr = listener.local_addr()?;
+        let listener = tokio::net::TcpListener::bind(config.bind_address)
+            .await
+            .map_err(|source| connection_failed(TransportStage::Connect, source))?;
+        let local_addr = listener
+            .local_addr()
+            .map_err(|source| connection_failed(TransportStage::Connect, source))?;
         let tls = TlsServerRuntime::initialize_with_service_context(config.tls.clone(), &service_context).await?;
         Ok(Arc::new(Self {
             local_addr,
@@ -2215,7 +2206,6 @@ mod retirement_tests {
     use std::task::Poll;
     use std::time::Duration;
 
-    use rocketmq_error::RocketMQError;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_protocol::protocol::RemotingCommandType;
     use rocketmq_runtime::RuntimeContext;
@@ -2265,8 +2255,8 @@ mod retirement_tests {
         assert!(healthy.is_healthy());
 
         let failed_writer = SessionWriterCompletionReport::new(
-            Err(rocketmq_error::RocketMQError::Shared(
-                crate::error_helpers::connection_failed_without_source(crate::error_helpers::TransportStage::Closed),
+            Err(crate::error_helpers::connection_failed_without_source(
+                crate::error_helpers::TransportStage::Closed,
             )),
             SessionWriterSnapshot::default(),
         );
@@ -3141,9 +3131,7 @@ mod retirement_tests {
             .await
             .expect("checked send task")
             .expect_err("session abort must reject the draining send");
-        let RocketMQError::Shared(source) = send_error else {
-            panic!("session abort must retain a canonical Shared error")
-        };
+        let source = send_error;
         assert_eq!(source.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
         runner.await.expect("session runner");
     }
@@ -3239,13 +3227,11 @@ mod retirement_tests {
             .expect("send task")
             .expect_err("deadline must win the enqueue race");
 
-        assert!(matches!(
-            error,
-            RocketMQError::Timeout {
-                operation: "transport_before_send",
-                timeout_ms: 50,
-            }
-        ));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_OPERATION_TIMED_OUT);
+        assert_eq!(
+            error.context().to_string(),
+            "operation=transport_before_send, timeout_ms=50"
+        );
         let mut byte = [0_u8; 1];
         tokio::select! {
             biased;

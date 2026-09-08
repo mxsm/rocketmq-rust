@@ -23,7 +23,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::OperationContext;
 use tokio::sync::Notify;
 use tracing::Instrument;
@@ -89,7 +88,7 @@ pub(crate) async fn resume_claimed<R, F, Fut>(
 where
     R: Send + 'static,
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
-    Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
+    Fut: Future<Output = Result<RemotingResponse, rocketmq_error::SharedError>> + Send + 'static,
 {
     let id = claimed.deferred_id();
     let request_id = claimed.request_id();
@@ -165,7 +164,7 @@ pub(crate) fn submit_claimed<R, F, Fut, O>(
 where
     R: Send + 'static,
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
-    Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
+    Fut: Future<Output = Result<RemotingResponse, rocketmq_error::SharedError>> + Send + 'static,
     O: FnOnce(&PublicResumeResult) + Send + 'static,
 {
     let id = claimed.deferred_id();
@@ -571,7 +570,7 @@ impl<R, F, Fut> DeferredResumeWork for ResumeWorkImpl<R, F>
 where
     R: Send + 'static,
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
-    Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
+    Fut: Future<Output = Result<RemotingResponse, rocketmq_error::SharedError>> + Send + 'static,
 {
     fn release_wait_permit(&mut self) {
         if let Some(parts) = self.parts.as_mut() {
@@ -632,7 +631,7 @@ async fn execute_work<R, F, Fut>(parts: ClaimExecutionParts<R>, handler: F, stop
 where
     R: Send + 'static,
     F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
-    Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
+    Fut: Future<Output = Result<RemotingResponse, rocketmq_error::SharedError>> + Send + 'static,
 {
     let ClaimExecutionParts {
         id,
@@ -659,7 +658,7 @@ where
         return result;
     }
     enum HandlerOutcome<T> {
-        Completed(RocketMQResult<T>),
+        Completed(Result<T, rocketmq_error::SharedError>),
         Stopped(ResumeResult),
     }
     // Keep the completed handler future alive until response delivery reaches

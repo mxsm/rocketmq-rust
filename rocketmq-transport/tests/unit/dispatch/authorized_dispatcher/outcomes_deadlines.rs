@@ -136,10 +136,10 @@ struct CommitFailureProcessor {
 }
 
 impl RequestProcessor for CommitFailureProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         request
             .mark_deferred_response_taken()
-            .map_err(|_| RocketMQError::illegal_argument("test deferred response reservation failed"))?;
+            .map_err(|_| crate::error_helpers::argument_invalid())?;
         Ok(HandlerOutcome::Deferred(
             DeferredRegistration::with_commit_error_for_test(request.original_identity().request_id(), self.kind),
         ))
@@ -147,7 +147,7 @@ impl RequestProcessor for CommitFailureProcessor {
 }
 
 impl RequestProcessor for RollbackRegistrationProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         if self.take_current {
             drop(expect_deferred_responder(
                 request.take_deferred_responder(),
@@ -159,7 +159,7 @@ impl RequestProcessor for RollbackRegistrationProcessor {
             .lock()
             .expect("real registration lock")
             .take()
-            .ok_or_else(|| RocketMQError::illegal_argument("real registration already consumed"))?;
+            .ok_or_else(|| crate::error_helpers::argument_invalid())?;
         Ok(HandlerOutcome::Deferred(registration))
     }
 }
@@ -216,10 +216,10 @@ fn real_registration_fixture(name: &'static str, owner: u64) -> (RealRegistratio
 }
 
 impl RequestProcessor for RegistryDeferredProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         let responder = expect_deferred_responder(request.take_deferred_responder(), "registry responder extraction");
         let retained = DeferredRegistry::<String>::try_retained_size(DeferredRetainedSizeParts::new(0))
-            .map_err(|_| RocketMQError::illegal_argument("deferred responder extraction failed"))?;
+            .map_err(|_| crate::error_helpers::argument_invalid())?;
         let permit = expect_deferred_permit(self.admission.try_reserve(retained), "dispatcher deferred permit");
         let mut registration = expect_registered(
             self.registry.register(DeferredRequest::new(
@@ -244,7 +244,7 @@ impl RequestProcessor for RegistryDeferredProcessor {
 }
 
 impl RequestProcessor for PublicDeferredProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         let request_id = request.original_identity().request_id();
         let original_opaque = request.original_identity().original_opaque();
         let session_id = request.session().id();
@@ -261,7 +261,7 @@ impl RequestProcessor for PublicDeferredProcessor {
                 .expect("deferred remoting response"),
             )
             .await
-            .map_err(|_| RocketMQError::illegal_argument("deferred response construction failed"))?
+            .map_err(|_| crate::error_helpers::argument_invalid())?
         {
             DeferredResponseOutcome::Completed(receipt) => receipt,
             DeferredResponseOutcome::AlreadyCompleted
@@ -269,7 +269,7 @@ impl RequestProcessor for PublicDeferredProcessor {
             | DeferredResponseOutcome::Cancelled
             | DeferredResponseOutcome::SessionClosed
             | DeferredResponseOutcome::QueueSaturated => {
-                return Err(RocketMQError::illegal_argument("deferred response was rejected"));
+                return Err(crate::error_helpers::argument_invalid());
             }
         };
         assert_eq!(receipt.request_id(), request_id);
@@ -385,7 +385,7 @@ async fn dispatcher_commits_a_real_registry_registration_before_returning_deferr
                     assert_eq!(resume, "dispatcher-owned deferred resume");
                     assert_eq!(reason, DeferredWakeReason::MessageArrived);
                     RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
-                        .map_err(|_| RocketMQError::illegal_argument("deferred response construction failed"))
+                        .map_err(|_| crate::error_helpers::argument_invalid())
                 },
             )
             .await
@@ -591,7 +591,7 @@ async fn expired_resume_cancels_without_polling_the_handler_or_writing_a_respons
             called.store(true, Ordering::SeqCst);
             async move {
                 RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
-                    .map_err(|_| RocketMQError::illegal_argument("deferred response construction failed"))
+                    .map_err(|_| crate::error_helpers::argument_invalid())
             }
         })
         .await

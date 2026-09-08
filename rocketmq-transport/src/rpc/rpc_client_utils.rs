@@ -16,7 +16,6 @@ use std::any::Any;
 
 use bytes::Bytes;
 use bytes::BytesMut;
-use rocketmq_error::RocketMQResult;
 
 use crate::rpc::rpc_request::RpcRequest;
 use crate::rpc::rpc_response::RpcResponse;
@@ -32,7 +31,7 @@ pub struct RpcClientUtils;
 impl RpcClientUtils {
     pub fn try_create_command_for_rpc_request<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         rpc_request: RpcRequest<H>,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> Result<RemotingCommand, rocketmq_error::SharedError> {
         let result = RemotingCommand::create_request_command(rpc_request.code, rpc_request.header);
         if let Some(body) = rpc_request.body {
             if let Some(body) = Self::try_encode_body(&*body)? {
@@ -85,13 +84,19 @@ impl RpcClientUtils {
         Self::try_encode_body(body).ok().flatten()
     }
 
-    pub fn try_encode_body(body: &dyn Any) -> RocketMQResult<Option<Bytes>> {
+    pub fn try_encode_body(body: &dyn Any) -> Result<Option<Bytes>, rocketmq_error::SharedError> {
         if body.is::<()>() {
             Ok(None)
         } else if let Some(bytes) = body.downcast_ref::<Bytes>() {
             Ok(Some(bytes.clone()))
         } else if let Some(remoting_serializable) = body.downcast_ref::<&dyn RemotingSerializable>() {
-            remoting_serializable.encode().map(Bytes::from).map(Some)
+            remoting_serializable
+                .encode()
+                .map(Bytes::from)
+                .map(Some)
+                .map_err(|source| {
+                    crate::error_helpers::serialization_failed_caused_by("encode", "remoting-body", source)
+                })
         } else if let Some(buffer) = body.downcast_ref::<BytesMut>() {
             let data = buffer.clone().freeze();
             Ok(Some(data))
@@ -103,8 +108,11 @@ impl RpcClientUtils {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use cheetah_string::CheetahString;
-    use rocketmq_error::RocketMQError;
+    use rocketmq_error::Error;
+    use rocketmq_error::ErrorContext;
     use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
     use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
     use rocketmq_protocol::protocol::SerializeType;
@@ -115,24 +123,30 @@ mod tests {
     struct FailingSerializable;
 
     impl RemotingSerializable for FailingSerializable {
-        fn encode(&self) -> RocketMQResult<Vec<u8>> {
-            Err(RocketMQError::response_process_failed(
-                "encode remoting body",
-                "forced encode failure",
+        fn encode(&self) -> rocketmq_error::Result<Vec<u8>> {
+            Err(Error::new(&rocketmq_error::PROTOCOL_RESPONSE_FAILED).with_context(
+                ErrorContext::new()
+                    .with_text(rocketmq_error::fields::OPERATION_DIAGNOSTIC, "encode remoting body")
+                    .with_secret_presence(rocketmq_error::fields::REASON_PRESENT),
             ))
         }
 
-        fn serialize_json(&self) -> RocketMQResult<String> {
-            Err(RocketMQError::response_process_failed(
-                "serialize remoting body",
-                "forced json failure",
+        fn serialize_json(&self) -> rocketmq_error::Result<String> {
+            Err(Error::new(&rocketmq_error::PROTOCOL_RESPONSE_FAILED).with_context(
+                ErrorContext::new()
+                    .with_text(rocketmq_error::fields::OPERATION_DIAGNOSTIC, "serialize remoting body")
+                    .with_secret_presence(rocketmq_error::fields::REASON_PRESENT),
             ))
         }
 
-        fn serialize_json_pretty(&self) -> RocketMQResult<String> {
-            Err(RocketMQError::response_process_failed(
-                "serialize remoting body pretty",
-                "forced pretty json failure",
+        fn serialize_json_pretty(&self) -> rocketmq_error::Result<String> {
+            Err(Error::new(&rocketmq_error::PROTOCOL_RESPONSE_FAILED).with_context(
+                ErrorContext::new()
+                    .with_text(
+                        rocketmq_error::fields::OPERATION_DIAGNOSTIC,
+                        "serialize remoting body pretty",
+                    )
+                    .with_secret_presence(rocketmq_error::fields::REASON_PRESENT),
             ))
         }
     }
@@ -145,7 +159,8 @@ mod tests {
         let error =
             RpcClientUtils::try_encode_body(&body).expect_err("serializable body encoding failure should be returned");
 
-        assert!(error.to_string().contains("forced encode failure"));
+        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_RESPONSE_FAILED);
+        assert!(error.source().is_some());
     }
 
     #[test]
@@ -212,7 +227,11 @@ mod tests {
     #[test]
     fn factory_aware_rpc_response_preserves_fields_and_owner_defaults() {
         let factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(9343, SerializeType::ROCKETMQ));
-        let exception = RocketMQError::response_process_failed("forward RPC response", "remote failure");
+        let exception = Error::new(&rocketmq_error::PROTOCOL_RESPONSE_FAILED).with_context(
+            ErrorContext::new()
+                .with_text(rocketmq_error::fields::OPERATION_DIAGNOSTIC, "forward RPC response")
+                .with_secret_presence(rocketmq_error::fields::REASON_PRESENT),
+        );
         let expected_remark = exception.to_string();
         let mut response = RpcResponse::new(
             17,

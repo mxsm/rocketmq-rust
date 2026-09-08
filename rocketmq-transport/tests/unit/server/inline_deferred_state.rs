@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
@@ -60,13 +59,13 @@ struct ConstructionProbeProcessor {
 }
 
 impl RequestProcessor for ConstructionProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         match request.command().code() {
-            ERROR_CODE => Err(RocketMQError::illegal_argument("mapped processor failure")),
+            ERROR_CODE => Err(crate::error_helpers::argument_invalid()),
             NO_REPLY_CODE => Ok(HandlerOutcome::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
-                    .map_err(|_| RocketMQError::illegal_argument("protocol no-response contract failed"))?,
+                    .map_err(|_| crate::error_helpers::argument_invalid())?,
             )),
             DEFERRED_CODE => {
                 let responder = match request.take_deferred_responder() {
@@ -75,17 +74,17 @@ impl RequestProcessor for ConstructionProbeProcessor {
                     | DeferredResponderOutcome::Unavailable
                     | DeferredResponderOutcome::AlreadyTaken
                     | DeferredResponderOutcome::OutcomeCompleted => {
-                        return Err(RocketMQError::illegal_argument("deferred responder unavailable"));
+                        return Err(crate::error_helpers::argument_invalid());
                     }
                 };
                 let retained = DeferredRegistry::<i32>::try_retained_size(DeferredRetainedSizeParts::new(0))
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+                    .map_err(|_| crate::error_helpers::argument_invalid())?;
                 let permit = match self.admission.try_reserve(retained) {
                     DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
                     DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
                     | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
                     | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
-                        return Err(RocketMQError::illegal_argument("deferred admission rejected"));
+                        return Err(crate::error_helpers::argument_invalid());
                     }
                 };
                 let registration = match self.registry.register(DeferredRequest::new(
@@ -100,13 +99,13 @@ impl RequestProcessor for ConstructionProbeProcessor {
                     | DeferredRegistryOutcome::DeadlineExpired
                     | DeferredRegistryOutcome::ContractViolation { .. }
                     | DeferredRegistryOutcome::OperationalFailure { .. } => {
-                        return Err(RocketMQError::illegal_argument("deferred registration rejected"));
+                        return Err(crate::error_helpers::argument_invalid());
                     }
                     DeferredRegistryOutcome::BuilderRejected { error, .. } => match error {},
                 };
                 self.registrations
                     .send(registration.deferred_id())
-                    .map_err(|_| RocketMQError::illegal_argument("construction registration observer closed"))?;
+                    .map_err(|_| crate::error_helpers::argument_invalid())?;
                 Ok(HandlerOutcome::Deferred(registration))
             }
             REPLY_CODE => RemotingResponse::bytes(
@@ -114,10 +113,8 @@ impl RequestProcessor for ConstructionProbeProcessor {
                 Bytes::from_static(b"inline-without-deferred-state"),
             )
             .map(HandlerOutcome::Reply)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string())),
-            code => Err(RocketMQError::illegal_argument(format!(
-                "unexpected construction-probe request code {code}"
-            ))),
+            .map_err(|_| crate::error_helpers::argument_invalid()),
+            _ => Err(crate::error_helpers::argument_invalid()),
         }
     }
 

@@ -23,7 +23,6 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQResult;
 use rocketmq_error::AUTH_PERMISSION_DENIED;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -73,7 +72,7 @@ impl SessionProcessor for CountingEchoProcessor {
     fn process(
         &self,
         request: RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
         Box::pin(async move {
             self.0.fetch_add(1, Ordering::SeqCst);
             Ok(RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(request.opaque()))
@@ -85,7 +84,7 @@ impl SessionProcessor for EchoProcessor {
     fn process(
         &self,
         request: RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
         Box::pin(async move {
             Ok(RemotingCommand::create_response_command_with_code(0)
                 .set_opaque(request.opaque())
@@ -100,7 +99,7 @@ impl SessionProcessor for HungProcessor {
     fn process(
         &self,
         _request: RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
         Box::pin(std::future::pending())
     }
 }
@@ -111,7 +110,7 @@ impl SessionProcessor for WrongOpaqueProcessor {
     fn process(
         &self,
         request: RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
         Box::pin(
             async move { Ok(RemotingCommand::create_response_command_with_code(0).set_opaque(request.opaque() + 1)) },
         )
@@ -237,7 +236,7 @@ impl SessionProcessor for SignatureProcessor {
     fn process(
         &self,
         request: RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
         Box::pin(async move {
             assert_eq!(
                 request
@@ -255,7 +254,7 @@ impl SessionProcessor for ControlledProcessor {
     fn process(
         &self,
         request: RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if request.code() == RequestCode::SendMessage.to_i32() {

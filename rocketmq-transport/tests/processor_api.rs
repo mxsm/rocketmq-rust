@@ -18,7 +18,8 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
+use rocketmq_error::{Error, ErrorContext};
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::Principal;
 use rocketmq_transport::api::AuthenticationState;
@@ -352,8 +353,7 @@ fn assert_claim_resume_contract<R>(
     let _: &mut R = claimed.resume_data_mut();
     assert_send_future(registry.claim(id, DeferredWakeReason::MessageArrived));
     let resume = claimed.resume(DeferredResumeRetainedSize::new(7), |_, _| async move {
-        RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
-            .map_err(|_| RocketMQError::illegal_argument("response contract"))
+        RemotingResponse::command(RemotingCommand::create_response_command_with_code(0)).map_err(|_| argument_invalid())
     });
     assert_send_future(resume);
     if let Some(error) = claim_error {
@@ -373,11 +373,11 @@ fn assert_claim_resume_contract<R>(
 struct LocalOnlyProcessor;
 
 impl LocalRequestProcessor for LocalOnlyProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         let local = Rc::new(());
         std::future::ready(()).await;
         drop(local);
-        Err(RocketMQError::illegal_argument("local processor contract"))
+        Err(argument_invalid())
     }
 }
 
@@ -385,8 +385,8 @@ impl LocalRequestProcessor for LocalOnlyProcessor {
 struct SendProcessor;
 
 impl RequestProcessor for SendProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        Err(RocketMQError::illegal_argument("send processor contract"))
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+        Err(argument_invalid())
     }
 }
 
@@ -685,4 +685,10 @@ fn api_client_facade_defaults_and_builders_use_the_canonical_processor() {
     let registry = SessionRegistry::new();
     assert!(registry.is_empty());
     let _: tokio::sync::broadcast::Receiver<SessionEvent> = registry.subscribe();
+}
+fn argument_invalid() -> SharedError {
+    std::sync::Arc::new(
+        Error::new(&rocketmq_error::CORE_ARGUMENT_INVALID)
+            .with_context(ErrorContext::new().with_secret_presence(rocketmq_error::fields::MESSAGE_PRESENT)),
+    )
 }

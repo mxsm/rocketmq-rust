@@ -165,7 +165,7 @@ impl RPCHook for NoopHook {
         &self,
         _remote_addr: SocketAddr,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         Ok(())
     }
 
@@ -174,7 +174,7 @@ impl RPCHook for NoopHook {
         _remote_addr: SocketAddr,
         _request: &RemotingCommand,
         _response: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         Ok(())
     }
 }
@@ -231,7 +231,8 @@ impl PendingHotPathHarness {
     }
 
     pub fn boxed_mutex_completion(&self) {
-        let (sender, _receiver) = tokio::sync::oneshot::channel::<rocketmq_error::RocketMQResult<RemotingCommand>>();
+        let (sender, _receiver) =
+            tokio::sync::oneshot::channel::<Result<RemotingCommand, rocketmq_error::SharedError>>();
         let legacy = Box::new(Mutex::new(Some(sender)));
         if let Some(sender) = legacy.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
             let _ = sender.send(Ok(RemotingCommand::create_success_response_command()));
@@ -240,7 +241,8 @@ impl PendingHotPathHarness {
     }
 
     pub fn concrete_oneshot_completion(&self) {
-        let (sender, _receiver) = tokio::sync::oneshot::channel::<rocketmq_error::RocketMQResult<RemotingCommand>>();
+        let (sender, _receiver) =
+            tokio::sync::oneshot::channel::<Result<RemotingCommand, rocketmq_error::SharedError>>();
         let _ = sender.send(Ok(RemotingCommand::create_success_response_command()));
     }
 

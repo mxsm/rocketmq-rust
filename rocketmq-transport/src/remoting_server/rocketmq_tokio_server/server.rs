@@ -149,7 +149,7 @@ where
     /// # Errors
     ///
     /// Returns an error if `frame_limits` is not a valid transport profile.
-    pub fn try_with_frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
+    pub fn try_with_frame_limits(mut self, frame_limits: FrameLimits) -> Result<Self, rocketmq_error::SharedError> {
         frame_limits.validate()?;
         self.frame_limits = frame_limits;
         Ok(self)
@@ -160,7 +160,7 @@ where
     /// # Errors
     ///
     /// Returns an error if the PROXY protocol policy is inconsistent.
-    pub fn try_with_proxy_protocol(mut self, config: ProxyProtocolConfig) -> RocketMQResult<Self> {
+    pub fn try_with_proxy_protocol(mut self, config: ProxyProtocolConfig) -> Result<Self, rocketmq_error::SharedError> {
         config.validate()?;
         self.proxy_protocol = config;
         Ok(self)
@@ -468,19 +468,13 @@ fn notify_startup(
     }
 }
 
-fn configuration_error(_stage: &'static str, error: RocketMQError) -> TransportError {
+fn configuration_error(_stage: &'static str, error: SharedError) -> TransportError {
     TransportError::start(error)
 }
 
 fn configuration_message(stage: &'static str, detail: &'static str) -> TransportError {
-    configuration_error(
-        stage,
-        RocketMQError::ConfigInvalidValue {
-            key: stage,
-            value: "conflict".to_owned(),
-            reason: detail.to_owned(),
-        },
-    )
+    let _ = detail;
+    configuration_error(stage, crate::error_helpers::configuration_invalid(stage))
 }
 
 async fn serve<P>(

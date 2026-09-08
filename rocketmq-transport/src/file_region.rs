@@ -17,10 +17,10 @@ use std::sync::Arc;
 #[cfg(all(target_os = "linux", feature = "linux-sendfile"))]
 use std::sync::OnceLock;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::error_helpers::argument_invalid;
 
 /// Owns the file descriptor and storage-generation lease behind a [`FileRegion`].
 ///
@@ -64,16 +64,12 @@ impl FileRegionSequence {
     ///
     /// Returns a typed argument error when no region is supplied or the aggregate length
     /// overflows `u64`.
-    pub fn try_new(regions: Vec<FileRegion>) -> RocketMQResult<Self> {
+    pub fn try_new(regions: Vec<FileRegion>) -> Result<Self, rocketmq_error::SharedError> {
         if regions.is_empty() {
-            return Err(RocketMQError::illegal_argument(
-                "file region sequence must contain at least one region",
-            ));
+            return Err(argument_invalid());
         }
         let len = regions.iter().try_fold(0_u64, |total, region| {
-            total
-                .checked_add(region.len())
-                .ok_or_else(|| RocketMQError::illegal_argument("file region sequence length overflowed u64"))
+            total.checked_add(region.len()).ok_or_else(argument_invalid)
         })?;
         Ok(Self { regions, len })
     }
@@ -137,26 +133,20 @@ impl FileRegion {
     ///
     /// Returns a typed error for a zero length, arithmetic overflow, a range beyond the current
     /// file length, or a metadata failure.
-    pub fn try_new(lease: Arc<dyn FileRegionLease>, offset: u64, len: u64) -> RocketMQResult<Self> {
+    pub fn try_new(
+        lease: Arc<dyn FileRegionLease>,
+        offset: u64,
+        len: u64,
+    ) -> Result<Self, rocketmq_error::SharedError> {
         if len == 0 {
-            return Err(RocketMQError::illegal_argument(
-                "file region length must be greater than zero",
-            ));
+            return Err(argument_invalid());
         }
-        let end = offset
-            .checked_add(len)
-            .ok_or_else(|| RocketMQError::illegal_argument("file region offset plus length overflowed u64"))?;
+        let end = offset.checked_add(len).ok_or_else(argument_invalid)?;
         let metadata = lease.file().metadata().map_err(|source| {
-            rocketmq_error::RocketMQError::Shared(crate::error_helpers::connection_failed(
-                crate::error_helpers::TransportStage::Read,
-                source,
-            ))
+            crate::error_helpers::connection_failed(crate::error_helpers::TransportStage::Read, source)
         })?;
         if end > metadata.len() {
-            return Err(RocketMQError::illegal_argument(format!(
-                "file region end {end} exceeds leased file length {}",
-                metadata.len()
-            )));
+            return Err(argument_invalid());
         }
         Ok(Self {
             lease,

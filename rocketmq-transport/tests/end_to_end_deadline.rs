@@ -23,7 +23,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_transport::api::AdmissionController;
@@ -147,7 +147,7 @@ async fn expired_before_send_has_zero_remote_side_effects() {
 
     assert!(matches!(
         error,
-        RocketMQError::Timeout {
+        SharedError::Timeout {
             operation: "transport_before_send",
             timeout_ms: 10,
         }
@@ -182,7 +182,7 @@ async fn blocked_socket_write_uses_the_original_deadline() {
         .expect("send task")
         .expect_err("blocked socket write must time out");
 
-    let RocketMQError::Shared(source) = error else {
+    let source = error else {
         panic!("blocked write must use the canonical Shared carrier")
     };
     assert_eq!(source.code(), rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code());
@@ -239,7 +239,7 @@ async fn full_outbound_admission_returns_queue_full_without_extending_deadline()
         .await
         .expect_err("full admission must reject immediately");
 
-    let RocketMQError::Shared(source) = error else {
+    let source = error else {
         panic!("queue rejection must use the canonical Shared carrier")
     };
     assert_eq!(
@@ -292,7 +292,7 @@ async fn queued_request_expiry_is_reported_before_send() {
 
     assert!(matches!(
         error,
-        RocketMQError::Timeout {
+        SharedError::Timeout {
             operation: "transport_before_send",
             timeout_ms: 50,
         }
@@ -352,7 +352,7 @@ async fn missing_response_uses_the_same_absolute_response_deadline() {
         Err(error) => error,
     };
 
-    let RocketMQError::Shared(source) = error else {
+    let source = error else {
         panic!("response timeout must use the canonical Shared carrier")
     };
     assert_eq!(source.code(), rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code());

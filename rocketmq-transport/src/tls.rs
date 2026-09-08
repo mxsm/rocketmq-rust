@@ -29,8 +29,7 @@ pub use crate::config::TlsConfig;
 pub use crate::config::TlsMode;
 #[cfg(feature = "tls")]
 use parking_lot::Mutex;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 #[cfg(feature = "tls")]
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
@@ -48,6 +47,7 @@ use tracing::warn;
 
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::connection::Connection;
+use crate::error_helpers::configuration_invalid;
 #[cfg(feature = "tls")]
 use crate::error_helpers::connection_failed;
 #[cfg(feature = "tls")]
@@ -170,7 +170,7 @@ impl TlsServerRuntime {
     pub async fn initialize_with_service_context(
         base_config: TlsConfig,
         service_context: &ChildServiceContext,
-    ) -> RocketMQResult<Self> {
+    ) -> Result<Self, rocketmq_error::SharedError> {
         #[cfg(feature = "tls")]
         {
             Self::initialize_with_task_group_and_blocking(
@@ -195,7 +195,7 @@ impl TlsServerRuntime {
         base_config: TlsConfig,
         task_group: TaskGroup,
         blocking: BlockingExecutor,
-    ) -> RocketMQResult<Self> {
+    ) -> Result<Self, rocketmq_error::SharedError> {
         let mode = base_config.server.mode;
         let acceptor = StdArc::new(TlsAcceptorSlot::empty());
         if mode != TlsMode::Disabled {
@@ -206,19 +206,14 @@ impl TlsServerRuntime {
                     build_server_acceptor(&effective)
                 })
                 .await
-                .map_err(|source| {
-                    rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::EndpointValidation, source))
-                })?;
+                .map_err(|source| connection_failed(TransportStage::EndpointValidation, source))?;
             match initial {
                 Ok(initial) => acceptor.store(Some(StdArc::new(VersionedTlsAcceptor {
                     generation: 1,
                     acceptor: initial,
                 }))),
                 Err(error) if mode == TlsMode::Enforcing => {
-                    return Err(rocketmq_error::RocketMQError::Shared(connection_failed(
-                        TransportStage::EndpointValidation,
-                        error,
-                    )));
+                    return Err(connection_failed(TransportStage::EndpointValidation, error));
                 }
                 Err(error) => warn!("failed to build initial TLS server acceptor: {error}"),
             }
@@ -361,7 +356,7 @@ impl TlsServerRuntime {
     }
 
     #[cfg(feature = "tls")]
-    pub async fn reload_now(&self) -> RocketMQResult<()> {
+    pub async fn reload_now(&self) -> Result<(), rocketmq_error::SharedError> {
         self.reload_now_with_report().await.map(|_| ())
     }
 
@@ -372,7 +367,7 @@ impl TlsServerRuntime {
     /// Returns an error without changing the active generation when blocking execution, parsing,
     /// certificate/key validation, or generation advancement fails.
     #[cfg(feature = "tls")]
-    pub async fn reload_now_with_report(&self) -> RocketMQResult<TlsReloadReport> {
+    pub async fn reload_now_with_report(&self) -> Result<TlsReloadReport, rocketmq_error::SharedError> {
         let _reload_writer = self.reload_writer.lock().await;
         let base_config = self.base_config.clone();
         let mode = self.mode;
@@ -388,9 +383,7 @@ impl TlsServerRuntime {
                 }
             })
             .await
-            .map_err(|source| {
-                rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::EndpointValidation, source))
-            })??;
+            .map_err(|source| connection_failed(TransportStage::EndpointValidation, source))??;
         let previous_generation = self.active_generation();
         let Some(acceptor) = acceptor else {
             return Ok(TlsReloadReport {
@@ -399,9 +392,9 @@ impl TlsServerRuntime {
                 changed: false,
             });
         };
-        let active_generation = previous_generation.checked_add(1).ok_or_else(|| {
-            rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::EndpointValidation))
-        })?;
+        let active_generation = previous_generation
+            .checked_add(1)
+            .ok_or_else(|| connection_failed_without_source(TransportStage::EndpointValidation))?;
         self.acceptor.store(Some(StdArc::new(VersionedTlsAcceptor {
             generation: active_generation,
             acceptor,
@@ -551,23 +544,19 @@ pub async fn connect_tls_stream(
     stream: TcpStream,
     server_name: &str,
     tls_config: &TlsConfig,
-) -> RocketMQResult<tokio_rustls::client::TlsStream<TcpStream>> {
+) -> Result<tokio_rustls::client::TlsStream<TcpStream>, rocketmq_error::SharedError> {
     let config = build_client_config(tls_config)?;
     let connector = tokio_rustls::TlsConnector::from(StdArc::new(config));
     connector
         .connect(parse_server_name(server_name)?, stream)
         .await
-        .map_err(|source| {
-            rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
-                server_name,
-                TransportStage::Connect,
-                source,
-            ))
-        })
+        .map_err(|source| connection_failed_for_remote(server_name, TransportStage::Connect, source))
 }
 
 #[cfg(feature = "tls")]
-pub fn build_client_config(tls_config: &TlsConfig) -> RocketMQResult<tokio_rustls::rustls::ClientConfig> {
+pub fn build_client_config(
+    tls_config: &TlsConfig,
+) -> Result<tokio_rustls::rustls::ClientConfig, rocketmq_error::SharedError> {
     use tokio_rustls::rustls::client::danger::HandshakeSignatureValid;
     use tokio_rustls::rustls::client::danger::ServerCertVerified;
     use tokio_rustls::rustls::client::danger::ServerCertVerifier;
@@ -670,7 +659,7 @@ pub fn build_client_config(tls_config: &TlsConfig) -> RocketMQResult<tokio_rustl
 }
 
 #[cfg(feature = "tls")]
-pub fn build_server_acceptor(tls_config: &TlsConfig) -> RocketMQResult<tokio_rustls::TlsAcceptor> {
+pub fn build_server_acceptor(tls_config: &TlsConfig) -> Result<tokio_rustls::TlsAcceptor, rocketmq_error::SharedError> {
     let effective_config = effective_tls_config(tls_config);
 
     build_server_acceptor_exact(&effective_config)
@@ -682,7 +671,9 @@ pub fn build_server_acceptor(tls_config: &TlsConfig) -> RocketMQResult<tokio_rus
 /// transport TLS properties file. It is intended for callers that already own an atomic,
 /// validated configuration generation.
 #[cfg(feature = "tls")]
-pub fn build_server_acceptor_exact(tls_config: &TlsConfig) -> RocketMQResult<tokio_rustls::TlsAcceptor> {
+pub fn build_server_acceptor_exact(
+    tls_config: &TlsConfig,
+) -> Result<tokio_rustls::TlsAcceptor, rocketmq_error::SharedError> {
     build_server_acceptor_exact_with_alpn(tls_config, &[])
 }
 
@@ -691,7 +682,7 @@ pub fn build_server_acceptor_exact(tls_config: &TlsConfig) -> RocketMQResult<tok
 pub fn build_server_acceptor_exact_with_alpn(
     tls_config: &TlsConfig,
     alpn_protocols: &[Vec<u8>],
-) -> RocketMQResult<tokio_rustls::TlsAcceptor> {
+) -> Result<tokio_rustls::TlsAcceptor, rocketmq_error::SharedError> {
     let effective_config = tls_config;
 
     let (certs, key) = if effective_config.test_mode_enable
@@ -741,7 +732,7 @@ pub fn build_server_acceptor_exact_with_alpn(
 #[cfg(feature = "tls")]
 fn build_client_cert_verifier(
     tls_config: &TlsConfig,
-) -> RocketMQResult<StdArc<dyn tokio_rustls::rustls::server::danger::ClientCertVerifier>> {
+) -> Result<StdArc<dyn tokio_rustls::rustls::server::danger::ClientCertVerifier>, rocketmq_error::SharedError> {
     use tokio_rustls::rustls::server::WebPkiClientVerifier;
 
     match tls_config.server.need_client_auth {
@@ -781,10 +772,13 @@ fn build_client_cert_verifier(
 }
 
 #[cfg(feature = "tls")]
-fn generate_self_signed_certificate() -> RocketMQResult<(
-    Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>,
-    tokio_rustls::rustls::pki_types::PrivateKeyDer<'static>,
-)> {
+fn generate_self_signed_certificate() -> Result<
+    (
+        Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>,
+        tokio_rustls::rustls::pki_types::PrivateKeyDer<'static>,
+    ),
+    rocketmq_error::SharedError,
+> {
     use tokio_rustls::rustls::pki_types::PrivateKeyDer;
     use tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer;
 
@@ -802,7 +796,9 @@ fn generate_self_signed_certificate() -> RocketMQResult<(
 }
 
 #[cfg(feature = "tls")]
-fn load_client_root_store(trust_cert_path: Option<&str>) -> RocketMQResult<tokio_rustls::rustls::RootCertStore> {
+fn load_client_root_store(
+    trust_cert_path: Option<&str>,
+) -> Result<tokio_rustls::rustls::RootCertStore, rocketmq_error::SharedError> {
     match trust_cert_path {
         Some(path) => load_root_store_from_pem(path, "tls.client.trustCertPath"),
         None => load_native_root_store(),
@@ -810,7 +806,7 @@ fn load_client_root_store(trust_cert_path: Option<&str>) -> RocketMQResult<tokio
 }
 
 #[cfg(feature = "tls")]
-fn load_native_root_store() -> RocketMQResult<tokio_rustls::rustls::RootCertStore> {
+fn load_native_root_store() -> Result<tokio_rustls::rustls::RootCertStore, rocketmq_error::SharedError> {
     let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
     let cert_result = rustls_native_certs::load_native_certs();
     let mut added_roots = 0usize;
@@ -838,7 +834,10 @@ fn load_native_root_store() -> RocketMQResult<tokio_rustls::rustls::RootCertStor
 }
 
 #[cfg(feature = "tls")]
-fn load_root_store_from_pem(path: &str, key: &'static str) -> RocketMQResult<tokio_rustls::rustls::RootCertStore> {
+fn load_root_store_from_pem(
+    path: &str,
+    key: &'static str,
+) -> Result<tokio_rustls::rustls::RootCertStore, rocketmq_error::SharedError> {
     let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
     for cert in load_certificates(path, key)? {
         root_store
@@ -857,7 +856,7 @@ fn load_root_store_from_pem(path: &str, key: &'static str) -> RocketMQResult<tok
 pub fn load_certificates(
     path: &str,
     key: &'static str,
-) -> RocketMQResult<Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>> {
+) -> Result<Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>, rocketmq_error::SharedError> {
     let file = fs::File::open(path)
         .map_err(|error| config_error(key, path, format!("failed to open certificate file: {error}")))?;
     let certs = tokio_rustls::rustls::pki_types::CertificateDer::pem_reader_iter(file)
@@ -884,7 +883,7 @@ impl PrivateKeyLoader {
         path: impl AsRef<std::path::Path>,
         key: &'static str,
         password: Option<&str>,
-    ) -> RocketMQResult<tokio_rustls::rustls::pki_types::PrivateKeyDer<'static>> {
+    ) -> Result<tokio_rustls::rustls::pki_types::PrivateKeyDer<'static>, rocketmq_error::SharedError> {
         use std::io::Cursor;
 
         use pkcs8::EncryptedPrivateKeyInfoRef;
@@ -947,12 +946,14 @@ fn load_private_key(
     path: &str,
     key: &'static str,
     password: Option<&str>,
-) -> RocketMQResult<tokio_rustls::rustls::pki_types::PrivateKeyDer<'static>> {
+) -> Result<tokio_rustls::rustls::pki_types::PrivateKeyDer<'static>, rocketmq_error::SharedError> {
     PrivateKeyLoader::load(path, key, password)
 }
 
 #[cfg(feature = "tls")]
-fn parse_server_name(server_name: &str) -> RocketMQResult<tokio_rustls::rustls::pki_types::ServerName<'static>> {
+fn parse_server_name(
+    server_name: &str,
+) -> Result<tokio_rustls::rustls::pki_types::ServerName<'static>, rocketmq_error::SharedError> {
     let value = server_name.trim_matches(['[', ']']);
     if let Ok(ip_addr) = value.parse::<IpAddr>() {
         return Ok(tokio_rustls::rustls::pki_types::ServerName::IpAddress(ip_addr.into()));
@@ -970,7 +971,7 @@ fn parse_server_name(server_name: &str) -> RocketMQResult<tokio_rustls::rustls::
 #[cfg(feature = "tls")]
 fn configured_protocol_versions(
     tls_config: &TlsConfig,
-) -> RocketMQResult<Option<Vec<&'static tokio_rustls::rustls::SupportedProtocolVersion>>> {
+) -> Result<Option<Vec<&'static tokio_rustls::rustls::SupportedProtocolVersion>>, rocketmq_error::SharedError> {
     let Some(protocols) = tls_config.protocols.as_deref() else {
         return Ok(None);
     };
@@ -1050,21 +1051,13 @@ async fn peek_tls_handshake(stream: &TcpStream) -> std::io::Result<bool> {
 }
 
 #[cfg(not(feature = "tls"))]
-pub fn tls_disabled_error() -> RocketMQError {
-    RocketMQError::ConfigInvalidValue {
-        key: "use_tls",
-        value: "true".to_string(),
-        reason: TLS_DISABLED_ERROR_REASON.to_string(),
-    }
+pub fn tls_disabled_error() -> SharedError {
+    configuration_invalid("use_tls")
 }
 
 #[cfg(feature = "tls")]
-fn config_error(key: &'static str, value: impl Into<String>, reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::ConfigInvalidValue {
-        key,
-        value: value.into(),
-        reason: reason.into(),
-    }
+fn config_error(key: &'static str, _value: impl Into<String>, _reason: impl Into<String>) -> SharedError {
+    configuration_invalid(key)
 }
 
 #[cfg(test)]

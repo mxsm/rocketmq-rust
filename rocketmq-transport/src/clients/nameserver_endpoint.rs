@@ -15,8 +15,9 @@
 use std::net::SocketAddr;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
+
+use crate::error_helpers::configuration_invalid;
 
 /// A physical connection address paired with its logical TLS authority.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -27,7 +28,10 @@ pub struct ConnectTarget {
 
 impl ConnectTarget {
     /// Creates a resolved target without discarding its logical authority.
-    pub fn new(socket_addr: SocketAddr, authority: impl Into<CheetahString>) -> RocketMQResult<Self> {
+    pub fn new(
+        socket_addr: SocketAddr,
+        authority: impl Into<CheetahString>,
+    ) -> Result<Self, rocketmq_error::SharedError> {
         let authority = authority.into();
         validate_authority(&authority)?;
         Ok(Self { socket_addr, authority })
@@ -73,7 +77,7 @@ enum NameServerDialTarget {
 
 impl NameServerEndpoint {
     /// Wraps a legacy `host:port` or `ip:port` address.
-    pub fn legacy(address: impl Into<CheetahString>) -> RocketMQResult<Self> {
+    pub fn legacy(address: impl Into<CheetahString>) -> Result<Self, rocketmq_error::SharedError> {
         let address = address.into();
         if address.trim().is_empty() {
             return Err(invalid_authority(&address, "must not be blank"));
@@ -161,7 +165,7 @@ pub fn diff_name_server_endpoints(
     }
 }
 
-fn validate_authority(authority: &str) -> RocketMQResult<()> {
+fn validate_authority(authority: &str) -> Result<(), rocketmq_error::SharedError> {
     let authority = authority.trim();
     if authority.is_empty() {
         return Err(invalid_authority(authority, "must not be blank"));
@@ -184,12 +188,8 @@ fn authority_host(authority: &str) -> &str {
         .map_or(authority, |(host, _)| host)
 }
 
-fn invalid_authority(authority: &str, reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::ConfigInvalidValue {
-        key: "transport.nameserver.authority",
-        value: authority.to_string(),
-        reason: reason.into(),
-    }
+fn invalid_authority(_authority: &str, _reason: impl Into<String>) -> SharedError {
+    configuration_invalid("transport.nameserver.authority")
 }
 
 #[cfg(test)]

@@ -29,7 +29,6 @@ pub(super) use std::time::Duration;
 pub(super) use std::time::Instant;
 
 pub(super) use bytes::Bytes;
-pub(super) use rocketmq_error::RocketMQError;
 pub(super) use rocketmq_protocol::code::response_code::ResponseCode;
 pub(super) use rocketmq_runtime::RuntimeContext;
 pub(super) use rocketmq_runtime::ShutdownDeadline;
@@ -121,7 +120,7 @@ impl Clone for TestProcessor {
 }
 
 impl RequestProcessor for TestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         self.state.processes.fetch_add(1, Ordering::SeqCst);
         self.state.events.lock().expect("event lock").push("process");
         *self.state.request_body_pointer.lock().expect("body pointer lock") =
@@ -138,11 +137,11 @@ impl RequestProcessor for TestProcessor {
                 )
                 .expect("test remoting response"),
             )),
-            Behavior::Error => Err(RocketMQError::illegal_argument("processor failure")),
+            Behavior::Error => Err(crate::error_helpers::argument_invalid()),
             Behavior::NoReply => Ok(HandlerOutcome::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
-                    .map_err(|_| RocketMQError::illegal_argument("protocol no-response contract failed"))?,
+                    .map_err(|_| crate::error_helpers::argument_invalid())?,
             )),
             Behavior::Deferred => {
                 request
@@ -236,7 +235,7 @@ impl crate::runtime::RPCHook for RecordingHook {
         &self,
         _remote_addr: std::net::SocketAddr,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.events.lock().expect("hook event lock").push("before");
         self.before_body_seen
             .fetch_add(usize::from(request.body().is_some()), Ordering::SeqCst);
@@ -254,7 +253,7 @@ impl crate::runtime::RPCHook for RecordingHook {
         _remote_addr: std::net::SocketAddr,
         request: &RemotingCommand,
         response: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.events.lock().expect("hook event lock").push("after");
         self.after_request_body_seen
             .fetch_add(usize::from(request.body().is_some()), Ordering::SeqCst);
@@ -271,7 +270,7 @@ impl crate::runtime::RPCHook for RecordingHook {
             *response = head.set_flag(flag);
         }
         if self.fail_after {
-            Err(RocketMQError::illegal_argument("after hook failure"))
+            Err(crate::error_helpers::argument_invalid())
         } else {
             if self.mark_after_oneway {
                 response.mark_oneway_rpc_ref();

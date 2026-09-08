@@ -15,8 +15,7 @@
 //! Canonical request and one-way execution for the Tokio transport client.
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ResourcePermit;
 use tokio::time;
@@ -31,6 +30,7 @@ use crate::clients::TransportSession;
 use crate::deadline::RequestDeadline;
 use crate::error::RequestOperation;
 use crate::error::TransportError;
+use crate::error_helpers::client_not_started;
 use crate::error_helpers::connection_failed_without_source_for_remote;
 use crate::error_helpers::TransportStage;
 use crate::request_outcome::OutboundRequestContract;
@@ -84,18 +84,19 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         request: RemotingCommand,
         deadline: RequestDeadline,
         permit: Option<ResourcePermit>,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         deadline.ensure_before_send()?;
         if self.is_stopping() {
-            return Err(RocketMQError::ClientNotStarted);
+            return Err(client_not_started());
         }
         let Some(mut client) = self.get_and_create_client_until(Some(addr), deadline).await? else {
-            return Err(rocketmq_error::RocketMQError::Shared(
-                connection_failed_without_source_for_remote(addr, TransportStage::Closed),
+            return Err(connection_failed_without_source_for_remote(
+                addr,
+                TransportStage::Closed,
             ));
         };
         if self.is_stopping() {
-            return Err(RocketMQError::ClientNotStarted);
+            return Err(client_not_started());
         }
 
         let mut request = request;
@@ -138,7 +139,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         target: RequestTarget,
         request: RemotingCommand,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<SendReceipt> {
+    ) -> Result<SendReceipt, rocketmq_error::SharedError> {
         match target {
             RequestTarget::Endpoint(endpoint) => {
                 self.invoke_oneway_until(&endpoint, request, deadline, None).await?;
@@ -151,8 +152,9 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 let started_at = time::Instant::now();
                 deadline.ensure_before_send()?;
                 let Some(selection) = self.get_and_create_nameserver_client_until(deadline).await? else {
-                    return Err(rocketmq_error::RocketMQError::Shared(
-                        connection_failed_without_source_for_remote("<nameserver>", TransportStage::Closed),
+                    return Err(connection_failed_without_source_for_remote(
+                        "<nameserver>",
+                        TransportStage::Closed,
                     ));
                 };
                 let metric_identity = selection.identity.clone();
@@ -415,41 +417,35 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
 }
 
 fn classify_before_write_error(
-    error: RocketMQError,
+    error: SharedError,
     deadline: RequestDeadline,
     remote_addr_present: bool,
 ) -> Result<OutboundRequestOutcome, TransportError> {
-    match error {
-        RocketMQError::Timeout { .. } => Ok(OutboundRequestOutcome::Rejected(
+    if error.descriptor() == &rocketmq_error::CORE_OPERATION_TIMED_OUT {
+        Ok(OutboundRequestOutcome::Rejected(
             OutboundRequestRejection::deadline_expired(
                 OutboundRequestStage::BeforeWrite,
                 deadline.budget_millis(),
                 remote_addr_present,
             ),
-        )),
-        RocketMQError::ClientNotStarted => Ok(OutboundRequestOutcome::Rejected(
+        ))
+    } else if error.descriptor() == &rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED {
+        Ok(OutboundRequestOutcome::Rejected(
             OutboundRequestRejection::client_stopping(OutboundRequestStage::BeforeWrite, remote_addr_present),
-        )),
-        RocketMQError::Shared(error) => Err(TransportError::request(
+        ))
+    } else {
+        Err(TransportError::request(
             RequestOperation::Connect,
             OutboundRequestStage::BeforeWrite,
             error,
-        )),
-        source => Err(TransportError::request_canonicalized(
-            RequestOperation::Connect,
-            OutboundRequestStage::BeforeWrite,
-            source,
-        )),
+        ))
     }
 }
 
 fn request_transport_error(
     operation: RequestOperation,
     stage: OutboundRequestStage,
-    error: RocketMQError,
+    error: SharedError,
 ) -> TransportError {
-    match error {
-        RocketMQError::Shared(error) => TransportError::request(operation, stage, error),
-        source => TransportError::request_canonicalized(operation, stage, source),
-    }
+    TransportError::request(operation, stage, error)
 }

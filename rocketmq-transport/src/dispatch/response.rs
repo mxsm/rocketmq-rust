@@ -17,7 +17,6 @@
 use std::error::Error;
 use std::fmt;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_error::SharedError;
 
 const RESERVED_RESPONSE_OWNER_ID: u64 = u64::MAX;
@@ -129,7 +128,7 @@ pub(crate) enum ResponseOperationalFailure {
     /// Encoding failed deterministically before any write began.
     Encode {
         /// Typed encoding failure preserved for programmatic inspection.
-        source: RocketMQError,
+        source: SharedError,
     },
     /// The canonical response transport failed after the supplied write progress.
     Transport {
@@ -185,7 +184,7 @@ impl ResponseCompletionOutcome {
 }
 
 impl ResponseOperationalFailure {
-    pub(crate) const fn encode(source: RocketMQError) -> Self {
+    pub(crate) const fn encode(source: SharedError) -> Self {
         Self::Encode { source }
     }
 
@@ -351,7 +350,7 @@ mod tests {
         let cases = [
             (
                 ResponseOperationalFailure::Encode {
-                    source: RocketMQError::InvalidProperty("encode-canary".to_owned()),
+                    source: crate::error_helpers::message_property_invalid("encode-canary".to_owned()),
                 },
                 "encode",
                 WriteProgress::NotStarted,
@@ -387,15 +386,15 @@ mod tests {
     #[test]
     fn source_errors_retain_their_concrete_type_and_identity() {
         let encode = ResponseOperationalFailure::Encode {
-            source: RocketMQError::InvalidProperty("encode-source-canary".to_owned()),
+            source: crate::error_helpers::message_property_invalid("encode-source-canary".to_owned()),
         };
         let ResponseOperationalFailure::Encode { source: expected } = &encode else {
             unreachable!()
         };
         let source = Error::source(&encode).expect("encode error should preserve its source");
         let typed = source
-            .downcast_ref::<RocketMQError>()
-            .expect("encode source should remain a RocketMQError");
+            .downcast_ref::<SharedError>()
+            .expect("encode source should remain a SharedError");
         assert!(std::ptr::eq(typed, expected));
         assert_eq!(typed.descriptor(), &PROTOCOL_MESSAGE_PROPERTY_INVALID);
 
@@ -416,7 +415,7 @@ mod tests {
         const CANARY: &str = "response-secret-canary";
         let errors = [
             ResponseOperationalFailure::Encode {
-                source: RocketMQError::InvalidProperty(CANARY.to_owned()),
+                source: crate::error_helpers::message_property_invalid(CANARY.to_owned()),
             },
             ResponseOperationalFailure::Transport {
                 progress: WriteProgress::PossiblyPartial,
