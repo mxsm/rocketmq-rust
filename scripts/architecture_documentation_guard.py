@@ -265,7 +265,6 @@ def validate_schema(policy: dict[str, Any]) -> list[Finding]:
     required = {
         "schema_version",
         "toolchains",
-        "implementation_baseline",
         "candidate_record",
         "root",
         "standalone",
@@ -338,63 +337,6 @@ def validate_candidate_record(root: Path, policy: dict[str, Any]) -> list[Findin
         path = Path(record[field])
         if path.is_absolute() or ".." in path.parts or not (root / path).is_file():
             findings.append(Finding("candidate-record-path", normalized(POLICY_RELATIVE), field))
-    return findings
-
-
-def validate_implementation_baseline(root: Path, policy: dict[str, Any]) -> list[Finding]:
-    baseline = policy.get("implementation_baseline")
-    expected_fields = {
-        "id",
-        "generator",
-        "output",
-        "historical_review_commit",
-        "planning_snapshot_commit",
-        "historical_difference",
-        "commands",
-        "required_evidence",
-    }
-    if not isinstance(baseline, dict) or set(baseline) != expected_fields:
-        return [
-            Finding(
-                "implementation-baseline-schema",
-                normalized(POLICY_RELATIVE),
-                "unexpected implementation_baseline schema",
-            )
-        ]
-    findings: list[Finding] = []
-    if not re.fullmatch(r"architecture-implementation-\d{4}-\d{2}-\d{2}-v\d+", baseline["id"]):
-        findings.append(
-            Finding("implementation-baseline-id", normalized(POLICY_RELATIVE), "baseline id is not versioned")
-        )
-    for field in ("historical_review_commit", "planning_snapshot_commit"):
-        if not re.fullmatch(r"[0-9a-f]{40}", baseline[field]):
-            findings.append(Finding("implementation-baseline-commit", normalized(POLICY_RELATIVE), field))
-    for field in ("generator", "output"):
-        path = Path(baseline[field])
-        if path.is_absolute() or ".." in path.parts:
-            findings.append(Finding("implementation-baseline-path", normalized(POLICY_RELATIVE), field))
-    if not (root / baseline["generator"]).is_file():
-        findings.append(
-            Finding("implementation-baseline-generator", baseline["generator"], "generator is missing")
-        )
-    if not isinstance(baseline["commands"], list) or not baseline["commands"]:
-        findings.append(
-            Finding("implementation-baseline-commands", normalized(POLICY_RELATIVE), "commands are required")
-        )
-    evidence = baseline["required_evidence"]
-    if (
-        not isinstance(evidence, list)
-        or not evidence
-        or len(evidence) != len(set(evidence))
-        or any(Path(path).is_absolute() or ".." in Path(path).parts for path in evidence)
-    ):
-        findings.append(
-            Finding(
-                "implementation-baseline-evidence",
-                normalized(POLICY_RELATIVE),
-                "evidence paths must be unique repository-relative paths",
-            )
-        )
     return findings
 
 
@@ -829,25 +771,6 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
             "soak, complete disaster recovery, Docker images, and real external adapters remain later V1 evidence.",
         ]
     )
-    baseline = policy["implementation_baseline"]
-    lines.extend(
-        [
-            "",
-            "## Current implementation baseline",
-            "",
-            f"- Baseline ID: `{baseline['id']}`.",
-            f"- Generator: `python {baseline['generator']}`.",
-            f"- Local artifact: `{baseline['output']}` (generated, not committed).",
-            f"- Historical review input: `{baseline['historical_review_commit']}`.",
-            f"- Planning snapshot input: `{baseline['planning_snapshot_commit']}`.",
-            f"- Distinction: {baseline['historical_difference']}",
-            "",
-            "The manifest records the current commit, dirty state, normalized Cargo metadata, toolchains,",
-            "hardware/filesystem facts, project routes, commands, and evidence checksums. A dirty manifest",
-            "is explicitly ineligible as a clean release candidate. Later performance and fault artifacts",
-            "must reference this baseline ID or a deliberately versioned successor.",
-        ]
-    )
     lines.extend(
         [
             "",
@@ -1013,7 +936,6 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
 def validate(root: Path, policy: dict[str, Any], facts: Facts) -> list[Finding]:
     findings = validate_schema(policy)
     findings.extend(validate_candidate_record(root, policy))
-    findings.extend(validate_implementation_baseline(root, policy))
     findings.extend(validate_python_tests(root, policy))
     findings.extend(validate_toolchains(root, policy, facts))
     findings.extend(validate_routes(root, policy, facts))

@@ -2,6 +2,9 @@
 
 This document freezes the first formal remoting command baseline after the correctness work for defaults, response construction, endpoint frame limits, and bounded `GO_AWAY` retry. It is a measurement reference, not a claim that Rust or one wire format wins every workload.
 
+The one-time collector and its fixed-count validation were retired on 2026-09-08.
+The tables below remain historical reference data; they are not a current development gate.
+
 ## Measurement contract
 
 The run used Rust revision `f12c363dc040018d612e320f37d2543bd8c872ff` and Apache RocketMQ revision `e3458616d207ee636b1762f0f8dcf788a590d59d`. The checked-in compact tables are:
@@ -13,7 +16,7 @@ The run used Rust revision `f12c363dc040018d612e320f37d2543bd8c872ff` and Apache
 
 Rust Criterion used a 5 second warmup, 10 second measurement window, and 100 samples. Java JMH used 5 forks, 10 one-second warmup iterations, 15 one-second measurement iterations, and the GC profiler. Diagnostic Quick results were rejected. The canonical request-header corpus contains 48 unique cases: JSON and ROCKETMQ, with 24 encode and 24 decode operations.
 
-The run covered construction, header encoding, frame assembly, envelope and typed decoding, round trips, cloning, raw forwarding, display, limit rejection, fragmentation, write batching, admission lookup, pending completion, and hook snapshots. The complete profile is in `scripts/remoting-command-baseline/profile-v1.json`.
+The run covered construction, header encoding, frame assembly, envelope and typed decoding, round trips, cloning, raw forwarding, display, limit rejection, fragmentation, write batching, admission lookup, pending completion, and hook snapshots. The measurement settings above describe the archived run.
 
 ## Environment
 
@@ -74,27 +77,19 @@ An audit of the initial collection found that `write_pipeline` and `admission_pe
 
 One later independent spot check of `remoting_command/header_encode/json/ext-16` completed with exit code 0 and a 2,304.21 ns median versus the formal 1,944.30 ns median (+18.5%). This was outside the formal-run process range and demonstrates cross-session frequency/load drift. Candidate reports must therefore use interleaved baseline/candidate measurements from the same session; exact absolute nanoseconds from this document are not an A/B acceptance gate. Additional long spot-check replays were time-boxed out after the formal 10-process run had completed.
 
-## Reproduction
+## Current performance investigation
 
-From clean Rust and Java oracle worktrees:
+Run the maintained benchmark targets directly and select the relevant cases:
 
-```powershell
-$output = Join-Path $PWD 'target/remoting-command-refactor/baseline-<run-id>'
-./scripts/remoting-command-baseline/collect.ps1 `
-  -JavaRepo <clean-java-oracle> `
-  -Output $output
+```bash
+cargo bench -p rocketmq-protocol --bench remoting_command_hot_paths
+cargo bench -p rocketmq-protocol --bench request_header_codec
+cargo bench -p rocketmq-transport --bench write_pipeline
+cargo bench -p rocketmq-transport --bench admission_pending_hooks
 ```
 
-The collector records the concrete Cargo, Maven, and JMH commands in `commands.txt`, rejects incomplete 48-case or 10-process results, and emits the compact tables with:
-
-```powershell
-python scripts/remoting-command-baseline/summarize.py `
-  --run $output `
-  --output "$output/summary"
-```
-
-Raw Criterion/JMH samples, console logs, profiler output, and machine-local paths remain under `target/` and are not committed.
-
-## Risk and rollback
-
-This change adds benchmark and reporting infrastructure only; it does not modify the production remoting hot path or wire bytes. If the harness becomes unreliable, revert the benchmark target, collector, and this report together. Downstream optimization reports should continue to preserve the 48-case corpus and may replace this baseline only with another complete non-Quick run.
+Keep raw Criterion/JMH output under `target/`. Choose sampling settings appropriate to
+the investigation and compare equivalent workloads in a comparable environment.
+The archived revisions and absolute timings above do not need to be recreated for
+routine development. Request-header compatibility fixtures and benchmark sources
+remain maintained independently of this report.
