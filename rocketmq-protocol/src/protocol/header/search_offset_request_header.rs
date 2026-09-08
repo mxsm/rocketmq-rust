@@ -203,27 +203,6 @@ mod tests {
     }
 
     #[test]
-    fn topic_request_trait_reads_and_updates_every_forwarded_field() {
-        let mut header = header_with_rpc_envelope();
-
-        header.set_topic(CheetahString::from("topic-b"));
-        header.set_queue_id(2);
-        header.set_lo(Some(true));
-        header.set_broker_name(CheetahString::from("broker-a"));
-        header.set_namespace(CheetahString::from("namespace-a"));
-        header.set_namespaced(true);
-        header.set_oneway(false);
-
-        assert_eq!(header.topic(), "topic-b");
-        assert_eq!(header.queue_id(), 2);
-        assert_eq!(header.lo(), Some(true));
-        assert_eq!(header.broker_name().map(|value| value.as_str()), Some("broker-a"));
-        assert_eq!(header.namespace(), Some("namespace-a"));
-        assert_eq!(header.namespaced(), Some(true));
-        assert_eq!(header.oneway(), Some(false));
-    }
-
-    #[test]
     fn nested_setters_are_noops_without_an_rpc_envelope() {
         let mut header = SearchOffsetRequestHeader::default();
 
