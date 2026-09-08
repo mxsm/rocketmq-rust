@@ -2404,8 +2404,8 @@ fn runtime_f64(runtime: Option<&KVTable>, key: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
-    AdminError::from_error(operation, error)
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }
 
 fn source_failure_from_error(

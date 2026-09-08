@@ -168,7 +168,7 @@ impl SendMessageRequest {
         };
         builder
             .build()
-            .map_err(|error| errors::admin_validation_failed("message", error.to_string()))
+            .map_err(|error| errors::admin_validation_failed_by("message", error))
     }
 }
 
@@ -285,7 +285,8 @@ impl ProducerService {
     ) -> CanonicalResult<ProducerInfoQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_producer_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -295,7 +296,10 @@ impl ProducerService {
         admin: &DefaultMQAdminExt,
         request: &ProducerInfoQueryRequest,
     ) -> CanonicalResult<ProducerInfoQueryResult> {
-        let producer_table_info = admin.get_all_producer_info(request.broker_addr.clone()).await?;
+        let producer_table_info = admin
+            .get_all_producer_info(request.broker_addr.clone())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         Ok(ProducerInfoQueryResult { producer_table_info })
     }
 
@@ -325,7 +329,7 @@ impl ProducerService {
         producer
             .start()
             .await
-            .map_err(|error| errors::admin_operation_failed("start_producer", error.to_string()))?;
+            .map_err(|error| errors::admin_response_failed_by("start_producer", error))?;
 
         let message = request.message()?;
         let send_result = if let (Some(broker_name), Some(queue_id)) = (request.broker_name(), request.queue_id()) {
@@ -334,7 +338,7 @@ impl ProducerService {
         } else {
             producer.send(message).await
         }
-        .map_err(|error| errors::broker_operation_failed("send_message", error.to_string()))?;
+        .map_err(|error| errors::broker_operation_failed_by("send_message", error))?;
 
         let row = if let Some(result) = send_result {
             SendMessageResultRow {
@@ -396,12 +400,12 @@ impl ProducerService {
         producer
             .start()
             .await
-            .map_err(|error| errors::admin_operation_failed("start_producer", error.to_string()))?;
+            .map_err(|error| errors::admin_response_failed_by("start_producer", error))?;
 
         producer
             .send(build_diagnostic_message(request.broker_name().as_str(), 16))
             .await
-            .map_err(|error| errors::broker_operation_failed("send_message_status_warmup", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("send_message_status_warmup", error))?;
 
         let mut rows = Vec::with_capacity(request.count() as usize);
         for _ in 0..request.count() {
@@ -412,7 +416,7 @@ impl ProducerService {
                     request.message_size(),
                 ))
                 .await
-                .map_err(|error| errors::broker_operation_failed("send_message_status", error.to_string()))?;
+                .map_err(|error| errors::broker_operation_failed_by("send_message_status", error))?;
             let rt_millis = current_millis() - begin;
             rows.push(SendMessageStatusRow {
                 rt_millis,
@@ -448,13 +452,13 @@ impl ProducerService {
         producer
             .start()
             .await
-            .map_err(|error| errors::admin_operation_failed("start_producer", error.to_string()))?;
+            .map_err(|error| errors::admin_response_failed_by("start_producer", error))?;
 
         let message = Message::builder()
             .topic(request.topic().as_str())
             .body_slice(&vec![b'a'; request.size()])
             .build()
-            .map_err(|error| errors::admin_validation_failed("message", error.to_string()))?;
+            .map_err(|error| errors::admin_validation_failed_by("message", error))?;
         let broker_name_holder = Arc::new(Mutex::new(String::new()));
         let queue_id_holder = Arc::new(Mutex::new(0));
         let mut rows = Vec::with_capacity(request.amount() as usize);

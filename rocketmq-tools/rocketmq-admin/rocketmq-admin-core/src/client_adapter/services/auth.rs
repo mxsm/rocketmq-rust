@@ -780,7 +780,8 @@ impl AuthService {
     ) -> CanonicalResult<AuthOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::create_user_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -790,7 +791,9 @@ impl AuthService {
         admin: &DefaultMQAdminExt,
         request: &CreateUserRequest,
     ) -> CanonicalResult<AuthOperationResult> {
-        let broker_addrs = resolve_master_and_slave_targets(admin, request.target()).await?;
+        let broker_addrs = resolve_master_and_slave_targets(admin, request.target())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         for broker_addr in &broker_addrs {
             admin
                 .create_user(
@@ -799,7 +802,8 @@ impl AuthService {
                     request.password().clone(),
                     request.user_type().clone(),
                 )
-                .await?;
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         }
         Ok(AuthOperationResult { broker_addrs })
     }
@@ -811,7 +815,8 @@ impl AuthService {
     ) -> CanonicalResult<AuthOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::update_user_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -821,7 +826,9 @@ impl AuthService {
         admin: &DefaultMQAdminExt,
         request: &UpdateUserRequest,
     ) -> CanonicalResult<AuthOperationResult> {
-        let broker_addrs = resolve_master_targets(admin, request.target()).await?;
+        let broker_addrs = resolve_master_targets(admin, request.target())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         for broker_addr in &broker_addrs {
             admin
                 .update_user(
@@ -831,7 +838,8 @@ impl AuthService {
                     request.user_type.clone().unwrap_or_default(),
                     request.user_status.clone().unwrap_or_default(),
                 )
-                .await?;
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         }
         Ok(AuthOperationResult { broker_addrs })
     }
@@ -843,7 +851,8 @@ impl AuthService {
     ) -> CanonicalResult<AuthOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::delete_user_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -853,11 +862,14 @@ impl AuthService {
         admin: &DefaultMQAdminExt,
         request: &DeleteUserRequest,
     ) -> CanonicalResult<AuthOperationResult> {
-        let broker_addrs = resolve_master_and_slave_targets(admin, request.target()).await?;
+        let broker_addrs = resolve_master_and_slave_targets(admin, request.target())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         for broker_addr in &broker_addrs {
             admin
                 .delete_user(broker_addr.clone(), request.username().clone())
-                .await?;
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         }
         Ok(AuthOperationResult { broker_addrs })
     }
@@ -869,7 +881,8 @@ impl AuthService {
     ) -> CanonicalResult<GetUserResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::get_user_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -881,14 +894,19 @@ impl AuthService {
     ) -> CanonicalResult<GetUserResult> {
         match request.target() {
             AuthTarget::BrokerAddr(broker_addr) => {
-                let user = admin.get_user(broker_addr.clone(), request.username().clone()).await?;
+                let user = admin
+                    .get_user(broker_addr.clone(), request.username().clone())
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 Ok(GetUserResult {
                     users: user.into_iter().collect(),
                     failed_broker_addrs: Vec::new(),
                 })
             }
             AuthTarget::ClusterName(_) => {
-                let broker_addrs = resolve_master_targets(admin, request.target()).await?;
+                let broker_addrs = resolve_master_targets(admin, request.target())
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 let results = futures::future::join_all(broker_addrs.into_iter().map(|broker_addr| async move {
                     admin
                         .get_user(broker_addr.clone(), request.username().clone())
@@ -922,7 +940,8 @@ impl AuthService {
     ) -> CanonicalResult<ListUsersResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::list_users_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -935,14 +954,19 @@ impl AuthService {
         let filter = request.filter.clone().unwrap_or_default();
         match request.target() {
             AuthTarget::BrokerAddr(broker_addr) => {
-                let users = admin.list_users(broker_addr.clone(), filter).await?;
+                let users = admin
+                    .list_users(broker_addr.clone(), filter)
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 Ok(ListUsersResult {
                     users,
                     failed_broker_addrs: Vec::new(),
                 })
             }
             AuthTarget::ClusterName(_) => {
-                let broker_addrs = resolve_master_targets(admin, request.target()).await?;
+                let broker_addrs = resolve_master_targets(admin, request.target())
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 let results = futures::future::join_all(broker_addrs.into_iter().map(|broker_addr| {
                     let filter = filter.clone();
                     async move {
@@ -978,7 +1002,8 @@ impl AuthService {
     ) -> CanonicalResult<CopyUsersResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::copy_users_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1007,7 +1032,8 @@ impl AuthService {
         } else {
             admin
                 .list_users(request.from_broker().clone(), CheetahString::default())
-                .await?
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?
         };
 
         let mut copied_usernames = Vec::new();
@@ -1054,7 +1080,8 @@ impl AuthService {
     ) -> CanonicalResult<AuthOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::create_acl_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1065,11 +1092,14 @@ impl AuthService {
         request: &CreateAclRequest,
     ) -> CanonicalResult<AuthOperationResult> {
         let acl_info = request.build_acl_info();
-        let broker_addrs = resolve_master_and_slave_targets(admin, request.target()).await?;
+        let broker_addrs = resolve_master_and_slave_targets(admin, request.target())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         for broker_addr in &broker_addrs {
             admin
                 .create_acl_with_acl_info(broker_addr.clone(), acl_info.clone())
-                .await?;
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         }
         Ok(AuthOperationResult { broker_addrs })
     }
@@ -1081,7 +1111,8 @@ impl AuthService {
     ) -> CanonicalResult<AuthOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::update_acl_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1091,7 +1122,9 @@ impl AuthService {
         admin: &DefaultMQAdminExt,
         request: &UpdateAclRequest,
     ) -> CanonicalResult<AuthOperationResult> {
-        let broker_addrs = resolve_master_targets(admin, request.target()).await?;
+        let broker_addrs = resolve_master_targets(admin, request.target())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         for broker_addr in &broker_addrs {
             admin
                 .update_acl(
@@ -1102,7 +1135,8 @@ impl AuthService {
                     request.source_ips().to_vec(),
                     request.decision().clone(),
                 )
-                .await?;
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         }
         Ok(AuthOperationResult { broker_addrs })
     }
@@ -1114,7 +1148,8 @@ impl AuthService {
     ) -> CanonicalResult<AuthOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::delete_acl_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1124,12 +1159,15 @@ impl AuthService {
         admin: &DefaultMQAdminExt,
         request: &DeleteAclRequest,
     ) -> CanonicalResult<AuthOperationResult> {
-        let broker_addrs = resolve_master_and_slave_targets(admin, request.target()).await?;
+        let broker_addrs = resolve_master_and_slave_targets(admin, request.target())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let resource = request.resource.clone().unwrap_or_default();
         for broker_addr in &broker_addrs {
             admin
                 .delete_acl(broker_addr.clone(), request.subject().clone(), resource.clone())
-                .await?;
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         }
         Ok(AuthOperationResult { broker_addrs })
     }
@@ -1141,7 +1179,8 @@ impl AuthService {
     ) -> CanonicalResult<GetAclResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::get_acl_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1153,14 +1192,19 @@ impl AuthService {
     ) -> CanonicalResult<GetAclResult> {
         match request.target() {
             AuthTarget::BrokerAddr(broker_addr) => {
-                let acl_info = admin.get_acl(broker_addr.clone(), request.subject().clone()).await?;
+                let acl_info = admin
+                    .get_acl(broker_addr.clone(), request.subject().clone())
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 Ok(GetAclResult {
                     acl_infos: vec![acl_info],
                     failed_broker_addrs: Vec::new(),
                 })
             }
             AuthTarget::ClusterName(_) => {
-                let broker_addrs = resolve_master_targets(admin, request.target()).await?;
+                let broker_addrs = resolve_master_targets(admin, request.target())
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 let results = futures::future::join_all(broker_addrs.into_iter().map(|broker_addr| async move {
                     admin
                         .get_acl(broker_addr.clone(), request.subject().clone())
@@ -1193,7 +1237,8 @@ impl AuthService {
     ) -> CanonicalResult<ListAclResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::list_acl_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1209,14 +1254,17 @@ impl AuthService {
             AuthTarget::BrokerAddr(broker_addr) => {
                 let acl_infos = admin
                     .list_acl(broker_addr.clone(), subject_filter, resource_filter)
-                    .await?;
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 Ok(ListAclResult {
                     acl_infos,
                     failed_broker_addrs: Vec::new(),
                 })
             }
             AuthTarget::ClusterName(_) => {
-                let broker_addrs = resolve_master_and_slave_targets(admin, request.target()).await?;
+                let broker_addrs = resolve_master_and_slave_targets(admin, request.target())
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 let results = futures::future::join_all(broker_addrs.into_iter().map(|broker_addr| {
                     let subject_filter = subject_filter.clone();
                     let resource_filter = resource_filter.clone();
@@ -1253,7 +1301,8 @@ impl AuthService {
     ) -> CanonicalResult<CopyAclResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::copy_acl_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1285,7 +1334,8 @@ impl AuthService {
                     CheetahString::default(),
                     CheetahString::default(),
                 )
-                .await?
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?
         };
 
         let mut copied_subjects = Vec::new();
@@ -1450,7 +1500,10 @@ async fn resolve_master_targets(admin: &DefaultMQAdminExt, target: &AuthTarget) 
     match target {
         AuthTarget::BrokerAddr(addr) => Ok(vec![addr.clone()]),
         AuthTarget::ClusterName(cluster_name) => {
-            let cluster_info = admin.examine_broker_cluster_info().await?;
+            let cluster_info = admin
+                .examine_broker_cluster_info()
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
             BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name.as_str())
         }
     }
@@ -1463,7 +1516,10 @@ async fn resolve_master_and_slave_targets(
     match target {
         AuthTarget::BrokerAddr(addr) => Ok(vec![addr.clone()]),
         AuthTarget::ClusterName(cluster_name) => {
-            let cluster_info = admin.examine_broker_cluster_info().await?;
+            let cluster_info = admin
+                .examine_broker_cluster_info()
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
             BrokerAddressResolver::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, cluster_name.as_str())
         }
     }

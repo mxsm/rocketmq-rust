@@ -23,6 +23,25 @@
 
 pub mod core;
 
+#[cfg(any(feature = "read-client-adapter", feature = "mutation-client-adapter"))]
+pub(crate) trait IntoCanonicalError {
+    fn into_canonical_error(self) -> rocketmq_error::Error;
+}
+
+#[cfg(any(feature = "read-client-adapter", feature = "mutation-client-adapter"))]
+impl IntoCanonicalError for rocketmq_error::Error {
+    fn into_canonical_error(self) -> rocketmq_error::Error {
+        self
+    }
+}
+
+#[cfg(any(feature = "read-client-adapter", feature = "mutation-client-adapter"))]
+impl IntoCanonicalError for rocketmq_client_rust::ClientError {
+    fn into_canonical_error(self) -> rocketmq_error::Error {
+        self.into_error()
+    }
+}
+
 #[cfg(feature = "read-client-adapter")]
 #[path = "client_adapter/consumer_observation.rs"]
 mod consumer_observation;

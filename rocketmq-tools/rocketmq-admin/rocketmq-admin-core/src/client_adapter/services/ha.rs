@@ -152,21 +152,20 @@ impl HaService {
         let broker_addrs = match request.target() {
             HaStatusTarget::BrokerAddr(broker_addr) => vec![broker_addr.clone()],
             HaStatusTarget::ClusterName(cluster_name) => {
-                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
-                })?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
                 BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name.as_str())?
             }
         };
 
         let mut entries = Vec::with_capacity(broker_addrs.len());
         for broker_addr in broker_addrs {
-            let runtime_info = admin.get_broker_ha_status(broker_addr.clone()).await.map_err(|error| {
-                errors::broker_operation_failed(
-                    "get_broker_ha_status",
-                    format!("HaService: failed to get broker HA status from {broker_addr}: {error}"),
-                )
-            })?;
+            let runtime_info = admin
+                .get_broker_ha_status(broker_addr.clone())
+                .await
+                .map_err(|error| errors::broker_operation_failed_by("get_broker_ha_status", error))?;
             entries.push(HaStatusEntry {
                 broker_addr,
                 runtime_info,
@@ -196,9 +195,10 @@ impl HaService {
         let brokers = match request.target() {
             SyncStateSetTarget::BrokerName(broker_name) => vec![broker_name.clone()],
             SyncStateSetTarget::ClusterName(cluster_name) => {
-                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
-                })?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
                 BrokerAddressResolver::fetch_broker_name_by_cluster_name(&cluster_info, cluster_name.as_str())?
                     .into_iter()
                     .map(CheetahString::from_string)
@@ -215,7 +215,7 @@ impl HaService {
         let broker_replicas_info = admin
             .get_in_sync_state_data(request.controller_address.clone(), brokers)
             .await
-            .map_err(|error| errors::broker_operation_failed("get_in_sync_state_data", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("get_in_sync_state_data", error))?;
         Ok(SyncStateSetQueryResult {
             broker_replicas_info: Some(broker_replicas_info),
         })

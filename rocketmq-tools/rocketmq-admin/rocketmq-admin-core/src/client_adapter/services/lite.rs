@@ -452,7 +452,8 @@ impl LiteService {
     ) -> CanonicalResult<BrokerLiteInfoQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_broker_lite_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -464,7 +465,10 @@ impl LiteService {
     ) -> CanonicalResult<BrokerLiteInfoQueryResult> {
         match request.target() {
             BrokerLiteInfoTarget::Broker(broker_addr) => {
-                let body = admin.get_broker_lite_info(broker_addr.clone()).await?;
+                let body = admin
+                    .get_broker_lite_info(broker_addr.clone())
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 Ok(BrokerLiteInfoQueryResult {
                     entries: vec![BrokerLiteInfoEntry {
                         broker_addr: broker_addr.clone(),
@@ -474,7 +478,10 @@ impl LiteService {
                 })
             }
             BrokerLiteInfoTarget::Cluster(cluster_name) => {
-                let cluster_info = admin.examine_broker_cluster_info().await?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 let broker_addrs =
                     BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name)?;
                 let mut entries = Vec::with_capacity(broker_addrs.len());
@@ -488,7 +495,7 @@ impl LiteService {
                         Err(error) => entries.push(BrokerLiteInfoEntry {
                             broker_addr,
                             body: None,
-                            error: Some(error.to_string()),
+                            error: Some(crate::client_adapter::services::stable_error_message(&error)),
                         }),
                     }
                 }
@@ -504,7 +511,8 @@ impl LiteService {
     ) -> CanonicalResult<ParentTopicInfoQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_parent_topic_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -516,7 +524,8 @@ impl LiteService {
     ) -> CanonicalResult<ParentTopicInfoQueryResult> {
         let route = admin
             .examine_topic_route_info(request.parent_topic().clone())
-            .await?
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?
             .ok_or_else(|| {
                 crate::client_adapter::services::errors::internal(format!(
                     "Topic route not found for parentTopic '{}'",
@@ -542,7 +551,7 @@ impl LiteService {
                 Err(error) => entries.push(ParentTopicInfoEntry {
                     broker_name,
                     body: None,
-                    error: Some(error.to_string()),
+                    error: Some(crate::client_adapter::services::stable_error_message(&error)),
                 }),
             }
         }
@@ -560,7 +569,8 @@ impl LiteService {
     ) -> CanonicalResult<LiteTopicInfoQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_lite_topic_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -572,7 +582,8 @@ impl LiteService {
     ) -> CanonicalResult<LiteTopicInfoQueryResult> {
         let route = admin
             .examine_topic_route_info(request.parent_topic().clone())
-            .await?
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?
             .ok_or_else(|| {
                 crate::client_adapter::services::errors::internal(format!(
                     "Topic route not found for parentTopic '{}'",
@@ -602,7 +613,7 @@ impl LiteService {
                 Err(error) => entries.push(LiteTopicInfoEntry {
                     broker_name,
                     body: None,
-                    error: Some(error.to_string()),
+                    error: Some(crate::client_adapter::services::stable_error_message(&error)),
                 }),
             }
         }
@@ -621,7 +632,8 @@ impl LiteService {
     ) -> CanonicalResult<LiteGroupInfoQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_lite_group_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -633,7 +645,8 @@ impl LiteService {
     ) -> CanonicalResult<LiteGroupInfoQueryResult> {
         let route = admin
             .examine_topic_route_info(request.parent_topic().clone())
-            .await?
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?
             .ok_or_else(|| {
                 crate::client_adapter::services::errors::internal(format!(
                     "Topic route not found for parentTopic '{}'",
@@ -677,7 +690,7 @@ impl LiteService {
                 Err(error) => entries.push(LiteGroupInfoEntry {
                     broker_name,
                     body: None,
-                    error: Some(error.to_string()),
+                    error: Some(crate::client_adapter::services::stable_error_message(&error)),
                 }),
             }
         }
@@ -704,7 +717,8 @@ impl LiteService {
     ) -> CanonicalResult<LiteClientInfoQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_lite_client_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -716,7 +730,8 @@ impl LiteService {
     ) -> CanonicalResult<LiteClientInfoQueryResult> {
         let route = admin
             .examine_topic_route_info(request.parent_topic().clone())
-            .await?
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?
             .ok_or_else(|| {
                 crate::client_adapter::services::errors::internal(format!(
                     "Topic route not found for parentTopic '{}'",
@@ -747,7 +762,7 @@ impl LiteService {
                 Err(error) => entries.push(LiteClientInfoEntry {
                     broker_name,
                     body: None,
-                    error: Some(error.to_string()),
+                    error: Some(crate::client_adapter::services::stable_error_message(&error)),
                 }),
             }
         }
@@ -767,7 +782,8 @@ impl LiteService {
     ) -> CanonicalResult<TriggerLiteDispatchResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::trigger_lite_dispatch_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -779,7 +795,8 @@ impl LiteService {
     ) -> CanonicalResult<TriggerLiteDispatchResult> {
         let route = admin
             .examine_topic_route_info(request.parent_topic().clone())
-            .await?
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?
             .ok_or_else(|| {
                 crate::client_adapter::services::errors::internal(format!(
                     "Topic route not found for parentTopic '{}'",
@@ -812,7 +829,7 @@ impl LiteService {
                 Err(error) => entries.push(TriggerLiteDispatchEntry {
                     broker_name,
                     dispatched: false,
-                    error: Some(error.to_string()),
+                    error: Some(crate::client_adapter::services::stable_error_message(&error)),
                 }),
             }
         }

@@ -269,7 +269,7 @@ impl TopicAdmin for AdminSession {
                     Ok(mut topic_rows) => rows.append(&mut topic_rows),
                     Err(error) => failures.push(TopicCurrentStatsFailure {
                         topic: topic.to_string(),
-                        error: error.to_string(),
+                        error: crate::core::stable_error_message(&error),
                     }),
                 }
             }
@@ -668,8 +668,8 @@ impl AdminSession {
     }
 }
 
-fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
-    AdminError::from_error(operation, error)
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }
 
 mod batch;

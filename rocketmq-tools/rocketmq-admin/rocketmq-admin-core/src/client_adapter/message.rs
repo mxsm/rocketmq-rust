@@ -17,7 +17,6 @@ use std::collections::BTreeMap;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::TraceDataEncoder;
 use rocketmq_client_rust::{ConsumerAdmin as _, OffsetAdmin as _, TopicAdmin as _};
-use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::message::MessageQueue;
 use rocketmq_model::result::PullStatus;
 use rocketmq_model::topic::DLQ_GROUP_TOPIC_PREFIX;
@@ -521,8 +520,8 @@ fn sort_messages(messages: &mut [MessageRecord]) {
     });
 }
 
-fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
-    AdminError::from_error(operation, error)
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }
 
 #[cfg(test)]

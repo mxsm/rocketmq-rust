@@ -97,7 +97,7 @@ impl BrokerService {
             .delete_expired_commit_log(request.cluster_name().cloned(), request.broker_addr().cloned())
             .await
             .map(|success| BrokerBooleanOperationResult { success })
-            .map_err(|error| errors::broker_operation_failed("delete_expired_commit_log", error.to_string()));
+            .map_err(|error| errors::broker_operation_failed_by("delete_expired_commit_log", error));
         admin.shutdown().await;
         result
     }
@@ -114,7 +114,7 @@ impl BrokerService {
             .clean_unused_topic(request.cluster_name().cloned(), request.broker_addr().cloned())
             .await
             .map(|success| BrokerBooleanOperationResult { success })
-            .map_err(|error| errors::broker_operation_failed("clean_unused_topic", error.to_string()));
+            .map_err(|error| errors::broker_operation_failed_by("clean_unused_topic", error));
         admin.shutdown().await;
         result
     }
@@ -288,9 +288,10 @@ impl BrokerService {
                 );
             }
             BrokerTarget::ClusterName(cluster_name) => {
-                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
-                })?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
                 let master_and_slave_map =
                     BrokerAddressResolver::fetch_master_and_slave_distinguish(&cluster_info, cluster_name.as_str())?;
                 let mut sorted_masters: Vec<_> = master_and_slave_map.keys().cloned().collect();
@@ -351,7 +352,7 @@ impl BrokerService {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| errors::broker_operation_failed("examine_broker_cluster_info", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
         let mut broker_addrs = match request.target() {
             BrokerEpochQueryTarget::BrokerName(broker_name) => {
                 BrokerAddressResolver::fetch_master_and_slave_addr_by_broker_name(&cluster_info, broker_name.as_str())?
@@ -584,9 +585,10 @@ impl BrokerService {
                 })
             }
             BrokerTarget::ClusterName(cluster_name) => {
-                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
-                })?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
                 let mut broker_addrs =
                     BrokerAddressResolver::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, cluster_name)?
                         .into_iter()
@@ -625,9 +627,10 @@ impl BrokerService {
                 });
             }
             BrokerTarget::ClusterName(cluster_name) => {
-                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
-                })?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
                 let master_and_slave_map =
                     BrokerAddressResolver::fetch_master_and_slave_distinguish(&cluster_info, cluster_name.as_str())?;
 
@@ -826,9 +829,10 @@ impl BrokerService {
         match request.target() {
             BrokerTarget::BrokerAddr(addr) => Ok(vec![addr.clone()]),
             BrokerTarget::ClusterName(cluster_name) => {
-                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
-                })?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
 
                 let mut broker_addrs =
                     BrokerAddressResolver::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, cluster_name)?
@@ -856,9 +860,10 @@ impl BrokerService {
         match target {
             BrokerTarget::BrokerAddr(addr) => Ok(vec![addr.clone()]),
             BrokerTarget::ClusterName(cluster_name) => {
-                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
-                })?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
                 let mut broker_addrs =
                     BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name.as_str())?;
                 broker_addrs.sort();
@@ -873,12 +878,10 @@ impl BrokerService {
         broker_addr: &CheetahString,
         key_pattern: Option<&Regex>,
     ) -> CanonicalResult<Vec<BrokerConfigEntry>> {
-        let properties = admin.get_broker_config(broker_addr.clone()).await.map_err(|error| {
-            errors::broker_operation_failed(
-                "get_broker_config",
-                format!("BrokerService: failed to get broker config for {broker_addr}: {error}"),
-            )
-        })?;
+        let properties = admin
+            .get_broker_config(broker_addr.clone())
+            .await
+            .map_err(|error| errors::broker_operation_failed_by("get_broker_config", error))?;
 
         Ok(filter_and_sort_properties(properties, key_pattern))
     }
@@ -891,12 +894,7 @@ impl BrokerService {
         let raw_info = admin
             .get_cold_data_flow_ctr_info(broker_addr.clone())
             .await
-            .map_err(|error| {
-                errors::broker_operation_failed(
-                    "get_cold_data_flow_ctr_info",
-                    format!("BrokerService: failed to get cold data flow ctr info from {broker_addr}: {error}"),
-                )
-            })?;
+            .map_err(|error| errors::broker_operation_failed_by("get_cold_data_flow_ctr_info", error))?;
 
         Ok(ColdDataFlowCtrInfoSection {
             target,
@@ -912,12 +910,7 @@ impl BrokerService {
         let mut epoch_cache = admin
             .get_broker_epoch_cache(broker_addr.clone())
             .await
-            .map_err(|error| {
-                errors::broker_operation_failed(
-                    "get_broker_epoch_cache",
-                    format!("BrokerService: failed to get broker epoch cache from {broker_addr}: {error}"),
-                )
-            })?;
+            .map_err(|error| errors::broker_operation_failed_by("get_broker_epoch_cache", error))?;
 
         let max_offset = epoch_cache.get_max_offset();
         let epoch_list = epoch_cache.get_epoch_list_mut();
@@ -961,7 +954,7 @@ impl BrokerService {
             let cluster_info = admin
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| errors::broker_operation_failed("examine_broker_cluster_info", error.to_string()))?;
+                .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
             Some(BrokerAddressResolver::fetch_master_and_slave_addr_by_cluster_name(
                 &cluster_info,
                 cluster_name.as_str(),
@@ -994,7 +987,7 @@ impl BrokerService {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| errors::broker_operation_failed("examine_broker_cluster_info", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
         let mut targets = Vec::new();
         if let Some(broker_addr_table) = cluster_info.broker_addr_table {
             for broker_data in broker_addr_table.values() {
@@ -1013,12 +1006,7 @@ impl BrokerService {
         let route_data = admin
             .examine_topic_route_info(topic.clone())
             .await
-            .map_err(|error| {
-                errors::broker_operation_failed(
-                    "examine_topic_route_info",
-                    format!("BrokerService: failed to examine topic route info for {topic}: {error}"),
-                )
-            })?
+            .map_err(|error| errors::broker_operation_failed_by("examine_topic_route_info", error))?
             .ok_or_else(|| errors::topic_route_not_found(topic.to_string()))?;
 
         let mut targets = Vec::new();
@@ -1043,9 +1031,10 @@ impl BrokerService {
         match request.target() {
             BrokerTarget::BrokerAddr(addr) => Ok(vec![(BrokerConfigSectionTarget::Broker(addr.clone()), addr.clone())]),
             BrokerTarget::ClusterName(cluster_name) => {
-                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|error| {
-                    errors::broker_operation_failed("examine_broker_cluster_info", error.to_string())
-                })?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
                 let master_and_slave_map =
                     BrokerAddressResolver::fetch_master_and_slave_distinguish(&cluster_info, cluster_name.as_str())?;
                 let mut sorted_masters: Vec<_> = master_and_slave_map.keys().cloned().collect();
@@ -1089,12 +1078,10 @@ impl BrokerService {
         target: BrokerConfigSectionTarget,
         broker_addr: CheetahString,
     ) -> CanonicalResult<CommitLogReadAheadSection> {
-        let current_config = admin.get_broker_config(broker_addr.clone()).await.map_err(|error| {
-            errors::broker_operation_failed(
-                "get_broker_config",
-                format!("BrokerService: failed to get broker config for {broker_addr}: {error}"),
-            )
-        })?;
+        let current_config = admin
+            .get_broker_config(broker_addr.clone())
+            .await
+            .map_err(|error| errors::broker_operation_failed_by("get_broker_config", error))?;
         let size_key_for_update = resolve_read_ahead_size_key(request, &current_config)?;
 
         if request.show_only() || !request.has_updates() {
@@ -1130,18 +1117,11 @@ impl BrokerService {
         admin
             .update_broker_config(broker_addr.clone(), properties)
             .await
-            .map_err(|error| {
-                errors::broker_operation_failed(
-                    "update_broker_config",
-                    format!("BrokerService: failed to update broker {broker_addr}: {error}"),
-                )
-            })?;
-        let updated_config = admin.get_broker_config(broker_addr.clone()).await.map_err(|error| {
-            errors::broker_operation_failed(
-                "get_broker_config",
-                format!("BrokerService: failed to fetch updated broker config for {broker_addr}: {error}"),
-            )
-        })?;
+            .map_err(|error| errors::broker_operation_failed_by("update_broker_config", error))?;
+        let updated_config = admin
+            .get_broker_config(broker_addr.clone())
+            .await
+            .map_err(|error| errors::broker_operation_failed_by("get_broker_config", error))?;
 
         Ok(CommitLogReadAheadSection {
             target,
@@ -1160,12 +1140,7 @@ impl BrokerService {
         let kv_table = admin
             .fetch_broker_runtime_stats(broker_addr.clone())
             .await
-            .map_err(|error| {
-                errors::broker_operation_failed(
-                    "fetch_broker_runtime_stats",
-                    format!("BrokerService: failed to fetch broker runtime stats from {broker_addr}: {error}"),
-                )
-            })?;
+            .map_err(|error| errors::broker_operation_failed_by("fetch_broker_runtime_stats", error))?;
 
         Ok(sort_runtime_stats_entries(kv_table.table))
     }
@@ -1256,12 +1231,10 @@ async fn fetch_broker_config_snapshot(
     admin: &DefaultMQAdminExt,
     broker_addr: &CheetahString,
 ) -> CanonicalResult<HashMap<CheetahString, CheetahString>> {
-    admin.get_broker_config(broker_addr.clone()).await.map_err(|error| {
-        errors::broker_operation_failed(
-            "get_broker_config",
-            format!("BrokerService: failed to get broker config for {broker_addr}: {error}"),
-        )
-    })
+    admin
+        .get_broker_config(broker_addr.clone())
+        .await
+        .map_err(|error| errors::broker_operation_failed_by("get_broker_config", error))
 }
 
 fn build_update_plan_for_snapshot(

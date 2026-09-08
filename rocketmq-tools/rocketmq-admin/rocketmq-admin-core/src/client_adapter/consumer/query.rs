@@ -44,19 +44,22 @@ pub(super) struct ConsumerGroupMeta {
     pub(super) orderly_flags: Vec<bool>,
 }
 
-pub(super) async fn query_consumer_connection_at<Query, QueryFuture>(
+pub(super) async fn query_consumer_connection_at<Query, QueryFuture, QueryError>(
     group: &str,
     address: Option<CheetahString>,
     query: Query,
 ) -> rocketmq_error::Result<ConsumerConnection>
 where
     Query: FnOnce(CheetahString, Option<CheetahString>) -> QueryFuture,
-    QueryFuture: Future<Output = rocketmq_error::Result<ConsumerConnection>>,
+    QueryFuture: Future<Output = Result<ConsumerConnection, QueryError>>,
+    QueryError: crate::IntoCanonicalError,
 {
-    query(CheetahString::from(group), address).await
+    query(CheetahString::from(group), address)
+        .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error)
 }
 
-pub(super) async fn query_consumer_progress_at<Query, QueryFuture>(
+pub(super) async fn query_consumer_progress_at<Query, QueryFuture, QueryError>(
     group: &str,
     address: Option<CheetahString>,
     timeout_millis: Option<u64>,
@@ -64,9 +67,12 @@ pub(super) async fn query_consumer_progress_at<Query, QueryFuture>(
 ) -> rocketmq_error::Result<ConsumeStats>
 where
     Query: FnOnce(CheetahString, Option<CheetahString>, Option<u64>) -> QueryFuture,
-    QueryFuture: Future<Output = rocketmq_error::Result<ConsumeStats>>,
+    QueryFuture: Future<Output = Result<ConsumeStats, QueryError>>,
+    QueryError: crate::IntoCanonicalError,
 {
-    query(CheetahString::from(group), address, timeout_millis).await
+    query(CheetahString::from(group), address, timeout_millis)
+        .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error)
 }
 
 pub(super) async fn collect_consumer_group_meta(

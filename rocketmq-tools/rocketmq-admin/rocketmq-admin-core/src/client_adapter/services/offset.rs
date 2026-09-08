@@ -355,7 +355,8 @@ impl OffsetService {
     ) -> CanonicalResult<()> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = admin
             .clone_group_offset(
                 request.src_group().clone(),
@@ -364,7 +365,7 @@ impl OffsetService {
                 request.offline(),
             )
             .await
-            .map_err(|error| errors::broker_operation_failed("clone_group_offset", error.to_string()));
+            .map_err(|error| errors::broker_operation_failed_by("clone_group_offset", error));
         admin.shutdown().await;
         result
     }
@@ -376,7 +377,8 @@ impl OffsetService {
     ) -> CanonicalResult<ConsumerStatusResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_consumer_status_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -392,7 +394,8 @@ impl OffsetService {
                 request.group().clone(),
                 request.origin_client_id().clone(),
             )
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let mut rows = Vec::new();
         for (client_id, mq_table) in consumer_status_table {
             for (mq, offset) in mq_table {
@@ -421,7 +424,8 @@ impl OffsetService {
     ) -> CanonicalResult<SkipAccumulatedMessageResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::skip_accumulated_message_with_admin(&mut admin, &request).await;
         admin.shutdown().await;
         result
@@ -454,10 +458,11 @@ impl OffsetService {
                             SKIP_TO_LATEST_TIMESTAMP,
                             request.force(),
                         )
-                        .await?;
+                        .await
+                        .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                     Ok(SkipAccumulatedMessageResult::Legacy(rollback_stats))
                 } else {
-                    Err(err)
+                    Err(crate::IntoCanonicalError::into_canonical_error(err))
                 }
             }
         }
@@ -470,7 +475,8 @@ impl OffsetService {
     ) -> CanonicalResult<ResetOffsetByTimeResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::reset_offset_by_time_with_admin(&mut admin, &request).await;
         admin.shutdown().await;
         result
@@ -489,10 +495,11 @@ impl OffsetService {
                 false,
             )
             .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
         {
             Ok(offset_table) => Ok(ResetOffsetByTimeResult::Current(offset_table)),
             Err(err) => {
-                let current_error = err.to_string();
+                let current_error = crate::client_adapter::services::stable_error_message(&err);
                 let rollback_stats = admin
                     .reset_offset_by_timestamp_old(
                         None,
@@ -501,7 +508,8 @@ impl OffsetService {
                         request.timestamp(),
                         false,
                     )
-                    .await?;
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 Ok(ResetOffsetByTimeResult::Legacy {
                     rollback_stats,
                     current_error,
@@ -517,7 +525,8 @@ impl OffsetService {
     ) -> CanonicalResult<Vec<RollbackStats>> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::reset_offset_by_time_old_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -536,6 +545,7 @@ impl OffsetService {
                 request.force(),
             )
             .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 }
 

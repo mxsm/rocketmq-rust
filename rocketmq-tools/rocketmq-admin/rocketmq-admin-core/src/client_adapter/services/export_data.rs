@@ -807,7 +807,8 @@ impl ExportService {
     ) -> CanonicalResult<ExportConfigsResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::export_configs_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -823,7 +824,10 @@ impl ExportService {
             .map(ToString::to_string)
             .collect::<Vec<_>>();
 
-        let cluster_info = admin.examine_broker_cluster_info().await?;
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let master_and_slave_map =
             BrokerAddressResolver::fetch_master_and_slave_distinguish(&cluster_info, request.cluster_name().as_str())?;
 
@@ -837,12 +841,10 @@ impl ExportService {
                 continue;
             }
 
-            let master_properties = admin.get_broker_config(master_addr.clone()).await.map_err(|error| {
-                errors::broker_operation_failed(
-                    "get_broker_config",
-                    format!("ExportService: failed to get broker config for {master_addr}: {error}"),
-                )
-            })?;
+            let master_properties = admin
+                .get_broker_config(master_addr.clone())
+                .await
+                .map_err(|error| errors::broker_operation_failed_by("get_broker_config", error))?;
 
             master_broker_size += 1;
             slave_broker_size += slave_addrs.len() as i64;
@@ -869,7 +871,8 @@ impl ExportService {
     ) -> CanonicalResult<ExportMetricsResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::export_metrics_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -879,7 +882,10 @@ impl ExportService {
         admin: &DefaultMQAdminExt,
         request: &ExportMetricsRequest,
     ) -> CanonicalResult<ExportMetricsResult> {
-        let cluster_info = admin.examine_broker_cluster_info().await?;
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let broker_names = resolve_export_metrics_broker_names(&cluster_info, request.cluster_name().as_str())?;
         let broker_addr_table = cluster_info
             .broker_addr_table
@@ -895,14 +901,22 @@ impl ExportService {
                 continue;
             };
 
-            let runtime_stats = admin.fetch_broker_runtime_stats(master_addr.clone()).await?;
-            let broker_config = admin.get_broker_config(master_addr.clone()).await?;
+            let runtime_stats = admin
+                .fetch_broker_runtime_stats(master_addr.clone())
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+            let broker_config = admin
+                .get_broker_config(master_addr.clone())
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
             let subscription_group_wrapper = admin
                 .get_user_subscription_group(master_addr.clone(), request.timeout_millis())
-                .await?;
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
             let topic_config_wrapper = admin
                 .get_user_topic_config(master_addr.clone(), false, request.timeout_millis())
-                .await?;
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
             let trans_stats_data = admin
                 .view_broker_stats_data(
                     master_addr.clone(),
@@ -1005,7 +1019,8 @@ impl ExportService {
     ) -> CanonicalResult<ExportMetadataResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::export_metadata_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1020,13 +1035,15 @@ impl ExportService {
                 ExportMetadataScope::Topic => {
                     let wrapper = admin
                         .get_user_topic_config(broker_addr.clone(), request.special_topic(), request.timeout_millis())
-                        .await?;
+                        .await
+                        .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                     Ok(ExportMetadataResult::BrokerTopic { wrapper })
                 }
                 ExportMetadataScope::SubscriptionGroup => {
                     let wrapper = admin
                         .get_user_subscription_group(broker_addr.clone(), request.timeout_millis())
-                        .await?;
+                        .await
+                        .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                     Ok(ExportMetadataResult::BrokerSubscriptionGroup { wrapper })
                 }
                 ExportMetadataScope::All => Err(crate::client_adapter::services::errors::admin_validation_failed(
@@ -1036,7 +1053,10 @@ impl ExportService {
                 .into()),
             },
             ExportMetadataTarget::Cluster(cluster_name) => {
-                let cluster_info = admin.examine_broker_cluster_info().await?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 let master_set =
                     BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name.as_str())?;
 
@@ -1046,10 +1066,12 @@ impl ExportService {
                 for addr in &master_set {
                     let topic_config_wrapper = admin
                         .get_user_topic_config(addr.clone(), request.special_topic(), request.timeout_millis())
-                        .await?;
+                        .await
+                        .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                     let subscription_group_wrapper = admin
                         .get_user_subscription_group(addr.clone(), request.timeout_millis())
-                        .await?;
+                        .await
+                        .map_err(crate::IntoCanonicalError::into_canonical_error)?;
 
                     if let Some(topic_table) = topic_config_wrapper.topic_config_table() {
                         merge_topic_configs(&mut topic_config_table, topic_table);
@@ -1074,7 +1096,8 @@ impl ExportService {
     ) -> CanonicalResult<ExportRocksDbConfigRpcResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::export_rocksdb_config_rpc_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1089,7 +1112,10 @@ impl ExportService {
                 vec![Self::resolve_export_rocksdb_rpc_broker_target(admin, broker_addr).await]
             }
             ExportRocksDbConfigRpcTarget::Cluster(cluster_name) => {
-                let cluster_info = admin.examine_broker_cluster_info().await?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 resolve_export_rocksdb_rpc_targets_from_cluster_info(&cluster_info, cluster_name.as_str())
             }
         };
@@ -1105,7 +1131,10 @@ impl ExportService {
                 .await
             {
                 Ok(()) => (true, None),
-                Err(error) => (false, Some(error.to_string())),
+                Err(error) => (
+                    false,
+                    Some(crate::client_adapter::services::stable_error_message(&error)),
+                ),
             };
 
             results.push(ExportRocksDbConfigRpcTargetResult {
@@ -1127,7 +1156,8 @@ impl ExportService {
     ) -> CanonicalResult<ExportPopRecordResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::export_pop_records_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1142,7 +1172,10 @@ impl ExportService {
                 vec![Self::resolve_export_pop_record_broker_target(admin, broker_addr).await]
             }
             ExportPopRecordTarget::Cluster(cluster_name) => {
-                let cluster_info = admin.examine_broker_cluster_info().await?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 resolve_export_pop_record_targets_from_cluster_info(&cluster_info, cluster_name.as_str())
             }
         };
@@ -1160,7 +1193,10 @@ impl ExportService {
                     .await
                 {
                     Ok(()) => (true, None),
-                    Err(error) => (false, Some(error.to_string())),
+                    Err(error) => (
+                        false,
+                        Some(crate::client_adapter::services::stable_error_message(&error)),
+                    ),
                 }
             };
 

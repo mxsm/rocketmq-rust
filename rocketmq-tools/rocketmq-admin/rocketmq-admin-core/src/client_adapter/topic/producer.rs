@@ -172,6 +172,6 @@ pub(crate) fn map_transaction_send_result(
     Ok(result)
 }
 
-fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
-    AdminError::from_error(operation, error)
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }

@@ -208,7 +208,7 @@ async fn resolve_message_queues(
     let topic_route = admin
         .examine_topic_route_info(CheetahString::from(route_topic))
         .await
-        .map_err(|error| errors::broker_operation_failed("examine_topic_route_info", error.to_string()))?
+        .map_err(|error| errors::broker_operation_failed_by("examine_topic_route_info", error))?
         .ok_or_else(|| errors::topic_route_not_found(route_topic))?;
 
     Ok(route_topic_queues(&topic_route, topic))
@@ -222,7 +222,7 @@ async fn resolve_broker_addr(
     let topic_route = admin
         .examine_topic_route_info(CheetahString::from(route_topic))
         .await
-        .map_err(|error| errors::broker_operation_failed("examine_topic_route_info", error.to_string()))?
+        .map_err(|error| errors::broker_operation_failed_by("examine_topic_route_info", error))?
         .ok_or_else(|| errors::topic_route_not_found(route_topic))?;
 
     let broker_data = topic_route
@@ -1181,7 +1181,8 @@ impl MessageService {
     ) -> CanonicalResult<QueryMessageByKeyResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_message_by_key_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1203,7 +1204,7 @@ impl MessageService {
                 request.last_key.clone(),
             )
             .await
-            .map_err(|error| errors::broker_operation_failed("query_message_by_key", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("query_message_by_key", error))?;
 
         let rows = query_result
             .message_list()
@@ -1243,7 +1244,8 @@ impl MessageService {
     ) -> CanonicalResult<QueryMessageByIdResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_message_by_id_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1295,12 +1297,12 @@ impl MessageService {
             },
             Err(error) if error.condition() == rocketmq_error::CanonicalCondition::NotFound => {
                 QueryMessageByIdOutcome::NotFound {
-                    reason: error.to_string(),
+                    reason: stable_error_message(&error),
                     query_time_ms,
                 }
             }
             Err(error) => QueryMessageByIdOutcome::Failed {
-                error: format!("Failed to query message by ID '{message_id}': {error}"),
+                error: stable_error_message(&error),
                 query_time_ms,
             },
         }
@@ -1313,7 +1315,8 @@ impl MessageService {
     ) -> CanonicalResult<QueryMessageByOffsetResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_message_by_offset_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1324,21 +1327,23 @@ impl MessageService {
         request: &QueryMessageByOffsetRequest,
     ) -> CanonicalResult<QueryMessageByOffsetResult> {
         let route_topic = request.route_topic.as_ref().unwrap_or(&request.topic);
-        let broker_addr = resolve_broker_addr(admin, route_topic.as_str(), request.broker_name.as_str()).await?;
+        let broker_addr = resolve_broker_addr(admin, route_topic.as_str(), request.broker_name.as_str())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
 
         if route_topic != &request.topic {
             let route_mq = MessageQueue::from_parts(route_topic.clone(), request.broker_name.clone(), 0);
             admin
                 .pull_message_from_queue(broker_addr.as_str(), &route_mq, "*", 0, 1, PULL_TIMEOUT_MILLIS)
                 .await
-                .map_err(|error| errors::broker_operation_failed("pull_route_topic_message", error.to_string()))?;
+                .map_err(|error| errors::broker_operation_failed_by("pull_route_topic_message", error))?;
         }
 
         let mq = MessageQueue::from_parts(request.topic.clone(), request.broker_name.clone(), request.queue_id);
         let pull_result = admin
             .pull_message_from_queue(broker_addr.as_str(), &mq, "*", request.offset, 1, PULL_TIMEOUT_MILLIS)
             .await
-            .map_err(|error| errors::broker_operation_failed("pull_message_by_offset", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("pull_message_by_offset", error))?;
 
         let pull_status = *pull_result.pull_status();
         let message = if pull_status == PullStatus::Found {
@@ -1359,7 +1364,8 @@ impl MessageService {
     ) -> CanonicalResult<QueryMessageByUniqueKeyResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_message_by_unique_key_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1370,7 +1376,9 @@ impl MessageService {
         request: &QueryMessageByUniqueKeyRequest,
     ) -> CanonicalResult<QueryMessageByUniqueKeyResult> {
         if let Some(direct_request) = request.direct_consume_request() {
-            let result = Self::direct_consume_message_with_admin(admin, &direct_request).await?;
+            let result = Self::direct_consume_message_with_admin(admin, &direct_request)
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
             return Ok(QueryMessageByUniqueKeyResult::Direct(result));
         }
 
@@ -1391,7 +1399,8 @@ impl MessageService {
                 begin_timestamp,
                 end_timestamp,
             )
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
 
         let mut messages = query_result.message_list().clone();
         messages.sort_by_key(|message| message.store_timestamp());
@@ -1400,7 +1409,10 @@ impl MessageService {
         }
 
         let entries = stream::iter(messages.into_iter().map(|message| async move {
-            let tracks = admin.message_track_detail(message.clone()).await;
+            let tracks = admin
+                .message_track_detail(message.clone())
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error);
             QueryMessageByUniqueKeyEntry::from_track_result(message, tracks)
         }))
         .buffered(MESSAGE_TRACK_CONCURRENCY)
@@ -1417,7 +1429,8 @@ impl MessageService {
     ) -> CanonicalResult<DirectConsumeMessageResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::direct_consume_message_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1456,13 +1469,13 @@ impl MessageService {
                         DirectConsumeMessageStatus::Consumed(DirectConsumeMessageResultDetail::from_result(&result))
                     }
                     Err(error) => DirectConsumeMessageStatus::Failed {
-                        error: error.to_string(),
+                        error: stable_error_message(&error),
                     },
                 }
             }
             Ok(_) => DirectConsumeMessageStatus::NotPushConsumer,
             Err(error) => DirectConsumeMessageStatus::RunningInfoFailed {
-                error: error.to_string(),
+                error: stable_error_message(&error),
             },
         };
 
@@ -1482,7 +1495,8 @@ impl MessageService {
     ) -> CanonicalResult<MessageTrackResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::message_track_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1526,7 +1540,7 @@ impl MessageService {
                     tracks: message_track_rows(tracks),
                 },
                 Err(error) => MessageTrackOutcome::Failed {
-                    error: format!("Failed to query message track for '{message_id}': {error}"),
+                    error: stable_error_message(&error),
                     query_time_ms,
                 },
             },
@@ -1547,7 +1561,8 @@ impl MessageService {
     ) -> CanonicalResult<Vec<MessageTraceView>> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_message_trace_by_id_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1568,7 +1583,8 @@ impl MessageService {
                 CheetahString::from_static_str(""),
                 None,
             )
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
 
         let mut trace_views = Vec::new();
         for message in query_result.message_list() {
@@ -1635,7 +1651,8 @@ impl MessageService {
     {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::print_messages_with_admin(&admin, &request, sink).await;
         admin.shutdown().await;
         result
@@ -1650,7 +1667,9 @@ impl MessageService {
         F: FnMut(MessagePullEvent) -> CanonicalResult<()>,
     {
         let route_topic = request.lmq_parent_topic.as_ref().unwrap_or(&request.topic);
-        let message_queues = resolve_message_queues(admin, request.topic.as_str(), route_topic.as_str()).await?;
+        let message_queues = resolve_message_queues(admin, request.topic.as_str(), route_topic.as_str())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         if message_queues.is_empty() {
             return Err(errors::topic_route_inconsistent(
                 request.topic.to_string(),
@@ -1662,12 +1681,12 @@ impl MessageService {
             let mut min_offset = admin
                 .min_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
                 .await
-                .map_err(|error| errors::broker_operation_failed("min_offset", error.to_string()))?;
+                .map_err(|error| errors::broker_operation_failed_by("min_offset", error))?;
 
             let mut max_offset = admin
                 .max_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
                 .await
-                .map_err(|error| errors::broker_operation_failed("max_offset", error.to_string()))?;
+                .map_err(|error| errors::broker_operation_failed_by("max_offset", error))?;
 
             if let Some(begin_timestamp) = request.begin_timestamp {
                 min_offset = admin
@@ -1679,7 +1698,7 @@ impl MessageService {
                         PULL_TIMEOUT_MILLIS,
                     )
                     .await
-                    .map_err(|error| errors::broker_operation_failed("search_begin_offset", error.to_string()))?
+                    .map_err(|error| errors::broker_operation_failed_by("search_begin_offset", error))?
                     as i64;
             }
 
@@ -1693,7 +1712,7 @@ impl MessageService {
                         PULL_TIMEOUT_MILLIS,
                     )
                     .await
-                    .map_err(|error| errors::broker_operation_failed("search_end_offset", error.to_string()))?
+                    .map_err(|error| errors::broker_operation_failed_by("search_end_offset", error))?
                     as i64;
             }
 
@@ -1744,7 +1763,7 @@ impl MessageService {
                     }
                     Err(error) => {
                         sink(MessagePullEvent::PullError {
-                            error: error.to_string(),
+                            error: stable_error_message(&error),
                         })?;
                         break;
                     }
@@ -1768,7 +1787,8 @@ impl MessageService {
     {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::print_messages_by_queue_with_admin(&admin, &request, sink).await;
         admin.shutdown().await;
         result
@@ -1782,17 +1802,19 @@ impl MessageService {
     where
         F: FnMut(MessagePullEvent) -> CanonicalResult<()>,
     {
-        let broker_addr = resolve_broker_addr(admin, request.topic.as_str(), request.broker_name.as_str()).await?;
+        let broker_addr = resolve_broker_addr(admin, request.topic.as_str(), request.broker_name.as_str())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let mq = MessageQueue::from_parts(request.topic.clone(), request.broker_name.clone(), request.queue_id);
 
         let mut min_offset = admin
             .min_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
             .await
-            .map_err(|error| errors::broker_operation_failed("min_offset", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("min_offset", error))?;
         let mut max_offset = admin
             .max_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
             .await
-            .map_err(|error| errors::broker_operation_failed("max_offset", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("max_offset", error))?;
 
         if let Some(begin_timestamp) = request.begin_timestamp {
             min_offset = admin
@@ -1804,7 +1826,7 @@ impl MessageService {
                     PULL_TIMEOUT_MILLIS,
                 )
                 .await
-                .map_err(|error| errors::broker_operation_failed("search_begin_offset", error.to_string()))?
+                .map_err(|error| errors::broker_operation_failed_by("search_begin_offset", error))?
                 as i64;
         }
 
@@ -1818,7 +1840,7 @@ impl MessageService {
                     PULL_TIMEOUT_MILLIS,
                 )
                 .await
-                .map_err(|error| errors::broker_operation_failed("search_end_offset", error.to_string()))?
+                .map_err(|error| errors::broker_operation_failed_by("search_end_offset", error))?
                 as i64;
         }
 
@@ -1867,7 +1889,7 @@ impl MessageService {
                 }
                 Err(error) => {
                     sink(MessagePullEvent::PullError {
-                        error: error.to_string(),
+                        error: stable_error_message(&error),
                     })?;
                     break;
                 }
@@ -1898,7 +1920,10 @@ impl MessageService {
             request.consumer_group.as_ref(),
             request.namesrv_addr(),
         );
-        client.start().await?;
+        client
+            .start()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let mut admin = ServiceAdminSession::from_started(client);
         let result = Self::consume_messages_with_admin(&admin, &request, sink).await;
         admin.shutdown().await;
@@ -1938,7 +1963,7 @@ impl MessageService {
         let topic_route = admin
             .examine_topic_route_info(request.topic.clone())
             .await
-            .map_err(|error| errors::broker_operation_failed("examine_topic_route_info", error.to_string()))?
+            .map_err(|error| errors::broker_operation_failed_by("examine_topic_route_info", error))?
             .ok_or_else(|| errors::topic_route_not_found(request.topic.to_string()))?;
 
         let mut count_left = request.message_number;
@@ -1950,11 +1975,11 @@ impl MessageService {
             let mut min_offset = admin
                 .min_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
                 .await
-                .map_err(|error| errors::broker_operation_failed("min_offset", error.to_string()))?;
+                .map_err(|error| errors::broker_operation_failed_by("min_offset", error))?;
             let mut max_offset = admin
                 .max_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
                 .await
-                .map_err(|error| errors::broker_operation_failed("max_offset", error.to_string()))?;
+                .map_err(|error| errors::broker_operation_failed_by("max_offset", error))?;
 
             if let Some(begin_timestamp) = request.begin_timestamp {
                 if begin_timestamp > 0 {
@@ -1967,7 +1992,7 @@ impl MessageService {
                             PULL_TIMEOUT_MILLIS,
                         )
                         .await
-                        .map_err(|error| errors::broker_operation_failed("search_begin_offset", error.to_string()))?
+                        .map_err(|error| errors::broker_operation_failed_by("search_begin_offset", error))?
                         as i64;
                 }
             }
@@ -1983,7 +2008,7 @@ impl MessageService {
                             PULL_TIMEOUT_MILLIS,
                         )
                         .await
-                        .map_err(|error| errors::broker_operation_failed("search_end_offset", error.to_string()))?
+                        .map_err(|error| errors::broker_operation_failed_by("search_end_offset", error))?
                         as i64;
                 }
             }
@@ -2000,7 +2025,8 @@ impl MessageService {
             }
 
             Self::pull_consume_message_by_queue(admin, broker_addr.as_str(), &mq, min_offset, max_offset, &mut sink)
-                .await?;
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         }
 
         Ok(())
@@ -2017,17 +2043,19 @@ impl MessageService {
     where
         F: FnMut(MessagePullEvent) -> CanonicalResult<()>,
     {
-        let broker_addr = resolve_broker_addr(admin, request.topic.as_str(), broker_name.as_str()).await?;
+        let broker_addr = resolve_broker_addr(admin, request.topic.as_str(), broker_name.as_str())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let mq = MessageQueue::from_parts(request.topic.clone(), broker_name.clone(), queue_id);
 
         let mut min_offset = admin
             .min_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
             .await
-            .map_err(|error| errors::broker_operation_failed("min_offset", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("min_offset", error))?;
         let mut max_offset = admin
             .max_offset(broker_addr.clone(), mq.clone(), PULL_TIMEOUT_MILLIS)
             .await
-            .map_err(|error| errors::broker_operation_failed("max_offset", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("max_offset", error))?;
 
         if let Some(begin_timestamp) = request.begin_timestamp {
             if begin_timestamp > 0 {
@@ -2040,7 +2068,7 @@ impl MessageService {
                         PULL_TIMEOUT_MILLIS,
                     )
                     .await
-                    .map_err(|error| errors::broker_operation_failed("search_begin_offset", error.to_string()))?
+                    .map_err(|error| errors::broker_operation_failed_by("search_begin_offset", error))?
                     as i64;
             }
         }
@@ -2056,7 +2084,7 @@ impl MessageService {
                         PULL_TIMEOUT_MILLIS,
                     )
                     .await
-                    .map_err(|error| errors::broker_operation_failed("search_end_offset", error.to_string()))?
+                    .map_err(|error| errors::broker_operation_failed_by("search_end_offset", error))?
                     as i64;
             }
         }
@@ -2126,7 +2154,7 @@ impl MessageService {
                 }
                 Err(error) => {
                     sink(MessagePullEvent::PullError {
-                        error: error.to_string(),
+                        error: stable_error_message(&error),
                     })?;
                     break 'read_queue;
                 }

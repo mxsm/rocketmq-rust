@@ -25,7 +25,6 @@ use rocketmq_client_rust::AclClientRPCHook;
 use rocketmq_client_rust::DefaultMQAdminExt;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_client_rust::SigningAlgorithm;
-use rocketmq_error::Error as CanonicalError;
 
 pub use rocketmq_client_rust::ClientRuntime;
 #[cfg(feature = "client-adapter")]
@@ -306,6 +305,6 @@ fn admin_acl_rpc_hook(credentials: &AdminCredentials) -> AclClientRPCHook {
     AclClientRPCHook::with_signature_algorithm(credentials, SigningAlgorithm::HmacSha256)
 }
 
-fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
-    AdminError::from_error(operation, error)
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }

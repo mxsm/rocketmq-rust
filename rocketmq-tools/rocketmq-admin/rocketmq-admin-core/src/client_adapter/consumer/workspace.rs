@@ -599,19 +599,17 @@ async fn observe_group_connection(
     forwarded_address: Option<CheetahString>,
 ) -> rocketmq_error::Result<ConsumerConnection> {
     match forwarded_address {
-        Some(address) => {
-            admin
-                .observe_consumer_connection_at(CheetahString::from(group), address)
-                .await
-        }
-        None => {
-            rocketmq_client_rust::MQAdminReadExt::examine_consumer_connection_info(
-                admin,
-                CheetahString::from(group),
-                None,
-            )
+        Some(address) => admin
+            .observe_consumer_connection_at(CheetahString::from(group), address)
             .await
-        }
+            .map_err(crate::IntoCanonicalError::into_canonical_error),
+        None => rocketmq_client_rust::MQAdminReadExt::examine_consumer_connection_info(
+            admin,
+            CheetahString::from(group),
+            None,
+        )
+        .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error),
     }
 }
 

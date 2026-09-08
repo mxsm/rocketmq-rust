@@ -102,7 +102,10 @@ impl AdminBuilder {
         let client_config = admin.client_config_mut();
         client_config.set_instance_name(instance_name.into());
 
-        admin.start().await?;
+        admin
+            .start()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         Ok(ServiceAdminSession {
             session: AdminSession::from_started(admin, Arc::new(SystemClock)),
         })

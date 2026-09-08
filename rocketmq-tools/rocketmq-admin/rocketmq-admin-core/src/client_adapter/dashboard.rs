@@ -22,7 +22,6 @@ use cheetah_string::CheetahString;
 use rocketmq_client_rust::{
     AuthAdmin as _, BrokerAdmin as _, ConsumerAdmin as _, OffsetAdmin as _, RouteAdmin as _, TopicAdmin as _,
 };
-use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::message::MessageQueue;
 use rocketmq_model::result::PullStatus;
 use rocketmq_model::topic::TopicConfig;
@@ -339,7 +338,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 ));
             }
             validate_subscription_group_name(group)
-                .map_err(|error| AdminError::invalid_argument("consumerGroup", error.to_string()))?;
+                .map_err(|error| AdminError::invalid_argument_source("consumerGroup", error))?;
 
             let cluster_info = self
                 .inner
@@ -459,7 +458,10 @@ impl dashboard::DashboardAdmin for AdminSession {
                         let (entries, runtime_error) =
                             match self.inner.fetch_broker_runtime_stats(address.clone()).await {
                                 Ok(runtime) => (kv_table_to_map(&runtime), None),
-                                Err(error) => (BTreeMap::new(), Some(error.to_string())),
+                                Err(error) => (
+                                    BTreeMap::new(),
+                                    Some(crate::client_adapter::services::stable_error_message(&error)),
+                                ),
                             };
                         items.push(dashboard::DashboardBrokerInfo {
                             cluster_name: cluster_name.to_string(),
@@ -858,8 +860,8 @@ fn authoritative_consumer_broker_targets(
     Ok(targets)
 }
 
-fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
-    AdminError::from_error(operation, error)
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }
 
 #[cfg(test)]

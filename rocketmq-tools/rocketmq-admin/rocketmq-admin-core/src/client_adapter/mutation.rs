@@ -1975,8 +1975,8 @@ fn map_offset_outcome(outcome: rocketmq_client_rust::TopicOffsetMutationOutcome)
     }
 }
 
-fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
-    AdminError::from_error(operation, error)
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }
 
 fn map_proxy_drain_state(

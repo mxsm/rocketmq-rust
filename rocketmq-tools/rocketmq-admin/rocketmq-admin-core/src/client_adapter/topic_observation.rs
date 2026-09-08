@@ -62,15 +62,21 @@ trait TopicObservationSource: Send {
 
 impl TopicObservationSource for DefaultMQAdminExt {
     async fn cluster_info(&self) -> Result<ClusterInfo, CanonicalError> {
-        MQAdminReadExt::examine_broker_cluster_info(self).await
+        MQAdminReadExt::examine_broker_cluster_info(self)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 
     async fn topic_route(&self, topic: &str) -> Result<Option<TopicRouteData>, CanonicalError> {
-        MQAdminReadExt::examine_topic_route_info(self, CheetahString::from(topic)).await
+        MQAdminReadExt::examine_topic_route_info(self, CheetahString::from(topic))
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 
     async fn topic_stats(&self, broker_addr: CheetahString, topic: &str) -> Result<TopicStatsTable, CanonicalError> {
-        MQAdminTopicStatsReadExt::topic_stats_at(self, broker_addr, CheetahString::from(topic)).await
+        MQAdminTopicStatsReadExt::topic_stats_at(self, broker_addr, CheetahString::from(topic))
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 
     async fn topic_config(
@@ -78,7 +84,9 @@ impl TopicObservationSource for DefaultMQAdminExt {
         broker_addr: CheetahString,
         topic: &str,
     ) -> Result<TopicConfigVersioned, CanonicalError> {
-        MQAdminReadExt::topic_config_with_version(self, broker_addr, CheetahString::from(topic)).await
+        MQAdminReadExt::topic_config_with_version(self, broker_addr, CheetahString::from(topic))
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 }
 
@@ -394,8 +402,8 @@ fn source_failure(source: AdminQuerySource, broker_name: &str, error: &Canonical
     )
 }
 
-fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
-    AdminError::from_error(operation, error)
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }
 
 #[cfg(test)]

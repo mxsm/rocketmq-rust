@@ -128,7 +128,7 @@ impl NameServerService {
                 Err(error) => entries.push(WritePermResultEntry {
                     namesrv_addr,
                     affected_count: None,
-                    error: Some(error.to_string()),
+                    error: Some(crate::client_adapter::services::stable_error_message(&error)),
                 }),
             }
         }

@@ -203,10 +203,7 @@ impl BrokerConfigQueryRequest {
 
         if let Some(pattern) = &key_pattern {
             Regex::new(pattern).map_err(|error| {
-                crate::client_adapter::services::errors::admin_validation_failed(
-                    "keyPattern",
-                    format!("invalid key regex pattern '{pattern}': {error}"),
-                )
+                crate::client_adapter::services::errors::admin_validation_failed_by("keyPattern", error)
             })?;
         }
 
@@ -253,11 +250,7 @@ impl BrokerConfigQueryRequest {
         self.key_pattern()
             .map(|pattern| {
                 Regex::new(pattern).map_err(|error| {
-                    crate::client_adapter::services::errors::admin_validation_failed(
-                        "keyPattern",
-                        format!("invalid key regex pattern '{pattern}': {error}"),
-                    )
-                    .into()
+                    crate::client_adapter::services::errors::admin_validation_failed_by("keyPattern", error).into()
                 })
             })
             .transpose()
@@ -1195,10 +1188,7 @@ impl CommitLogReadAheadRequest {
         {
             Some(value) => {
                 let parsed = value.parse::<u64>().map_err(|error| {
-                    crate::client_adapter::services::errors::admin_validation_failed(
-                        "readAheadSize",
-                        format!("invalid readAheadSize '{value}': {error}"),
-                    )
+                    crate::client_adapter::services::errors::admin_validation_failed_by("readAheadSize", error)
                 })?;
                 if parsed == 0 {
                     return Err(crate::client_adapter::services::errors::admin_validation_failed(

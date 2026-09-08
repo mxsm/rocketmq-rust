@@ -117,7 +117,8 @@ impl StatsService {
     ) -> CanonicalResult<StatsAllQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_stats_all_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -127,7 +128,10 @@ impl StatsService {
         admin: &DefaultMQAdminExt,
         request: &StatsAllQueryRequest,
     ) -> CanonicalResult<StatsAllQueryResult> {
-        let topic_list = admin.fetch_all_topic_list().await?;
+        let topic_list = admin
+            .fetch_all_topic_list()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let mut result = StatsAllQueryResult::default();
 
         for topic in &topic_list.topic_list {
@@ -165,8 +169,14 @@ async fn collect_topic_detail(
     topic: &CheetahString,
     active_topic: bool,
 ) -> CanonicalResult<Vec<StatsAllRow>> {
-    let topic_route_data = admin.examine_topic_route_info(topic.clone()).await?;
-    let group_list = admin.query_topic_consume_by_who(topic.clone()).await?;
+    let topic_route_data = admin
+        .examine_topic_route_info(topic.clone())
+        .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+    let group_list = admin
+        .query_topic_consume_by_who(topic.clone())
+        .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error)?;
 
     let mut in_tps = 0.0;
     let mut in_msg_count_24h = 0;

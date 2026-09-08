@@ -55,7 +55,7 @@ impl BrokerAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+                .map_err(|error| AdminError::backend_source("examine_broker_cluster_info", error))?;
             let broker_names = cluster_info
                 .cluster_addr_table
                 .as_ref()
@@ -100,7 +100,7 @@ impl BrokerAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+                .map_err(|error| AdminError::backend_source("examine_broker_cluster_info", error))?;
             let broker_names = cluster_info
                 .cluster_addr_table
                 .as_ref()
@@ -171,7 +171,7 @@ impl BrokerAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+                .map_err(|error| AdminError::backend_source("examine_broker_cluster_info", error))?;
             let broker_names = cluster_info
                 .cluster_addr_table
                 .as_ref()
@@ -187,7 +187,10 @@ impl BrokerAdmin for AdminSession {
                 for broker_addr in broker_data.broker_addrs().values() {
                     result.attempted += 1;
                     if let Err(error) = self.inner.fetch_broker_runtime_stats(broker_addr.clone()).await {
-                        result.failures.push(format!("{broker_addr}: {error}"));
+                        result.failures.push(format!(
+                            "{broker_addr}: {}",
+                            crate::client_adapter::services::stable_error_message(&error)
+                        ));
                     }
                 }
             }
@@ -205,7 +208,7 @@ impl BrokerAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+                .map_err(|error| AdminError::backend_source("examine_broker_cluster_info", error))?;
             let broker_names = cluster_info
                 .cluster_addr_table
                 .as_ref()
@@ -275,7 +278,7 @@ impl BrokerAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+                .map_err(|error| AdminError::backend_source("examine_broker_cluster_info", error))?;
             let broker_names = cluster_info
                 .cluster_addr_table
                 .as_ref()
@@ -315,7 +318,7 @@ impl BrokerAdmin for AdminSession {
                 .inner
                 .examine_broker_cluster_info()
                 .await
-                .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+                .map_err(|error| AdminError::backend_source("examine_broker_cluster_info", error))?;
             let broker_names = cluster_info
                 .cluster_addr_table
                 .as_ref()
@@ -425,7 +428,7 @@ impl BrokerAdmin for AdminSession {
                 CheetahString::from(request.broker_addr.as_str()),
             )
             .await
-            .map_err(|error| AdminError::backend("get_broker_config_allowlisted", error.to_string()))?;
+            .map_err(|error| AdminError::backend_source("get_broker_config_allowlisted", error))?;
             Ok(BrokerAllowlistedConfig {
                 generation: config.generation,
                 send_message_thread_pool_nums: config.send_message_thread_pool_nums,
@@ -490,7 +493,7 @@ impl BrokerAdmin for AdminSession {
                 .inner
                 .fetch_broker_runtime_stats(CheetahString::from(request.broker_addr.as_str()))
                 .await
-                .map_err(|error| AdminError::backend("fetch_broker_runtime_stats", error.to_string()))?;
+                .map_err(|error| AdminError::backend_source("fetch_broker_runtime_stats", error))?;
             Ok(project_broker_log_filter_state(request.logger.clone(), &runtime))
         })
     }
@@ -543,7 +546,7 @@ async fn exact_broker_targets(
     let cluster_info = admin
         .examine_broker_cluster_info()
         .await
-        .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+        .map_err(|error| AdminError::backend_source("examine_broker_cluster_info", error))?;
     crate::exact_broker::resolve_exact_broker_targets(cluster_info, cluster, broker_name, source)
 }
 

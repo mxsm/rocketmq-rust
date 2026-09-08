@@ -254,12 +254,7 @@ impl QueueService {
                 request.consumer_group().clone(),
             )
             .await
-            .map_err(|error| {
-                errors::broker_operation_failed(
-                    "query_consume_queue",
-                    format!("failed to query consume queue from {broker_addr}: {error}"),
-                )
-            })?;
+            .map_err(|error| errors::broker_operation_failed_by("query_consume_queue", error))?;
 
         Ok(QueryConsumeQueueResult {
             broker_addr,
@@ -287,7 +282,7 @@ impl QueueService {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| errors::broker_operation_failed("examine_broker_cluster_info", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
         let Some(cluster_addr_table) = cluster_info.cluster_addr_table.as_ref() else {
             return Ok(CheckRocksdbCqWriteProgressResult {
                 cluster_found: false,
@@ -352,7 +347,7 @@ async fn resolve_topic_master_broker(
     let topic_route_data = admin
         .examine_topic_route_info(topic.clone())
         .await
-        .map_err(|error| errors::broker_operation_failed("examine_topic_route_info", error.to_string()))?;
+        .map_err(|error| errors::broker_operation_failed_by("examine_topic_route_info", error))?;
 
     let topic_route_data = topic_route_data.ok_or_else(|| errors::topic_route_not_found(topic.to_string()))?;
     if topic_route_data.broker_datas.is_empty() {

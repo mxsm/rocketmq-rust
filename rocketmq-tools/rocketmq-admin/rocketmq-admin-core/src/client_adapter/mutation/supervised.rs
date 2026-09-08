@@ -1315,7 +1315,7 @@ fn checked_offset_target_budget(queue_counts: impl IntoIterator<Item = u32>) -> 
 fn validate_supervised_group(group: &str) -> AdminResult<String> {
     let group = require_non_empty("consumerGroup", group)?;
     rocketmq_protocol::protocol::subscription::subscription_group_config::validate_subscription_group_name(group)
-        .map_err(|error| AdminError::invalid_argument("consumerGroup", error.to_string()))?;
+        .map_err(|error| AdminError::invalid_argument_source("consumerGroup", error))?;
     if crate::core::consumer::is_protected_consumer_group(group) {
         return Err(AdminError::invalid_argument(
             "consumerGroup",

@@ -230,7 +230,8 @@ impl ClusterService {
     ) -> CanonicalResult<ClusterListQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_cluster_list_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -240,7 +241,10 @@ impl ClusterService {
         admin: &DefaultMQAdminExt,
         request: &ClusterListQueryRequest,
     ) -> CanonicalResult<ClusterListQueryResult> {
-        let cluster_info = admin.examine_broker_cluster_info().await?;
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let cluster_names = target_cluster_names(request.cluster_name(), &cluster_info);
 
         let mut result = ClusterListQueryResult {
@@ -268,7 +272,8 @@ impl ClusterService {
     ) -> CanonicalResult<ClusterBrokerNameQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_cluster_broker_names_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -278,7 +283,10 @@ impl ClusterService {
         admin: &DefaultMQAdminExt,
         request: &ClusterBrokerNameQueryRequest,
     ) -> CanonicalResult<ClusterBrokerNameQueryResult> {
-        let cluster_info = admin.examine_broker_cluster_info().await?;
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         Ok(collect_cluster_broker_names(request.cluster_name(), &cluster_info))
     }
 
@@ -292,7 +300,8 @@ impl ClusterService {
             credentials.clone(),
             client_runtime.clone(),
         )
-        .await?;
+        .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error)?;
 
         let instance_name = format!("PID_ClusterRTCommand_{}", current_millis());
         let mut client_config = ClientConfig::default();
@@ -318,7 +327,7 @@ impl ClusterService {
         producer
             .start()
             .await
-            .map_err(|error| errors::admin_operation_failed("start_cluster_rt_producer", error.to_string()))?;
+            .map_err(|error| errors::admin_response_failed_by("start_cluster_rt_producer", error))?;
 
         let mut rows = Vec::new();
         for (cluster_name, broker_names) in &broker_names.broker_names_by_cluster {

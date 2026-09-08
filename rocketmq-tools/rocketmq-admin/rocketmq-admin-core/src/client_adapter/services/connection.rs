@@ -121,7 +121,8 @@ impl ConnectionService {
     ) -> CanonicalResult<ConsumerConnectionQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_consumer_connection_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -133,7 +134,8 @@ impl ConnectionService {
     ) -> CanonicalResult<ConsumerConnectionQueryResult> {
         let connection = admin
             .examine_consumer_connection_info(request.consumer_group.clone(), request.broker_addr.clone())
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         Ok(ConsumerConnectionQueryResult { connection })
     }
 
@@ -144,7 +146,8 @@ impl ConnectionService {
     ) -> CanonicalResult<ProducerConnectionQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_producer_connection_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -156,7 +159,8 @@ impl ConnectionService {
     ) -> CanonicalResult<ProducerConnectionQueryResult> {
         let connection = admin
             .examine_producer_connection_info(request.producer_group.clone(), request.topic.clone())
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         Ok(ProducerConnectionQueryResult { connection })
     }
 }

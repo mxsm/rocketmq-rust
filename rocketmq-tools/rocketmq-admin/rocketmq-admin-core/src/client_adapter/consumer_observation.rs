@@ -70,12 +70,15 @@ trait ConsumerObservationSource: Send {
 
 impl ConsumerObservationSource for DefaultMQAdminExt {
     async fn cluster_info(&self) -> Result<ClusterInfo, CanonicalError> {
-        MQAdminReadExt::examine_broker_cluster_info(self).await
+        MQAdminReadExt::examine_broker_cluster_info(self)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 
     async fn consumer_route(&self, consumer_group: &str) -> Result<Option<TopicRouteData>, CanonicalError> {
         MQAdminReadExt::examine_topic_route_info(self, CheetahString::from(mix_all::get_retry_topic(consumer_group)))
             .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 
     async fn group_config(
@@ -89,6 +92,7 @@ impl ConsumerObservationSource for DefaultMQAdminExt {
             CheetahString::from(consumer_group),
         )
         .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 
     async fn connection(
@@ -102,6 +106,7 @@ impl ConsumerObservationSource for DefaultMQAdminExt {
             CheetahString::from(consumer_group),
         )
         .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 
     async fn progress(
@@ -111,6 +116,7 @@ impl ConsumerObservationSource for DefaultMQAdminExt {
     ) -> Result<ConsumerProgressRead, CanonicalError> {
         MQAdminConsumerObservationReadExt::consumer_progress_at(self, broker_addr, CheetahString::from(consumer_group))
             .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 }
 
@@ -746,8 +752,8 @@ fn source_failure(source: AdminQuerySource, broker_name: &str, error: &Canonical
     )
 }
 
-fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
-    AdminError::from_error(operation, error)
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }
 
 #[cfg(test)]

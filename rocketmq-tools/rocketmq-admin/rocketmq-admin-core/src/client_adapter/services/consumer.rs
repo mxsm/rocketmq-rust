@@ -321,7 +321,7 @@ impl UpdateSubscriptionGroupRequest {
 
     fn validate(&self) -> CanonicalResult<()> {
         validate_subscription_group_name(self.config.group_name().as_str()).map_err(|error| {
-            crate::client_adapter::services::errors::admin_validation_failed("groupName", error.to_string()).into()
+            crate::client_adapter::services::errors::admin_validation_failed_by("groupName", error).into()
         })
     }
 }
@@ -649,7 +649,7 @@ impl UpdateSubscriptionGroupListRequest {
 
     fn validate(&self) -> CanonicalResult<()> {
         validate_subscription_group_configs(&self.configs).map_err(|error| {
-            crate::client_adapter::services::errors::admin_validation_failed("groupConfigs", error.to_string()).into()
+            crate::client_adapter::services::errors::admin_validation_failed_by("groupConfigs", error).into()
         })
     }
 }
@@ -664,7 +664,8 @@ impl ConsumerService {
     ) -> CanonicalResult<ConsumerOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::delete_subscription_group_with_admin(&mut admin, &request).await;
         admin.shutdown().await;
         result
@@ -675,7 +676,9 @@ impl ConsumerService {
         request: &DeleteSubscriptionGroupRequest,
     ) -> CanonicalResult<ConsumerOperationResult> {
         let mut result = ConsumerOperationResult::empty();
-        let broker_addrs = resolve_master_targets(admin, request.target()).await?;
+        let broker_addrs = resolve_master_targets(admin, request.target())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
 
         for broker_addr in broker_addrs {
             match admin
@@ -720,7 +723,8 @@ impl ConsumerService {
     ) -> CanonicalResult<ConsumerConfigQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_consumer_config_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -731,7 +735,10 @@ impl ConsumerService {
         request: &ConsumerConfigQueryRequest,
     ) -> CanonicalResult<ConsumerConfigQueryResult> {
         let mut entries = Vec::new();
-        let cluster_info = admin.examine_broker_cluster_info().await?;
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let broker_addr_table = cluster_info.broker_addr_table.unwrap_or_default();
         let cluster_addr_table = cluster_info.cluster_addr_table.unwrap_or_default();
 
@@ -765,7 +772,8 @@ impl ConsumerService {
     ) -> CanonicalResult<ConsumerOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::set_consume_mode_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -776,7 +784,9 @@ impl ConsumerService {
         request: &SetConsumeModeRequest,
     ) -> CanonicalResult<ConsumerOperationResult> {
         let mut result = ConsumerOperationResult::empty();
-        let broker_addrs = resolve_master_targets(admin, &request.target).await?;
+        let broker_addrs = resolve_master_targets(admin, &request.target)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         for broker_addr in broker_addrs {
             match admin
                 .set_message_request_mode(
@@ -806,7 +816,8 @@ impl ConsumerService {
         request.validate()?;
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::update_subscription_group_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -818,7 +829,9 @@ impl ConsumerService {
     ) -> CanonicalResult<ConsumerOperationResult> {
         request.validate()?;
         let mut result = ConsumerOperationResult::empty();
-        let broker_addrs = resolve_master_targets(admin, request.target()).await?;
+        let broker_addrs = resolve_master_targets(admin, request.target())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         for broker_addr in broker_addrs {
             match admin
                 .create_and_update_subscription_group_config(broker_addr.clone(), request.config().clone())
@@ -841,7 +854,8 @@ impl ConsumerService {
         request.validate()?;
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::update_subscription_group_list_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -856,7 +870,9 @@ impl ConsumerService {
         if request.configs().is_empty() {
             return Ok(result);
         }
-        let broker_addrs = resolve_master_targets(admin, &request.target).await?;
+        let broker_addrs = resolve_master_targets(admin, &request.target)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         for broker_addr in broker_addrs {
             match admin
                 .create_and_update_subscription_group_config_list(broker_addr.clone(), request.configs.clone())
@@ -878,7 +894,8 @@ impl ConsumerService {
     ) -> CanonicalResult<ConsumerRunningInfoResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_consumer_running_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -896,6 +913,7 @@ impl ConsumerService {
                 None,
             )
             .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 
     pub(crate) async fn query_consumer_running_info_with_admin(
@@ -904,7 +922,8 @@ impl ConsumerService {
     ) -> CanonicalResult<ConsumerRunningInfoResult> {
         let consumer_connection = admin
             .examine_consumer_connection_info(request.group_name().clone(), request.broker_addr().cloned())
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
 
         let mut items = Vec::new();
         if let Some(client_id) = request.client_id() {
@@ -985,7 +1004,8 @@ impl ConsumerService {
     ) -> CanonicalResult<ConsumerProgressResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_consumer_progress_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -1004,7 +1024,8 @@ impl ConsumerService {
                     None,
                     None,
                 )
-                .await?;
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
             let allocation = if request.show_client_ip() {
                 get_message_queue_allocation_result_with_admin(admin, consumer_group.as_str()).await
             } else {
@@ -1045,7 +1066,10 @@ impl ConsumerService {
             }))
         } else {
             let mut results = Vec::new();
-            let topic_list = admin.fetch_all_topic_list().await?;
+            let topic_list = admin
+                .fetch_all_topic_list()
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
             for topic in topic_list.topic_list {
                 if topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                     let consumer_group = KeyBuilder::parse_group(&topic);
@@ -1106,7 +1130,8 @@ impl ConsumerService {
     {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::start_monitoring_with_admin(&admin, &request, &mut event_sink).await;
         admin.shutdown().await;
         result
@@ -1189,7 +1214,7 @@ impl ConsumerService {
                                             round,
                                             consumer_group: Some(consumer_group.clone()),
                                             operation: "examineConsumeStats".to_string(),
-                                            error: error.to_string(),
+                                            error: stable_error_message(&error),
                                         },
                                     )?;
                                 }
@@ -1227,7 +1252,7 @@ impl ConsumerService {
                                             round,
                                             consumer_group: Some(consumer_group),
                                             operation: "consumerRunningInfo".to_string(),
-                                            error: error.to_string(),
+                                            error: stable_error_message(&error),
                                         },
                                     )?;
                                 }
@@ -1246,7 +1271,7 @@ impl ConsumerService {
                             round,
                             consumer_group: None,
                             operation: "fetchAllTopicList".to_string(),
-                            error: error.to_string(),
+                            error: stable_error_message(&error),
                         },
                     )?;
                 }
@@ -1375,7 +1400,10 @@ async fn resolve_master_targets(
     match target {
         BrokerTarget::BrokerAddr(addr) => Ok(vec![addr.clone()]),
         BrokerTarget::ClusterName(cluster_name) => {
-            let cluster_info = admin.examine_broker_cluster_info().await?;
+            let cluster_info = admin
+                .examine_broker_cluster_info()
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
             BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name.as_str())
         }
     }

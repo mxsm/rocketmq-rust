@@ -687,7 +687,7 @@ impl ConsumerDiagnosticAdmin for AdminSession {
 fn normalize_consumer_group(value: &str) -> AdminResult<String> {
     let value = value.strip_prefix("%SYS%").unwrap_or(value).trim();
     validate_subscription_group_name(value)
-        .map_err(|error| AdminError::invalid_argument("consumerGroup", error.to_string()))?;
+        .map_err(|error| AdminError::invalid_argument_source("consumerGroup", error))?;
     Ok(value.to_string())
 }
 
@@ -1092,8 +1092,8 @@ fn source_failure_from_client(
     AdminSourceFailure::new(source, code, retryable, logical_target)
 }
 
-fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
-    AdminError::from_error(operation, error)
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }
 
 #[cfg(test)]

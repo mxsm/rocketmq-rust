@@ -113,7 +113,9 @@ trait InfrastructureObservationSource: Send {
 
 impl InfrastructureObservationSource for DefaultMQAdminExt {
     async fn cluster_info(&self) -> Result<ClusterInfo, CanonicalError> {
-        MQAdminReadExt::examine_broker_cluster_info(self).await
+        MQAdminReadExt::examine_broker_cluster_info(self)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 
     async fn ha_runtime(&self, endpoint: CheetahString) -> ObservationResult<HARuntimeInfo> {
@@ -1046,8 +1048,8 @@ fn invalid_failure(source: AdminQuerySource, logical_target: &str) -> AdminSourc
     AdminSourceFailure::new(source, AdminQueryFailureCode::InvalidResponse, false, logical_target)
 }
 
-fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
-    AdminError::from_error(operation, error)
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }
 
 fn safe_logical_identifier(value: &str) -> bool {

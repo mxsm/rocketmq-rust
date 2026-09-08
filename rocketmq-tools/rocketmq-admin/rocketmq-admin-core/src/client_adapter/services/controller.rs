@@ -320,7 +320,8 @@ impl ControllerService {
     ) -> CanonicalResult<ControllerConfigQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_controller_config_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -330,7 +331,10 @@ impl ControllerService {
         admin: &DefaultMQAdminExt,
         request: &ControllerConfigQueryRequest,
     ) -> CanonicalResult<ControllerConfigQueryResult> {
-        let controller_configs = admin.get_controller_config(request.controller_servers.clone()).await?;
+        let controller_configs = admin
+            .get_controller_config(request.controller_servers.clone())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         Ok(ControllerConfigQueryResult { controller_configs })
     }
 
@@ -341,7 +345,8 @@ impl ControllerService {
     ) -> CanonicalResult<()> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::update_controller_config_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -354,6 +359,7 @@ impl ControllerService {
         admin
             .update_controller_config(request.properties.clone(), request.controller_servers.clone())
             .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 
     pub async fn query_controller_metadata_by_request_with_credentials(
@@ -363,7 +369,8 @@ impl ControllerService {
     ) -> CanonicalResult<ControllerMetadataQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_controller_metadata_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -373,7 +380,10 @@ impl ControllerService {
         admin: &DefaultMQAdminExt,
         request: &ControllerMetadataQueryRequest,
     ) -> CanonicalResult<ControllerMetadataQueryResult> {
-        let meta_data = admin.get_controller_meta_data(request.controller_addr.clone()).await?;
+        let meta_data = admin
+            .get_controller_meta_data(request.controller_addr.clone())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         Ok(ControllerMetadataQueryResult { meta_data })
     }
 
@@ -384,7 +394,8 @@ impl ControllerService {
     ) -> CanonicalResult<ControllerElectMasterResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::elect_master_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -401,7 +412,8 @@ impl ControllerService {
                 request.broker_name.clone(),
                 Some(request.broker_id),
             )
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         Ok(ControllerElectMasterResult {
             response_header,
             broker_member_group,
@@ -415,7 +427,8 @@ impl ControllerService {
     ) -> CanonicalResult<()> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::clean_controller_metadata_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -434,6 +447,7 @@ impl ControllerService {
                 request.clean_living_broker,
             )
             .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 }
 

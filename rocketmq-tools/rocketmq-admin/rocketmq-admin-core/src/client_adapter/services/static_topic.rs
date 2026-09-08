@@ -215,7 +215,8 @@ impl StaticTopicService {
     ) -> CanonicalResult<StaticTopicMappingPlan> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::update_static_topic_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -225,7 +226,10 @@ impl StaticTopicService {
         admin: &DefaultMQAdminExt,
         request: &UpdateStaticTopicRequest,
     ) -> CanonicalResult<StaticTopicMappingPlan> {
-        let cluster_info = admin.examine_broker_cluster_info().await?;
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let cluster_addr_table = cluster_info
             .cluster_addr_table
             .as_ref()
@@ -244,7 +248,9 @@ impl StaticTopicService {
             return Err(errors::broker_not_found("static topic target brokers"));
         }
 
-        let mut broker_config_map = MQAdminUtils::examine_topic_config_all(request.topic(), admin).await?;
+        let mut broker_config_map = MQAdminUtils::examine_topic_config_all(request.topic(), admin)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let mut max_epoch_and_num = (current_millis(), request.queue_num());
         if !broker_config_map.is_empty() {
             let new_max_epoch_and_num =
@@ -270,8 +276,12 @@ impl StaticTopicService {
             &mut broker_config_map,
         )?;
 
-        MQAdminUtils::complete_no_target_brokers(broker_config_map.clone(), admin).await?;
-        MQAdminUtils::update_topic_config_mapping_all(&broker_config_map, admin, false).await?;
+        MQAdminUtils::complete_no_target_brokers(broker_config_map.clone(), admin)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+        MQAdminUtils::update_topic_config_mapping_all(&broker_config_map, admin, false)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
 
         Ok(StaticTopicMappingPlan {
             old_mapping,
@@ -287,7 +297,8 @@ impl StaticTopicService {
     ) -> CanonicalResult<()> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::update_static_topic_from_mapping_with_admin(&admin, &request, wrapper).await;
         admin.shutdown().await;
         result
@@ -304,7 +315,9 @@ impl StaticTopicService {
         )?;
         TopicQueueMappingUtils::check_and_build_mapping_items(mapping_details, request.force_replace(), true)?;
 
-        MQAdminUtils::complete_no_target_brokers(wrapper.broker_config_map().clone(), admin).await?;
+        MQAdminUtils::complete_no_target_brokers(wrapper.broker_config_map().clone(), admin)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         MQAdminUtils::update_topic_config_mapping_all(wrapper.broker_config_map(), admin, request.force_replace()).await
     }
 
@@ -315,7 +328,8 @@ impl StaticTopicService {
     ) -> CanonicalResult<StaticTopicMappingPlan> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::remapping_static_topic_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -325,7 +339,10 @@ impl StaticTopicService {
         admin: &DefaultMQAdminExt,
         request: &RemappingStaticTopicRequest,
     ) -> CanonicalResult<StaticTopicMappingPlan> {
-        let cluster_info = admin.examine_broker_cluster_info().await?;
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let cluster_addr_table = cluster_info
             .cluster_addr_table
             .as_ref()
@@ -353,7 +370,9 @@ impl StaticTopicService {
             }
         }
 
-        let mut broker_config_map = MQAdminUtils::examine_topic_config_all(request.topic(), admin).await?;
+        let mut broker_config_map = MQAdminUtils::examine_topic_config_all(request.topic(), admin)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         if broker_config_map.is_empty() {
             return Err(errors::topic_route_not_found(request.topic().to_string()));
         }
@@ -375,7 +394,9 @@ impl StaticTopicService {
             &target_brokers,
         )?;
 
-        MQAdminUtils::complete_no_target_brokers(broker_config_map.clone(), admin).await?;
+        MQAdminUtils::complete_no_target_brokers(broker_config_map.clone(), admin)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         MQAdminUtils::remapping_static_topic(
             request.topic(),
             new_mapping.broker_to_map_in(),
@@ -385,7 +406,8 @@ impl StaticTopicService {
             request.force_replace(),
             admin,
         )
-        .await?;
+        .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error)?;
 
         Ok(StaticTopicMappingPlan {
             old_mapping,
@@ -401,7 +423,8 @@ impl StaticTopicService {
     ) -> CanonicalResult<()> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::remapping_static_topic_from_mapping_with_admin(&admin, &request, &mut wrapper).await;
         admin.shutdown().await;
         result

@@ -44,12 +44,12 @@ pub(crate) fn broker_operation_failed(operation: &'static str, reason: impl Into
         .with_context(ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation))
 }
 
-pub(crate) fn broker_response_failed(operation: &'static str, code: i32) -> CanonicalError {
-    CanonicalError::new(&rocketmq_error::BROKER_OPERATION_FAILED).with_context(
-        ErrorContext::new()
-            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
-            .with_i64(fields::BROKER_CODE, i64::from(code)),
-    )
+pub(crate) fn broker_operation_failed_by(
+    operation: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> CanonicalError {
+    CanonicalError::caused_by(&rocketmq_error::BROKER_OPERATION_FAILED, source)
+        .with_context(ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation))
 }
 
 pub(crate) fn broker_response_code(error: &CanonicalError) -> Option<i32> {
@@ -72,6 +72,17 @@ pub(crate) fn admin_operation_failed(operation: &'static str, reason: impl Into<
     )
 }
 
+pub(crate) fn admin_response_failed_by(
+    operation: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> CanonicalError {
+    CanonicalError::caused_by(&rocketmq_error::PROTOCOL_RESPONSE_FAILED, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_secret_presence(fields::REASON_PRESENT),
+    )
+}
+
 pub(crate) fn admin_operation_failed_by(
     operation: &'static str,
     source: impl std::error::Error + Send + Sync + 'static,
@@ -87,6 +98,15 @@ pub(crate) fn admin_validation_failed(field: impl Into<String>, reason: impl Int
         .with_context(ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT))
 }
 
+pub(crate) fn admin_validation_failed_by(
+    field: impl Into<String>,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> CanonicalError {
+    let _ = field.into();
+    CanonicalError::caused_by(&rocketmq_error::CORE_ARGUMENT_INVALID, source)
+        .with_context(ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT))
+}
+
 pub(crate) fn admin_serialization_failed_by(
     format: &'static str,
     source: impl std::error::Error + Send + Sync + 'static,
@@ -94,17 +114,6 @@ pub(crate) fn admin_serialization_failed_by(
     CanonicalError::caused_by(&rocketmq_error::CORE_SERIALIZATION_FAILED, source).with_context(
         ErrorContext::new()
             .with_text(fields::FORMAT, format)
-            .with_secret_presence(fields::SOURCE_PRESENT),
-    )
-}
-
-pub(crate) fn io_failed_by(
-    operation: &'static str,
-    source: impl std::error::Error + Send + Sync + 'static,
-) -> CanonicalError {
-    CanonicalError::caused_by(&rocketmq_error::CORE_IO_FAILED, source).with_context(
-        ErrorContext::new()
-            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
             .with_secret_presence(fields::SOURCE_PRESENT),
     )
 }
@@ -164,4 +173,8 @@ pub(crate) fn topic_route_inconsistent(topic: impl Into<String>, reason: impl In
 pub(crate) fn internal(reason: impl Into<String>) -> CanonicalError {
     let _ = reason.into();
     CanonicalError::new(&rocketmq_error::CORE_INTERNAL_FAILURE)
+}
+
+pub(crate) fn internal_by(source: impl std::error::Error + Send + Sync + 'static) -> CanonicalError {
+    CanonicalError::caused_by(&rocketmq_error::CORE_INTERNAL_FAILURE, source)
 }

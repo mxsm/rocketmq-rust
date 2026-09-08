@@ -249,7 +249,7 @@ async fn cluster_broker_targets(
 ) -> AdminResult<(Vec<(String, CheetahString)>, Vec<AdminSourceFailure>)> {
     let cluster_info = rocketmq_client_rust::MQAdminReadExt::examine_broker_cluster_info(admin)
         .await
-        .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+        .map_err(|error| AdminError::backend_source("examine_broker_cluster_info", error))?;
     let broker_names = cluster_info
         .cluster_addr_table
         .as_ref()
