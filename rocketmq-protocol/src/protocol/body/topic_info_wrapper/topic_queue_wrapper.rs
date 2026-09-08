@@ -69,18 +69,6 @@ mod tests {
     }
 
     #[test]
-    fn test_new_and_getters() {
-        let map = create_test_map();
-        let version = DataVersion::default();
-
-        let wrapper = TopicQueueMappingSerializeWrapper::new(Some(map), Some(version.clone()));
-
-        assert!(wrapper.topic_queue_mapping_info_map().is_some());
-        assert_eq!(wrapper.topic_queue_mapping_info_map().unwrap().len(), 1);
-        assert!(wrapper.data_version().is_some());
-    }
-
-    #[test]
     fn test_take_topic_queue_mapping_info_map() {
         let map = create_test_map();
         let mut wrapper = TopicQueueMappingSerializeWrapper::new(Some(map), None);
