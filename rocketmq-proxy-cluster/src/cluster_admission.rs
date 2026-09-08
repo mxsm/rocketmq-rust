@@ -26,6 +26,7 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::code::request_code::RequestCode;
+use rocketmq_proxy_core::error::canonical;
 use rocketmq_proxy_core::MessageQueueTarget;
 use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyResult;
@@ -121,15 +122,21 @@ impl ClusterExecutionLanes {
         let control_bytes = policy.control_reserve_bytes();
         let limit = BudgetLimit::new(policy.capacity_count, policy.capacity_bytes, FullPolicy::Reject)
             .with_control_reserve(BudgetCapacity::new(policy.control_reserve, control_bytes));
-        let tree = ResourceBudgetTree::new("proxy-cluster-commands", limit).map_err(|error| ProxyError::Transport {
-            message: format!("invalid proxy cluster command budget: {error}"),
+        let tree = ResourceBudgetTree::new("proxy-cluster-commands", limit).map_err(|error| {
+            ProxyError::from(canonical::configuration_invalid_with_source(
+                "proxy.cluster.command_budget",
+                error,
+            ))
         })?;
         let long_poll_tree = ResourceBudgetTree::new(
             "proxy-cluster-long-polls",
             BudgetLimit::new(policy.capacity_count, policy.capacity_bytes, FullPolicy::Reject),
         )
-        .map_err(|error| ProxyError::Transport {
-            message: format!("invalid proxy cluster long-poll budget: {error}"),
+        .map_err(|error| {
+            ProxyError::from(canonical::configuration_invalid_with_source(
+                "proxy.cluster.long_poll_budget",
+                error,
+            ))
         })?;
         let root_budget = tree.root();
         Ok(Self {
@@ -204,8 +211,11 @@ impl ClusterExecutionLanes {
                 let queue = parent_budget
                     .child(format!("key-{generation}"), lane_limit)
                     .map(BudgetedQueue::new)
-                    .map_err(|error| ProxyError::Transport {
-                        message: format!("invalid proxy cluster keyed lane budget: {error}"),
+                    .map_err(|error| {
+                        ProxyError::from(canonical::configuration_invalid_with_source(
+                            "proxy.cluster.keyed_lane_budget",
+                            error,
+                        ))
                     })?;
                 let registered = RegisteredLane { generation, queue };
                 registry.insert(key.clone(), registered.clone());

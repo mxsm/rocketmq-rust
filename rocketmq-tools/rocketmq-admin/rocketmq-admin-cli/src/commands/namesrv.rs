@@ -20,7 +20,7 @@ mod update_namesrv_config_sub_command;
 mod wipe_write_perm_sub_command;
 
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::namesrv::add_write_perm_sub_command::AddWritePermSubCommand;
@@ -80,7 +80,7 @@ impl CommandExecute for NameServerCommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             NameServerCommands::AddWritePerm(value) => value.execute(credentials, client_runtime.clone()).await,
             NameServerCommands::DeleteKvConfig(value) => value.execute(credentials, client_runtime.clone()).await,

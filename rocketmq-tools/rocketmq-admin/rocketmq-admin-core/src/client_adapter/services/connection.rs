@@ -22,9 +22,8 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::client_adapter::services::admin::AdminBuilder;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Result as CanonicalResult;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsumerConnectionQueryRequest {
@@ -34,7 +33,7 @@ pub struct ConsumerConnectionQueryRequest {
 }
 
 impl ConsumerConnectionQueryRequest {
-    pub fn try_new(consumer_group: impl Into<String>, broker_addr: Option<String>) -> RocketMQResult<Self> {
+    pub fn try_new(consumer_group: impl Into<String>, broker_addr: Option<String>) -> CanonicalResult<Self> {
         Ok(Self {
             consumer_group: trim_required_cheetah("consumerGroup", consumer_group)?,
             broker_addr: trim_optional_string(broker_addr).map(CheetahString::from),
@@ -77,7 +76,7 @@ pub struct ProducerConnectionQueryRequest {
 }
 
 impl ProducerConnectionQueryRequest {
-    pub fn try_new(producer_group: impl Into<String>, topic: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(producer_group: impl Into<String>, topic: impl Into<String>) -> CanonicalResult<Self> {
         Ok(Self {
             producer_group: trim_required_cheetah("producerGroup", producer_group)?,
             topic: trim_required_cheetah("topic", topic)?,
@@ -119,10 +118,11 @@ impl ConnectionService {
         request: ConsumerConnectionQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ConsumerConnectionQueryResult> {
+    ) -> CanonicalResult<ConsumerConnectionQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_consumer_connection_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -131,10 +131,11 @@ impl ConnectionService {
     pub(crate) async fn query_consumer_connection_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ConsumerConnectionQueryRequest,
-    ) -> RocketMQResult<ConsumerConnectionQueryResult> {
+    ) -> CanonicalResult<ConsumerConnectionQueryResult> {
         let connection = admin
             .examine_consumer_connection_info(request.consumer_group.clone(), request.broker_addr.clone())
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         Ok(ConsumerConnectionQueryResult { connection })
     }
 
@@ -142,10 +143,11 @@ impl ConnectionService {
         request: ProducerConnectionQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ProducerConnectionQueryResult> {
+    ) -> CanonicalResult<ProducerConnectionQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_producer_connection_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -154,10 +156,11 @@ impl ConnectionService {
     pub(crate) async fn query_producer_connection_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ProducerConnectionQueryRequest,
-    ) -> RocketMQResult<ProducerConnectionQueryResult> {
+    ) -> CanonicalResult<ProducerConnectionQueryResult> {
         let connection = admin
             .examine_producer_connection_info(request.producer_group.clone(), request.topic.clone())
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         Ok(ProducerConnectionQueryResult { connection })
     }
 }
@@ -168,11 +171,14 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        ));
     }
     Ok(CheetahString::from(value))
 }

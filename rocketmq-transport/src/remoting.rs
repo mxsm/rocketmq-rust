@@ -15,7 +15,6 @@
 pub(crate) mod inner {
     use std::net::SocketAddr;
 
-    use rocketmq_error::RocketMQResult;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
     use crate::hook_registry::HookSnapshot;
@@ -24,7 +23,7 @@ pub(crate) mod inner {
         snapshot: Option<&HookSnapshot>,
         remote_address: SocketAddr,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         if let Some(snapshot) = snapshot {
             for hook in snapshot.hooks() {
                 hook.do_before_request(remote_address, request)?;
@@ -38,7 +37,7 @@ pub(crate) mod inner {
         remote_address: SocketAddr,
         request: &RemotingCommand,
         response: &mut RemotingCommand,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         if let Some(snapshot) = snapshot {
             for hook in snapshot.hooks() {
                 hook.do_after_response(remote_address, request, response)?;

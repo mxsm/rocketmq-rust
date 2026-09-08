@@ -71,9 +71,9 @@ impl McpOperationOutcome {
     }
 }
 
-/// Bounded error categories suitable for aggregate metrics.
+/// Bounded failure labels suitable for aggregate metrics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum McpErrorKind {
+pub enum McpFailureLabel {
     InvalidRequest,
     PermissionDenied,
     RateLimited,
@@ -82,7 +82,7 @@ pub enum McpErrorKind {
     Internal,
 }
 
-impl McpErrorKind {
+impl McpFailureLabel {
     #[cfg(any(feature = "otel-metrics", test))]
     const fn as_str(self) -> &'static str {
         match self {
@@ -253,16 +253,16 @@ impl McpMetricsRecorder {
     }
 
     /// Records a bounded error class without including an error message.
-    pub fn record_error(&self, kind: McpOperationKind, operation: &'static str, error: McpErrorKind) {
+    pub fn record_error(&self, kind: McpOperationKind, operation: &'static str, failure: McpFailureLabel) {
         #[cfg(feature = "otel-metrics")]
         if self.telemetry.is_active() {
             if let Some(metrics) = &self.metrics {
-                metrics.record_error(kind, operation, error);
+                metrics.record_error(kind, operation, failure);
             }
         }
 
         #[cfg(not(feature = "otel-metrics"))]
-        let _ = (kind, operation, error);
+        let _ = (kind, operation, failure);
     }
 
     /// Records one query-cache event.
@@ -342,8 +342,8 @@ pub fn record_operation(
 }
 
 /// Compatibility helper that never reads global telemetry state.
-pub fn record_error(kind: McpOperationKind, operation: &'static str, error: McpErrorKind) {
-    McpMetricsRecorder::noop().record_error(kind, operation, error);
+pub fn record_error(kind: McpOperationKind, operation: &'static str, failure: McpFailureLabel) {
+    McpMetricsRecorder::noop().record_error(kind, operation, failure);
 }
 
 /// Compatibility helper that never reads global telemetry state.
@@ -488,13 +488,13 @@ impl McpMetrics {
         self.request_latency.record(latency_ms, &base_attributes);
     }
 
-    fn record_error(&self, kind: McpOperationKind, operation: &'static str, error: McpErrorKind) {
+    fn record_error(&self, kind: McpOperationKind, operation: &'static str, failure: McpFailureLabel) {
         self.errors_total.add(
             1,
             &[
                 opentelemetry::KeyValue::new(crate::semantic::labels::OPERATION_KIND, kind.as_str()),
                 opentelemetry::KeyValue::new(crate::semantic::labels::OPERATION, operation),
-                opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, error.as_str()),
+                opentelemetry::KeyValue::new(crate::semantic::labels::RESULT, failure.as_str()),
             ],
         );
     }
@@ -541,7 +541,7 @@ mod tests {
     fn bounded_labels_are_stable() {
         assert_eq!(McpOperationKind::Tool.as_str(), "tool");
         assert_eq!(McpOperationOutcome::Denied.as_str(), "denied");
-        assert_eq!(McpErrorKind::OutputTooLarge.as_str(), "output_too_large");
+        assert_eq!(McpFailureLabel::OutputTooLarge.as_str(), "output_too_large");
         assert_eq!(McpCacheEvent::CoalescedWaiter.as_str(), "coalesced_waiter");
         assert_eq!(McpRateLimitOutcome::Rejected.as_str(), "rejected");
         assert_eq!(McpAuditDropReason::ByteCapacity.as_str(), "byte_capacity");
@@ -559,7 +559,7 @@ mod tests {
         record_error(
             McpOperationKind::Tool,
             "get_cluster_overview",
-            McpErrorKind::SourceUnavailable,
+            McpFailureLabel::SourceUnavailable,
         );
         record_cache_event(McpCacheEvent::Hit);
         record_rate_limit(McpRateLimitOutcome::Accepted);
@@ -596,7 +596,7 @@ mod tests {
         metrics.record_error(
             McpOperationKind::Resource,
             "read_resource",
-            McpErrorKind::PermissionDenied,
+            McpFailureLabel::PermissionDenied,
         );
         metrics.record_cache_event(McpCacheEvent::Miss);
         metrics.record_rate_limit(McpRateLimitOutcome::Rejected);

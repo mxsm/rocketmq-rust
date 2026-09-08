@@ -24,7 +24,6 @@ use base64::Engine;
 use cheetah_string::CheetahString;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
-use rocketmq_error::AuthError;
 use rocketmq_model::common::mix_all::UNIQUE_MSG_QUERY_FLAG;
 use rocketmq_model::common::mq_version::RocketMqVersion;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -32,6 +31,10 @@ use tracing::warn;
 
 use crate::authentication::builder::AuthenticationContextBuilder;
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 /// Constants for parsing authentication headers
 const CREDENTIAL: &str = "Credential";
@@ -98,7 +101,7 @@ impl DefaultAuthenticationContextBuilder {
         &self,
         metadata: &HashMap<String, String>,
         request: &dyn std::any::Any,
-    ) -> Result<DefaultAuthenticationContext, AuthError> {
+    ) -> AuthServiceResult<DefaultAuthenticationContext> {
         Self::build_from_grpc_values(
             request,
             Self::metadata_value(metadata, "authorization"),
@@ -119,10 +122,11 @@ impl DefaultAuthenticationContextBuilder {
     /// # Returns
     ///
     /// * `Ok(String)` - Base64-encoded string
-    /// * `Err(AuthError)` - Invalid hex input
-    fn hex_to_base64(hex_input: &str) -> Result<String, AuthError> {
-        let bytes =
-            hex::decode(hex_input).map_err(|source| AuthError::operation("decode hexadecimal signature", source))?;
+    /// * `Err(AuthServiceError)` - Invalid hex input
+    fn hex_to_base64(hex_input: &str) -> AuthServiceResult<String> {
+        let bytes = hex::decode(hex_input).map_err(|source| {
+            AuthServiceError::with_source(AuthOperation::BuildContext, AuthFailureKind::InvalidInput, source)
+        })?;
         Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
     }
 
@@ -203,7 +207,7 @@ impl DefaultAuthenticationContextBuilder {
         authorization: Option<&str>,
         datetime: Option<&str>,
         channel_id: Option<&str>,
-    ) -> Result<DefaultAuthenticationContext, AuthError> {
+    ) -> AuthServiceResult<DefaultAuthenticationContext> {
         let mut context = DefaultAuthenticationContext::new();
 
         if let Some(channel_id) = channel_id {
@@ -218,13 +222,15 @@ impl DefaultAuthenticationContextBuilder {
             return Ok(context);
         }
 
-        let datetime = datetime.ok_or_else(|| AuthError::MissingDateTime("datetime header is required".into()))?;
+        let datetime = datetime
+            .ok_or_else(|| AuthServiceError::new(AuthOperation::BuildContext, AuthFailureKind::Unauthenticated))?;
         Self::set_request_timestamp(&mut context, datetime);
 
         let parts: Vec<&str> = authorization.splitn(2, SPACE).collect();
         if parts.len() != 2 {
-            return Err(AuthError::InvalidAuthorizationHeader(
-                "authentication header format is incorrect".into(),
+            return Err(AuthServiceError::new(
+                AuthOperation::BuildContext,
+                AuthFailureKind::Unauthenticated,
             ));
         }
 
@@ -246,7 +252,10 @@ impl DefaultAuthenticationContextBuilder {
                 CREDENTIAL => {
                     let credential_parts: Vec<&str> = value.split(SLASH).collect();
                     if credential_parts.is_empty() {
-                        return Err(AuthError::InvalidCredential("credential is empty".into()));
+                        return Err(AuthServiceError::new(
+                            AuthOperation::BuildContext,
+                            AuthFailureKind::Unauthenticated,
+                        ));
                     }
                     context.set_username(CheetahString::from(credential_parts[0]));
                 }
@@ -279,7 +288,7 @@ impl AuthenticationContextBuilder<DefaultAuthenticationContext> for DefaultAuthe
         &self,
         metadata: &tonic::metadata::MetadataMap,
         request: &dyn std::any::Any,
-    ) -> Result<DefaultAuthenticationContext, AuthError> {
+    ) -> AuthServiceResult<DefaultAuthenticationContext> {
         Self::build_from_grpc_values(
             request,
             metadata.get("authorization").and_then(|v| v.to_str().ok()),
@@ -292,7 +301,7 @@ impl AuthenticationContextBuilder<DefaultAuthenticationContext> for DefaultAuthe
         &self,
         request: &RemotingCommand,
         channel_id: Option<&str>,
-    ) -> Result<DefaultAuthenticationContext, AuthError> {
+    ) -> AuthServiceResult<DefaultAuthenticationContext> {
         let mut context = DefaultAuthenticationContext::new();
 
         // Set channel ID

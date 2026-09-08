@@ -42,7 +42,7 @@ impl BatchMqHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let mut request_body = LockBatchRequestBody::decode(request.get_body().unwrap()).unwrap();
         let mut lock_ok_mqset = HashSet::new();
         let self_lock_okmqset = broker_runtime_inner.rebalance_lock_manager().try_lock_batch(
@@ -118,7 +118,7 @@ impl BatchMqHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let mut request_body = UnlockBatchRequestBody::decode(request.get_body().unwrap()).unwrap();
         if request_body.only_this_broker || !broker_runtime_inner.broker_config().lock_in_strict_mode {
             broker_runtime_inner.rebalance_lock_manager().unlock_batch(

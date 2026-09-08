@@ -14,9 +14,9 @@
 
 //! Lite pull consumer example with manual offset commit.
 
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::DefaultLitePullConsumer;
 use rocketmq_client_rust::MessageSelector;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -33,11 +33,11 @@ pub const POLL_TIMEOUT_MS: u64 = 1000;
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
         .consumer_group(CONSUMER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)

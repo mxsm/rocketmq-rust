@@ -313,19 +313,15 @@ impl RemotingResponse {
 
     pub(crate) fn with_body_free_hook_head<T>(
         &mut self,
-        apply: impl FnOnce(&mut RemotingCommand) -> rocketmq_error::RocketMQResult<T>,
-    ) -> rocketmq_error::RocketMQResult<T> {
+        apply: impl FnOnce(&mut RemotingCommand) -> Result<T, rocketmq_error::SharedError>,
+    ) -> Result<T, rocketmq_error::SharedError> {
         debug_assert!(self.head.body().is_none());
         let result = apply(&mut self.head);
         if self.head.take_body().is_some() {
-            return Err(rocketmq_error::RocketMQError::invariant_violated(
-                "RPC hook attached a response body through the body-free projection",
-            ));
+            return Err(crate::error_helpers::invariant_violated());
         }
         if self.head.is_oneway_rpc() {
-            return Err(rocketmq_error::RocketMQError::invariant_violated(
-                "RPC hook marked a remoting response head as one-way",
-            ));
+            return Err(crate::error_helpers::invariant_violated());
         }
         result
     }

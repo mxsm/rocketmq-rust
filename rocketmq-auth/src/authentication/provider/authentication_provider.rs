@@ -18,11 +18,11 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 use crate::authorization::context::authentication_context::AuthenticationContext;
 use crate::config::AuthConfig;
+use crate::AuthServiceResult;
 
 /// Authentication provider trait.
 #[allow(async_fn_in_trait)]
@@ -35,10 +35,10 @@ pub trait AuthenticationProvider: Send + Sync {
         &mut self,
         config: AuthConfig,
         metadata_service: Option<Arc<dyn Any + Send + Sync>>,
-    ) -> RocketMQResult<()>;
+    ) -> AuthServiceResult<()>;
 
     /// Authenticate a request.
-    async fn authenticate(&self, context: &Self::Context) -> RocketMQResult<()>;
+    async fn authenticate(&self, context: &Self::Context) -> AuthServiceResult<()>;
 
     /// Create context from gRPC metadata.
     fn new_context_from_metadata(

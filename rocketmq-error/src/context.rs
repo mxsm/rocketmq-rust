@@ -22,8 +22,6 @@ use crate::field::I64Field;
 use crate::field::SecretPresenceField;
 use crate::field::TextField;
 use crate::field::U64Field;
-use crate::ErrorDescriptor;
-use crate::Exposure;
 
 /// The redacted constant.
 pub const REDACTED: &str = "<redacted>";
@@ -234,25 +232,6 @@ impl ErrorContext {
     /// Returns retained fields to crate-private descriptor validators.
     pub(crate) fn fields(&self) -> &[ErrorContextField] {
         &self.fields
-    }
-
-    pub(crate) fn public_projection(&self, descriptor: &'static ErrorDescriptor) -> Self {
-        let mut projection = Self::new();
-        projection.truncated = self.truncated;
-        if matches!(descriptor.exposure(), Exposure::Generic) {
-            return projection;
-        }
-
-        projection.fields.extend(
-            self.fields
-                .iter()
-                .filter(|field| {
-                    matches!(field.visibility(), ContextVisibility::Public)
-                        && descriptor.fields().iter().any(|schema| *schema == field.schema())
-                })
-                .cloned(),
-        );
-        projection
     }
 
     #[inline]

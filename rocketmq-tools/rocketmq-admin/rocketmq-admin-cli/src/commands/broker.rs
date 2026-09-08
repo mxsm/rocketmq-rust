@@ -29,7 +29,7 @@ mod update_broker_config_sub_command;
 mod update_cold_data_flow_ctr_group_config_sub_command;
 
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::broker::broker_consume_stats_sub_command::BrokerConsumeStatsSubCommand;
@@ -161,7 +161,7 @@ impl CommandExecute for BrokerCommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             BrokerCommands::BrokerConsumeStats(value) => value.execute(credentials, client_runtime.clone()).await,
             BrokerCommands::BrokerStatus(cmd) => cmd.execute(credentials, client_runtime.clone()).await,

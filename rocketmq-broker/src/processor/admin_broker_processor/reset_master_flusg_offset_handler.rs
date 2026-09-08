@@ -32,7 +32,7 @@ impl ResetMasterFlushOffsetHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let broker_id = broker_runtime_inner.broker_config().broker_identity.broker_id;
         if broker_id != MASTER_ID {
             let request_header = request.decode_required_header::<ResetMasterFlushOffsetHeader>(

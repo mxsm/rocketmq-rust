@@ -17,7 +17,6 @@ use crate::error::controller_internal;
 use crate::error::controller_internal_by;
 use crate::error::not_initialized;
 use rocketmq_error::Error;
-use rocketmq_error::RocketMQError;
 
 #[derive(Debug)]
 struct ControllerStartupRollbackFailure {
@@ -42,7 +41,6 @@ impl std::error::Error for ControllerStartupRollbackFailure {
 #[derive(Debug)]
 enum ControllerShutdownFailure {
     Canonical { phase: &'static str, error: Error },
-    Facade { phase: &'static str, error: RocketMQError },
     UnhealthyReport { phase: &'static str },
     TimedOut { phase: &'static str },
 }
@@ -57,7 +55,6 @@ impl std::fmt::Display for ControllerShutdownFailures {
         for failure in &self.failures {
             let phase = match failure {
                 ControllerShutdownFailure::Canonical { phase, .. }
-                | ControllerShutdownFailure::Facade { phase, .. }
                 | ControllerShutdownFailure::UnhealthyReport { phase }
                 | ControllerShutdownFailure::TimedOut { phase } => phase,
             };
@@ -71,7 +68,6 @@ impl std::error::Error for ControllerShutdownFailures {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.failures.iter().find_map(|failure| match failure {
             ControllerShutdownFailure::Canonical { error, .. } => Some(error as &(dyn std::error::Error + 'static)),
-            ControllerShutdownFailure::Facade { error, .. } => Some(error as &(dyn std::error::Error + 'static)),
             ControllerShutdownFailure::UnhealthyReport { .. } | ControllerShutdownFailure::TimedOut { .. } => None,
         })
     }
@@ -406,7 +402,7 @@ impl ControllerManager {
                 Ok(Ok(())) => info!("Controller security adapter shut down"),
                 Ok(Err(error)) => {
                     warn!(%error, "Controller security adapter shutdown failed");
-                    failures.push(ControllerShutdownFailure::Facade {
+                    failures.push(ControllerShutdownFailure::Canonical {
                         phase: "security adapter",
                         error,
                     });

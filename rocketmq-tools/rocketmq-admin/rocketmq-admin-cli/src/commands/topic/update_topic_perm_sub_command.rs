@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::topic::TopicValidator;
 
 use crate::commands::CommandExecute;
@@ -59,18 +58,18 @@ pub struct UpdateTopicPermSubCommand {
 }
 
 impl UpdateTopicPermSubCommand {
-    fn request(&self) -> RocketMQResult<UpdateTopicPermRequest> {
+    fn request(&self) -> CanonicalResult<UpdateTopicPermRequest> {
         let target = if let Some(broker_addr) = &self.broker_addr {
             TopicTarget::Broker(broker_addr.trim().into())
         } else if let Some(cluster_name) = &self.cluster_name {
             TopicTarget::Cluster(cluster_name.trim().into())
         } else {
-            return Err(RocketMQError::IllegalArgument(
-                "UpdateTopicPermSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided".into(),
+            return Err(crate::errors::argument_invalid(
+                "UpdateTopicPermSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided",
             ));
         };
         let perm = self.perm.parse::<i32>().map_err(|e| {
-            RocketMQError::IllegalArgument(format!(
+            crate::errors::argument_invalid(format!(
                 "UpdateTopicPermSubCommand: Invalid perm value '{}': {}",
                 self.perm, e
             ))
@@ -100,10 +99,10 @@ impl CommandExecute for UpdateTopicPermSubCommand {
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let validation_result = TopicValidator::validate_topic(&self.topic);
         if !validation_result.valid() {
-            return Err(RocketMQError::IllegalArgument(format!(
+            return Err(crate::errors::argument_invalid(format!(
                 "UpdateTopicPermSubCommand: Invalid topic name: {}",
                 validation_result.remark().as_str()
             )));

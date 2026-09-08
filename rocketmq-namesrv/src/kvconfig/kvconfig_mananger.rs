@@ -18,8 +18,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::NameServerResult;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::body::kv_table::KVTable;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
@@ -54,20 +55,19 @@ pub(super) type ConfigTable = dashmap::DashMap<Namespace, ConfigMap>;
 fn load_config_table_with(
     config_path: &Path,
     read: impl FnOnce(&Path) -> io::Result<String>,
-) -> RocketMQResult<Option<ConfigTable>> {
+) -> NameServerResult<Option<ConfigTable>> {
     let content = match read(config_path) {
         Ok(content) if content.is_empty() => return Ok(None),
         Ok(content) => content,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
-            return Err(rocketmq_error::RocketMQError::IO(io::Error::new(
-                error.kind(),
-                format!("failed to read KV config at {}: {error}", config_path.display()),
-            )));
+            return Err(crate::namesrv_error::storage_read(error));
         }
     };
 
-    Ok(KVConfigSerializeWrapper::decode(content.as_bytes())?.config_table)
+    KVConfigSerializeWrapper::decode(content.as_bytes())
+        .map(|wrapper| wrapper.config_table)
+        .map_err(|error| crate::namesrv_error::serialization("decode-kv-config", "json", error))
 }
 
 /// KV Configuration Manager
@@ -79,7 +79,7 @@ pub struct KVConfigManager {
     /// Runtime inner for accessing configuration
     pub(crate) name_server_runtime_inner: NameServerRuntimeHandle,
     /// Bounded, lifecycle-owned durable-before-publish mutation service.
-    mutation_service: Result<KvMutationService, Arc<str>>,
+    mutation_service: Result<KvMutationService, SharedError>,
     /// Production persistence owner. Absence is retained only for legacy
     /// builders that do not inject a service lifecycle.
     metadata_io: Option<Result<MetadataIoActor, RuntimeError>>,
@@ -106,23 +106,24 @@ impl KVConfigManager {
         metrics: rocketmq_observability::metrics::namesrv::NameServerMetrics,
     ) -> Self {
         let config_table = Arc::new(dashmap::DashMap::with_capacity(64));
-        let mutation_service = metadata_io
-            .as_ref()
-            .ok_or_else(|| Arc::<str>::from("metadata I/O actor is unavailable"))
-            .and_then(|actor| actor.as_ref().map_err(|error| Arc::<str>::from(error.to_string())))
-            .and_then(|actor| {
-                KvMutationService::start(
-                    service_context,
-                    Arc::clone(&config_table),
-                    actor.clone(),
-                    target,
-                    queue_capacity,
-                    batch_size,
-                    max_pending_bytes,
-                    metrics,
-                )
-                .map_err(|error| Arc::<str>::from(error.to_string()))
-            });
+        let mutation_service = match metadata_io.as_ref() {
+            None => Err(crate::namesrv_error::storage_write(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "metadata I/O actor is unavailable",
+            ))),
+            Some(Err(error)) => Err(crate::runtime_error(error.clone())),
+            Some(Ok(actor)) => KvMutationService::start(
+                service_context,
+                Arc::clone(&config_table),
+                actor.clone(),
+                target,
+                queue_capacity,
+                batch_size,
+                max_pending_bytes,
+                metrics,
+            )
+            .map_err(crate::runtime_error),
+        };
         Self {
             config_table,
             name_server_runtime_inner,
@@ -153,7 +154,7 @@ impl KVConfigManager {
         self.mutation_service.as_ref().ok().map(KvMutationService::snapshot)
     }
 
-    pub(crate) fn validate_persistence_owner(&self) -> RocketMQResult<()> {
+    pub(crate) fn validate_persistence_owner(&self) -> NameServerResult<()> {
         self.mutation_service().map(|_| ())
     }
 
@@ -173,13 +174,8 @@ impl KVConfigManager {
         self.mutation_snapshot().map_or(0, |snapshot| snapshot.pending_commands)
     }
 
-    fn mutation_service(&self) -> RocketMQResult<&KvMutationService> {
-        self.mutation_service.as_ref().map_err(|error| {
-            rocketmq_error::RocketMQError::IO(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                format!("NameServer KV persistence owner is unavailable: {error}"),
-            ))
-        })
+    fn mutation_service(&self) -> NameServerResult<&KvMutationService> {
+        self.mutation_service.as_ref().map_err(Arc::clone)
     }
 }
 
@@ -189,8 +185,8 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// - `Ok(())` if loading succeeds or file doesn't exist
-    /// - `Err(RocketMQError)` if deserialization fails
-    pub fn load(&self) -> RocketMQResult<()> {
+    /// - `Err(SharedError)` if deserialization fails
+    pub fn load(&self) -> NameServerResult<()> {
         let namesrv_config = self.name_server_runtime_inner.name_server_config();
         let config_path = Path::new(namesrv_config.kv_config_path.as_str());
         let config_table =
@@ -224,8 +220,8 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// - `Ok(())` if update succeeds
-    /// - `Err(RocketMQError)` if validation fails
-    pub fn update_namesrv_config(&self, updates: HashMap<CheetahString, CheetahString>) -> RocketMQResult<()> {
+    /// - `Err(SharedError)` if validation fails
+    pub fn update_namesrv_config(&self, updates: HashMap<CheetahString, CheetahString>) -> NameServerResult<()> {
         let result = self.name_server_runtime_inner.update_name_server_config(updates);
 
         if result.is_ok() {
@@ -243,8 +239,8 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// - `Ok(())` if persistence succeeds
-    /// - `Err(RocketMQError)` if serialization or file write fails
-    pub async fn persist_until(&self, deadline: MetadataDeadline) -> RocketMQResult<()> {
+    /// - `Err(SharedError)` if serialization or file write fails
+    pub async fn persist_until(&self, deadline: MetadataDeadline) -> NameServerResult<()> {
         self.mutation_service()?
             .submit(KvMutation::Persist, deadline)?
             .wait_until(deadline)
@@ -263,8 +259,8 @@ impl KVConfigManager {
     ///
     /// - `Ok(true)` if persistence was performed
     /// - `Ok(false)` if persistence was skipped
-    /// - `Err(RocketMQError)` if persistence fails
-    pub async fn persist_if_needed(&self, deadline: MetadataDeadline) -> RocketMQResult<bool> {
+    /// - `Err(SharedError)` if persistence fails
+    pub async fn persist_if_needed(&self, deadline: MetadataDeadline) -> NameServerResult<bool> {
         if self.pending_changes() > 0 {
             self.persist_until(deadline).await?;
             Ok(true)
@@ -278,7 +274,7 @@ impl KVConfigManager {
     /// This should be called when shutting down or when immediate
     /// durability is required.
     #[inline]
-    pub async fn force_persist(&self, deadline: MetadataDeadline) -> RocketMQResult<()> {
+    pub async fn force_persist(&self, deadline: MetadataDeadline) -> NameServerResult<()> {
         self.persist_until(deadline).await
     }
 
@@ -318,7 +314,7 @@ impl KVConfigManager {
         key: Key,
         value: Value,
         deadline: MetadataDeadline,
-    ) -> RocketMQResult<()> {
+    ) -> NameServerResult<()> {
         let receipt = self
             .mutation_service()?
             .submit(KvMutation::Put { namespace, key, value }, deadline)?
@@ -355,7 +351,7 @@ impl KVConfigManager {
         namespace: &Namespace,
         key: &Key,
         deadline: MetadataDeadline,
-    ) -> RocketMQResult<bool> {
+    ) -> NameServerResult<bool> {
         let receipt = self
             .mutation_service()?
             .submit(
@@ -398,7 +394,7 @@ impl KVConfigManager {
         namespace: Namespace,
         kv_pairs: HashMap<Key, Value>,
         deadline: MetadataDeadline,
-    ) -> RocketMQResult<usize> {
+    ) -> NameServerResult<usize> {
         if kv_pairs.is_empty() {
             return Ok(0);
         }
@@ -438,7 +434,7 @@ impl KVConfigManager {
         namespace: &Namespace,
         keys: &[Key],
         deadline: MetadataDeadline,
-    ) -> RocketMQResult<usize> {
+    ) -> NameServerResult<usize> {
         if keys.is_empty() {
             return Ok(0);
         }
@@ -473,7 +469,7 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// - `Ok(usize)` - Number of keys deleted
-    pub async fn delete_namespace(&self, namespace: &Namespace, deadline: MetadataDeadline) -> RocketMQResult<usize> {
+    pub async fn delete_namespace(&self, namespace: &Namespace, deadline: MetadataDeadline) -> NameServerResult<usize> {
         let receipt = self
             .mutation_service()?
             .submit(
@@ -600,10 +596,8 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use cheetah_string::CheetahString;
-    use rocketmq_error::RocketMQError;
-
     use super::*;
+    use cheetah_string::CheetahString;
 
     #[test]
     fn missing_kv_file_loads_as_an_empty_table() {
@@ -630,14 +624,11 @@ mod tests {
         })
         .expect_err("permission failures must not be treated as a missing file");
 
-        match error {
-            RocketMQError::IO(source) => {
-                assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
-                assert!(source.to_string().contains("read KV config"));
-                assert!(source.to_string().contains("protected.json"));
-            }
-            other => panic!("expected an I/O error, got {other:?}"),
-        }
+        assert_eq!(error.code(), rocketmq_error::STORAGE_READ_FAILED.code());
+        let source = std::error::Error::source(error.as_ref())
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .expect("storage read failure should retain the I/O source");
+        assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
     }
 
     #[test]
@@ -645,7 +636,7 @@ mod tests {
         let error = load_config_table_with(Path::new("corrupt.json"), |_| Ok("{not-json".to_string()))
             .expect_err("corrupt persisted KV data must fail closed");
 
-        assert!(matches!(error, RocketMQError::Serialization(_)));
+        assert_eq!(error.code(), rocketmq_error::CORE_SERIALIZATION_FAILED.code());
     }
 
     #[test]

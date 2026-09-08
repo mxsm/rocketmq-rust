@@ -15,31 +15,23 @@
 use std::fs;
 use std::path::PathBuf;
 
+use crate::NameServerResult;
 use config::Config;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_runtime::common::parse_config_file::render_safe_config_error;
 use tracing::info;
 
 use crate::config::validate_namesrv_config_source;
 use crate::NamesrvConfig;
 
-pub fn parse_command_and_config_file(config_file: PathBuf) -> RocketMQResult<NamesrvConfig> {
-    let source = fs::read_to_string(&config_file).map_err(|error| {
-        RocketMQError::nameserver_config_invalid(format!("failed to read '{}': {error}", config_file.display()))
-    })?;
+pub fn parse_command_and_config_file(config_file: PathBuf) -> NameServerResult<NamesrvConfig> {
+    let source = fs::read_to_string(&config_file)
+        .map_err(|error| crate::namesrv_error::invalid_configuration_source("configFile", error))?;
     validate_namesrv_config_source(&source)?;
 
     let namesrv_config = Config::builder()
         .add_source(config::File::from(config_file.clone()))
         .build()
         .and_then(Config::try_deserialize::<NamesrvConfig>)
-        .map_err(|error| {
-            RocketMQError::nameserver_config_invalid(format!(
-                "failed to parse NameServer configuration: {}",
-                render_safe_config_error(&error)
-            ))
-        })?;
+        .map_err(|error| crate::namesrv_error::invalid_configuration_source("configFile", error))?;
     namesrv_config.validate_domains()?;
     info!(
         cluster_test = namesrv_config.cluster_test,
@@ -132,10 +124,7 @@ kvConfigPath = "/tmp/rocketmq/kvConfig.json"
         let error = parse_command_and_config_file(temp_config_path("missing"))
             .expect_err("missing config must fail explicitly");
 
-        assert!(matches!(
-            error,
-            rocketmq_error::RocketMQError::Tools(rocketmq_error::ToolsError::NameServerConfigInvalid { .. })
-        ));
+        assert_eq!(error.code(), rocketmq_error::CORE_CONFIGURATION_INVALID.code());
     }
 
     #[test]

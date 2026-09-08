@@ -223,17 +223,13 @@ impl TopicConfigManager {
     }
 
     #[cfg(feature = "rocksdb_store")]
-    pub(crate) fn export_to_json(&self) -> Result<(), rocketmq_error::RocketMQError> {
+    pub(crate) fn export_to_json(&self) -> crate::broker_error::BrokerResult<()> {
         let json = self.encode_pretty(true);
         if json.is_empty() {
             return Ok(());
         }
-        file_utils::string_to_file(json.as_str(), self.config_file_path().as_str()).map_err(|error| {
-            rocketmq_error::RocketMQError::storage_write_failed(
-                "rocksdb-topic-config",
-                format!("export topic config to json failed: {error}"),
-            )
-        })
+        file_utils::string_to_file(json.as_str(), self.config_file_path().as_str())
+            .map_err(crate::broker_error::storage_write_source)
     }
 
     fn init(&mut self, broker_config: &BrokerConfig, message_store_config: &MessageStoreConfig) {
@@ -1284,19 +1280,11 @@ impl TopicConfigManager {
         &self,
         key: &[u8],
         body: &[u8],
-    ) -> Result<(CheetahString, TopicConfig), rocketmq_error::RocketMQError> {
-        let topic_name = String::from_utf8(key.to_vec()).map_err(|error| {
-            rocketmq_error::RocketMQError::deserialization_failed(
-                "rocksdb-topic-config",
-                format!("topic key utf8 decode failed: {error}"),
-            )
-        })?;
-        let mut topic_config = serde_json::from_slice::<TopicConfig>(body).map_err(|error| {
-            rocketmq_error::RocketMQError::deserialization_failed(
-                "rocksdb-topic-config",
-                format!("topic config decode failed: {error}"),
-            )
-        })?;
+    ) -> crate::broker_error::BrokerResult<(CheetahString, TopicConfig)> {
+        let topic_name = String::from_utf8(key.to_vec())
+            .map_err(|error| crate::broker_error::serialization_failed("decode_topic_key", "utf8", error))?;
+        let mut topic_config = serde_json::from_slice::<TopicConfig>(body)
+            .map_err(|error| crate::broker_error::serialization_failed("decode_topic_config", "json", error))?;
         if topic_config.topic_name.is_none() {
             topic_config.topic_name = Some(CheetahString::from_string(topic_name.clone()));
         }
@@ -1308,7 +1296,7 @@ impl TopicConfigManager {
         &self,
         topic_config_table: &HashMap<CheetahString, TopicConfig>,
         data_version: &DataVersion,
-    ) -> Result<(), rocketmq_error::RocketMQError> {
+    ) -> crate::broker_error::BrokerResult<()> {
         let Some(rocksdb_config_manager) = &self.rocksdb_config_manager else {
             return Ok(());
         };
@@ -1316,12 +1304,7 @@ impl TopicConfigManager {
             .iter()
             .map(|(topic, config)| serde_json::to_vec(config).map(|body| (topic.as_bytes().to_vec(), body)))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| {
-                rocketmq_error::RocketMQError::storage_write_failed(
-                    "rocksdb-topic-config",
-                    format!("topic config encode failed: {error}"),
-                )
-            })?;
+            .map_err(crate::broker_error::storage_write_source)?;
         rocksdb_config_manager.replace_snapshot_with_version(&records, data_version)?;
         self.flush_rocksdb_config_if_needed(rocksdb_config_manager)
     }
@@ -1330,18 +1313,18 @@ impl TopicConfigManager {
     fn flush_rocksdb_config_if_needed(
         &self,
         rocksdb_config_manager: &RocksDbBrokerConfigManager,
-    ) -> Result<(), rocketmq_error::RocketMQError> {
+    ) -> crate::broker_error::BrokerResult<()> {
         if self.real_time_persist_rocksdb_config.load(Ordering::Acquire) {
             rocksdb_config_manager.flush_wal()?;
         }
         Ok(())
     }
 
-    fn persist_topic_config(&self, _topic_name: &str) -> rocketmq_error::RocketMQResult<()> {
+    fn persist_topic_config(&self, _topic_name: &str) -> crate::broker_error::BrokerResult<()> {
         self.persist_latest_snapshot().map(|_| ())
     }
 
-    pub(crate) fn persist_latest_snapshot(&self) -> Result<DataVersion, rocketmq_error::RocketMQError> {
+    pub(crate) fn persist_latest_snapshot(&self) -> crate::broker_error::BrokerResult<DataVersion> {
         let _persist = self.persist_lock.lock();
         let (topic_config_table, data_version) = self.metadata_snapshot();
         #[cfg(feature = "rocksdb_store")]
@@ -1352,37 +1335,23 @@ impl TopicConfigManager {
 
         let json = TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(data_version.clone()))
             .serialize_json_pretty()
-            .map_err(|error| {
-                rocketmq_error::RocketMQError::storage_write_failed(
-                    self.config_file_path(),
-                    format!("encode topic config snapshot failed: {error}"),
-                )
-            })?;
+            .map_err(crate::broker_error::storage_write_source)?;
         if !json.is_empty() {
             let file_name = self.config_file_path();
-            file_utils::string_to_file(json.as_str(), file_name.as_str()).map_err(|error| {
-                rocketmq_error::RocketMQError::storage_write_failed(
-                    file_name,
-                    format!("persist topic config snapshot failed: {error}"),
-                )
-            })?;
+            file_utils::string_to_file(json.as_str(), file_name.as_str())
+                .map_err(crate::broker_error::storage_write_source)?;
         }
         Ok(data_version)
     }
 
     pub(crate) fn encoded_persistence_snapshot(
         &self,
-    ) -> Result<(DataVersion, String, Vec<u8>), rocketmq_error::RocketMQError> {
+    ) -> crate::broker_error::BrokerResult<(DataVersion, String, Vec<u8>)> {
         let _persist = self.persist_lock.lock();
         let (topic_config_table, data_version) = self.metadata_snapshot();
         let content = TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(data_version.clone()))
             .serialize_json_pretty()
-            .map_err(|error| {
-                rocketmq_error::RocketMQError::storage_write_failed(
-                    self.config_file_path(),
-                    format!("encode topic config snapshot failed: {error}"),
-                )
-            })?;
+            .map_err(crate::broker_error::storage_write_source)?;
         Ok((data_version, self.config_file_path(), content.into_bytes()))
     }
 
@@ -1438,11 +1407,11 @@ impl ConfigManager for TopicConfigManager {
         &mut self,
         topic_name: &str,
         _t: Box<dyn std::any::Any>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         self.persist_topic_config(topic_name)
     }
 
-    fn persist(&self) -> rocketmq_error::RocketMQResult<()> {
+    fn persist(&self) -> crate::broker_error::BrokerResult<()> {
         self.persist_latest_snapshot().map(|_| ())
     }
 

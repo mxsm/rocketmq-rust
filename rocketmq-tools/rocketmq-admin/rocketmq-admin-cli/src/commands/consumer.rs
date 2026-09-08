@@ -23,7 +23,7 @@ mod update_sub_group_list_sub_command;
 mod update_sub_group_sub_command;
 
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::consumer::consumer_progress_sub_command::ConsumerProgressSubCommand;
 use crate::commands::consumer::consumer_status_sub_command::ConsumerStatusSubCommand;
@@ -108,7 +108,7 @@ impl CommandExecute for ConsumerCommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             ConsumerCommands::ConsumerStatus(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
             ConsumerCommands::Consumer(cmd) => cmd.execute(credentials, client_runtime.clone()).await,

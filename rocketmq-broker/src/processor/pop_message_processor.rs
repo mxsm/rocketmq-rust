@@ -104,7 +104,7 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
         context: Arc<PopMessageProcessorContext<MS>>,
         buffer_context: Arc<PopBufferMergeContext<MS>>,
         queue_lock_manager: QueueLockManager,
-    ) -> rocketmq_error::RocketMQResult<Arc<Self>> {
+    ) -> crate::broker_error::BrokerResult<Arc<Self>> {
         let policy = context.policy.snapshot();
         let revive_topic = CheetahString::from_string(PopAckConstants::build_cluster_revive_topic(
             policy.broker_cluster_name.as_str(),
@@ -130,11 +130,7 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
         }
         #[cfg(not(feature = "rocksdb_store"))]
         if policy.pop_consumer_kv_service_init || policy.pop_consumer_kv_service_enable {
-            return Err(rocketmq_error::RocketMQError::ConfigInvalidValue {
-                key: "popConsumerKVServiceEnable",
-                value: "true".to_owned(),
-                reason: "persistent POP consumer profiles require the rocksdb_store feature".to_owned(),
-            });
+            return Err(crate::broker_error::configuration_invalid("popConsumerKVServiceEnable"));
         }
         let pop_buffer_merge_service = Self::new_pop_buffer_merge_service(
             revive_topic.clone(),
@@ -189,7 +185,10 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
         self.queue_lock_manager.start();
     }
 
-    pub(crate) async fn remove_consumer_profile(&self, group: CheetahString) -> rocketmq_error::RocketMQResult<bool> {
+    pub(crate) async fn remove_consumer_profile(
+        &self,
+        group: CheetahString,
+    ) -> crate::broker_error::BrokerResult<bool> {
         #[cfg(feature = "rocksdb_store")]
         if let Some(profile_store) = &self.profile_store {
             let profile_store = Arc::clone(profile_store);
@@ -237,7 +236,7 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
     #[cfg(feature = "rocksdb_store")]
     fn open_pop_consumer_rocksdb_store(
         policy: &capability::PopPolicy,
-    ) -> rocketmq_error::RocketMQResult<Option<Arc<PopConsumerRocksDbStore>>> {
+    ) -> crate::broker_error::BrokerResult<Option<Arc<PopConsumerRocksDbStore>>> {
         if !policy.pop_consumer_kv_service_init && !policy.pop_consumer_kv_service_enable {
             return Ok(None);
         }
@@ -252,14 +251,7 @@ impl<MS: BrokerReadWriteStore> PopMessageProcessor<MS> {
                 info!("Pop consumer RocksDB KV store opened at {}", path.display());
                 Ok(Some(Arc::new(store)))
             }
-            Err(error) => Err(rocketmq_error::RocketMQError::ConfigInvalidValue {
-                key: "popConsumerKVServiceEnable",
-                value: "true".to_owned(),
-                reason: format!(
-                    "failed to open POP consumer RocksDB store at {}: {error}",
-                    path.display()
-                ),
-            }),
+            Err(error) => Err(crate::broker_error::configuration_invalid("popConsumerKVServiceEnable")),
         }
     }
 }

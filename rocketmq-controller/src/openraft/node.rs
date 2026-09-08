@@ -20,9 +20,9 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::ControllerResult;
 use openraft::Config;
 use openraft::ReadPolicy;
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_security_api::MaintenanceAuthorizationGrant;
 use tracing::info;
@@ -183,7 +183,7 @@ impl RaftNodeManager {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: MembershipChangeRequest,
-    ) -> RocketMQResult<MembershipChangeOutcome> {
+    ) -> ControllerResult<MembershipChangeOutcome> {
         self.membership_changes.apply(self, authorization, request).await
     }
 

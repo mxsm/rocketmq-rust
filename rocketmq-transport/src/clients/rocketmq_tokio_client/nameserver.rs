@@ -20,7 +20,6 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rocketmq_error::RocketMQResult;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -363,7 +362,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     pub(super) async fn get_and_create_nameserver_client_until(
         &self,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<Option<NameServerSession<PR>>> {
+    ) -> Result<Option<NameServerSession<PR>>, rocketmq_error::SharedError> {
         deadline.ensure_before_send()?;
         let state = self.endpoint_state.load();
         let cached_addr = state.chosen().cloned();

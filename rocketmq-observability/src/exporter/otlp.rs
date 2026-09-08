@@ -158,10 +158,10 @@ mod tests {
 
         let error = build_tonic_metadata(&headers).expect_err("invalid metadata key should fail");
 
-        assert!(matches!(error, crate::error::ObservabilityError::InvalidConfig(_)));
+        assert_eq!(error.code(), rocketmq_error::OBSERVABILITY_CONFIGURATION_INVALID.code());
         for output in [error.to_string(), format!("{error:?}")] {
             assert!(!output.contains(METADATA_KEY_CANARY));
-            assert!(output.contains("invalid OTLP gRPC metadata key"));
+            assert!(output.contains("observability.configuration.invalid"));
         }
     }
 

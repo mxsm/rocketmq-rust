@@ -14,8 +14,6 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::AuthError;
-use rocketmq_error::RocketMQError;
 use rocketmq_security_api::AuthorizationDecision;
 use rocketmq_security_api::AuthorizationDenial;
 
@@ -25,6 +23,7 @@ use crate::authentication::enums::user_type::UserType;
 use crate::authentication::model::user::User;
 use crate::authentication::provider::AuthenticationMetadataProvider;
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
+use crate::AuthFailureKind;
 use crate::AuthOperation;
 use crate::AuthServiceError;
 use crate::AuthServiceResult;
@@ -56,7 +55,7 @@ impl<P: AuthenticationMetadataProvider> UserAuthorizationHandler<P> {
         let username = User::username_from_subject_key(subject.subject_key());
         let user = match self.authentication_metadata_provider.get_user(username).await {
             Ok(user) => user,
-            Err(RocketMQError::Authentication(AuthError::UserNotFound(_))) => {
+            Err(error) if error.kind() == AuthFailureKind::NotFound => {
                 return Ok(Some(AuthorizationDecision::Deny(AuthorizationDenial::SubjectUnknown)));
             }
             Err(source) => {

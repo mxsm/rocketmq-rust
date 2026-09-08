@@ -118,18 +118,16 @@ impl CommandCustomHeader for TestCustomHeader {
 }
 
 impl FromMap for TestCustomHeader {
-    type Error = rocketmq_error::RocketMQError;
+    type Error = rocketmq_error::Error;
     type Target = Self;
 
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self, Self::Error> {
         let value = map
             .get(&CheetahString::from_static_str("value"))
-            .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("missing value test custom header field"))?
+            .ok_or_else(|| crate::error::invalid_argument("missing value test custom header field"))?
             .parse::<i32>()
             .map_err(|error| {
-                rocketmq_error::RocketMQError::illegal_argument(format!(
-                    "invalid value test custom header field: {error}"
-                ))
+                crate::error::invalid_argument(format!("invalid value test custom header field: {error}"))
             })?;
         Ok(Self { value })
     }
@@ -449,7 +447,7 @@ fn try_read_custom_header_ref_reports_missing_header() {
 
     let error = command.try_read_custom_header_ref::<TestCustomHeader>().unwrap_err();
 
-    assert!(error.to_string().contains("missing"));
+    assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
     assert!(command.read_custom_header_ref_unchecked::<TestCustomHeader>().is_err());
 }
 
@@ -463,7 +461,7 @@ fn try_read_custom_header_ref_reports_type_mismatch() {
 
     let error = command.try_read_custom_header_ref::<OtherCustomHeader>().unwrap_err();
 
-    assert!(error.to_string().contains("type mismatch"));
+    assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
     assert!(command.read_custom_header_ref_unchecked::<OtherCustomHeader>().is_err());
 }
 

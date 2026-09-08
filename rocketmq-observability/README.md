@@ -123,7 +123,8 @@ The default feature set is empty.
 | `stdout` | Compatibility feature. Runtime log output is selected through `MetricsExporter::Log`, `TraceExporter::Log`, or `LogsExporter::Log`. |
 
 If runtime config requests an exporter whose feature is not enabled,
-`init_observability` returns `ObservabilityError::FeatureDisabled`.
+`init_observability` returns an `ObservabilityError` classified by the
+`observability.feature.disabled` descriptor.
 `ObservabilityError` is owned by `rocketmq-error` and re-exported by
 `rocketmq-observability` for compatibility.
 

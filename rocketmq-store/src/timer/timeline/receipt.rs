@@ -14,7 +14,8 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
 use rocketmq_store_api::TimerEngineEpoch;
 use rocketmq_store_api::TimerGeneration;
@@ -45,7 +46,7 @@ pub(crate) struct TimelineCompletionReceiptV1 {
 }
 
 impl TimelineCompletionReceiptV1 {
-    fn encode(self) -> Result<[u8; RECEIPT_VALUE_SIZE], RocketMQError> {
+    fn encode(self) -> Result<[u8; RECEIPT_VALUE_SIZE], StoreError> {
         if self.due_time_ms < 0 || self.final_physical_offset < 0 || self.final_record_size == 0 {
             return Err(receipt_error("invalid final CommitLog identity"));
         }
@@ -63,7 +64,7 @@ impl TimelineCompletionReceiptV1 {
         Ok(output)
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, RocketMQError> {
+    fn decode(bytes: &[u8]) -> Result<Self, StoreError> {
         if bytes.len() != RECEIPT_VALUE_SIZE
             || read_u16(bytes, 0)? != EXTENDED_TIMELINE_FORMAT_VERSION
             || read_u32(bytes, 56)? != crc32c(&bytes[..56])
@@ -102,7 +103,7 @@ impl TimelineReceiptStore {
         batch: &mut RocksDbWriteBatch,
         delivery_token: &str,
         receipt: TimelineCompletionReceiptV1,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), StoreError> {
         batch.put_cf(RECEIPT_CF, encode_key(delivery_token)?, receipt.encode()?);
         Ok(())
     }
@@ -119,13 +120,13 @@ impl TimelineReceiptStore {
             .map_err(Into::into)
     }
 
-    pub(crate) fn delete(batch: &mut RocksDbWriteBatch, delivery_token: &str) -> Result<(), RocketMQError> {
+    pub(crate) fn delete(batch: &mut RocksDbWriteBatch, delivery_token: &str) -> Result<(), StoreError> {
         batch.delete_cf(RECEIPT_CF, encode_key(delivery_token)?);
         Ok(())
     }
 }
 
-fn encode_key(delivery_token: &str) -> Result<Vec<u8>, RocketMQError> {
+fn encode_key(delivery_token: &str) -> Result<Vec<u8>, StoreError> {
     if delivery_token.is_empty() || delivery_token.len() > MAX_TOKEN_BYTES {
         return Err(receipt_error("completion receipt token length is invalid"));
     }
@@ -135,34 +136,36 @@ fn encode_key(delivery_token: &str) -> Result<Vec<u8>, RocketMQError> {
     Ok(key)
 }
 
-fn receipt_error(reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::storage_read_failed("timer-timeline-receipt", reason.into())
+fn receipt_error(reason: impl Into<String>) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::Read)
+        .in_component(StoreComponent::RocksDb)
+        .with_detail(format!("timer-timeline-receipt: {}", reason.into()))
 }
 
-fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], RocketMQError> {
+fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], StoreError> {
     bytes
         .get(offset..offset.saturating_add(N))
         .and_then(|value| value.try_into().ok())
         .ok_or_else(|| receipt_error("truncated completion receipt"))
 }
 
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, RocketMQError> {
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, StoreError> {
     Ok(u16::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, RocketMQError> {
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, StoreError> {
     Ok(u32::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, RocketMQError> {
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, StoreError> {
     Ok(u64::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_i64(bytes: &[u8], offset: usize) -> Result<i64, RocketMQError> {
+fn read_i64(bytes: &[u8], offset: usize) -> Result<i64, StoreError> {
     Ok(i64::from_be_bytes(read_array(bytes, offset)?))
 }
 
-fn read_u128(bytes: &[u8], offset: usize) -> Result<u128, RocketMQError> {
+fn read_u128(bytes: &[u8], offset: usize) -> Result<u128, StoreError> {
     Ok(u128::from_be_bytes(read_array(bytes, offset)?))
 }
 

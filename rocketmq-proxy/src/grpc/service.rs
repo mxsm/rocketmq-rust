@@ -42,6 +42,7 @@ use crate::auth::AuthenticatedPrincipal;
 use crate::auth::ProxyAuthRuntime;
 use crate::config::ProxyConfig;
 use crate::context::ProxyContext;
+use crate::error::canonical;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::grpc::adapter;
@@ -311,11 +312,10 @@ where
         config.grpc.tls.validate()?;
         #[cfg(not(feature = "tls"))]
         if config.grpc.tls.enabled {
-            return Err(rocketmq_error::RocketMQError::ConfigInvalidValue {
-                key: "grpc.tls.enabled",
-                value: "true".to_owned(),
-                reason: "rocketmq-proxy was compiled without the tls feature".to_owned(),
-            }
+            return Err(canonical::configuration_invalid(
+                "grpc.tls.enabled",
+                "rocketmq-proxy was compiled without the tls feature",
+            )
             .into());
         }
         ExecutionGuards::try_from_config(&config.runtime)
@@ -426,9 +426,7 @@ where
                 decode_gzip_message_bodies(request, max_body_size)
             })
             .await
-            .map_err(|error| ProxyError::Transport {
-                message: format!("gzip decode task failed: {error}"),
-            })?
+            .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?
     }
 
     pub fn metrics_snapshot(&self) -> ProxyMetricsSnapshot {
@@ -1154,11 +1152,12 @@ fn decode_gzip_message_bodies(
         let mut decoded = Vec::with_capacity(message.body.len().min(max_body_size));
         let decoder = flate2::read::GzDecoder::new(message.body.as_ref());
         let limit = u64::try_from(max_body_size).unwrap_or(u64::MAX).saturating_add(1);
-        decoder.take(limit).read_to_end(&mut decoded).map_err(|error| {
-            rocketmq_error::RocketMQError::illegal_argument(format!("invalid gzip message body: {error}"))
-        })?;
+        decoder
+            .take(limit)
+            .read_to_end(&mut decoded)
+            .map_err(canonical::argument_with_source)?;
         if decoded.len() > max_body_size {
-            return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+            return Err(canonical::argument(format!(
                 "decoded message body exceeds the configured maximum {max_body_size} bytes"
             ))
             .into());

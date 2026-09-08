@@ -26,6 +26,9 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
+/// Result returned by storage composition operations.
+pub type StoreResult<T> = std::result::Result<T, rocketmq_store_api::StoreError>;
+
 mod base;
 mod capability;
 mod config;

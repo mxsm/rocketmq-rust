@@ -17,7 +17,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_security_api::Action;
@@ -75,7 +75,7 @@ pub(crate) enum AuthorizedDispatchError {
     #[error("authorized dispatch session is closing")]
     Closing(#[source] RuntimeError),
     #[error(" boundary response failed")]
-    BoundaryResponse(#[source] RocketMQError),
+    BoundaryResponse(#[source] SharedError),
     #[error(transparent)]
     Contract(#[from] TransportContractViolation),
     #[error(transparent)]

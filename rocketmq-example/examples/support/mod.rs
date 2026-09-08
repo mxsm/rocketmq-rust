@@ -15,25 +15,25 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use rocketmq_client_rust::ClientError;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
-pub fn run<F, Fut>(operation: F) -> RocketMQResult<()>
+pub fn run<F, Fut>(operation: F) -> ClientResult<()>
 where
     F: FnOnce(Arc<ClientRuntime>) -> Fut,
-    Fut: Future<Output = RocketMQResult<()>>,
+    Fut: Future<Output = ClientResult<()>>,
 {
     let owner = RuntimeOwner::plan(RuntimeConfig::server_default("rocketmq-example"))
         .expect("test runtime configuration is valid")
         .build()
-        .map_err(|source| RocketMQError::internal("create example runtime", source))?;
+        .map_err(|source| ClientError::internal("create example runtime", source))?;
     let telemetry_guard =
         rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
-            .map_err(|source| RocketMQError::internal("initialize example telemetry", source))?;
+            .map_err(|source| ClientError::internal("initialize example telemetry", source))?;
     let client_runtime = ClientRuntime::try_new(
         owner.root_context().component("client"),
         ClientRuntimeConfig::default(),
@@ -48,11 +48,11 @@ where
     });
     let shutdown_result = owner
         .shutdown_runtime_blocking()
-        .map_err(|source| RocketMQError::internal("shut down example runtime", source));
+        .map_err(|source| ClientError::internal("shut down example runtime", source));
     let telemetry_result = telemetry_guard
         .shutdown()
         .into_result()
-        .map_err(|source| RocketMQError::internal("shut down example telemetry", source));
+        .map_err(|source| ClientError::internal("shut down example telemetry", source));
 
     operation_result
         .and(shutdown_result.map(|_| ()))

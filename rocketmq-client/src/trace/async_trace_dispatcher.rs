@@ -27,13 +27,12 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use crate::ClientError;
+use crate::ClientResult;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::UnifiedServiceError;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::topic::TopicValidator;
@@ -107,12 +106,12 @@ impl DispatcherState {
 }
 
 enum TraceFlushResponder {
-    Blocking(std_mpsc::Sender<RocketMQResult<()>>),
-    Async(oneshot::Sender<RocketMQResult<()>>),
+    Blocking(std_mpsc::Sender<ClientResult<()>>),
+    Async(oneshot::Sender<ClientResult<()>>),
 }
 
 impl TraceFlushResponder {
-    fn send(self, result: RocketMQResult<()>) {
+    fn send(self, result: ClientResult<()>) {
         match self {
             Self::Blocking(sender) => {
                 let _ = sender.send(result);
@@ -354,9 +353,9 @@ impl AsyncTraceDispatcher {
     }
 
     /// Asynchronously flushes pending trace contexts without blocking a Tokio worker thread.
-    pub async fn flush_async(&self) -> RocketMQResult<()> {
+    pub async fn flush_async(&self) -> ClientResult<()> {
         if !self.state.is_started.load(Ordering::SeqCst) {
-            return Err(RocketMQError::not_initialized("Dispatcher not started"));
+            return Err(ClientError::not_initialized("Dispatcher not started"));
         }
 
         info!("Flushing trace data...");
@@ -453,7 +452,7 @@ impl TraceDispatcher for AsyncTraceDispatcher {
     ///
     /// Returns an error if the dispatcher has already been started or if
     /// internal state initialization fails.
-    fn start(&self, name_srv_addr: &str, access_channel: AccessChannel) -> RocketMQResult<()> {
+    fn start(&self, name_srv_addr: &str, access_channel: AccessChannel) -> ClientResult<()> {
         // CAS to ensure we only start once
         if self
             .state
@@ -500,14 +499,14 @@ impl TraceDispatcher for AsyncTraceDispatcher {
             .rx
             .lock()
             .take()
-            .ok_or_else(|| RocketMQError::not_initialized("Dispatcher already started"))?;
+            .ok_or_else(|| ClientError::not_initialized("Dispatcher already started"))?;
 
         // Get producer reference for worker
         let producer = self
             .trace_producer
             .read()
             .clone()
-            .ok_or_else(|| RocketMQError::not_initialized("Producer not initialized"))?;
+            .ok_or_else(|| ClientError::not_initialized("Producer not initialized"))?;
 
         // Spawn worker task
         let state = self.state.clone();
@@ -584,9 +583,9 @@ impl TraceDispatcher for AsyncTraceDispatcher {
     /// # Errors
     ///
     /// Returns an error if the dispatcher has not been started.
-    fn flush(&self) -> RocketMQResult<()> {
+    fn flush(&self) -> ClientResult<()> {
         if !self.state.is_started.load(Ordering::SeqCst) {
-            return Err(RocketMQError::not_initialized("Dispatcher not started"));
+            return Err(ClientError::not_initialized("Dispatcher not started"));
         }
 
         info!("Flushing trace data...");
@@ -594,7 +593,7 @@ impl TraceDispatcher for AsyncTraceDispatcher {
         let (sender, receiver) = std_mpsc::channel();
         self.tx
             .try_send(TraceWorkerCommand::Flush(TraceFlushResponder::Blocking(sender)))
-            .map_err(|error| trace_dispatcher_interrupted(format!("flush queue failed: {error}")))?;
+            .map_err(trace_dispatcher_interrupted_source)?;
 
         match receiver.recv_timeout(TRACE_WORKER_FLUSH_TIMEOUT) {
             Ok(result) => result?,
@@ -685,7 +684,7 @@ fn spawn_trace_task<F>(
     service_context: &ChildServiceContext,
     thread_name: &'static str,
     task: F,
-) -> RocketMQResult<TraceTaskHandle>
+) -> ClientResult<TraceTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
@@ -694,21 +693,23 @@ where
         .map_err(|error| trace_dispatcher_startup_failed(thread_name, error))
 }
 
-fn trace_dispatcher_interrupted(_reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::Interrupted)
+fn trace_dispatcher_interrupted(_reason: impl Into<String>) -> ClientError {
+    ClientError::service_failed("trace_dispatcher_interrupted")
 }
 
-fn trace_dispatcher_flush_timeout() -> RocketMQError {
-    RocketMQError::Timeout {
-        operation: "trace_dispatcher_flush",
-        timeout_ms: TRACE_WORKER_FLUSH_TIMEOUT.as_millis() as u64,
-    }
+fn trace_dispatcher_interrupted_source(source: impl std::error::Error + Send + Sync + 'static) -> ClientError {
+    ClientError::service_source("trace_dispatcher_interrupted", source)
 }
 
-fn trace_dispatcher_startup_failed(thread_name: &'static str, error: impl std::fmt::Display) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
-        "failed to spawn {thread_name} task: {error}"
-    )))
+fn trace_dispatcher_flush_timeout() -> ClientError {
+    ClientError::timeout("trace_dispatcher_flush", TRACE_WORKER_FLUSH_TIMEOUT.as_millis() as u64)
+}
+
+fn trace_dispatcher_startup_failed(
+    thread_name: &'static str,
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> ClientError {
+    ClientError::service_source(thread_name, error)
 }
 
 fn decrement_queued_trace_count(state: &DispatcherState) {
@@ -728,7 +729,7 @@ async fn worker_loop(
     state: Arc<DispatcherState>,
     producer: Arc<tokio::sync::Mutex<DefaultMQProducer>>,
     config: TraceDispatcherConfig,
-) -> RocketMQResult<()> {
+) -> ClientResult<()> {
     // Start the producer in the async worker context
     {
         let mut producer_guard = producer.lock().await;
@@ -847,7 +848,7 @@ async fn flush_buffer(
     state: &Arc<DispatcherState>,
     producer: &Arc<tokio::sync::Mutex<DefaultMQProducer>>,
     config: &TraceDispatcherConfig,
-) -> RocketMQResult<()> {
+) -> ClientResult<()> {
     if buffer.is_empty() {
         record_flush_completion(state);
         return Ok(());
@@ -876,7 +877,7 @@ async fn send_trace_data(
     state: &Arc<DispatcherState>,
     producer: &Arc<tokio::sync::Mutex<DefaultMQProducer>>,
     config: &TraceDispatcherConfig,
-) -> RocketMQResult<()> {
+) -> ClientResult<()> {
     // Group trace contexts by (topic, trace_topic)
     let mut trans_bean_map: HashMap<String, Vec<TraceTransferBean>> = HashMap::with_capacity(16);
 
@@ -943,7 +944,7 @@ async fn flush_data(
     producer: &Arc<tokio::sync::Mutex<DefaultMQProducer>>,
     state: &Arc<DispatcherState>,
     config: &TraceDispatcherConfig,
-) -> RocketMQResult<()> {
+) -> ClientResult<()> {
     if beans.is_empty() {
         return Ok(());
     }
@@ -983,7 +984,7 @@ async fn send_trace_message(
     trace_topic: &str,
     producer: &Arc<tokio::sync::Mutex<DefaultMQProducer>>,
     state: &Arc<DispatcherState>,
-) -> RocketMQResult<()> {
+) -> ClientResult<()> {
     let keys: Vec<String> = key_set.iter().map(|k| k.to_string()).collect();
 
     let message = Message::builder()
@@ -1115,6 +1116,14 @@ mod tests {
     }
 
     #[test]
+    fn trace_dispatcher_interrupted_source_preserves_cause() {
+        let error = trace_dispatcher_interrupted_source(std::io::Error::other("flush queue closed"));
+
+        assert_eq!(error.descriptor().code(), rocketmq_error::CORE_SERVICE_FAILED.code());
+        assert!(error.source_ref::<std::io::Error>().is_some());
+    }
+
+    #[test]
     fn trace_dispatcher_flush_timeout_uses_timeout_descriptor() {
         let error = trace_dispatcher_flush_timeout();
 
@@ -1127,10 +1136,11 @@ mod tests {
 
     #[test]
     fn trace_dispatcher_startup_failed_uses_service_descriptor() {
-        let error = trace_dispatcher_startup_failed("rocketmq-client-trace-test", "task group closed");
+        let error =
+            trace_dispatcher_startup_failed("rocketmq-client-trace-test", std::io::Error::other("task group closed"));
 
         assert_eq!(error.descriptor().code(), rocketmq_error::CORE_SERVICE_FAILED.code());
-        assert!(error.to_string().contains("rocketmq-client-trace-test"));
+        assert!(std::error::Error::source(&error).is_some());
     }
 
     #[test]

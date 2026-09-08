@@ -17,8 +17,8 @@ use std::vec::Vec;
 
 use crate::common::wire_constants::KEY_SEPARATOR;
 use crate::common::wire_constants::RETRY_GROUP_TOPIC_PREFIX;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Error;
+use rocketmq_error::Result;
 use rocketmq_model::common::key_builder;
 use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
@@ -44,13 +44,13 @@ const RETRY_TOPIC_V2: &str = "2";
 const QUEUE_OFFSET: &str = "qo";
 
 #[inline]
-fn illegal_argument(message: impl Into<String>) -> RocketMQError {
-    RocketMQError::illegal_argument(message)
+fn illegal_argument(message: impl Into<String>) -> Error {
+    crate::error::invalid_argument(message)
 }
 
 impl ExtraInfoUtil {
     /// Parses the fixed POP receipt-handle prefix without allocating its fields.
-    pub fn parse_ack_extra_info(extra_info: &str) -> RocketMQResult<AckExtraInfo<'_>> {
+    pub fn parse_ack_extra_info(extra_info: &str) -> Result<AckExtraInfo<'_>> {
         let mut parts = extra_info.split(KEY_SEPARATOR);
         let mut next = |name: &str| {
             parts
@@ -113,7 +113,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get the checkpoint queue offset from the extra info
-    pub fn get_ck_queue_offset(extra_info_strs: &[String]) -> RocketMQResult<i64> {
+    pub fn get_ck_queue_offset(extra_info_strs: &[String]) -> Result<i64> {
         if extra_info_strs.is_empty() {
             return Err(illegal_argument(format!(
                 "getCkQueueOffset fail, extraInfoStrs length {}",
@@ -126,7 +126,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get the pop time from the extra info
-    pub fn get_pop_time(extra_info_strs: &[String]) -> RocketMQResult<i64> {
+    pub fn get_pop_time(extra_info_strs: &[String]) -> Result<i64> {
         if extra_info_strs.len() < 2 {
             return Err(illegal_argument(format!(
                 "getPopTime fail, extraInfoStrs length {}",
@@ -139,7 +139,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get the invisible time from the extra info
-    pub fn get_invisible_time(extra_info_strs: &[String]) -> RocketMQResult<i64> {
+    pub fn get_invisible_time(extra_info_strs: &[String]) -> Result<i64> {
         if extra_info_strs.len() < 3 {
             return Err(illegal_argument(format!(
                 "getInvisibleTime fail, extraInfoStrs length {}",
@@ -152,7 +152,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get the revive queue ID from the extra info
-    pub fn get_revive_qid(extra_info_strs: &[String]) -> RocketMQResult<i32> {
+    pub fn get_revive_qid(extra_info_strs: &[String]) -> Result<i32> {
         if extra_info_strs.len() < 4 {
             return Err(illegal_argument(format!(
                 "getReviveQid fail, extraInfoStrs length {}",
@@ -165,7 +165,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get the real topic name based on the retry flag
-    pub fn get_real_topic(extra_info_strs: &[String], topic: &str, cid: &str) -> RocketMQResult<String> {
+    pub fn get_real_topic(extra_info_strs: &[String], topic: &str, cid: &str) -> Result<String> {
         if extra_info_strs.len() < 5 {
             return Err(illegal_argument(format!(
                 "getRealTopic fail, extraInfoStrs length {}",
@@ -183,7 +183,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get the real topic name based on the retry flag
-    pub fn get_real_topic_with_retry(topic: &str, cid: &str, retry: &str) -> RocketMQResult<String> {
+    pub fn get_real_topic_with_retry(topic: &str, cid: &str, retry: &str) -> Result<String> {
         if retry == NORMAL_TOPIC {
             Ok(topic.to_string())
         } else if retry == RETRY_TOPIC {
@@ -196,7 +196,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get the retry flag from the extra info
-    pub fn get_retry(extra_info_strs: &[String]) -> RocketMQResult<String> {
+    pub fn get_retry(extra_info_strs: &[String]) -> Result<String> {
         if extra_info_strs.len() < 5 {
             return Err(illegal_argument(format!(
                 "getRetry fail, extraInfoStrs length {}",
@@ -207,7 +207,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get the broker name from the extra info
-    pub fn get_broker_name(extra_info_strs: &[String]) -> RocketMQResult<String> {
+    pub fn get_broker_name(extra_info_strs: &[String]) -> Result<String> {
         if extra_info_strs.len() < 6 {
             return Err(illegal_argument(format!(
                 "getBrokerName fail, extraInfoStrs length {}",
@@ -218,7 +218,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get the queue ID from the extra info
-    pub fn get_queue_id(extra_info_strs: &[String]) -> rocketmq_error::RocketMQResult<i32> {
+    pub fn get_queue_id(extra_info_strs: &[String]) -> rocketmq_error::Result<i32> {
         if extra_info_strs.len() < 7 {
             return Err(illegal_argument(format!(
                 "getQueueId fail, extraInfoStrs length {}",
@@ -231,7 +231,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get the queue offset from the extra info
-    pub fn get_queue_offset(extra_info_strs: &[String]) -> rocketmq_error::RocketMQResult<i64> {
+    pub fn get_queue_offset(extra_info_strs: &[String]) -> rocketmq_error::Result<i64> {
         if extra_info_strs.len() < 8 {
             return Err(illegal_argument(format!(
                 "getQueueOffset fail, extraInfoStrs length {}",
@@ -391,7 +391,7 @@ impl ExtraInfoUtil {
     }
 
     /// Parse message offset info into a HashMap
-    pub fn parse_msg_offset_info(msg_offset_info: &str) -> RocketMQResult<HashMap<String, Vec<i64>>> {
+    pub fn parse_msg_offset_info(msg_offset_info: &str) -> Result<HashMap<String, Vec<i64>>> {
         let mut msg_offset_map: HashMap<String, Vec<i64>> = HashMap::with_capacity(4);
         if msg_offset_info.is_empty() {
             return Ok(msg_offset_map);
@@ -429,7 +429,7 @@ impl ExtraInfoUtil {
     }
 
     /// Parse start offset info into a HashMap
-    pub fn parse_start_offset_info(start_offset_info: &str) -> RocketMQResult<HashMap<String, i64>> {
+    pub fn parse_start_offset_info(start_offset_info: &str) -> Result<HashMap<String, i64>> {
         let mut start_offset_map: HashMap<String, i64> = HashMap::with_capacity(4);
         if start_offset_info.is_empty() {
             return Ok(start_offset_map);
@@ -465,7 +465,7 @@ impl ExtraInfoUtil {
     }
 
     /// Parse order count info into a HashMap
-    pub fn parse_order_count_info(order_count_info: &str) -> RocketMQResult<HashMap<String, i32>> {
+    pub fn parse_order_count_info(order_count_info: &str) -> Result<HashMap<String, i32>> {
         let mut order_count_map: HashMap<String, i32> = HashMap::with_capacity(4);
         if order_count_info.is_empty() {
             return Ok(order_count_map);
@@ -508,11 +508,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get start offset info map key with pop check
-    pub fn get_start_offset_info_map_key_with_pop_ck(
-        topic: &str,
-        pop_ck: Option<&str>,
-        key: i64,
-    ) -> RocketMQResult<String> {
+    pub fn get_start_offset_info_map_key_with_pop_ck(topic: &str, pop_ck: Option<&str>, key: i64) -> Result<String> {
         Ok(format!("{}@{}", Self::get_retry_from_topic_pop_ck(topic, pop_ck)?, key))
     }
 
@@ -547,7 +543,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get retry flag with pop check
-    fn get_retry_from_topic_pop_ck(topic: &str, pop_ck: Option<&str>) -> RocketMQResult<String> {
+    fn get_retry_from_topic_pop_ck(topic: &str, pop_ck: Option<&str>) -> Result<String> {
         match pop_ck {
             Some(ck) => Self::get_retry(&Self::split(ck)),
             None => Ok(Self::get_retry_from_topic(topic)),
@@ -576,7 +572,7 @@ mod tests {
     #[test]
     fn get_ck_queue_offset_with_invalid_string() {
         let result = ExtraInfoUtil::get_ck_queue_offset(&["abc".to_string()]).unwrap_err();
-        assert_eq!(result.to_string(), "Illegal argument: parse ck_queue_offset error");
+        assert_eq!(result.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -588,10 +584,7 @@ mod tests {
     #[test]
     fn get_pop_time_with_insufficient_length() {
         let result = ExtraInfoUtil::get_pop_time(&["123".to_string()]).unwrap_err();
-        assert_eq!(
-            result.to_string(),
-            "Illegal argument: getPopTime fail, extraInfoStrs length 1"
-        );
+        assert_eq!(result.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -604,10 +597,7 @@ mod tests {
     #[test]
     fn get_invisible_time_with_insufficient_length() {
         let result = ExtraInfoUtil::get_invisible_time(&["123".to_string(), "456".to_string()]).unwrap_err();
-        assert_eq!(
-            result.to_string(),
-            "Illegal argument: getInvisibleTime fail, extraInfoStrs length 2"
-        );
+        assert_eq!(result.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -626,10 +616,7 @@ mod tests {
     fn get_revive_qid_with_insufficient_length() {
         let result =
             ExtraInfoUtil::get_revive_qid(&["123".to_string(), "456".to_string(), "789".to_string()]).unwrap_err();
-        assert_eq!(
-            result.to_string(),
-            "Illegal argument: getReviveQid fail, extraInfoStrs length 3"
-        );
+        assert_eq!(result.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -696,16 +683,13 @@ mod tests {
             "cid",
         )
         .unwrap_err();
-        assert_eq!(
-            result.to_string(),
-            "Illegal argument: getRealTopic fail, extraInfoStrs length 4"
-        );
+        assert_eq!(result.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
     fn get_real_topic_with_retry_invalid() {
         let result = ExtraInfoUtil::get_real_topic_with_retry("topic", "cid", "3").unwrap_err();
-        assert_eq!(result.to_string(), "Illegal argument: getRetry fail, format is wrong");
+        assert_eq!(result.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -730,10 +714,7 @@ mod tests {
             "10".to_string(),
         ])
         .unwrap_err();
-        assert_eq!(
-            result.to_string(),
-            "Illegal argument: getRetry fail, extraInfoStrs length 4"
-        );
+        assert_eq!(result.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -760,10 +741,7 @@ mod tests {
             "1".to_string(),
         ])
         .unwrap_err();
-        assert_eq!(
-            result.to_string(),
-            "Illegal argument: getBrokerName fail, extraInfoStrs length 5"
-        );
+        assert_eq!(result.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -792,10 +770,7 @@ mod tests {
             "broker".to_string(),
         ])
         .unwrap_err();
-        assert_eq!(
-            result.to_string(),
-            "Illegal argument: getQueueId fail, extraInfoStrs length 6"
-        );
+        assert_eq!(result.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -826,10 +801,7 @@ mod tests {
             "7".to_string(),
         ])
         .unwrap_err();
-        assert_eq!(
-            result.to_string(),
-            "Illegal argument: getQueueOffset fail, extraInfoStrs length 7"
-        );
+        assert_eq!(result.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]

@@ -93,7 +93,7 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
         mut response: RemotingCommand,
         mut mapping_context: TopicQueueMappingContext,
         response_context: PullResponseContext<'_>,
-    ) -> rocketmq_error::RocketMQResult<PullMessageResult> {
+    ) -> crate::broker_error::BrokerResult<PullMessageResult> {
         let client_address = response_context.effective_peer.to_string();
         let policy = self.context.policy();
         let topic_config = self.context.topics().select_topic_config(request_header.topic.as_ref());
@@ -293,18 +293,18 @@ impl<MS: BrokerReadStore> PullMessageResultHandler for DefaultPullMessageResultH
     }
 }
 
-fn command_result(response: RemotingCommand) -> rocketmq_error::RocketMQResult<PullMessageResult> {
+fn command_result(response: RemotingCommand) -> crate::broker_error::BrokerResult<PullMessageResult> {
     Ok(PullMessageResult::Reply(BrokerResponseParts::command(response)?))
 }
 
-fn bytes_result(response: RemotingCommand, body: Bytes) -> rocketmq_error::RocketMQResult<PullMessageResult> {
+fn bytes_result(response: RemotingCommand, body: Bytes) -> crate::broker_error::BrokerResult<PullMessageResult> {
     Ok(PullMessageResult::Reply(BrokerResponseParts::bytes(response, body)?))
 }
 
 fn store_result(
     response: RemotingCommand,
     get_message_result: GetMessageResult,
-) -> rocketmq_error::RocketMQResult<PullMessageResult> {
+) -> crate::broker_error::BrokerResult<PullMessageResult> {
     Ok(PullMessageResult::Reply(store_response_parts(
         response,
         get_message_result.message_mapped_vec(),
@@ -315,9 +315,9 @@ fn store_result(
 pub(crate) fn pull_bytes_wire_fixture_parts(
     response: RemotingCommand,
     body: Bytes,
-) -> rocketmq_error::RocketMQResult<BrokerResponseParts> {
+) -> crate::broker_error::BrokerResult<BrokerResponseParts> {
     let PullMessageResult::Reply(parts) = bytes_result(response, body)? else {
-        return Err(rocketmq_error::RocketMQError::invariant_violated(
+        return Err(crate::broker_error::invariant_violated(
             "the Pull bytes builder unexpectedly suspended",
         ));
     };
@@ -328,9 +328,9 @@ pub(crate) fn pull_bytes_wire_fixture_parts(
 pub(crate) fn pull_store_wire_fixture_parts(
     response: RemotingCommand,
     result: GetMessageResult,
-) -> rocketmq_error::RocketMQResult<BrokerResponseParts> {
+) -> crate::broker_error::BrokerResult<BrokerResponseParts> {
     let PullMessageResult::Reply(parts) = store_result(response, result)? else {
-        return Err(rocketmq_error::RocketMQError::invariant_violated(
+        return Err(crate::broker_error::invariant_violated(
             "the Pull store-result builder unexpectedly suspended",
         ));
     };
@@ -639,7 +639,7 @@ impl<MS: BrokerReadStore> DefaultPullMessageResultHandler<MS> {
         client_resolver: &crate::processor::pull_message_result_handler::PullBroadcastClientResolver<'_>,
         response: Option<&mut RemotingCommand>,
         next_begin_offset: i64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         if response.is_none() || !self.context.policy().enable_broadcast_offset_store {
             return Ok(());
         }
@@ -673,7 +673,7 @@ mod tests {
         RemotingCommand::create_response_command_with_code(ResponseCode::Success)
     }
 
-    fn reply_response(result: rocketmq_error::RocketMQResult<PullMessageResult>) -> RemotingResponse {
+    fn reply_response(result: crate::broker_error::BrokerResult<PullMessageResult>) -> RemotingResponse {
         let PullMessageResult::Reply(parts) = result.expect("valid Pull result") else {
             panic!("expected an immediate Pull reply");
         };

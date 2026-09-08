@@ -25,7 +25,6 @@ use std::sync::Mutex as StdMutex;
 
 use rocketmq_error::Error;
 use rocketmq_error::RemotingResponseCode;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::CONTROLLER_INTERNAL_FAILURE;
 use rocketmq_error::CONTROLLER_REQUEST_INVALID;
 use rocketmq_error::CORE_INTERNAL_FAILURE;
@@ -196,13 +195,6 @@ fn promote_request(operation_id: &str, node_id: u64) -> MembershipChangeRequest 
     .expect("request")
 }
 
-fn expect_shared_controller_error(error: RocketMQError) -> Arc<Error> {
-    let RocketMQError::Shared(canonical) = error else {
-        panic!("Controller failure must cross the RocketMQResult boundary as Shared");
-    };
-    canonical
-}
-
 #[tokio::test]
 async fn repeated_operation_id_replays_without_second_consensus_mutation() {
     let sink = Arc::new(RecordingAuditSink::default());
@@ -248,9 +240,7 @@ async fn reused_operation_id_with_different_payload_is_rejected_and_audited() {
         .await
         .expect_err("conflicting idempotency payload");
 
-    let canonical = expect_shared_controller_error(error);
-    let same_allocation = Arc::clone(&canonical);
-    assert!(Arc::ptr_eq(&canonical, &same_allocation));
+    let canonical = error;
     assert_eq!(canonical.descriptor(), &CONTROLLER_REQUEST_INVALID);
     assert!(canonical.source().is_none());
     assert_eq!(
@@ -275,7 +265,7 @@ async fn full_idempotency_journal_preserves_the_owner_system_error_response() {
         .await
         .expect_err("a full idempotency journal rejects new operations");
 
-    let canonical = expect_shared_controller_error(error);
+    let canonical = error;
     assert_eq!(canonical.descriptor(), &CORE_INTERNAL_FAILURE);
     assert_eq!(
         canonical.descriptor().projection().remoting().code,
@@ -325,7 +315,7 @@ async fn learner_must_be_caught_up_before_promotion() {
         .await
         .expect_err("learner is behind");
 
-    let canonical = expect_shared_controller_error(error);
+    let canonical = error;
     assert_eq!(canonical.descriptor(), &CONTROLLER_REQUEST_INVALID);
     assert_eq!(port.mutation_count(), 0);
     assert_eq!(
@@ -359,7 +349,7 @@ async fn deserialized_request_is_revalidated_before_mutation() {
         .await
         .expect_err("apply must revalidate deserialized DTOs");
 
-    let canonical = expect_shared_controller_error(error);
+    let canonical = error;
     assert_eq!(canonical.descriptor(), &CONTROLLER_REQUEST_INVALID);
     assert_eq!(port.mutation_count(), 0);
     let records = sink.records.lock().expect("audit lock");
@@ -430,9 +420,7 @@ async fn initial_membership_read_failure_is_rejected_and_audited() {
         .await
         .expect_err("initial read is injected to fail");
 
-    let canonical = expect_shared_controller_error(error);
-    let same_allocation = Arc::clone(&canonical);
-    assert!(Arc::ptr_eq(&canonical, &same_allocation));
+    let canonical = error;
     assert_eq!(canonical.descriptor(), &CONTROLLER_INTERNAL_FAILURE);
     assert_eq!(
         canonical.descriptor().projection().remoting().code,

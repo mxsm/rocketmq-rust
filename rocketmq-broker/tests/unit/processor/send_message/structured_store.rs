@@ -20,7 +20,6 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode as ProtocolResponseCode;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
@@ -182,7 +181,7 @@ struct StoreProbeProcessor {
 }
 
 impl RequestProcessor for StoreProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let control = request.control().clone();
         let identity = request.original_identity();
         let original_opaque = identity.original_opaque();
@@ -272,7 +271,7 @@ impl RequestProcessor for StoreProbeProcessor {
             (response, completion)
         })
         .await
-        .map_err(|_| RocketMQError::invariant_violated("structured Send reply conversion failed"))?;
+        .map_err(|_| crate::broker_error::invariant_violated("structured Send reply conversion failed"))?;
         let (outcome, completion) = reply.into_parts();
         if !original_one_way {
             assert!(

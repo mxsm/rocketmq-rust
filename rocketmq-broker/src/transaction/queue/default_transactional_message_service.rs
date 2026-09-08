@@ -19,10 +19,9 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 use std::time::Duration;
 
+use crate::broker_error::BrokerResult as Result;
 use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_accessor::MessageAccessor;
@@ -112,36 +111,21 @@ pub struct DefaultTransactionalMessageService<MS: BrokerWriteStore + BrokerMaste
     operation_queue_budget: ResourceBudget,
 }
 
-fn standalone_transaction_resource_budget(broker_config: &BrokerConfig) -> RocketMQResult<ResourceBudget> {
+fn standalone_transaction_resource_budget(broker_config: &BrokerConfig) -> Result<ResourceBudget> {
     let process_limit = if broker_config.process_memory_limit_bytes == 0 {
-        ProcessMemoryLimit::detect().map_err(|source| RocketMQError::Internal {
-            operation: "detect-process-memory-limit",
-            source: Box::new(source),
-        })?
+        ProcessMemoryLimit::detect()
+            .map_err(|source| crate::broker_error::internal("detect-process-memory-limit", source))?
     } else {
-        ProcessMemoryLimit::configured(broker_config.process_memory_limit_bytes).map_err(|_error| {
-            RocketMQError::ConfigInvalidValue {
-                key: "broker.processMemoryLimitBytes",
-                value: broker_config.process_memory_limit_bytes.to_string(),
-                reason: "must be greater than zero".to_string(),
-            }
-        })?
+        ProcessMemoryLimit::configured(broker_config.process_memory_limit_bytes)
+            .map_err(|_error| crate::broker_error::configuration_invalid("broker.processMemoryLimitBytes"))?
     };
     let managed_bytes = process_limit
         .fraction(1, 4)
-        .map_err(|_error| RocketMQError::ConfigInvalidValue {
-            key: "broker.processMemoryLimitBytes",
-            value: process_limit.bytes().to_string(),
-            reason: "must produce a positive bounded managed-memory fraction".to_string(),
-        })?;
+        .map_err(|_error| crate::broker_error::configuration_invalid("broker.processMemoryLimitBytes"))?;
     let managed_bytes = usize::try_from(managed_bytes).unwrap_or(usize::MAX).max(1);
     ResourceBudgetTree::new("broker", BudgetLimit::new(20_000, managed_bytes, FullPolicy::Reject))
         .map(|tree| tree.root())
-        .map_err(|error| RocketMQError::ConfigInvalidValue {
-            key: "broker.transaction.operationQueue",
-            value: managed_bytes.to_string(),
-            reason: error.to_string(),
-        })
+        .map_err(|_error| crate::broker_error::configuration_invalid("broker.transaction.operationQueue"))
 }
 
 impl<MS> DefaultTransactionalMessageService<MS>
@@ -167,7 +151,7 @@ where
         transactional_message_bridge: TransactionalMessageBridge<MS>,
         broker_config: Arc<BrokerConfig>,
         file_reserved_time_hours: i64,
-    ) -> RocketMQResult<Self> {
+    ) -> Result<Self> {
         let resource_budget = standalone_transaction_resource_budget(&broker_config)?;
         Self::try_new_with_resource_budget(
             transactional_message_bridge,
@@ -182,7 +166,7 @@ where
         broker_config: Arc<BrokerConfig>,
         file_reserved_time_hours: i64,
         parent_budget: &ResourceBudget,
-    ) -> RocketMQResult<Self> {
+    ) -> Result<Self> {
         let transaction_metrics =
             TransactionMetrics::open(get_transaction_metrics_path(broker_config.store_path_root_dir.as_str()))?;
         Self::try_new_with_resource_budget_and_metrics(
@@ -200,7 +184,7 @@ where
         file_reserved_time_hours: i64,
         parent_budget: &ResourceBudget,
         transaction_metrics: TransactionMetrics,
-    ) -> RocketMQResult<Self> {
+    ) -> Result<Self> {
         let queue_count = 20_000.min(parent_budget.limit().capacity.count);
         let queue_bytes = (parent_budget.limit().capacity.bytes / 16).max(1);
         let queue_rate = u64::try_from(queue_count).unwrap_or(u64::MAX).max(1);
@@ -211,11 +195,7 @@ where
                     .with_rate(RateLimit::new(queue_rate, queue_rate))
                     .with_max_age(Duration::from_secs(30)),
             )
-            .map_err(|error| RocketMQError::ConfigInvalidValue {
-                key: "broker.transaction.operationQueue",
-                value: queue_bytes.to_string(),
-                reason: error.to_string(),
-            })?;
+            .map_err(|_error| crate::broker_error::configuration_invalid("broker.transaction.operationQueue"))?;
         Ok(Self {
             transactional_message_bridge,
             broker_config,
@@ -230,7 +210,7 @@ where
         })
     }
 
-    pub(crate) fn start_transaction_metrics_flush(&self, service_context: ChildServiceContext) -> RocketMQResult<()> {
+    pub(crate) fn start_transaction_metrics_flush(&self, service_context: ChildServiceContext) -> Result<()> {
         const FLUSH_INTERVAL: Duration = Duration::from_secs(10);
 
         let blocking = service_context.metadata_io().clone();
@@ -255,21 +235,17 @@ where
                     }
                 },
             )
-            .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
+            .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?;
         self.transaction_metrics_flush_tasks
             .set(scheduled_tasks)
-            .map_err(|_| RocketMQError::ConfigInvalidValue {
-                key: "transactionMetrics.flushService",
-                value: "duplicate".into(),
-                reason: "transaction metrics flush service already started".into(),
-            })?;
+            .map_err(|_| crate::broker_error::configuration_invalid("transactionMetrics.flushService"))?;
         Ok(())
     }
 
     pub async fn set_transactional_op_batch_service_start(
         &self,
         weak_this: Weak<DefaultTransactionalMessageService<MS>>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         let service = self
             .transactional_op_batch_service
             .get_or_init(|| TransactionalOpBatchService::new(self.broker_config.clone(), weak_this));
@@ -451,7 +427,7 @@ where
         transaction_timeout: u64,
         transaction_check_max: i32,
         listener: Listener,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         let topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC);
 
         //TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC only one read and write queue
@@ -551,7 +527,7 @@ where
         done_op_offset: &mut Vec<i64>,
         mut pull_result: Option<TransactionReadOutcome>,
         mut listener: Listener,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         let mut get_message_null_count = 1;
         let mut new_offset = half_offset;
         let mut consume_half_offset = half_offset;
@@ -889,7 +865,7 @@ where
         done_op_offset: &mut Vec<i64>,
         msg_ext: &MessageExt,
         check_immunity_time_str: &str,
-    ) -> RocketMQResult<bool> {
+    ) -> Result<bool> {
         let prepare_queue_offset_str = msg_ext.user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
         ));
@@ -997,7 +973,7 @@ where
     }
 
     /// Get half message
-    async fn get_half_msg(&self, message_queue: &MessageQueue, offset: i64) -> RocketMQResult<GetResult> {
+    async fn get_half_msg(&self, message_queue: &MessageQueue, offset: i64) -> Result<GetResult> {
         let mut get_result = GetResult::new();
 
         if let Some(result) = self.pull_half_msg(message_queue, offset, PULL_MSG_RETRY_NUMBER).await {
@@ -1064,7 +1040,7 @@ where
         mini_offset: i64,
         op_msg_map: &mut HashMap<i64, HashSet<i64>>,
         done_op_offset: &mut Vec<i64>,
-    ) -> RocketMQResult<Option<TransactionReadOutcome>> {
+    ) -> Result<Option<TransactionReadOutcome>> {
         let pull_result = self.pull_op_msg(op_queue, pull_offset_of_op, OP_MSG_PULL_NUMS).await;
 
         let Some(pull_result) = pull_result else {
@@ -1313,7 +1289,7 @@ where
                     metrics.persist_if_dirty()
                 })
                 .await
-                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))
+                .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))
                 .and_then(|result| result)
         } else {
             metrics.persist_if_dirty()
@@ -1448,10 +1424,10 @@ mod tests {
     fn transactional_message_service_uses_typed_errors() {
         let source = include_str!("default_transactional_message_service.rs");
 
-        assert!(source.contains(") -> RocketMQResult<()>"));
-        assert!(source.contains(") -> RocketMQResult<GetResult>"));
-        assert!(source.contains(") -> RocketMQResult<Option<TransactionReadOutcome>>"));
-        assert!(!source.contains(concat!("Box<dyn std::error::", "Error")));
+        assert!(source.contains(") -> Result<()>"));
+        assert!(source.contains(") -> Result<GetResult>"));
+        assert!(source.contains(") -> Result<Option<TransactionReadOutcome>>"));
+        assert!(!source.contains(concat!("Box<dyn std::error::", "SharedError")));
     }
 
     #[test]

@@ -124,7 +124,7 @@ impl Clone for TcpProcessor {
 }
 
 impl RequestProcessor for TcpProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         self.state.processes.fetch_add(1, Ordering::SeqCst);
         self.state
             .request_sequences
@@ -145,7 +145,7 @@ impl RequestProcessor for TcpProcessor {
             return Ok(HandlerOutcome::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
-                    .map_err(|error| RocketMQError::internal("create protocol no-response", error))?,
+                    .map_err(|error| crate::error_helpers::internal_failure("create protocol no-response", error))?,
             ));
         }
         Ok(HandlerOutcome::Reply(
@@ -194,7 +194,7 @@ impl Drop for DropTrackedProcessor {
 }
 
 impl RequestProcessor for DropTrackedProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         Ok(HandlerOutcome::Reply(
             RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                 ResponseCode::Success,
@@ -211,14 +211,14 @@ struct DrainingProcessor {
 }
 
 impl RequestProcessor for DrainingProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         if request.command().code() == 39 {
             self.started.notify_one();
             self.release.notified().await;
             return Ok(HandlerOutcome::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
-                    .map_err(|error| RocketMQError::internal("create protocol no-response", error))?,
+                    .map_err(|error| crate::error_helpers::internal_failure("create protocol no-response", error))?,
             ));
         }
         Ok(HandlerOutcome::Reply(
@@ -253,7 +253,11 @@ impl IngressPolicy for CountingPolicy {
 }
 
 impl RPCHook for CountingHook {
-    fn do_before_request(&self, _remote_addr: SocketAddr, _request: &mut RemotingCommand) -> RocketMQResult<()> {
+    fn do_before_request(
+        &self,
+        _remote_addr: SocketAddr,
+        _request: &mut RemotingCommand,
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.before.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -263,14 +267,18 @@ impl RPCHook for CountingHook {
         _remote_addr: SocketAddr,
         _request: &RemotingCommand,
         _response: &mut RemotingCommand,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.after.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
 
 impl RPCHook for OrderedHook {
-    fn do_before_request(&self, _remote_addr: SocketAddr, _request: &mut RemotingCommand) -> RocketMQResult<()> {
+    fn do_before_request(
+        &self,
+        _remote_addr: SocketAddr,
+        _request: &mut RemotingCommand,
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.events
             .lock()
             .expect("ordered hook event lock")
@@ -283,7 +291,7 @@ impl RPCHook for OrderedHook {
         _remote_addr: SocketAddr,
         _request: &RemotingCommand,
         _response: &mut RemotingCommand,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.events
             .lock()
             .expect("ordered hook event lock")
@@ -325,7 +333,7 @@ struct NetworkDeferredRegistration {
 }
 
 impl RequestProcessor for NetworkDeferredCleanupProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         if request.command().code() == 706 {
             return Ok(HandlerOutcome::Reply(
                 RemotingResponse::bytes(
@@ -343,19 +351,17 @@ impl RequestProcessor for NetworkDeferredCleanupProcessor {
             | DeferredResponderOutcome::Unavailable
             | DeferredResponderOutcome::AlreadyTaken
             | DeferredResponderOutcome::OutcomeCompleted => {
-                return Err(RocketMQError::illegal_argument("deferred responder is unavailable"));
+                return Err(crate::error_helpers::argument_invalid());
             }
         };
         let retained = DeferredRegistry::<usize>::try_retained_size(DeferredRetainedSizeParts::new(0))
-            .map_err(|error| RocketMQError::internal("size network deferred registration", error))?;
+            .map_err(|error| crate::error_helpers::internal_failure("size network deferred registration", error))?;
         let permit = match self.admission.try_reserve(retained) {
             DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
             DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
             | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
             | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
-                return Err(RocketMQError::illegal_argument(
-                    "deferred admission capacity is exhausted",
-                ));
+                return Err(crate::error_helpers::argument_invalid());
             }
         };
         let registration = match self.registry.register(DeferredRequest::new(
@@ -366,14 +372,12 @@ impl RequestProcessor for NetworkDeferredCleanupProcessor {
             DeferredRegistryOutcome::DuplicateRequest(recovery)
             | DeferredRegistryOutcome::IdentityExhausted(recovery) => {
                 drop(recovery);
-                return Err(RocketMQError::illegal_argument(
-                    "deferred registry rejected the request",
-                ));
+                return Err(crate::error_helpers::argument_invalid());
             }
             DeferredRegistryOutcome::ParentCancelled
             | DeferredRegistryOutcome::SessionClosed
             | DeferredRegistryOutcome::DeadlineExpired => {
-                return Err(RocketMQError::illegal_argument("deferred registry lifecycle ended"));
+                return Err(crate::error_helpers::argument_invalid());
             }
             DeferredRegistryOutcome::BuilderRejected { error, parts } => {
                 drop(parts);
@@ -381,11 +385,17 @@ impl RequestProcessor for NetworkDeferredCleanupProcessor {
             }
             DeferredRegistryOutcome::ContractViolation { violation, recovery } => {
                 drop(recovery);
-                return Err(RocketMQError::internal("register network deferred request", violation));
+                return Err(crate::error_helpers::internal_failure(
+                    "register network deferred request",
+                    violation,
+                ));
             }
             DeferredRegistryOutcome::OperationalFailure { error, recovery } => {
                 drop(recovery);
-                return Err(RocketMQError::internal("register network deferred request", error));
+                return Err(crate::error_helpers::internal_failure(
+                    "register network deferred request",
+                    error,
+                ));
             }
         };
         self.registered
@@ -394,7 +404,7 @@ impl RequestProcessor for NetworkDeferredCleanupProcessor {
                 session_id: request.session().id(),
                 id: registration.deferred_id(),
             })
-            .map_err(|_| rocketmq_error::RocketMQError::illegal_argument("registration observer closed"))?;
+            .map_err(|_| crate::error_helpers::argument_invalid())?;
         if opaque == self.precommit_opaque {
             self.release_precommit.notified().await;
         }
@@ -1598,10 +1608,10 @@ async fn injected_boundary_conflicts_fail_before_hooks_are_merged() {
     let error = expect_start_error(security_runtime, server).await;
     assert_eq!(error.code(), TRANSPORT_START_FAILED.code());
     assert_transport_operation(&error, "start");
-    assert!(matches!(
-        error.source().and_then(|source| source.downcast_ref::<RocketMQError>()),
-        Some(RocketMQError::ConfigInvalidValue { .. })
-    ));
+    assert!(error
+        .source()
+        .and_then(|source| source.downcast_ref::<rocketmq_error::SharedError>())
+        .is_some_and(|source| source.descriptor() == &rocketmq_error::CORE_CONFIGURATION_INVALID));
 
     let admission_runtime = TestRuntime::new("transport-admission-conflict");
     let mut admission_conflict = TransportServer::new_with_authorized_dispatcher(

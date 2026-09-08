@@ -15,7 +15,7 @@
 use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::message::DumpCompactionLogRequest;
 use rocketmq_admin_core::client_adapter::services::message::MessageService;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 
@@ -36,7 +36,7 @@ impl CommandExecute for DumpCompactionLogSubCommand {
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = MessageService::dump_compaction_log_by_request(&self.request())?;
         if result.missing_file_name {
             println!("miss dump log file name");

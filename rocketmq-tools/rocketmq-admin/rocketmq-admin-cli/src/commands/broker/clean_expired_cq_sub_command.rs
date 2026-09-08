@@ -14,8 +14,7 @@
 
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
@@ -52,7 +51,7 @@ pub struct CleanExpiredCQSubCommand {
 }
 
 impl CleanExpiredCQSubCommand {
-    fn request(&self) -> RocketMQResult<CleanExpiredConsumeQueueRequest> {
+    fn request(&self) -> CanonicalResult<CleanExpiredConsumeQueueRequest> {
         CleanExpiredConsumeQueueRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
@@ -67,7 +66,7 @@ impl CommandExecute for CleanExpiredCQSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         let report = BrokerService::clean_expired_consume_queue_by_request_with_credentials(
             request.clone(),
@@ -87,14 +86,7 @@ impl CommandExecute for CleanExpiredCQSubCommand {
         print_cleanup_report(&report);
 
         if !report.failures.is_empty() {
-            return Err(RocketMQError::broker_operation_failed(
-                "CLEAN_EXPIRED_CONSUME_QUEUE",
-                -1,
-                format!(
-                    "CleanExpiredCQSubCommand: cleanup failed on {} broker(s)",
-                    report.failures.len()
-                ),
-            ));
+            return Err(crate::errors::broker_response_failed("CLEAN_EXPIRED_CONSUME_QUEUE", -1));
         }
 
         Ok(())

@@ -43,7 +43,7 @@ use criterion_profile::apply_remoting_command_baseline_profile;
 struct InlineReplyProcessor;
 
 impl RequestProcessor for InlineReplyProcessor {
-    async fn process(&mut self, _request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, _request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         Ok(HandlerOutcome::Reply(RemotingResponse::empty_response(0)))
     }
 }

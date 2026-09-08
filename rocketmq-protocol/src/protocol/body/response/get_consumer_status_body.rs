@@ -15,7 +15,6 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::SerializationError;
 use rocketmq_model::message::MessageQueue;
 use serde::Deserialize;
 use serde::Serialize;
@@ -51,11 +50,11 @@ impl GetConsumerStatusBody {
         self.encode_java_compatible().unwrap_or_default()
     }
 
-    pub fn encode_java_compatible(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
+    pub fn encode_java_compatible(&self) -> rocketmq_error::Result<Vec<u8>> {
         Ok(self.to_java_compatible_json()?.into_bytes())
     }
 
-    pub fn to_java_compatible_json(&self) -> rocketmq_error::RocketMQResult<String> {
+    pub fn to_java_compatible_json(&self) -> rocketmq_error::Result<String> {
         let mut body = String::new();
         body.push_str("{\"messageQueueTable\":{");
         append_offset_map(&mut body, &self.message_queue_table)?;
@@ -67,7 +66,7 @@ impl GetConsumerStatusBody {
             }
             body.push_str(
                 &serde_json::to_string(client_id.as_str())
-                    .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+                    .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
             );
             body.push_str(":{");
             append_offset_map(&mut body, offsets)?;
@@ -93,7 +92,7 @@ impl GetConsumerStatusBody {
     }
 }
 
-fn append_offset_map(output: &mut String, offsets: &HashMap<MessageQueue, i64>) -> rocketmq_error::RocketMQResult<()> {
+fn append_offset_map(output: &mut String, offsets: &HashMap<MessageQueue, i64>) -> rocketmq_error::Result<()> {
     for (index, (queue, offset)) in offsets.iter().enumerate() {
         if index > 0 {
             output.push(',');

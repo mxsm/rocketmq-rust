@@ -20,14 +20,15 @@ use std::sync::Arc;
 use clap::Args;
 use clap::Subcommand;
 use rocketmq_admin_core::client_adapter::ClientRuntime;
+use rocketmq_admin_core::core::AdminError;
 use rocketmq_admin_core::core::release_checkpoint::ReleaseCheckpointSetBuilder;
 use rocketmq_admin_core::core::release_checkpoint::ValidatedMaintenanceCapabilities;
 use rocketmq_admin_core::core::release_checkpoint::decode_checkpoint_set;
 use rocketmq_admin_core::core::release_checkpoint::encode_checkpoint_set;
 use rocketmq_admin_core::core::release_checkpoint::verify_checkpoint_set_restore;
 use rocketmq_admin_core::core::security::AdminCredentials;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_error::Sensitive;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
 use rocketmq_protocol::protocol::body::release_checkpoint::MaintenanceCapabilitiesResponse;
@@ -54,7 +55,7 @@ impl CommandExecute for ReleaseCheckpointCommands {
         &self,
         _credentials: Option<AdminCredentials>,
         _client_runtime: Arc<ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             Self::Capabilities(command) => command.execute().await,
             Self::CreateSet(command) => command.execute().await,
@@ -72,14 +73,13 @@ pub struct CapabilitiesCommand {
 }
 
 impl CapabilitiesCommand {
-    async fn execute(&self) -> RocketMQResult<()> {
+    async fn execute(&self) -> CanonicalResult<()> {
         let response: MaintenanceCapabilitiesResponse = read_json(&self.input, "maintenance capabilities").await?;
-        let capabilities = ValidatedMaintenanceCapabilities::try_from_response(response)
-            .map_err(|error| RocketMQError::validation_failed("maintenanceCapabilities", error.to_string()))?;
+        let capabilities = ValidatedMaintenanceCapabilities::try_from_response(response).map_err(map_admin_error)?;
         println!(
             "{}",
             serde_json::to_string_pretty(capabilities.response())
-                .map_err(|error| RocketMQError::internal("encode maintenance capabilities", error))?
+                .map_err(|error| crate::errors::serialization_failed_by("JSON", error))?
         );
         Ok(())
     }
@@ -119,7 +119,7 @@ impl fmt::Debug for CreateSetCommand {
 }
 
 impl CreateSetCommand {
-    async fn execute(&self) -> RocketMQResult<()> {
+    async fn execute(&self) -> CanonicalResult<()> {
         let controller: ControllerReleaseSnapshotManifest =
             read_json(&self.controller_manifest, "Controller checkpoint manifest").await?;
         let mut stores = Vec::with_capacity(self.store_manifest.len());
@@ -139,9 +139,8 @@ impl CreateSetCommand {
                 rocketmq_runtime::common::time_utils::current_millis(),
             )
         })
-        .map_err(|error| RocketMQError::validation_failed("checkpointSet", error.to_string()))?;
-        let bytes = encode_checkpoint_set(&manifest)
-            .map_err(|error| RocketMQError::validation_failed("checkpointSet", error.to_string()))?;
+        .map_err(map_admin_error)?;
+        let bytes = encode_checkpoint_set(&manifest).map_err(map_admin_error)?;
         write_new_file(&self.output, &bytes).await?;
         println!("{}", self.output.display());
         Ok(())
@@ -155,10 +154,9 @@ pub struct VerifySetCommand {
 }
 
 impl VerifySetCommand {
-    async fn execute(&self) -> RocketMQResult<()> {
+    async fn execute(&self) -> CanonicalResult<()> {
         let bytes = read_file(&self.manifest, "checkpoint set").await?;
-        decode_checkpoint_set(&bytes)
-            .map_err(|error| RocketMQError::validation_failed("checkpointSet", error.to_string()))?;
+        decode_checkpoint_set(&bytes).map_err(map_admin_error)?;
         println!("checkpoint set verified: {}", self.manifest.display());
         Ok(())
     }
@@ -173,58 +171,60 @@ pub struct RestoreVerifyCommand {
 }
 
 impl RestoreVerifyCommand {
-    async fn execute(&self) -> RocketMQResult<()> {
+    async fn execute(&self) -> CanonicalResult<()> {
         let manifest_bytes = read_file(&self.manifest, "checkpoint set").await?;
-        let manifest = decode_checkpoint_set(&manifest_bytes)
-            .map_err(|error| RocketMQError::validation_failed("checkpointSet", error.to_string()))?;
+        let manifest = decode_checkpoint_set(&manifest_bytes).map_err(map_admin_error)?;
         let mut proofs = Vec::with_capacity(self.proof.len());
         for path in &self.proof {
             proofs.push(read_json::<ReleaseCheckpointRestoreVerification>(path, "restore proof").await?);
         }
-        verify_checkpoint_set_restore(&manifest, &proofs)
-            .map_err(|error| RocketMQError::validation_failed("restoreProofs", error.to_string()))?;
+        verify_checkpoint_set_restore(&manifest, &proofs).map_err(map_admin_error)?;
         println!("checkpoint restore proofs verified: {}", self.manifest.display());
         Ok(())
     }
 }
 
-async fn read_json<T>(path: &Path, artifact: &'static str) -> RocketMQResult<T>
+async fn read_json<T>(path: &Path, artifact: &'static str) -> CanonicalResult<T>
 where
     T: serde::de::DeserializeOwned,
 {
     let bytes = read_file(path, artifact).await?;
-    serde_json::from_slice(&bytes)
-        .map_err(|error| RocketMQError::request_body_invalid(artifact, format!("{}: {error}", path.display())))
+    serde_json::from_slice(&bytes).map_err(|error| crate::errors::request_body_invalid_by(artifact, error))
 }
 
-async fn read_file(path: &Path, artifact: &'static str) -> RocketMQResult<Vec<u8>> {
+async fn read_file(path: &Path, artifact: &'static str) -> CanonicalResult<Vec<u8>> {
     tokio::fs::read(path)
         .await
-        .map_err(|error| RocketMQError::storage_read_failed(path.display().to_string(), format!("{artifact}: {error}")))
+        .map_err(|error| crate::errors::storage_read_failed_by(artifact, error))
 }
 
-async fn write_new_file(path: &Path, bytes: &[u8]) -> RocketMQResult<()> {
+async fn write_new_file(path: &Path, bytes: &[u8]) -> CanonicalResult<()> {
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
         .await
-        .map_err(|error| RocketMQError::storage_write_failed(path.display().to_string(), error.to_string()))?;
+        .map_err(|error| crate::errors::storage_write_failed_by("release-checkpoint", error))?;
     file.write_all(bytes)
         .await
-        .map_err(|error| RocketMQError::storage_write_failed(path.display().to_string(), error.to_string()))?;
+        .map_err(|error| crate::errors::storage_write_failed_by("release-checkpoint", error))?;
     file.write_all(b"\n")
         .await
-        .map_err(|error| RocketMQError::storage_write_failed(path.display().to_string(), error.to_string()))?;
+        .map_err(|error| crate::errors::storage_write_failed_by("release-checkpoint", error))?;
     file.sync_all()
         .await
-        .map_err(|error| RocketMQError::storage_write_failed(path.display().to_string(), error.to_string()))
+        .map_err(|error| crate::errors::storage_write_failed_by("release-checkpoint", error))
+}
+
+fn map_admin_error(error: AdminError) -> CanonicalError {
+    error.into_error()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
+    use std::error::Error as _;
 
     #[derive(Parser)]
     struct TestCli {
@@ -247,5 +247,13 @@ mod tests {
             ])
             .is_ok()
         );
+    }
+
+    #[test]
+    fn checkpoint_admin_error_conversion_preserves_typed_source() {
+        let admin_error = decode_checkpoint_set(b"not-json").expect_err("invalid checkpoint JSON");
+        let canonical = map_admin_error(admin_error);
+
+        assert!(canonical.source().expect("AdminError source").is::<AdminError>());
     }
 }

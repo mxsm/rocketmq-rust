@@ -36,7 +36,7 @@ use tabled::Table;
 use tabled::Tabled;
 use tabled::settings::Style;
 
-use rocketmq_admin_core::client_adapter::services::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 /// A trait that defines the execution behavior for commands.
 ///
@@ -54,7 +54,7 @@ pub trait CommandExecute {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()>;
+    ) -> CanonicalResult<()>;
 }
 
 #[cfg(test)]
@@ -192,7 +192,7 @@ impl CommandExecute for Commands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             Commands::Auth(value) => value.execute(credentials, client_runtime.clone()).await,
             Commands::Broker(value) => value.execute(credentials, client_runtime.clone()).await,
@@ -237,7 +237,7 @@ impl CommandExecute for ClassificationTablePrint {
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let commands: Vec<Command> = vec![
             Command {
                 category: "Auth",

@@ -24,8 +24,7 @@ use std::sync::LazyLock;
 use bytes::Buf;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result;
 
 pub mod message_accessor;
 pub mod message_batch;
@@ -74,14 +73,14 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// Returns an error if the property name is reserved by the system or if the name or value is
     /// empty.
-    fn put_user_property(&mut self, name: CheetahString, value: CheetahString) -> RocketMQResult<()> {
+    fn put_user_property(&mut self, name: CheetahString, value: CheetahString) -> Result<()> {
         if name.is_empty() || value.is_empty() {
-            return Err(RocketMQError::InvalidProperty(
-                "The name or value of property can not be null or blank string!".to_string(),
+            return Err(crate::error::invalid_property(
+                "The name or value of property can not be null or blank string!",
             ));
         }
         if STRING_HASH_SET.contains(name.as_str()) {
-            return Err(RocketMQError::InvalidProperty(format!(
+            return Err(crate::error::invalid_property(format!(
                 "The Property<{name}> is used by system, input another please"
             )));
         }
@@ -208,9 +207,9 @@ pub trait MessageTrait: Any + Display + Debug {
     }
 
     /// Sets the message priority, matching Java's non-negative validation.
-    fn try_set_priority(&mut self, priority: i32) -> RocketMQResult<()> {
+    fn try_set_priority(&mut self, priority: i32) -> Result<()> {
         if priority < 0 {
-            return Err(RocketMQError::illegal_argument(
+            return Err(crate::error::invalid_argument(
                 "The priority must be greater than or equal to 0",
             ));
         }
@@ -412,7 +411,7 @@ impl MessageVersion {
     /// # Errors
     ///
     /// Returns an error if the magic code is not recognized.
-    pub fn value_of_magic_code(magic_code: i32) -> Result<MessageVersion, &'static str> {
+    pub fn value_of_magic_code(magic_code: i32) -> std::result::Result<MessageVersion, &'static str> {
         match magic_code {
             MESSAGE_MAGIC_CODE_V1 => Ok(MessageVersion::V1),
             MESSAGE_MAGIC_CODE_V2 => Ok(MessageVersion::V2),

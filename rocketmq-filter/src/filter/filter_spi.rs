@@ -34,72 +34,14 @@
 use std::fmt;
 
 use rocketmq_error::FilterCompileError;
-use rocketmq_error::FilterCompileErrorKind;
-use rocketmq_error::FilterCompileStage;
 
 use crate::expression::Expression;
-
-/// Deprecated local string error retained for 1.x filter compilation compatibility.
-///
-/// New filter compilation paths return [`FilterCompileError`], whose stable
-/// metadata is safe to expose at service boundaries. This compatibility type
-/// remains available throughout 1.x; any future removal requires a complete
-/// release cycle, an explicit 2.0 breaking window, and individual reviewed
-/// post-freeze approvals for every affected frozen public item.
-#[deprecated(since = "1.0.0", note = "use Filter::try_compile and FilterCompileError")]
-#[derive(Debug, Clone)]
-pub struct FilterError {
-    /// Human-readable error message
-    message: String,
-}
-
-#[allow(
-    deprecated,
-    reason = "This inherent implementation preserves the legacy string-error compatibility API."
-)]
-impl FilterError {
-    /// Creates a new filter error with the given message.
-    ///
-    /// # Arguments
-    ///
-    /// * `message` - Error description
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-
-    /// Gets the error message.
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-}
-
-#[allow(
-    deprecated,
-    reason = "The legacy string-error Display implementation is retained for compatibility."
-)]
-impl fmt::Display for FilterError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FilterError: {}", self.message)
-    }
-}
-
-#[allow(
-    deprecated,
-    reason = "The legacy string-error Error implementation is retained for compatibility."
-)]
-impl std::error::Error for FilterError {}
 
 /// Core trait for message filter implementations.
 ///
 /// This trait defines the service provider interface (SPI) for pluggable
 /// filter implementations. Each filter type (SQL92, Tag, etc.) must implement
 /// this trait to participate in the message filtering pipeline.
-///
-/// New callers should use [`Self::try_compile`]. The deprecated 1.x
-/// [`Self::compile`] facade remains available for compatibility and is not
-/// removed or authorized for removal by this API documentation.
 ///
 /// # Type Parameters
 ///
@@ -120,60 +62,15 @@ impl std::error::Error for FilterError {}
 /// Implementations should be stateless or use interior mutability with
 /// appropriate synchronization.
 pub trait Filter: Send + Sync + fmt::Debug {
-    /// Compiles an expression string through the deprecated 1.x compatibility facade.
+    /// Compiles an expression with structured, redaction-safe failure details.
     ///
-    /// This method parses the input string according to the filter's syntax
-    /// rules and produces an `Expression` that can be evaluated against messages.
-    ///
-    /// # Arguments
-    ///
-    /// * `expr` - The expression string to compile (e.g., "age > 18 AND region = 'US'")
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Box<dyn Expression>)` - Successfully compiled expression
-    /// * `Err(FilterError)` - Legacy string-only compilation failure
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let filter = SqlFilter::new();
-    /// let expr = filter.try_compile("price > 100 AND category = 'electronics'")?;
-    /// ```
+    /// Implementations must return a typed failure without retaining submitted
+    /// expression text in the error.
     ///
     /// # Errors
     ///
-    /// New code should call [`Self::try_compile`] to preserve structured failure
-    /// metadata. This wrapper remains available throughout 1.x and is not
-    /// authorized for removal by this documentation.
-    #[deprecated(since = "1.0.0", note = "use Filter::try_compile and FilterCompileError")]
-    #[allow(
-        deprecated,
-        reason = "The legacy string-error trait method is retained so existing external filters continue to compile."
-    )]
-    fn compile(&self, expr: &str) -> Result<Box<dyn Expression>, FilterError>;
-
-    /// Compiles an expression with structured, redaction-safe failure details.
-    ///
-    /// Filters that only implement the legacy [`Self::compile`] method continue
-    /// to work. Their failures are classified as
-    /// [`FilterCompileErrorKind::LegacyAdapter`] during the compatibility stage.
-    /// Future removal of that adapter requires a complete release cycle, an
-    /// explicit 2.0 breaking window, and individual reviewed post-freeze
-    /// approvals for every affected frozen public item.
-    fn try_compile(&self, expr: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
-        #[allow(
-            deprecated,
-            reason = "This default method is the narrow compatibility adapter for legacy Filter implementations."
-        )]
-        self.compile(expr).map_err(|_| {
-            FilterCompileError::new(
-                FilterCompileErrorKind::LegacyAdapter,
-                FilterCompileStage::Compatibility,
-                None,
-            )
-        })
-    }
+    /// Returns [`FilterCompileError`] when the expression cannot be compiled.
+    fn try_compile(&self, expr: &str) -> Result<Box<dyn Expression>, FilterCompileError>;
 
     /// Returns the unique type identifier for this filter.
     ///

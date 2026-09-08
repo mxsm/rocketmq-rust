@@ -822,10 +822,7 @@ mod tests {
     fn invalid_env_filter_returns_typed_error() {
         let error = build_env_filter("rocketmq_store==debug").expect_err("invalid filter should fail");
 
-        assert!(matches!(
-            error,
-            ObservabilityError::InvalidLogFilter { filter, .. } if filter == "rocketmq_store==debug"
-        ));
+        assert_eq!(error.code(), rocketmq_error::OBSERVABILITY_LOG_FILTER_INVALID.code());
     }
 
     #[test]
@@ -963,7 +960,10 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(matches!(error, ObservabilityError::LoggingInit(message) if message.contains("directory")));
+        assert_eq!(
+            error.operation(),
+            crate::error::ObservabilityOperation::InitializeSubscriber
+        );
     }
 
     #[test]
@@ -1015,10 +1015,8 @@ mod tests {
         };
 
         assert!(!report.is_healthy());
-        assert!(matches!(
-            report.into_result(),
-            Err(ObservabilityError::LogsShutdown(message)) if message == "logger provider failed"
-        ));
+        let error = report.into_result().expect_err("log shutdown should fail");
+        assert_eq!(error.operation(), crate::error::ObservabilityOperation::ShutdownLogs);
     }
 
     fn unique_temp_log_dir(test_name: &str) -> PathBuf {

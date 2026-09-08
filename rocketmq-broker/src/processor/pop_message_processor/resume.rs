@@ -135,7 +135,7 @@ where
         &self,
         resume: ResumePop,
         reason: DeferredWakeReason,
-    ) -> rocketmq_error::RocketMQResult<RemotingResponse> {
+    ) -> crate::broker_error::BrokerResult<RemotingResponse> {
         self.resume_pop_request(PopResumeRequest::from_resume(resume), reason)
             .await
     }
@@ -144,7 +144,7 @@ where
         &self,
         request: PopResumeRequest,
         reason: DeferredWakeReason,
-    ) -> rocketmq_error::RocketMQResult<RemotingResponse> {
+    ) -> crate::broker_error::BrokerResult<RemotingResponse> {
         match reason {
             DeferredWakeReason::MessageArrived | DeferredWakeReason::Timeout | DeferredWakeReason::ForcedRefresh => {}
         }
@@ -192,7 +192,7 @@ where
     pub(super) async fn read_pop_store(
         &self,
         request: PopStoreReadRequest<'_>,
-    ) -> rocketmq_error::RocketMQResult<PopStoreReadOutcome> {
+    ) -> crate::broker_error::BrokerResult<PopStoreReadOutcome> {
         let PopStoreReadRequest {
             request_header,
             topic_config,

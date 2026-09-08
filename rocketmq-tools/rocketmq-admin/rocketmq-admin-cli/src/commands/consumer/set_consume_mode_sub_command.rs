@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 
 use crate::commands::CommandExecute;
@@ -78,20 +77,16 @@ fn parse_consume_mode(s: &str) -> Result<MessageRequestMode, String> {
     }
 }
 
-fn validate_cluster_consume_mode_success(success_count: usize) -> RocketMQResult<()> {
+fn validate_cluster_consume_mode_success(success_count: usize) -> CanonicalResult<()> {
     if success_count == 0 {
-        Err(RocketMQError::broker_operation_failed(
-            "SET_CONSUMER_REQUEST_MODE",
-            -1,
-            "failed on every broker in the cluster",
-        ))
+        Err(crate::errors::broker_response_failed("SET_CONSUMER_REQUEST_MODE", -1))
     } else {
         Ok(())
     }
 }
 
 impl SetConsumeModeSubCommand {
-    fn request(&self) -> RocketMQResult<SetConsumeModeRequest> {
+    fn request(&self) -> CanonicalResult<SetConsumeModeRequest> {
         SetConsumeModeRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
@@ -103,7 +98,7 @@ impl SetConsumeModeSubCommand {
         .map(|request| request.with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
 
-    fn print_result(request: &SetConsumeModeRequest, result: ConsumerOperationResult) -> RocketMQResult<()> {
+    fn print_result(request: &SetConsumeModeRequest, result: ConsumerOperationResult) -> CanonicalResult<()> {
         for broker_addr in &result.broker_addrs {
             println!("set consume mode to {} success.", broker_addr);
         }
@@ -127,7 +122,7 @@ impl CommandExecute for SetConsumeModeSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         let result = ConsumerService::set_consume_mode_by_request_with_credentials(
             request.clone(),

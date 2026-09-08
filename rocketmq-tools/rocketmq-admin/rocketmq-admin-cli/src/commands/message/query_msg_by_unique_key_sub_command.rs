@@ -16,8 +16,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_runtime::common::util_all::time_millis_to_human_string2;
 
@@ -62,7 +61,7 @@ pub struct QueryMsgByUniqueKeySubCommand {
 }
 
 impl QueryMsgByUniqueKeySubCommand {
-    fn show_message(entry: &QueryMessageByUniqueKeyEntry, index: usize) -> RocketMQResult<()> {
+    fn show_message(entry: &QueryMessageByUniqueKeyEntry, index: usize) -> CanonicalResult<()> {
         let msg = &entry.message;
         let body_tmp_file_path = Self::create_body_file(msg, index)?;
         println!("{:<20} {}", "Topic:", msg.topic());
@@ -113,9 +112,10 @@ impl QueryMsgByUniqueKeySubCommand {
         Ok(())
     }
 
-    fn create_body_file(msg: &MessageExt, index: usize) -> RocketMQResult<PathBuf> {
+    fn create_body_file(msg: &MessageExt, index: usize) -> CanonicalResult<PathBuf> {
         let mut body_tmp_file_path = Self::body_directory();
-        fs::create_dir_all(&body_tmp_file_path).map_err(RocketMQError::IO)?;
+        fs::create_dir_all(&body_tmp_file_path)
+            .map_err(|source| crate::errors::io_failed_by("create_message_body_directory", source))?;
 
         let mut filename = msg.msg_id().to_string();
         if index > 0 {
@@ -124,7 +124,8 @@ impl QueryMsgByUniqueKeySubCommand {
         body_tmp_file_path.push(filename);
 
         let body = msg.body().map(|b| b.to_vec()).unwrap_or_default();
-        fs::write(&body_tmp_file_path, &body).map_err(RocketMQError::IO)?;
+        fs::write(&body_tmp_file_path, &body)
+            .map_err(|source| crate::errors::io_failed_by("write_message_body", source))?;
 
         Ok(body_tmp_file_path)
     }
@@ -172,7 +173,7 @@ impl CommandExecute for QueryMsgByUniqueKeySubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let start_time = self
             .start_time
             .as_deref()
@@ -180,7 +181,7 @@ impl CommandExecute for QueryMsgByUniqueKeySubCommand {
             .map(|value| {
                 value
                     .parse::<i64>()
-                    .map_err(|e| RocketMQError::IllegalArgument(format!("Invalid startTime '{}': {}", value, e)))
+                    .map_err(|e| crate::errors::argument_invalid(format!("Invalid startTime '{}': {}", value, e)))
             })
             .transpose()?;
         let end_time = self
@@ -190,7 +191,7 @@ impl CommandExecute for QueryMsgByUniqueKeySubCommand {
             .map(|value| {
                 value
                     .parse::<i64>()
-                    .map_err(|e| RocketMQError::IllegalArgument(format!("Invalid endTime '{}': {}", value, e)))
+                    .map_err(|e| crate::errors::argument_invalid(format!("Invalid endTime '{}': {}", value, e)))
             })
             .transpose()?;
 

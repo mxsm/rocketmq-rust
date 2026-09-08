@@ -47,7 +47,7 @@ struct PerRequestFilterProcessor {
 }
 
 impl RequestProcessor for PerRequestFilterProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let header = request
             .command()
             .decode_command_custom_header::<NotificationRequestHeader>()?;
@@ -72,14 +72,14 @@ impl RequestProcessor for PerRequestFilterProcessor {
     }
 }
 
-fn success_plan(has_msg: bool) -> rocketmq_error::RocketMQResult<RemotingResponse> {
+fn success_plan(has_msg: bool) -> crate::broker_error::BrokerResult<RemotingResponse> {
     let head = application_remoting_command_factory().create_success_response_command_with_header(
         NotificationResponseHeader {
             has_msg,
             polling_full: false,
         },
     );
-    RemotingResponse::command(head).map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+    RemotingResponse::command(head).map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
 }
 
 #[tokio::test]

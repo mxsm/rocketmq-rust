@@ -92,12 +92,12 @@ async fn tcp_session_close_drops_prepared_owner_once_without_retrying() {
                         let _ = plan_ready_tx.send(());
                         release_plan_rx
                             .await
-                            .map_err(|_| RocketMQError::illegal_argument("session-close plan release closed"))?;
+                            .map_err(|_| crate::broker_error::invalid_argument("session-close plan release closed"))?;
                         RemotingResponse::bytes(
                             RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                             body,
                         )
-                        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                     },
                 )
                 .await;

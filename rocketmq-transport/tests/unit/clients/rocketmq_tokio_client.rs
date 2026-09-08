@@ -21,8 +21,6 @@ use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::RuntimeContext;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
@@ -79,7 +77,11 @@ struct CountingHook {
 }
 
 impl RPCHook for CountingHook {
-    fn do_before_request(&self, _remote_addr: SocketAddr, request: &mut RemotingCommand) -> RocketMQResult<()> {
+    fn do_before_request(
+        &self,
+        _remote_addr: SocketAddr,
+        request: &mut RemotingCommand,
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.before_count.fetch_add(1, Ordering::SeqCst);
         request.ensure_ext_fields_initialized();
         request.add_ext_field("hooked", "true");
@@ -91,7 +93,7 @@ impl RPCHook for CountingHook {
         _remote_addr: SocketAddr,
         request: &RemotingCommand,
         response: &mut RemotingCommand,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.after_count.fetch_add(1, Ordering::SeqCst);
         self.after_observed_before_field.store(
             request
@@ -113,7 +115,11 @@ struct RejectingRequestHook {
 struct RejectingResponseHook;
 
 impl RPCHook for RejectingResponseHook {
-    fn do_before_request(&self, _remote_addr: SocketAddr, _request: &mut RemotingCommand) -> RocketMQResult<()> {
+    fn do_before_request(
+        &self,
+        _remote_addr: SocketAddr,
+        _request: &mut RemotingCommand,
+    ) -> Result<(), rocketmq_error::SharedError> {
         Ok(())
     }
 
@@ -122,8 +128,8 @@ impl RPCHook for RejectingResponseHook {
         _remote_addr: SocketAddr,
         _request: &RemotingCommand,
         _response: &mut RemotingCommand,
-    ) -> RocketMQResult<()> {
-        Err(RocketMQError::illegal_argument("injected response hook rejection"))
+    ) -> Result<(), rocketmq_error::SharedError> {
+        Err(crate::error_helpers::argument_invalid())
     }
 }
 
@@ -133,7 +139,11 @@ struct BlockingResponseHook {
 }
 
 impl RPCHook for BlockingResponseHook {
-    fn do_before_request(&self, _remote_addr: SocketAddr, _request: &mut RemotingCommand) -> RocketMQResult<()> {
+    fn do_before_request(
+        &self,
+        _remote_addr: SocketAddr,
+        _request: &mut RemotingCommand,
+    ) -> Result<(), rocketmq_error::SharedError> {
         Ok(())
     }
 
@@ -142,7 +152,7 @@ impl RPCHook for BlockingResponseHook {
         _remote_addr: SocketAddr,
         _request: &RemotingCommand,
         _response: &mut RemotingCommand,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.entered.send(()).expect("response hook observer");
         let (lock, condition) = self.release.as_ref();
         let mut released = lock.lock().expect("response hook release lock");
@@ -154,9 +164,13 @@ impl RPCHook for BlockingResponseHook {
 }
 
 impl RPCHook for RejectingRequestHook {
-    fn do_before_request(&self, _remote_addr: SocketAddr, _request: &mut RemotingCommand) -> RocketMQResult<()> {
+    fn do_before_request(
+        &self,
+        _remote_addr: SocketAddr,
+        _request: &mut RemotingCommand,
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Err(RocketMQError::illegal_argument("injected request hook rejection"))
+        Err(crate::error_helpers::argument_invalid())
     }
 
     fn do_after_response(
@@ -164,7 +178,7 @@ impl RPCHook for RejectingRequestHook {
         _remote_addr: SocketAddr,
         _request: &RemotingCommand,
         _response: &mut RemotingCommand,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         Ok(())
     }
 }
@@ -827,11 +841,8 @@ async fn request_before_hook_error_is_preserved_without_writing_a_frame() {
     assert!(error
         .shared_error()
         .source()
-        .and_then(|source| source.downcast_ref::<RocketMQError>())
-        .is_some_and(|source| matches!(
-            source,
-            RocketMQError::IllegalArgument(message) if message == "injected request hook rejection"
-        )));
+        .and_then(|source| source.downcast_ref::<rocketmq_error::SharedError>())
+        .is_some_and(|source| source.descriptor() == &rocketmq_error::CORE_ARGUMENT_INVALID));
     assert_eq!(hook.calls.load(Ordering::SeqCst), 1);
     client.shutdown();
     assert_eq!(
@@ -881,11 +892,8 @@ async fn response_hook_error_is_operational_at_response_received() {
     assert!(error
         .shared_error()
         .source()
-        .and_then(|source| source.downcast_ref::<RocketMQError>())
-        .is_some_and(|source| matches!(
-            source,
-            RocketMQError::IllegalArgument(message) if message == "injected response hook rejection"
-        )));
+        .and_then(|source| source.downcast_ref::<rocketmq_error::SharedError>())
+        .is_some_and(|source| source.descriptor() == &rocketmq_error::CORE_ARGUMENT_INVALID));
 
     server.await.expect("response hook server task");
     client.shutdown();

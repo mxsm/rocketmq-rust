@@ -34,12 +34,12 @@ struct CountingCompressor {
 }
 
 impl Compressor for CountingCompressor {
-    fn compress(&self, src: &[u8], _level: i32) -> rocketmq_error::RocketMQResult<Bytes> {
+    fn compress(&self, src: &[u8], _level: i32) -> rocketmq_error::Result<Bytes> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         Ok(Bytes::copy_from_slice(src))
     }
 
-    fn decompress(&self, src: &[u8]) -> rocketmq_error::RocketMQResult<Bytes> {
+    fn decompress(&self, src: &[u8]) -> rocketmq_error::Result<Bytes> {
         Ok(Bytes::copy_from_slice(src))
     }
 }
@@ -60,8 +60,9 @@ impl rocketmq_transport::test_support::SessionProcessor for ProducerRoutePrepara
     fn process(
         &self,
         request: RemotingCommand,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = rocketmq_error::RocketMQResult<RemotingCommand>> + Send + '_>>
-    {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>,
+    > {
         Box::pin(async move {
             if request.code() != rocketmq_protocol::code::request_code::RequestCode::GetRouteinfoByTopic.to_i32() {
                 self.primary_sends.fetch_add(1, Ordering::SeqCst);
@@ -70,7 +71,7 @@ impl rocketmq_transport::test_support::SessionProcessor for ProducerRoutePrepara
                     .lock()
                     .expect("primary responses lock")
                     .pop_front()
-                    .ok_or_else(|| RocketMQError::illegal_argument("unexpected primary send"))?;
+                    .ok_or_else(|| ClientError::illegal_argument("unexpected primary send"))?;
                 return Ok(response.set_opaque(request.opaque()));
             }
             let header = request.decode_command_custom_header::<
@@ -82,7 +83,7 @@ impl rocketmq_transport::test_support::SessionProcessor for ProducerRoutePrepara
                 .lock()
                 .expect("route responses lock")
                 .pop_front()
-                .ok_or_else(|| RocketMQError::illegal_argument("unexpected producer route request"))?;
+                .ok_or_else(|| ClientError::illegal_argument("unexpected producer route request"))?;
             Ok(response.set_opaque(request.opaque()))
         })
     }
@@ -281,17 +282,14 @@ async fn running_is_published_only_after_async_start_initialization() {
 
 #[test]
 fn request_cause_from_error_uses_typed_error() {
-    let error = DefaultMQProducerImpl::request_cause_from_error(&RocketMQError::Shared(Arc::new(
+    let error = DefaultMQProducerImpl::request_cause_from_error(&ClientError::from_shared(Arc::new(
         rocketmq_error::Error::caused_by(
             &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
             std::io::Error::other("send failed"),
         ),
     )));
 
-    assert!(matches!(
-        error,
-        rocketmq_error::RocketMQError::ResponseProcessFailed { .. }
-    ));
+    assert!(error.is(&rocketmq_error::PROTOCOL_RESPONSE_FAILED));
     assert_eq!(
         error.to_string(),
         "Response request_response_callback failed: transport.connection.failed: Transport connection operation failed"
@@ -873,19 +871,13 @@ async fn zero_retry_producer_prepares_route_then_executes_one_primary_send() {
         )
         .await
         .expect_err("a non-idempotent sync send must not replay GO_AWAY");
-    assert!(matches!(
-        sync_error,
-        RocketMQError::BrokerOperationFailed { code, .. } if code == ResponseCode::GoAway.to_i32()
-    ));
+    assert_eq!(sync_error.broker_response_code(), Some(ResponseCode::GoAway.to_i32()));
     assert_eq!(processor.primary_sends.load(Ordering::SeqCst), sends_before_sync + 1);
 
     let (callback_tx, callback_rx) = tokio::sync::oneshot::channel();
     let callback_tx = Arc::new(std::sync::Mutex::new(Some(callback_tx)));
-    let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
-        let code = match error {
-            Some(RocketMQError::BrokerOperationFailed { code, .. }) => *code,
-            _ => i32::MIN,
-        };
+    let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&ClientError>| {
+        let code = error.and_then(ClientError::broker_response_code).unwrap_or(i32::MIN);
         if let Some(sender) = callback_tx.lock().expect("callback sender lock").take() {
             let _ = sender.send(code);
         }
@@ -1014,15 +1006,13 @@ fn retry_failure_preserves_shared_network_source_identity_and_redaction() {
         std::io::Error::new(std::io::ErrorKind::ConnectionReset, "private network detail"),
     ));
     let mut retry_state = RetryState::new(1);
-    retry_state.set_error(rocketmq_error::RocketMQError::Shared(Arc::clone(&canonical)));
+    retry_state.set_error(crate::ClientError::from_shared(Arc::clone(&canonical)));
     let error = retry_state.take_failure_error(&CheetahString::from_static_str("TopicTest"), 1);
     let rendered = error.to_string();
-    let remoting_code = error.boundary_view().remoting().code.as_i32();
-    let rocketmq_error::RocketMQError::Shared(retained) = error else {
-        panic!("expected the canonical shared carrier")
-    };
+    let remoting_code = error.descriptor().projection().remoting().code.as_i32();
+    let retained = error.shared_error();
 
-    assert!(Arc::ptr_eq(&canonical, &retained));
+    assert!(Arc::ptr_eq(&canonical, retained));
     assert!(std::error::Error::source(retained.as_ref())
         .and_then(|source| source.downcast_ref::<std::io::Error>())
         .is_some());
@@ -1136,13 +1126,7 @@ fn request_remaining_timeout_returns_typed_error_instead_of_underflow() {
     for elapsed in [3_000, 3_001] {
         let error = DefaultMQProducerImpl::remaining_request_timeout(3_000, elapsed)
             .expect_err("exhausted request budget should be a typed timeout");
-        assert!(matches!(
-            error,
-            rocketmq_error::RocketMQError::Timeout {
-                operation: "send request message",
-                timeout_ms: 3_000
-            }
-        ));
+        assert!(error.is(&rocketmq_error::CORE_OPERATION_TIMED_OUT));
     }
 }
 
@@ -1180,7 +1164,7 @@ async fn async_send_to_queue_validates_message_before_kernel_like_java() {
     let seen_error = Arc::new(std::sync::Mutex::new(None::<String>));
     let notify_for_callback = notify.clone();
     let seen_for_callback = seen_error.clone();
-    let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
+    let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&ClientError>| {
         if let Some(error) = error {
             *seen_for_callback
                 .lock()
@@ -1215,7 +1199,7 @@ async fn async_send_to_queue_topic_mismatch_uses_java_callback_error_message() {
     let seen_error = Arc::new(std::sync::Mutex::new(None::<String>));
     let notify_for_callback = notify.clone();
     let seen_for_callback = seen_error.clone();
-    let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
+    let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&ClientError>| {
         if let Some(error) = error {
             *seen_for_callback
                 .lock()
@@ -1253,7 +1237,7 @@ async fn async_send_with_callback_reports_kernel_error_to_callback() {
     let seen_error = Arc::new(std::sync::Mutex::new(None::<String>));
     let notify_for_callback = notify.clone();
     let seen_for_callback = seen_error.clone();
-    let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
+    let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&ClientError>| {
         if let Some(error) = error {
             *seen_for_callback
                 .lock()

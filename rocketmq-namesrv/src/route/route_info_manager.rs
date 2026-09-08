@@ -63,8 +63,6 @@ use crate::route::topic_route_snapshot::TopicRouteView;
 use crate::route::types::BrokerName;
 use crate::route::types::BrokerSession;
 
-#[cfg(test)]
-use crate::route::error::RocketMQError;
 use crate::route::types::RemotingConnectionId;
 use crate::route::types::TopicName;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
@@ -89,7 +87,7 @@ pub enum TopicRouteLookupOutcome<T> {
 /// - Serialized writes: one mutation gate covers every route-visible source-table update
 /// - One coordinator avoids redundant nested lock layers on write paths
 /// - Compact strings: CheetahString avoids repeated temporary conversions
-/// - Type-safe errors: Result<T, RocketMQError> instead of Option
+/// - Type-safe errors: [`RouteResult`] instead of `Option`
 /// - Better modularity: Separate table modules for maintainability
 ///
 /// ## Concurrency Model
@@ -2417,7 +2415,10 @@ mod tests {
             "an unpublished unregister mutation must leave the complete old route visible",
         );
         assert_eq!(route_while_unregistration_is_paused, initial_route);
-        assert!(matches!(management_result, Err(RocketMQError::ClusterNotFound { .. })));
+        assert_eq!(
+            management_result.expect_err("cluster should not exist").code(),
+            rocketmq_error::ROUTE_CLUSTER_NOT_FOUND.code()
+        );
         assert!(matches!(
             manager.pickup_topic_route_data(topic.as_str()),
             Ok(TopicRouteLookupOutcome::NotFound)

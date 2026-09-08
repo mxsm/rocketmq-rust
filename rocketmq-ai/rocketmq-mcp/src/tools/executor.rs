@@ -23,7 +23,7 @@ use rmcp::model::ContentBlock;
 use rmcp::model::JsonObject;
 use rmcp::model::Resource;
 use rmcp::ErrorData;
-use rocketmq_observability::metrics::mcp::McpErrorKind;
+use rocketmq_observability::metrics::mcp::McpFailureLabel;
 use rocketmq_observability::metrics::mcp::McpMetricsRecorder;
 use rocketmq_observability::metrics::mcp::McpOperationKind;
 use rocketmq_observability::metrics::mcp::McpOperationOutcome;
@@ -193,24 +193,24 @@ impl ToolFailure {
         }
     }
 
-    fn metric_kind(&self) -> McpErrorKind {
+    fn metric_failure_label(&self) -> McpFailureLabel {
         match self {
-            Self::Rejected(ToolRejection::InvalidArguments { .. }) => McpErrorKind::InvalidRequest,
+            Self::Rejected(ToolRejection::InvalidArguments { .. }) => McpFailureLabel::InvalidRequest,
             Self::Rejected(ToolRejection::AliasInputBoundExceeded)
             | Self::Rejected(ToolRejection::AliasCapacityExceeded)
-            | Self::Rejected(ToolRejection::AliasCollisionExhausted) => McpErrorKind::SourceUnavailable,
+            | Self::Rejected(ToolRejection::AliasCollisionExhausted) => McpFailureLabel::SourceUnavailable,
             Self::Rejected(ToolRejection::PermissionDenied)
             | Self::Rejected(ToolRejection::UnauthorizedScope)
             | Self::Rejected(ToolRejection::TenantMismatch)
             | Self::Rejected(ToolRejection::ClusterNotAllowed)
-            | Self::Rejected(ToolRejection::ChangePlanningDisabled) => McpErrorKind::PermissionDenied,
-            Self::Rejected(ToolRejection::RateLimited) => McpErrorKind::RateLimited,
+            | Self::Rejected(ToolRejection::ChangePlanningDisabled) => McpFailureLabel::PermissionDenied,
+            Self::Rejected(ToolRejection::RateLimited) => McpFailureLabel::RateLimited,
             Self::Operational(ToolExecutionError::Backend(_)) | Self::Rejected(ToolRejection::TimedOut { .. }) => {
-                McpErrorKind::SourceUnavailable
+                McpFailureLabel::SourceUnavailable
             }
-            Self::Rejected(ToolRejection::OutputTooLarge { .. }) => McpErrorKind::OutputTooLarge,
+            Self::Rejected(ToolRejection::OutputTooLarge { .. }) => McpFailureLabel::OutputTooLarge,
             Self::Operational(ToolExecutionError::Internal(_)) | Self::Rejected(ToolRejection::Cancelled) => {
-                McpErrorKind::Internal
+                McpFailureLabel::Internal
             }
         }
     }
@@ -398,7 +398,7 @@ where
                 rocketmq_observability::metrics::mcp::record_error(
                     McpOperationKind::Tool,
                     "unknown_tool",
-                    McpErrorKind::InvalidRequest,
+                    McpFailureLabel::InvalidRequest,
                 );
                 return Err(ErrorData::invalid_params("unknown tool", None));
             }
@@ -1233,7 +1233,7 @@ fn validate_schema(schema: &JsonObject, value: &Value, _label: &str) -> Result<(
 }
 
 fn error_result(operation: &'static str, tool_name: &str, request_id: &str, error: ToolFailure) -> CallToolResult {
-    rocketmq_observability::metrics::mcp::record_error(McpOperationKind::Tool, operation, error.metric_kind());
+    rocketmq_observability::metrics::mcp::record_error(McpOperationKind::Tool, operation, error.metric_failure_label());
     if error.has_private_detail() {
         tracing::warn!(
             correlation_id = request_id,

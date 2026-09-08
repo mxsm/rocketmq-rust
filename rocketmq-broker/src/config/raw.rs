@@ -114,19 +114,19 @@ impl RawBrokerConfig {
             .build()
             .map_err(|error| BrokerConfigError::Load {
                 path: path.to_path_buf(),
-                source: error,
+                source: Box::new(error),
             })?;
         let raw = loaded
             .clone()
             .try_deserialize()
             .map_err(|error| BrokerConfigError::Load {
                 path: path.to_path_buf(),
-                source: error,
+                source: Box::new(error),
             })?;
         let ownership: CanonicalOwnershipMarkers =
             loaded.try_deserialize().map_err(|error| BrokerConfigError::Load {
                 path: path.to_path_buf(),
-                source: error,
+                source: Box::new(error),
             })?;
         ownership.validate()?;
         Ok(raw)

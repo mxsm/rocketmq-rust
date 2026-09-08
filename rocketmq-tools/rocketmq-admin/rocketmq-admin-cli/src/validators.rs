@@ -12,100 +12,79 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_admin_core::client_adapter::services::RocketMQError;
-use rocketmq_admin_core::client_adapter::services::RocketMQResult;
-use rocketmq_admin_core::client_adapter::services::ToolsError;
+use rocketmq_error::Result as CanonicalResult;
 
-pub fn validate_namesrv_addr(addr: &str) -> RocketMQResult<()> {
+use crate::errors::argument_invalid;
+
+pub fn validate_namesrv_addr(addr: &str) -> CanonicalResult<()> {
     if addr.is_empty() {
-        return Err(RocketMQError::Tools(ToolsError::ValidationError {
-            field: "namesrv_addr".to_string(),
-            reason: "NameServer address cannot be empty".to_string(),
-        }));
+        return Err(argument_invalid("NameServer address cannot be empty"));
     }
 
     for single_addr in addr.split(';').map(str::trim).filter(|s| !s.is_empty()) {
         let parts: Vec<&str> = single_addr.split(':').collect();
 
         if parts.len() != 2 {
-            return Err(RocketMQError::Tools(ToolsError::ValidationError {
-                field: "namesrv_addr".to_string(),
-                reason: format!("Invalid format '{single_addr}', expected 'host:port'"),
-            }));
+            return Err(argument_invalid(format!(
+                "Invalid format '{single_addr}', expected 'host:port'"
+            )));
         }
 
-        parts[1].parse::<u16>().map_err(|_| {
-            RocketMQError::Tools(ToolsError::ValidationError {
-                field: "namesrv_addr".to_string(),
-                reason: format!("Invalid port '{}' in address '{single_addr}'", parts[1]),
-            })
-        })?;
+        parts[1]
+            .parse::<u16>()
+            .map_err(|_| argument_invalid(format!("Invalid port '{}' in address '{single_addr}'", parts[1])))?;
     }
 
     Ok(())
 }
 
-pub fn validate_topic_name(topic: &str) -> RocketMQResult<()> {
+pub fn validate_topic_name(topic: &str) -> CanonicalResult<()> {
     if topic.is_empty() {
-        return Err(RocketMQError::Tools(ToolsError::ValidationError {
-            field: "topic".to_string(),
-            reason: "Topic name cannot be empty".to_string(),
-        }));
+        return Err(argument_invalid("Topic name cannot be empty"));
     }
 
     if topic.len() > 127 {
-        return Err(RocketMQError::Tools(ToolsError::ValidationError {
-            field: "topic".to_string(),
-            reason: format!("Name '{topic}' exceeds maximum length of 127 characters"),
-        }));
+        return Err(argument_invalid(format!(
+            "Name '{topic}' exceeds maximum length of 127 characters"
+        )));
     }
 
     const INVALID_CHARS: &[char] = &['/', '\\', '|', '<', '>', '?', '*', '"', ':'];
 
     if let Some(ch) = topic.chars().find(|c| INVALID_CHARS.contains(c)) {
-        return Err(RocketMQError::Tools(ToolsError::ValidationError {
-            field: "topic".to_string(),
-            reason: format!("Name '{topic}' contains invalid character '{ch}'"),
-        }));
+        return Err(argument_invalid(format!(
+            "Name '{topic}' contains invalid character '{ch}'"
+        )));
     }
 
     Ok(())
 }
 
-pub fn validate_queue_nums(nums: i32, name: &str) -> RocketMQResult<()> {
+pub fn validate_queue_nums(nums: i32, name: &str) -> CanonicalResult<()> {
     match nums {
-        n if n <= 0 => Err(RocketMQError::Tools(ToolsError::ValidationError {
-            field: name.to_string(),
-            reason: format!("must be positive, got {nums}"),
-        })),
-        n if n > 1024 => Err(RocketMQError::Tools(ToolsError::ValidationError {
-            field: name.to_string(),
-            reason: format!("exceeds maximum value of 1024, got {nums}"),
-        })),
+        n if n <= 0 => Err(argument_invalid(format!("{name} must be positive, got {nums}"))),
+        n if n > 1024 => Err(argument_invalid(format!(
+            "{name} exceeds maximum value of 1024, got {nums}"
+        ))),
         _ => Ok(()),
     }
 }
 
-pub fn validate_perm(perm: i32) -> RocketMQResult<()> {
+pub fn validate_perm(perm: i32) -> CanonicalResult<()> {
     match perm {
         2 | 4 | 6 => Ok(()),
-        _ => Err(RocketMQError::Tools(ToolsError::ValidationError {
-            field: "perm".to_string(),
-            reason: format!("Invalid value {perm}, valid values are: 2 (read), 4 (write), 6 (read+write)"),
-        })),
+        _ => Err(argument_invalid(format!(
+            "Invalid value {perm}, valid values are: 2 (read), 4 (write), 6 (read+write)"
+        ))),
     }
 }
 
-pub fn validate_broker_name(name: &str) -> RocketMQResult<()> {
+pub fn validate_broker_name(name: &str) -> CanonicalResult<()> {
     match name {
-        "" => Err(RocketMQError::Tools(ToolsError::ValidationError {
-            field: "broker_name".to_string(),
-            reason: "Broker name cannot be empty".to_string(),
-        })),
-        n if n.len() > 127 => Err(RocketMQError::Tools(ToolsError::ValidationError {
-            field: "broker_name".to_string(),
-            reason: format!("Name '{name}' exceeds maximum length of 127 characters"),
-        })),
+        "" => Err(argument_invalid("Broker name cannot be empty")),
+        n if n.len() > 127 => Err(argument_invalid(format!(
+            "Name '{name}' exceeds maximum length of 127 characters"
+        ))),
         _ => Ok(()),
     }
 }

@@ -51,8 +51,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::RpcClientError;
+use rocketmq_error::SharedError;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_runtime::TaskId;
 use tracing::error;
@@ -60,6 +59,10 @@ use tracing::trace;
 
 use crate::clients::rocketmq_tokio_client::TransportClient;
 use crate::deadline::RequestDeadline;
+use crate::error_helpers::rpc_broker_address_not_found;
+use crate::error_helpers::rpc_request_failed;
+use crate::error_helpers::rpc_request_unsupported;
+use crate::error_helpers::rpc_response_failed;
 use crate::request_outcome::OutboundRequestContractReason;
 use crate::request_outcome::OutboundRequestOutcome;
 use crate::request_outcome::OutboundRequestRejectionReason;
@@ -98,7 +101,7 @@ impl ResponseConfig {
 
 fn rpc_request_response(
     result: Result<OutboundRequestOutcome, crate::error::TransportError>,
-) -> RocketMQResult<RemotingCommand> {
+) -> Result<RemotingCommand, rocketmq_error::SharedError> {
     match result {
         Ok(OutboundRequestOutcome::Response(response)) => Ok(response),
         Ok(OutboundRequestOutcome::Rejected(rejection)) => {
@@ -125,7 +128,7 @@ fn rpc_request_response(
                     rocketmq_error::Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED)
                 }
             };
-            Err(rocketmq_error::RocketMQError::Shared(Arc::new(error)))
+            Err(Arc::new(error))
         }
         Ok(OutboundRequestOutcome::Contract(contract)) => {
             let descriptor = match contract.reason() {
@@ -133,11 +136,9 @@ fn rpc_request_response(
                     &rocketmq_error::TRANSPORT_CONNECTION_FAILED
                 }
             };
-            Err(rocketmq_error::RocketMQError::Shared(Arc::new(
-                rocketmq_error::Error::new(descriptor),
-            )))
+            Err(Arc::new(rocketmq_error::Error::new(descriptor)))
         }
-        Err(error) => Err(rocketmq_error::RocketMQError::Shared(error.into_shared_error())),
+        Err(error) => Err(error.into_shared_error()),
     }
 }
 
@@ -210,29 +211,21 @@ impl RpcClientImpl {
         addr: &CheetahString,
         request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> Result<(i32, RemotingCommand), RpcClientError>
+    ) -> Result<(i32, RemotingCommand), SharedError>
     where
         H: CommandCustomHeader + TopicRequestHeaderTrait,
     {
         let request_code = request.code;
-        let request_command = RpcClientUtils::try_create_command_for_rpc_request(request).map_err(|err| {
-            RpcClientError::RequestFailed {
-                addr: addr.to_string(),
-                request_code,
-                timeout_ms: timeout_millis,
-                source: Box::new(err),
-            }
-        })?;
+        let request_command = RpcClientUtils::try_create_command_for_rpc_request(request)
+            .map_err(|err| rpc_request_failed(addr.to_string(), request_code, timeout_millis, err))?;
         Ok((request_code, request_command))
     }
 
     /// Resolves broker address by name, returning error if not found
-    fn get_broker_addr_by_name(&self, broker_name: &str) -> Result<CheetahString, RpcClientError> {
+    fn get_broker_addr_by_name(&self, broker_name: &str) -> Result<CheetahString, SharedError> {
         self.client_metadata
             .find_master_broker_addr(broker_name)
-            .ok_or_else(|| RpcClientError::BrokerNotFound {
-                broker_name: broker_name.to_string(),
-            })
+            .ok_or_else(|| rpc_broker_address_not_found(broker_name))
     }
 
     /// Generic request handler eliminating code duplication
@@ -255,10 +248,10 @@ impl RpcClientImpl {
         request: RpcRequest<H>,
         deadline: RequestDeadline,
         config: ResponseConfig,
-    ) -> Result<RpcResponse, RpcClientError>
+    ) -> Result<RpcResponse, SharedError>
     where
         H: CommandCustomHeader + TopicRequestHeaderTrait,
-        R: CommandCustomHeader + FromMap<Target = R, Error = rocketmq_error::RocketMQError> + Send + Sync + 'static,
+        R: CommandCustomHeader + FromMap<Target = R, Error = rocketmq_error::Error> + Send + Sync + 'static,
     {
         let timeout_millis = deadline.budget_millis();
         trace!(
@@ -271,12 +264,7 @@ impl RpcClientImpl {
         let (request_code, request_command) = self.create_request_command(addr, request, timeout_millis)?;
         deadline
             .ensure_before_send()
-            .map_err(|err| RpcClientError::RequestFailed {
-                addr: addr.to_string(),
-                request_code,
-                timeout_ms: timeout_millis,
-                source: Box::new(err),
-            })?;
+            .map_err(|err| rpc_request_failed(addr.to_string(), request_code, timeout_millis, err))?;
 
         let response = rpc_request_response(
             self.remoting_client
@@ -288,32 +276,18 @@ impl RpcClientImpl {
                 "RPC request failed: addr={}, code={}, error={}",
                 addr, request_code, err
             );
-            RpcClientError::RequestFailed {
-                addr: addr.to_string(),
-                request_code,
-                timeout_ms: timeout_millis,
-                source: Box::new(err),
-            }
+            rpc_request_failed(addr.to_string(), request_code, timeout_millis, err)
         })?;
 
         let response_code = ResponseCode::from(response.code());
 
         if !config.success_codes.contains(&response_code) {
-            return Err(RpcClientError::UnexpectedResponseCode {
-                code: response.code(),
-                code_name: format!("{:?}", response_code),
-            });
+            return Err(rpc_response_failed(response.code()));
         }
 
-        let response_header =
-            response
-                .decode_command_custom_header::<R>()
-                .map_err(|err| RpcClientError::RequestFailed {
-                    addr: addr.to_string(),
-                    request_code,
-                    timeout_ms: timeout_millis,
-                    source: Box::new(err),
-                })?;
+        let response_header = response
+            .decode_command_custom_header::<R>()
+            .map_err(|err| rpc_request_failed(addr.to_string(), request_code, timeout_millis, err))?;
 
         let body = response.body().map(|value| Box::new(value.clone()) as Box<dyn Any>);
 
@@ -326,7 +300,7 @@ impl RpcClientImpl {
         addr: &CheetahString,
         request: RpcRequest<H>,
         deadline: RequestDeadline,
-    ) -> Result<RpcResponse, RpcClientError> {
+    ) -> Result<RpcResponse, SharedError> {
         const PULL_SUCCESS_CODES: &[ResponseCode] = &[
             ResponseCode::Success,
             ResponseCode::PullNotFound,
@@ -349,40 +323,25 @@ impl RpcClientImpl {
         addr: &CheetahString,
         request: RpcRequest<H>,
         deadline: RequestDeadline,
-    ) -> Result<RpcResponse, RpcClientError> {
+    ) -> Result<RpcResponse, SharedError> {
         let timeout_millis = deadline.budget_millis();
         let (request_code, request_command) = self.create_request_command(addr, request, timeout_millis)?;
         deadline
             .ensure_before_send()
-            .map_err(|err| RpcClientError::RequestFailed {
-                addr: addr.to_string(),
-                request_code,
-                timeout_ms: timeout_millis,
-                source: Box::new(err),
-            })?;
+            .map_err(|err| rpc_request_failed(addr.to_string(), request_code, timeout_millis, err))?;
 
         let response = rpc_request_response(
             self.remoting_client
                 .invoke_request_with_deadline(Some(addr), request_command, deadline)
                 .await,
         )
-        .map_err(|err| RpcClientError::RequestFailed {
-            addr: addr.to_string(),
-            request_code,
-            timeout_ms: timeout_millis,
-            source: Box::new(err),
-        })?;
+        .map_err(|err| rpc_request_failed(addr.to_string(), request_code, timeout_millis, err))?;
 
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
                 let response_header = response
                     .decode_command_custom_header::<QueryConsumerOffsetResponseHeader>()
-                    .map_err(|err| RpcClientError::RequestFailed {
-                        addr: addr.to_string(),
-                        request_code,
-                        timeout_ms: timeout_millis,
-                        source: Box::new(err),
-                    })?;
+                    .map_err(|err| rpc_request_failed(addr.to_string(), request_code, timeout_millis, err))?;
                 let body = response.body().map(|value| Box::new(value.clone()) as Box<dyn Any>);
                 Ok(RpcResponse::new(response.code(), Box::new(response_header), body))
             }
@@ -390,10 +349,7 @@ impl RpcClientImpl {
                 // Special case: no offset found (not an error)
                 Ok(RpcResponse::new_option(response.code(), None))
             }
-            code => Err(RpcClientError::UnexpectedResponseCode {
-                code: response.code(),
-                code_name: format!("{:?}", code),
-            }),
+            _ => Err(rpc_response_failed(response.code())),
         }
     }
 
@@ -401,7 +357,7 @@ impl RpcClientImpl {
     fn execute_hooks<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         request: &RpcRequest<H>,
-    ) -> RocketMQResult<Option<RpcResponse>> {
+    ) -> Result<Option<RpcResponse>, rocketmq_error::SharedError> {
         for hook in &self.client_hook_list {
             if let Some(response) = hook(Some(&request.header), None)? {
                 trace!("Request intercepted by client hook");
@@ -415,13 +371,11 @@ impl RpcClientImpl {
         &self,
         request: RpcRequest<H>,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<RpcResponse> {
+    ) -> Result<RpcResponse, rocketmq_error::SharedError> {
         let timeout_millis = deadline.budget_millis();
         if let Some(response) = self.execute_hooks(&request)? {
             if deadline.is_expired() {
-                return Err(rocketmq_error::RocketMQError::Shared(
-                    crate::error_helpers::response_timeout(timeout_millis),
-                ));
+                return Err(crate::error_helpers::response_timeout(timeout_millis));
             }
             return Ok(response);
         }
@@ -429,9 +383,7 @@ impl RpcClientImpl {
         let broker_name = request
             .header
             .broker_name()
-            .ok_or_else(|| RpcClientError::BrokerNotFound {
-                broker_name: "<missing brokerName>".to_string(),
-            })?;
+            .ok_or_else(|| rpc_broker_address_not_found("<missing brokerName>"))?;
         let addr = self.get_broker_addr_by_name(broker_name.as_ref())?;
         deadline.ensure_before_send()?;
 
@@ -491,25 +443,16 @@ impl RpcClientImpl {
                         .invoke_request_with_deadline(Some(&addr), request_command, deadline)
                         .await,
                 )
-                .map_err(|err| RpcClientError::RequestFailed {
-                    addr: addr.to_string(),
-                    request_code,
-                    timeout_ms: timeout_millis,
-                    source: Box::new(err),
-                })?;
+                .map_err(|err| rpc_request_failed(addr.to_string(), request_code, timeout_millis, err))?;
 
                 if response.code() != ResponseCode::Success as i32 {
-                    return Err(RpcClientError::UnexpectedResponseCode {
-                        code: response.code(),
-                        code_name: format!("{:?}", ResponseCode::from(response.code())),
-                    }
-                    .into());
+                    return Err(rpc_response_failed(response.code()));
                 }
 
                 let body = response.body().map(|value| Box::new(value.clone()) as Box<dyn Any>);
                 RpcResponse::new_option(response.code(), body)
             }
-            _ => return Err(RpcClientError::UnsupportedRequestCode { code: request.code }.into()),
+            _ => return Err(rpc_request_unsupported(request.code)),
         };
 
         Ok(result)
@@ -529,7 +472,7 @@ impl RpcClient for RpcClientImpl {
         &self,
         request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> RocketMQResult<RpcResponse> {
+    ) -> Result<RpcResponse, rocketmq_error::SharedError> {
         self.invoke_until(request, RequestDeadline::from_timeout_millis(timeout_millis))
             .await
     }
@@ -542,7 +485,7 @@ impl RpcClient for RpcClientImpl {
         mq: MessageQueue,
         mut request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> RocketMQResult<RpcResponse> {
+    ) -> Result<RpcResponse, rocketmq_error::SharedError> {
         let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
         if let Some(broker_name) = self.client_metadata.get_broker_name_from_message_queue(&mq) {
             request.header.set_broker_name(broker_name);
@@ -578,7 +521,7 @@ impl RpcClientImpl {
     pub fn invoke_with_callback<H, F>(&self, request: RpcRequest<H>, timeout_millis: u64, callback: F) -> TaskId
     where
         H: CommandCustomHeader + TopicRequestHeaderTrait + Send + 'static,
-        F: FnOnce(RocketMQResult<RpcResponse>) + Send + 'static,
+        F: FnOnce(Result<RpcResponse, rocketmq_error::SharedError>) + Send + 'static,
     {
         let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
         let client_metadata = self.client_metadata.clone();
@@ -616,16 +559,11 @@ mod tests {
 
     #[test]
     fn test_error_formatting() {
-        let err = RpcClientError::BrokerNotFound {
-            broker_name: "broker-a".to_string(),
-        };
-        assert!(err.to_string().contains("broker-a"));
+        let err = rpc_broker_address_not_found("broker-a");
+        assert_eq!(err.descriptor(), &rocketmq_error::RPC_BROKER_ADDRESS_NOT_FOUND);
 
-        let err = RpcClientError::UnexpectedResponseCode {
-            code: 1,
-            code_name: "SUCCESS".to_string(),
-        };
-        assert!(err.to_string().contains("Unexpected response code"));
+        let err = rpc_response_failed(1);
+        assert_eq!(err.descriptor(), &rocketmq_error::RPC_RESPONSE_FAILED);
     }
 
     #[tokio::test]
@@ -651,10 +589,7 @@ mod tests {
             panic!("missing brokerName should return a typed error");
         };
 
-        assert!(matches!(
-            error,
-            rocketmq_error::RocketMQError::Rpc(RpcClientError::BrokerNotFound { .. })
-        ));
+        assert_eq!(error.descriptor(), &rocketmq_error::RPC_BROKER_ADDRESS_NOT_FOUND);
     }
 
     #[tokio::test]

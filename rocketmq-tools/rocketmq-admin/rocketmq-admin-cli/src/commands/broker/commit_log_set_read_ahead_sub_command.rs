@@ -17,8 +17,7 @@ use std::collections::HashMap;
 use cheetah_string::CheetahString;
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigSectionTarget;
@@ -90,7 +89,7 @@ pub struct CommitLogSetReadAheadSubCommand {
 }
 
 impl CommitLogSetReadAheadSubCommand {
-    fn request(&self) -> RocketMQResult<CommitLogReadAheadRequest> {
+    fn request(&self) -> CanonicalResult<CommitLogReadAheadRequest> {
         CommitLogReadAheadRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
@@ -103,7 +102,7 @@ impl CommitLogSetReadAheadSubCommand {
         )
     }
 
-    fn print_result(request: &CommitLogReadAheadRequest, result: CommitLogReadAheadResult) -> RocketMQResult<()> {
+    fn print_result(request: &CommitLogReadAheadRequest, result: CommitLogReadAheadResult) -> CanonicalResult<()> {
         for section in result.sections {
             print_section(request, section);
         }
@@ -111,20 +110,7 @@ impl CommitLogSetReadAheadSubCommand {
         if result.failures.is_empty() {
             Ok(())
         } else {
-            Err(RocketMQError::broker_operation_failed(
-                "SET_COMMIT_LOG_READ_MODE",
-                -1,
-                format!(
-                    "CommitLogSetReadAheadSubCommand: Failed on {} broker(s): {}",
-                    result.failures.len(),
-                    result
-                        .failures
-                        .iter()
-                        .map(|failure| format!("{}: {}", failure.broker_addr, failure.error))
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ),
-            ))
+            Err(crate::errors::broker_response_failed("SET_COMMIT_LOG_READ_MODE", -1))
         }
     }
 }
@@ -134,7 +120,7 @@ impl CommandExecute for CommitLogSetReadAheadSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         let result = BrokerService::set_commit_log_read_ahead_by_request_with_credentials(
             request.clone(),

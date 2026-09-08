@@ -60,7 +60,7 @@ impl SubscriptionGroupHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let start_time = current_millis() as i64;
 
         let response = RemotingCommand::create_java_default_error_response_command();
@@ -126,7 +126,7 @@ impl SubscriptionGroupHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
         let request_header =
             match request.decode_command_custom_header::<UpdateSubscriptionGroupConfigCasRequestHeader>() {
@@ -301,7 +301,7 @@ impl SubscriptionGroupHandler {
         runtime: &BrokerAdminRuntime<MS>,
         _metadata: &AdminRequestMetadata,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
         let header = match request.decode_command_custom_header::<GetSubscriptionGroupConfigRequestHeader>() {
             Ok(header) => header,
@@ -414,9 +414,7 @@ impl SubscriptionGroupHandler {
             }
         };
         let version = u64::try_from(update.data_version.counter()).map_err(|_| {
-            rocketmq_error::RocketMQError::invariant_violated(
-                "Subscription Group state version must remain non-negative",
-            )
+            crate::broker_error::invariant_violated("Subscription Group state version must remain non-negative")
         })?;
         if !update.changed {
             return Ok(Some(
@@ -465,7 +463,7 @@ impl SubscriptionGroupHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<GetSubscriptionGroupConfigRequestHeader>()?;
         let group = &request_header.group;
@@ -515,7 +513,7 @@ impl SubscriptionGroupHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         info!(
             "AdminBrokerProcessor#updateAndCreateSubscriptionGroupList called by {}",
             metadata
@@ -566,7 +564,7 @@ impl SubscriptionGroupHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<DeleteSubscriptionGroupRequestHeader>()?;
         info!("AdminBrokerProcessor#deleteSubscriptionGroup called by {}", metadata);
 
@@ -609,7 +607,7 @@ impl SubscriptionGroupHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let Some(encoded) = request.body() else {
             return Ok(Some(
@@ -694,7 +692,7 @@ impl SubscriptionGroupHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<UpdateGroupForbiddenRequestHeader>()?;
         info!(
             "AdminBrokerProcessor#updateAndGetGroupForbidden called by {} for object {}@{} readable={:?}",

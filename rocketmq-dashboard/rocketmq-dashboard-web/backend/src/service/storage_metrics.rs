@@ -18,7 +18,7 @@ use crate::model::StorageStatusView;
 use crate::persistence::StorageStatus;
 use crate::persistence::error::PersistenceError;
 use rocketmq_observability::DashboardStorageBackend;
-use rocketmq_observability::DashboardStorageErrorKind;
+use rocketmq_observability::DashboardStorageFailureLabel;
 use rocketmq_observability::DashboardStorageMetricsRecorder;
 use rocketmq_observability::DashboardStorageOperation;
 use rocketmq_observability::DashboardStorageOperationResult;
@@ -59,15 +59,15 @@ impl StorageMetrics {
         result: &Result<T, DashboardError>,
         elapsed: Duration,
     ) {
-        let (result, error_kind) = match result {
+        let (result, failure) = match result {
             Ok(_) => (DashboardStorageOperationResult::Success, None),
             Err(error) => (
                 DashboardStorageOperationResult::Failure,
-                Some(storage_error_kind(error)),
+                Some(storage_failure_label(error)),
             ),
         };
         self.inner
-            .record_operation(storage_backend(backend), operation, result, error_kind, elapsed);
+            .record_operation(storage_backend(backend), operation, result, failure, elapsed);
     }
 
     /// Records a direct persistence result without exposing its source error.
@@ -78,15 +78,15 @@ impl StorageMetrics {
         result: &Result<T, PersistenceError>,
         elapsed: Duration,
     ) {
-        let (result, error_kind) = match result {
+        let (result, failure) = match result {
             Ok(_) => (DashboardStorageOperationResult::Success, None),
             Err(error) => (
                 DashboardStorageOperationResult::Failure,
-                Some(persistence_error_kind(error)),
+                Some(persistence_failure_label(error)),
             ),
         };
         self.inner
-            .record_operation(storage_backend(backend), operation, result, error_kind, elapsed);
+            .record_operation(storage_backend(backend), operation, result, failure, elapsed);
     }
 }
 
@@ -107,36 +107,36 @@ fn storage_result(status: StorageStatus) -> DashboardStorageResult {
     }
 }
 
-fn storage_error_kind(error: &DashboardError) -> DashboardStorageErrorKind {
+fn storage_failure_label(error: &DashboardError) -> DashboardStorageFailureLabel {
     match error {
-        DashboardError::Storage(error) => persistence_error_kind(error),
-        _ => DashboardStorageErrorKind::Other,
+        DashboardError::Storage(error) => persistence_failure_label(error),
+        _ => DashboardStorageFailureLabel::Other,
     }
 }
 
-fn persistence_error_kind(error: &PersistenceError) -> DashboardStorageErrorKind {
+fn persistence_failure_label(error: &PersistenceError) -> DashboardStorageFailureLabel {
     match error {
-        PersistenceError::Capacity => DashboardStorageErrorKind::Capacity,
+        PersistenceError::Capacity => DashboardStorageFailureLabel::Capacity,
         PersistenceError::ConnectionUnavailable | PersistenceError::LockUnavailable => {
-            DashboardStorageErrorKind::Connection
+            DashboardStorageFailureLabel::Connection
         }
-        PersistenceError::Timeout => DashboardStorageErrorKind::Timeout,
-        PersistenceError::Conflict => DashboardStorageErrorKind::Conflict,
-        _ => DashboardStorageErrorKind::Other,
+        PersistenceError::Timeout => DashboardStorageFailureLabel::Timeout,
+        PersistenceError::Conflict => DashboardStorageFailureLabel::Conflict,
+        _ => DashboardStorageFailureLabel::Other,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::storage_backend;
-    use super::storage_error_kind;
+    use super::storage_failure_label;
     use super::storage_result;
     use crate::error::DashboardError;
     use crate::model::StorageBackend;
     use crate::persistence::StorageStatus;
     use crate::persistence::error::PersistenceError;
     use rocketmq_observability::DashboardStorageBackend;
-    use rocketmq_observability::DashboardStorageErrorKind;
+    use rocketmq_observability::DashboardStorageFailureLabel;
     use rocketmq_observability::DashboardStorageResult;
 
     #[test]
@@ -147,8 +147,8 @@ mod tests {
             DashboardStorageResult::Degraded
         );
         assert_eq!(
-            storage_error_kind(&DashboardError::Storage(PersistenceError::Timeout)),
-            DashboardStorageErrorKind::Timeout
+            storage_failure_label(&DashboardError::Storage(PersistenceError::Timeout)),
+            DashboardStorageFailureLabel::Timeout
         );
     }
 }

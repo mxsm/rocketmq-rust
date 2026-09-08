@@ -61,7 +61,7 @@ impl RPCHook for DefaultRecallMessageTraceHook {
         &self,
         _remote_addr: SocketAddr,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         Ok(())
     }
 
@@ -70,7 +70,7 @@ impl RPCHook for DefaultRecallMessageTraceHook {
         _remote_addr: SocketAddr,
         request: &RemotingCommand,
         response: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         if request.code() != RequestCode::RecallMessage as i32 || !self.enable_default_trace {
             return Ok(());
         }
@@ -142,7 +142,7 @@ mod tests {
     }
 
     impl TraceDispatcher for CapturingTraceDispatcher {
-        fn start(&self, _name_srv_addr: &str, _access_channel: AccessChannel) -> rocketmq_error::RocketMQResult<()> {
+        fn start(&self, _name_srv_addr: &str, _access_channel: AccessChannel) -> crate::ClientResult<()> {
             Ok(())
         }
 
@@ -154,7 +154,7 @@ mod tests {
             true
         }
 
-        fn flush(&self) -> rocketmq_error::RocketMQResult<()> {
+        fn flush(&self) -> crate::ClientResult<()> {
             Ok(())
         }
 

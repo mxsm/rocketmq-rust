@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use crate::broker_error::BrokerResult as Result;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_store::BrokerReadStore;
@@ -38,11 +37,7 @@ where
 {
     /// Re-runs the canonical Pull business path for an already-claimed deferred request.
     #[allow(dead_code, reason = "called by the forthcoming Pull leaf")]
-    pub(crate) async fn resume_pull(
-        &self,
-        resume: ResumePull,
-        reason: DeferredWakeReason,
-    ) -> RocketMQResult<RemotingResponse> {
+    pub(crate) async fn resume_pull(&self, resume: ResumePull, reason: DeferredWakeReason) -> Result<RemotingResponse> {
         let (request, criteria, _wait_deadline) = resume.into_parts();
         drop(criteria);
         let (request_code, header, effective_peer, session_id, hook_metadata) = request.into_parts();
@@ -67,7 +62,7 @@ where
         hook_metadata: &PullHookMetadata,
         broadcast_client_resolver: &PullBroadcastClientResolver<'_>,
         reason: DeferredWakeReason,
-    ) -> RocketMQResult<RemotingResponse> {
+    ) -> Result<RemotingResponse> {
         match reason {
             DeferredWakeReason::MessageArrived | DeferredWakeReason::Timeout | DeferredWakeReason::ForcedRefresh => {}
         }
@@ -83,7 +78,7 @@ where
             .await?
         {
             PullMessageResult::Reply(parts) => parts.into_remoting_response(),
-            PullMessageResult::Suspend(_) => Err(RocketMQError::internal(
+            PullMessageResult::Suspend(_) => Err(crate::broker_error::internal(
                 "resume-pull",
                 PullResumeError::UnexpectedSuspension,
             )),

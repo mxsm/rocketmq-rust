@@ -15,9 +15,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::ControllerResult;
 use arc_swap::ArcSwap;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use tokio::sync::Mutex;
 
 mod controller_config;
@@ -83,15 +82,12 @@ impl ControllerConfigHandle {
     ///
     /// Returns the configuration validation error without changing the active
     /// snapshot when any supplied property is invalid or unknown.
-    pub(crate) async fn update(&self, properties: HashMap<String, String>) -> RocketMQResult<()> {
+    pub(crate) async fn update(&self, properties: HashMap<String, String>) -> ControllerResult<()> {
         let _update_guard = self.update_lock.lock().await;
         let mut next = (*self.snapshot()).clone();
         next.update(properties).await?;
-        next.validate().map_err(|reason| RocketMQError::ConfigInvalidValue {
-            key: "controllerConfig",
-            value: "candidate".to_string(),
-            reason,
-        })?;
+        next.validate()
+            .map_err(|_reason| crate::error::configuration_invalid("controllerConfig"))?;
         self.reader.current.store(Arc::new(next));
         Ok(())
     }

@@ -17,8 +17,7 @@ use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataRe
 use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataResult;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataScope;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -86,7 +85,7 @@ pub struct ExportMetadataSubCommand {
 }
 
 impl ExportMetadataSubCommand {
-    fn request(&self) -> RocketMQResult<ExportMetadataRequest> {
+    fn request(&self) -> CanonicalResult<ExportMetadataRequest> {
         ExportMetadataRequest::try_new(
             self.cluster_name.clone(),
             self.broker_addr.clone(),
@@ -97,27 +96,17 @@ impl ExportMetadataSubCommand {
         .map(|request| request.with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
 
-    fn write_result(result: &ExportMetadataResult, file_path: &str) -> RocketMQResult<()> {
+    fn write_result(result: &ExportMetadataResult, file_path: &str) -> CanonicalResult<()> {
         let (export_path, json_content) = match result {
             ExportMetadataResult::BrokerTopic { wrapper } => (
                 format!("{}/topic.json", file_path),
-                serde_json::to_string_pretty(wrapper).map_err(|source| {
-                    RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                        "encode topic configuration",
-                        "JSON",
-                        source,
-                    ))
-                })?,
+                serde_json::to_string_pretty(wrapper)
+                    .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?,
             ),
             ExportMetadataResult::BrokerSubscriptionGroup { wrapper } => (
                 format!("{}/subscriptionGroup.json", file_path),
-                serde_json::to_string_pretty(wrapper).map_err(|source| {
-                    RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                        "encode subscription group configuration",
-                        "JSON",
-                        source,
-                    ))
-                })?,
+                serde_json::to_string_pretty(wrapper)
+                    .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?,
             ),
             ExportMetadataResult::Cluster {
                 scope,
@@ -130,49 +119,29 @@ impl ExportMetadataSubCommand {
                     ExportMetadataScope::Topic => {
                         output.insert(
                             "topicConfigTable".to_string(),
-                            serde_json::to_value(topic_config_table).map_err(|source| {
-                                RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                                    "encode topic configuration table",
-                                    "JSON",
-                                    source,
-                                ))
-                            })?,
+                            serde_json::to_value(topic_config_table)
+                                .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?,
                         );
                         format!("{}/topic.json", file_path)
                     }
                     ExportMetadataScope::SubscriptionGroup => {
                         output.insert(
                             "subscriptionGroupTable".to_string(),
-                            serde_json::to_value(subscription_group_table).map_err(|source| {
-                                RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                                    "encode subscription group table",
-                                    "JSON",
-                                    source,
-                                ))
-                            })?,
+                            serde_json::to_value(subscription_group_table)
+                                .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?,
                         );
                         format!("{}/subscriptionGroup.json", file_path)
                     }
                     ExportMetadataScope::All => {
                         output.insert(
                             "topicConfigTable".to_string(),
-                            serde_json::to_value(topic_config_table).map_err(|source| {
-                                RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                                    "encode topic configuration table",
-                                    "JSON",
-                                    source,
-                                ))
-                            })?,
+                            serde_json::to_value(topic_config_table)
+                                .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?,
                         );
                         output.insert(
                             "subscriptionGroupTable".to_string(),
-                            serde_json::to_value(subscription_group_table).map_err(|source| {
-                                RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                                    "encode subscription group table",
-                                    "JSON",
-                                    source,
-                                ))
-                            })?,
+                            serde_json::to_value(subscription_group_table)
+                                .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?,
                         );
                         format!("{}/metadata.json", file_path)
                     }
@@ -183,19 +152,14 @@ impl ExportMetadataSubCommand {
                     serde_json::Value::Number(serde_json::Number::from(*export_time_millis)),
                 );
 
-                let json_content = serde_json::to_string_pretty(&output).map_err(|source| {
-                    RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                        "encode metadata export",
-                        "JSON",
-                        source,
-                    ))
-                })?;
+                let json_content = serde_json::to_string_pretty(&output)
+                    .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?;
                 (export_path, json_content)
             }
         };
 
         rocketmq_runtime::common::file_utils::string_to_file(&json_content, &export_path)
-            .map_err(crate::runtime_to_rocketmq_error)?;
+            .map_err(crate::runtime_error)?;
         println!("export {} success", export_path);
 
         Ok(())
@@ -207,7 +171,7 @@ impl CommandExecute for ExportMetadataSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let file_path = self.file_path.trim();
         let result = ExportService::export_metadata_by_request_with_credentials(
             self.request()?,

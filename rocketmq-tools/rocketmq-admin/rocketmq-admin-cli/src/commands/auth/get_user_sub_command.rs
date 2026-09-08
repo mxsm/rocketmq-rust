@@ -19,8 +19,8 @@ use cheetah_string::CheetahString;
 use rocketmq_admin_core::client_adapter::services::auth::AuthService;
 use rocketmq_admin_core::client_adapter::services::auth::GetUserRequest;
 use rocketmq_admin_core::client_adapter::services::auth::GetUserResult;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
 
 use crate::commands::CommandExecute;
@@ -46,12 +46,10 @@ struct ParseGetUserSubCommand {
 }
 
 impl ParseGetUserSubCommand {
-    fn new(command: &GetUserSubCommand) -> Result<Self, RocketMQError> {
+    fn new(command: &GetUserSubCommand) -> Result<Self, CanonicalError> {
         let username = command.username.trim();
         if username.is_empty() {
-            Err(RocketMQError::IllegalArgument(
-                "GetUserSubCommand: username is empty".into(),
-            ))
+            Err(crate::errors::argument_invalid("GetUserSubCommand: username is empty"))
         } else {
             Ok(Self {
                 username: username.into(),
@@ -65,7 +63,7 @@ impl CommandExecute for GetUserSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let command = ParseGetUserSubCommand::new(self)?;
         let request = GetUserRequest::try_new(
             self.broker_addr.clone(),
@@ -108,7 +106,7 @@ fn render_get_user_result(
     command: &ParseGetUserSubCommand,
     result: GetUserResult,
     single_broker_target: bool,
-) -> RocketMQResult<()> {
+) -> CanonicalResult<()> {
     if single_broker_target && result.users.is_empty() {
         eprintln!("No user with username {} was found", command.username);
         return Ok(());
@@ -119,14 +117,7 @@ fn render_get_user_result(
     if result.failed_broker_addrs.is_empty() || !result.users.is_empty() {
         Ok(())
     } else {
-        Err(RocketMQError::broker_operation_failed(
-            "GET_USER",
-            -1,
-            format!(
-                "GetUserSubCommand: Failed to get user for brokers {}",
-                result.failed_broker_addrs.join(", ")
-            ),
-        ))
+        Err(crate::errors::broker_response_failed("GET_USER", -1))
     }
 }
 

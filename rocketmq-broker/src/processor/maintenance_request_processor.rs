@@ -16,11 +16,11 @@
 
 use std::sync::Arc;
 
+use crate::broker_error::BrokerResult as Result;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::RemotingAuthContext;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 use rocketmq_error::CORE_INTERNAL_FAILURE;
 use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -114,7 +114,7 @@ impl MaintenanceRequestProcessor {
         grant: &MaintenanceAuthorizationGrant,
         request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> Result<RemotingCommand> {
         let response = match request_code {
             RequestCode::MaintenanceGetCapabilities => self.capabilities(grant).await?,
             RequestCode::MaintenanceCreateStoreCheckpoint => self.create_store_checkpoint(grant, request).await?,
@@ -137,7 +137,7 @@ impl MaintenanceRequestProcessor {
         &self,
         request: &RemotingRequest,
         original_code: i32,
-    ) -> RocketMQResult<MaintenanceAuthorizationGrant> {
+    ) -> Result<MaintenanceAuthorizationGrant> {
         if !self.broker_config.maintenance_enabled {
             return Err(maintenance_permission_denied());
         }
@@ -145,10 +145,12 @@ impl MaintenanceRequestProcessor {
         authoritative_command.set_code_mut(original_code);
         let principal = match request.origin() {
             RequestOrigin::Network { .. } => {
-                let auth_context = RemotingAuthContext::from_request(request)?;
+                let auth_context =
+                    RemotingAuthContext::from_request(request).map_err(crate::broker_error::auth_service_error)?;
                 self.auth_runtime
                     .authenticate_maintenance_principal(&authoritative_command, auth_context.channel_id())
-                    .await?
+                    .await
+                    .map_err(crate::broker_error::auth_service_error)?
             }
             RequestOrigin::Embedded {
                 caller: EmbeddedCaller::BrokerProxy,
@@ -156,9 +158,9 @@ impl MaintenanceRequestProcessor {
                 .authentication()
                 .principal()
                 .map(|principal| principal.id().into())
-                .ok_or_else(|| RocketMQError::authentication_failed("maintenance request is anonymous"))?,
+                .ok_or_else(|| crate::broker_error::authentication_failed("maintenance request is anonymous"))?,
             _ => {
-                return Err(RocketMQError::authentication_failed(
+                return Err(crate::broker_error::authentication_failed(
                     "maintenance request origin is not authorized",
                 ));
             }
@@ -166,15 +168,13 @@ impl MaintenanceRequestProcessor {
         self.authorize_principal(principal.as_str(), &authoritative_command)
     }
 
-    fn authorize_principal(
-        &self,
-        principal: &str,
-        request: &RemotingCommand,
-    ) -> RocketMQResult<MaintenanceAuthorizationGrant> {
+    fn authorize_principal(&self, principal: &str, request: &RemotingCommand) -> Result<MaintenanceAuthorizationGrant> {
         let header = request
             .decode_command_custom_header::<MaintenanceRequestHeader>()
-            .map_err(|source| RocketMQError::request_header_source("decode privileged maintenance header", source))?;
-        header.validate().map_err(RocketMQError::request_header_error)?;
+            .map_err(|source| {
+                crate::broker_error::request_header_source("decode privileged maintenance header", source)
+            })?;
+        header.validate().map_err(crate::broker_error::request_header_error)?;
         if header.policy_version != self.authorizer.policy().policy_version {
             return Err(maintenance_permission_denied());
         }
@@ -194,7 +194,7 @@ impl MaintenanceRequestProcessor {
             .map_err(|_denial| maintenance_permission_denied())
     }
 
-    async fn capabilities(&self, grant: &MaintenanceAuthorizationGrant) -> RocketMQResult<RemotingCommand> {
+    async fn capabilities(&self, grant: &MaintenanceAuthorizationGrant) -> Result<RemotingCommand> {
         let storage_identity = self
             .checkpoint_service
             .storage_identity(grant)
@@ -248,10 +248,11 @@ impl MaintenanceRequestProcessor {
         &self,
         grant: &MaintenanceAuthorizationGrant,
         request: &RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> Result<RemotingCommand> {
         let body = required_body(request, "MAINTENANCE_CREATE_STORE_CHECKPOINT")?;
-        let checkpoint_request: StoreReleaseCheckpointRequest = serde_json::from_slice(body)
-            .map_err(|source| RocketMQError::request_body_source("MAINTENANCE_CREATE_STORE_CHECKPOINT", source))?;
+        let checkpoint_request: StoreReleaseCheckpointRequest = serde_json::from_slice(body).map_err(|source| {
+            crate::broker_error::request_body_source("MAINTENANCE_CREATE_STORE_CHECKPOINT", source)
+        })?;
         let outcome = self
             .checkpoint_service
             .create_release_checkpoint(grant, checkpoint_request_from_wire(checkpoint_request))
@@ -269,13 +270,13 @@ impl MaintenanceRequestProcessor {
         }
     }
 
-    fn verify_store_checkpoint(&self, request: &RemotingCommand) -> RocketMQResult<RemotingCommand> {
+    fn verify_store_checkpoint(&self, request: &RemotingCommand) -> Result<RemotingCommand> {
         let body = required_body(request, "MAINTENANCE_VERIFY_CHECKPOINT")?;
         let manifest: StoreReleaseCheckpointManifest = serde_json::from_slice(body)
-            .map_err(|source| RocketMQError::request_body_source("MAINTENANCE_VERIFY_CHECKPOINT", source))?;
+            .map_err(|source| crate::broker_error::request_body_source("MAINTENANCE_VERIFY_CHECKPOINT", source))?;
         manifest
             .validate()
-            .map_err(|source| RocketMQError::request_body_source("MAINTENANCE_VERIFY_CHECKPOINT", source))?;
+            .map_err(|source| crate::broker_error::request_body_source("MAINTENANCE_VERIFY_CHECKPOINT", source))?;
         encode_success(
             &self.command_factory,
             &manifest,
@@ -287,10 +288,10 @@ impl MaintenanceRequestProcessor {
         &self,
         grant: &MaintenanceAuthorizationGrant,
         request: &RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> Result<RemotingCommand> {
         let body = required_body(request, "MAINTENANCE_RESTORE_VERIFY")?;
         let manifest: StoreReleaseCheckpointManifest = serde_json::from_slice(body)
-            .map_err(|source| RocketMQError::request_body_source("MAINTENANCE_RESTORE_VERIFY", source))?;
+            .map_err(|source| crate::broker_error::request_body_source("MAINTENANCE_RESTORE_VERIFY", source))?;
         let outcome = self
             .checkpoint_service
             .restore_verify_release_checkpoint(grant, &checkpoint_manifest_from_wire(manifest))
@@ -309,20 +310,18 @@ impl MaintenanceRequestProcessor {
     }
 }
 
-fn maintenance_permission_denied() -> RocketMQError {
-    RocketMQError::BrokerPermissionDenied {
-        operation: "privileged maintenance".to_owned(),
-    }
+fn maintenance_permission_denied() -> SharedError {
+    crate::broker_error::permission_denied("privileged maintenance")
 }
 
 impl RequestProcessor for MaintenanceRequestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
 
 impl MaintenanceRequestProcessor {
-    pub(crate) async fn process_shared(&self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+    pub(crate) async fn process_shared(&self, request: &mut RemotingRequest) -> Result<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let original_code = request.original_identity().original_code();
         let result = match self.authorize_request(request, original_code).await {
@@ -341,24 +340,24 @@ impl MaintenanceRequestProcessor {
     }
 }
 
-fn required_body<'a>(request: &'a RemotingCommand, operation: &'static str) -> RocketMQResult<&'a [u8]> {
+fn required_body<'a>(request: &'a RemotingCommand, operation: &'static str) -> Result<&'a [u8]> {
     request
         .body()
         .map(bytes::Bytes::as_ref)
-        .ok_or_else(|| RocketMQError::request_body_invalid(operation, "request body is empty"))
+        .ok_or_else(|| crate::broker_error::request_body_invalid(operation, "request body is empty"))
 }
 
 fn encode_success<T: serde::Serialize>(
     command_factory: &RemotingCommandFactory,
     value: &T,
     operation: &'static str,
-) -> RocketMQResult<RemotingCommand> {
-    let body = serde_json::to_vec(value).map_err(|error| RocketMQError::internal(operation, error))?;
+) -> Result<RemotingCommand> {
+    let body = serde_json::to_vec(value).map_err(|error| crate::broker_error::internal(operation, error))?;
     Ok(command_factory.create_success_response_command().set_body(body))
 }
 
-fn checkpoint_error(error: impl std::error::Error + Send + Sync + 'static) -> RocketMQError {
-    RocketMQError::internal("release-checkpoint", error)
+fn checkpoint_error(error: impl std::error::Error + Send + Sync + 'static) -> SharedError {
+    crate::broker_error::internal("release-checkpoint", error)
 }
 
 fn checkpoint_create_rejection_response(
@@ -569,7 +568,7 @@ mod tests {
     struct MutateMaintenanceCodeHook;
 
     impl RPCHook for MutateMaintenanceCodeHook {
-        fn do_before_request(&self, _remote_addr: SocketAddr, request: &mut RemotingCommand) -> RocketMQResult<()> {
+        fn do_before_request(&self, _remote_addr: SocketAddr, request: &mut RemotingCommand) -> Result<()> {
             request.set_code_mut(RequestCode::MaintenanceCreateStoreCheckpoint.to_i32());
             Ok(())
         }
@@ -579,7 +578,7 @@ mod tests {
             _remote_addr: SocketAddr,
             _request: &RemotingCommand,
             _response: &mut RemotingCommand,
-        ) -> RocketMQResult<()> {
+        ) -> Result<()> {
             Ok(())
         }
     }
@@ -701,7 +700,7 @@ mod tests {
         processor: MaintenanceRequestProcessor,
         principal: &'static str,
         command: RemotingCommand,
-    ) -> Result<EmbeddedDispatchOutcome, rocketmq_transport::api::TransportError> {
+    ) -> std::result::Result<EmbeddedDispatchOutcome, rocketmq_transport::api::TransportError> {
         dispatch_request_with_hooks(processor, principal, command, Vec::new()).await
     }
 
@@ -710,7 +709,7 @@ mod tests {
         principal: &'static str,
         command: RemotingCommand,
         hooks: Vec<Arc<dyn RPCHook>>,
-    ) -> Result<EmbeddedDispatchOutcome, rocketmq_transport::api::TransportError> {
+    ) -> std::result::Result<EmbeddedDispatchOutcome, rocketmq_transport::api::TransportError> {
         let dispatcher = Arc::new(AuthorizedCommandDispatcher::new(
             processor,
             hooks,

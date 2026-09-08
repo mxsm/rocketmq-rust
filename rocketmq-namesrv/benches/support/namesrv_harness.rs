@@ -229,7 +229,7 @@ pub(crate) mod network {
     pub(crate) struct OwnedNameServer {
         pub(crate) endpoint: CheetahString,
         shutdown: Option<oneshot::Sender<()>>,
-        task: JoinHandle<rocketmq_error::RocketMQResult<()>>,
+        task: JoinHandle<rocketmq_namesrv::NameServerResult<()>>,
         runtime_context: RuntimeContext,
     }
 

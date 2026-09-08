@@ -45,10 +45,10 @@ sequenceDiagram
 ```rust
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_client_rust::producer::transaction_mq_producer::TransactionMQProducer;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 
 #[tokio::main]
-async fn main() -> RocketMQResult<()> {
+async fn main() -> ClientResult<()> {
     let mut producer = TransactionMQProducer::builder()
         .producer_group("transaction_producer_group")
         .name_server_addr("localhost:9876")

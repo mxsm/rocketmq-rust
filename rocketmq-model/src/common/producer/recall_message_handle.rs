@@ -18,8 +18,7 @@ use base64::engine::general_purpose::URL_SAFE;
 use base64::Engine;
 use cheetah_string::CheetahString;
 
-use crate::RocketMQError;
-use crate::RocketMQResult;
+use rocketmq_error::Result;
 
 const SEPARATOR: &str = " ";
 const VERSION_1: &str = "v1";
@@ -43,7 +42,7 @@ impl RecallMessageHandle {
     /// # Returns
     ///
     /// * `Ok(RecallMessageHandle)` - Successfully decoded handle
-    /// * `Err(RocketMQError)` - Error if decoding fails
+    /// * `Err(Error)` - Error if decoding fails
     ///
     /// # Examples
     ///
@@ -54,17 +53,20 @@ impl RecallMessageHandle {
     /// let handle = RecallMessageHandle::decode_handle(handle_str);
     /// assert!(handle.is_ok());
     /// ```
-    pub fn decode_handle(handle: &str) -> RocketMQResult<Self> {
+    pub fn decode_handle(handle: &str) -> Result<Self> {
         if handle.is_empty() {
-            return Err(RocketMQError::deserialization_failed("RecallHandle", "handle is empty"));
+            return Err(crate::error::serialization_decode_failed(
+                "RecallHandle",
+                "handle is empty",
+            ));
         }
 
         let raw_bytes = URL_SAFE
             .decode(handle.as_bytes())
-            .map_err(|_| RocketMQError::deserialization_failed("RecallHandle", "invalid base64 encoding"))?;
+            .map_err(|source| crate::error::serialization_source("decode", "RecallHandle", source))?;
 
         let raw_string = String::from_utf8(raw_bytes)
-            .map_err(|_| RocketMQError::deserialization_failed("RecallHandle", "invalid UTF-8 encoding"))?;
+            .map_err(|source| crate::error::serialization_source("decode", "RecallHandle", source))?;
 
         let mut items: Vec<&str> = raw_string.split(SEPARATOR).collect();
         while items.len() > 1 && items.last().is_some_and(|item| item.is_empty()) {
@@ -72,7 +74,7 @@ impl RecallMessageHandle {
         }
 
         if items.is_empty() || items[0] != VERSION_1 || items.len() < 5 {
-            return Err(RocketMQError::deserialization_failed(
+            return Err(crate::error::serialization_decode_failed(
                 "RecallHandle",
                 format!(
                     "invalid format: expected 'v1 topic broker timestamp msgid', got {} parts",
@@ -243,7 +245,7 @@ mod tests {
         let result = RecallMessageHandle::decode_handle("");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("empty"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
     }
 
     #[test]
@@ -251,7 +253,8 @@ mod tests {
         let result = RecallMessageHandle::decode_handle("invalid base64!");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("base64") || err.to_string().contains("Decoding"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
+        assert!(std::error::Error::source(&err).is_some());
     }
 
     #[test]
@@ -260,7 +263,7 @@ mod tests {
         let result = RecallMessageHandle::decode_handle(&invalid_handle);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("invalid format") || err.to_string().contains("Decoding"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
     }
 
     #[test]
@@ -269,7 +272,7 @@ mod tests {
         let result = RecallMessageHandle::decode_handle(&invalid_handle);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("4 parts") || err.to_string().contains("invalid format"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
     }
 
     #[test]
@@ -278,7 +281,7 @@ mod tests {
         let result = RecallMessageHandle::decode_handle(&invalid_handle);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("4 parts") || err.to_string().contains("invalid format"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
     }
 
     #[test]

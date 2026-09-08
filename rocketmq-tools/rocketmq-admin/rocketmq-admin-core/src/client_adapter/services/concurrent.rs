@@ -19,7 +19,7 @@ use std::future::Future;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 
-use crate::client_adapter::services::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 /// Execute multiple async operations concurrently
 ///
@@ -33,9 +33,9 @@ use crate::client_adapter::services::RocketMQResult;
 ///     }
 /// })).await;
 /// ```
-pub async fn concurrent_query<F, T>(queries: impl Iterator<Item = F>) -> Vec<RocketMQResult<T>>
+pub async fn concurrent_query<F, T>(queries: impl Iterator<Item = F>) -> Vec<CanonicalResult<T>>
 where
-    F: Future<Output = RocketMQResult<T>>,
+    F: Future<Output = CanonicalResult<T>>,
 {
     let mut futures = queries.collect::<FuturesUnordered<_>>();
     let mut results = Vec::new();
@@ -53,9 +53,9 @@ where
 pub async fn concurrent_query_limited<F, T>(
     queries: impl Iterator<Item = F>,
     max_concurrent: usize,
-) -> Vec<RocketMQResult<T>>
+) -> Vec<CanonicalResult<T>>
 where
-    F: Future<Output = RocketMQResult<T>>,
+    F: Future<Output = CanonicalResult<T>>,
 {
     let mut futures = FuturesUnordered::new();
     let mut queries = queries.peekable();
@@ -86,9 +86,13 @@ where
 /// Batch process items with concurrent queries
 ///
 /// Splits items into batches and processes each batch concurrently.
-pub async fn batch_query<I, F, T>(items: Vec<I>, batch_size: usize, query_fn: impl Fn(I) -> F) -> Vec<RocketMQResult<T>>
+pub async fn batch_query<I, F, T>(
+    items: Vec<I>,
+    batch_size: usize,
+    query_fn: impl Fn(I) -> F,
+) -> Vec<CanonicalResult<T>>
 where
-    F: Future<Output = RocketMQResult<T>>,
+    F: Future<Output = CanonicalResult<T>>,
     I: Clone,
 {
     let mut all_results = Vec::new();

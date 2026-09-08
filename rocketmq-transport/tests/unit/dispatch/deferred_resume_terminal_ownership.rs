@@ -22,7 +22,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
@@ -182,7 +181,7 @@ async fn claimed_for_terminal_test(
     (claim, admission)
 }
 
-fn remoting_response() -> RocketMQResult<RemotingResponse> {
+fn remoting_response() -> Result<RemotingResponse, rocketmq_error::SharedError> {
     Ok(
         RemotingResponse::command(RemotingCommand::create_response_command_with_code(0))
             .expect("terminal ownership remoting response"),
@@ -259,12 +258,12 @@ async fn claimed_resume_handler_reenters_the_original_request_span() {
 }
 
 struct ReadyRetainedFuture {
-    output: Option<RocketMQResult<RemotingResponse>>,
+    output: Option<Result<RemotingResponse, rocketmq_error::SharedError>>,
     drops: Arc<AtomicUsize>,
 }
 
 impl Future for ReadyRetainedFuture {
-    type Output = RocketMQResult<RemotingResponse>;
+    type Output = Result<RemotingResponse, rocketmq_error::SharedError>;
 
     fn poll(mut self: Pin<&mut Self>, _context: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         std::task::Poll::Ready(self.output.take().expect("retained future is polled once"))
@@ -333,13 +332,13 @@ impl PublishedTerminalWinner {
 struct TerminalWinnerFuture {
     state: Arc<ResponseState>,
     winner: PublishedTerminalWinner,
-    output: Option<RocketMQResult<RemotingResponse>>,
+    output: Option<Result<RemotingResponse, rocketmq_error::SharedError>>,
     polls: Arc<AtomicUsize>,
     drops: Arc<AtomicUsize>,
 }
 
 impl Future for TerminalWinnerFuture {
-    type Output = RocketMQResult<RemotingResponse>;
+    type Output = Result<RemotingResponse, rocketmq_error::SharedError>;
 
     fn poll(mut self: Pin<&mut Self>, _context: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         let this = self.as_mut().get_mut();

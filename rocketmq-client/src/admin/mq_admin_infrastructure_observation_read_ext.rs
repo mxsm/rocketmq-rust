@@ -17,8 +17,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::ClientError;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_protocol::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
@@ -163,9 +163,9 @@ impl MQAdminInfrastructureObservationReadExt for DefaultMQAdminExt {
     }
 }
 
-fn sanitized_error(error: RocketMQError) -> InfrastructureObservationReadError {
-    let view = error.boundary_view();
-    let code = match view.http().status.as_u16() {
+fn sanitized_error(error: ClientError) -> InfrastructureObservationReadError {
+    let descriptor = error.descriptor();
+    let code = match descriptor.projection().http().status.as_u16() {
         401 | 403 => InfrastructureObservationReadErrorCode::PermissionDenied,
         404 => InfrastructureObservationReadErrorCode::NotFound,
         408 | 504 => InfrastructureObservationReadErrorCode::Timeout,
@@ -173,7 +173,14 @@ fn sanitized_error(error: RocketMQError) -> InfrastructureObservationReadError {
         400 | 413 | 422 => InfrastructureObservationReadErrorCode::InvalidResponse,
         _ => InfrastructureObservationReadErrorCode::SourceUnavailable,
     };
-    InfrastructureObservationReadError::new(code, view.is_retryable())
+    let retryable = matches!(
+        descriptor.recovery_hint(),
+        rocketmq_error::RecoveryHint::Backoff
+            | rocketmq_error::RecoveryHint::RefreshRoute
+            | rocketmq_error::RecoveryHint::RefreshLeader
+            | rocketmq_error::RecoveryHint::SwitchBroker
+    );
+    InfrastructureObservationReadError::new(code, retryable)
 }
 
 const fn invalid_response() -> InfrastructureObservationReadError {
@@ -190,7 +197,7 @@ mod tests {
 
     #[test]
     fn public_error_is_typed_and_never_retains_endpoint_detail() {
-        let error = sanitized_error(RocketMQError::Shared(Arc::new(Error::caused_by(
+        let error = sanitized_error(ClientError::from_shared(Arc::new(Error::caused_by(
             &TRANSPORT_CONNECTION_FAILED,
             std::io::Error::other("private-controller.internal:9878 at 10.23.45.67:10911"),
         ))));

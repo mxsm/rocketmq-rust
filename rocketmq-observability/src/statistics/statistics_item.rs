@@ -17,11 +17,28 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
+use rocketmq_error::Result;
+use thiserror::Error as ThisError;
 
 use crate::statistics::interceptor::Interceptor;
 use rocketmq_runtime::common::time_utils::current_millis;
+
+#[derive(Debug, ThisError)]
+enum StatisticsItemContractViolation {
+    #[error("statistics item names must not be empty")]
+    EmptyItemNames,
+    #[error("statistics items must have identical identities")]
+    IdentityMismatch,
+}
+
+#[track_caller]
+fn invalid_statistics_item(source: StatisticsItemContractViolation) -> Error {
+    Error::caused_by(&rocketmq_error::CORE_ARGUMENT_INVALID, source)
+        .with_context(ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT))
+}
 
 pub struct StatisticsItem {
     stat_kind: String,
@@ -34,9 +51,9 @@ pub struct StatisticsItem {
 }
 
 impl StatisticsItem {
-    pub fn new(stat_kind: &str, stat_object: &str, item_names: Vec<&str>) -> RocketMQResult<Self> {
+    pub fn new(stat_kind: &str, stat_object: &str, item_names: Vec<&str>) -> Result<Self> {
         if item_names.is_empty() {
-            return Err(RocketMQError::illegal_argument("StatisticsItem \"itemNames\" is empty"));
+            return Err(invalid_statistics_item(StatisticsItemContractViolation::EmptyItemNames));
         }
 
         Ok(Self::from_item_names(
@@ -139,13 +156,13 @@ impl StatisticsItem {
         }
     }
 
-    pub fn subtract(&self, item: &StatisticsItem) -> RocketMQResult<Self> {
+    pub fn subtract(&self, item: &StatisticsItem) -> Result<Self> {
         if self.stat_kind != item.stat_kind
             || self.stat_object != item.stat_object
             || self.item_names != item.item_names
         {
-            return Err(RocketMQError::illegal_argument(
-                "StatisticsItem's kind, key and itemNames must be exactly the same",
+            return Err(invalid_statistics_item(
+                StatisticsItemContractViolation::IdentityMismatch,
             ));
         }
 
@@ -207,7 +224,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(error.to_string().contains("StatisticsItem \"itemNames\" is empty"));
+        assert_eq!(error.code(), rocketmq_error::CORE_ARGUMENT_INVALID.code());
     }
 
     #[test]
@@ -261,9 +278,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(error
-            .to_string()
-            .contains("StatisticsItem's kind, key and itemNames must be exactly the same"));
+        assert_eq!(error.code(), rocketmq_error::CORE_ARGUMENT_INVALID.code());
     }
 
     #[test]

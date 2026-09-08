@@ -21,6 +21,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use rocketmq_client_rust::ClientError;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
@@ -30,7 +32,6 @@ use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
 use rocketmq_client_rust::TelemetryHandle;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -89,7 +90,7 @@ enum ProbeRunError {
     InvalidEnvironment { name: &'static str },
     InvalidProbe,
     InvalidProbeAcl,
-    RocketMq(rocketmq_error::RocketMQError),
+    RocketMq(ClientError),
     Timeout(tokio::time::error::Elapsed),
     Encoding(serde_json::Error),
     InvalidIdentity,
@@ -138,8 +139,8 @@ impl std::fmt::Debug for ProbeRunError {
     }
 }
 
-impl From<rocketmq_error::RocketMQError> for ProbeRunError {
-    fn from(source: rocketmq_error::RocketMQError) -> Self {
+impl From<ClientError> for ProbeRunError {
+    fn from(source: ClientError) -> Self {
         Self::RocketMq(source)
     }
 }
@@ -560,7 +561,7 @@ impl MessageListenerConcurrently for CountingListener {
         &self,
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         let matched = match &self.expected_key_prefix {
             Some(expected) => messages
                 .iter()

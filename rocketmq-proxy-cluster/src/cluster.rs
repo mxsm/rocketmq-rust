@@ -14,6 +14,7 @@
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -26,6 +27,7 @@ use rocketmq_client_rust::rpc_hook_from_outbound_signer;
 use rocketmq_client_rust::AckResult;
 use rocketmq_client_rust::AckStatus;
 use rocketmq_client_rust::ClientConfig as RocketmqClientConfig;
+use rocketmq_client_rust::ClientError;
 use rocketmq_client_rust::ClientInstanceHandle;
 use rocketmq_client_rust::ClientRpcHook;
 use rocketmq_client_rust::ClientRuntime;
@@ -35,7 +37,7 @@ use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::PopResult;
 use rocketmq_client_rust::PopStatus;
 use rocketmq_client_rust::TelemetryHandle;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
@@ -79,6 +81,7 @@ use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_protocol::rpc::topic_request_header::TopicRequestHeader;
+use rocketmq_proxy_core::error::canonical;
 use rocketmq_proxy_core::proto::v2;
 use rocketmq_proxy_core::status::ProxyStatusMapper;
 use rocketmq_proxy_core::AckMessageEntry;
@@ -236,7 +239,7 @@ pub trait ClusterClient: Send + Sync {
 
 #[async_trait]
 trait ClusterClientIo: Send + Sync {
-    async fn start(&self) -> Result<(), RocketMQError>;
+    async fn start(&self) -> Result<(), CanonicalError>;
 
     async fn shutdown(&self);
 
@@ -245,8 +248,8 @@ trait ClusterClientIo: Send + Sync {
         _broker_addr: &CheetahString,
         _request: RemotingCommand,
         _timeout_millis: u64,
-    ) -> Result<RemotingCommand, RocketMQError> {
-        Err(RocketMQError::IllegalArgument(
+    ) -> Result<RemotingCommand, CanonicalError> {
+        Err(canonical::argument(
             "raw Remoting invocation is unavailable for this Client adapter".to_owned(),
         ))
     }
@@ -256,25 +259,25 @@ trait ClusterClientIo: Send + Sync {
         _broker_addr: &CheetahString,
         _request: LiteSubscriptionDTO,
         _timeout_millis: u64,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), CanonicalError> {
         Ok(())
     }
 
-    async fn topic_route(&self, topic: &str, timeout_millis: u64) -> Result<Option<TopicRouteData>, RocketMQError>;
+    async fn topic_route(&self, topic: &str, timeout_millis: u64) -> Result<Option<TopicRouteData>, CanonicalError>;
 
     async fn lock_batch_mq(
         &self,
         broker_addr: &str,
         request: LockBatchRequestBody,
         timeout_millis: u64,
-    ) -> Result<std::collections::HashSet<MessageQueue>, RocketMQError>;
+    ) -> Result<std::collections::HashSet<MessageQueue>, CanonicalError>;
 
     async fn unlock_batch_mq(
         &self,
         broker_addr: &CheetahString,
         request: UnlockBatchRequestBody,
         timeout_millis: u64,
-    ) -> Result<(), RocketMQError>;
+    ) -> Result<(), CanonicalError>;
 
     #[allow(
         clippy::too_many_arguments,
@@ -289,7 +292,7 @@ trait ClusterClientIo: Send + Sync {
         strategy_name: CheetahString,
         message_model: MessageModel,
         timeout_millis: u64,
-    ) -> Result<Option<Vec<MessageQueueAssignment>>, RocketMQError>;
+    ) -> Result<Option<Vec<MessageQueueAssignment>>, CanonicalError>;
 
     async fn pop_message(
         &self,
@@ -297,21 +300,21 @@ trait ClusterClientIo: Send + Sync {
         broker_addr: &CheetahString,
         request: PopMessageRequestHeader,
         timeout_millis: u64,
-    ) -> Result<PopResult, RocketMQError>;
+    ) -> Result<PopResult, CanonicalError>;
 
     async fn ack_message(
         &self,
         broker_addr: &CheetahString,
         request: AckMessageRequestHeader,
         timeout_millis: u64,
-    ) -> Result<AckResult, RocketMQError>;
+    ) -> Result<AckResult, CanonicalError>;
 
     async fn batch_ack_message(
         &self,
         broker_addr: &CheetahString,
         request: BatchAckMessageRequestBody,
         timeout_millis: u64,
-    ) -> Result<AckResult, RocketMQError>;
+    ) -> Result<AckResult, CanonicalError>;
 
     async fn change_invisible_time(
         &self,
@@ -319,7 +322,7 @@ trait ClusterClientIo: Send + Sync {
         broker_addr: &CheetahString,
         request: ChangeInvisibleTimeRequestHeader,
         timeout_millis: u64,
-    ) -> Result<AckResult, RocketMQError>;
+    ) -> Result<AckResult, CanonicalError>;
 
     async fn end_transaction(
         &self,
@@ -327,7 +330,7 @@ trait ClusterClientIo: Send + Sync {
         request: EndTransactionRequestHeader,
         remark: CheetahString,
         timeout_millis: u64,
-    ) -> Result<(), RocketMQError>;
+    ) -> Result<(), CanonicalError>;
 
     async fn find_subscribe_broker_addr(
         &self,
@@ -345,7 +348,7 @@ trait ClusterClientIo: Send + Sync {
         broker_addr: &str,
         request: PullMessageRequestHeader,
         timeout_millis: u64,
-    ) -> Result<rocketmq_model::result::PullOutcome<MessageExt>, RocketMQError>;
+    ) -> Result<rocketmq_model::result::PullOutcome<MessageExt>, CanonicalError>;
 
     #[allow(clippy::too_many_arguments, reason = "mirrors the RocketMQ send-back wire contract")]
     async fn consumer_send_message_back(
@@ -357,35 +360,35 @@ trait ClusterClientIo: Send + Sync {
         delay_level: i32,
         timeout_millis: u64,
         max_consume_retry_times: i32,
-    ) -> Result<(), RocketMQError>;
+    ) -> Result<(), CanonicalError>;
 
     async fn update_consumer_offset(
         &self,
         broker_addr: &CheetahString,
         request: UpdateConsumerOffsetRequestHeader,
         timeout_millis: u64,
-    ) -> Result<(), RocketMQError>;
+    ) -> Result<(), CanonicalError>;
 
     async fn query_consumer_offset(
         &self,
         broker_addr: &str,
         request: QueryConsumerOffsetRequestHeader,
         timeout_millis: u64,
-    ) -> Result<i64, RocketMQError>;
+    ) -> Result<i64, CanonicalError>;
 
     async fn min_offset(
         &self,
         broker_addr: &str,
         queue: &MessageQueue,
         timeout_millis: u64,
-    ) -> Result<i64, RocketMQError>;
+    ) -> Result<i64, CanonicalError>;
 
     async fn max_offset(
         &self,
         broker_addr: &str,
         queue: &MessageQueue,
         timeout_millis: u64,
-    ) -> Result<i64, RocketMQError>;
+    ) -> Result<i64, CanonicalError>;
 
     async fn search_offset(
         &self,
@@ -394,37 +397,37 @@ trait ClusterClientIo: Send + Sync {
         timestamp: i64,
         boundary_type: BoundaryType,
         timeout_millis: u64,
-    ) -> Result<i64, RocketMQError>;
+    ) -> Result<i64, CanonicalError>;
 
     async fn topic_config(
         &self,
         broker_addr: &CheetahString,
         topic: CheetahString,
         timeout_millis: u64,
-    ) -> Result<rocketmq_model::topic::TopicConfig, RocketMQError>;
+    ) -> Result<rocketmq_model::topic::TopicConfig, CanonicalError>;
 
     async fn subscription_group_config(
         &self,
         broker_addr: &CheetahString,
         group: CheetahString,
         timeout_millis: u64,
-    ) -> Result<SubscriptionGroupConfig, RocketMQError>;
+    ) -> Result<SubscriptionGroupConfig, CanonicalError>;
 
-    async fn broker_cluster_info(&self, timeout_millis: u64) -> Result<ClusterInfo, RocketMQError>;
+    async fn broker_cluster_info(&self, timeout_millis: u64) -> Result<ClusterInfo, CanonicalError>;
 
     async fn user(
         &self,
         broker_addr: CheetahString,
         username: CheetahString,
         timeout_millis: u64,
-    ) -> Result<Option<UserInfo>, RocketMQError>;
+    ) -> Result<Option<UserInfo>, CanonicalError>;
 
     async fn acl(
         &self,
         broker_addr: CheetahString,
         subject: CheetahString,
         timeout_millis: u64,
-    ) -> Result<Option<AclInfo>, RocketMQError>;
+    ) -> Result<Option<AclInfo>, CanonicalError>;
 }
 
 trait ClusterClientFactory: Send + Sync {
@@ -434,7 +437,7 @@ trait ClusterClientFactory: Send + Sync {
         domain_id: u64,
         client_config: RocketmqClientConfig,
         rpc_hook: Option<Arc<ClientRpcHook>>,
-    ) -> Result<Arc<dyn ClusterClientIo>, RocketMQError>;
+    ) -> Result<Arc<dyn ClusterClientIo>, CanonicalError>;
 }
 
 struct DefaultClusterClientFactory;
@@ -446,8 +449,9 @@ impl ClusterClientFactory for DefaultClusterClientFactory {
         domain_id: u64,
         client_config: RocketmqClientConfig,
         rpc_hook: Option<Arc<ClientRpcHook>>,
-    ) -> Result<Arc<dyn ClusterClientIo>, RocketMQError> {
+    ) -> Result<Arc<dyn ClusterClientIo>, CanonicalError> {
         ClientInstanceHandle::get_or_create(client_runtime, domain_id, client_config, rpc_hook)
+            .map_err(ClientError::into_error)
             .map(|client| Arc::new(client) as Arc<dyn ClusterClientIo>)
     }
 }
@@ -465,15 +469,15 @@ impl ClusterClientFactory for StaticClusterClientFactory {
         _domain_id: u64,
         _client_config: RocketmqClientConfig,
         _rpc_hook: Option<Arc<ClientRpcHook>>,
-    ) -> Result<Arc<dyn ClusterClientIo>, RocketMQError> {
+    ) -> Result<Arc<dyn ClusterClientIo>, CanonicalError> {
         Ok(self.client.clone())
     }
 }
 
 #[async_trait]
 impl ClusterClientIo for ClientInstanceHandle {
-    async fn start(&self) -> Result<(), RocketMQError> {
-        ClientInstanceHandle::start(self).await
+    async fn start(&self) -> Result<(), CanonicalError> {
+        ClientInstanceHandle::start(self).await.map_err(ClientError::into_error)
     }
 
     async fn shutdown(&self) {
@@ -485,8 +489,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &CheetahString,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> Result<RemotingCommand, RocketMQError> {
-        ClientInstanceHandle::invoke_remoting(self, broker_addr, request, timeout_millis).await
+    ) -> Result<RemotingCommand, CanonicalError> {
+        ClientInstanceHandle::invoke_remoting(self, broker_addr, request, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn sync_lite_subscription(
@@ -494,12 +500,16 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &CheetahString,
         request: LiteSubscriptionDTO,
         timeout_millis: u64,
-    ) -> Result<(), RocketMQError> {
-        self.sync_lite_subscription(broker_addr, request, timeout_millis).await
+    ) -> Result<(), CanonicalError> {
+        self.sync_lite_subscription(broker_addr, request, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
-    async fn topic_route(&self, topic: &str, timeout_millis: u64) -> Result<Option<TopicRouteData>, RocketMQError> {
-        self.topic_route(topic, timeout_millis).await
+    async fn topic_route(&self, topic: &str, timeout_millis: u64) -> Result<Option<TopicRouteData>, CanonicalError> {
+        self.topic_route(topic, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn lock_batch_mq(
@@ -507,8 +517,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &str,
         request: LockBatchRequestBody,
         timeout_millis: u64,
-    ) -> Result<std::collections::HashSet<MessageQueue>, RocketMQError> {
-        self.lock_batch_mq(broker_addr, request, timeout_millis).await
+    ) -> Result<std::collections::HashSet<MessageQueue>, CanonicalError> {
+        self.lock_batch_mq(broker_addr, request, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn unlock_batch_mq(
@@ -516,8 +528,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &CheetahString,
         request: UnlockBatchRequestBody,
         timeout_millis: u64,
-    ) -> Result<(), RocketMQError> {
-        self.unlock_batch_mq(broker_addr, request, timeout_millis).await
+    ) -> Result<(), CanonicalError> {
+        self.unlock_batch_mq(broker_addr, request, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn query_assignment(
@@ -529,7 +543,7 @@ impl ClusterClientIo for ClientInstanceHandle {
         strategy_name: CheetahString,
         message_model: MessageModel,
         timeout_millis: u64,
-    ) -> Result<Option<Vec<MessageQueueAssignment>>, RocketMQError> {
+    ) -> Result<Option<Vec<MessageQueueAssignment>>, CanonicalError> {
         self.query_assignment(
             broker_addr,
             topic,
@@ -540,6 +554,7 @@ impl ClusterClientIo for ClientInstanceHandle {
             timeout_millis,
         )
         .await
+        .map_err(ClientError::into_error)
     }
 
     async fn pop_message(
@@ -548,9 +563,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &CheetahString,
         request: PopMessageRequestHeader,
         timeout_millis: u64,
-    ) -> Result<PopResult, RocketMQError> {
+    ) -> Result<PopResult, CanonicalError> {
         self.pop_message(broker_name, broker_addr, request, timeout_millis)
             .await
+            .map_err(ClientError::into_error)
     }
 
     async fn ack_message(
@@ -558,8 +574,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &CheetahString,
         request: AckMessageRequestHeader,
         timeout_millis: u64,
-    ) -> Result<AckResult, RocketMQError> {
-        self.ack_message(broker_addr, request, timeout_millis).await
+    ) -> Result<AckResult, CanonicalError> {
+        self.ack_message(broker_addr, request, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn batch_ack_message(
@@ -567,8 +585,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &CheetahString,
         request: BatchAckMessageRequestBody,
         timeout_millis: u64,
-    ) -> Result<AckResult, RocketMQError> {
-        self.batch_ack_message(broker_addr, request, timeout_millis).await
+    ) -> Result<AckResult, CanonicalError> {
+        self.batch_ack_message(broker_addr, request, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn change_invisible_time(
@@ -577,9 +597,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &CheetahString,
         request: ChangeInvisibleTimeRequestHeader,
         timeout_millis: u64,
-    ) -> Result<AckResult, RocketMQError> {
+    ) -> Result<AckResult, CanonicalError> {
         self.change_invisible_time(broker_name, broker_addr, request, timeout_millis)
             .await
+            .map_err(ClientError::into_error)
     }
 
     async fn end_transaction(
@@ -588,8 +609,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         request: EndTransactionRequestHeader,
         remark: CheetahString,
         timeout_millis: u64,
-    ) -> Result<(), RocketMQError> {
-        self.end_transaction(broker_addr, request, remark, timeout_millis).await
+    ) -> Result<(), CanonicalError> {
+        self.end_transaction(broker_addr, request, remark, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn find_subscribe_broker_addr(
@@ -615,9 +638,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &str,
         request: PullMessageRequestHeader,
         timeout_millis: u64,
-    ) -> Result<rocketmq_model::result::PullOutcome<MessageExt>, RocketMQError> {
+    ) -> Result<rocketmq_model::result::PullOutcome<MessageExt>, CanonicalError> {
         self.pull_outcome_from_broker(broker_addr, request, timeout_millis)
             .await
+            .map_err(ClientError::into_error)
     }
 
     async fn consumer_send_message_back(
@@ -629,7 +653,7 @@ impl ClusterClientIo for ClientInstanceHandle {
         delay_level: i32,
         timeout_millis: u64,
         max_consume_retry_times: i32,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), CanonicalError> {
         self.consumer_send_message_back(
             broker_addr,
             broker_name,
@@ -640,6 +664,7 @@ impl ClusterClientIo for ClientInstanceHandle {
             max_consume_retry_times,
         )
         .await
+        .map_err(ClientError::into_error)
     }
 
     async fn update_consumer_offset(
@@ -647,8 +672,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &CheetahString,
         request: UpdateConsumerOffsetRequestHeader,
         timeout_millis: u64,
-    ) -> Result<(), RocketMQError> {
-        self.update_consumer_offset(broker_addr, request, timeout_millis).await
+    ) -> Result<(), CanonicalError> {
+        self.update_consumer_offset(broker_addr, request, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn query_consumer_offset(
@@ -656,8 +683,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &str,
         request: QueryConsumerOffsetRequestHeader,
         timeout_millis: u64,
-    ) -> Result<i64, RocketMQError> {
-        self.query_consumer_offset(broker_addr, request, timeout_millis).await
+    ) -> Result<i64, CanonicalError> {
+        self.query_consumer_offset(broker_addr, request, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn min_offset(
@@ -665,8 +694,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &str,
         queue: &MessageQueue,
         timeout_millis: u64,
-    ) -> Result<i64, RocketMQError> {
-        self.min_offset(broker_addr, queue, timeout_millis).await
+    ) -> Result<i64, CanonicalError> {
+        self.min_offset(broker_addr, queue, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn max_offset(
@@ -674,8 +705,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &str,
         queue: &MessageQueue,
         timeout_millis: u64,
-    ) -> Result<i64, RocketMQError> {
-        self.max_offset(broker_addr, queue, timeout_millis).await
+    ) -> Result<i64, CanonicalError> {
+        self.max_offset(broker_addr, queue, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn search_offset(
@@ -685,9 +718,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         timestamp: i64,
         boundary_type: BoundaryType,
         timeout_millis: u64,
-    ) -> Result<i64, RocketMQError> {
+    ) -> Result<i64, CanonicalError> {
         self.search_offset(broker_addr, queue, timestamp, boundary_type, timeout_millis)
             .await
+            .map_err(ClientError::into_error)
     }
 
     async fn topic_config(
@@ -695,8 +729,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &CheetahString,
         topic: CheetahString,
         timeout_millis: u64,
-    ) -> Result<rocketmq_model::topic::TopicConfig, RocketMQError> {
-        self.topic_config(broker_addr, topic, timeout_millis).await
+    ) -> Result<rocketmq_model::topic::TopicConfig, CanonicalError> {
+        self.topic_config(broker_addr, topic, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn subscription_group_config(
@@ -704,12 +740,16 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: &CheetahString,
         group: CheetahString,
         timeout_millis: u64,
-    ) -> Result<SubscriptionGroupConfig, RocketMQError> {
-        self.subscription_group_config(broker_addr, group, timeout_millis).await
+    ) -> Result<SubscriptionGroupConfig, CanonicalError> {
+        self.subscription_group_config(broker_addr, group, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
-    async fn broker_cluster_info(&self, timeout_millis: u64) -> Result<ClusterInfo, RocketMQError> {
-        self.broker_cluster_info(timeout_millis).await
+    async fn broker_cluster_info(&self, timeout_millis: u64) -> Result<ClusterInfo, CanonicalError> {
+        self.broker_cluster_info(timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn user(
@@ -717,8 +757,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: CheetahString,
         username: CheetahString,
         timeout_millis: u64,
-    ) -> Result<Option<UserInfo>, RocketMQError> {
-        self.user(broker_addr, username, timeout_millis).await
+    ) -> Result<Option<UserInfo>, CanonicalError> {
+        self.user(broker_addr, username, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn acl(
@@ -726,8 +768,10 @@ impl ClusterClientIo for ClientInstanceHandle {
         broker_addr: CheetahString,
         subject: CheetahString,
         timeout_millis: u64,
-    ) -> Result<Option<AclInfo>, RocketMQError> {
-        self.acl(broker_addr, subject, timeout_millis).await
+    ) -> Result<Option<AclInfo>, CanonicalError> {
+        self.acl(broker_addr, subject, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 }
 
@@ -741,7 +785,7 @@ trait ClusterProducerIo: Send {
 
     fn producer_group(&self) -> CheetahString;
 
-    async fn start(&mut self) -> Result<(), RocketMQError>;
+    async fn start(&mut self) -> Result<(), CanonicalError>;
 
     async fn shutdown(&mut self);
 
@@ -749,27 +793,27 @@ trait ClusterProducerIo: Send {
         &mut self,
         topic: CheetahString,
         recall_handle: CheetahString,
-    ) -> Result<String, RocketMQError>;
+    ) -> Result<String, CanonicalError>;
 
-    async fn fetch_publish_message_queues(&mut self, topic: &str) -> Result<Vec<MessageQueue>, RocketMQError>;
+    async fn fetch_publish_message_queues(&mut self, topic: &str) -> Result<Vec<MessageQueue>, CanonicalError>;
 
-    async fn send(&mut self, message: Message, timeout_millis: u64) -> Result<Option<SendResult>, RocketMQError>;
+    async fn send(&mut self, message: Message, timeout_millis: u64) -> Result<Option<SendResult>, CanonicalError>;
 
     async fn send_to_queue(
         &mut self,
         message: Message,
         queue: MessageQueue,
         timeout_millis: u64,
-    ) -> Result<Option<SendResult>, RocketMQError>;
+    ) -> Result<Option<SendResult>, CanonicalError>;
 
-    async fn send_batch(&mut self, messages: Vec<Message>, timeout_millis: u64) -> Result<SendResult, RocketMQError>;
+    async fn send_batch(&mut self, messages: Vec<Message>, timeout_millis: u64) -> Result<SendResult, CanonicalError>;
 
     async fn send_batch_to_queue(
         &mut self,
         messages: Vec<Message>,
         queue: MessageQueue,
         timeout_millis: u64,
-    ) -> Result<SendResult, RocketMQError>;
+    ) -> Result<SendResult, CanonicalError>;
 }
 
 #[async_trait]
@@ -790,8 +834,8 @@ impl ClusterProducerIo for DefaultMQProducer {
         self.producer_group()
     }
 
-    async fn start(&mut self) -> Result<(), RocketMQError> {
-        self.start().await
+    async fn start(&mut self) -> Result<(), CanonicalError> {
+        self.start().await.map_err(ClientError::into_error)
     }
 
     async fn shutdown(&mut self) {
@@ -802,16 +846,22 @@ impl ClusterProducerIo for DefaultMQProducer {
         &mut self,
         topic: CheetahString,
         recall_handle: CheetahString,
-    ) -> Result<String, RocketMQError> {
-        self.recall_message(topic, recall_handle).await
+    ) -> Result<String, CanonicalError> {
+        self.recall_message(topic, recall_handle)
+            .await
+            .map_err(ClientError::into_error)
     }
 
-    async fn fetch_publish_message_queues(&mut self, topic: &str) -> Result<Vec<MessageQueue>, RocketMQError> {
-        self.fetch_publish_message_queues(topic).await
+    async fn fetch_publish_message_queues(&mut self, topic: &str) -> Result<Vec<MessageQueue>, CanonicalError> {
+        self.fetch_publish_message_queues(topic)
+            .await
+            .map_err(ClientError::into_error)
     }
 
-    async fn send(&mut self, message: Message, timeout_millis: u64) -> Result<Option<SendResult>, RocketMQError> {
-        self.send_with_timeout(message, timeout_millis).await
+    async fn send(&mut self, message: Message, timeout_millis: u64) -> Result<Option<SendResult>, CanonicalError> {
+        self.send_with_timeout(message, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn send_to_queue(
@@ -819,12 +869,16 @@ impl ClusterProducerIo for DefaultMQProducer {
         message: Message,
         queue: MessageQueue,
         timeout_millis: u64,
-    ) -> Result<Option<SendResult>, RocketMQError> {
-        self.send_to_queue_with_timeout(message, queue, timeout_millis).await
+    ) -> Result<Option<SendResult>, CanonicalError> {
+        self.send_to_queue_with_timeout(message, queue, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
-    async fn send_batch(&mut self, messages: Vec<Message>, timeout_millis: u64) -> Result<SendResult, RocketMQError> {
-        self.send_batch_with_timeout(messages, timeout_millis).await
+    async fn send_batch(&mut self, messages: Vec<Message>, timeout_millis: u64) -> Result<SendResult, CanonicalError> {
+        self.send_batch_with_timeout(messages, timeout_millis)
+            .await
+            .map_err(ClientError::into_error)
     }
 
     async fn send_batch_to_queue(
@@ -832,9 +886,10 @@ impl ClusterProducerIo for DefaultMQProducer {
         messages: Vec<Message>,
         queue: MessageQueue,
         timeout_millis: u64,
-    ) -> Result<SendResult, RocketMQError> {
+    ) -> Result<SendResult, CanonicalError> {
         self.send_batch_to_queue_with_timeout(messages, queue, timeout_millis)
             .await
+            .map_err(ClientError::into_error)
     }
 }
 
@@ -1452,8 +1507,8 @@ async fn handle_cluster_command(config: &ClusterConfig, state: &mut ClusterWorke
     }
 }
 
-fn proxy_client_result<T>(result: Result<T, RocketMQError>) -> ProxyResult<T> {
-    result.map_err(ProxyError::from)
+fn proxy_client_result<T>(result: Result<T, CanonicalError>) -> ProxyResult<T> {
+    result.map_err(ProxyError::from_client_error)
 }
 
 async fn forward_remoting_inner(
@@ -1468,9 +1523,7 @@ async fn forward_remoting_inner(
     let broker_addr = client
         .find_subscribe_broker_addr(&broker_name, MASTER_ID, true)
         .await
-        .ok_or_else(|| RocketMQError::BrokerNotFound {
-            name: broker_name.to_string(),
-        })?;
+        .ok_or_else(|| canonical::broker_not_found(&broker_name))?;
     proxy_client_result(
         client
             .invoke_remoting(&broker_addr, request, timeout_millis.max(1))
@@ -1594,9 +1647,7 @@ async fn resolve_remoting_broker_addr(
             .await;
     }
     result
-        .ok_or_else(|| RocketMQError::BrokerNotFound {
-            name: broker_name.to_string(),
-        })
+        .ok_or_else(|| canonical::broker_not_found(&broker_name))
         .map_err(Into::into)
 }
 
@@ -1621,9 +1672,8 @@ async fn query_assignment_inner(
     let group_name = group.to_string();
     let client = state.client(config).await?;
     let route = fetch_topic_route(client.as_ref(), config, state, topic_name.as_str()).await?;
-    let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
-        name: topic_name.clone(),
-    })?;
+    let broker_addr =
+        select_master_broker_addr(&route).ok_or_else(|| canonical::broker_not_found(topic_name.clone()))?;
     client
         .query_assignment(
             &broker_addr,
@@ -1650,9 +1700,8 @@ async fn query_topic_message_type_inner(
 
     let client = state.client(config).await?;
     let route = fetch_topic_route(client.as_ref(), config, state, topic_name.as_str()).await?;
-    let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
-        name: topic_name.clone(),
-    })?;
+    let broker_addr =
+        select_master_broker_addr(&route).ok_or_else(|| canonical::broker_not_found(topic_name.clone()))?;
     let topic_config = client
         .topic_config(
             &broker_addr,
@@ -1785,7 +1834,7 @@ async fn sync_lite_subscription_inner(
     let route = fetch_topic_route(client.as_ref(), config, state, topic.as_str()).await?;
     let broker_addrs = master_broker_addrs(&route);
     if broker_addrs.is_empty() {
-        return Err(RocketMQError::BrokerNotFound { name: topic }.into());
+        return Err(canonical::broker_not_found(topic).into());
     }
     for broker_addr in broker_addrs {
         client
@@ -1840,7 +1889,7 @@ async fn send_compatible_batch(
     match result {
         Ok(result) => split_batch_send_result(result, &entries),
         Err(error) => {
-            let error = ProxyError::from(error);
+            let error = ProxyError::from_client_error(error);
             entries.iter().map(|_| failure_send_result_entry(&error)).collect()
         }
     }
@@ -1893,7 +1942,7 @@ async fn recall_message_inner(
     let message_id = producer
         .recall_message(topic, CheetahString::from(request.recall_handle))
         .await
-        .map_err(ProxyError::from)?;
+        .map_err(ProxyError::from_client_error)?;
 
     Ok(RecallMessagePlan {
         status: ProxyStatusMapper::ok_payload(),
@@ -1935,7 +1984,7 @@ async fn acquire_send_producer<'a>(
                 producer.shutdown().await;
             }
             state.send_producers.remove(producer_group);
-            return Err(ProxyError::from(error));
+            return Err(ProxyError::from_client_error(error));
         }
     }
 
@@ -2095,9 +2144,7 @@ async fn ack_message_inner(
                     .await;
             let broker_addr = find_subscribe_broker_addr(client.as_ref(), &actual_broker_name, &route_topic)
                 .await
-                .ok_or_else(|| RocketMQError::BrokerNotFound {
-                    name: actual_broker_name.to_string(),
-                })?;
+                .ok_or_else(|| canonical::broker_not_found(&actual_broker_name))?;
             client
                 .batch_ack_message(&broker_addr, batch_request.body, timeout_ms)
                 .await
@@ -2172,9 +2219,7 @@ async fn forward_message_to_dead_letter_queue_inner(
         resolve_subscription_broker_name(client.as_ref(), &parsed.topic, &parsed.broker_name, parsed.queue_id).await;
     let broker_addr = find_subscribe_broker_addr(client.as_ref(), &actual_broker_name, &parsed.topic)
         .await
-        .ok_or_else(|| RocketMQError::BrokerNotFound {
-            name: actual_broker_name.to_string(),
-        })?;
+        .ok_or_else(|| canonical::broker_not_found(&actual_broker_name))?;
     let message = build_dead_letter_message(&request, &parsed, &actual_broker_name)?;
 
     client
@@ -2346,7 +2391,7 @@ async fn fetch_topic_route(
     }
 
     let route = proxy_client_result(client.topic_route(topic_name, config.mq_client_api_timeout_ms).await)?
-        .ok_or_else(|| RocketMQError::route_not_found(topic_name.to_owned()))?;
+        .ok_or_else(|| canonical::route_not_found(topic_name))?;
     state.cache_route(topic_name.to_owned(), route.clone(), config.route_cache_ttl());
     Ok(route)
 }
@@ -2356,12 +2401,8 @@ async fn fetch_auth_metadata_broker_addr(
     config: &ClusterConfig,
 ) -> ProxyResult<CheetahString> {
     let cluster_info = client.broker_cluster_info(config.mq_client_api_timeout_ms).await?;
-    select_auth_metadata_broker_addr(&cluster_info, config.broker_cluster_name.as_str()).ok_or_else(|| {
-        RocketMQError::BrokerNotFound {
-            name: config.broker_cluster_name.clone(),
-        }
-        .into()
-    })
+    select_auth_metadata_broker_addr(&cluster_info, config.broker_cluster_name.as_str())
+        .ok_or_else(|| canonical::broker_not_found(config.broker_cluster_name.clone()).into())
 }
 
 fn select_auth_metadata_broker_addr(cluster_info: &ClusterInfo, cluster_name: &str) -> Option<CheetahString> {
@@ -2448,9 +2489,7 @@ async fn resolve_broker_target(
     }
 
     let route = fetch_topic_route(client, config, state, topic_name.as_str()).await?;
-    let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
-        name: topic_name.to_string(),
-    })?;
+    let broker_addr = select_master_broker_addr(&route).ok_or_else(|| canonical::broker_not_found(&topic_name))?;
     let broker_name = route
         .broker_datas
         .iter()
@@ -2483,9 +2522,7 @@ async fn ack_message_entry_inner(
         resolve_subscription_broker_name(client, &parsed.topic, &parsed.broker_name, parsed.queue_id).await;
     let broker_addr = find_subscribe_broker_addr(client, &actual_broker_name, &parsed.topic)
         .await
-        .ok_or_else(|| RocketMQError::BrokerNotFound {
-            name: actual_broker_name.to_string(),
-        })?;
+        .ok_or_else(|| canonical::broker_not_found(&actual_broker_name))?;
     let request_header = AckMessageRequestHeader {
         consumer_group: CheetahString::from(group.to_string()),
         topic: parsed.topic.clone(),
@@ -2525,9 +2562,7 @@ async fn change_invisible_duration_inner(
         resolve_subscription_broker_name(client, &parsed.topic, &parsed.broker_name, parsed.queue_id).await;
     let broker_addr = find_subscribe_broker_addr(client, &actual_broker_name, &parsed.topic)
         .await
-        .ok_or_else(|| RocketMQError::BrokerNotFound {
-            name: actual_broker_name.to_string(),
-        })?;
+        .ok_or_else(|| canonical::broker_not_found(&actual_broker_name))?;
     let request_header = ChangeInvisibleTimeRequestHeader {
         consumer_group: CheetahString::from(request.group.to_string()),
         topic: parsed.topic.clone(),
@@ -2581,9 +2616,8 @@ async fn end_transaction_inner(
 ) -> ProxyResult<EndTransactionPlan> {
     let topic_name = request.topic.to_string();
     let route = fetch_topic_route(client, config, state, topic_name.as_str()).await?;
-    let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
-        name: topic_name.clone(),
-    })?;
+    let broker_addr =
+        select_master_broker_addr(&route).ok_or_else(|| canonical::broker_not_found(topic_name.clone()))?;
     let producer_group = request
         .producer_group
         .clone()
@@ -2831,14 +2865,14 @@ fn parse_receipt_handle(receipt_handle: &str, topic: &str, consumer_group: &str)
     let parts = ExtraInfoUtil::split(trimmed);
     let broker_name = ExtraInfoUtil::get_broker_name(parts.as_slice())
         .map(CheetahString::from_string)
-        .map_err(|error| ProxyError::invalid_receipt_handle(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::receipt_handle_invalid_with_source(error)))?;
     let queue_id = ExtraInfoUtil::get_queue_id(parts.as_slice())
-        .map_err(|error| ProxyError::invalid_receipt_handle(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::receipt_handle_invalid_with_source(error)))?;
     let queue_offset = ExtraInfoUtil::get_queue_offset(parts.as_slice())
-        .map_err(|error| ProxyError::invalid_receipt_handle(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::receipt_handle_invalid_with_source(error)))?;
     let real_topic = ExtraInfoUtil::get_real_topic(parts.as_slice(), topic, consumer_group)
         .map(CheetahString::from_string)
-        .map_err(|error| ProxyError::invalid_receipt_handle(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::receipt_handle_invalid_with_source(error)))?;
 
     Ok(ParsedReceiptHandle {
         raw: CheetahString::from(trimmed),
@@ -2949,18 +2983,9 @@ async fn resolve_target_queue(
         .map(Some)
         .ok_or_else(|| {
             if max_queue_id >= 0 {
-                RocketMQError::QueueIdOutOfRange {
-                    topic: entry.topic.to_string(),
-                    queue_id,
-                    max: max_queue_id,
-                }
-                .into()
+                canonical::queue_id_out_of_range(entry.topic.to_string(), queue_id, max_queue_id).into()
             } else {
-                RocketMQError::QueueNotExist {
-                    topic: entry.topic.to_string(),
-                    queue_id,
-                }
-                .into()
+                canonical::queue_not_found(entry.topic.to_string(), queue_id).into()
             }
         })
 }
@@ -3020,14 +3045,27 @@ fn transaction_resolution_flag(resolution: TransactionResolution) -> i32 {
 
 fn decode_end_transaction_message_id(message_id: &str) -> ProxyResult<MessageId> {
     MessageDecoder::decode_message_id(&CheetahString::from(message_id)).map_err(|error| {
-        ProxyError::invalid_transaction_id(format!("failed to decode transactional message id: {error}"))
+        ProxyError::from(canonical::transaction_id_invalid_with_source(MessageIdDecodeError(
+            error,
+        )))
     })
 }
 
 fn decode_broker_message_id(message_id: &str) -> ProxyResult<MessageId> {
     MessageDecoder::decode_message_id(&CheetahString::from(message_id))
-        .map_err(|error| ProxyError::illegal_message_id(format!("failed to decode broker message id: {error}")))
+        .map_err(|error| ProxyError::from(canonical::message_id_invalid_with_source(MessageIdDecodeError(error))))
 }
+
+#[derive(Debug)]
+struct MessageIdDecodeError(String);
+
+impl fmt::Display for MessageIdDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for MessageIdDecodeError {}
 
 fn effective_send_timeout_ms(config: &ClusterConfig, deadline: Option<Duration>) -> u64 {
     effective_request_timeout_ms(config.send_message_timeout_ms, deadline)
@@ -3104,7 +3142,7 @@ mod tests {
     use std::time::Instant;
 
     use cheetah_string::CheetahString;
-    use rocketmq_error::RocketMQError;
+    use rocketmq_error::Error as CanonicalError;
     use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
     use rocketmq_model::common::message::MessageConst;
     use rocketmq_model::result::SendResult;
@@ -3114,6 +3152,7 @@ mod tests {
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+    use rocketmq_proxy_core::error::canonical;
     use rocketmq_proxy_core::AckMessageRequest;
     use rocketmq_proxy_core::MessageQueueTarget;
     use rocketmq_proxy_core::ProxyMessage;
@@ -3131,6 +3170,8 @@ mod tests {
     use super::compatible_batch_entries;
     use super::convert_subscription_group;
     use super::convert_topic_message_type;
+    use super::decode_broker_message_id;
+    use super::decode_end_transaction_message_id;
     use super::master_broker_addrs;
     use super::run_cluster_lane;
     use super::select_auth_metadata_broker_addr;
@@ -3144,6 +3185,7 @@ mod tests {
     use super::ClusterExecutionPolicy;
     use super::ClusterTaskExecutor;
     use super::ClusterWorkerState;
+    use super::MessageIdDecodeError;
     use super::RocketmqClusterClient;
     use super::TelemetryHandle;
     use crate::cluster::cluster_admission::ClusterCommandClass;
@@ -3162,6 +3204,28 @@ mod tests {
     }
 
     #[test]
+    fn message_id_decode_failures_keep_typed_sources() {
+        let cases = [
+            (
+                decode_broker_message_id("not-a-message-id"),
+                &rocketmq_error::PROXY_MESSAGE_ID_INVALID,
+            ),
+            (
+                decode_end_transaction_message_id("not-a-message-id"),
+                &rocketmq_error::PROXY_TRANSACTION_ID_INVALID,
+            ),
+        ];
+
+        for (result, descriptor) in cases {
+            let error = result.expect_err("invalid message id must fail");
+            assert_eq!(error.descriptor(), descriptor);
+            let canonical = std::error::Error::source(&error).expect("Proxy error keeps canonical source");
+            let decoder = canonical.source().expect("canonical error keeps decoder source");
+            assert!(decoder.downcast_ref::<MessageIdDecodeError>().is_some());
+        }
+    }
+
+    #[test]
     fn compatible_normal_entries_form_one_broker_batch() {
         let entries = vec![batch_entry("a"), batch_entry("b")];
         assert!(compatible_batch_entries(&entries));
@@ -3175,9 +3239,10 @@ mod tests {
 
     #[test]
     fn cluster_result_conversion_normalizes_failures_and_preserves_forwarded_commands() {
-        let error = super::proxy_client_result::<()>(Err(RocketMQError::broker_operation_failed(
+        let error = super::proxy_client_result::<()>(Err(canonical::broker_operation(
             "cluster broker request",
             rocketmq_protocol::code::response_code::ResponseCode::TopicNotExist.to_i32(),
+            None,
             "token=secret\r\nC:\\private\\broker.log",
         )))
         .expect_err("Broker failure must enter the Proxy normalizer");
@@ -3186,7 +3251,7 @@ mod tests {
         };
         assert_eq!(error.descriptor(), &rocketmq_error::PROXY_BROKER_TOPIC_NOT_FOUND);
         assert!(std::error::Error::source(&error)
-            .and_then(|source| source.downcast_ref::<RocketMQError>())
+            .and_then(|source| source.downcast_ref::<CanonicalError>())
             .is_some());
         assert_eq!(
             error.public_view().expect("public view").message(),
@@ -3206,7 +3271,7 @@ mod tests {
             .set_body(vec![1_u8, 2, 3]);
         command.add_ext_field("owner", "broker-a");
 
-        let forwarded = super::proxy_client_result(Ok::<_, RocketMQError>(command)).expect("forwarded command");
+        let forwarded = super::proxy_client_result(Ok::<_, CanonicalError>(command)).expect("forwarded command");
         assert_eq!(
             rocketmq_protocol::code::response_code::ResponseCode::from(forwarded.code()),
             rocketmq_protocol::code::response_code::ResponseCode::PolicyNotExist
@@ -3738,13 +3803,7 @@ mod tests {
             .await
             .expect("expiry response")
             .expect_err("expired command must not execute");
-        assert!(matches!(
-            error,
-            ProxyError::RocketMQ(RocketMQError::Timeout {
-                operation: "proxy cluster command queue",
-                timeout_ms: 1
-            })
-        ));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_OPERATION_TIMED_OUT);
     }
 
     #[tokio::test]

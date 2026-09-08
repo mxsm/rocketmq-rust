@@ -19,10 +19,10 @@ pub(crate) mod pop;
 use std::fs::File;
 use std::sync::Arc;
 
+use crate::broker_error::BrokerResult as Result;
 use bytes::Bytes;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_store::FileRangeTransferHandle;
@@ -60,9 +60,9 @@ pub(crate) enum BrokerResponseBuildError {
     ResponseConstruction(#[from] TransportContractViolation),
 }
 
-impl From<BrokerResponseBuildError> for RocketMQError {
+impl From<BrokerResponseBuildError> for SharedError {
     fn from(error: BrokerResponseBuildError) -> Self {
-        Self::internal("broker-response-assembly", error)
+        crate::broker_error::internal("broker-response-assembly", error)
     }
 }
 
@@ -87,25 +87,28 @@ impl BrokerResponseParts {
     /// Splits a response command into the body-free head and affine byte owner required by the
     /// response contract. This prevents each leaf from open-coding body extraction or
     /// accidentally placing a body-bearing head in a [`RemotingResponse`].
-    pub(crate) fn from_command(mut command: RemotingCommand) -> Result<Self, BrokerResponseBuildError> {
+    pub(crate) fn from_command(mut command: RemotingCommand) -> std::result::Result<Self, BrokerResponseBuildError> {
         match command.take_body() {
             Some(body) => Self::bytes(command, body),
             None => Self::command(command),
         }
     }
 
-    pub(crate) fn command(head: RemotingCommand) -> Result<Self, BrokerResponseBuildError> {
+    pub(crate) fn command(head: RemotingCommand) -> std::result::Result<Self, BrokerResponseBuildError> {
         Self::new(head, BrokerResponseBodyOwner::Empty)
     }
 
-    pub(crate) fn bytes(head: RemotingCommand, body: Bytes) -> Result<Self, BrokerResponseBuildError> {
+    pub(crate) fn bytes(head: RemotingCommand, body: Bytes) -> std::result::Result<Self, BrokerResponseBuildError> {
         if body.is_empty() {
             return Self::command(head);
         }
         Self::new(head, BrokerResponseBodyOwner::Bytes(body))
     }
 
-    pub(crate) fn segments(head: RemotingCommand, body_segments: Vec<Bytes>) -> Result<Self, BrokerResponseBuildError> {
+    pub(crate) fn segments(
+        head: RemotingCommand,
+        body_segments: Vec<Bytes>,
+    ) -> std::result::Result<Self, BrokerResponseBuildError> {
         if body_segments.iter().all(Bytes::is_empty) {
             return Self::command(head);
         }
@@ -115,17 +118,20 @@ impl BrokerResponseParts {
     pub(crate) fn file_regions(
         head: RemotingCommand,
         regions: FileRegionSequence,
-    ) -> Result<Self, BrokerResponseBuildError> {
+    ) -> std::result::Result<Self, BrokerResponseBuildError> {
         Self::new(head, BrokerResponseBodyOwner::FileRegions(regions))
     }
 
-    fn new(head: RemotingCommand, body: BrokerResponseBodyOwner) -> Result<Self, BrokerResponseBuildError> {
+    fn new(
+        head: RemotingCommand,
+        body: BrokerResponseBodyOwner,
+    ) -> std::result::Result<Self, BrokerResponseBuildError> {
         validate_head(&head)?;
         validate_body(&body)?;
         Ok(Self { head, body })
     }
 
-    pub(crate) fn into_remoting_response(self) -> RocketMQResult<RemotingResponse> {
+    pub(crate) fn into_remoting_response(self) -> Result<RemotingResponse> {
         let result = match self.body {
             BrokerResponseBodyOwner::Empty => RemotingResponse::command(self.head),
             BrokerResponseBodyOwner::Bytes(body) => RemotingResponse::bytes(self.head, body),
@@ -135,7 +141,7 @@ impl BrokerResponseParts {
         result.map_err(|error| BrokerResponseBuildError::ResponseConstruction(error).into())
     }
 
-    pub(crate) fn into_handler_outcome(self) -> RocketMQResult<HandlerOutcome> {
+    pub(crate) fn into_handler_outcome(self) -> Result<HandlerOutcome> {
         self.into_remoting_response().map(HandlerOutcome::Reply)
     }
 
@@ -149,16 +155,16 @@ impl BrokerResponseParts {
 /// Broker-owned wire factory for typed request-header failures.
 pub(crate) fn immediate_outcome_from_command_result(
     command_factory: &RemotingCommandFactory,
-    result: RocketMQResult<Option<RemotingCommand>>,
+    result: Result<Option<RemotingCommand>>,
     original_opaque: i32,
     missing_response: &'static str,
-) -> RocketMQResult<HandlerOutcome> {
+) -> Result<HandlerOutcome> {
     let command = match result {
         Ok(Some(command)) => command,
-        Ok(None) => return Err(RocketMQError::invariant_violated(missing_response)),
+        Ok(None) => return Err(crate::broker_error::invariant_violated(missing_response)),
         Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
             let context = error.context();
-            let view = PublicErrorView::try_new(error.descriptor(), &context)
+            let view = PublicErrorView::try_new(error.descriptor(), context)
                 .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
             error_response(
                 view,
@@ -173,7 +179,7 @@ pub(crate) fn immediate_outcome_from_command_result(
     BrokerResponseParts::from_command(command)?.into_handler_outcome()
 }
 
-fn validate_head(head: &RemotingCommand) -> Result<(), BrokerResponseBuildError> {
+fn validate_head(head: &RemotingCommand) -> std::result::Result<(), BrokerResponseBuildError> {
     if head.body().is_some() {
         return Err(TransportContractViolation::response_head_has_body().into());
     }
@@ -186,7 +192,7 @@ fn validate_head(head: &RemotingCommand) -> Result<(), BrokerResponseBuildError>
     Ok(())
 }
 
-fn validate_body(body: &BrokerResponseBodyOwner) -> Result<(), BrokerResponseBuildError> {
+fn validate_body(body: &BrokerResponseBodyOwner) -> std::result::Result<(), BrokerResponseBuildError> {
     match body {
         BrokerResponseBodyOwner::Empty => Ok(()),
         BrokerResponseBodyOwner::Bytes(body) => checked_body_len([body.len() as u64]).map(|_| ()),
@@ -197,7 +203,7 @@ fn validate_body(body: &BrokerResponseBodyOwner) -> Result<(), BrokerResponseBui
     }
 }
 
-fn checked_body_len(lengths: impl IntoIterator<Item = u64>) -> Result<usize, BrokerResponseBuildError> {
+fn checked_body_len(lengths: impl IntoIterator<Item = u64>) -> std::result::Result<usize, BrokerResponseBuildError> {
     let mut body_len = 0_u64;
     for len in lengths {
         body_len = body_len
@@ -271,7 +277,7 @@ pub(crate) fn store_body_segments(selections: Vec<SelectMappedBufferResult>) -> 
 pub(crate) fn store_response_parts(
     head: RemotingCommand,
     selections: Vec<SelectMappedBufferResult>,
-) -> Result<BrokerResponseParts, BrokerResponseBuildError> {
+) -> std::result::Result<BrokerResponseParts, BrokerResponseBuildError> {
     store_response_parts_with(
         head,
         selections,
@@ -285,7 +291,7 @@ fn store_response_parts_with<Available, Lease>(
     selections: Vec<SelectMappedBufferResult>,
     available: Available,
     lease: Lease,
-) -> Result<BrokerResponseParts, BrokerResponseBuildError>
+) -> std::result::Result<BrokerResponseParts, BrokerResponseBuildError>
 where
     Available: FnMut(usize, StoreFileRegionStage) -> bool,
     Lease: FnMut(FileRangeTransferHandle) -> Arc<dyn FileRegionLease>,

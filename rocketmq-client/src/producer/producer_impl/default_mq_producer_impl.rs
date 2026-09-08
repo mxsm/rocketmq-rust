@@ -29,13 +29,13 @@ use arc_swap::ArcSwap;
 use parking_lot::Mutex as ParkingLotMutex;
 use parking_lot::RwLock as ParkingLotRwLock;
 
+use crate::ClientError;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rand::random;
 use rocketmq_error::fields;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::base::service_state::ServiceState;
 use rocketmq_model::common::compression::compression_type::CompressionType;
 use rocketmq_model::common::message::message_accessor::MessageAccessor;
@@ -284,7 +284,7 @@ impl SendContext {
 struct RetryState {
     times_total: u32,
     brokers_sent: Vec<String>,
-    last_error: Option<rocketmq_error::RocketMQError>,
+    last_error: Option<crate::ClientError>,
     last_send_result: Option<SendResult>,
 }
 
@@ -304,11 +304,11 @@ impl RetryState {
         }
     }
 
-    fn set_error(&mut self, error: rocketmq_error::RocketMQError) {
+    fn set_error(&mut self, error: crate::ClientError) {
         self.last_error = Some(error);
     }
 
-    fn take_last_error(&mut self) -> Option<rocketmq_error::RocketMQError> {
+    fn take_last_error(&mut self) -> Option<crate::ClientError> {
         self.last_error.take()
     }
 
@@ -320,7 +320,7 @@ impl RetryState {
         self.last_send_result.take()
     }
 
-    fn take_failure_error(&mut self, topic: &CheetahString, elapsed_ms: u128) -> rocketmq_error::RocketMQError {
+    fn take_failure_error(&mut self, topic: &CheetahString, elapsed_ms: u128) -> crate::ClientError {
         if let Some(error) = self.last_error.take() {
             return error;
         }
@@ -338,27 +338,27 @@ impl RetryState {
     }
 }
 
-pub(crate) fn producer_retry_input_error(input: RetryInput, remote_addr: Option<&CheetahString>) -> RocketMQError {
+pub(crate) fn producer_retry_input_error(input: RetryInput, remote_addr: Option<&CheetahString>) -> ClientError {
     match input {
-        RetryInput::Transport(error) => RocketMQError::Shared(error.into_shared_error()),
+        RetryInput::Transport(error) => ClientError::from_shared(error.into_shared_error()),
         RetryInput::Rejected(rejection) => match rejection.reason() {
             OutboundRequestRejectionReason::DeadlineExpired => {
                 let mut context = ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "producer_send");
                 if let Some(timeout_millis) = rejection.timeout_millis() {
                     context = context.with_u64(fields::TIMEOUT_MS, timeout_millis);
                 }
-                RocketMQError::Shared(Arc::new(
+                ClientError::from_shared(Arc::new(
                     Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT).with_context(context),
                 ))
             }
             OutboundRequestRejectionReason::ClientStopping => {
-                RocketMQError::Shared(Arc::new(Error::new(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED)))
+                ClientError::from_shared(Arc::new(Error::new(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED)))
             }
             OutboundRequestRejectionReason::QueueSaturated => {
                 let context = remote_addr.map_or_else(ErrorContext::new, |addr| {
                     ErrorContext::new().with_text(fields::REMOTE_ADDR, addr.as_str())
                 });
-                RocketMQError::Shared(Arc::new(
+                ClientError::from_shared(Arc::new(
                     Error::new(&rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED).with_context(context),
                 ))
             }
@@ -385,19 +385,19 @@ pub(crate) fn producer_retry_input_error(input: RetryInput, remote_addr: Option<
     }
 }
 
-fn producer_retry_hook_error(input: &RetryInput) -> Arc<RocketMQError> {
+fn producer_retry_hook_error(input: &RetryInput) -> Arc<ClientError> {
     match input {
-        RetryInput::Transport(error) => Arc::new(RocketMQError::Shared(Arc::clone(error.shared_error()))),
+        RetryInput::Transport(error) => Arc::new(ClientError::from_shared(Arc::clone(error.shared_error()))),
         _ => DefaultMQProducerImpl::context_error("send failed".to_string()),
     }
 }
 
-fn producer_connection_error(phase: &'static str, remote_addr_present: bool) -> RocketMQError {
+fn producer_connection_error(phase: &'static str, remote_addr_present: bool) -> ClientError {
     let mut context = ErrorContext::new().with_text(fields::PHASE, phase);
     if remote_addr_present {
         context = context.with_secret_presence(fields::REMOTE_ADDR_PRESENT);
     }
-    RocketMQError::Shared(Arc::new(
+    ClientError::from_shared(Arc::new(
         Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED).with_context(context),
     ))
 }

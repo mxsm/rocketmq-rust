@@ -21,7 +21,6 @@ use std::sync::atomic::Ordering;
 
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rocketmq_error::SerializationError;
 use serde::ser::SerializeStruct;
 use serde::Deserialize;
 use serde::Serialize;
@@ -213,39 +212,39 @@ impl Display for DataVersion {
 }
 
 pub trait RemotingSerializable {
-    fn encode(&self) -> rocketmq_error::RocketMQResult<Vec<u8>>;
-    fn serialize_json(&self) -> rocketmq_error::RocketMQResult<String>;
-    fn serialize_json_pretty(&self) -> rocketmq_error::RocketMQResult<String>;
+    fn encode(&self) -> rocketmq_error::Result<Vec<u8>>;
+    fn serialize_json(&self) -> rocketmq_error::Result<String>;
+    fn serialize_json_pretty(&self) -> rocketmq_error::Result<String>;
 }
 
 pub trait RemotingDeserializable {
     type Output;
-    fn decode(bytes: &[u8]) -> rocketmq_error::RocketMQResult<Self::Output>;
-    fn decode_str(value: &str) -> rocketmq_error::RocketMQResult<Self::Output> {
+    fn decode(bytes: &[u8]) -> rocketmq_error::Result<Self::Output>;
+    fn decode_str(value: &str) -> rocketmq_error::Result<Self::Output> {
         Self::decode(value.as_bytes())
     }
-    fn decode_string(value: String) -> rocketmq_error::RocketMQResult<Self::Output> {
+    fn decode_string(value: String) -> rocketmq_error::Result<Self::Output> {
         Self::decode_str(&value)
     }
 }
 
 impl<T: Serialize> RemotingSerializable for T {
-    fn encode(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
-        Ok(serde_json::to_vec(self).map_err(|error| SerializationError::source("serialize", "JSON", error))?)
+    fn encode(&self) -> rocketmq_error::Result<Vec<u8>> {
+        serde_json::to_vec(self).map_err(|error| crate::error::serialization_source("serialize", "JSON", error))
     }
-    fn serialize_json(&self) -> rocketmq_error::RocketMQResult<String> {
-        Ok(serde_json::to_string(self).map_err(|error| SerializationError::source("serialize", "JSON", error))?)
+    fn serialize_json(&self) -> rocketmq_error::Result<String> {
+        serde_json::to_string(self).map_err(|error| crate::error::serialization_source("serialize", "JSON", error))
     }
-    fn serialize_json_pretty(&self) -> rocketmq_error::RocketMQResult<String> {
-        Ok(serde_json::to_string_pretty(self)
-            .map_err(|error| SerializationError::source("serialize", "JSON", error))?)
+    fn serialize_json_pretty(&self) -> rocketmq_error::Result<String> {
+        serde_json::to_string_pretty(self)
+            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))
     }
 }
 
 impl<T: serde::de::DeserializeOwned> RemotingDeserializable for T {
     type Output = T;
-    fn decode(bytes: &[u8]) -> rocketmq_error::RocketMQResult<Self::Output> {
-        Ok(serde_json::from_slice(bytes).map_err(|error| SerializationError::source("deserialize", "JSON", error))?)
+    fn decode(bytes: &[u8]) -> rocketmq_error::Result<Self::Output> {
+        serde_json::from_slice(bytes).map_err(|error| crate::error::serialization_source("deserialize", "JSON", error))
     }
 }
 
@@ -455,23 +454,17 @@ mod tests {
     #[derive(Debug, Deserialize)]
     struct DecodedValue;
 
-    fn assert_json_source(error: &rocketmq_error::RocketMQError) {
+    fn assert_json_source(error: &rocketmq_error::Error) {
         let direct_source = StdError::source(error).expect("JSON error source");
         assert!(direct_source.downcast_ref::<serde_json::Error>().is_some());
-
-        let rocketmq_error::RocketMQError::Serialization(serialization) = error else {
-            panic!("expected serialization error");
-        };
-        let json = StdError::source(serialization).expect("JSON error source");
-        assert!(json.downcast_ref::<serde_json::Error>().is_some());
     }
 
     #[test]
     fn protocol_json_encode_preserves_source_and_public_boundary() {
         let error = FailingJsonSerialize.encode().unwrap_err();
 
-        assert_eq!(error.to_string(), "serialize failed (JSON)");
-        assert_eq!(error.boundary_view().message(), "Serialization failed");
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
+        assert_eq!(error.descriptor().public_message(), "Serialization failed");
         assert_json_source(&error);
     }
 
@@ -479,8 +472,8 @@ mod tests {
     fn protocol_json_decode_preserves_source_and_public_boundary() {
         let error = DecodedValue::decode(b"invalid").unwrap_err();
 
-        assert_eq!(error.to_string(), "deserialize failed (JSON)");
-        assert_eq!(error.boundary_view().message(), "Serialization failed");
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
+        assert_eq!(error.descriptor().public_message(), "Serialization failed");
         assert_json_source(&error);
     }
 }

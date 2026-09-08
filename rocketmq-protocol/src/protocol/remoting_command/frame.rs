@@ -21,10 +21,7 @@ use super::SerializeType;
 
 impl RemotingCommand {
     #[inline]
-    pub(super) fn try_encode_header_with_body_length(
-        &mut self,
-        body_length: usize,
-    ) -> rocketmq_error::RocketMQResult<Bytes> {
+    pub(super) fn try_encode_header_with_body_length(&mut self, body_length: usize) -> rocketmq_error::Result<Bytes> {
         // Encode header data
         let header_data = self.try_header_encode()?;
         let header_len = header_data.len();
@@ -50,29 +47,28 @@ impl RemotingCommand {
         header_length: usize,
         body_length: usize,
         serialize_type: SerializeType,
-    ) -> rocketmq_error::RocketMQResult<(i32, i32)> {
+    ) -> rocketmq_error::Result<(i32, i32)> {
         const MAX_HEADER_LENGTH: usize = 0x00ff_ffff;
         if header_length > MAX_HEADER_LENGTH {
-            return Err(rocketmq_error::SerializationError::encode_failed(
+            return Err(crate::error::serialization_encode_failed(
                 "remoting-command",
                 format!("encoded header is {header_length} bytes, exceeding the 24-bit wire limit"),
-            )
-            .into());
+            ));
         }
         let payload_length = 4usize
             .checked_add(header_length)
             .and_then(|length| length.checked_add(body_length))
             .ok_or_else(|| {
-                rocketmq_error::SerializationError::encode_failed("remoting-command", "encoded frame length overflow")
+                crate::error::serialization_encode_failed("remoting-command", "encoded frame length overflow")
             })?;
         let total_length = i32::try_from(payload_length).map_err(|_| {
-            rocketmq_error::SerializationError::encode_failed(
+            crate::error::serialization_encode_failed(
                 "remoting-command",
                 format!("encoded payload is {payload_length} bytes, exceeding the signed 32-bit wire limit"),
             )
         })?;
         let header_length = i32::try_from(header_length).map_err(|_| {
-            rocketmq_error::SerializationError::encode_failed("remoting-command", "encoded header length overflow")
+            crate::error::serialization_encode_failed("remoting-command", "encoded header length overflow")
         })?;
         Ok((
             total_length,

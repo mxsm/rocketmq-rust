@@ -15,8 +15,7 @@
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::SerializationError;
+use rocketmq_error::Result;
 
 use super::remoting_command::RemotingCommand;
 
@@ -56,7 +55,7 @@ impl EncodedFrame {
     /// Returns a serialization error when the command header cannot be encoded, the header exceeds
     /// RocketMQ's 24-bit header-length field, or the complete frame exceeds its signed 32-bit
     /// length field.
-    pub fn from_command(mut command: RemotingCommand) -> RocketMQResult<Self> {
+    pub fn from_command(mut command: RemotingCommand) -> Result<Self> {
         let body = command.take_body().unwrap_or_default();
         let (prefix, header) = encode_header_segments(&mut command, body.len())?;
         validate_announced_payload_len(&prefix, header.len(), body.len())?;
@@ -106,13 +105,12 @@ impl EncodedFrameHead {
     ///
     /// Returns an error when the command already has an in-memory body, header serialization
     /// fails, or the complete frame exceeds RocketMQ's signed 32-bit wire-length limit.
-    pub fn from_command_and_body_len(mut command: RemotingCommand, body_len: usize) -> RocketMQResult<Self> {
+    pub fn from_command_and_body_len(mut command: RemotingCommand, body_len: usize) -> Result<Self> {
         if command.body().is_some() {
-            return Err(SerializationError::encode_failed(
+            return Err(crate::error::serialization_encode_failed(
                 "remoting-command-file-body",
                 "command must not contain an in-memory body when an external body length is supplied",
-            )
-            .into());
+            ));
         }
         let (prefix, header) = encode_header_segments(&mut command, body_len)?;
         validate_announced_payload_len(&prefix, header.len(), body_len)?;
@@ -145,71 +143,61 @@ impl EncodedFrameHead {
     }
 }
 
-fn encode_header_segments(
-    command: &mut RemotingCommand,
-    body_len: usize,
-) -> RocketMQResult<([u8; FRAME_PREFIX_BYTES], Bytes)> {
+fn encode_header_segments(command: &mut RemotingCommand, body_len: usize) -> Result<([u8; FRAME_PREFIX_BYTES], Bytes)> {
     let mut encoded_header = BytesMut::new();
     command.try_fast_header_encode_with_body_length(&mut encoded_header, body_len)?;
     if encoded_header.len() < FRAME_PREFIX_BYTES {
-        return Err(SerializationError::encode_failed(
+        return Err(crate::error::serialization_encode_failed(
             "remoting-command",
             "encoded header omitted the RocketMQ frame prefix",
-        )
-        .into());
+        ));
     }
     let prefix_bytes = encoded_header.split_to(FRAME_PREFIX_BYTES);
     let header = encoded_header.freeze();
     if header.len() > MAX_HEADER_BYTES {
-        return Err(SerializationError::encode_failed(
+        return Err(crate::error::serialization_encode_failed(
             "remoting-command",
             format!(
                 "encoded header is {} bytes, exceeding the 24-bit wire limit",
                 header.len()
             ),
-        )
-        .into());
+        ));
     }
     let mut prefix = [0_u8; FRAME_PREFIX_BYTES];
     prefix.copy_from_slice(&prefix_bytes);
     let announced_header = u32::from_be_bytes([prefix[4], prefix[5], prefix[6], prefix[7]]) & MAX_HEADER_BYTES as u32;
     if announced_header as usize != header.len() {
-        return Err(SerializationError::encode_failed(
+        return Err(crate::error::serialization_encode_failed(
             "remoting-command",
             "fast header encoder produced an inconsistent header length",
-        )
-        .into());
+        ));
     }
     Ok((prefix, header))
 }
 
-fn checked_payload_len(header_len: usize, body_len: usize) -> RocketMQResult<i32> {
+fn checked_payload_len(header_len: usize, body_len: usize) -> Result<i32> {
     let payload_len = SERIALIZE_TYPE_BYTES
         .checked_add(header_len)
         .and_then(|length| length.checked_add(body_len))
-        .ok_or_else(|| SerializationError::encode_failed("remoting-command", "encoded frame length overflow"))?;
+        .ok_or_else(|| {
+            crate::error::serialization_encode_failed("remoting-command", "encoded frame length overflow")
+        })?;
     i32::try_from(payload_len).map_err(|_| {
-        SerializationError::encode_failed(
+        crate::error::serialization_encode_failed(
             "remoting-command",
             format!("encoded payload is {payload_len} bytes, exceeding the signed 32-bit wire limit"),
         )
-        .into()
     })
 }
 
-fn validate_announced_payload_len(
-    prefix: &[u8; FRAME_PREFIX_BYTES],
-    header_len: usize,
-    body_len: usize,
-) -> RocketMQResult<()> {
+fn validate_announced_payload_len(prefix: &[u8; FRAME_PREFIX_BYTES], header_len: usize, body_len: usize) -> Result<()> {
     let expected = checked_payload_len(header_len, body_len)?;
     let announced = i32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]);
     if announced != expected {
-        return Err(SerializationError::encode_failed(
+        return Err(crate::error::serialization_encode_failed(
             "remoting-command",
             "fast header encoder produced inconsistent wire lengths",
-        )
-        .into());
+        ));
     }
     Ok(())
 }

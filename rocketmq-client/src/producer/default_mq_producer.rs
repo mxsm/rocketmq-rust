@@ -17,9 +17,9 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use crate::ClientError;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::compression::compression_type::CompressionType;
 use rocketmq_model::common::message::message_batch::MessageBatch;
 use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
@@ -190,7 +190,7 @@ impl RPCHook for CompositeRPCHook {
         &self,
         remote_addr: SocketAddr,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         for hook in &self.hooks {
             hook.do_before_request(remote_addr, request)?;
         }
@@ -202,7 +202,7 @@ impl RPCHook for CompositeRPCHook {
         remote_addr: SocketAddr,
         request: &RemotingCommand,
         response: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         for hook in &self.hooks {
             hook.do_after_response(remote_addr, request, response)?;
         }
@@ -458,7 +458,7 @@ impl DefaultMQProducer {
         self.session = Some(session);
     }
 
-    pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn start(&mut self) -> crate::ClientResult<()> {
         <Self as ProducerBackend>::start(self).await
     }
 
@@ -476,10 +476,7 @@ impl DefaultMQProducer {
         }
     }
 
-    pub async fn fetch_publish_message_queues(
-        &mut self,
-        topic: &str,
-    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
+    pub async fn fetch_publish_message_queues(&mut self, topic: &str) -> crate::ClientResult<Vec<MessageQueue>> {
         <Self as ProducerBackend>::fetch_publish_message_queues(self, topic).await
     }
 
@@ -489,7 +486,7 @@ impl DefaultMQProducer {
         new_topic: &str,
         queue_num: i32,
         attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         <Self as ProducerBackend>::create_topic(self, key, new_topic, queue_num, attributes).await
     }
 
@@ -500,24 +497,24 @@ impl DefaultMQProducer {
         queue_num: i32,
         topic_sys_flag: i32,
         attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         <Self as ProducerBackend>::create_topic_with_flag(self, key, new_topic, queue_num, topic_sys_flag, attributes)
             .await
     }
 
-    pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> crate::ClientResult<i64> {
         <Self as ProducerBackend>::search_offset(self, mq, timestamp).await
     }
 
-    pub async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn max_offset(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         <Self as ProducerBackend>::max_offset(self, mq).await
     }
 
-    pub async fn min_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn min_offset(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         <Self as ProducerBackend>::min_offset(self, mq).await
     }
 
-    pub async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         <Self as ProducerBackend>::earliest_msg_store_time(self, mq).await
     }
 
@@ -528,36 +525,32 @@ impl DefaultMQProducer {
         max_num: i32,
         begin: u64,
         end: u64,
-    ) -> rocketmq_error::RocketMQResult<QueryResult> {
+    ) -> crate::ClientResult<QueryResult> {
         <Self as ProducerBackend>::query_message(self, topic, key, max_num, begin, end).await
     }
 
-    pub async fn view_message(&mut self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
+    pub async fn view_message(&mut self, topic: &str, msg_id: &str) -> crate::ClientResult<MessageExt> {
         <Self as ProducerBackend>::view_message(self, topic, msg_id).await
     }
 
-    pub async fn send<M>(&mut self, msg: M) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    pub async fn send<M>(&mut self, msg: M) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::send(self, msg).await
     }
 
-    pub async fn send_with_timeout<M>(
-        &mut self,
-        msg: M,
-        timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    pub async fn send_with_timeout<M>(&mut self, msg: M, timeout: u64) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::send_with_timeout(self, msg, timeout).await
     }
 
-    pub async fn send_with_callback<M, F>(&mut self, msg: M, send_callback: F) -> rocketmq_error::RocketMQResult<()>
+    pub async fn send_with_callback<M, F>(&mut self, msg: M, send_callback: F) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         <Self as ProducerBackend>::send_with_callback(self, msg, send_callback).await
     }
@@ -567,26 +560,22 @@ impl DefaultMQProducer {
         msg: M,
         send_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::send_with_callback_timeout(self, msg, send_callback, timeout).await
     }
 
-    pub async fn send_oneway<M>(&mut self, msg: M) -> rocketmq_error::RocketMQResult<()>
+    pub async fn send_oneway<M>(&mut self, msg: M) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::send_oneway(self, msg).await
     }
 
-    pub async fn send_to_queue<M>(
-        &mut self,
-        msg: M,
-        mq: MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    pub async fn send_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -598,7 +587,7 @@ impl DefaultMQProducer {
         msg: M,
         mq: MessageQueue,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -610,10 +599,10 @@ impl DefaultMQProducer {
         msg: M,
         mq: MessageQueue,
         send_callback: F,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         <Self as ProducerBackend>::send_to_queue_with_callback(self, msg, mq, send_callback).await
     }
@@ -624,15 +613,15 @@ impl DefaultMQProducer {
         mq: MessageQueue,
         send_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         <Self as ProducerBackend>::send_to_queue_with_callback_timeout(self, msg, mq, send_callback, timeout).await
     }
 
-    pub async fn send_oneway_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> rocketmq_error::RocketMQResult<()>
+    pub async fn send_oneway_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -644,7 +633,7 @@ impl DefaultMQProducer {
         msg: M,
         selector: S,
         arg: T,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
@@ -659,7 +648,7 @@ impl DefaultMQProducer {
         selector: S,
         arg: T,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
@@ -674,7 +663,7 @@ impl DefaultMQProducer {
         selector: S,
         arg: T,
         send_callback: Option<ArcSendCallback>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
@@ -690,7 +679,7 @@ impl DefaultMQProducer {
         arg: T,
         send_callback: Option<ArcSendCallback>,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -700,12 +689,7 @@ impl DefaultMQProducer {
             .await
     }
 
-    pub async fn send_oneway_with_selector<M, S, T>(
-        &mut self,
-        msg: M,
-        selector: S,
-        arg: T,
-    ) -> rocketmq_error::RocketMQResult<()>
+    pub async fn send_oneway_with_selector<M, S, T>(&mut self, msg: M, selector: S, arg: T) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -718,7 +702,7 @@ impl DefaultMQProducer {
         &mut self,
         msg: M,
         arg: Option<T>,
-    ) -> rocketmq_error::RocketMQResult<TransactionSendResult>
+    ) -> crate::ClientResult<TransactionSendResult>
     where
         T: std::any::Any + Sync + Send,
         M: MessageTrait + Send + Sync,
@@ -726,29 +710,21 @@ impl DefaultMQProducer {
         <Self as ProducerBackend>::send_message_in_transaction(self, msg, arg).await
     }
 
-    pub async fn send_batch<M>(&mut self, msgs: Vec<M>) -> rocketmq_error::RocketMQResult<SendResult>
+    pub async fn send_batch<M>(&mut self, msgs: Vec<M>) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::send_batch(self, msgs).await
     }
 
-    pub async fn send_batch_with_timeout<M>(
-        &mut self,
-        msgs: Vec<M>,
-        timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    pub async fn send_batch_with_timeout<M>(&mut self, msgs: Vec<M>, timeout: u64) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::send_batch_with_timeout(self, msgs, timeout).await
     }
 
-    pub async fn send_batch_to_queue<M>(
-        &mut self,
-        msgs: Vec<M>,
-        mq: MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    pub async fn send_batch_to_queue<M>(&mut self, msgs: Vec<M>, mq: MessageQueue) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -760,17 +736,17 @@ impl DefaultMQProducer {
         msgs: Vec<M>,
         mq: MessageQueue,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    ) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::send_batch_to_queue_with_timeout(self, msgs, mq, timeout).await
     }
 
-    pub async fn send_batch_with_callback<M, F>(&mut self, msgs: Vec<M>, f: F) -> rocketmq_error::RocketMQResult<()>
+    pub async fn send_batch_with_callback<M, F>(&mut self, msgs: Vec<M>, f: F) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         <Self as ProducerBackend>::send_batch_with_callback(self, msgs, f).await
     }
@@ -780,10 +756,10 @@ impl DefaultMQProducer {
         msgs: Vec<M>,
         f: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         <Self as ProducerBackend>::send_batch_with_callback_timeout(self, msgs, f, timeout).await
     }
@@ -793,10 +769,10 @@ impl DefaultMQProducer {
         msgs: Vec<M>,
         mq: MessageQueue,
         f: F,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         <Self as ProducerBackend>::send_batch_to_queue_with_callback(self, msgs, mq, f).await
     }
@@ -807,19 +783,15 @@ impl DefaultMQProducer {
         mq: MessageQueue,
         f: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         <Self as ProducerBackend>::send_batch_to_queue_with_callback_timeout(self, msgs, mq, f, timeout).await
     }
 
-    pub async fn request<M>(
-        &mut self,
-        msg: M,
-        timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    pub async fn request<M>(&mut self, msg: M, timeout: u64) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -831,9 +803,9 @@ impl DefaultMQProducer {
         msg: M,
         request_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
-        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&crate::ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::request_with_callback(self, msg, request_callback, timeout).await
@@ -845,7 +817,7 @@ impl DefaultMQProducer {
         selector: S,
         arg: T,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
         T: Send + Sync + 'static,
@@ -861,10 +833,10 @@ impl DefaultMQProducer {
         arg: T,
         request_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
-        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&crate::ClientError>) + Send + Sync + 'static,
         T: Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
@@ -877,7 +849,7 @@ impl DefaultMQProducer {
         msg: M,
         mq: MessageQueue,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -890,9 +862,9 @@ impl DefaultMQProducer {
         mq: MessageQueue,
         request_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
-        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&crate::ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::request_to_queue_with_callback(self, msg, mq, request_callback, timeout).await
@@ -902,7 +874,7 @@ impl DefaultMQProducer {
         &mut self,
         topic: impl Into<CheetahString>,
         recall_handle: impl Into<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<String> {
+    ) -> crate::ClientResult<String> {
         <Self as ProducerBackend>::recall_message(self, topic, recall_handle).await
     }
 
@@ -1521,7 +1493,7 @@ impl DefaultMQProducer {
 
     pub fn release_back_pressure_for_async_send_size_lock(&self) {}
 
-    fn batch<M>(&mut self, messages: Vec<M>) -> rocketmq_error::RocketMQResult<MessageBatch>
+    fn batch<M>(&mut self, messages: Vec<M>) -> crate::ClientResult<MessageBatch>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1529,7 +1501,7 @@ impl DefaultMQProducer {
             Ok(msg_batch) => msg_batch,
             Err(err) => {
                 error!("Failed to initiate the MessageBatch: {:?}", err);
-                return Err(err);
+                return Err(err.into());
             }
         };
 
@@ -1553,14 +1525,14 @@ impl DefaultMQProducer {
         producer_config.produce_accumulator.is_some() && producer_config.auto_batch
     }
     #[inline]
-    fn get_impl(&self) -> rocketmq_error::RocketMQResult<&Arc<DefaultMQProducerImpl>> {
+    fn get_impl(&self) -> crate::ClientResult<&Arc<DefaultMQProducerImpl>> {
         self.default_mqproducer_impl
             .as_ref()
             .ok_or_else(|| mq_client_err!("DefaultMQProducerImpl is not initialized, call start() first"))
     }
 
     #[inline]
-    fn get_accumulator(&self) -> rocketmq_error::RocketMQResult<Arc<ProduceAccumulator>> {
+    fn get_accumulator(&self) -> crate::ClientResult<Arc<ProduceAccumulator>> {
         self.producer_config
             .snapshot()
             .produce_accumulator
@@ -1572,7 +1544,7 @@ impl DefaultMQProducer {
         mut msg: M,
         mq: Option<MessageQueue>,
         send_callback: Option<ArcSendCallback>,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1600,7 +1572,7 @@ impl DefaultMQProducer {
         mut msg: M,
         mq: Option<MessageQueue>,
         send_callback: Option<ArcSendCallback>,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + std::marker::Sync + 'static,
     {
@@ -1719,14 +1691,14 @@ impl DefaultMQProducer {
 }
 
 impl ProducerBackend for DefaultMQProducer {
-    async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    async fn start(&mut self) -> crate::ClientResult<()> {
         let producer_group_clone = self.producer_config.snapshot().producer_group.clone();
         let producer_group = self.with_namespace(&producer_group_clone);
         self.set_producer_group(producer_group);
         let default_mqproducer_impl = self
             .default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?;
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?;
 
         let trace_dispatcher_to_start = self.prepare_trace_dispatcher(default_mqproducer_impl);
 
@@ -1775,11 +1747,11 @@ impl ProducerBackend for DefaultMQProducer {
         }
     }
 
-    async fn fetch_publish_message_queues(&mut self, topic: &str) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
+    async fn fetch_publish_message_queues(&mut self, topic: &str) -> crate::ClientResult<Vec<MessageQueue>> {
         let topic = self.with_namespace(topic);
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .fetch_publish_message_queues(topic.as_ref())
             .await
     }
@@ -1790,7 +1762,7 @@ impl ProducerBackend for DefaultMQProducer {
         new_topic: &str,
         queue_num: i32,
         attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         self.create_topic_with_flag(key, new_topic, queue_num, 0, attributes)
             .await
     }
@@ -1802,43 +1774,43 @@ impl ProducerBackend for DefaultMQProducer {
         queue_num: i32,
         topic_sys_flag: i32,
         attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let new_topic = self.with_namespace(new_topic);
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .create_topic(key, new_topic.as_str(), queue_num, topic_sys_flag, attributes)
             .await
     }
 
-    async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+    async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> crate::ClientResult<i64> {
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .search_offset(mq, timestamp)
             .await
     }
 
-    async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn max_offset(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .max_offset(mq)
             .await
     }
 
-    async fn min_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn min_offset(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .min_offset(mq)
             .await
     }
 
-    async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .earliest_msg_store_time(mq)
             .await
     }
@@ -1850,21 +1822,21 @@ impl ProducerBackend for DefaultMQProducer {
         max_num: i32,
         begin: u64,
         end: u64,
-    ) -> rocketmq_error::RocketMQResult<QueryResult> {
+    ) -> crate::ClientResult<QueryResult> {
         let topic = self.with_namespace(topic);
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .query_message(topic.as_str(), key, max_num, begin, end)
             .await
     }
 
-    async fn view_message(&mut self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
+    async fn view_message(&mut self, topic: &str, msg_id: &str) -> crate::ClientResult<MessageExt> {
         let view_result = {
             let producer_impl = self
                 .default_mqproducer_impl
                 .as_ref()
-                .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?;
+                .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?;
             producer_impl.view_message(topic, msg_id).await
         };
         match view_result {
@@ -1873,14 +1845,14 @@ impl ProducerBackend for DefaultMQProducer {
                 let topic = self.with_namespace(topic);
                 self.default_mqproducer_impl
                     .as_ref()
-                    .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+                    .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
                     .query_message_by_uniq_key(topic.as_str(), msg_id)
                     .await
             }
         }
     }
 
-    async fn send<M>(&mut self, mut msg: M) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    async fn send<M>(&mut self, mut msg: M) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1891,17 +1863,13 @@ impl ProducerBackend for DefaultMQProducer {
             let timeout = self.send_msg_timeout() as u64;
             self.default_mqproducer_impl
                 .as_ref()
-                .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+                .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
                 .send_with_timeout(&mut msg, timeout)
                 .await
         }
     }
 
-    async fn send_with_timeout<M>(
-        &mut self,
-        mut msg: M,
-        timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    async fn send_with_timeout<M>(&mut self, mut msg: M, timeout: u64) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1909,15 +1877,15 @@ impl ProducerBackend for DefaultMQProducer {
         msg.set_topic(topic_build);
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_with_timeout(&mut msg, timeout)
             .await
     }
 
-    async fn send_with_callback<M, F>(&mut self, mut msg: M, send_callback: F) -> rocketmq_error::RocketMQResult<()>
+    async fn send_with_callback<M, F>(&mut self, mut msg: M, send_callback: F) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         let send_callback_inner = Arc::new(send_callback);
@@ -1928,7 +1896,7 @@ impl ProducerBackend for DefaultMQProducer {
             let timeout = self.send_msg_timeout() as u64;
             self.default_mqproducer_impl
                 .as_ref()
-                .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+                .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
                 .async_send_with_callback_timeout(msg, Some(send_callback_inner.clone()), timeout)
                 .await
                 .map(|()| None)
@@ -1944,38 +1912,34 @@ impl ProducerBackend for DefaultMQProducer {
         mut msg: M,
         send_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic().as_str()));
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .async_send_with_callback_timeout(msg, Some(Arc::new(send_callback)), timeout)
             .await?;
         Ok(())
     }
 
-    async fn send_oneway<M>(&mut self, mut msg: M) -> rocketmq_error::RocketMQResult<()>
+    async fn send_oneway<M>(&mut self, mut msg: M) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_oneway(msg)
             .await?;
         Ok(())
     }
 
-    async fn send_to_queue<M>(
-        &mut self,
-        mut msg: M,
-        mq: MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    async fn send_to_queue<M>(&mut self, mut msg: M, mq: MessageQueue) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1993,7 +1957,7 @@ impl ProducerBackend for DefaultMQProducer {
         mut msg: M,
         mq: MessageQueue,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -2001,7 +1965,7 @@ impl ProducerBackend for DefaultMQProducer {
         let mq = self.client_config.snapshot().queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .sync_send_with_message_queue_timeout(msg, mq, timeout)
             .await
     }
@@ -2011,10 +1975,10 @@ impl ProducerBackend for DefaultMQProducer {
         mut msg: M,
         mq: MessageQueue,
         send_callback: F,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         let mq = self.client_config.snapshot().queue_with_resolved_namespace(mq);
@@ -2035,21 +1999,21 @@ impl ProducerBackend for DefaultMQProducer {
         mq: MessageQueue,
         send_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         let mq = self.client_config.snapshot().queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .async_send_batch_to_queue_with_callback_timeout(msg, mq, Some(Arc::new(send_callback)), timeout)
             .await
     }
 
-    async fn send_oneway_to_queue<M>(&mut self, mut msg: M, mq: MessageQueue) -> rocketmq_error::RocketMQResult<()>
+    async fn send_oneway_to_queue<M>(&mut self, mut msg: M, mq: MessageQueue) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -2057,7 +2021,7 @@ impl ProducerBackend for DefaultMQProducer {
         let mq = self.client_config.snapshot().queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_oneway_with_message_queue(msg, mq)
             .await?;
         Ok(())
@@ -2068,7 +2032,7 @@ impl ProducerBackend for DefaultMQProducer {
         mut msg: M,
         selector: S,
         arg: T,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
@@ -2078,7 +2042,7 @@ impl ProducerBackend for DefaultMQProducer {
         let mq = self
             .default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .invoke_message_queue_selector(&mut msg, selector, &arg, self.send_msg_timeout() as u64)
             .await?;
         let mq = self.client_config.snapshot().queue_with_resolved_namespace(mq);
@@ -2095,7 +2059,7 @@ impl ProducerBackend for DefaultMQProducer {
         selector: S,
         arg: T,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
@@ -2104,7 +2068,7 @@ impl ProducerBackend for DefaultMQProducer {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_with_selector_timeout(msg, selector, arg, timeout)
             .await
     }
@@ -2115,7 +2079,7 @@ impl ProducerBackend for DefaultMQProducer {
         selector: S,
         arg: T,
         send_callback: Option<ArcSendCallback>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
@@ -2125,7 +2089,7 @@ impl ProducerBackend for DefaultMQProducer {
         let mq = self
             .default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .invoke_message_queue_selector(&mut msg, selector, &arg, self.send_msg_timeout() as u64)
             .await?;
         let mq = self.client_config.snapshot().queue_with_resolved_namespace(mq);
@@ -2144,7 +2108,7 @@ impl ProducerBackend for DefaultMQProducer {
         arg: T,
         send_callback: Option<ArcSendCallback>,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -2153,17 +2117,12 @@ impl ProducerBackend for DefaultMQProducer {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_with_selector_callback_timeout(msg, selector, arg, send_callback, timeout)
             .await
     }
 
-    async fn send_oneway_with_selector<M, S, T>(
-        &mut self,
-        mut msg: M,
-        selector: S,
-        arg: T,
-    ) -> rocketmq_error::RocketMQResult<()>
+    async fn send_oneway_with_selector<M, S, T>(&mut self, mut msg: M, selector: S, arg: T) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -2172,7 +2131,7 @@ impl ProducerBackend for DefaultMQProducer {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_oneway_with_selector(msg, selector, arg)
             .await
     }
@@ -2181,7 +2140,7 @@ impl ProducerBackend for DefaultMQProducer {
         &mut self,
         _msg: M,
         _arg: Option<T>,
-    ) -> rocketmq_error::RocketMQResult<TransactionSendResult>
+    ) -> crate::ClientResult<TransactionSendResult>
     where
         T: std::any::Any + Sync + Send,
         M: MessageTrait + Send + Sync,
@@ -2191,7 +2150,7 @@ impl ProducerBackend for DefaultMQProducer {
         ))
     }
 
-    async fn send_batch<M>(&mut self, msgs: Vec<M>) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send_batch<M>(&mut self, msgs: Vec<M>) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -2199,17 +2158,13 @@ impl ProducerBackend for DefaultMQProducer {
         let result = self
             .default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send(&mut batch)
             .await?;
         result.ok_or_else(|| crate::mq_client_err!("Synchronous batch send completed without SendResult"))
     }
 
-    async fn send_batch_with_timeout<M>(
-        &mut self,
-        msgs: Vec<M>,
-        timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send_batch_with_timeout<M>(&mut self, msgs: Vec<M>, timeout: u64) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -2217,17 +2172,13 @@ impl ProducerBackend for DefaultMQProducer {
         let result = self
             .default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_with_timeout(&mut batch, timeout)
             .await?;
         result.ok_or_else(|| crate::mq_client_err!("Synchronous batch send completed without SendResult"))
     }
 
-    async fn send_batch_to_queue<M>(
-        &mut self,
-        msgs: Vec<M>,
-        mq: MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send_batch_to_queue<M>(&mut self, msgs: Vec<M>, mq: MessageQueue) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -2236,7 +2187,7 @@ impl ProducerBackend for DefaultMQProducer {
         let result = self
             .default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .sync_send_with_message_queue(batch, mq)
             .await?;
         result.ok_or_else(|| crate::mq_client_err!("Synchronous batch send completed without SendResult"))
@@ -2247,7 +2198,7 @@ impl ProducerBackend for DefaultMQProducer {
         msgs: Vec<M>,
         mq: MessageQueue,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    ) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -2256,21 +2207,21 @@ impl ProducerBackend for DefaultMQProducer {
         let result = self
             .default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .sync_send_with_message_queue_timeout(batch, mq, timeout)
             .await?;
         result.ok_or_else(|| crate::mq_client_err!("Synchronous batch send completed without SendResult"))
     }
 
-    async fn send_batch_with_callback<M, F>(&mut self, msgs: Vec<M>, f: F) -> rocketmq_error::RocketMQResult<()>
+    async fn send_batch_with_callback<M, F>(&mut self, msgs: Vec<M>, f: F) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         let batch = self.batch(msgs)?;
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .async_send_with_callback(batch, Some(Arc::new(f)))
             .await?;
         Ok(())
@@ -2281,15 +2232,15 @@ impl ProducerBackend for DefaultMQProducer {
         msgs: Vec<M>,
         f: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         let batch = self.batch(msgs)?;
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .async_send_with_callback_timeout(batch, Some(Arc::new(f)), timeout)
             .await?;
         Ok(())
@@ -2300,16 +2251,16 @@ impl ProducerBackend for DefaultMQProducer {
         msgs: Vec<M>,
         mq: MessageQueue,
         f: F,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         let batch = self.batch(msgs)?;
         let mq = self.client_config.snapshot().queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .async_send_with_message_queue_callback(batch, mq, Some(Arc::new(f)))
             .await
     }
@@ -2320,32 +2271,28 @@ impl ProducerBackend for DefaultMQProducer {
         mq: MessageQueue,
         f: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
     {
         let batch = self.batch(msgs)?;
         let mq = self.client_config.snapshot().queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .async_send_batch_to_queue_with_callback_timeout(batch, mq, Some(Arc::new(f)), timeout)
             .await
     }
 
-    async fn request<M>(
-        &mut self,
-        mut msg: M,
-        timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    async fn request<M>(&mut self, mut msg: M, timeout: u64) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .request(msg, timeout)
             .await
     }
@@ -2355,15 +2302,15 @@ impl ProducerBackend for DefaultMQProducer {
         mut msg: M,
         request_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
-        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&crate::ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .request_with_callback(msg, Arc::new(request_callback), timeout)
             .await
     }
@@ -2374,7 +2321,7 @@ impl ProducerBackend for DefaultMQProducer {
         selector: S,
         arg: T,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
         T: Send + Sync + 'static,
@@ -2383,7 +2330,7 @@ impl ProducerBackend for DefaultMQProducer {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .request_with_selector(msg, selector, arg, timeout)
             .await
     }
@@ -2395,17 +2342,17 @@ impl ProducerBackend for DefaultMQProducer {
         arg: T,
         request_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
-        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&crate::ClientError>) + Send + Sync + 'static,
         T: Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .request_with_selector_callback(msg, selector, arg, Arc::new(request_callback), timeout)
             .await
     }
@@ -2415,7 +2362,7 @@ impl ProducerBackend for DefaultMQProducer {
         mut msg: M,
         mq: MessageQueue,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -2423,7 +2370,7 @@ impl ProducerBackend for DefaultMQProducer {
         let mq = self.client_config.snapshot().queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .request_to_queue(msg, mq, timeout)
             .await
     }
@@ -2434,16 +2381,16 @@ impl ProducerBackend for DefaultMQProducer {
         mq: MessageQueue,
         request_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
-        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&crate::ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.topic()));
         let mq = self.client_config.snapshot().queue_with_resolved_namespace(mq);
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .request_to_queue_with_callback(msg, mq, Arc::new(request_callback), timeout)
             .await
     }
@@ -2460,10 +2407,10 @@ impl ProducerBackend for DefaultMQProducer {
         &mut self,
         topic: impl Into<CheetahString>,
         recall_handle: impl Into<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<String> {
+    ) -> crate::ClientResult<String> {
         self.default_mqproducer_impl
             .as_ref()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .ok_or(ClientError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .recall_message(topic, recall_handle)
             .await
     }
@@ -2473,9 +2420,9 @@ impl ProducerBackend for DefaultMQProducer {
 mod facade_tests {
     use std::sync::Arc;
 
+    use crate::ClientError;
+    use crate::ClientResult;
     use bytes::Bytes;
-    use rocketmq_error::RocketMQError;
-    use rocketmq_error::RocketMQResult;
     use rocketmq_model::common::message::message_queue::MessageQueue;
     use rocketmq_model::common::message::message_single::Message;
     use rocketmq_model::common::message::MessageTrait;
@@ -2603,12 +2550,12 @@ mod facade_tests {
         MessageQueue::from_parts("test-topic", "broker-a", 0)
     }
 
-    fn assert_not_initialized<T>(result: RocketMQResult<T>) {
+    fn assert_not_initialized<T>(result: ClientResult<T>) {
         match result {
-            Err(RocketMQError::NotInitialized(reason)) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            Err(other) => panic!("Unexpected error: {other:?}"),
+            Err(error) => assert!(
+                error.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED),
+                "unexpected error: {error:?}"
+            ),
             Ok(_) => panic!("expected producer facade to require a started implementation"),
         }
     }
@@ -2631,7 +2578,7 @@ mod facade_tests {
                 .await,
         );
 
-        let callback = |_result: Option<&SendResult>, _err: Option<&RocketMQError>| {};
+        let callback = |_result: Option<&SendResult>, _err: Option<&ClientError>| {};
         assert_not_initialized(
             unstarted_producer()
                 .send_batch_to_queue_with_callback_timeout(vec![message()], queue(), callback, 1000)
@@ -2641,7 +2588,7 @@ mod facade_tests {
 
     #[tokio::test]
     async fn default_mq_producer_exposes_modern_java_request_facade_methods_without_trait_import() {
-        let request_callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&rocketmq_error::RocketMQError>| {};
+        let request_callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&crate::ClientError>| {};
         assert_not_initialized(
             unstarted_producer()
                 .request_with_callback(message(), request_callback, 1000)
@@ -2657,7 +2604,7 @@ mod facade_tests {
 
         assert_not_initialized(unstarted_producer().request_to_queue(message(), queue(), 1000).await);
 
-        let request_callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&rocketmq_error::RocketMQError>| {};
+        let request_callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&crate::ClientError>| {};
         assert_not_initialized(
             unstarted_producer()
                 .request_to_queue_with_callback(message(), queue(), request_callback, 1000)
@@ -2669,8 +2616,8 @@ mod facade_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ClientResult;
     use bytes::Bytes;
-    use rocketmq_error::RocketMQResult;
     use rocketmq_model::common::message::message_single::Message;
 
     fn test_runtime() -> Arc<ClientRuntime> {
@@ -2686,18 +2633,13 @@ mod tests {
             default_mqproducer_impl: None,
         };
         let msg = Message::builder().topic("test-topic").empty_body().build_unchecked();
-        let callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&rocketmq_error::RocketMQError>| {
+        let callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&crate::ClientError>| {
             // no-op
         };
         let result = producer.request_with_callback(msg, callback, 1000).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            RocketMQError::NotInitialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[tokio::test]
@@ -2714,12 +2656,7 @@ mod tests {
         let result = producer.request_with_selector(msg, selector, 1, 1000).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            RocketMQError::NotInitialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[tokio::test]
@@ -2733,7 +2670,7 @@ mod tests {
         };
         let msg = Message::builder().topic("test-topic").empty_body().build_unchecked();
         let selector = |_queues: &[MessageQueue], _msg: &Message, _arg: &i32| -> Option<MessageQueue> { None };
-        let callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&rocketmq_error::RocketMQError>| {
+        let callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&crate::ClientError>| {
             // no-op
         };
         let result = producer
@@ -2741,12 +2678,7 @@ mod tests {
             .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            RocketMQError::NotInitialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[tokio::test]
@@ -2762,18 +2694,13 @@ mod tests {
             .topic("test-topic")
             .body(Bytes::from_static(b"Hello world"))
             .build_unchecked();
-        let callback = |_msg: Option<&SendResult>, _err: Option<&RocketMQError>| {
+        let callback = |_msg: Option<&SendResult>, _err: Option<&ClientError>| {
             // no-op
         };
-        let result: RocketMQResult<()> = producer.send_batch_with_callback(vec![msg], callback).await;
+        let result: ClientResult<()> = producer.send_batch_with_callback(vec![msg], callback).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            RocketMQError::NotInitialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[tokio::test]
@@ -2840,20 +2767,15 @@ mod tests {
             .topic("test-topic")
             .body(Bytes::from_static(b"Hello world"))
             .build_unchecked();
-        let callback = |_msg: Option<&SendResult>, _err: Option<&RocketMQError>| {
+        let callback = |_msg: Option<&SendResult>, _err: Option<&ClientError>| {
             // no-op
         };
-        let result: RocketMQResult<()> = producer
+        let result: ClientResult<()> = producer
             .send_batch_with_callback_timeout(vec![msg], callback, 1000)
             .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            RocketMQError::NotInitialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[tokio::test]
@@ -2869,21 +2791,16 @@ mod tests {
             .topic("test-topic")
             .body(Bytes::from_static(b"Hello world"))
             .build_unchecked();
-        let callback = |_msg: Option<&SendResult>, _err: Option<&RocketMQError>| {
+        let callback = |_msg: Option<&SendResult>, _err: Option<&ClientError>| {
             // no-op
         };
         let mq = MessageQueue::new();
-        let result: RocketMQResult<()> = producer
+        let result: ClientResult<()> = producer
             .send_batch_to_queue_with_callback(vec![msg], mq, callback)
             .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            RocketMQError::NotInitialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[tokio::test]
@@ -2902,12 +2819,7 @@ mod tests {
         // Assert
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            RocketMQError::NotInitialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[test]

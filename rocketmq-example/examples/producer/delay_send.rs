@@ -17,8 +17,8 @@
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::DefaultMQProducer;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_single::Message;
 
 pub const PRODUCER_GROUP: &str = "producer_delay_send_group";
@@ -30,11 +30,11 @@ pub const TIMEOUT_MS: u64 = 3000;
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
@@ -52,7 +52,7 @@ async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>
     Ok(())
 }
 
-async fn send_delay_level(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_delay_level(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     let message = Message::builder()
         .topic(TOPIC)
         .tags(TAG)
@@ -66,7 +66,7 @@ async fn send_delay_level(producer: &mut DefaultMQProducer) -> RocketMQResult<()
     Ok(())
 }
 
-async fn send_delay_seconds(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_delay_seconds(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     let message = Message::builder()
         .topic(TOPIC)
         .tags(TAG)
@@ -80,7 +80,7 @@ async fn send_delay_seconds(producer: &mut DefaultMQProducer) -> RocketMQResult<
     Ok(())
 }
 
-async fn send_delay_millis(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_delay_millis(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     let message = Message::builder()
         .topic(TOPIC)
         .tags(TAG)
@@ -94,7 +94,7 @@ async fn send_delay_millis(producer: &mut DefaultMQProducer) -> RocketMQResult<(
     Ok(())
 }
 
-async fn send_deliver_time(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_deliver_time(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     let deliver_time_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time must be after UNIX_EPOCH")

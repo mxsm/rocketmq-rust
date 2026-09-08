@@ -218,7 +218,7 @@ where
         admission: Arc<AdmissionController>,
         telemetry: TransportTelemetry,
         process_budget: &ResourceBudget,
-    ) -> rocketmq_error::RocketMQResult<Self> {
+    ) -> Result<Self, rocketmq_error::SharedError> {
         let response_table = PendingRequestTable::try_with_limits_and_budget(
             PendingRequestLimits {
                 max_count: 512,

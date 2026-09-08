@@ -20,9 +20,8 @@ use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::UnifiedServiceError;
+use crate::ClientError;
+use crate::ClientResult;
 use rocketmq_observability::metrics::client::ClientMetrics;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::Shutdown;
@@ -48,16 +47,12 @@ where
     spawn_client_tracked_task_with_context(service_context, "rocketmq-client-rebalance-service", Box::pin(task))
 }
 
-fn rebalance_service_startup_failed(error: impl std::fmt::Display) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
-        "RebalanceService start: {error}"
-    )))
+fn rebalance_service_startup_failed(error: impl std::error::Error + Send + Sync + 'static) -> ClientError {
+    ClientError::service_source("rebalance_start", error)
 }
 
-fn rebalance_service_shutdown_failed(reason: impl std::fmt::Display) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::ShutdownFailed(format!(
-        "RebalanceService shutdown: {reason}"
-    )))
+fn rebalance_service_shutdown_failed(_reason: impl std::fmt::Display) -> ClientError {
+    ClientError::service_failed("rebalance_shutdown")
 }
 
 /// Configuration for RebalanceService.
@@ -244,7 +239,7 @@ impl RebalanceService {
         &self.config
     }
 
-    pub async fn start(&self, instance: Arc<MQClientInstance>) -> RocketMQResult<()> {
+    pub async fn start(&self, instance: Arc<MQClientInstance>) -> ClientResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
         // Prevent duplicate starts
         if self.started.swap(true, Ordering::SeqCst) {
@@ -374,7 +369,7 @@ impl RebalanceService {
         self.notify.notify_waiters();
     }
 
-    pub async fn shutdown(&self, timeout_ms: u64) -> RocketMQResult<()> {
+    pub async fn shutdown(&self, timeout_ms: u64) -> ClientResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
         // If not started, return directly
         if !self.started.load(Ordering::SeqCst) {

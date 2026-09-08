@@ -46,11 +46,12 @@ impl MaintenancePrincipalAuthenticator for ControllerAuthRuntimeAdapter {
                 .authenticate_maintenance_principal(request, channel_id)
                 .await
                 .map(String::from)
+                .map_err(Into::into)
         })
     }
 
     fn shutdown(&self) -> MaintenanceAuthenticationShutdownFuture<'_> {
-        Box::pin(self.runtime.shutdown())
+        Box::pin(async move { self.runtime.shutdown().await.map_err(Into::into) })
     }
 }
 

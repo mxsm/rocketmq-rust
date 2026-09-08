@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
 use tokio::sync::RwLock;
 use tracing::info;
 use tracing::warn;
@@ -32,6 +31,9 @@ use crate::authentication::model::user::User;
 use crate::authentication::provider::AuthenticationMetadataProvider;
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::config::AuthConfig;
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
 
 /// Default implementation of `AuthenticationMetadataManager`.
 ///
@@ -103,17 +105,26 @@ where
     fn validate_user(&self, user: &User, is_create: bool) -> ManagerResult<()> {
         // Validate username
         if user.username().is_empty() {
-            return Err(RocketMQError::authentication_failed("username can not be blank"));
+            return Err(AuthServiceError::new(
+                AuthOperation::ManageMetadata,
+                AuthFailureKind::InvalidInput,
+            ));
         }
 
         // Validate password (required for creation)
         if is_create && user.password().is_none() {
-            return Err(RocketMQError::authentication_failed("password can not be blank"));
+            return Err(AuthServiceError::new(
+                AuthOperation::ManageMetadata,
+                AuthFailureKind::InvalidInput,
+            ));
         }
 
         // Validate user type (required for creation, optional for update)
         if is_create && user.user_type().is_none() {
-            return Err(RocketMQError::authentication_failed("userType can not be blank"));
+            return Err(AuthServiceError::new(
+                AuthOperation::ManageMetadata,
+                AuthFailureKind::InvalidInput,
+            ));
         }
 
         Ok(())
@@ -121,8 +132,8 @@ where
 
     /// Handle exceptions from provider operations.
     ///
-    /// Converts provider exceptions into consistent RocketMQError types.
-    fn handle_exception(&self, error: RocketMQError) -> RocketMQError {
+    /// Preserves provider failures at the manager boundary.
+    fn handle_exception(&self, error: AuthServiceError) -> AuthServiceError {
         // Log the error
         warn!("Authentication metadata manager operation failed: {}", error);
 
@@ -239,7 +250,7 @@ where
         let provider = match &*guard {
             Some(p) => p,
             None => {
-                return Err(RocketMQError::not_initialized(
+                return Err(AuthServiceError::not_initialized(
                     "Authentication metadata provider is not configured",
                 ));
             }
@@ -268,7 +279,7 @@ where
         let provider = match &*guard {
             Some(p) => p,
             None => {
-                return Err(RocketMQError::not_initialized(
+                return Err(AuthServiceError::not_initialized(
                     "Authentication metadata provider is not configured",
                 ));
             }
@@ -276,7 +287,10 @@ where
 
         // Check if user already exists
         if let Ok(_existing) = provider.get_user(user.username().as_str()).await {
-            return Err(RocketMQError::authentication_failed("The user already exists"));
+            return Err(AuthServiceError::new(
+                AuthOperation::ManageMetadata,
+                AuthFailureKind::Conflict,
+            ));
         }
 
         // Set default values if not provided
@@ -305,17 +319,16 @@ where
         let provider = match &*guard {
             Some(p) => p,
             None => {
-                return Err(RocketMQError::not_initialized(
+                return Err(AuthServiceError::not_initialized(
                     "Authentication metadata provider is not configured",
                 ));
             }
         };
 
         // Get existing user first
-        let existing_user = provider
-            .get_user(user.username().as_str())
-            .await
-            .map_err(|_| RocketMQError::authentication_failed("The user does not exist"))?;
+        let existing_user = provider.get_user(user.username().as_str()).await.map_err(|source| {
+            AuthServiceError::with_source(AuthOperation::ManageMetadata, AuthFailureKind::NotFound, source)
+        })?;
 
         // Merge fields: update only provided fields
         let mut updated_user = existing_user.clone();
@@ -346,14 +359,17 @@ where
 
     async fn delete_user(&self, username: &str) -> ManagerResult<()> {
         if username.is_empty() {
-            return Err(RocketMQError::authentication_failed("username can not be blank"));
+            return Err(AuthServiceError::new(
+                AuthOperation::ManageMetadata,
+                AuthFailureKind::InvalidInput,
+            ));
         }
 
         let auth_guard = self.authentication_metadata_provider.read().await;
         let auth_provider = match &*auth_guard {
             Some(p) => p,
             None => {
-                return Err(RocketMQError::not_initialized(
+                return Err(AuthServiceError::not_initialized(
                     "Authentication metadata provider is not configured",
                 ));
             }
@@ -379,14 +395,17 @@ where
 
     async fn get_user(&self, username: &str) -> ManagerResult<User> {
         if username.is_empty() {
-            return Err(RocketMQError::authentication_failed("username can not be blank"));
+            return Err(AuthServiceError::new(
+                AuthOperation::ReadMetadata,
+                AuthFailureKind::InvalidInput,
+            ));
         }
 
         let guard = self.authentication_metadata_provider.read().await;
         let provider = match &*guard {
             Some(p) => p,
             None => {
-                return Err(RocketMQError::not_initialized(
+                return Err(AuthServiceError::not_initialized(
                     "Authentication metadata provider is not configured",
                 ));
             }
@@ -400,7 +419,7 @@ where
         let provider = match &*guard {
             Some(p) => p,
             None => {
-                return Err(RocketMQError::not_initialized(
+                return Err(AuthServiceError::not_initialized(
                     "Authentication metadata provider is not configured",
                 ));
             }

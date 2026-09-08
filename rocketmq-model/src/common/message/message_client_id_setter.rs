@@ -27,8 +27,7 @@ use chrono::Local;
 use chrono::LocalResult;
 use chrono::Months;
 use chrono::TimeZone;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result;
 
 use crate::codec::bytes_to_string;
 use crate::codec::string_to_bytes;
@@ -101,20 +100,20 @@ fn compute_time_window(millis: i64) -> (i64, i64) {
     (start.timestamp_millis(), next.timestamp_millis())
 }
 
-fn decode_uniq_id_bytes(msg_id: &str) -> RocketMQResult<Vec<u8>> {
+fn decode_uniq_id_bytes(msg_id: &str) -> Result<Vec<u8>> {
     let msg_id = msg_id.trim();
     if msg_id.len() != 32 && msg_id.len() != 56 {
-        return Err(RocketMQError::illegal_argument(format!(
+        return Err(crate::error::invalid_argument(format!(
             "Invalid uniq id length: {}. Expected 32 characters (IPv4) or 56 characters (IPv6)",
             msg_id.len()
         )));
     }
     if !msg_id.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(RocketMQError::illegal_argument(
+        return Err(crate::error::invalid_argument(
             "Invalid uniq id: expected hexadecimal characters",
         ));
     }
-    string_to_bytes(msg_id).ok_or_else(|| RocketMQError::illegal_argument("Invalid uniq id hex"))
+    string_to_bytes(msg_id).ok_or_else(|| crate::error::invalid_argument("Invalid uniq id hex"))
 }
 
 pub struct MessageClientIDSetter;
@@ -159,7 +158,7 @@ impl MessageClientIDSetter {
         sb.into_iter().collect()
     }
 
-    pub fn get_nearly_time_from_id(msg_id: &str) -> RocketMQResult<DateTime<Local>> {
+    pub fn get_nearly_time_from_id(msg_id: &str) -> Result<DateTime<Local>> {
         let bytes = decode_uniq_id_bytes(msg_id)?;
         let ip_length = if bytes.len() == 28 { 16 } else { 4 };
         let diff_start = ip_length + 2 + 4;
@@ -182,16 +181,16 @@ impl MessageClientIDSetter {
         Local
             .timestamp_millis_opt(timestamp)
             .single()
-            .ok_or_else(|| RocketMQError::illegal_argument("Invalid uniq id timestamp"))
+            .ok_or_else(|| crate::error::invalid_argument("Invalid uniq id timestamp"))
     }
 
-    pub fn get_ip_from_id(msg_id: &str) -> RocketMQResult<Vec<u8>> {
+    pub fn get_ip_from_id(msg_id: &str) -> Result<Vec<u8>> {
         let bytes = decode_uniq_id_bytes(msg_id)?;
         let ip_length = if bytes.len() == 28 { 16 } else { 4 };
         Ok(bytes[..ip_length].to_vec())
     }
 
-    pub fn get_ip_str_from_id(msg_id: &str) -> RocketMQResult<String> {
+    pub fn get_ip_str_from_id(msg_id: &str) -> Result<String> {
         let ip_bytes = Self::get_ip_from_id(msg_id)?;
         match ip_bytes.len() {
             4 => Ok(std::net::Ipv4Addr::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]).to_string()),
@@ -200,13 +199,13 @@ impl MessageClientIDSetter {
                 segments.copy_from_slice(&ip_bytes);
                 Ok(std::net::Ipv6Addr::from(segments).to_string())
             }
-            len => Err(RocketMQError::illegal_argument(format!(
+            len => Err(crate::error::invalid_argument(format!(
                 "Invalid uniq id IP length: {len}"
             ))),
         }
     }
 
-    pub fn get_pid_from_id(msg_id: &str) -> RocketMQResult<i32> {
+    pub fn get_pid_from_id(msg_id: &str) -> Result<i32> {
         let bytes = decode_uniq_id_bytes(msg_id)?;
         let pid_start = bytes.len() - 2 - 4 - 4 - 2;
         let pid = u16::from_be_bytes([bytes[pid_start], bytes[pid_start + 1]]);

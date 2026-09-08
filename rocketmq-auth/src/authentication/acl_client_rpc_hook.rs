@@ -22,8 +22,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::OutboundSigner;
 use rocketmq_security_api::Secret;
@@ -39,6 +39,10 @@ use crate::authentication::builder::DefaultAuthenticationContextBuilder;
 use crate::authentication::chain::acl_signer;
 use crate::authentication::chain::acl_signer::SignatureAlgorithm;
 use crate::config::AuthConfig;
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 const ACCESS_KEY: &str = "AccessKey";
 const SECURITY_TOKEN: &str = "SecurityToken";
@@ -84,7 +88,7 @@ impl AclClientRpcHook {
         })
     }
 
-    pub fn from_auth_config(config: &AuthConfig) -> RocketMQResult<Option<Self>> {
+    pub fn from_auth_config(config: &AuthConfig) -> AuthServiceResult<Option<Self>> {
         Self::from_credentials_json(
             config.inner_client_authentication_credentials.as_str(),
             config.signature_algorithm,
@@ -94,16 +98,13 @@ impl AclClientRpcHook {
     pub fn from_credentials_json(
         credentials_json: &str,
         signature_algorithm: SignatureAlgorithm,
-    ) -> RocketMQResult<Option<Self>> {
+    ) -> AuthServiceResult<Option<Self>> {
         if credentials_json.trim().is_empty() {
             return Ok(None);
         }
 
         let credentials = serde_json::from_str::<ClientCredentials>(credentials_json).map_err(|error| {
-            RocketMQError::auth_config_invalid(
-                "innerClientAuthenticationCredentials",
-                format!("invalid JSON credentials: {error}"),
-            )
+            AuthServiceError::with_source(AuthOperation::Initialize, AuthFailureKind::InvalidConfiguration, error)
         })?;
         Ok(Self::from_credentials(credentials, signature_algorithm))
     }
@@ -111,23 +112,21 @@ impl AclClientRpcHook {
     pub fn from_tools_file(
         path: impl AsRef<Path>,
         signature_algorithm: SignatureAlgorithm,
-    ) -> RocketMQResult<Option<Self>> {
+    ) -> AuthServiceResult<Option<Self>> {
         let path = path.as_ref();
         let content = match fs::read_to_string(path) {
             Ok(content) => content,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
-                return Err(RocketMQError::auth_config_invalid(
-                    "toolsAclFile",
-                    format!("failed to read {}: {error}", path.display()),
+                return Err(AuthServiceError::with_source(
+                    AuthOperation::LoadSecret,
+                    AuthFailureKind::Unavailable,
+                    error,
                 ));
             }
         };
         let credentials = serde_yaml::from_str::<ClientCredentials>(&content).map_err(|error| {
-            RocketMQError::auth_config_invalid(
-                "toolsAclFile",
-                format!("invalid YAML credentials in {}: {error}", path.display()),
-            )
+            AuthServiceError::with_source(AuthOperation::Initialize, AuthFailureKind::InvalidConfiguration, error)
         })?;
         Ok(Self::from_credentials(credentials, signature_algorithm))
     }
@@ -163,7 +162,7 @@ impl AclClientRpcHook {
 }
 
 impl RPCHook for AclClientRpcHook {
-    fn do_before_request(&self, _remote_addr: SocketAddr, request: &mut RemotingCommand) -> RocketMQResult<()> {
+    fn do_before_request(&self, _remote_addr: SocketAddr, request: &mut RemotingCommand) -> Result<(), SharedError> {
         request.ensure_ext_fields_initialized();
         request.add_ext_field(ACCESS_KEY, self.access_key.clone());
         if let Some(security_token) = &self.security_token {
@@ -183,7 +182,8 @@ impl RPCHook for AclClientRpcHook {
             content.as_slice(),
             self.secret_key.as_str(),
             self.signature_algorithm,
-        )?;
+        )
+        .map_err(|error| Arc::new(CanonicalError::from(error)))?;
         request.add_ext_field(SIGNATURE, signature);
         Ok(())
     }
@@ -193,7 +193,7 @@ impl RPCHook for AclClientRpcHook {
         _remote_addr: SocketAddr,
         _request: &RemotingCommand,
         _response: &mut RemotingCommand,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), SharedError> {
         Ok(())
     }
 }

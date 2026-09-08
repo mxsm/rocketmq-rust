@@ -19,7 +19,7 @@ mod get_controller_metadata_sub_command;
 mod update_controller_config_sub_command;
 
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::controller::clean_broker_metadata_sub_command::CleanBrokerMetadataSubCommand;
@@ -72,7 +72,7 @@ impl CommandExecute for ControllerCommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             ControllerCommands::CleanBrokerMetadata(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
             ControllerCommands::ElectMaster(value) => value.execute(credentials, client_runtime.clone()).await,

@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use crate::manager::ControllerManager;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use crate::ControllerResult;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use std::collections::HashMap;
@@ -43,16 +42,13 @@ impl ControllerRequestProcessor {
     pub(super) async fn handle_update_controller_config(
         &self,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let body = request
             .body()
-            .ok_or_else(|| RocketMQError::request_body_invalid("UPDATE_CONTROLLER_CONFIG", "request body not exist"))?;
+            .ok_or_else(|| crate::error::request_body_invalid("UPDATE_CONTROLLER_CONFIG"))?;
         let properties = Self::parse_properties_from_string(body)?;
         if properties.is_empty() {
-            return Err(RocketMQError::request_body_invalid(
-                "UPDATE_CONTROLLER_CONFIG",
-                "update config found empty config",
-            ));
+            return Err(crate::error::request_body_invalid("UPDATE_CONTROLLER_CONFIG"));
         }
         if self.validate_blacklist_config_exist(&properties) {
             return Ok(Some(self.command_factory.create_response_command_with_code_remark(
@@ -65,9 +61,9 @@ impl ControllerRequestProcessor {
         Ok(Some(self.command_factory.create_success_response_command()))
     }
 
-    fn parse_properties_from_string(body: &[u8]) -> RocketMQResult<HashMap<String, String>> {
+    fn parse_properties_from_string(body: &[u8]) -> ControllerResult<HashMap<String, String>> {
         let content = String::from_utf8(body.to_vec())
-            .map_err(|error| RocketMQError::request_body_source("UPDATE_CONTROLLER_CONFIG", error))?;
+            .map_err(|error| crate::error::request_body_invalid_by("UPDATE_CONTROLLER_CONFIG", error))?;
         let mut properties = HashMap::new();
 
         for line in content.lines() {
@@ -79,7 +75,7 @@ impl ControllerRequestProcessor {
         Ok(properties)
     }
 
-    pub(super) fn handle_get_controller_config(&self) -> RocketMQResult<Option<RemotingCommand>> {
+    pub(super) fn handle_get_controller_config(&self) -> ControllerResult<Option<RemotingCommand>> {
         let config_string = self.controller_manager()?.controller_config().to_properties_string();
         Ok(Some(
             self.command_factory

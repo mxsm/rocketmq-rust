@@ -19,8 +19,6 @@ use std::io::Read;
 use std::path::Path;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::mix_all::ACL_CONF_TOOLS_FILE;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use serde_yaml;
@@ -28,6 +26,10 @@ use serde_yaml;
 use crate::migration::alc::acl_config::AclConfig;
 use crate::migration::alc::plain_access_config::PlainAccessConfig;
 use crate::migration::alc::plain_access_data::PlainAccessData;
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 pub struct PlainPermissionManager {
     pub file_home: String,
@@ -100,7 +102,7 @@ impl PlainPermissionManager {
         all_acl_files
     }
 
-    pub fn load(&mut self) -> Result<(), RocketMQError> {
+    pub fn load(&mut self) -> AuthServiceResult<()> {
         if self.file_home.is_empty() {
             return Ok(());
         }
@@ -116,7 +118,7 @@ impl PlainPermissionManager {
         Ok(())
     }
 
-    fn assure_acl_config_files_exist(&self) -> RocketMQResult<()> {
+    fn assure_acl_config_files_exist(&self) -> AuthServiceResult<()> {
         let default_acl_path = Path::new(&self.default_acl_file);
         if !default_acl_path.exists() {
             // Create file if it doesn't exist
@@ -125,7 +127,7 @@ impl PlainPermissionManager {
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => { /* maybe created by other threads */ }
                 Err(e) => {
                     tracing::error!("Error in creating {}: {:?}", self.default_acl_file, e);
-                    return Err(e.into());
+                    return Err(AuthServiceError::storage_write_failed(e));
                 }
             }
         }
@@ -133,7 +135,7 @@ impl PlainPermissionManager {
     }
 
     /// Reads ACL YAML files and returns aggregated `AclConfig` (deduplicating access keys)
-    pub fn get_all_acl_config(&self) -> RocketMQResult<AclConfig> {
+    pub fn get_all_acl_config(&self) -> AuthServiceResult<AclConfig> {
         let mut acl_config = AclConfig::new();
         let mut configs: Vec<PlainAccessConfig> = Vec::new();
         let mut white_addrs: Vec<CheetahString> = Vec::new();
@@ -143,22 +145,18 @@ impl PlainPermissionManager {
             // Open file (return IO error if fail)
             let mut f = File::open(path).map_err(|e| {
                 tracing::error!("ACL file {} cannot be opened: {:?}", path, e);
-                RocketMQError::IO(e)
+                AuthServiceError::storage_read_failed(e)
             })?;
 
             let mut content = String::new();
             f.read_to_string(&mut content).map_err(|e| {
                 tracing::error!("Failed to read ACL file {}: {:?}", path, e);
-                RocketMQError::IO(e)
+                AuthServiceError::storage_read_failed(e)
             })?;
 
             let plain_acl_conf_data: PlainAccessData = serde_yaml::from_str(&content).map_err(|e| {
                 tracing::error!("Failed to parse YAML {}: {:?}", path, e);
-                // map to unified serialization error
-                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::decode_failed(
-                    "YAML",
-                    e.to_string(),
-                ))
+                AuthServiceError::with_source(AuthOperation::DecodeMetadata, AuthFailureKind::InvalidData, e)
             })?;
 
             let global_white_addrs = plain_acl_conf_data.global_white_remote_addresses();
@@ -287,10 +285,9 @@ accounts:
 
         let res = mgr.get_all_acl_config();
         assert!(res.is_err());
-        match res.err().unwrap() {
-            rocketmq_error::RocketMQError::Serialization(_) => {}
-            other => panic!("expected serialization error, got {other:?}"),
-        }
+        let error = res.expect_err("invalid YAML must fail");
+        assert_eq!(error.operation(), AuthOperation::DecodeMetadata);
+        assert_eq!(error.kind(), AuthFailureKind::InvalidData);
     }
 
     #[test]

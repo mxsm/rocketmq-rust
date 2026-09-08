@@ -55,11 +55,8 @@ impl HeaderFieldSource for HeaderMap {
 
 #[cold]
 #[inline(never)]
-fn malformed_binary_fields(reason: &'static str) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-        format: "binary-header-fields",
-        message: reason.to_string(),
-    })
+fn malformed_binary_fields(reason: &'static str) -> rocketmq_error::Error {
+    crate::error::serialization_decode_failed("binary-header-fields", reason)
 }
 
 /// A validated, immutable ROCKETMQ extension-field payload.
@@ -75,7 +72,7 @@ pub(crate) struct BinaryHeaderFields {
 
 impl BinaryHeaderFields {
     /// Validates and retains one complete extension-field payload.
-    pub(crate) fn new(payload: Bytes) -> rocketmq_error::RocketMQResult<Self> {
+    pub(crate) fn new(payload: Bytes) -> rocketmq_error::Result<Self> {
         let entry_count = Self::validate(&payload)?;
         Ok(Self { payload, entry_count })
     }
@@ -102,7 +99,7 @@ impl BinaryHeaderFields {
         }
     }
 
-    fn validate(payload: &[u8]) -> rocketmq_error::RocketMQResult<usize> {
+    fn validate(payload: &[u8]) -> rocketmq_error::Result<usize> {
         let mut cursor = 0usize;
         let mut entry_count = 0usize;
         while cursor < payload.len() {
@@ -132,12 +129,12 @@ impl BinaryHeaderFields {
         Ok(entry_count)
     }
 
-    fn read_u16(payload: &[u8], cursor: &mut usize) -> rocketmq_error::RocketMQResult<usize> {
+    fn read_u16(payload: &[u8], cursor: &mut usize) -> rocketmq_error::Result<usize> {
         let bytes = Self::take(payload, cursor, KEY_LENGTH_BYTES, "missing extension-field key length")?;
         Ok(u16::from_be_bytes([bytes[0], bytes[1]]) as usize)
     }
 
-    fn read_i32(payload: &[u8], cursor: &mut usize) -> rocketmq_error::RocketMQResult<i32> {
+    fn read_i32(payload: &[u8], cursor: &mut usize) -> rocketmq_error::Result<i32> {
         let bytes = Self::take(
             payload,
             cursor,
@@ -153,7 +150,7 @@ impl BinaryHeaderFields {
         cursor: &mut usize,
         length: usize,
         truncated_reason: &'static str,
-    ) -> rocketmq_error::RocketMQResult<&'a str> {
+    ) -> rocketmq_error::Result<&'a str> {
         let bytes = Self::take(payload, cursor, length, truncated_reason)?;
         std::str::from_utf8(bytes).map_err(|_| malformed_binary_fields("extension-field text is not valid UTF-8"))
     }
@@ -163,7 +160,7 @@ impl BinaryHeaderFields {
         cursor: &mut usize,
         length: usize,
         reason: &'static str,
-    ) -> rocketmq_error::RocketMQResult<&'a [u8]> {
+    ) -> rocketmq_error::Result<&'a [u8]> {
         let end = cursor
             .checked_add(length)
             .ok_or_else(|| malformed_binary_fields(reason))?;

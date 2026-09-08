@@ -16,7 +16,7 @@ mod consumer_connection_sub_command;
 mod producer_connection_sub_command;
 
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::connection::consumer_connection_sub_command::ConsumerConnectionSubCommand;
@@ -39,7 +39,7 @@ impl CommandExecute for ConnectionCommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             ConnectionCommands::ConsumerConnection(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
             ConnectionCommands::ProducerConnection(cmd) => cmd.execute(credentials, client_runtime.clone()).await,

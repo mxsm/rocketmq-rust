@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/// Result returned by local storage implementation operations.
+pub type StoreResult<T> = std::result::Result<T, rocketmq_store_api::StoreError>;
+
 pub mod base;
 pub mod commit_log;
 pub mod config;

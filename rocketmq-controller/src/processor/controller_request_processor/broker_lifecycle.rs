@@ -16,8 +16,7 @@ use crate::controller::broker_heartbeat_manager::BrokerHeartbeatAdmission;
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::controller::broker_heartbeat_manager::BrokerSession;
 use crate::Controller;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use crate::ControllerResult;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
 use rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader;
@@ -36,7 +35,7 @@ impl ControllerRequestProcessor {
         &self,
         session: BrokerSession,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header_fast::<BrokerHeartbeatRequestHeader>()?;
 
         if let Some(broker_id) = &request_header.broker_id {
@@ -46,18 +45,15 @@ impl ControllerRequestProcessor {
                     "Heart beat with invalid brokerId",
                 )));
             }
-            let heartbeat_timeout_mills = request_header.heartbeat_timeout_mills.ok_or_else(|| {
-                RocketMQError::request_header_error("BrokerHeartbeatRequestHeader.heartbeat_timeout_mills is missing")
-            })?;
-            let heartbeat_timeout_mills = u64::try_from(heartbeat_timeout_mills).map_err(|_| {
-                RocketMQError::request_header_error(
-                    "BrokerHeartbeatRequestHeader.heartbeat_timeout_mills must be non-negative",
-                )
-            })?;
+            let heartbeat_timeout_mills = request_header
+                .heartbeat_timeout_mills
+                .ok_or_else(|| crate::error::request_header_invalid("validate broker heartbeat timeout"))?;
+            let heartbeat_timeout_mills = u64::try_from(heartbeat_timeout_mills)
+                .map_err(|_| crate::error::request_header_invalid("validate broker heartbeat timeout"))?;
             if heartbeat_timeout_mills > MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS {
-                return Err(RocketMQError::request_header_error(format!(
-                    "BrokerHeartbeatRequestHeader.heartbeat_timeout_mills must not exceed {MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS}",
-                )));
+                return Err(crate::error::request_header_invalid(
+                    "validate broker heartbeat timeout",
+                ));
             }
             let admission = self.heartbeat_manager.on_broker_session_heartbeat(
                 &request_header.cluster_name,
@@ -108,15 +104,12 @@ impl ControllerRequestProcessor {
     pub(super) async fn handle_clean_broker_data(
         &self,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<CleanBrokerDataRequestHeader>()
             .map_err(|error| {
                 warn!("Failed to decode CleanBrokerDataRequestHeader: {:?}", error);
-                RocketMQError::request_header_error(format!(
-                    "Failed to decode CleanBrokerDataRequestHeader: {:?}",
-                    error
-                ))
+                crate::error::request_header_invalid_by("decode clean broker data header", error)
             })?;
 
         if request_header.broker_name.is_empty() {
@@ -135,15 +128,12 @@ impl ControllerRequestProcessor {
     pub(super) async fn handle_get_next_broker_id(
         &self,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<GetNextBrokerIdRequestHeader>()
             .map_err(|error| {
                 warn!("Failed to decode GetNextBrokerIdRequestHeader: {:?}", error);
-                RocketMQError::request_header_error(format!(
-                    "Failed to decode GetNextBrokerIdRequestHeader: {:?}",
-                    error
-                ))
+                crate::error::request_header_invalid_by("decode next broker id header", error)
             })?;
 
         info!(
@@ -191,12 +181,12 @@ impl ControllerRequestProcessor {
     pub(super) async fn handle_apply_broker_id(
         &self,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<ApplyBrokerIdRequestHeader>()
             .map_err(|error| {
                 warn!("Failed to decode ApplyBrokerIdRequestHeader: {:?}", error);
-                RocketMQError::request_header_error(format!("Failed to decode ApplyBrokerIdRequestHeader: {:?}", error))
+                crate::error::request_header_invalid_by("decode apply broker id header", error)
             })?;
 
         info!(
@@ -277,15 +267,12 @@ impl ControllerRequestProcessor {
     pub(super) async fn handle_register_broker(
         &self,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<RegisterBrokerToControllerRequestHeader>()
             .map_err(|error| {
                 warn!("Failed to decode RegisterBrokerToControllerRequestHeader: {:?}", error);
-                RocketMQError::request_header_error(format!(
-                    "Failed to decode RegisterBrokerToControllerRequestHeader: {:?}",
-                    error
-                ))
+                crate::error::request_header_invalid_by("decode register broker header", error)
             })?;
 
         let broker_name = request_header.broker_name.clone().unwrap_or_default();

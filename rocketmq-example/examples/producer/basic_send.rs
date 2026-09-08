@@ -21,10 +21,10 @@
 //! - `send_with_callback_timeout`: Send with callback and timeout
 //! - `send_oneway`: One-way send (fire and forget, no response)
 
+use rocketmq_client_rust::ClientError;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::SendResult;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_single::Message;
 
 pub const PRODUCER_GROUP: &str = "producer_basic_send";
@@ -36,11 +36,11 @@ pub const TIMEOUT_MS: u64 = 3000;
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
@@ -75,7 +75,7 @@ async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>
 ///
 /// Sends a message and waits for the broker to acknowledge.
 /// Returns the send result containing message ID, queue info, etc.
-async fn basic_send(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn basic_send(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("1. Basic Synchronous Send");
     println!("   Method: producer.send(message).await");
 
@@ -98,7 +98,7 @@ async fn basic_send(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
 ///
 /// Sends a message but returns an error if the specified timeout is exceeded.
 /// Useful for preventing indefinite blocking.
-async fn send_with_timeout(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_with_timeout(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("2. Send with Timeout");
     println!("   Method: producer.send_with_timeout(message, timeout_ms).await");
     println!("   Timeout: {}ms", TIMEOUT_MS);
@@ -123,7 +123,7 @@ async fn send_with_timeout(producer: &mut DefaultMQProducer) -> RocketMQResult<(
 /// Sends a message asynchronously. The result is delivered via the callback
 /// function when the send completes, allowing the producer to continue work
 /// without waiting.
-async fn send_with_callback(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_with_callback(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("3. Send with Callback");
     println!("   Method: producer.send_with_callback(message, callback_fn).await");
     println!("   Callback: Executes when send completes");
@@ -137,7 +137,7 @@ async fn send_with_callback(producer: &mut DefaultMQProducer) -> RocketMQResult<
     producer
         .send_with_callback(
             message,
-            |result: Option<&SendResult>, error: Option<&RocketMQError>| match (result, error) {
+            |result: Option<&SendResult>, error: Option<&ClientError>| match (result, error) {
                 (Some(r), None) => println!("   Callback: Success - {:?}", r),
                 (None, Some(e)) => println!("   Callback: Error - {}", e),
                 _ => println!("   Callback: Unknown state"),
@@ -153,7 +153,7 @@ async fn send_with_callback(producer: &mut DefaultMQProducer) -> RocketMQResult<
 ///
 /// Combines callback delivery with timeout protection. The callback will
 /// be called with either success or timeout error.
-async fn send_with_callback_timeout(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_with_callback_timeout(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("4. Send with Callback and Timeout");
     println!("   Method: producer.send_with_callback_timeout(message, callback_fn, timeout_ms).await");
     println!("   Timeout: {}ms", TIMEOUT_MS);
@@ -167,7 +167,7 @@ async fn send_with_callback_timeout(producer: &mut DefaultMQProducer) -> RocketM
     producer
         .send_with_callback_timeout(
             message,
-            |result: Option<&SendResult>, error: Option<&RocketMQError>| match (result, error) {
+            |result: Option<&SendResult>, error: Option<&ClientError>| match (result, error) {
                 (Some(r), None) => println!("   Callback: Success - {:?}", r),
                 (None, Some(e)) => println!("   Callback: Error - {}", e),
                 _ => println!("   Callback: Unknown state"),
@@ -184,7 +184,7 @@ async fn send_with_callback_timeout(producer: &mut DefaultMQProducer) -> RocketM
 ///
 /// Sends a message without waiting for any response from the broker.
 /// Fastest send method but provides no reliability guarantees.
-async fn send_oneway(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_oneway(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("5. One-way Send (Fire and Forget)");
     println!("   Method: producer.send_oneway(message).await");
     println!("   Note: Does not wait for broker response");

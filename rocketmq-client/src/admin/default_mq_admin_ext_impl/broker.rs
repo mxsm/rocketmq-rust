@@ -44,9 +44,9 @@ pub(super) fn notify_min_broker_id_change_request_header(
     min_broker_addr: CheetahString,
     offline_broker_addr: Option<CheetahString>,
     ha_broker_addr: Option<CheetahString>,
-) -> rocketmq_error::RocketMQResult<NotifyMinBrokerIdChangeRequestHeader> {
+) -> crate::ClientResult<NotifyMinBrokerIdChangeRequestHeader> {
     if min_broker_addr.is_empty() {
-        return Err(RocketMQError::illegal_argument(
+        return Err(ClientError::illegal_argument(
             "notifyMinBrokerIdChanged requires minBrokerAddr",
         ));
     }
@@ -91,7 +91,7 @@ impl BrokerCleanupOperation {
         api: &Arc<MQClientAPIImpl>,
         addr: &CheetahString,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<bool> {
+    ) -> crate::ClientResult<bool> {
         match self {
             BrokerCleanupOperation::CleanExpiredConsumerQueue => {
                 api.clean_expired_consume_queue(addr, timeout_millis).await
@@ -143,7 +143,7 @@ impl DefaultMQAdminExtImpl {
         cluster: Option<CheetahString>,
         addr: Option<CheetahString>,
         operation: BrokerCleanupOperation,
-    ) -> rocketmq_error::RocketMQResult<bool> {
+    ) -> crate::ClientResult<bool> {
         let timeout = self.remoting_timeout_millis()?;
         let api = self.mq_client_api()?;
 

@@ -47,7 +47,7 @@ pub struct UpdateOrderConfSubCommand {
 }
 
 impl UpdateOrderConfSubCommand {
-    fn request(&self) -> rocketmq_error::RocketMQResult<OrderConfRequest> {
+    fn request(&self) -> rocketmq_error::Result<OrderConfRequest> {
         Ok(
             OrderConfRequest::try_new(self.topic.clone(), self.method.as_str(), self.order_conf.clone())?
                 .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()),
@@ -77,7 +77,7 @@ impl CommandExecute for UpdateOrderConfSubCommand {
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> rocketmq_error::Result<()> {
         let result = TopicService::apply_order_conf(self.request()?).await?;
         Self::print_result(result);
         Ok(())

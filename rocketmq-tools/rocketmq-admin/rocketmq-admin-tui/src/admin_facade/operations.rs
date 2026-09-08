@@ -210,8 +210,7 @@ use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicPermRequest
 use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicPermResult;
 use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicRequest;
 use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicResult;
-use rocketmq_admin_core::client_adapter::services::RocketMQError;
-use rocketmq_admin_core::client_adapter::services::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_protocol::protocol::admin::rollback_stats::RollbackStats;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -226,7 +225,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         username: impl Into<String>,
-    ) -> RocketMQResult<GetUserRequest> {
+    ) -> CanonicalResult<GetUserRequest> {
         Ok(GetUserRequest::try_new(broker_addr, cluster_name, username)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -238,7 +237,7 @@ impl TuiAdminFacade {
         username: impl Into<String>,
         password: impl Into<String>,
         user_type: Option<String>,
-    ) -> RocketMQResult<CreateUserRequest> {
+    ) -> CanonicalResult<CreateUserRequest> {
         Ok(
             CreateUserRequest::try_new(broker_addr, cluster_name, username, password, user_type)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -253,7 +252,7 @@ impl TuiAdminFacade {
         password: Option<String>,
         user_type: Option<String>,
         user_status: Option<String>,
-    ) -> RocketMQResult<UpdateUserRequest> {
+    ) -> CanonicalResult<UpdateUserRequest> {
         Ok(
             UpdateUserRequest::try_new(broker_addr, cluster_name, username, password, user_type, user_status)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -265,7 +264,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         username: impl Into<String>,
-    ) -> RocketMQResult<DeleteUserRequest> {
+    ) -> CanonicalResult<DeleteUserRequest> {
         Ok(DeleteUserRequest::try_new(broker_addr, cluster_name, username)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -275,7 +274,7 @@ impl TuiAdminFacade {
         from_broker: impl Into<String>,
         to_broker: impl Into<String>,
         usernames: Option<String>,
-    ) -> RocketMQResult<CopyUsersRequest> {
+    ) -> CanonicalResult<CopyUsersRequest> {
         Ok(CopyUsersRequest::try_new(from_broker, to_broker, usernames)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -285,7 +284,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         filter: Option<String>,
-    ) -> RocketMQResult<ListUsersRequest> {
+    ) -> CanonicalResult<ListUsersRequest> {
         Ok(ListUsersRequest::try_new(broker_addr, cluster_name, filter)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -295,7 +294,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         subject: impl Into<String>,
-    ) -> RocketMQResult<GetAclRequest> {
+    ) -> CanonicalResult<GetAclRequest> {
         Ok(GetAclRequest::try_new(broker_addr, cluster_name, subject)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -310,7 +309,7 @@ impl TuiAdminFacade {
         actions: impl Into<String>,
         decision: impl Into<String>,
         source_ip: Option<String>,
-    ) -> RocketMQResult<CreateAclRequest> {
+    ) -> CanonicalResult<CreateAclRequest> {
         Ok(CreateAclRequest::try_new(
             broker_addr,
             cluster_name,
@@ -333,7 +332,7 @@ impl TuiAdminFacade {
         actions: impl Into<String>,
         decision: impl Into<String>,
         source_ip: Option<String>,
-    ) -> RocketMQResult<UpdateAclRequest> {
+    ) -> CanonicalResult<UpdateAclRequest> {
         Ok(UpdateAclRequest::try_new(
             broker_addr,
             cluster_name,
@@ -352,7 +351,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         subject: impl Into<String>,
         resource: Option<String>,
-    ) -> RocketMQResult<DeleteAclRequest> {
+    ) -> CanonicalResult<DeleteAclRequest> {
         Ok(DeleteAclRequest::try_new(broker_addr, cluster_name, subject, resource)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -362,7 +361,7 @@ impl TuiAdminFacade {
         from_broker: impl Into<String>,
         to_broker: impl Into<String>,
         subjects: Option<String>,
-    ) -> RocketMQResult<CopyAclRequest> {
+    ) -> CanonicalResult<CopyAclRequest> {
         Ok(CopyAclRequest::try_new(from_broker, to_broker, subjects)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -373,7 +372,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         subject_filter: Option<String>,
         resource_filter: Option<String>,
-    ) -> RocketMQResult<ListAclRequest> {
+    ) -> CanonicalResult<ListAclRequest> {
         Ok(ListAclRequest::try_new(broker_addr, cluster_name, subject_filter)?
             .with_resource_filter(resource_filter)
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
@@ -382,7 +381,7 @@ impl TuiAdminFacade {
     pub fn controller_config_query_request(
         &self,
         controller_address: impl Into<String>,
-    ) -> RocketMQResult<ControllerConfigQueryRequest> {
+    ) -> CanonicalResult<ControllerConfigQueryRequest> {
         Ok(ControllerConfigQueryRequest::try_new(controller_address)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -392,7 +391,7 @@ impl TuiAdminFacade {
         controller_address: impl Into<String>,
         key: impl Into<String>,
         value: impl Into<String>,
-    ) -> RocketMQResult<ControllerConfigUpdateRequest> {
+    ) -> CanonicalResult<ControllerConfigUpdateRequest> {
         Ok(ControllerConfigUpdateRequest::try_new(controller_address, key, value)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -400,7 +399,7 @@ impl TuiAdminFacade {
     pub fn controller_metadata_query_request(
         &self,
         controller_address: impl Into<String>,
-    ) -> RocketMQResult<ControllerMetadataQueryRequest> {
+    ) -> CanonicalResult<ControllerMetadataQueryRequest> {
         Ok(ControllerMetadataQueryRequest::try_new(controller_address)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -411,7 +410,7 @@ impl TuiAdminFacade {
         cluster_name: impl Into<String>,
         broker_name: impl Into<String>,
         broker_id: i64,
-    ) -> RocketMQResult<ControllerElectMasterRequest> {
+    ) -> CanonicalResult<ControllerElectMasterRequest> {
         Ok(
             ControllerElectMasterRequest::try_new(controller_address, cluster_name, broker_name, broker_id)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -425,7 +424,7 @@ impl TuiAdminFacade {
         broker_controller_ids_to_clean: Option<String>,
         cluster_name: Option<String>,
         clean_living_broker: bool,
-    ) -> RocketMQResult<ControllerMetadataCleanRequest> {
+    ) -> CanonicalResult<ControllerMetadataCleanRequest> {
         Ok(ControllerMetadataCleanRequest::try_new(
             controller_address,
             broker_name,
@@ -436,7 +435,7 @@ impl TuiAdminFacade {
         .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
-    pub fn namesrv_config_query_request(&self) -> RocketMQResult<NamesrvConfigQueryRequest> {
+    pub fn namesrv_config_query_request(&self) -> CanonicalResult<NamesrvConfigQueryRequest> {
         NamesrvConfigQueryRequest::try_new(self.namesrv_addr.clone())
     }
 
@@ -444,7 +443,7 @@ impl TuiAdminFacade {
         &self,
         key: impl Into<String>,
         value: impl Into<String>,
-    ) -> RocketMQResult<NamesrvConfigUpdateRequest> {
+    ) -> CanonicalResult<NamesrvConfigUpdateRequest> {
         NamesrvConfigUpdateRequest::try_new(key, value, self.namesrv_addr.clone())
     }
 
@@ -453,7 +452,7 @@ impl TuiAdminFacade {
         namespace: impl Into<String>,
         key: impl Into<String>,
         value: impl Into<String>,
-    ) -> RocketMQResult<KvConfigUpdateRequest> {
+    ) -> CanonicalResult<KvConfigUpdateRequest> {
         Ok(
             KvConfigUpdateRequest::try_new(namespace, key, value)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -464,11 +463,11 @@ impl TuiAdminFacade {
         &self,
         namespace: impl Into<String>,
         key: impl Into<String>,
-    ) -> RocketMQResult<KvConfigDeleteRequest> {
+    ) -> CanonicalResult<KvConfigDeleteRequest> {
         Ok(KvConfigDeleteRequest::try_new(namespace, key)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
-    pub fn write_perm_request(&self, broker_name: impl Into<String>) -> RocketMQResult<WritePermRequest> {
+    pub fn write_perm_request(&self, broker_name: impl Into<String>) -> CanonicalResult<WritePermRequest> {
         Ok(WritePermRequest::try_new(broker_name)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
@@ -477,7 +476,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         key_pattern: Option<String>,
-    ) -> RocketMQResult<BrokerConfigQueryRequest> {
+    ) -> CanonicalResult<BrokerConfigQueryRequest> {
         Ok(
             BrokerConfigQueryRequest::try_new(broker_addr, cluster_name, key_pattern)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -490,7 +489,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         entries: std::collections::BTreeMap<String, String>,
         rollback_enabled: bool,
-    ) -> RocketMQResult<BrokerConfigUpdateRequest> {
+    ) -> CanonicalResult<BrokerConfigUpdateRequest> {
         Ok(BrokerConfigUpdateRequest::try_new(broker_addr, cluster_name, entries)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone())
             .with_rollback_enabled(rollback_enabled))
@@ -500,7 +499,7 @@ impl TuiAdminFacade {
         &self,
         broker_addr: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<BrokerRuntimeStatsQueryRequest> {
+    ) -> CanonicalResult<BrokerRuntimeStatsQueryRequest> {
         Ok(BrokerRuntimeStatsQueryRequest::try_new(broker_addr, cluster_name)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -511,7 +510,7 @@ impl TuiAdminFacade {
         timeout_millis: u64,
         diff_level: i64,
         is_order: bool,
-    ) -> RocketMQResult<BrokerConsumeStatsQueryRequest> {
+    ) -> CanonicalResult<BrokerConsumeStatsQueryRequest> {
         Ok(
             BrokerConsumeStatsQueryRequest::try_new(broker_addr, timeout_millis, diff_level, is_order)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -522,7 +521,7 @@ impl TuiAdminFacade {
         &self,
         broker_name: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<BrokerEpochQueryRequest> {
+    ) -> CanonicalResult<BrokerEpochQueryRequest> {
         Ok(BrokerEpochQueryRequest::try_new(broker_name, cluster_name)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -531,7 +530,7 @@ impl TuiAdminFacade {
         &self,
         broker_addr: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<ColdDataFlowCtrInfoQueryRequest> {
+    ) -> CanonicalResult<ColdDataFlowCtrInfoQueryRequest> {
         Ok(ColdDataFlowCtrInfoQueryRequest::try_new(broker_addr, cluster_name)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -540,7 +539,7 @@ impl TuiAdminFacade {
         &self,
         broker_addr: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<BrokerOptionalTarget> {
+    ) -> CanonicalResult<BrokerOptionalTarget> {
         Ok(BrokerOptionalTarget::new(broker_addr, cluster_name)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
@@ -550,7 +549,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         topic: Option<String>,
         dry_run: bool,
-    ) -> RocketMQResult<CleanExpiredConsumeQueueRequest> {
+    ) -> CanonicalResult<CleanExpiredConsumeQueueRequest> {
         Ok(
             CleanExpiredConsumeQueueRequest::try_new(broker_addr, cluster_name, topic, dry_run)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -561,7 +560,7 @@ impl TuiAdminFacade {
         &self,
         broker_addr: Option<String>,
         offset: Option<i64>,
-    ) -> RocketMQResult<ResetMasterFlushOffsetRequest> {
+    ) -> CanonicalResult<ResetMasterFlushOffsetRequest> {
         Ok(ResetMasterFlushOffsetRequest::try_new(broker_addr, offset)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -572,7 +571,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         consumer_group: impl Into<String>,
         threshold: impl Into<String>,
-    ) -> RocketMQResult<ColdDataFlowCtrGroupConfigUpdateRequest> {
+    ) -> CanonicalResult<ColdDataFlowCtrGroupConfigUpdateRequest> {
         Ok(
             ColdDataFlowCtrGroupConfigUpdateRequest::try_new(broker_addr, cluster_name, consumer_group, threshold)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -584,7 +583,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         consumer_group: impl Into<String>,
-    ) -> RocketMQResult<ColdDataFlowCtrGroupConfigRemoveRequest> {
+    ) -> CanonicalResult<ColdDataFlowCtrGroupConfigRemoveRequest> {
         Ok(
             ColdDataFlowCtrGroupConfigRemoveRequest::try_new(broker_addr, cluster_name, consumer_group)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -602,7 +601,7 @@ impl TuiAdminFacade {
         read_ahead_size: Option<String>,
         read_ahead_size_key: Option<String>,
         show_only: bool,
-    ) -> RocketMQResult<CommitLogReadAheadRequest> {
+    ) -> CanonicalResult<CommitLogReadAheadRequest> {
         Ok(CommitLogReadAheadRequest::try_new(
             broker_addr,
             cluster_name,
@@ -621,7 +620,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         engine_type: impl Into<String>,
-    ) -> RocketMQResult<SwitchTimerEngineRequest> {
+    ) -> CanonicalResult<SwitchTimerEngineRequest> {
         Ok(
             SwitchTimerEngineRequest::try_new(broker_addr, cluster_name, engine_type)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -641,7 +640,7 @@ impl TuiAdminFacade {
         amount: u64,
         size: u64,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<ClusterSendMessageRtRequest> {
+    ) -> CanonicalResult<ClusterSendMessageRtRequest> {
         Ok(ClusterSendMessageRtRequest::try_new(amount, size, cluster_name)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -650,7 +649,7 @@ impl TuiAdminFacade {
         &self,
         consumer_group: impl Into<String>,
         broker_addr: Option<String>,
-    ) -> RocketMQResult<ConsumerConnectionQueryRequest> {
+    ) -> CanonicalResult<ConsumerConnectionQueryRequest> {
         Ok(ConsumerConnectionQueryRequest::try_new(consumer_group, broker_addr)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -659,12 +658,15 @@ impl TuiAdminFacade {
         &self,
         producer_group: impl Into<String>,
         topic: impl Into<String>,
-    ) -> RocketMQResult<ProducerConnectionQueryRequest> {
+    ) -> CanonicalResult<ProducerConnectionQueryRequest> {
         Ok(ProducerConnectionQueryRequest::try_new(producer_group, topic)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
-    pub fn consumer_config_request(&self, group_name: impl Into<String>) -> RocketMQResult<ConsumerConfigQueryRequest> {
+    pub fn consumer_config_request(
+        &self,
+        group_name: impl Into<String>,
+    ) -> CanonicalResult<ConsumerConfigQueryRequest> {
         Ok(ConsumerConfigQueryRequest::try_new(group_name)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
@@ -674,7 +676,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         group_name: impl Into<String>,
         remove_offset: bool,
-    ) -> RocketMQResult<DeleteSubscriptionGroupRequest> {
+    ) -> CanonicalResult<DeleteSubscriptionGroupRequest> {
         Ok(
             DeleteSubscriptionGroupRequest::try_new(broker_addr, cluster_name, group_name, remove_offset)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -689,7 +691,7 @@ impl TuiAdminFacade {
         group_name: impl Into<String>,
         mode: MessageRequestMode,
         pop_share_queue_num: Option<i32>,
-    ) -> RocketMQResult<SetConsumeModeRequest> {
+    ) -> CanonicalResult<SetConsumeModeRequest> {
         Ok(SetConsumeModeRequest::try_new(
             broker_addr,
             cluster_name,
@@ -718,7 +720,7 @@ impl TuiAdminFacade {
         notify_consumer_ids_changed_enable: bool,
         group_sys_flag: i32,
         consume_timeout_minute: i32,
-    ) -> RocketMQResult<UpdateSubscriptionGroupRequest> {
+    ) -> CanonicalResult<UpdateSubscriptionGroupRequest> {
         let config = subscription_group_config(
             group_name,
             consume_enable,
@@ -756,7 +758,7 @@ impl TuiAdminFacade {
         notify_consumer_ids_changed_enable: bool,
         group_sys_flag: i32,
         consume_timeout_minute: i32,
-    ) -> RocketMQResult<UpdateSubscriptionGroupListRequest> {
+    ) -> CanonicalResult<UpdateSubscriptionGroupListRequest> {
         let configs = split_csv(group_names.as_ref())
             .into_iter()
             .map(|group_name| {
@@ -788,7 +790,7 @@ impl TuiAdminFacade {
         client_id: Option<String>,
         broker_addr: Option<String>,
         jstack: bool,
-    ) -> RocketMQResult<ConsumerRunningInfoRequest> {
+    ) -> CanonicalResult<ConsumerRunningInfoRequest> {
         ConsumerRunningInfoRequest::try_new(group_name, client_id, broker_addr, jstack, self.namesrv_addr.clone())
     }
 
@@ -798,7 +800,7 @@ impl TuiAdminFacade {
         topic_name: Option<String>,
         show_client_ip: bool,
         cluster: Option<String>,
-    ) -> RocketMQResult<ConsumerProgressRequest> {
+    ) -> CanonicalResult<ConsumerProgressRequest> {
         ConsumerProgressRequest::try_new(
             consumer_group,
             topic_name,
@@ -815,7 +817,7 @@ impl TuiAdminFacade {
         include_undone_msgs: bool,
         include_running_info: bool,
         max_events: Option<usize>,
-    ) -> RocketMQResult<StartMonitoringRequest> {
+    ) -> CanonicalResult<StartMonitoringRequest> {
         StartMonitoringRequest::try_new(
             self.namesrv_addr.clone(),
             round_count,
@@ -832,7 +834,7 @@ impl TuiAdminFacade {
         dest_group: impl Into<String>,
         topic: impl Into<String>,
         offline: bool,
-    ) -> RocketMQResult<CloneGroupOffsetRequest> {
+    ) -> CanonicalResult<CloneGroupOffsetRequest> {
         Ok(CloneGroupOffsetRequest::try_new(src_group, dest_group, topic, offline)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -842,7 +844,7 @@ impl TuiAdminFacade {
         group: impl Into<String>,
         topic: impl Into<String>,
         origin_client_id: Option<String>,
-    ) -> RocketMQResult<ConsumerStatusQueryRequest> {
+    ) -> CanonicalResult<ConsumerStatusQueryRequest> {
         Ok(ConsumerStatusQueryRequest::try_new(group, topic, origin_client_id)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -853,7 +855,7 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         cluster: Option<String>,
         force: Option<bool>,
-    ) -> RocketMQResult<SkipAccumulatedMessageRequest> {
+    ) -> CanonicalResult<SkipAccumulatedMessageRequest> {
         SkipAccumulatedMessageRequest::try_new(group, topic, cluster, force, self.namesrv_addr.clone())
     }
 
@@ -862,7 +864,7 @@ impl TuiAdminFacade {
         group: impl Into<String>,
         topic: impl Into<String>,
         timestamp: u64,
-    ) -> RocketMQResult<ResetOffsetByTimeRequest> {
+    ) -> CanonicalResult<ResetOffsetByTimeRequest> {
         Ok(ResetOffsetByTimeRequest::try_new(group, topic, timestamp)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -874,7 +876,7 @@ impl TuiAdminFacade {
         timestamp: u64,
         force: Option<bool>,
         cluster: Option<String>,
-    ) -> RocketMQResult<ResetOffsetByTimeOldRequest> {
+    ) -> CanonicalResult<ResetOffsetByTimeOldRequest> {
         ResetOffsetByTimeOldRequest::try_new(group, topic, timestamp, force, cluster, self.namesrv_addr.clone())
     }
 
@@ -886,7 +888,7 @@ impl TuiAdminFacade {
         count: i32,
         broker_addr: Option<String>,
         consumer_group: Option<String>,
-    ) -> RocketMQResult<QueryConsumeQueueRequest> {
+    ) -> CanonicalResult<QueryConsumeQueueRequest> {
         Ok(
             QueryConsumeQueueRequest::try_new(topic, queue_id, index, count, broker_addr, consumer_group)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -898,7 +900,7 @@ impl TuiAdminFacade {
         cluster_name: impl Into<String>,
         topic: Option<String>,
         check_from: Option<i64>,
-    ) -> RocketMQResult<CheckRocksdbCqWriteProgressRequest> {
+    ) -> CanonicalResult<CheckRocksdbCqWriteProgressRequest> {
         CheckRocksdbCqWriteProgressRequest::try_new(
             cluster_name,
             self.namesrv_addr.clone().unwrap_or_default(),
@@ -911,7 +913,7 @@ impl TuiAdminFacade {
         &self,
         broker_addr: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<HaStatusQueryRequest> {
+    ) -> CanonicalResult<HaStatusQueryRequest> {
         Ok(HaStatusQueryRequest::try_new(broker_addr, cluster_name)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -921,7 +923,7 @@ impl TuiAdminFacade {
         controller_address: impl Into<String>,
         broker_name: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<SyncStateSetQueryRequest> {
+    ) -> CanonicalResult<SyncStateSetQueryRequest> {
         Ok(
             SyncStateSetQueryRequest::try_new(controller_address, broker_name, cluster_name)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -932,7 +934,7 @@ impl TuiAdminFacade {
         StatsAllQueryRequest::new(active_topic, topic).with_optional_namesrv_addr(self.namesrv_addr.clone())
     }
 
-    pub fn producer_info_request(&self, broker_addr: impl Into<String>) -> RocketMQResult<ProducerInfoQueryRequest> {
+    pub fn producer_info_request(&self, broker_addr: impl Into<String>) -> CanonicalResult<ProducerInfoQueryRequest> {
         Ok(ProducerInfoQueryRequest::try_new(broker_addr)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
@@ -946,7 +948,7 @@ impl TuiAdminFacade {
         broker_name: Option<String>,
         queue_id: Option<i32>,
         msg_trace_enable: bool,
-    ) -> RocketMQResult<SendMessageRequest> {
+    ) -> CanonicalResult<SendMessageRequest> {
         Ok(
             SendMessageRequest::try_new(topic, body, keys, tags, broker_name, queue_id, msg_trace_enable)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -958,7 +960,7 @@ impl TuiAdminFacade {
         broker_name: impl Into<String>,
         message_size: usize,
         count: u32,
-    ) -> RocketMQResult<SendMessageStatusRequest> {
+    ) -> CanonicalResult<SendMessageStatusRequest> {
         SendMessageStatusRequest::try_new(broker_name, message_size, count)
     }
 
@@ -967,7 +969,7 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         amount: u64,
         size: usize,
-    ) -> RocketMQResult<CheckMessageSendRtRequest> {
+    ) -> CanonicalResult<CheckMessageSendRtRequest> {
         CheckMessageSendRtRequest::try_new(topic, amount, size)
     }
 
@@ -975,7 +977,7 @@ impl TuiAdminFacade {
         &self,
         broker_addr: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<BrokerLiteInfoQueryRequest> {
+    ) -> CanonicalResult<BrokerLiteInfoQueryRequest> {
         Ok(BrokerLiteInfoQueryRequest::try_new(broker_addr, cluster_name)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -983,7 +985,7 @@ impl TuiAdminFacade {
     pub fn parent_topic_info_request(
         &self,
         parent_topic: impl Into<String>,
-    ) -> RocketMQResult<ParentTopicInfoQueryRequest> {
+    ) -> CanonicalResult<ParentTopicInfoQueryRequest> {
         Ok(ParentTopicInfoQueryRequest::try_new(parent_topic)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
@@ -991,7 +993,7 @@ impl TuiAdminFacade {
         &self,
         parent_topic: impl Into<String>,
         lite_topic: impl Into<String>,
-    ) -> RocketMQResult<LiteTopicInfoQueryRequest> {
+    ) -> CanonicalResult<LiteTopicInfoQueryRequest> {
         Ok(LiteTopicInfoQueryRequest::try_new(parent_topic, lite_topic)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -1002,7 +1004,7 @@ impl TuiAdminFacade {
         group: impl Into<String>,
         lite_topic: Option<String>,
         top_k: Option<i32>,
-    ) -> RocketMQResult<LiteGroupInfoQueryRequest> {
+    ) -> CanonicalResult<LiteGroupInfoQueryRequest> {
         Ok(
             LiteGroupInfoQueryRequest::try_new(parent_topic, group, lite_topic, top_k)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -1014,7 +1016,7 @@ impl TuiAdminFacade {
         parent_topic: impl Into<String>,
         group: impl Into<String>,
         client_id: impl Into<String>,
-    ) -> RocketMQResult<LiteClientInfoQueryRequest> {
+    ) -> CanonicalResult<LiteClientInfoQueryRequest> {
         Ok(LiteClientInfoQueryRequest::try_new(parent_topic, group, client_id)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
@@ -1025,7 +1027,7 @@ impl TuiAdminFacade {
         group: impl Into<String>,
         client_id: Option<String>,
         broker_name: Option<String>,
-    ) -> RocketMQResult<TriggerLiteDispatchRequest> {
+    ) -> CanonicalResult<TriggerLiteDispatchRequest> {
         Ok(
             TriggerLiteDispatchRequest::try_new(parent_topic, group, client_id, broker_name)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -1038,7 +1040,7 @@ impl TuiAdminFacade {
         broker_names: impl Into<String>,
         queue_num: impl AsRef<str>,
         cluster_names: Option<String>,
-    ) -> RocketMQResult<UpdateStaticTopicRequest> {
+    ) -> CanonicalResult<UpdateStaticTopicRequest> {
         Ok(
             UpdateStaticTopicRequest::try_new(topic, broker_names, queue_num, cluster_names)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -1051,14 +1053,14 @@ impl TuiAdminFacade {
         broker_names: Option<String>,
         cluster_names: Option<String>,
         force_replace: Option<bool>,
-    ) -> RocketMQResult<RemappingStaticTopicRequest> {
+    ) -> CanonicalResult<RemappingStaticTopicRequest> {
         Ok(
             RemappingStaticTopicRequest::try_new(topic, broker_names, cluster_names, force_replace)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
         )
     }
 
-    pub fn decode_message_id_request(&self, message_ids: impl AsRef<str>) -> RocketMQResult<DecodeMessageIdRequest> {
+    pub fn decode_message_id_request(&self, message_ids: impl AsRef<str>) -> CanonicalResult<DecodeMessageIdRequest> {
         DecodeMessageIdRequest::try_new(split_message_ids(message_ids.as_ref()))
     }
 
@@ -1067,7 +1069,7 @@ impl TuiAdminFacade {
         message_ids: impl AsRef<str>,
         topic: Option<String>,
         timeout_millis: u64,
-    ) -> RocketMQResult<QueryMessageByIdRequest> {
+    ) -> CanonicalResult<QueryMessageByIdRequest> {
         Ok(
             QueryMessageByIdRequest::try_new(split_message_ids(message_ids.as_ref()), topic, timeout_millis)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -1085,7 +1087,7 @@ impl TuiAdminFacade {
         cluster: Option<String>,
         key_type: Option<String>,
         last_key: Option<String>,
-    ) -> RocketMQResult<QueryMessageByKeyRequest> {
+    ) -> CanonicalResult<QueryMessageByKeyRequest> {
         Ok(QueryMessageByKeyRequest::try_new(
             topic,
             msg_key,
@@ -1106,7 +1108,7 @@ impl TuiAdminFacade {
         queue_id: i32,
         offset: i64,
         route_topic: Option<String>,
-    ) -> RocketMQResult<QueryMessageByOffsetRequest> {
+    ) -> CanonicalResult<QueryMessageByOffsetRequest> {
         Ok(
             QueryMessageByOffsetRequest::try_new(topic, broker_name, queue_id, offset, route_topic)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -1124,7 +1126,7 @@ impl TuiAdminFacade {
         cluster: Option<String>,
         start_time: Option<i64>,
         end_time: Option<i64>,
-    ) -> RocketMQResult<QueryMessageByUniqueKeyRequest> {
+    ) -> CanonicalResult<QueryMessageByUniqueKeyRequest> {
         Ok(QueryMessageByUniqueKeyRequest::try_new(
             msg_id,
             consumer_group,
@@ -1145,7 +1147,7 @@ impl TuiAdminFacade {
         consumer_group: impl Into<String>,
         client_id: impl Into<String>,
         cluster: Option<String>,
-    ) -> RocketMQResult<DirectConsumeMessageRequest> {
+    ) -> CanonicalResult<DirectConsumeMessageRequest> {
         Ok(
             DirectConsumeMessageRequest::try_new(topic, msg_id, consumer_group, client_id, cluster)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -1158,7 +1160,7 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         cluster: Option<String>,
         timeout_millis: u64,
-    ) -> RocketMQResult<MessageTrackRequest> {
+    ) -> CanonicalResult<MessageTrackRequest> {
         Ok(
             MessageTrackRequest::try_new(split_message_ids(message_ids.as_ref()), topic, cluster, timeout_millis)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -1172,7 +1174,7 @@ impl TuiAdminFacade {
         begin_timestamp: Option<i64>,
         end_timestamp: Option<i64>,
         max_num: i32,
-    ) -> RocketMQResult<QueryMessageTraceByIdRequest> {
+    ) -> CanonicalResult<QueryMessageTraceByIdRequest> {
         Ok(
             QueryMessageTraceByIdRequest::try_new(msg_id, trace_topic, begin_timestamp, end_timestamp, max_num)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -1183,7 +1185,7 @@ impl TuiAdminFacade {
         DumpCompactionLogRequest::try_new(file)
     }
 
-    pub fn export_configs_request(&self, cluster_name: impl Into<String>) -> RocketMQResult<ExportConfigsRequest> {
+    pub fn export_configs_request(&self, cluster_name: impl Into<String>) -> CanonicalResult<ExportConfigsRequest> {
         Ok(ExportConfigsRequest::try_new(cluster_name)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
@@ -1191,7 +1193,7 @@ impl TuiAdminFacade {
         &self,
         cluster_name: impl Into<String>,
         timeout_millis: Option<u64>,
-    ) -> RocketMQResult<ExportMetricsRequest> {
+    ) -> CanonicalResult<ExportMetricsRequest> {
         let request =
             ExportMetricsRequest::try_new(cluster_name)?.with_optional_namesrv_addr(self.namesrv_addr.clone());
         Ok(match timeout_millis {
@@ -1207,7 +1209,7 @@ impl TuiAdminFacade {
         topic_only: bool,
         subscription_group_only: bool,
         special_topic: bool,
-    ) -> RocketMQResult<ExportMetadataRequest> {
+    ) -> CanonicalResult<ExportMetadataRequest> {
         Ok(ExportMetadataRequest::try_new(
             cluster_name,
             broker_addr,
@@ -1233,7 +1235,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         config_types: impl Into<String>,
         timeout_millis: Option<u64>,
-    ) -> RocketMQResult<ExportRocksDbConfigRpcRequest> {
+    ) -> CanonicalResult<ExportRocksDbConfigRpcRequest> {
         Ok(
             ExportRocksDbConfigRpcRequest::try_new(cluster_name, broker_addr, config_types, timeout_millis)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -1246,7 +1248,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         dry_run: bool,
         timeout_millis: Option<u64>,
-    ) -> RocketMQResult<ExportPopRecordRequest> {
+    ) -> CanonicalResult<ExportPopRecordRequest> {
         let request = ExportPopRecordRequest::try_new(cluster_name, broker_addr, dry_run)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone());
         Ok(match timeout_millis {
@@ -1259,7 +1261,7 @@ impl TuiAdminFacade {
         &self,
         output_path: impl Into<String>,
         overwrite: bool,
-    ) -> RocketMQResult<ExportFileWriteRequest> {
+    ) -> CanonicalResult<ExportFileWriteRequest> {
         ExportFileWriteRequest::try_new(
             output_path,
             if overwrite {
@@ -1277,7 +1279,7 @@ impl TuiAdminFacade {
         begin_timestamp: Option<u64>,
         end_timestamp: Option<u64>,
         lmq_parent_topic: Option<String>,
-    ) -> RocketMQResult<PrintMessagesRequest> {
+    ) -> CanonicalResult<PrintMessagesRequest> {
         Ok(
             PrintMessagesRequest::try_new(topic, sub_expression, begin_timestamp, end_timestamp, lmq_parent_topic)?
                 .with_optional_namesrv_addr(self.namesrv_addr.clone()),
@@ -1295,7 +1297,7 @@ impl TuiAdminFacade {
         end_timestamp: Option<u64>,
         print_messages: bool,
         calculate_by_tag: bool,
-    ) -> RocketMQResult<PrintMessagesByQueueRequest> {
+    ) -> CanonicalResult<PrintMessagesByQueueRequest> {
         Ok(PrintMessagesByQueueRequest::try_new(
             topic,
             broker_name,
@@ -1320,7 +1322,7 @@ impl TuiAdminFacade {
         begin_timestamp: Option<i64>,
         end_timestamp: Option<i64>,
         message_number: i64,
-    ) -> RocketMQResult<ConsumeMessagesRequest> {
+    ) -> CanonicalResult<ConsumeMessagesRequest> {
         Ok(ConsumeMessagesRequest::try_new(
             topic,
             broker_name,
@@ -1334,11 +1336,11 @@ impl TuiAdminFacade {
         .with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
-    pub fn topic_cluster_request(&self, topic: impl Into<String>) -> RocketMQResult<TopicClusterQueryRequest> {
+    pub fn topic_cluster_request(&self, topic: impl Into<String>) -> CanonicalResult<TopicClusterQueryRequest> {
         Ok(TopicClusterQueryRequest::try_new(topic)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
-    pub fn topic_route_request(&self, topic: impl Into<String>) -> RocketMQResult<TopicRouteQueryRequest> {
+    pub fn topic_route_request(&self, topic: impl Into<String>) -> CanonicalResult<TopicRouteQueryRequest> {
         Ok(TopicRouteQueryRequest::try_new(topic)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
@@ -1346,7 +1348,7 @@ impl TuiAdminFacade {
         &self,
         topic: impl Into<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<TopicStatusQueryRequest> {
+    ) -> CanonicalResult<TopicStatusQueryRequest> {
         Ok(TopicStatusQueryRequest::try_new(topic)?
             .with_optional_namesrv_addr(self.namesrv_addr.clone())
             .with_optional_cluster_name(cluster_name))
@@ -1362,7 +1364,7 @@ impl TuiAdminFacade {
         &self,
         topic: impl Into<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<DeleteTopicRequest> {
+    ) -> CanonicalResult<DeleteTopicRequest> {
         Ok(DeleteTopicRequest::try_new(topic, cluster_name)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
@@ -1371,7 +1373,7 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         method: impl AsRef<str>,
         order_conf: Option<String>,
-    ) -> RocketMQResult<OrderConfRequest> {
+    ) -> CanonicalResult<OrderConfRequest> {
         Ok(OrderConfRequest::try_new(topic, method, order_conf)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
@@ -1379,7 +1381,7 @@ impl TuiAdminFacade {
         &self,
         topic: impl Into<String>,
         ip_list: impl Into<String>,
-    ) -> RocketMQResult<AllocateMqQueryRequest> {
+    ) -> CanonicalResult<AllocateMqQueryRequest> {
         Ok(AllocateMqQueryRequest::try_new(topic, ip_list)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
@@ -1394,7 +1396,7 @@ impl TuiAdminFacade {
         order: Option<bool>,
         unit: Option<bool>,
         has_unit_sub: Option<bool>,
-    ) -> RocketMQResult<UpdateTopicRequest> {
+    ) -> CanonicalResult<UpdateTopicRequest> {
         Ok(UpdateTopicRequest::try_new(
             topic,
             target,
@@ -1413,15 +1415,15 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         target: TopicTarget,
         perm: i32,
-    ) -> RocketMQResult<UpdateTopicPermRequest> {
+    ) -> CanonicalResult<UpdateTopicPermRequest> {
         Ok(UpdateTopicPermRequest::try_new(topic, target, perm)?.with_optional_namesrv_addr(self.namesrv_addr.clone()))
     }
 
-    pub async fn query_topic_clusters(&self, topic: impl Into<String>) -> RocketMQResult<TopicClusterList> {
+    pub async fn query_topic_clusters(&self, topic: impl Into<String>) -> CanonicalResult<TopicClusterList> {
         TopicService::query_topic_clusters(self.topic_cluster_request(topic)?).await
     }
 
-    pub async fn query_topic_route(&self, topic: impl Into<String>) -> RocketMQResult<Option<TopicRouteData>> {
+    pub async fn query_topic_route(&self, topic: impl Into<String>) -> CanonicalResult<Option<TopicRouteData>> {
         TopicService::query_topic_route(self.topic_route_request(topic)?).await
     }
 
@@ -1429,11 +1431,11 @@ impl TuiAdminFacade {
         &self,
         topic: impl Into<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<TopicStatsTable> {
+    ) -> CanonicalResult<TopicStatsTable> {
         TopicService::query_topic_status(self.topic_status_request(topic, cluster_name)?).await
     }
 
-    pub async fn query_topic_list(&self, cluster_name: Option<String>) -> RocketMQResult<TopicListResult> {
+    pub async fn query_topic_list(&self, cluster_name: Option<String>) -> CanonicalResult<TopicListResult> {
         TopicService::query_topic_list(self.topic_list_request(cluster_name)).await
     }
 
@@ -1441,7 +1443,7 @@ impl TuiAdminFacade {
         &self,
         topic: impl Into<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<DeleteTopicResult> {
+    ) -> CanonicalResult<DeleteTopicResult> {
         TopicService::delete_topic_by_request(self.delete_topic_request(topic, cluster_name)?).await
     }
 
@@ -1450,7 +1452,7 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         method: impl AsRef<str>,
         order_conf: Option<String>,
-    ) -> RocketMQResult<OrderConfResult> {
+    ) -> CanonicalResult<OrderConfResult> {
         TopicService::apply_order_conf(self.order_conf_request(topic, method, order_conf)?).await
     }
 
@@ -1458,15 +1460,15 @@ impl TuiAdminFacade {
         &self,
         topic: impl Into<String>,
         ip_list: impl Into<String>,
-    ) -> RocketMQResult<AllocatedMqQueryResult> {
+    ) -> CanonicalResult<AllocatedMqQueryResult> {
         TopicService::query_allocated_mq_by_request(self.allocate_mq_request(topic, ip_list)?).await
     }
 
-    pub async fn create_or_update_topic(&self, request: UpdateTopicRequest) -> RocketMQResult<UpdateTopicResult> {
+    pub async fn create_or_update_topic(&self, request: UpdateTopicRequest) -> CanonicalResult<UpdateTopicResult> {
         TopicService::create_or_update_topic_by_request(request).await
     }
 
-    pub async fn update_topic_perm(&self, request: UpdateTopicPermRequest) -> RocketMQResult<UpdateTopicPermResult> {
+    pub async fn update_topic_perm(&self, request: UpdateTopicPermRequest) -> CanonicalResult<UpdateTopicPermResult> {
         TopicService::update_topic_perm_by_request(request).await
     }
 
@@ -1475,7 +1477,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         username: impl Into<String>,
-    ) -> RocketMQResult<GetUserResult> {
+    ) -> CanonicalResult<GetUserResult> {
         AuthService::get_user_by_request_with_credentials(
             self.auth_get_user_request(broker_addr, cluster_name, username)?,
             None,
@@ -1491,7 +1493,7 @@ impl TuiAdminFacade {
         username: impl Into<String>,
         password: impl Into<String>,
         user_type: Option<String>,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         AuthService::create_user_by_request_with_credentials(
             self.auth_create_user_request(broker_addr, cluster_name, username, password, user_type)?,
             None,
@@ -1508,7 +1510,7 @@ impl TuiAdminFacade {
         password: Option<String>,
         user_type: Option<String>,
         user_status: Option<String>,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         AuthService::update_user_by_request_with_credentials(
             self.auth_update_user_request(broker_addr, cluster_name, username, password, user_type, user_status)?,
             None,
@@ -1522,7 +1524,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         username: impl Into<String>,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         AuthService::delete_user_by_request_with_credentials(
             self.auth_delete_user_request(broker_addr, cluster_name, username)?,
             None,
@@ -1536,7 +1538,7 @@ impl TuiAdminFacade {
         from_broker: impl Into<String>,
         to_broker: impl Into<String>,
         usernames: Option<String>,
-    ) -> RocketMQResult<CopyUsersResult> {
+    ) -> CanonicalResult<CopyUsersResult> {
         AuthService::copy_users_by_request_with_credentials(
             self.auth_copy_users_request(from_broker, to_broker, usernames)?,
             None,
@@ -1550,7 +1552,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         filter: Option<String>,
-    ) -> RocketMQResult<ListUsersResult> {
+    ) -> CanonicalResult<ListUsersResult> {
         AuthService::list_users_by_request_with_credentials(
             self.auth_list_users_request(broker_addr, cluster_name, filter)?,
             None,
@@ -1564,7 +1566,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         subject: impl Into<String>,
-    ) -> RocketMQResult<GetAclResult> {
+    ) -> CanonicalResult<GetAclResult> {
         AuthService::get_acl_by_request_with_credentials(
             self.auth_get_acl_request(broker_addr, cluster_name, subject)?,
             None,
@@ -1583,7 +1585,7 @@ impl TuiAdminFacade {
         actions: impl Into<String>,
         decision: impl Into<String>,
         source_ip: Option<String>,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         AuthService::create_acl_by_request_with_credentials(
             self.auth_create_acl_request(
                 broker_addr,
@@ -1610,7 +1612,7 @@ impl TuiAdminFacade {
         actions: impl Into<String>,
         decision: impl Into<String>,
         source_ip: Option<String>,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         AuthService::update_acl_by_request_with_credentials(
             self.auth_update_acl_request(
                 broker_addr,
@@ -1633,7 +1635,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         subject: impl Into<String>,
         resource: Option<String>,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         AuthService::delete_acl_by_request_with_credentials(
             self.auth_delete_acl_request(broker_addr, cluster_name, subject, resource)?,
             None,
@@ -1647,7 +1649,7 @@ impl TuiAdminFacade {
         from_broker: impl Into<String>,
         to_broker: impl Into<String>,
         subjects: Option<String>,
-    ) -> RocketMQResult<CopyAclResult> {
+    ) -> CanonicalResult<CopyAclResult> {
         AuthService::copy_acl_by_request_with_credentials(
             self.auth_copy_acl_request(from_broker, to_broker, subjects)?,
             None,
@@ -1662,7 +1664,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         subject_filter: Option<String>,
         resource_filter: Option<String>,
-    ) -> RocketMQResult<ListAclResult> {
+    ) -> CanonicalResult<ListAclResult> {
         AuthService::list_acl_by_request_with_credentials(
             self.auth_list_acl_request(broker_addr, cluster_name, subject_filter, resource_filter)?,
             None,
@@ -1674,7 +1676,7 @@ impl TuiAdminFacade {
     pub async fn query_controller_config(
         &self,
         controller_address: impl Into<String>,
-    ) -> RocketMQResult<ControllerConfigQueryResult> {
+    ) -> CanonicalResult<ControllerConfigQueryResult> {
         ControllerService::query_controller_config_by_request_with_credentials(
             self.controller_config_query_request(controller_address)?,
             None,
@@ -1688,7 +1690,7 @@ impl TuiAdminFacade {
         controller_address: impl Into<String>,
         key: impl Into<String>,
         value: impl Into<String>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         ControllerService::update_controller_config_by_request_with_credentials(
             self.controller_config_update_request(controller_address, key, value)?,
             None,
@@ -1700,7 +1702,7 @@ impl TuiAdminFacade {
     pub async fn query_controller_metadata(
         &self,
         controller_address: impl Into<String>,
-    ) -> RocketMQResult<ControllerMetadataQueryResult> {
+    ) -> CanonicalResult<ControllerMetadataQueryResult> {
         ControllerService::query_controller_metadata_by_request_with_credentials(
             self.controller_metadata_query_request(controller_address)?,
             None,
@@ -1715,7 +1717,7 @@ impl TuiAdminFacade {
         cluster_name: impl Into<String>,
         broker_name: impl Into<String>,
         broker_id: i64,
-    ) -> RocketMQResult<ControllerElectMasterResult> {
+    ) -> CanonicalResult<ControllerElectMasterResult> {
         ControllerService::elect_master_by_request_with_credentials(
             self.controller_elect_master_request(controller_address, cluster_name, broker_name, broker_id)?,
             None,
@@ -1731,7 +1733,7 @@ impl TuiAdminFacade {
         broker_controller_ids_to_clean: Option<String>,
         cluster_name: Option<String>,
         clean_living_broker: bool,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         ControllerService::clean_controller_metadata_by_request_with_credentials(
             self.controller_metadata_clean_request(
                 controller_address,
@@ -1746,7 +1748,7 @@ impl TuiAdminFacade {
         .await
     }
 
-    pub async fn query_namesrv_config(&self) -> RocketMQResult<NamesrvConfigQueryResult> {
+    pub async fn query_namesrv_config(&self) -> CanonicalResult<NamesrvConfigQueryResult> {
         NameServerService::query_namesrv_config(self.namesrv_config_query_request()?).await
     }
 
@@ -1754,7 +1756,7 @@ impl TuiAdminFacade {
         &self,
         key: impl Into<String>,
         value: impl Into<String>,
-    ) -> RocketMQResult<NamesrvConfigUpdateResult> {
+    ) -> CanonicalResult<NamesrvConfigUpdateResult> {
         NameServerService::update_namesrv_config_by_request(self.namesrv_config_update_request(key, value)?).await
     }
 
@@ -1763,7 +1765,7 @@ impl TuiAdminFacade {
         namespace: impl Into<String>,
         key: impl Into<String>,
         value: impl Into<String>,
-    ) -> RocketMQResult<KvConfigUpdateResult> {
+    ) -> CanonicalResult<KvConfigUpdateResult> {
         NameServerService::update_kv_config_by_request(self.kv_config_update_request(namespace, key, value)?).await
     }
 
@@ -1771,15 +1773,15 @@ impl TuiAdminFacade {
         &self,
         namespace: impl Into<String>,
         key: impl Into<String>,
-    ) -> RocketMQResult<KvConfigUpdateResult> {
+    ) -> CanonicalResult<KvConfigUpdateResult> {
         NameServerService::delete_kv_config_by_request(self.kv_config_delete_request(namespace, key)?).await
     }
 
-    pub async fn add_write_perm(&self, broker_name: impl Into<String>) -> RocketMQResult<WritePermResult> {
+    pub async fn add_write_perm(&self, broker_name: impl Into<String>) -> CanonicalResult<WritePermResult> {
         NameServerService::add_write_perm_by_request(self.write_perm_request(broker_name)?).await
     }
 
-    pub async fn wipe_write_perm(&self, broker_name: impl Into<String>) -> RocketMQResult<WritePermResult> {
+    pub async fn wipe_write_perm(&self, broker_name: impl Into<String>) -> CanonicalResult<WritePermResult> {
         NameServerService::wipe_write_perm_by_request(self.write_perm_request(broker_name)?).await
     }
 
@@ -1788,7 +1790,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         key_pattern: Option<String>,
-    ) -> RocketMQResult<BrokerConfigQueryResult> {
+    ) -> CanonicalResult<BrokerConfigQueryResult> {
         BrokerService::query_broker_config_by_request(self.broker_config_query_request(
             broker_addr,
             cluster_name,
@@ -1800,14 +1802,14 @@ impl TuiAdminFacade {
     pub async fn build_broker_config_update_plan(
         &self,
         request: BrokerConfigUpdateRequest,
-    ) -> RocketMQResult<BrokerConfigUpdatePlanResult> {
+    ) -> CanonicalResult<BrokerConfigUpdatePlanResult> {
         BrokerService::build_broker_config_update_plan_by_request(request).await
     }
 
     pub async fn apply_broker_config_update(
         &self,
         request: BrokerConfigUpdateRequest,
-    ) -> RocketMQResult<BrokerConfigUpdateApplyResult> {
+    ) -> CanonicalResult<BrokerConfigUpdateApplyResult> {
         BrokerService::apply_broker_config_update_by_request(request).await
     }
 
@@ -1815,7 +1817,7 @@ impl TuiAdminFacade {
         &self,
         broker_addr: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<BrokerRuntimeStatsResult> {
+    ) -> CanonicalResult<BrokerRuntimeStatsResult> {
         BrokerService::query_broker_runtime_stats_by_request(
             self.broker_runtime_stats_request(broker_addr, cluster_name)?,
         )
@@ -1828,7 +1830,7 @@ impl TuiAdminFacade {
         timeout_millis: u64,
         diff_level: i64,
         is_order: bool,
-    ) -> RocketMQResult<BrokerConsumeStatsResult> {
+    ) -> CanonicalResult<BrokerConsumeStatsResult> {
         BrokerService::query_broker_consume_stats_by_request(self.broker_consume_stats_request(
             broker_addr,
             timeout_millis,
@@ -1842,7 +1844,7 @@ impl TuiAdminFacade {
         &self,
         broker_name: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<BrokerEpochQueryResult> {
+    ) -> CanonicalResult<BrokerEpochQueryResult> {
         BrokerService::query_broker_epoch_by_request_with_credentials(
             self.broker_epoch_request(broker_name, cluster_name)?,
             None,
@@ -1855,7 +1857,7 @@ impl TuiAdminFacade {
         &self,
         broker_addr: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<ColdDataFlowCtrInfoQueryResult> {
+    ) -> CanonicalResult<ColdDataFlowCtrInfoQueryResult> {
         BrokerService::query_cold_data_flow_ctr_info_by_request_with_credentials(
             self.cold_data_flow_ctr_info_request(broker_addr, cluster_name)?,
             None,
@@ -1870,7 +1872,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         topic: Option<String>,
         dry_run: bool,
-    ) -> RocketMQResult<CleanExpiredConsumeQueueReport> {
+    ) -> CanonicalResult<CleanExpiredConsumeQueueReport> {
         BrokerService::clean_expired_consume_queue_by_request_with_credentials(
             self.clean_expired_consume_queue_request(broker_addr, cluster_name, topic, dry_run)?,
             None,
@@ -1883,7 +1885,7 @@ impl TuiAdminFacade {
         &self,
         broker_addr: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<BrokerBooleanOperationResult> {
+    ) -> CanonicalResult<BrokerBooleanOperationResult> {
         BrokerService::delete_expired_commit_log_by_request_with_credentials(
             self.broker_optional_target_request(broker_addr, cluster_name)?,
             None,
@@ -1896,7 +1898,7 @@ impl TuiAdminFacade {
         &self,
         broker_addr: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<BrokerBooleanOperationResult> {
+    ) -> CanonicalResult<BrokerBooleanOperationResult> {
         BrokerService::clean_unused_topic_by_request_with_credentials(
             self.broker_optional_target_request(broker_addr, cluster_name)?,
             None,
@@ -1909,7 +1911,7 @@ impl TuiAdminFacade {
         &self,
         broker_addr: Option<String>,
         offset: Option<i64>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         BrokerService::reset_master_flush_offset_by_request_with_credentials(
             self.reset_master_flush_offset_request(broker_addr, offset)?,
             None,
@@ -1924,7 +1926,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         consumer_group: impl Into<String>,
         threshold: impl Into<String>,
-    ) -> RocketMQResult<BrokerOperationResult> {
+    ) -> CanonicalResult<BrokerOperationResult> {
         BrokerService::update_cold_data_flow_ctr_group_config_by_request_with_credentials(
             self.cold_data_flow_ctr_group_config_update_request(broker_addr, cluster_name, consumer_group, threshold)?,
             None,
@@ -1938,7 +1940,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         consumer_group: impl Into<String>,
-    ) -> RocketMQResult<BrokerOperationResult> {
+    ) -> CanonicalResult<BrokerOperationResult> {
         BrokerService::remove_cold_data_flow_ctr_group_config_by_request_with_credentials(
             self.cold_data_flow_ctr_group_config_remove_request(broker_addr, cluster_name, consumer_group)?,
             None,
@@ -1958,7 +1960,7 @@ impl TuiAdminFacade {
         read_ahead_size: Option<String>,
         read_ahead_size_key: Option<String>,
         show_only: bool,
-    ) -> RocketMQResult<CommitLogReadAheadResult> {
+    ) -> CanonicalResult<CommitLogReadAheadResult> {
         BrokerService::set_commit_log_read_ahead_by_request_with_credentials(
             self.commit_log_read_ahead_request(
                 broker_addr,
@@ -1981,7 +1983,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         engine_type: impl Into<String>,
-    ) -> RocketMQResult<BrokerOperationResult> {
+    ) -> CanonicalResult<BrokerOperationResult> {
         BrokerService::switch_timer_engine_by_request_with_credentials(
             self.switch_timer_engine_request(broker_addr, cluster_name, engine_type)?,
             None,
@@ -1994,7 +1996,7 @@ impl TuiAdminFacade {
         &self,
         more_stats: bool,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<ClusterListQueryResult> {
+    ) -> CanonicalResult<ClusterListQueryResult> {
         ClusterService::query_cluster_list_by_request_with_credentials(
             self.cluster_list_request(more_stats, cluster_name),
             None,
@@ -2006,7 +2008,7 @@ impl TuiAdminFacade {
     pub async fn query_cluster_broker_names(
         &self,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<ClusterBrokerNameQueryResult> {
+    ) -> CanonicalResult<ClusterBrokerNameQueryResult> {
         ClusterService::query_cluster_broker_names_by_request_with_credentials(
             self.cluster_broker_names_request(cluster_name),
             None,
@@ -2020,7 +2022,7 @@ impl TuiAdminFacade {
         amount: u64,
         size: u64,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<ClusterSendMessageRtResult> {
+    ) -> CanonicalResult<ClusterSendMessageRtResult> {
         ClusterService::send_message_rt_by_request_with_credentials(
             self.cluster_send_message_rt_request(amount, size, cluster_name)?,
             None,
@@ -2033,7 +2035,7 @@ impl TuiAdminFacade {
         &self,
         consumer_group: impl Into<String>,
         broker_addr: Option<String>,
-    ) -> RocketMQResult<ConsumerConnectionQueryResult> {
+    ) -> CanonicalResult<ConsumerConnectionQueryResult> {
         ConnectionService::query_consumer_connection_by_request_with_credentials(
             self.consumer_connection_request(consumer_group, broker_addr)?,
             None,
@@ -2046,7 +2048,7 @@ impl TuiAdminFacade {
         &self,
         producer_group: impl Into<String>,
         topic: impl Into<String>,
-    ) -> RocketMQResult<ProducerConnectionQueryResult> {
+    ) -> CanonicalResult<ProducerConnectionQueryResult> {
         ConnectionService::query_producer_connection_by_request_with_credentials(
             self.producer_connection_request(producer_group, topic)?,
             None,
@@ -2058,7 +2060,7 @@ impl TuiAdminFacade {
     pub async fn query_consumer_config(
         &self,
         group_name: impl Into<String>,
-    ) -> RocketMQResult<ConsumerConfigQueryResult> {
+    ) -> CanonicalResult<ConsumerConfigQueryResult> {
         ConsumerService::query_consumer_config_by_request_with_credentials(
             self.consumer_config_request(group_name)?,
             None,
@@ -2073,7 +2075,7 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         group_name: impl Into<String>,
         remove_offset: bool,
-    ) -> RocketMQResult<ConsumerOperationResult> {
+    ) -> CanonicalResult<ConsumerOperationResult> {
         ConsumerService::delete_subscription_group_by_request_with_credentials(
             self.delete_subscription_group_request(broker_addr, cluster_name, group_name, remove_offset)?,
             None,
@@ -2090,7 +2092,7 @@ impl TuiAdminFacade {
         group_name: impl Into<String>,
         mode: MessageRequestMode,
         pop_share_queue_num: Option<i32>,
-    ) -> RocketMQResult<ConsumerOperationResult> {
+    ) -> CanonicalResult<ConsumerOperationResult> {
         ConsumerService::set_consume_mode_by_request_with_credentials(
             self.set_consume_mode_request(
                 broker_addr,
@@ -2123,7 +2125,7 @@ impl TuiAdminFacade {
         notify_consumer_ids_changed_enable: bool,
         group_sys_flag: i32,
         consume_timeout_minute: i32,
-    ) -> RocketMQResult<ConsumerOperationResult> {
+    ) -> CanonicalResult<ConsumerOperationResult> {
         ConsumerService::update_subscription_group_by_request_with_credentials(
             self.update_subscription_group_request(
                 broker_addr,
@@ -2164,7 +2166,7 @@ impl TuiAdminFacade {
         notify_consumer_ids_changed_enable: bool,
         group_sys_flag: i32,
         consume_timeout_minute: i32,
-    ) -> RocketMQResult<ConsumerOperationResult> {
+    ) -> CanonicalResult<ConsumerOperationResult> {
         ConsumerService::update_subscription_group_list_by_request_with_credentials(
             self.update_subscription_group_list_request(
                 broker_addr,
@@ -2194,7 +2196,7 @@ impl TuiAdminFacade {
         client_id: Option<String>,
         broker_addr: Option<String>,
         jstack: bool,
-    ) -> RocketMQResult<ConsumerRunningInfoResult> {
+    ) -> CanonicalResult<ConsumerRunningInfoResult> {
         ConsumerService::query_consumer_running_info_by_request_with_credentials(
             self.consumer_running_info_request(group_name, client_id, broker_addr, jstack)?,
             None,
@@ -2209,7 +2211,7 @@ impl TuiAdminFacade {
         topic_name: Option<String>,
         show_client_ip: bool,
         cluster: Option<String>,
-    ) -> RocketMQResult<ConsumerProgressResult> {
+    ) -> CanonicalResult<ConsumerProgressResult> {
         ConsumerService::query_consumer_progress_by_request_with_credentials(
             self.consumer_progress_request(consumer_group, topic_name, show_client_ip, cluster)?,
             None,
@@ -2226,7 +2228,7 @@ impl TuiAdminFacade {
         include_running_info: bool,
         max_events: usize,
         mut progress: F,
-    ) -> RocketMQResult<MonitoringResult>
+    ) -> CanonicalResult<MonitoringResult>
     where
         F: FnMut(String),
     {
@@ -2257,7 +2259,7 @@ impl TuiAdminFacade {
         dest_group: impl Into<String>,
         topic: impl Into<String>,
         offline: bool,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         OffsetService::clone_group_offset_by_request_with_credentials(
             self.clone_group_offset_request(src_group, dest_group, topic, offline)?,
             None,
@@ -2271,7 +2273,7 @@ impl TuiAdminFacade {
         group: impl Into<String>,
         topic: impl Into<String>,
         origin_client_id: Option<String>,
-    ) -> RocketMQResult<ConsumerStatusResult> {
+    ) -> CanonicalResult<ConsumerStatusResult> {
         OffsetService::query_consumer_status_by_request_with_credentials(
             self.consumer_status_request(group, topic, origin_client_id)?,
             None,
@@ -2286,7 +2288,7 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         cluster: Option<String>,
         force: Option<bool>,
-    ) -> RocketMQResult<SkipAccumulatedMessageResult> {
+    ) -> CanonicalResult<SkipAccumulatedMessageResult> {
         OffsetService::skip_accumulated_message_by_request_with_credentials(
             self.skip_accumulated_message_request(group, topic, cluster, force)?,
             None,
@@ -2300,7 +2302,7 @@ impl TuiAdminFacade {
         group: impl Into<String>,
         topic: impl Into<String>,
         timestamp: u64,
-    ) -> RocketMQResult<ResetOffsetByTimeResult> {
+    ) -> CanonicalResult<ResetOffsetByTimeResult> {
         OffsetService::reset_offset_by_time_by_request_with_credentials(
             self.reset_offset_by_time_request(group, topic, timestamp)?,
             None,
@@ -2316,7 +2318,7 @@ impl TuiAdminFacade {
         timestamp: u64,
         force: Option<bool>,
         cluster: Option<String>,
-    ) -> RocketMQResult<Vec<RollbackStats>> {
+    ) -> CanonicalResult<Vec<RollbackStats>> {
         OffsetService::reset_offset_by_time_old_by_request_with_credentials(
             self.reset_offset_by_time_old_request(group, topic, timestamp, force, cluster)?,
             None,
@@ -2333,7 +2335,7 @@ impl TuiAdminFacade {
         count: i32,
         broker_addr: Option<String>,
         consumer_group: Option<String>,
-    ) -> RocketMQResult<QueryConsumeQueueResult> {
+    ) -> CanonicalResult<QueryConsumeQueueResult> {
         QueueService::query_consume_queue_by_request_with_credentials(
             self.query_consume_queue_request(topic, queue_id, index, count, broker_addr, consumer_group)?,
             None,
@@ -2347,7 +2349,7 @@ impl TuiAdminFacade {
         cluster_name: impl Into<String>,
         topic: Option<String>,
         check_from: Option<i64>,
-    ) -> RocketMQResult<CheckRocksdbCqWriteProgressResult> {
+    ) -> CanonicalResult<CheckRocksdbCqWriteProgressResult> {
         QueueService::check_rocksdb_cq_write_progress_by_request_with_credentials(
             self.check_rocksdb_cq_write_progress_request(cluster_name, topic, check_from)?,
             None,
@@ -2360,7 +2362,7 @@ impl TuiAdminFacade {
         &self,
         broker_addr: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<HaStatusQueryResult> {
+    ) -> CanonicalResult<HaStatusQueryResult> {
         HaService::query_ha_status_by_request_with_credentials(
             self.ha_status_request(broker_addr, cluster_name)?,
             None,
@@ -2374,7 +2376,7 @@ impl TuiAdminFacade {
         controller_address: impl Into<String>,
         broker_name: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<SyncStateSetQueryResult> {
+    ) -> CanonicalResult<SyncStateSetQueryResult> {
         HaService::query_sync_state_set_by_request_with_credentials(
             self.sync_state_set_request(controller_address, broker_name, cluster_name)?,
             None,
@@ -2387,7 +2389,7 @@ impl TuiAdminFacade {
         &self,
         active_topic: bool,
         topic: Option<String>,
-    ) -> RocketMQResult<StatsAllQueryResult> {
+    ) -> CanonicalResult<StatsAllQueryResult> {
         StatsService::query_stats_all_by_request_with_credentials(
             self.stats_all_request(active_topic, topic),
             None,
@@ -2396,7 +2398,10 @@ impl TuiAdminFacade {
         .await
     }
 
-    pub async fn query_producer_info(&self, broker_addr: impl Into<String>) -> RocketMQResult<ProducerInfoQueryResult> {
+    pub async fn query_producer_info(
+        &self,
+        broker_addr: impl Into<String>,
+    ) -> CanonicalResult<ProducerInfoQueryResult> {
         ProducerService::query_producer_info_by_request_with_credentials(
             self.producer_info_request(broker_addr)?,
             None,
@@ -2415,7 +2420,7 @@ impl TuiAdminFacade {
         broker_name: Option<String>,
         queue_id: Option<i32>,
         msg_trace_enable: bool,
-    ) -> RocketMQResult<SendMessageResult> {
+    ) -> CanonicalResult<SendMessageResult> {
         ProducerService::send_message_by_request_with_credentials(
             self.send_message_request(topic, body, keys, tags, broker_name, queue_id, msg_trace_enable)?,
             None,
@@ -2429,7 +2434,7 @@ impl TuiAdminFacade {
         broker_name: impl Into<String>,
         message_size: usize,
         count: u32,
-    ) -> RocketMQResult<SendMessageStatusResult> {
+    ) -> CanonicalResult<SendMessageStatusResult> {
         ProducerService::send_message_status_by_request_with_credentials(
             self.send_message_status_request(broker_name, message_size, count)?,
             None,
@@ -2443,7 +2448,7 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         amount: u64,
         size: usize,
-    ) -> RocketMQResult<CheckMessageSendRtResult> {
+    ) -> CanonicalResult<CheckMessageSendRtResult> {
         ProducerService::check_message_send_rt_by_request_with_credentials(
             self.check_message_send_rt_request(topic, amount, size)?,
             None,
@@ -2456,7 +2461,7 @@ impl TuiAdminFacade {
         &self,
         broker_addr: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<BrokerLiteInfoQueryResult> {
+    ) -> CanonicalResult<BrokerLiteInfoQueryResult> {
         LiteService::query_broker_lite_info_by_request_with_credentials(
             self.broker_lite_info_request(broker_addr, cluster_name)?,
             None,
@@ -2468,7 +2473,7 @@ impl TuiAdminFacade {
     pub async fn query_parent_topic_info(
         &self,
         parent_topic: impl Into<String>,
-    ) -> RocketMQResult<ParentTopicInfoQueryResult> {
+    ) -> CanonicalResult<ParentTopicInfoQueryResult> {
         LiteService::query_parent_topic_info_by_request_with_credentials(
             self.parent_topic_info_request(parent_topic)?,
             None,
@@ -2481,7 +2486,7 @@ impl TuiAdminFacade {
         &self,
         parent_topic: impl Into<String>,
         lite_topic: impl Into<String>,
-    ) -> RocketMQResult<LiteTopicInfoQueryResult> {
+    ) -> CanonicalResult<LiteTopicInfoQueryResult> {
         LiteService::query_lite_topic_info_by_request_with_credentials(
             self.lite_topic_info_request(parent_topic, lite_topic)?,
             None,
@@ -2496,7 +2501,7 @@ impl TuiAdminFacade {
         group: impl Into<String>,
         lite_topic: Option<String>,
         top_k: Option<i32>,
-    ) -> RocketMQResult<LiteGroupInfoQueryResult> {
+    ) -> CanonicalResult<LiteGroupInfoQueryResult> {
         LiteService::query_lite_group_info_by_request_with_credentials(
             self.lite_group_info_request(parent_topic, group, lite_topic, top_k)?,
             None,
@@ -2510,7 +2515,7 @@ impl TuiAdminFacade {
         parent_topic: impl Into<String>,
         group: impl Into<String>,
         client_id: impl Into<String>,
-    ) -> RocketMQResult<LiteClientInfoQueryResult> {
+    ) -> CanonicalResult<LiteClientInfoQueryResult> {
         LiteService::query_lite_client_info_by_request_with_credentials(
             self.lite_client_info_request(parent_topic, group, client_id)?,
             None,
@@ -2525,7 +2530,7 @@ impl TuiAdminFacade {
         group: impl Into<String>,
         client_id: Option<String>,
         broker_name: Option<String>,
-    ) -> RocketMQResult<TriggerLiteDispatchResult> {
+    ) -> CanonicalResult<TriggerLiteDispatchResult> {
         LiteService::trigger_lite_dispatch_by_request_with_credentials(
             self.trigger_lite_dispatch_request(parent_topic, group, client_id, broker_name)?,
             None,
@@ -2540,7 +2545,7 @@ impl TuiAdminFacade {
         broker_names: impl Into<String>,
         queue_num: impl AsRef<str>,
         cluster_names: Option<String>,
-    ) -> RocketMQResult<StaticTopicMappingPlan> {
+    ) -> CanonicalResult<StaticTopicMappingPlan> {
         StaticTopicService::update_static_topic_by_request_with_credentials(
             self.update_static_topic_request(topic, broker_names, queue_num, cluster_names)?,
             None,
@@ -2555,7 +2560,7 @@ impl TuiAdminFacade {
         broker_names: Option<String>,
         cluster_names: Option<String>,
         force_replace: Option<bool>,
-    ) -> RocketMQResult<StaticTopicMappingPlan> {
+    ) -> CanonicalResult<StaticTopicMappingPlan> {
         StaticTopicService::remapping_static_topic_by_request_with_credentials(
             self.remapping_static_topic_request(topic, broker_names, cluster_names, force_replace)?,
             None,
@@ -2564,7 +2569,7 @@ impl TuiAdminFacade {
         .await
     }
 
-    pub fn decode_message_id(&self, message_ids: impl AsRef<str>) -> RocketMQResult<DecodeMessageIdResult> {
+    pub fn decode_message_id(&self, message_ids: impl AsRef<str>) -> CanonicalResult<DecodeMessageIdResult> {
         let request = self.decode_message_id_request(message_ids)?;
         Ok(MessageService::decode_message_ids(&request))
     }
@@ -2574,7 +2579,7 @@ impl TuiAdminFacade {
         message_ids: impl AsRef<str>,
         topic: Option<String>,
         timeout_millis: u64,
-    ) -> RocketMQResult<QueryMessageByIdResult> {
+    ) -> CanonicalResult<QueryMessageByIdResult> {
         MessageService::query_message_by_id_by_request_with_credentials(
             self.query_message_by_id_request(message_ids, topic, timeout_millis)?,
             None,
@@ -2594,7 +2599,7 @@ impl TuiAdminFacade {
         cluster: Option<String>,
         key_type: Option<String>,
         last_key: Option<String>,
-    ) -> RocketMQResult<QueryMessageByKeyResult> {
+    ) -> CanonicalResult<QueryMessageByKeyResult> {
         MessageService::query_message_by_key_by_request_with_credentials(
             self.query_message_by_key_request(
                 topic,
@@ -2619,7 +2624,7 @@ impl TuiAdminFacade {
         queue_id: i32,
         offset: i64,
         route_topic: Option<String>,
-    ) -> RocketMQResult<QueryMessageByOffsetResult> {
+    ) -> CanonicalResult<QueryMessageByOffsetResult> {
         MessageService::query_message_by_offset_by_request_with_credentials(
             self.query_message_by_offset_request(topic, broker_name, queue_id, offset, route_topic)?,
             None,
@@ -2639,7 +2644,7 @@ impl TuiAdminFacade {
         cluster: Option<String>,
         start_time: Option<i64>,
         end_time: Option<i64>,
-    ) -> RocketMQResult<QueryMessageByUniqueKeyResult> {
+    ) -> CanonicalResult<QueryMessageByUniqueKeyResult> {
         MessageService::query_message_by_unique_key_by_request_with_credentials(
             self.query_message_by_unique_key_request(
                 msg_id,
@@ -2664,7 +2669,7 @@ impl TuiAdminFacade {
         consumer_group: impl Into<String>,
         client_id: impl Into<String>,
         cluster: Option<String>,
-    ) -> RocketMQResult<DirectConsumeMessageResult> {
+    ) -> CanonicalResult<DirectConsumeMessageResult> {
         MessageService::direct_consume_message_by_request_with_credentials(
             self.direct_consume_message_request(topic, msg_id, consumer_group, client_id, cluster)?,
             None,
@@ -2679,7 +2684,7 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         cluster: Option<String>,
         timeout_millis: u64,
-    ) -> RocketMQResult<MessageTrackResult> {
+    ) -> CanonicalResult<MessageTrackResult> {
         MessageService::message_track_by_request_with_credentials(
             self.message_track_request(message_ids, topic, cluster, timeout_millis)?,
             None,
@@ -2695,7 +2700,7 @@ impl TuiAdminFacade {
         begin_timestamp: Option<i64>,
         end_timestamp: Option<i64>,
         max_num: i32,
-    ) -> RocketMQResult<Vec<MessageTraceView>> {
+    ) -> CanonicalResult<Vec<MessageTraceView>> {
         MessageService::query_message_trace_by_id_by_request_with_credentials(
             self.query_message_trace_by_id_request(msg_id, trace_topic, begin_timestamp, end_timestamp, max_num)?,
             None,
@@ -2704,12 +2709,12 @@ impl TuiAdminFacade {
         .await
     }
 
-    pub fn dump_compaction_log(&self, file: Option<String>) -> RocketMQResult<DumpCompactionLogResult> {
+    pub fn dump_compaction_log(&self, file: Option<String>) -> CanonicalResult<DumpCompactionLogResult> {
         let request = self.dump_compaction_log_request(file);
         MessageService::dump_compaction_log_by_request(&request)
     }
 
-    pub async fn export_configs(&self, cluster_name: impl Into<String>) -> RocketMQResult<ExportConfigsResult> {
+    pub async fn export_configs(&self, cluster_name: impl Into<String>) -> CanonicalResult<ExportConfigsResult> {
         ExportService::export_configs_by_request_with_credentials(
             self.export_configs_request(cluster_name)?,
             None,
@@ -2722,7 +2727,7 @@ impl TuiAdminFacade {
         &self,
         cluster_name: impl Into<String>,
         timeout_millis: Option<u64>,
-    ) -> RocketMQResult<ExportMetricsResult> {
+    ) -> CanonicalResult<ExportMetricsResult> {
         ExportService::export_metrics_by_request_with_credentials(
             self.export_metrics_request(cluster_name, timeout_millis)?,
             None,
@@ -2738,7 +2743,7 @@ impl TuiAdminFacade {
         topic_only: bool,
         subscription_group_only: bool,
         special_topic: bool,
-    ) -> RocketMQResult<ExportMetadataResult> {
+    ) -> CanonicalResult<ExportMetadataResult> {
         ExportService::export_metadata_by_request_with_credentials(
             self.export_metadata_request(
                 cluster_name,
@@ -2758,7 +2763,7 @@ impl TuiAdminFacade {
         path: impl Into<String>,
         config_type: impl Into<String>,
         json_enable: bool,
-    ) -> RocketMQResult<ExportMetadataInRocksDbResult> {
+    ) -> CanonicalResult<ExportMetadataInRocksDbResult> {
         let request = self.export_metadata_rocksdb_request(path, config_type, json_enable);
         ExportService::export_metadata_in_rocksdb_by_request(&request)
     }
@@ -2769,7 +2774,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         config_types: impl Into<String>,
         timeout_millis: Option<u64>,
-    ) -> RocketMQResult<ExportRocksDbConfigRpcResult> {
+    ) -> CanonicalResult<ExportRocksDbConfigRpcResult> {
         ExportService::export_rocksdb_config_rpc_by_request_with_credentials(
             self.export_rocksdb_config_rpc_request(cluster_name, broker_addr, config_types, timeout_millis)?,
             None,
@@ -2784,7 +2789,7 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         dry_run: bool,
         timeout_millis: Option<u64>,
-    ) -> RocketMQResult<ExportPopRecordResult> {
+    ) -> CanonicalResult<ExportPopRecordResult> {
         ExportService::export_pop_records_by_request_with_credentials(
             self.export_pop_record_request(cluster_name, broker_addr, dry_run, timeout_millis)?,
             None,
@@ -2798,7 +2803,7 @@ impl TuiAdminFacade {
         output_path: impl Into<String>,
         overwrite: bool,
         value: &T,
-    ) -> RocketMQResult<ExportFileWriteResult>
+    ) -> CanonicalResult<ExportFileWriteResult>
     where
         T: Serialize + ?Sized,
     {
@@ -2816,7 +2821,7 @@ impl TuiAdminFacade {
         lmq_parent_topic: Option<String>,
         max_events: usize,
         mut progress: F,
-    ) -> RocketMQResult<MessagePullCapture>
+    ) -> CanonicalResult<MessagePullCapture>
     where
         F: FnMut(String),
     {
@@ -2847,7 +2852,7 @@ impl TuiAdminFacade {
         calculate_by_tag: bool,
         max_events: usize,
         mut progress: F,
-    ) -> RocketMQResult<MessagePullCapture>
+    ) -> CanonicalResult<MessagePullCapture>
     where
         F: FnMut(String),
     {
@@ -2890,7 +2895,7 @@ impl TuiAdminFacade {
         message_number: i64,
         max_events: usize,
         mut progress: F,
-    ) -> RocketMQResult<MessagePullCapture>
+    ) -> CanonicalResult<MessagePullCapture>
     where
         F: FnMut(String),
     {
@@ -3008,10 +3013,10 @@ fn capture_message_pull_event(
     events: &mut Vec<MessagePullEvent>,
     event_limit: usize,
     event: MessagePullEvent,
-) -> RocketMQResult<()> {
+) -> CanonicalResult<()> {
     events.push(event);
     if event_limit > 0 && events.len() >= event_limit {
-        Err(RocketMQError::invariant_violated(MESSAGE_EVENT_LIMIT_REACHED))
+        Err(crate::errors::invariant_violated(MESSAGE_EVENT_LIMIT_REACHED))
     } else {
         Ok(())
     }
@@ -3020,8 +3025,8 @@ fn capture_message_pull_event(
 fn message_pull_capture_from_result(
     events: Vec<MessagePullEvent>,
     event_limit: usize,
-    result: RocketMQResult<()>,
-) -> RocketMQResult<MessagePullCapture> {
+    result: CanonicalResult<()>,
+) -> CanonicalResult<MessagePullCapture> {
     match result {
         Ok(()) => Ok(MessagePullCapture {
             events,

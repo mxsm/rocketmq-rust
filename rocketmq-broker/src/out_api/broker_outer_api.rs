@@ -24,10 +24,8 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use dns_lookup::lookup_host;
 use rocketmq_error::fields;
-use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::SerializationError;
+use rocketmq_error::SharedError;
 use rocketmq_model::common::broker::broker_identity::BrokerIdentity;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
@@ -135,7 +133,7 @@ impl OnewayBroadcastReport {
         self.failures.is_empty()
     }
 
-    fn record(&mut self, address: CheetahString, result: rocketmq_error::RocketMQResult<()>) {
+    fn record(&mut self, address: CheetahString, result: crate::broker_error::BrokerResult<()>) {
         self.attempted = self.attempted.saturating_add(1);
         match result {
             Ok(()) => self.succeeded = self.succeeded.saturating_add(1),
@@ -162,20 +160,20 @@ pub struct BrokerOuterAPI {
     command_factory: RemotingCommandFactory,
 }
 
-fn broker_request_rejection_error(operation: &'static str, rejection: OutboundRequestRejection) -> RocketMQError {
+fn broker_request_rejection_error(operation: &'static str, rejection: OutboundRequestRejection) -> SharedError {
     match rejection.reason() {
         OutboundRequestRejectionReason::DeadlineExpired => {
             let context = ErrorContext::new()
                 .with_text(fields::OPERATION_DIAGNOSTIC, operation)
                 .with_u64(fields::TIMEOUT_MS, rejection.timeout_millis().unwrap_or_default());
-            RocketMQError::Shared(Arc::new(
-                Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT).with_context(context),
+            crate::broker_error::from_shared(Arc::new(
+                rocketmq_error::Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT).with_context(context),
             ))
         }
-        OutboundRequestRejectionReason::ClientStopping => RocketMQError::ClientNotStarted,
-        OutboundRequestRejectionReason::QueueSaturated => RocketMQError::Shared(Arc::new(Error::new(
-            &rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED,
-        ))),
+        OutboundRequestRejectionReason::ClientStopping => crate::broker_error::client_not_started(),
+        OutboundRequestRejectionReason::QueueSaturated => crate::broker_error::from_shared(Arc::new(
+            rocketmq_error::Error::new(&rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED),
+        )),
         OutboundRequestRejectionReason::Cancelled
         | OutboundRequestRejectionReason::SessionClosed
         | OutboundRequestRejectionReason::EndpointUnavailable => {
@@ -183,18 +181,18 @@ fn broker_request_rejection_error(operation: &'static str, rejection: OutboundRe
             if rejection.remote_addr_present() {
                 context = context.with_secret_presence(fields::REMOTE_ADDR_PRESENT);
             }
-            RocketMQError::Shared(Arc::new(
-                Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED).with_context(context),
+            crate::broker_error::from_shared(Arc::new(
+                rocketmq_error::Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED).with_context(context),
             ))
         }
     }
 }
 
-fn broker_request_contract_error(contract: OutboundRequestContract) -> RocketMQError {
+fn broker_request_contract_error(contract: OutboundRequestContract) -> SharedError {
     match contract.reason() {
-        OutboundRequestContractReason::NameServerEndpointMissing => {
-            RocketMQError::Shared(Arc::new(Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED)))
-        }
+        OutboundRequestContractReason::NameServerEndpointMissing => crate::broker_error::from_shared(Arc::new(
+            rocketmq_error::Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED),
+        )),
     }
 }
 
@@ -388,7 +386,7 @@ impl BrokerOuterAPI {
         timeout_mills: u64,
         request_header: RegisterBrokerRequestHeader,
         body: Vec<u8>,
-    ) -> rocketmq_error::RocketMQResult<Option<RegisterBrokerResult>> {
+    ) -> crate::broker_error::BrokerResult<Option<RegisterBrokerResult>> {
         debug!(
             "Register broker to name remoting_server, namesrv_addr={},request_code={:?}, request_header={:?}, \
              body_len={}",
@@ -437,7 +435,7 @@ impl BrokerOuterAPI {
                 Err(broker_request_rejection_error("register_broker", rejection))
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => Err(broker_request_contract_error(contract)),
-            Err(error) => Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => Err(crate::broker_error::from_shared(error.into_shared_error())),
         }
     }
 
@@ -462,7 +460,7 @@ impl BrokerOuterAPI {
                         Err(broker_request_rejection_error("register_single_topic_all", rejection))
                     }
                     Ok(OutboundRequestOutcome::Contract(contract)) => Err(broker_request_contract_error(contract)),
-                    Err(error) => Err(RocketMQError::Shared(error.into_shared_error())),
+                    Err(error) => Err(crate::broker_error::from_shared(error.into_shared_error())),
                 }
             }
         });
@@ -741,7 +739,7 @@ impl BrokerOuterAPI {
         topic: CheetahString,
         queue_id: i32,
         committed: bool,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    ) -> crate::broker_error::BrokerResult<i64> {
         let request_header = GetMaxOffsetRequestHeader {
             topic,
             queue_id,
@@ -759,7 +757,7 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("get_max_offset", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
 
         match ResponseCode::from(response.code()) {
@@ -767,12 +765,12 @@ impl BrokerOuterAPI {
                 let response_header = response.decode_command_custom_header::<GetMaxOffsetResponseHeader>()?;
                 Ok(response_header.offset)
             }
-            _ => Err(RocketMQError::BrokerOperationFailed {
-                operation: "get_max_offset",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr: Some(addr.to_string()),
-            }),
+            _ => Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_max_offset",
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(addr.to_string()),
+            )),
         }
     }
 
@@ -790,7 +788,7 @@ impl BrokerOuterAPI {
         addr: &CheetahString,
         topic: CheetahString,
         queue_id: i32,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    ) -> crate::broker_error::BrokerResult<i64> {
         let request_header = GetMinOffsetRequestHeader {
             topic,
             queue_id,
@@ -807,7 +805,7 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("get_min_offset", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
 
         match ResponseCode::from(response.code()) {
@@ -815,12 +813,12 @@ impl BrokerOuterAPI {
                 let response_header = response.decode_command_custom_header::<GetMinOffsetResponseHeader>()?;
                 Ok(response_header.offset)
             }
-            _ => Err(RocketMQError::BrokerOperationFailed {
-                operation: "get_min_offset",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr: Some(addr.to_string()),
-            }),
+            _ => Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_min_offset",
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(addr.to_string()),
+            )),
         }
     }
 
@@ -833,7 +831,7 @@ impl BrokerOuterAPI {
         addr: &CheetahString,
         request_body: bytes::Bytes,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<HashSet<MessageQueue>> {
+    ) -> crate::broker_error::BrokerResult<HashSet<MessageQueue>> {
         let mut request = self
             .command_factory
             .create_request_command(RequestCode::LockBatchMq, LockBatchMqRequestHeader::default());
@@ -848,24 +846,24 @@ impl BrokerOuterAPI {
                     let lock_batch_response_body = LockBatchResponseBody::decode(response.get_body().unwrap()).unwrap();
                     Ok(lock_batch_response_body.lock_ok_mq_set)
                 } else {
-                    Err(RocketMQError::BrokerOperationFailed {
-                        operation: "lock_batch_mq",
-                        code: response.code(),
-                        message: response
+                    Err(crate::broker_error::broker_operation_failed_with_address(
+                        "lock_batch_mq",
+                        response.code(),
+                        response
                             .remark()
                             .cloned()
                             .unwrap_or(CheetahString::empty())
                             .serialize_json()
                             .expect("to json failed"),
-                        broker_addr: Some("".to_string()),
-                    })
+                        Some("".to_string()),
+                    ))
                 }
             }
             Ok(OutboundRequestOutcome::Rejected(rejection)) => {
                 Err(broker_request_rejection_error("lock_batch_mq", rejection))
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => Err(broker_request_contract_error(contract)),
-            Err(error) => Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => Err(crate::broker_error::from_shared(error.into_shared_error())),
         }
     }
 
@@ -874,7 +872,7 @@ impl BrokerOuterAPI {
         addr: &CheetahString,
         request_body: bytes::Bytes,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         let mut request = self
             .command_factory
             .create_request_command(RequestCode::UnlockBatchMq, UnlockBatchMqRequestHeader::default());
@@ -888,19 +886,19 @@ impl BrokerOuterAPI {
                 if ResponseCode::from(response.code()) == ResponseCode::Success {
                     Ok(())
                 } else {
-                    Err(RocketMQError::BrokerOperationFailed {
-                        operation: "unlock_batch_mq",
-                        code: response.code(),
-                        message: response.remark().cloned().unwrap_or(CheetahString::empty()).to_string(),
-                        broker_addr: Some("".to_string()),
-                    })
+                    Err(crate::broker_error::broker_operation_failed_with_address(
+                        "unlock_batch_mq",
+                        response.code(),
+                        response.remark().cloned().unwrap_or(CheetahString::empty()).to_string(),
+                        Some("".to_string()),
+                    ))
                 }
             }
             Ok(OutboundRequestOutcome::Rejected(rejection)) => {
                 Err(broker_request_rejection_error("unlock_batch_mq", rejection))
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => Err(broker_request_contract_error(contract)),
-            Err(error) => Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => Err(crate::broker_error::from_shared(error.into_shared_error())),
         }
     }
 
@@ -909,7 +907,7 @@ impl BrokerOuterAPI {
         topic: &CheetahString,
         timeout_millis: u64,
         allow_topic_not_exist: bool,
-    ) -> rocketmq_error::RocketMQResult<TopicRouteData> {
+    ) -> crate::broker_error::BrokerResult<TopicRouteData> {
         let header = GetRouteInfoRequestHeader {
             topic: topic.clone(),
             ..Default::default()
@@ -927,7 +925,7 @@ impl BrokerOuterAPI {
                 ));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         match ResponseCode::from(response.code()) {
             ResponseCode::TopicNotExist if allow_topic_not_exist => {
@@ -944,12 +942,12 @@ impl BrokerOuterAPI {
             }
             _ => {}
         }
-        Err(RocketMQError::BrokerOperationFailed {
-            operation: "notify_min_broker_id_changed",
-            code: response.code(),
-            message: response.remark().cloned().unwrap_or(CheetahString::empty()).to_string(),
-            broker_addr: Some("".to_string()),
-        })
+        Err(crate::broker_error::broker_operation_failed_with_address(
+            "notify_min_broker_id_changed",
+            response.code(),
+            response.remark().cloned().unwrap_or(CheetahString::empty()).to_string(),
+            Some("".to_string()),
+        ))
     }
 
     pub(crate) async fn get_topic_stats_info_from_broker(
@@ -957,7 +955,7 @@ impl BrokerOuterAPI {
         broker_name: &CheetahString,
         topic: &CheetahString,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<TopicStatsTable> {
+    ) -> crate::broker_error::BrokerResult<TopicStatsTable> {
         let header = GetTopicStatsInfoRequestHeader {
             topic: topic.clone(),
             topic_request_header: Some(TopicRequestHeader {
@@ -971,7 +969,7 @@ impl BrokerOuterAPI {
         let request = RpcRequest::new(RequestCode::GetTopicStatsInfo as i32, header, None);
         let response = self.rpc_client.invoke(request, timeout_millis).await?;
         let body = Self::rpc_response_body_as_bytes(response, "get_topic_stats_info")?;
-        TopicStatsTable::decode(body.as_ref())
+        TopicStatsTable::decode(body.as_ref()).map_err(crate::broker_error::from_canonical)
     }
 
     pub(crate) async fn get_topic_config_from_broker(
@@ -980,7 +978,7 @@ impl BrokerOuterAPI {
         topic: &CheetahString,
         lo: bool,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<TopicConfigAndQueueMapping> {
+    ) -> crate::broker_error::BrokerResult<TopicConfigAndQueueMapping> {
         let header = GetTopicConfigRequestHeader {
             topic: topic.clone(),
             topic_request_header: Some(RpcTopicRequestHeader {
@@ -994,33 +992,27 @@ impl BrokerOuterAPI {
         let request = RpcRequest::new(RequestCode::GetTopicConfig as i32, header, None);
         let response = self.rpc_client.invoke(request, timeout_millis).await?;
         let body = Self::rpc_response_body_as_bytes(response, "get_topic_config")?;
-        TopicConfigAndQueueMapping::decode(body.as_ref())
+        TopicConfigAndQueueMapping::decode(body.as_ref()).map_err(crate::broker_error::from_canonical)
     }
 
     fn rpc_response_body_as_bytes(
         response: rocketmq_transport::api::RpcResponse,
         operation: &'static str,
-    ) -> rocketmq_error::RocketMQResult<Bytes> {
+    ) -> crate::broker_error::BrokerResult<Bytes> {
         if let Some(exception) = response.exception {
-            return Err(RocketMQError::ResponseProcessFailed {
-                operation,
-                reason: exception.to_string(),
-            });
+            return Err(crate::broker_error::response_process_source(operation, exception));
         }
 
         let Some(body) = response.body else {
-            return Err(RocketMQError::ResponseProcessFailed {
+            return Err(crate::broker_error::response_process_failed(
                 operation,
-                reason: "missing response body".to_string(),
-            });
+                "missing response body",
+            ));
         };
 
         body.downcast::<Bytes>()
             .map(|bytes| *bytes)
-            .map_err(|_| RocketMQError::ResponseProcessFailed {
-                operation,
-                reason: "response body is not bytes".to_string(),
-            })
+            .map_err(|_| crate::broker_error::response_process_failed(operation, "response body is not bytes"))
     }
 
     pub async fn send_message_to_specific_broker(
@@ -1030,7 +1022,7 @@ impl BrokerOuterAPI {
         msg: MessageExt,
         group: CheetahString,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<SendResult> {
+    ) -> crate::broker_error::BrokerResult<SendResult> {
         let uniq_msg_id = MessageClientIDSetter::get_uniq_id(&msg);
         let queue_id = msg.queue_id;
         let topic = msg.topic().clone();
@@ -1048,7 +1040,7 @@ impl BrokerOuterAPI {
                 ));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
 
         process_send_response(broker_name, uniq_msg_id.unwrap_or_default(), queue_id, topic, &response)
@@ -1064,7 +1056,7 @@ impl BrokerOuterAPI {
         offset: i64,
         max_nums: i32,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<(Option<PullOutcome<MessageExt>>, String, bool)> {
+    ) -> crate::broker_error::BrokerResult<(Option<PullOutcome<MessageExt>>, String, bool)> {
         let request_command = build_pull_message_request(
             &self.command_factory,
             broker_name,
@@ -1134,7 +1126,7 @@ impl BrokerOuterAPI {
         broker_addr: &CheetahString,
         broker_name: &CheetahString,
         broker_id: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         let request_header = UnRegisterBrokerRequestHeader {
             broker_name: broker_name.clone(),
             broker_addr: broker_addr.clone(),
@@ -1154,24 +1146,24 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("unregister_broker", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
         } else {
-            Err(RocketMQError::BrokerOperationFailed {
-                operation: "sync_consumer_offset_all",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr: Some(broker_addr.to_string()),
-            })
+            Err(crate::broker_error::broker_operation_failed_with_address(
+                "sync_consumer_offset_all",
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(broker_addr.to_string()),
+            ))
         }
     }
 
     pub async fn get_all_topic_config(
         &self,
         addr: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<TopicConfigAndMappingSerializeWrapper>> {
+    ) -> crate::broker_error::BrokerResult<Option<TopicConfigAndMappingSerializeWrapper>> {
         let request = self
             .command_factory
             .create_remoting_command(RequestCode::GetAllTopicConfig);
@@ -1185,7 +1177,7 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("get_all_topic_config", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.body() {
@@ -1194,19 +1186,19 @@ impl BrokerOuterAPI {
             }
             Ok(None)
         } else {
-            Err(RocketMQError::BrokerOperationFailed {
-                operation: "get_all_topic_config",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr: Some(addr.to_string()),
-            })
+            Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_all_topic_config",
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(addr.to_string()),
+            ))
         }
     }
 
     pub async fn get_all_consumer_offset(
         &self,
         addr: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<ConsumerOffsetSerializeWrapper>> {
+    ) -> crate::broker_error::BrokerResult<Option<ConsumerOffsetSerializeWrapper>> {
         let request = self
             .command_factory
             .create_remoting_command(RequestCode::GetAllConsumerOffset);
@@ -1217,7 +1209,7 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("get_all_consumer_offset", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.body() {
@@ -1226,16 +1218,16 @@ impl BrokerOuterAPI {
             }
             Ok(None)
         } else {
-            Err(RocketMQError::BrokerOperationFailed {
-                operation: "get_all_consumer_offset",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr: Some(addr.to_string()),
-            })
+            Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_all_consumer_offset",
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(addr.to_string()),
+            ))
         }
     }
 
-    pub async fn get_delay_offset(&self, addr: &CheetahString) -> rocketmq_error::RocketMQResult<Option<String>> {
+    pub async fn get_delay_offset(&self, addr: &CheetahString) -> crate::broker_error::BrokerResult<Option<String>> {
         let request = self
             .command_factory
             .create_remoting_command(RequestCode::GetAllDelayOffset);
@@ -1245,7 +1237,7 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("get_delay_offset", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -1253,19 +1245,19 @@ impl BrokerOuterAPI {
             }
             Ok(None)
         } else {
-            Err(RocketMQError::BrokerOperationFailed {
-                operation: "get_delay_offset",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr: Some(addr.to_string()),
-            })
+            Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_delay_offset",
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(addr.to_string()),
+            ))
         }
     }
 
     pub async fn get_all_subscription_group_config(
         &self,
         addr: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<SubscriptionGroupWrapper>> {
+    ) -> crate::broker_error::BrokerResult<Option<SubscriptionGroupWrapper>> {
         let request = self
             .command_factory
             .create_remoting_command(RequestCode::GetAllSubscriptionGroupConfig);
@@ -1278,7 +1270,7 @@ impl BrokerOuterAPI {
                 ));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -1286,19 +1278,19 @@ impl BrokerOuterAPI {
             }
             Ok(None)
         } else {
-            Err(RocketMQError::BrokerOperationFailed {
-                operation: "get_all_subscription_group_config",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr: Some(addr.to_string()),
-            })
+            Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_all_subscription_group_config",
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(addr.to_string()),
+            ))
         }
     }
 
     pub async fn get_message_request_mode(
         &self,
         addr: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<MessageRequestModeSerializeWrapper>> {
+    ) -> crate::broker_error::BrokerResult<Option<MessageRequestModeSerializeWrapper>> {
         let request = self
             .command_factory
             .create_remoting_command(RequestCode::GetAllMessageRequestMode);
@@ -1308,7 +1300,7 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("get_message_request_mode", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -1316,19 +1308,19 @@ impl BrokerOuterAPI {
             }
             Ok(None)
         } else {
-            Err(RocketMQError::BrokerOperationFailed {
-                operation: "get_message_request_mode",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr: Some(addr.to_string()),
-            })
+            Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_message_request_mode",
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(addr.to_string()),
+            ))
         }
     }
 
     pub async fn get_timer_metrics(
         &self,
         addr: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<TimerMetricsSerializeWrapper>> {
+    ) -> crate::broker_error::BrokerResult<Option<TimerMetricsSerializeWrapper>> {
         let request = self
             .command_factory
             .create_remoting_command(RequestCode::GetTimerMetrics);
@@ -1338,29 +1330,29 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("get_timer_metrics", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
                 return serde_json::from_slice(body.as_ref())
                     .map(Some)
-                    .map_err(|error| SerializationError::source("deserialize", "JSON", error).into());
+                    .map_err(|error| crate::broker_error::serialization_failed("deserialize", "JSON", error));
             }
             Ok(None)
         } else {
-            Err(RocketMQError::BrokerOperationFailed {
-                operation: "get_timer_metrics",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr: Some(addr.to_string()),
-            })
+            Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_timer_metrics",
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(addr.to_string()),
+            ))
         }
     }
 
     pub async fn get_timer_check_point(
         &self,
         addr: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<TimerCheckpointSnapshot>> {
+    ) -> crate::broker_error::BrokerResult<Option<TimerCheckpointSnapshot>> {
         let request = self
             .command_factory
             .create_remoting_command(RequestCode::GetTimerCheckPoint);
@@ -1370,20 +1362,22 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("get_timer_check_point", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
-                return Ok(Some(TimerCheckpointSnapshot::decode(body.as_ref())?));
+                return TimerCheckpointSnapshot::decode(body.as_ref())
+                    .map(Some)
+                    .map_err(crate::broker_error::io);
             }
             Ok(None)
         } else {
-            Err(RocketMQError::BrokerOperationFailed {
-                operation: "get_timer_check_point",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr: Some(addr.to_string()),
-            })
+            Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_timer_check_point",
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(addr.to_string()),
+            ))
         }
     }
 
@@ -1392,7 +1386,7 @@ impl BrokerOuterAPI {
         cluster_name: &CheetahString,
         broker_name: &CheetahString,
         is_compatible_with_old_name_srv: bool,
-    ) -> rocketmq_error::RocketMQResult<Option<BrokerMemberGroup>> {
+    ) -> crate::broker_error::BrokerResult<Option<BrokerMemberGroup>> {
         if is_compatible_with_old_name_srv {
             self.get_broker_member_group_compatible(cluster_name, broker_name).await
         } else {
@@ -1404,7 +1398,7 @@ impl BrokerOuterAPI {
         &self,
         cluster_name: &CheetahString,
         broker_name: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<BrokerMemberGroup>> {
+    ) -> crate::broker_error::BrokerResult<Option<BrokerMemberGroup>> {
         let request_header = GetBrokerMemberGroupRequestHeader::new(cluster_name.clone(), broker_name.clone());
         let request = self
             .command_factory
@@ -1415,7 +1409,7 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("get_broker_member_group", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -1434,7 +1428,7 @@ impl BrokerOuterAPI {
         &self,
         cluster_name: &CheetahString,
         broker_name: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<BrokerMemberGroup>> {
+    ) -> crate::broker_error::BrokerResult<Option<BrokerMemberGroup>> {
         let request_header = GetRouteInfoRequestHeader {
             topic: CheetahString::from_string(format!(
                 "{}{}",
@@ -1455,7 +1449,7 @@ impl BrokerOuterAPI {
                 ));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -1474,7 +1468,7 @@ impl BrokerOuterAPI {
     pub async fn get_controller_metadata(
         &self,
         controller_address: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<GetMetaDataResponseHeader> {
+    ) -> crate::broker_error::BrokerResult<GetMetaDataResponseHeader> {
         let request = self
             .command_factory
             .create_remoting_command(RequestCode::ControllerGetMetadataInfo);
@@ -1488,16 +1482,16 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("get_controller_metadata", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => Ok(response.decode_command_custom_header::<GetMetaDataResponseHeader>()?),
-            _ => Err(RocketMQError::BrokerOperationFailed {
-                operation: "get_controller_metadata",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr: Some(controller_address.to_string()),
-            }),
+            _ => Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_controller_metadata",
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(controller_address.to_string()),
+            )),
         }
     }
 
@@ -1507,7 +1501,7 @@ impl BrokerOuterAPI {
         controller_address: CheetahString,
         timeout_millis: u64,
         request_header: BrokerHeartbeatRequestHeader,
-    ) -> rocketmq_error::RocketMQResult<Option<ControllerWriteLeaseGrant>> {
+    ) -> crate::broker_error::BrokerResult<Option<ControllerWriteLeaseGrant>> {
         if controller_address.is_empty() {
             return Ok(None);
         }
@@ -1527,20 +1521,20 @@ impl BrokerOuterAPI {
                 ));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => response
                 .body()
                 .map(|body| serde_json::from_slice(body.as_ref()))
                 .transpose()
-                .map_err(|error| SerializationError::source("deserialize", "JSON", error).into()),
-            _ => Err(RocketMQError::BrokerOperationFailed {
-                operation: "send_heartbeat_to_controller",
-                code: response.code(),
-                message: response.remark().map_or_else(String::new, ToString::to_string),
-                broker_addr: Some(controller_address.to_string()),
-            }),
+                .map_err(|error| crate::broker_error::serialization_failed("deserialize", "JSON", error)),
+            _ => Err(crate::broker_error::broker_operation_failed_with_address(
+                "send_heartbeat_to_controller",
+                response.code(),
+                response.remark().map_or_else(String::new, ToString::to_string),
+                Some(controller_address.to_string()),
+            )),
         }
     }
 
@@ -1549,7 +1543,7 @@ impl BrokerOuterAPI {
         controller_address: &CheetahString,
         timeout_millis: u64,
         request_header: BrokerHeartbeatRequestHeader,
-    ) -> rocketmq_error::RocketMQResult<Option<ControllerWriteLeaseGrant>> {
+    ) -> crate::broker_error::BrokerResult<Option<ControllerWriteLeaseGrant>> {
         let request = self
             .command_factory
             .create_request_command(RequestCode::BrokerHeartbeat, request_header);
@@ -1566,7 +1560,7 @@ impl BrokerOuterAPI {
                 ));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
 
         match ResponseCode::from(response.code()) {
@@ -1574,17 +1568,17 @@ impl BrokerOuterAPI {
                 .body()
                 .map(|body| serde_json::from_slice(body.as_ref()))
                 .transpose()
-                .map_err(|error| SerializationError::source("deserialize", "JSON", error).into()),
-            _ => Err(RocketMQError::BrokerOperationFailed {
-                operation: "send_heartbeat_to_controller_sync",
-                code: response.code(),
-                message: response
+                .map_err(|error| crate::broker_error::serialization_failed("deserialize", "JSON", error)),
+            _ => Err(crate::broker_error::broker_operation_failed_with_address(
+                "send_heartbeat_to_controller_sync",
+                response.code(),
+                response
                     .remark()
                     .map_or("send_heartbeat_to_controller_sync failed".to_string(), |s| {
                         s.to_string()
                     }),
-                broker_addr: Some(controller_address.to_string()),
-            }),
+                Some(controller_address.to_string()),
+            )),
         }
     }
 
@@ -1597,7 +1591,7 @@ impl BrokerOuterAPI {
         master_epoch: i32,
         new_sync_state_set: HashSet<i64>,
         sync_state_set_epoch: i32,
-    ) -> rocketmq_error::RocketMQResult<SyncStateSet> {
+    ) -> crate::broker_error::BrokerResult<SyncStateSet> {
         let request_header = AlterSyncStateSetRequestHeader {
             broker_name,
             master_broker_id,
@@ -1619,27 +1613,27 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("alter_sync_state_set", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
 
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "alter_sync_state_set",
-                code: response.code(),
-                message: response
+            return Err(crate::broker_error::broker_operation_failed_with_address(
+                "alter_sync_state_set",
+                response.code(),
+                response
                     .remark()
                     .map_or("alter_sync_state_set failed".to_string(), |s| s.to_string()),
-                broker_addr: Some(controller_address.to_string()),
-            });
+                Some(controller_address.to_string()),
+            ));
         }
 
         if response.body().is_none() {
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "alter_sync_state_set",
-                code: -1,
-                message: "No body in alter_sync_state_set response".to_string(),
-                broker_addr: Some(controller_address.to_string()),
-            });
+            return Err(crate::broker_error::broker_operation_failed_with_address(
+                "alter_sync_state_set",
+                -1,
+                "No body in alter_sync_state_set response".to_string(),
+                Some(controller_address.to_string()),
+            ));
         }
         let body = response.body().unwrap();
         let sync_state_set: SyncStateSet = SyncStateSet::decode(body.as_ref())?;
@@ -1653,7 +1647,7 @@ impl BrokerOuterAPI {
         cluster_name: CheetahString,
         broker_name: CheetahString,
         broker_id: i64,
-    ) -> rocketmq_error::RocketMQResult<(ElectMasterResponseHeader, HashSet<i64>)> {
+    ) -> crate::broker_error::BrokerResult<(ElectMasterResponseHeader, HashSet<i64>)> {
         let request_header = ElectMasterRequestHeader {
             cluster_name,
             broker_name,
@@ -1674,39 +1668,36 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("broker_elect", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
 
         match ResponseCode::from(response.code()) {
             ResponseCode::Success | ResponseCode::ControllerMasterStillExist => {
                 let response_header = response
                     .decode_command_custom_header::<ElectMasterResponseHeader>()
-                    .map_err(|e| RocketMQError::BrokerOperationFailed {
-                        operation: "broker_elect",
-                        code: -1,
-                        message: format!("Failed to decode elect response: {:?}", e),
-                        broker_addr: Some(controller_address.to_string()),
+                    .map_err(|error| {
+                        crate::broker_error::broker_operation_source("broker_elect", -1, controller_address, error)
                     })?;
                 if response.body().is_none() {
-                    return Err(RocketMQError::BrokerOperationFailed {
-                        operation: "broker_elect",
-                        code: -1,
-                        message: "No body in broker_elect response".to_string(),
-                        broker_addr: Some(controller_address.to_string()),
-                    });
+                    return Err(crate::broker_error::broker_operation_failed_with_address(
+                        "broker_elect",
+                        -1,
+                        "No body in broker_elect response".to_string(),
+                        Some(controller_address.to_string()),
+                    ));
                 }
                 let body = response.body().unwrap();
                 let elect_master_response_body = ElectMasterResponseBody::decode(body.as_ref())?;
                 Ok((response_header, elect_master_response_body.sync_state_set))
             }
-            _ => Err(RocketMQError::BrokerOperationFailed {
-                operation: "broker_elect",
-                code: response.code(),
-                message: response
+            _ => Err(crate::broker_error::broker_operation_failed_with_address(
+                "broker_elect",
+                response.code(),
+                response
                     .remark()
                     .map_or("broker_elect failed".to_string(), |s| s.to_string()),
-                broker_addr: Some(controller_address.to_string()),
-            }),
+                Some(controller_address.to_string()),
+            )),
         }
     }
 
@@ -1716,7 +1707,7 @@ impl BrokerOuterAPI {
         cluster_name: CheetahString,
         broker_name: CheetahString,
         controller_address: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<GetNextBrokerIdResponseHeader> {
+    ) -> crate::broker_error::BrokerResult<GetNextBrokerIdResponseHeader> {
         let request_header = GetNextBrokerIdRequestHeader {
             cluster_name,
             broker_name,
@@ -1735,27 +1726,24 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("get_next_broker_id", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
 
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "get_next_broker_id",
-                code: response.code(),
-                message: response
+            return Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_next_broker_id",
+                response.code(),
+                response
                     .remark()
                     .map_or("get_next_broker_id failed".to_string(), |s| s.to_string()),
-                broker_addr: Some(controller_address.to_string()),
-            });
+                Some(controller_address.to_string()),
+            ));
         }
 
         response
             .decode_command_custom_header::<GetNextBrokerIdResponseHeader>()
-            .map_err(|e| RocketMQError::BrokerOperationFailed {
-                operation: "get_next_broker_id",
-                code: -1,
-                message: format!("Failed to decode next broker id response header: {:?}", e),
-                broker_addr: Some(controller_address.to_string()),
+            .map_err(|error| {
+                crate::broker_error::broker_operation_source("get_next_broker_id", -1, controller_address, error)
             })
     }
 
@@ -1767,7 +1755,7 @@ impl BrokerOuterAPI {
         broker_id: i64,
         register_check_code: CheetahString,
         controller_address: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ApplyBrokerIdResponseHeader> {
+    ) -> crate::broker_error::BrokerResult<ApplyBrokerIdResponseHeader> {
         let request_header = ApplyBrokerIdRequestHeader {
             cluster_name,
             broker_name,
@@ -1788,27 +1776,24 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("apply_broker_id", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
 
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "apply_broker_id",
-                code: response.code(),
-                message: response
+            return Err(crate::broker_error::broker_operation_failed_with_address(
+                "apply_broker_id",
+                response.code(),
+                response
                     .remark()
                     .map_or("apply_broker_id failed".to_string(), |s| s.to_string()),
-                broker_addr: Some(controller_address.to_string()),
-            });
+                Some(controller_address.to_string()),
+            ));
         }
 
         let response_header = response
             .decode_command_custom_header::<ApplyBrokerIdResponseHeader>()
-            .map_err(|e| RocketMQError::BrokerOperationFailed {
-                operation: "apply_broker_id",
-                code: -1,
-                message: format!("Failed to decode apply broker id response: {:?}", e),
-                broker_addr: Some(controller_address.to_string()),
+            .map_err(|error| {
+                crate::broker_error::broker_operation_source("apply_broker_id", -1, controller_address, error)
             })?;
         Ok(response_header)
     }
@@ -1821,7 +1806,7 @@ impl BrokerOuterAPI {
         broker_id: i64,
         broker_address: CheetahString,
         controller_address: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<(RegisterBrokerToControllerResponseHeader, Option<HashSet<i64>>)> {
+    ) -> crate::broker_error::BrokerResult<(RegisterBrokerToControllerResponseHeader, Option<HashSet<i64>>)> {
         let request_header = RegisterBrokerToControllerRequestHeader {
             cluster_name: Some(cluster_name),
             broker_name: Some(broker_name),
@@ -1846,36 +1831,38 @@ impl BrokerOuterAPI {
                 ));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
 
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "register_broker_to_controller",
-                code: response.code(),
-                message: response
+            return Err(crate::broker_error::broker_operation_failed_with_address(
+                "register_broker_to_controller",
+                response.code(),
+                response
                     .remark()
                     .map_or("register_broker_to_controller failed".to_string(), |s| s.to_string()),
-                broker_addr: Some(controller_address.to_string()),
-            });
+                Some(controller_address.to_string()),
+            ));
         }
 
         let response_header = response
             .decode_command_custom_header::<RegisterBrokerToControllerResponseHeader>()
-            .map_err(|e| RocketMQError::BrokerOperationFailed {
-                operation: "register_broker_to_controller",
-                code: -1,
-                message: format!("Failed to decode register response: {:?}", e),
-                broker_addr: Some(controller_address.to_string()),
+            .map_err(|error| {
+                crate::broker_error::broker_operation_source(
+                    "register_broker_to_controller",
+                    -1,
+                    controller_address,
+                    error,
+                )
             })?;
 
         if response.body().is_none() {
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "register_broker_to_controller",
-                code: -1,
-                message: "No body in register_broker_to_controller response".to_string(),
-                broker_addr: Some(controller_address.to_string()),
-            });
+            return Err(crate::broker_error::broker_operation_failed_with_address(
+                "register_broker_to_controller",
+                -1,
+                "No body in register_broker_to_controller response".to_string(),
+                Some(controller_address.to_string()),
+            ));
         }
         let body = response.body().unwrap();
         let mut sync_state_set = SyncStateSet::decode(body.as_ref())?;
@@ -1889,7 +1876,7 @@ impl BrokerOuterAPI {
         &self,
         controller_address: &CheetahString,
         broker_name: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<(GetReplicaInfoResponseHeader, SyncStateSet)> {
+    ) -> crate::broker_error::BrokerResult<(GetReplicaInfoResponseHeader, SyncStateSet)> {
         let request_header = GetReplicaInfoRequestHeader { broker_name };
         let request = self
             .command_factory
@@ -1905,36 +1892,33 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("get_replica_info", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
 
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "get_replica_info",
-                code: response.code(),
-                message: response
+            return Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_replica_info",
+                response.code(),
+                response
                     .remark()
                     .map_or("get_replica_info failed".to_string(), |s| s.to_string()),
-                broker_addr: Some(controller_address.to_string()),
-            });
+                Some(controller_address.to_string()),
+            ));
         }
 
         let response_header = response
             .decode_command_custom_header::<GetReplicaInfoResponseHeader>()
-            .map_err(|e| RocketMQError::BrokerOperationFailed {
-                operation: "get_replica_info",
-                code: -1,
-                message: format!("Failed to decode replica info response: {:?}", e),
-                broker_addr: Some(controller_address.to_string()),
+            .map_err(|error| {
+                crate::broker_error::broker_operation_source("get_replica_info", -1, controller_address, error)
             })?;
 
         if response.body().is_none() {
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "get_replica_info",
-                code: -1,
-                message: "No body in get_replica_info response".to_string(),
-                broker_addr: Some(controller_address.to_string()),
-            });
+            return Err(crate::broker_error::broker_operation_failed_with_address(
+                "get_replica_info",
+                -1,
+                "No body in get_replica_info response".to_string(),
+                Some(controller_address.to_string()),
+            ));
         }
         let body = response.body().unwrap();
         let sync_state_set = SyncStateSet::decode(body.as_ref())?;
@@ -1948,7 +1932,7 @@ impl BrokerOuterAPI {
         master_ha_addr: &CheetahString,
         broker_init_max_offset: i64,
         master_addr: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         let request_header = ExchangeHAInfoRequestHeader {
             master_ha_address: Some(master_ha_addr.clone()),
             master_flush_offset: Some(broker_init_max_offset),
@@ -1967,24 +1951,24 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("send_broker_ha_info", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
         } else {
-            Err(RocketMQError::BrokerOperationFailed {
-                operation: "sync_broker_member_group",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr: Some(broker_addr.to_string()),
-            })
+            Err(crate::broker_error::broker_operation_failed_with_address(
+                "sync_broker_member_group",
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                Some(broker_addr.to_string()),
+            ))
         }
     }
 
     pub async fn retrieve_broker_ha_info(
         &self,
         master_broker_addr: Option<&CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<BrokerSyncInfo> {
+    ) -> crate::broker_error::BrokerResult<BrokerSyncInfo> {
         let request_header = ExchangeHAInfoRequestHeader::default();
         let request = self
             .command_factory
@@ -1999,7 +1983,7 @@ impl BrokerOuterAPI {
                 return Err(broker_request_rejection_error("retrieve_broker_ha_info", rejection));
             }
             Ok(OutboundRequestOutcome::Contract(contract)) => return Err(broker_request_contract_error(contract)),
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(crate::broker_error::from_shared(error.into_shared_error())),
         };
 
         if ResponseCode::from(response.code()) == ResponseCode::Success {
@@ -2011,12 +1995,12 @@ impl BrokerOuterAPI {
             });
         }
 
-        Err(RocketMQError::BrokerOperationFailed {
-            operation: "retrieve_broker_ha_info",
-            code: response.code(),
-            message: response.remark().map_or("".to_string(), |s| s.to_string()),
-            broker_addr: master_broker_addr.map(|s| s.to_string()),
-        })
+        Err(crate::broker_error::broker_operation_failed_with_address(
+            "retrieve_broker_ha_info",
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            master_broker_addr.map(|s| s.to_string()),
+        ))
     }
 
     pub fn close_channel(&self, addr_list: Vec<String>) {

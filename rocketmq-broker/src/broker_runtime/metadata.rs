@@ -51,23 +51,18 @@ impl BrokerRuntime {
     pub(super) async fn initialize_metadata(&self) -> Result<(), BrokerStartupError> {
         info!("======Starting initialize metadata========");
         if let Some(Err(error)) = self.composition.state.metadata_io.as_ref() {
-            return Err(BrokerStartupError::Initialization {
-                component: "metadata_io_actor",
-                detail: error.to_string(),
-            });
+            return Err(BrokerStartupError::initialization_source(
+                "metadata_io_actor",
+                error.clone(),
+            ));
         }
         match self.composition.state.topic_config_coordinator().load().await {
             Ok(true) => {}
             Ok(false) => {
-                return Err(BrokerStartupError::MetadataLoad {
-                    component: "topic_config",
-                });
+                return Err(BrokerStartupError::metadata_load("topic_config"));
             }
             Err(error) => {
-                return Err(BrokerStartupError::Initialization {
-                    component: "topic_config",
-                    detail: error.to_string(),
-                });
+                return Err(BrokerStartupError::initialization_source("topic_config", error));
             }
         }
         for (component, loaded) in [
@@ -93,7 +88,7 @@ impl BrokerRuntime {
             ),
         ] {
             if !loaded {
-                return Err(BrokerStartupError::MetadataLoad { component });
+                return Err(BrokerStartupError::metadata_load(component));
             }
         }
         Ok(())

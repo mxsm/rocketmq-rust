@@ -80,7 +80,7 @@ impl<MS> RequestProcessor for ConsumerManageProcessor<MS>
 where
     MS: BrokerStorePort + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -89,7 +89,7 @@ impl<MS: BrokerStorePort> ConsumerManageProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let request_source = trusted_request_source(request)?;
         let result = self.process_command(request_source, request.command_mut()).await;
@@ -146,7 +146,7 @@ where
         &self,
         request_source: CheetahString,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("ConsumerManageProcessor received request code: {:?}", request_code);
         match request_code {
@@ -174,7 +174,7 @@ where
         &self,
         request_source: &str,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = self.command_factory.create_success_response_command();
         let request_header = request.decode_command_custom_header::<GetConsumerListByGroupRequestHeader>()?;
         let consumer_group_info = self.consumer_view.client_ids_if_present(&request_header.consumer_group);
@@ -215,7 +215,7 @@ where
         &self,
         request_source: CheetahString,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let mut request_header = request.decode_command_custom_header::<UpdateConsumerOffsetRequestHeader>()?;
         let mut mapping_context = self
             .topic_queue_mapping_manager
@@ -282,7 +282,7 @@ where
     async fn update_consumer_offset_conditional(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let header = request.decode_command_custom_header::<UpdateConsumerOffsetConditionalHeader>()?;
         let response = self.command_factory.create_success_response_command();
         if header.queue_id < 0 || header.expected_offset < -1 || header.new_offset < 0 {
@@ -341,7 +341,7 @@ where
     async fn query_consumer_offset(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let mut request_header = request.decode_command_custom_header::<QueryConsumerOffsetRequestHeader>()?;
         let mut mapping_context = self
             .topic_queue_mapping_manager
@@ -618,7 +618,7 @@ where
     }
 }
 
-fn trusted_request_source(request: &RemotingRequest) -> rocketmq_error::RocketMQResult<CheetahString> {
+fn trusted_request_source(request: &RemotingRequest) -> crate::broker_error::BrokerResult<CheetahString> {
     let origin = match request.origin() {
         RequestOrigin::Network { peer } => TrustedOriginFact::Network(peer.address()),
         RequestOrigin::Embedded { .. } => TrustedOriginFact::Embedded,
@@ -649,13 +649,13 @@ enum TrustedSessionFact {
 fn trusted_request_source_from_facts(
     origin: TrustedOriginFact,
     session: TrustedSessionFact,
-) -> rocketmq_error::RocketMQResult<CheetahString> {
+) -> crate::broker_error::BrokerResult<CheetahString> {
     match (origin, session) {
         (TrustedOriginFact::Network(peer), TrustedSessionFact::Network(remote_addr)) if peer == remote_addr => {
             Ok(remote_addr.to_string().into())
         }
         (TrustedOriginFact::Embedded, TrustedSessionFact::Embedded) => Ok(CheetahString::from_static_str("embedded")),
-        _ => Err(rocketmq_error::RocketMQError::invariant_violated(
+        _ => Err(crate::broker_error::invariant_violated(
             "consumer manager request origin does not match its session view",
         )),
     }

@@ -25,7 +25,6 @@ use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_transport::api::AdmissionController;
@@ -171,12 +170,6 @@ async fn hard_write_stall_deadline_poison_closes_and_drains_session_writer() {
         .await
         .expect("second send task")
         .expect_err("batched follower must share the failure");
-    let RocketMQError::Shared(first) = first else {
-        panic!("stalled writer must return the canonical Shared error");
-    };
-    let RocketMQError::Shared(second) = second else {
-        panic!("batched follower must return the canonical Shared error");
-    };
     assert!(Arc::ptr_eq(&first, &second));
     assert_eq!(first.code(), rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code());
     assert!(first

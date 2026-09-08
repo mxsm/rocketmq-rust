@@ -444,7 +444,7 @@ impl TopicBatchUpsertRequest {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "client-adapter"))]
     pub(crate) fn unchecked_for_execution_test(
         topic: String,
         broker_names: Vec<String>,
@@ -1275,61 +1275,61 @@ mod tests {
 
     impl TopicAdmin for ExistingTopicAdminFake {
         fn list_topics<'a>(&'a mut self, _: &'a ListTopicsRequest) -> AdminFuture<'a, ListTopicsResult> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
 
         fn get_topic_route<'a>(&'a mut self, _: &'a GetTopicRouteRequest) -> AdminFuture<'a, Option<TopicRoute>> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
 
         fn get_topic_catalog<'a>(&'a mut self, _: &'a TopicCatalogRequest) -> AdminFuture<'a, TopicCatalog> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
 
         fn get_topic_current_stats(&mut self) -> AdminFuture<'_, TopicCurrentStats> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
 
         fn get_topic_stats<'a>(&'a mut self, _: &'a str) -> AdminFuture<'a, TopicStats> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
 
         fn get_topic_config<'a>(&'a mut self, _: &'a GetTopicConfigRequest) -> AdminFuture<'a, TopicConfigDetail> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
 
         fn upsert_topic<'a>(&'a mut self, _: &'a UpsertTopicRequest) -> AdminFuture<'a, TopicMutationOutcome> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
 
         fn delete_topic<'a>(&'a mut self, _: &'a DeleteTopicAdminRequest) -> AdminFuture<'a, TopicMutationOutcome> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
 
         fn delete_topics_in_broker<'a>(
             &'a mut self,
             _: &'a DeleteTopicsInBrokerRequest,
         ) -> AdminFuture<'a, TopicMutationOutcome> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
 
         fn get_topic_consumer_groups<'a>(&'a mut self, _: &'a str) -> AdminFuture<'a, TopicConsumerGroups> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
 
         fn get_topic_consumers<'a>(&'a mut self, _: &'a str) -> AdminFuture<'a, TopicConsumers> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
 
         fn reset_topic_consumer_offset<'a>(
             &'a mut self,
             _: &'a ResetTopicConsumerOffsetRequest,
         ) -> AdminFuture<'a, TopicMutationOutcome> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
 
         fn send_topic_test_message<'a>(&'a mut self, _: &'a TopicSendRequest) -> AdminFuture<'a, TopicSendResult> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
     }
 
@@ -1340,7 +1340,7 @@ mod tests {
             &'a mut self,
             _: &'a TopicBatchUpsertRequest,
         ) -> AdminFuture<'a, TopicBatchMutationOutcome> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
     }
 
@@ -1351,7 +1351,7 @@ mod tests {
             &'a mut self,
             _: &'a TopicInventoryRequest,
         ) -> AdminFuture<'a, TopicInventoryResult> {
-            Box::pin(async { Err(AdminError::SessionClosed) })
+            Box::pin(async { Err(AdminError::session_closed()) })
         }
     }
 }

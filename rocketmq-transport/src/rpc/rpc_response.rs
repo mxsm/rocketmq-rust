@@ -8,7 +8,7 @@
 
 use std::any::Any;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error;
 use rocketmq_protocol::rpc::rpc_response::RpcResponse as CanonicalRpcResponse;
 
 use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
@@ -18,7 +18,7 @@ pub struct RpcResponse {
     pub code: i32,
     pub header: Option<Box<dyn CommandCustomHeader + Send + Sync + 'static>>,
     pub body: Option<Box<dyn Any>>,
-    pub exception: Option<RocketMQError>,
+    pub exception: Option<Error>,
 }
 
 impl RpcResponse {
@@ -36,12 +36,23 @@ impl RpcResponse {
         self.header.as_mut()?.as_any_mut().downcast_mut::<T>()
     }
 
-    pub fn new_exception(exception: Option<RocketMQError>) -> Self {
+    pub fn new_exception(exception: Option<Error>) -> Self {
+        let code = exception
+            .as_ref()
+            .and_then(|error| error.diagnostic_view().ok())
+            .and_then(|view| {
+                view.fields().find_map(|field| {
+                    (field.name() == "broker_code")
+                        .then(|| match field.value() {
+                            rocketmq_error::ViewValueRef::I64(code) => i32::try_from(code).ok(),
+                            _ => None,
+                        })
+                        .flatten()
+                })
+            })
+            .unwrap_or(0);
         Self {
-            code: exception.as_ref().map_or(0, |error| match error {
-                RocketMQError::BrokerOperationFailed { code, .. } => *code,
-                _ => 0,
-            }),
+            code,
             header: None,
             body: None,
             exception,

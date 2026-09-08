@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
 
@@ -249,7 +249,7 @@ async fn cluster_broker_targets(
 ) -> AdminResult<(Vec<(String, CheetahString)>, Vec<AdminSourceFailure>)> {
     let cluster_info = rocketmq_client_rust::MQAdminReadExt::examine_broker_cluster_info(admin)
         .await
-        .map_err(|error| AdminError::backend("examine_broker_cluster_info", error.to_string()))?;
+        .map_err(|error| AdminError::backend_source("examine_broker_cluster_info", error))?;
     let broker_names = cluster_info
         .cluster_addr_table
         .as_ref()
@@ -371,9 +371,8 @@ fn failure_targets(failures: &[AdminSourceFailure]) -> Vec<String> {
         .collect()
 }
 
-fn source_failure(source: AdminQuerySource, logical_target: &str, error: &RocketMQError) -> AdminSourceFailure {
-    let view = error.boundary_view();
-    let code = match view.http().status.as_u16() {
+fn source_failure(source: AdminQuerySource, logical_target: &str, error: &CanonicalError) -> AdminSourceFailure {
+    let code = match crate::client_adapter::services::error_view::rocketmq_http_status(error) {
         401 | 403 => AdminQueryFailureCode::PermissionDenied,
         404 => AdminQueryFailureCode::NotFound,
         408 | 504 => AdminQueryFailureCode::Timeout,
@@ -381,5 +380,10 @@ fn source_failure(source: AdminQuerySource, logical_target: &str, error: &Rocket
         400 | 413 | 422 => AdminQueryFailureCode::InvalidResponse,
         _ => AdminQueryFailureCode::SourceUnavailable,
     };
-    AdminSourceFailure::new(source, code, view.is_retryable(), logical_target)
+    AdminSourceFailure::new(
+        source,
+        code,
+        crate::client_adapter::services::error_view::rocketmq_is_retryable(error),
+        logical_target,
+    )
 }

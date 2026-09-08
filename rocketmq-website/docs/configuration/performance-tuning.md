@@ -244,7 +244,7 @@ use rocketmq_common::common::message::message_single::Message;
 async fn benchmark_producer(
     producer: &mut DefaultMQProducer,
     num_messages: usize,
-) -> rocketmq_error::RocketMQResult<()> {
+) -> rocketmq_client_rust::ClientResult<()> {
     let start = Instant::now();
 
     for i in 0..num_messages {

@@ -23,9 +23,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use moka::sync::Cache;
-use rocketmq_error::AuthError;
-
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
 use crate::authentication::provider::AuthenticationProvider;
 use crate::authentication::strategy::abstract_authentication_strategy::AbstractAuthenticationStrategy;
@@ -34,7 +31,12 @@ use crate::authentication::strategy::authentication_strategy::AuthenticationStra
 use crate::authentication::strategy::AuthenticationFuture;
 use crate::authorization::context::authentication_context::AuthenticationContext;
 use crate::config::AuthConfig;
+use crate::AuthFailureKind;
 use crate::AuthMetrics;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
+use moka::sync::Cache;
 
 const POUND: &str = "#";
 
@@ -43,22 +45,22 @@ const POUND: &str = "#";
 struct AuthCacheEntry {
     /// Whether authentication succeeded
     success: bool,
-    /// Error message if authentication failed
-    error_message: Option<String>,
+    /// Bounded error kind if authentication failed.
+    error_kind: Option<AuthFailureKind>,
 }
 
 impl AuthCacheEntry {
     fn success() -> Self {
         Self {
             success: true,
-            error_message: None,
+            error_kind: None,
         }
     }
 
-    fn failure(error: String) -> Self {
+    fn failure(error: &AuthServiceError) -> Self {
         Self {
             success: false,
-            error_message: Some(error),
+            error_kind: Some(error.kind()),
         }
     }
 }
@@ -149,11 +151,11 @@ where
     /// Key format:
     /// - `{generation}#{channel_id}` if username is not available
     /// - `{generation}#{channel_id}#{username}` if username is available
-    fn build_cache_key(&self, context: &DefaultAuthenticationContext) -> Result<String, AuthError> {
+    fn build_cache_key(&self, context: &DefaultAuthenticationContext) -> AuthServiceResult<String> {
         let channel_id = context
             .base
             .channel_id()
-            .ok_or_else(|| AuthError::AuthenticationFailed("Channel ID is required for stateful auth".to_string()))?;
+            .ok_or_else(|| AuthServiceError::new(AuthOperation::Authenticate, AuthFailureKind::InvalidInput))?;
         let generation = self.refresh_acl_generation();
 
         if let Some(username) = context.username() {
@@ -179,7 +181,7 @@ where
     }
 
     /// Perform actual authentication without caching.
-    async fn do_authenticate_internal(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
+    async fn do_authenticate_internal(&self, context: &dyn AuthenticationContext) -> AuthServiceResult<()> {
         if !self.auth_config.authentication_enabled {
             return Ok(());
         }
@@ -187,11 +189,7 @@ where
         let default_context = context
             .as_any()
             .downcast_ref::<DefaultAuthenticationContext>()
-            .ok_or_else(|| {
-                AuthError::AuthenticationFailed(
-                    "Stateful authentication requires DefaultAuthenticationContext".to_string(),
-                )
-            })?;
+            .ok_or_else(|| AuthServiceError::new(AuthOperation::Authenticate, AuthFailureKind::InvalidInput))?;
 
         if let Some(rpc_code) = default_context.base.rpc_code() {
             if self.is_whitelisted(rpc_code.as_str()) {
@@ -230,11 +228,7 @@ where
             let default_context = context
                 .as_any()
                 .downcast_ref::<DefaultAuthenticationContext>()
-                .ok_or_else(|| {
-                    AuthError::AuthenticationFailed(
-                        "Stateful authentication requires DefaultAuthenticationContext".to_string(),
-                    )
-                })?;
+                .ok_or_else(|| AuthServiceError::new(AuthOperation::Authenticate, AuthFailureKind::InvalidInput))?;
 
             if default_context.base.channel_id().is_none() {
                 return self.do_authenticate_internal(context).await;
@@ -249,17 +243,16 @@ where
                 self.metrics.record_cache_miss();
                 let result = match self.do_authenticate_internal(context).await {
                     Ok(()) => AuthCacheEntry::success(),
-                    Err(error) => AuthCacheEntry::failure(error.to_string()),
+                    Err(error) => AuthCacheEntry::failure(&error),
                 };
                 self.auth_cache.insert(cache_key, result.clone());
                 result
             };
 
             if !result.success {
-                return Err(AuthError::AuthenticationFailed(
-                    result
-                        .error_message
-                        .unwrap_or_else(|| "Authentication failed".to_string()),
+                return Err(AuthServiceError::new(
+                    AuthOperation::Authenticate,
+                    result.error_kind.unwrap_or(AuthFailureKind::Unauthenticated),
                 ));
             }
 
@@ -272,13 +265,10 @@ where
 mod tests {
     use std::any::Any;
 
-    use cheetah_string::CheetahString;
-    use rocketmq_error::RocketMQError;
-    use rocketmq_error::RocketMQResult;
-
     use super::*;
     use crate::authentication::provider::AuthenticationProvider;
     use crate::authentication::provider::DefaultAuthenticationProvider;
+    use cheetah_string::CheetahString;
 
     struct CountingAuthenticationProvider {
         calls: Arc<std::sync::atomic::AtomicUsize>,
@@ -292,16 +282,19 @@ mod tests {
             &mut self,
             _config: AuthConfig,
             _metadata_service: Option<Arc<dyn Any + Send + Sync>>,
-        ) -> RocketMQResult<()> {
+        ) -> AuthServiceResult<()> {
             Ok(())
         }
 
-        async fn authenticate(&self, _context: &Self::Context) -> RocketMQResult<()> {
+        async fn authenticate(&self, _context: &Self::Context) -> AuthServiceResult<()> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if self.should_succeed.load(std::sync::atomic::Ordering::SeqCst) {
                 Ok(())
             } else {
-                Err(RocketMQError::authentication_failed("denied by test provider"))
+                Err(AuthServiceError::new(
+                    AuthOperation::Authenticate,
+                    AuthFailureKind::Unauthenticated,
+                ))
             }
         }
 

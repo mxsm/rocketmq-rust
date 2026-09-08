@@ -79,7 +79,7 @@ impl DefaultMQProducerImpl {
             return Ok(mq);
         }
 
-        let instance = self.client_instance().map_err(RetryInput::BusinessError)?;
+        let instance = self.client_instance().map_err(RetryInput::from)?;
         let Some(publish_info) = instance
             .prepare_topic_publish_info_once(topic, producer_config, deadline)
             .await?
@@ -99,7 +99,7 @@ impl DefaultMQProducerImpl {
         max_attempts: u32,
         topic: &CheetahString,
         retry_state: &mut RetryState,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let action = RetryPolicy::decide(Self::route_refresh_retry_context(ctx, attempt, max_attempts), &input);
         retry_state.set_error(producer_retry_input_error(input, None));
         match action {
@@ -136,7 +136,7 @@ impl DefaultMQProducerImpl {
                 *queued_retry_queue = Some(current_queue.clone());
             }
             RetryAction::RefreshRoute => {
-                let instance = self.client_instance().map_err(RetryInput::BusinessError)?;
+                let instance = self.client_instance().map_err(RetryInput::from)?;
                 let Some(publish_info) = instance.refresh_topic_route_info_once(topic, ctx.deadline).await? else {
                     return Err(RetryInput::RouteUnavailable);
                 };

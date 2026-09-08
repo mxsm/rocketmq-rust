@@ -22,7 +22,7 @@ use rocketmq_client_rust::DefaultMQAdminExt;
 use rocketmq_client_rust::MQAdminReadExt;
 use rocketmq_client_rust::MQAdminTopicStatsReadExt;
 use rocketmq_client_rust::TopicConfigVersioned;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -50,35 +50,43 @@ type BrokerTarget = (String, CheetahString);
 
 #[allow(async_fn_in_trait)]
 trait TopicObservationSource: Send {
-    async fn cluster_info(&self) -> Result<ClusterInfo, RocketMQError>;
-    async fn topic_route(&self, topic: &str) -> Result<Option<TopicRouteData>, RocketMQError>;
-    async fn topic_stats(&self, broker_addr: CheetahString, topic: &str) -> Result<TopicStatsTable, RocketMQError>;
+    async fn cluster_info(&self) -> Result<ClusterInfo, CanonicalError>;
+    async fn topic_route(&self, topic: &str) -> Result<Option<TopicRouteData>, CanonicalError>;
+    async fn topic_stats(&self, broker_addr: CheetahString, topic: &str) -> Result<TopicStatsTable, CanonicalError>;
     async fn topic_config(
         &self,
         broker_addr: CheetahString,
         topic: &str,
-    ) -> Result<TopicConfigVersioned, RocketMQError>;
+    ) -> Result<TopicConfigVersioned, CanonicalError>;
 }
 
 impl TopicObservationSource for DefaultMQAdminExt {
-    async fn cluster_info(&self) -> Result<ClusterInfo, RocketMQError> {
-        MQAdminReadExt::examine_broker_cluster_info(self).await
+    async fn cluster_info(&self) -> Result<ClusterInfo, CanonicalError> {
+        MQAdminReadExt::examine_broker_cluster_info(self)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 
-    async fn topic_route(&self, topic: &str) -> Result<Option<TopicRouteData>, RocketMQError> {
-        MQAdminReadExt::examine_topic_route_info(self, CheetahString::from(topic)).await
+    async fn topic_route(&self, topic: &str) -> Result<Option<TopicRouteData>, CanonicalError> {
+        MQAdminReadExt::examine_topic_route_info(self, CheetahString::from(topic))
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 
-    async fn topic_stats(&self, broker_addr: CheetahString, topic: &str) -> Result<TopicStatsTable, RocketMQError> {
-        MQAdminTopicStatsReadExt::topic_stats_at(self, broker_addr, CheetahString::from(topic)).await
+    async fn topic_stats(&self, broker_addr: CheetahString, topic: &str) -> Result<TopicStatsTable, CanonicalError> {
+        MQAdminTopicStatsReadExt::topic_stats_at(self, broker_addr, CheetahString::from(topic))
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 
     async fn topic_config(
         &self,
         broker_addr: CheetahString,
         topic: &str,
-    ) -> Result<TopicConfigVersioned, RocketMQError> {
-        MQAdminReadExt::topic_config_with_version(self, broker_addr, CheetahString::from(topic)).await
+    ) -> Result<TopicConfigVersioned, CanonicalError> {
+        MQAdminReadExt::topic_config_with_version(self, broker_addr, CheetahString::from(topic))
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)
     }
 }
 
@@ -205,7 +213,7 @@ async fn resolve_topic_targets<S: TopicObservationSource>(
         .topic_route(topic)
         .await
         .map_err(|error| backend_error("examine_topic_route_info", error))?
-        .ok_or_else(|| AdminError::not_found("topic", topic))?;
+        .ok_or_else(|| AdminError::topic_not_found(topic))?;
     selected_cluster_route_masters(&cluster_info, &route, cluster, failure_source)
 }
 
@@ -219,7 +227,7 @@ fn selected_cluster_route_masters(
         .cluster_addr_table
         .as_ref()
         .and_then(|table| table.get(cluster))
-        .ok_or_else(|| AdminError::not_found("cluster", cluster))?;
+        .ok_or_else(|| AdminError::cluster_not_found(cluster))?;
     let mut route_brokers = BTreeSet::new();
     let mut failures = Vec::new();
     for broker in &route.broker_datas {
@@ -244,13 +252,9 @@ fn selected_cluster_route_masters(
         return Err(AdminError::not_found("topic route in selected cluster", cluster));
     }
     if route_brokers.len() > MAX_TOPIC_OBSERVATION_TARGETS {
-        return Err(AdminError::backend_view(
+        return Err(AdminError::target_limit(
             "resolve_topic_observation_targets",
-            "TOPIC_OBSERVATION_TARGET_LIMIT_EXCEEDED",
             "Topic route has too many selected-cluster Broker targets",
-            None,
-            422,
-            false,
         ));
     }
 
@@ -381,9 +385,8 @@ fn invalid_response_failure(source: AdminQuerySource, broker_name: &str) -> Admi
     AdminSourceFailure::new(source, AdminQueryFailureCode::InvalidResponse, false, broker_name)
 }
 
-fn source_failure(source: AdminQuerySource, broker_name: &str, error: &RocketMQError) -> AdminSourceFailure {
-    let view = error.boundary_view();
-    let code = match view.http().status.as_u16() {
+fn source_failure(source: AdminQuerySource, broker_name: &str, error: &CanonicalError) -> AdminSourceFailure {
+    let code = match crate::canonical_http_status(error) {
         401 | 403 => AdminQueryFailureCode::PermissionDenied,
         404 => AdminQueryFailureCode::NotFound,
         408 | 504 => AdminQueryFailureCode::Timeout,
@@ -391,19 +394,11 @@ fn source_failure(source: AdminQuerySource, broker_name: &str, error: &RocketMQE
         400 | 413 | 422 => AdminQueryFailureCode::InvalidResponse,
         _ => AdminQueryFailureCode::SourceUnavailable,
     };
-    AdminSourceFailure::new(source, code, view.is_retryable(), broker_name)
+    AdminSourceFailure::new(source, code, crate::canonical_is_retryable(error), broker_name)
 }
 
-fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
-    let view = error.boundary_view();
-    AdminError::backend_view(
-        operation,
-        view.code().as_str(),
-        view.message(),
-        (!view.context().is_empty()).then(|| view.context().to_string()),
-        view.http().status.as_u16(),
-        view.is_retryable(),
-    )
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }
 
 #[cfg(test)]
@@ -441,11 +436,11 @@ mod tests {
     }
 
     impl TopicObservationSource for FakeSource {
-        async fn cluster_info(&self) -> Result<ClusterInfo, RocketMQError> {
+        async fn cluster_info(&self) -> Result<ClusterInfo, CanonicalError> {
             Ok(self.cluster_info.clone())
         }
 
-        async fn topic_route(&self, _topic: &str) -> Result<Option<TopicRouteData>, RocketMQError> {
+        async fn topic_route(&self, _topic: &str) -> Result<Option<TopicRouteData>, CanonicalError> {
             Ok(self.route.clone())
         }
 
@@ -453,7 +448,7 @@ mod tests {
             &self,
             broker_addr: CheetahString,
             _topic: &str,
-        ) -> Result<TopicStatsTable, RocketMQError> {
+        ) -> Result<TopicStatsTable, CanonicalError> {
             self.stats_calls.lock().unwrap().push(broker_addr.to_string());
             match self.stats.get(broker_addr.as_str()) {
                 Some(TestResult::Value(stats)) => Ok(stats.clone()),
@@ -466,7 +461,7 @@ mod tests {
             &self,
             broker_addr: CheetahString,
             _topic: &str,
-        ) -> Result<TopicConfigVersioned, RocketMQError> {
+        ) -> Result<TopicConfigVersioned, CanonicalError> {
             self.config_calls.lock().unwrap().push(broker_addr.to_string());
             match self.configs.get(broker_addr.as_str()) {
                 Some(TestResult::Value(config)) => Ok(config.clone()),
@@ -600,7 +595,7 @@ mod tests {
             .stats
             .insert(ADDRESS_A.to_string(), TestResult::Failure("secret-internal-a"));
         let error = query_topic_stats_from(&source, &request).await.unwrap_err();
-        assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+        assert_eq!(error.code().as_str(), "client.component.unavailable");
         assert!(!error.to_string().contains("secret-internal"));
     }
 
@@ -706,7 +701,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+        assert_eq!(error.code().as_str(), "client.component.unavailable");
         assert_eq!(source.stats_calls.lock().unwrap().as_slice(), [ADDRESS_A]);
     }
 
@@ -997,7 +992,7 @@ mod tests {
             .configs
             .insert(ADDRESS_A.to_string(), TestResult::Failure("secret-internal-a"));
         let error = query_topic_config_from(&source, &request).await.unwrap_err();
-        assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+        assert_eq!(error.code().as_str(), "client.component.unavailable");
         assert!(!error.to_string().contains("secret-internal"));
     }
 
@@ -1018,7 +1013,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+        assert_eq!(error.code().as_str(), "client.component.unavailable");
         assert!(source.stats_calls.lock().unwrap().is_empty());
     }
 
@@ -1057,7 +1052,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-            assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+            assert_eq!(error.code().as_str(), "client.component.unavailable");
             assert!(source.stats_calls.lock().unwrap().is_empty());
         }
     }
@@ -1103,7 +1098,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-            assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+            assert_eq!(error.code().as_str(), "client.component.unavailable");
             assert!(source.stats_calls.lock().unwrap().is_empty());
         }
     }
@@ -1201,21 +1196,21 @@ mod tests {
 
         let error = selected_cluster_route_masters(&cluster_info, &route, "cluster-a", AdminQuerySource::TopicStats)
             .unwrap_err();
-        assert_eq!(error.code(), Some("TOPIC_OBSERVATION_TARGET_LIMIT_EXCEEDED"));
+        assert_eq!(error.code().as_str(), "core.argument.invalid");
+        assert_eq!(error.http_status(), rocketmq_error::HttpStatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
     async fn missing_topic_and_cross_cluster_route_fail_closed() {
         let mut source = source_with_two_clusters();
         source.route = None;
-        assert!(matches!(
-            query_topic_config_from(
-                &source,
-                &QueryTopicConfigRequest::try_new("cluster-a", "orders").unwrap()
-            )
-            .await,
-            Err(AdminError::NotFound { .. })
-        ));
+        let error = query_topic_config_from(
+            &source,
+            &QueryTopicConfigRequest::try_new("cluster-a", "orders").unwrap(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.failure(), crate::core::AdminFailure::NotFound);
 
         let (cluster_info, route) = topology(&[("cluster-b", "broker-c", ADDRESS_C)]);
         source.cluster_info = cluster_info;
@@ -1228,10 +1223,12 @@ mod tests {
         .is_err());
     }
 
-    fn test_error(reason: &str) -> RocketMQError {
-        RocketMQError::ResponseProcessFailed {
-            operation: "topic_observation_test",
-            reason: reason.to_string(),
-        }
+    fn test_error(reason: &str) -> CanonicalError {
+        let _ = reason;
+        CanonicalError::new(&rocketmq_error::PROTOCOL_RESPONSE_FAILED).with_context(
+            rocketmq_error::ErrorContext::new()
+                .with_text(rocketmq_error::fields::OPERATION_DIAGNOSTIC, "topic_observation_test")
+                .with_secret_presence(rocketmq_error::fields::REASON_PRESENT),
+        )
     }
 }

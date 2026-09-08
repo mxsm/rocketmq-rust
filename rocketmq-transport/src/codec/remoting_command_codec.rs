@@ -14,7 +14,6 @@
 
 use bytes::Bytes;
 use bytes::BytesMut;
-use rocketmq_error::SerializationError;
 use serde::de::Error as _;
 use serde::Deserialize;
 use serde::Serialize;
@@ -28,6 +27,9 @@ use crate::admission::AdmissionClass;
 use crate::admission::AdmissionResource;
 use crate::admission::AdmissionScopeHandle;
 use crate::admission::PartialFramePermit;
+use crate::error::TransportError;
+use crate::error_helpers::argument_invalid;
+use crate::error_helpers::serialization_failed;
 
 /// A decoded command together with the complete frame size retained while processing it.
 ///
@@ -117,7 +119,7 @@ impl FrameLimits {
         max_header_bytes: usize,
         max_body_bytes: usize,
         initial_read_bytes: usize,
-    ) -> rocketmq_error::RocketMQResult<Self> {
+    ) -> Result<Self, rocketmq_error::SharedError> {
         let limits = Self {
             max_frame_bytes,
             max_header_bytes,
@@ -132,29 +134,17 @@ impl FrameLimits {
     ///
     /// Public fields remain available for source compatibility; every codec and connection entry
     /// point calls this method before using a caller-constructed value.
-    pub fn validate(self) -> rocketmq_error::RocketMQResult<()> {
+    pub fn validate(self) -> Result<(), rocketmq_error::SharedError> {
         if !(Self::MIN_FRAME_BYTES..=Self::MAX_PROTOCOL_FRAME_BYTES).contains(&self.max_frame_bytes) {
-            return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
-                "max frame bytes must be between {} and {}",
-                Self::MIN_FRAME_BYTES,
-                Self::MAX_PROTOCOL_FRAME_BYTES
-            )));
+            return Err(argument_invalid());
         }
         if self.max_header_bytes > Self::MAX_HEADER_BYTES {
-            return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
-                "max header bytes {} exceeds the 24-bit protocol ceiling {}",
-                self.max_header_bytes,
-                Self::MAX_HEADER_BYTES
-            )));
+            return Err(argument_invalid());
         }
         if !(Self::MIN_FRAME_BYTES..=Self::MAX_INITIAL_READ_BYTES).contains(&self.initial_read_bytes)
             || self.initial_read_bytes > self.max_frame_bytes
         {
-            return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
-                "initial read bytes must be between {} and {} and no larger than max frame bytes",
-                Self::MIN_FRAME_BYTES,
-                Self::MAX_INITIAL_READ_BYTES
-            )));
+            return Err(argument_invalid());
         }
         Ok(())
     }
@@ -165,7 +155,7 @@ impl FrameLimits {
             .min(self.max_frame_bytes.max(Self::MIN_FRAME_BYTES))
     }
 
-    pub(crate) fn validate_raw_payload(self, payload_len: usize) -> rocketmq_error::RocketMQResult<()> {
+    pub(crate) fn validate_raw_payload(self, payload_len: usize) -> Result<(), rocketmq_error::SharedError> {
         self.validate()?;
         if payload_len > self.max_frame_bytes {
             return Err(encoding_limit_error("raw payload", payload_len, self.max_frame_bytes));
@@ -173,7 +163,7 @@ impl FrameLimits {
         Ok(())
     }
 
-    pub(crate) fn validate_frame_segments(self, segments: &[Bytes]) -> rocketmq_error::RocketMQResult<usize> {
+    pub(crate) fn validate_frame_segments(self, segments: &[Bytes]) -> Result<usize, rocketmq_error::SharedError> {
         self.validate()?;
         let frame_len = checked_frame_segments_len(segments.iter().map(Bytes::len), self.max_frame_bytes)?;
         if frame_len < Self::MIN_FRAME_BYTES {
@@ -197,11 +187,7 @@ impl FrameLimits {
             .checked_add(4)
             .ok_or_else(|| encoding_limit_error("announced frame", usize::MAX, self.max_frame_bytes))?;
         if announced_wire_len != frame_len {
-            return Err(SerializationError::encode_failed(
-                "remoting-command",
-                format!("announced wire length {announced_wire_len} does not match segmented frame length {frame_len}"),
-            )
-            .into());
+            return Err(serialization_failed("encode", "remoting-command"));
         }
 
         let header_marker = u32::from_be_bytes(envelope[4..].try_into().expect("four-byte header marker"));
@@ -209,12 +195,7 @@ impl FrameLimits {
         let body_len = frame_len
             .checked_sub(Self::MIN_FRAME_BYTES)
             .and_then(|payload| payload.checked_sub(header_len))
-            .ok_or_else(|| {
-                SerializationError::encode_failed(
-                    "remoting-command",
-                    format!("header length {header_len} exceeds segmented frame payload"),
-                )
-            })?;
+            .ok_or_else(|| serialization_failed("encode", "remoting-command"))?;
         self.validate_encoded_lengths(frame_len, header_len, body_len)?;
         Ok(frame_len)
     }
@@ -234,10 +215,7 @@ impl FrameLimits {
         Self::java_compatibility()
     }
 
-    pub(crate) fn encode_command(
-        self,
-        command: RemotingCommand,
-    ) -> Result<EncodedFrame, rocketmq_error::RocketMQError> {
+    pub(crate) fn encode_command(self, command: RemotingCommand) -> Result<EncodedFrame, rocketmq_error::SharedError> {
         self.validate()?;
         self.validate_command_lower_bounds(&command)?;
         let frame = EncodedFrame::from_command(command)?;
@@ -249,7 +227,7 @@ impl FrameLimits {
         self,
         command: RemotingCommand,
         body_len: usize,
-    ) -> Result<rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead, rocketmq_error::RocketMQError> {
+    ) -> Result<rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead, rocketmq_error::SharedError> {
         self.validate()?;
         self.validate_command_and_body_lower_bounds(&command, body_len)?;
         let head =
@@ -259,7 +237,7 @@ impl FrameLimits {
         Ok(head)
     }
 
-    fn validate_command_lower_bounds(&self, command: &RemotingCommand) -> Result<(), rocketmq_error::RocketMQError> {
+    fn validate_command_lower_bounds(&self, command: &RemotingCommand) -> Result<(), rocketmq_error::SharedError> {
         self.validate_command_and_body_lower_bounds(command, command.body().map_or(0, bytes::Bytes::len))
     }
 
@@ -267,7 +245,7 @@ impl FrameLimits {
         &self,
         command: &RemotingCommand,
         body_len: usize,
-    ) -> Result<(), rocketmq_error::RocketMQError> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         if body_len > self.max_body_bytes {
             return Err(encoding_limit_error("body", body_len, self.max_body_bytes));
         }
@@ -298,7 +276,7 @@ impl FrameLimits {
         Ok(())
     }
 
-    fn validate_encoded_frame(&self, frame: &EncodedFrame) -> Result<(), rocketmq_error::RocketMQError> {
+    fn validate_encoded_frame(&self, frame: &EncodedFrame) -> Result<(), rocketmq_error::SharedError> {
         let [_, header, body] = frame.segments();
         self.validate_encoded_lengths(frame.encoded_len(), header.len(), body.len())
     }
@@ -308,7 +286,7 @@ impl FrameLimits {
         frame_len: usize,
         header_len: usize,
         body_len: usize,
-    ) -> Result<(), rocketmq_error::RocketMQError> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         if header_len > self.max_header_bytes {
             return Err(encoding_limit_error("header", header_len, self.max_header_bytes));
         }
@@ -359,18 +337,15 @@ impl<'de> Deserialize<'de> for FrameLimits {
     }
 }
 
-fn encoding_limit_error(component: &str, actual: usize, limit: usize) -> rocketmq_error::RocketMQError {
-    SerializationError::encode_failed(
-        "remoting-command",
-        format!("encoded {component} is {actual} bytes, exceeding configured limit {limit}"),
-    )
-    .into()
+fn encoding_limit_error(component: &str, actual: usize, limit: usize) -> rocketmq_error::SharedError {
+    let _ = (component, actual, limit);
+    serialization_failed("encode", "remoting-command")
 }
 
 fn checked_frame_segments_len(
     lengths: impl IntoIterator<Item = usize>,
     max_frame_bytes: usize,
-) -> rocketmq_error::RocketMQResult<usize> {
+) -> Result<usize, rocketmq_error::SharedError> {
     lengths.into_iter().try_fold(0_usize, |total, length| {
         total
             .checked_add(length)
@@ -396,7 +371,7 @@ impl RemotingCommandCodec {
     fn decode_with_metadata(
         &mut self,
         src: &mut BytesMut,
-    ) -> Result<Option<DecodedCommand>, rocketmq_error::RocketMQError> {
+    ) -> Result<Option<DecodedCommand>, rocketmq_error::SharedError> {
         self.limits.validate()?;
         self.validate_announced_frame(src)?;
         let retained_frame_bytes = if src.len() >= 4 {
@@ -418,7 +393,7 @@ impl RemotingCommandCodec {
 }
 
 impl Decoder for RemotingCommandCodec {
-    type Error = rocketmq_error::RocketMQError;
+    type Error = TransportError;
     type Item = RemotingCommand;
 
     /// Decodes a `RemotingCommand` from a `BytesMut` buffer.
@@ -447,14 +422,15 @@ impl Decoder for RemotingCommandCodec {
     /// # Errors
     ///
     /// This function will return an error if the decoding process fails.
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, rocketmq_error::RocketMQError> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, TransportError> {
         self.decode_with_metadata(src)
             .map(|decoded| decoded.map(|decoded| decoded.command))
+            .map_err(TransportError::codec_decode)
     }
 }
 
 impl RemotingCommandCodec {
-    fn validate_announced_frame(&self, src: &BytesMut) -> Result<(), rocketmq_error::RocketMQError> {
+    fn validate_announced_frame(&self, src: &BytesMut) -> Result<(), rocketmq_error::SharedError> {
         if src.len() < 4 {
             return Ok(());
         }
@@ -493,7 +469,7 @@ impl RemotingCommandCodec {
 }
 
 impl Encoder<RemotingCommand> for RemotingCommandCodec {
-    type Error = rocketmq_error::RocketMQError;
+    type Error = TransportError;
 
     /// Encodes a `RemotingCommand` into a `BytesMut` buffer.
     ///
@@ -517,7 +493,10 @@ impl Encoder<RemotingCommand> for RemotingCommandCodec {
     ///
     /// This function will return an error if the encoding process fails.
     fn encode(&mut self, item: RemotingCommand, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        self.limits.encode_command(item)?.copy_to(dst);
+        self.limits
+            .encode_command(item)
+            .map_err(TransportError::codec_encode)?
+            .copy_to(dst);
         Ok(())
     }
 }
@@ -537,7 +516,7 @@ impl SessionCommandDecoder {
         }
     }
 
-    fn reserve_announced_frame(&mut self, src: &BytesMut) -> Result<(), rocketmq_error::RocketMQError> {
+    fn reserve_announced_frame(&mut self, src: &BytesMut) -> Result<(), rocketmq_error::SharedError> {
         if self.partial_frame_permit.is_some() {
             return Ok(());
         }
@@ -563,24 +542,20 @@ impl SessionCommandDecoder {
                 retained_frame_bytes,
                 AdmissionClass::Data,
             )
-            .map_err(|_| {
-                rocketmq_error::RocketMQError::Shared(crate::error_helpers::admission_queue_saturated(
-                    "partial-frame-admission",
-                ))
-            })?;
+            .map_err(|_| crate::error_helpers::admission_queue_saturated("partial-frame-admission"))?;
         self.partial_frame_permit = Some(PartialFramePermit::new(permit));
         Ok(())
     }
 }
 
 impl Decoder for SessionCommandDecoder {
-    type Error = rocketmq_error::RocketMQError;
+    type Error = TransportError;
     type Item = DecodedCommand;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         if let Err(error) = self.reserve_announced_frame(src) {
             self.partial_frame_permit.take();
-            return Err(error);
+            return Err(TransportError::codec_decode(error));
         }
         match self.inner.decode_with_metadata(src) {
             Ok(Some(mut decoded)) => {
@@ -590,7 +565,7 @@ impl Decoder for SessionCommandDecoder {
             Ok(None) => Ok(None),
             Err(error) => {
                 self.partial_frame_permit.take();
-                Err(error)
+                Err(TransportError::codec_decode(error))
             }
         }
     }

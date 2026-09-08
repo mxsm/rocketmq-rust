@@ -30,7 +30,7 @@ use crate::long_polling::notification_deferred::service::NotificationDeferredReg
 use crate::long_polling::notification_deferred::service::NotificationRegisterFault;
 use crate::long_polling::notification_deferred::service::PreparedNotificationRegistration;
 
-fn success_reply(polling_full: bool) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+fn success_reply(polling_full: bool) -> crate::broker_error::BrokerResult<HandlerOutcome> {
     let header = NotificationResponseHeader {
         has_msg: false,
         polling_full,
@@ -39,7 +39,7 @@ fn success_reply(polling_full: bool) -> rocketmq_error::RocketMQResult<HandlerOu
         application_remoting_command_factory().create_success_response_command_with_header(header),
     )
     .map(HandlerOutcome::Reply)
-    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+    .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
 }
 
 fn limited_service(
@@ -83,7 +83,7 @@ struct ProvenanceProcessor {
 }
 
 impl RequestProcessor for ProvenanceProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         if let Some(prepared) = self.state.lock().prepared.take() {
             let rejection = match self.service.register(prepared, request) {
                 Ok(NotificationDeferredRegisterOutcome::Rejected(rejection)) => rejection,
@@ -103,9 +103,9 @@ impl RequestProcessor for ProvenanceProcessor {
         {
             Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
             Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
-                return Err(RocketMQError::illegal_argument(format!("{:?}", rejection.kind())));
+                return Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())));
             }
-            Err(error) => return Err(RocketMQError::illegal_argument(error.to_string())),
+            Err(error) => return Err(crate::broker_error::invalid_argument(error.to_string())),
         };
         self.state.lock().prepared = Some(prepared);
         success_reply(false)
@@ -119,7 +119,7 @@ struct EmbeddedOriginProcessor {
 }
 
 impl RequestProcessor for EmbeddedOriginProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let error = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
@@ -150,7 +150,7 @@ struct CapacityProcessor {
 }
 
 impl RequestProcessor for CapacityProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let polling_full = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
@@ -163,7 +163,7 @@ impl RequestProcessor for CapacityProcessor {
                 self.observed.lock().push(rejection.kind());
                 true
             }
-            Err(error) => return Err(RocketMQError::illegal_argument(error.to_string())),
+            Err(error) => return Err(crate::broker_error::invalid_argument(error.to_string())),
         };
         success_reply(polling_full)
     }
@@ -183,16 +183,16 @@ struct PostTakeFaultProcessor {
 }
 
 impl RequestProcessor for PostTakeFaultProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let prepared = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
         {
             Ok(NotificationDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
             Ok(NotificationDeferredPrepareOutcome::Rejected(rejection)) => {
-                return Err(RocketMQError::illegal_argument(format!("{:?}", rejection.kind())));
+                return Err(crate::broker_error::invalid_argument(format!("{:?}", rejection.kind())));
             }
-            Err(error) => return Err(RocketMQError::illegal_argument(error.to_string())),
+            Err(error) => return Err(crate::broker_error::invalid_argument(error.to_string())),
         };
         self.service.force_register_fault(self.fault);
         let rejection = match self.service.register(prepared, request) {
@@ -205,15 +205,15 @@ impl RequestProcessor for PostTakeFaultProcessor {
         drop(rejection);
         self.observed
             .send(kind)
-            .map_err(|_| RocketMQError::illegal_argument("post-take observer closed"))?;
-        Err(RocketMQError::illegal_argument(
+            .map_err(|_| crate::broker_error::invalid_argument("post-take observer closed"))?;
+        Err(crate::broker_error::invalid_argument(
             "injected post-take Notification rejection",
         ))
     }
 }
 
 impl RequestProcessor for OneWayProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let rejection = match self
             .service
             .prepare(request, None, None, NotificationRetainedEstimate::default())
@@ -225,7 +225,7 @@ impl RequestProcessor for OneWayProcessor {
         };
         self.observed
             .send(rejection.kind())
-            .map_err(|_| RocketMQError::illegal_argument("one-way observer closed"))?;
+            .map_err(|_| crate::broker_error::invalid_argument("one-way observer closed"))?;
         success_reply(false)
     }
 }

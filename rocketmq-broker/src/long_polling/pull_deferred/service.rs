@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::convert::Infallible;
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
 use std::future::Future;
 use std::num::NonZeroUsize;
@@ -468,7 +468,9 @@ impl PullDeferredService {
             ));
         }
         if self.expiry_margins.recovery().is_zero() || self.expiry_margins.write().is_zero() {
-            return Err(PullDeferredPrepareError::InvalidExpiryMargins { candidate });
+            return Err(PullDeferredPrepareError::InvalidExpiryMargins {
+                candidate: Box::new(candidate),
+            });
         }
         let deadline = match PullWaitDeadline::checked(
             candidate.timing.suspend_wall_millis,
@@ -484,7 +486,10 @@ impl PullDeferredService {
                 ));
             }
             Err(source) => {
-                return Err(PullDeferredPrepareError::Deadline { source, candidate });
+                return Err(PullDeferredPrepareError::Deadline {
+                    source,
+                    candidate: Box::new(candidate),
+                });
             }
         };
         let key = PullCriteriaKey::from_criteria(&candidate.criteria);
@@ -496,18 +501,26 @@ impl PullDeferredService {
                 ));
             }
             Err(source) => {
-                return Err(PullDeferredPrepareError::Index { source, candidate });
+                return Err(PullDeferredPrepareError::Index {
+                    source,
+                    candidate: Box::new(candidate),
+                });
             }
         };
         let retained_size = match try_retained_size(&candidate) {
             Ok(size) => size,
             Err(PullRetainedSizeError::Overflow) => {
                 drop(reservation);
-                return Err(PullDeferredPrepareError::RetainedSizeOverflow { candidate });
+                return Err(PullDeferredPrepareError::RetainedSizeOverflow {
+                    candidate: Box::new(candidate),
+                });
             }
             Err(PullRetainedSizeError::Contract(source)) => {
                 drop(reservation);
-                return Err(PullDeferredPrepareError::Contract { source, candidate });
+                return Err(PullDeferredPrepareError::Contract {
+                    source,
+                    candidate: Box::new(candidate),
+                });
             }
         };
         let permit = match self.admission.try_reserve(retained_size) {
@@ -563,7 +576,7 @@ impl PullDeferredService {
                     PullDeferredRegisterRejection::PreTake {
                         kind: PullDeferredRegisterRejectionKind::Responder,
                         prepared: Box::new(prepared),
-                        responder: Some(outcome),
+                        responder: Some(Box::new(outcome)),
                     },
                 )));
             }
@@ -587,7 +600,10 @@ impl PullDeferredService {
             Ok(DeferredExpiryOutcome::Attached) => {}
             Ok(outcome) => {
                 return Ok(PullDeferredRegisterOutcome::Rejected(Box::new(
-                    PullDeferredRegisterRejection::Expiry { outcome, parts },
+                    PullDeferredRegisterRejection::Expiry {
+                        outcome: Box::new(outcome),
+                        parts: Box::new(parts),
+                    },
                 )));
             }
             Err(violation) => {
@@ -954,7 +970,7 @@ impl PullDeferredService {
     ) -> Result<DeferredResumeOutcome, TransportError>
     where
         F: FnOnce(ResumePull, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
     {
         let observation = Arc::new(Mutex::new(None));
         let accepted = Arc::clone(&observation);
@@ -985,7 +1001,7 @@ impl PullDeferredService {
     ) -> Result<DeferredResumeSubmitOutcome, TransportError>
     where
         F: FnOnce(ResumePull, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
     {
         let resume_executions = Arc::clone(&self.resume_executions);
         let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
@@ -1140,8 +1156,8 @@ impl fmt::Display for PullPendingArrivalError {
     }
 }
 
-impl Error for PullPendingArrivalError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for PullPendingArrivalError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Continuation(source) => Some(source),
             Self::Latch(source) => Some(source),
@@ -1237,17 +1253,21 @@ pub(crate) enum PullCandidateBuildErrorKind {
 
 pub(crate) struct PullCandidateBuildError {
     kind: PullCandidateBuildErrorKind,
-    fallback: RemotingResponse,
-    source: Option<rocketmq_error::RocketMQError>,
+    fallback: Box<RemotingResponse>,
+    source: Option<rocketmq_error::Error>,
 }
 
 impl PullCandidateBuildError {
     fn new(
         kind: PullCandidateBuildErrorKind,
         fallback: RemotingResponse,
-        source: Option<rocketmq_error::RocketMQError>,
+        source: Option<rocketmq_error::Error>,
     ) -> Self {
-        Self { kind, fallback, source }
+        Self {
+            kind,
+            fallback: Box::new(fallback),
+            source,
+        }
     }
 
     pub(crate) const fn kind(&self) -> PullCandidateBuildErrorKind {
@@ -1255,7 +1275,7 @@ impl PullCandidateBuildError {
     }
 
     pub(crate) fn into_fallback(self) -> RemotingResponse {
-        self.fallback
+        *self.fallback
     }
 }
 
@@ -1274,9 +1294,9 @@ impl fmt::Display for PullCandidateBuildError {
     }
 }
 
-impl Error for PullCandidateBuildError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.source.as_ref().map(|source| source as &(dyn Error + 'static))
+impl StdError for PullCandidateBuildError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.source.as_ref().map(|source| source as &(dyn StdError + 'static))
     }
 }
 
@@ -1340,22 +1360,22 @@ impl PullDeferredPrepareRejection {
 pub(crate) enum PullDeferredPrepareError {
     Build(PullCandidateBuildError),
     InvalidExpiryMargins {
-        candidate: PullSuspensionCandidate,
+        candidate: Box<PullSuspensionCandidate>,
     },
     Deadline {
         source: PullWaitDeadlineError,
-        candidate: PullSuspensionCandidate,
+        candidate: Box<PullSuspensionCandidate>,
     },
     Index {
         source: PullIndexOperationalError,
-        candidate: PullSuspensionCandidate,
+        candidate: Box<PullSuspensionCandidate>,
     },
     RetainedSizeOverflow {
-        candidate: PullSuspensionCandidate,
+        candidate: Box<PullSuspensionCandidate>,
     },
     Contract {
         source: TransportContractViolation,
-        candidate: PullSuspensionCandidate,
+        candidate: Box<PullSuspensionCandidate>,
     },
 }
 
@@ -1378,7 +1398,7 @@ impl PullDeferredPrepareError {
             | Self::Deadline { candidate, .. }
             | Self::Index { candidate, .. }
             | Self::RetainedSizeOverflow { candidate }
-            | Self::Contract { candidate, .. } => candidate.into_fallback(),
+            | Self::Contract { candidate, .. } => (*candidate).into_fallback(),
         }
     }
 }
@@ -1398,8 +1418,8 @@ impl fmt::Display for PullDeferredPrepareError {
     }
 }
 
-impl Error for PullDeferredPrepareError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for PullDeferredPrepareError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Build(source) => Some(source),
             Self::Deadline { source, .. } => Some(source),
@@ -1435,11 +1455,11 @@ pub(crate) enum PullDeferredRegisterRejection {
     PreTake {
         kind: PullDeferredRegisterRejectionKind,
         prepared: Box<PreparedPullRegistration>,
-        responder: Option<DeferredResponderOutcome>,
+        responder: Option<Box<DeferredResponderOutcome>>,
     },
     Expiry {
-        outcome: DeferredExpiryOutcome,
-        parts: DeferredParts,
+        outcome: Box<DeferredExpiryOutcome>,
+        parts: Box<DeferredParts>,
     },
     RegistryRejected,
 }
@@ -1516,8 +1536,8 @@ impl fmt::Display for PullDeferredRegisterError {
     }
 }
 
-impl Error for PullDeferredRegisterError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for PullDeferredRegisterError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::RegistryContract(violation) => Some(violation),
             Self::RegistryOperational(error) => Some(error),

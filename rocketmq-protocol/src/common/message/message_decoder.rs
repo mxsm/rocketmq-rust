@@ -531,10 +531,10 @@ pub fn decode_message_id(msg_id: &str) -> Result<MessageId, String> {
     })
 }
 
-pub fn encode(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::RocketMQResult<Bytes> {
+pub fn encode(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::Result<Bytes> {
     let body = message_ext
         .get_body()
-        .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("message body is required"))?;
+        .ok_or_else(|| crate::error::invalid_argument("message body is required"))?;
     let topic = message_ext.topic().as_bytes();
     let topic_len = topic.len();
     let properties = message_properties_to_string(message_ext.get_properties());
@@ -657,10 +657,10 @@ pub fn encode(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::
     Ok(byte_buffer.freeze())
 }
 
-pub fn encode_uniquely(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::RocketMQResult<Bytes> {
+pub fn encode_uniquely(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::Result<Bytes> {
     let body = message_ext
         .get_body()
-        .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("message body is required"))?;
+        .ok_or_else(|| crate::error::invalid_argument("message body is required"))?;
     let topics = message_ext.topic().as_bytes();
     let topic_len = topics.len();
     let properties = message_properties_to_string(message_ext.get_properties());

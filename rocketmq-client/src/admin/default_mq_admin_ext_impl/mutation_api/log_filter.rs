@@ -14,8 +14,8 @@
 
 use std::collections::HashMap;
 
+use crate::ClientError;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 
 const LOGGER_PREFIX: &str = "rocketmq_broker::";
 const MIN_TTL_SECONDS: u32 = 60;
@@ -33,20 +33,20 @@ pub(super) fn set_properties(
     level: &CheetahString,
     ttl_seconds: u32,
     operation_id: &CheetahString,
-) -> Result<HashMap<CheetahString, CheetahString>, RocketMQError> {
+) -> Result<HashMap<CheetahString, CheetahString>, ClientError> {
     validate_broker_addr(broker_addr)?;
     validate_logger(logger)?;
     let filter_level = match level.as_str() {
         "INFO" => "info",
         "DEBUG" => "debug",
         _ => {
-            return Err(RocketMQError::illegal_argument(
+            return Err(ClientError::illegal_argument(
                 "broker log-filter level must be INFO or DEBUG",
             ));
         }
     };
     if !(MIN_TTL_SECONDS..=MAX_TTL_SECONDS).contains(&ttl_seconds) {
-        return Err(RocketMQError::illegal_argument(format!(
+        return Err(ClientError::illegal_argument(format!(
             "broker log-filter TTL must be between {MIN_TTL_SECONDS} and {MAX_TTL_SECONDS} seconds"
         )));
     }
@@ -65,7 +65,7 @@ pub(super) fn set_properties(
 pub(super) fn restore_properties(
     broker_addr: &CheetahString,
     operation_id: &CheetahString,
-) -> Result<HashMap<CheetahString, CheetahString>, RocketMQError> {
+) -> Result<HashMap<CheetahString, CheetahString>, ClientError> {
     validate_broker_addr(broker_addr)?;
     validate_operation_id(operation_id)?;
     Ok(properties([
@@ -76,7 +76,7 @@ pub(super) fn restore_properties(
     ]))
 }
 
-fn validate_broker_addr(value: &CheetahString) -> Result<(), RocketMQError> {
+fn validate_broker_addr(value: &CheetahString) -> Result<(), ClientError> {
     let value = value.as_str();
     if value.is_empty()
         || value.len() > MAX_BROKER_ADDR_BYTES
@@ -84,14 +84,14 @@ fn validate_broker_addr(value: &CheetahString) -> Result<(), RocketMQError> {
             .bytes()
             .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
     {
-        return Err(RocketMQError::illegal_argument(
+        return Err(ClientError::illegal_argument(
             "broker address must be a bounded non-whitespace value",
         ));
     }
     Ok(())
 }
 
-fn validate_logger(value: &CheetahString) -> Result<(), RocketMQError> {
+fn validate_logger(value: &CheetahString) -> Result<(), ClientError> {
     let value = value.as_str();
     let valid_path = value.starts_with(LOGGER_PREFIX)
         && value.len() <= MAX_LOGGER_BYTES
@@ -99,14 +99,14 @@ fn validate_logger(value: &CheetahString) -> Result<(), RocketMQError> {
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b':'));
     if !valid_path || FORBIDDEN_LOGGER_SEGMENTS.iter().any(|segment| value.contains(segment)) {
-        return Err(RocketMQError::illegal_argument(
+        return Err(ClientError::illegal_argument(
             "broker logger must be one non-sensitive rocketmq_broker module path",
         ));
     }
     Ok(())
 }
 
-fn validate_operation_id(value: &CheetahString) -> Result<(), RocketMQError> {
+fn validate_operation_id(value: &CheetahString) -> Result<(), ClientError> {
     let value = value.as_str();
     if value.is_empty()
         || value.len() > MAX_OPERATION_ID_BYTES
@@ -114,7 +114,7 @@ fn validate_operation_id(value: &CheetahString) -> Result<(), RocketMQError> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/'))
     {
-        return Err(RocketMQError::illegal_argument(
+        return Err(ClientError::illegal_argument(
             "broker log-filter operation id contains unsupported characters",
         ));
     }

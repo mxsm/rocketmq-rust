@@ -26,7 +26,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use bytes::Bytes;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead;
 use rocketmq_protocol::protocol::RemotingCommand;
 use rocketmq_runtime::RuntimeOwner;
@@ -493,9 +492,7 @@ async fn close_collected_with_a_poisoned_batch_receives_the_same_canonical_failu
         .await
         .expect("close completion")
         .expect_err("poisoned close must report the write failure");
-    let RocketMQError::Shared(close_error) = close_failure else {
-        panic!("poisoned close must retain the canonical Shared error")
-    };
+    let close_error = close_failure;
     assert!(Arc::ptr_eq(
         write_failure.error().expect("canonical write failure"),
         &close_error

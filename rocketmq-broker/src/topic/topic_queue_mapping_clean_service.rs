@@ -22,9 +22,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::broker_error::BrokerResult as Result;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX;
 use rocketmq_model::common::mix_all::METADATA_SCOPE_GLOBAL;
@@ -215,13 +215,13 @@ impl TopicQueueMappingCleanService {
         self.inner.running.load(Ordering::Acquire)
     }
 
-    pub(crate) async fn run_once(&self) -> RocketMQResult<bool> {
+    pub(crate) async fn run_once(&self) -> Result<bool> {
         let expired_changed = self.clean_item_expired_once().await?;
         let old_generation_changed = self.clean_item_list_more_than_second_gen_once().await?;
         Ok(expired_changed || old_generation_changed)
     }
 
-    pub(crate) async fn clean_item_expired_once(&self) -> RocketMQResult<bool> {
+    pub(crate) async fn clean_item_expired_once(&self) -> Result<bool> {
         if !self.is_time_to_clean() {
             return Ok(false);
         }
@@ -358,7 +358,7 @@ impl TopicQueueMappingCleanService {
         Ok(changed)
     }
 
-    pub(crate) async fn clean_item_list_more_than_second_gen_once(&self) -> RocketMQResult<bool> {
+    pub(crate) async fn clean_item_list_more_than_second_gen_once(&self) -> Result<bool> {
         if !self.is_time_to_clean() {
             return Ok(false);
         }

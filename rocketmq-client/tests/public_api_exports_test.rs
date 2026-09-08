@@ -43,6 +43,7 @@ use rocketmq_client_rust::AsyncTraceDispatcher;
 use rocketmq_client_rust::AuthAdmin;
 #[cfg(feature = "admin-full")]
 use rocketmq_client_rust::BrokerAdmin;
+use rocketmq_client_rust::ClientError;
 use rocketmq_client_rust::ClientInstanceHandle;
 use rocketmq_client_rust::ClientRpcHook;
 use rocketmq_client_rust::ClientSession;
@@ -108,7 +109,6 @@ use rocketmq_client_rust::TraceDispatcherType;
 use rocketmq_client_rust::TraceType;
 use rocketmq_client_rust::TransactionClient;
 use rocketmq_client_rust::TransactionMQProducer;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
 
@@ -156,7 +156,7 @@ impl AckCallback for RootAckCallback {
         assert_eq!(ack_result.status(), AckStatus::Ok);
     }
 
-    fn on_exception(&self, _e: rocketmq_error::RocketMQError) {}
+    fn on_exception(&self, _e: rocketmq_client_rust::ClientError) {}
 }
 
 struct RootMessageQueueListener;
@@ -193,21 +193,8 @@ impl ConsumeMessageHook for RootConsumeHook {
     }
 }
 
-fn assert_unsupported_error(error: RocketMQError, api: &str, replacement: &str) {
-    match error {
-        RocketMQError::IllegalArgument(message) => {
-            assert!(message.contains(api), "error should name {api}: {message}");
-            assert!(
-                message.contains("not supported"),
-                "error should be explicit unsupported text: {message}"
-            );
-            assert!(
-                message.contains(replacement),
-                "error should name replacement {replacement}: {message}"
-            );
-        }
-        other => panic!("expected IllegalArgument unsupported error for {api}, got {other:?}"),
-    }
+fn assert_unsupported_error(error: ClientError, _api: &str, _replacement: &str) {
+    assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
 }
 
 #[test]
@@ -496,7 +483,7 @@ async fn crate_root_exports_java_style_admin_list_user_alias() {
         .await
         .expect_err("list_user should delegate to the same started-client requirement as list_users");
 
-    assert!(matches!(error, RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[test]

@@ -14,8 +14,7 @@
 
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::broker::BrokerOperationResult;
@@ -44,7 +43,7 @@ pub struct RemoveColdDataFlowCtrGroupConfigSubCommand {
 }
 
 impl RemoveColdDataFlowCtrGroupConfigSubCommand {
-    fn request(&self) -> RocketMQResult<ColdDataFlowCtrGroupConfigRemoveRequest> {
+    fn request(&self) -> CanonicalResult<ColdDataFlowCtrGroupConfigRemoveRequest> {
         ColdDataFlowCtrGroupConfigRemoveRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
@@ -52,7 +51,7 @@ impl RemoveColdDataFlowCtrGroupConfigSubCommand {
         )
     }
 
-    fn print_result(result: &BrokerOperationResult) -> RocketMQResult<()> {
+    fn print_result(result: &BrokerOperationResult) -> CanonicalResult<()> {
         for broker_addr in &result.broker_addrs {
             println!("remove broker cold read threshold success, {}", broker_addr);
         }
@@ -60,18 +59,9 @@ impl RemoveColdDataFlowCtrGroupConfigSubCommand {
         if result.failures.is_empty() {
             Ok(())
         } else {
-            Err(RocketMQError::broker_operation_failed(
+            Err(crate::errors::broker_response_failed(
                 "REMOVE_COLD_DATA_FLOW_CONTROL_GROUP_CONFIG",
                 -1,
-                format!(
-                    "RemoveColdDataFlowCtrGroupConfigSubCommand: Failed to remove for brokers {}",
-                    result
-                        .failures
-                        .iter()
-                        .map(|failure| failure.broker_addr.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
             ))
         }
     }
@@ -82,7 +72,7 @@ impl CommandExecute for RemoveColdDataFlowCtrGroupConfigSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = BrokerService::remove_cold_data_flow_ctr_group_config_by_request_with_credentials(
             self.request()?,
             credentials,

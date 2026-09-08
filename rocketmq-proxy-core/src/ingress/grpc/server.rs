@@ -23,6 +23,7 @@ use rocketmq_runtime::TaskGroup;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
+use crate::error::canonical;
 use crate::ingress::grpc::service::GrpcHousekeepingRunReport;
 use crate::GrpcConfig;
 use crate::ProxyError;
@@ -82,12 +83,12 @@ where
     SFut: Future<Output = ProxyResult<()>> + Send,
 {
     let addr = config.socket_addr()?;
-    let listener = TcpListener::bind(addr).await.map_err(|error| ProxyError::Transport {
-        message: format!("proxy gRPC server failed to bind {addr}: {error}"),
-    })?;
-    let local_addr = listener.local_addr().map_err(|error| ProxyError::Transport {
-        message: format!("proxy gRPC server failed to resolve local address for {addr}: {error}"),
-    })?;
+    let listener = TcpListener::bind(addr)
+        .await
+        .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
+    let local_addr = listener
+        .local_addr()
+        .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let housekeeping_future = housekeeping(shutdown_rx.clone(), task_group.clone());
 

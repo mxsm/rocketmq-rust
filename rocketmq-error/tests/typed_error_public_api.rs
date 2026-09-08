@@ -18,8 +18,8 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
     let context_source = include_str!("../src/context.rs");
     let core_source = include_str!("../src/error.rs");
     let removed_symbols = [
-        concat!("Legacy", "RocketMQResult"),
-        concat!("pub enum Rocket", "mqError"),
+        concat!("pub type RocketMQ", "Result"),
+        concat!("pub enum RocketMQ", "Error"),
         concat!("pub struct MQBroker", "Err"),
         concat!("pub struct Client", "Err"),
         concat!("pub struct RequestTimeout", "Err"),
@@ -71,11 +71,6 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
             "`rocketmq-error` implementation module `{module}` must remain private"
         );
     }
-
-    fn accepts_domain_error(_: &dyn rocketmq_error::DomainError) {}
-    accepts_domain_error(&rocketmq_error::RocketMQError::invariant_violated(
-        "public root contract compiles",
-    ));
 
     let condition = rocketmq_error::CanonicalCondition::Unavailable;
     let recovery = rocketmq_error::RecoveryHint::Backoff;

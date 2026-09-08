@@ -264,8 +264,8 @@ impl RemotingRequest {
 
     pub(crate) fn with_body_free_hook_command<T>(
         &mut self,
-        apply: impl FnOnce(&mut RemotingCommand) -> rocketmq_error::RocketMQResult<T>,
-    ) -> rocketmq_error::RocketMQResult<T> {
+        apply: impl FnOnce(&mut RemotingCommand) -> Result<T, rocketmq_error::SharedError>,
+    ) -> Result<T, rocketmq_error::SharedError> {
         let body = self.command.take_body();
         let result = apply(&mut self.command);
         let attached_body = self.command.take_body();
@@ -273,17 +273,15 @@ impl RemotingRequest {
             self.command.set_body_mut_ref(body);
         }
         if attached_body.is_some() {
-            return Err(rocketmq_error::RocketMQError::invariant_violated(
-                "RPC hook attached a request body through the body-free projection",
-            ));
+            return Err(crate::error_helpers::invariant_violated());
         }
         result
     }
 
     pub(crate) fn with_body_free_hook_request<T>(
         &mut self,
-        apply: impl FnOnce(&RemotingCommand) -> rocketmq_error::RocketMQResult<T>,
-    ) -> rocketmq_error::RocketMQResult<T> {
+        apply: impl FnOnce(&RemotingCommand) -> Result<T, rocketmq_error::SharedError>,
+    ) -> Result<T, rocketmq_error::SharedError> {
         let body = self.command.take_body();
         let result = apply(&self.command);
         debug_assert!(self.command.body().is_none());

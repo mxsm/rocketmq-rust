@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::ClientError;
+use crate::ClientResult;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 
 use super::client_config::ClientConfig;
@@ -81,7 +81,7 @@ impl ClientOptions {
 
     pub(crate) fn into_normalized_parts(
         mut self,
-    ) -> RocketMQResult<(
+    ) -> ClientResult<(
         ClientConfig,
         Option<NameServerDiscoveryConfig>,
         Option<RemotingCommandFactory>,
@@ -93,11 +93,11 @@ impl ClientOptions {
         };
 
         if let Some(legacy) = self.client.namesrv_addr.as_ref() {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "nameserver_discovery",
-                value: discovery.fingerprint(),
-                reason: format!("typed NameServer discovery cannot be combined with legacy namesrv_addr={legacy}"),
-            });
+            return Err(ClientError::config_invalid(
+                "nameserver_discovery",
+                discovery.fingerprint(),
+                format!("typed NameServer discovery cannot be combined with legacy namesrv_addr={legacy}"),
+            ));
         }
         discovery.validate()?;
         if let Some(canonical) = discovery.static_canonical() {

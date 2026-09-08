@@ -9,22 +9,20 @@ classes: wide
 
 # Error Architecture Contribution Guide
 
-This guide separates the canonical core that is effective now from the
-remaining migration target. The [Error Architecture Redesign
-ADR](07-error-architecture-adr.md) defines both, and the [Error Architecture
-Inventory](07-error-inventory.md) pins the baseline and records per-owner
-migration evidence.
+This guide describes the current canonical error architecture. The [Error
+Architecture Redesign ADR](07-error-architecture-adr.md) defines the contract,
+and the [Error Architecture Inventory](07-error-inventory.md) records the
+historical cutover evidence.
 
 ## Effective-now rules
 
-The effective central API now includes the one-pointer, non-`Clone` canonical
-`Error`, `Result<T>`, `SharedError = Arc<Error>`, typed `ErrorContext`, safe
-views, and the complete policy fields on the exact 98-entry declarative
-catalog. `StoreError` owns one canonical `Error`; `RuntimeError` and
-`TransportError` clone through `SharedError`. The public `RocketMQError` enum
-and structural `ErrorKind` remain typed domain surfaces, but the legacy
-`ErrorSpec`, scope/category metadata, and parallel recovery/projection tables
-have been removed.
+The central API is the one-pointer, non-`Clone` canonical `Error`, `Result<T>`,
+`SharedError = Arc<Error>`, typed `ErrorContext`, safe views, and the complete
+policy fields on the exact 136-entry declarative catalog. `StoreError` owns one
+canonical `Error`; cloneable facades such as `ClientError`, `RuntimeError`, and
+`TransportError` share the canonical value through `SharedError`. There is no
+central public error enum, structural classification enum, parallel spec table,
+or caller-owned projection override.
 
 1. Preserve typed sources for I/O, serde, storage, raft, transport, and runtime
    failures. Do not replace a source with rendered text.
@@ -38,21 +36,19 @@ have been removed.
    presentation, never as data for classification, mapping, retry, persistence,
    or comparison.
 5. Use the existing typed error contracts and local boundary mappings without
-   widening public `anyhow` contracts. The baseline has no legacy
-   `RocketmqError`/`Legacy*` aliases and no public anyhow `Result` alias or
-   callers; do not reintroduce either.
+   widening public `anyhow` contracts. Do not introduce compatibility aliases,
+   versioned error facades, or public anyhow result aliases.
 6. Redact secret keys, tokens, signatures, passwords, authorization values,
    and equivalent sensitive data in public output, diagnostics, logs, traces,
    and exported reports. Use the repository's existing shared redaction
    support where available.
 
-These rules apply now, including while a private migration bridge is present.
-A bridge must remain private and temporary; it must not become a public,
-deprecated, feature-gated, or long-lived dual API.
+These rules apply to every new or modified error path. Do not add a public or
+private compatibility bridge around the canonical model.
 
-## Five-layer migration contract
+## Five-layer error contract
 
-When an owning migration lands, it follows these five layers exactly:
+Current implementations follow these five layers:
 
 1. **Outcome/Decision/Rejection:** public control-flow outcomes without leaf
    representation; retry is not inferred from rendered text.
@@ -93,33 +89,29 @@ operation idempotency, operation stage, and remaining budget together with the
 catalog's `RecoveryHint`; it never uses a response message or source string as
 the decision.
 
-The canonical core types are current imports from `rocketmq-error`. Other
-target types become usable only in their owning migration, with inventory
-evidence and focused tests; do not invent a compatibility alias or parallel
-catalog in an unmigrated crate.
+Import canonical core types from `rocketmq-error`. Owning crates may expose a
+narrow facade such as `ClientError`, `RuntimeError`, `StoreError`, or
+`TransportError`; each facade must preserve the canonical descriptor, context,
+and typed source without adding a parallel catalog.
 
 ## Where changes belong
 
 | Change type | Owner |
 | --- | --- |
 | Current leaf/source type and source preservation | Owning domain crate |
-| Future canonical identity, catalog policy, redaction, or recovery contract | `rocketmq-error` |
+| Canonical identity, catalog policy, redaction, or recovery contract | `rocketmq-error` |
 | Remoting response code and safe remark conversion | Remoting boundary adapter |
 | gRPC payload/status conversion | Proxy gRPC boundary adapter |
 | Broker or NameServer external response conversion | Processor code using the remoting adapter |
 | Dashboard or HTTP conversion | Dashboard boundary error wrapper |
 | CLI display and exit behavior | CLI/tool boundary |
-| Domain-local storage, auth, controller, or client source preservation | Owning crate, then canonical conversion during migration |
+| Domain-local storage, auth, controller, or client source preservation | Owning crate and its canonical conversion boundary |
 
-Do not create a second semantic catalog in a boundary crate. During migration,
-keep an existing local mapper buildable while removing new display-text and
-arbitrary-remark decisions. Preserve remoting numeric codes and headers,
+Do not create a second semantic catalog in a boundary crate. Preserve remoting numeric codes and headers,
 gRPC/HTTP external contracts, wire semantics, and persisted layouts with
 focused regression evidence when affected.
 
 ## Adding a new error
-
-For a current API change:
 
 1. Reuse the owning crate's existing typed shape where possible.
 2. Add or reuse one canonical descriptor and associate every retained leaf.
@@ -128,13 +120,7 @@ For a current API change:
 4. Keep protocol conversion in the owning adapter, sourced from the
    descriptor's explicit projection; do not add another semantic mapping table.
 5. Add focused tests for association, source preservation, redaction, and
-   boundary output, then update the inventory evidence.
-
-For a target migration, the owning change assigns the catalog's stable dotted
-code, `CanonicalCondition`, fixed public message, severity, `RecoveryHint`,
-projection metadata, context visibility, and source policy. It also migrates
-both producers and consumers before removing its private bridge. These are
-implementation requirements for that wave, not current API imports.
+   boundary output.
 
 ## Boundary and redaction rules
 
@@ -147,20 +133,12 @@ Public output uses only `PublicErrorView`; controlled diagnostics may use
 never carries a secret value. Typed source chains may be retained for
 diagnostics, but their rendered strings are not copied into stable fields.
 
-## Dependency-driven wave rule
+## Dependency-driven change rule
 
-The work is organized by producer/consumer dependency, not by a fixed PR list.
-A wave closes only after its producer and every known consumer migrate, focused
-tests and compatibility regression evidence pass, and the private bridge for
-that wave is removed. No bridge may become a V1/V2 API, deprecated shim,
-compatibility feature, or long-lived dual path.
-
-The dependency order is: baseline and freezes; primitive layers, views, and
-catalog; domain leaf producers and facades; opaque canonical conversion;
-boundary projections and client retry decisions; remaining application
-consumers; bridge and local-table removal; then evidence and inventory update.
-Wave 0B specifically revalidates every inventory row and every current consumer
-before a row's ownership or status changes.
+An error change is complete only when its producer and every affected consumer
+use the same canonical descriptor and source-preserving contract. Focused tests
+and compatibility evidence must pass in the same delivery; no deprecated shim,
+feature-gated alias, versioned facade, or dual path is retained.
 
 ## Lightweight governance and validation
 
@@ -181,7 +159,7 @@ fingerprint requirement.
 - Does every retained typed leaf associate with the single canonical descriptor
   catalog without a parallel spec or policy table?
 - Are Outcome/Decision/Rejection, ContractViolation, private leaf `Error`,
-  domain facade, and opaque canonical `Error` kept distinct where migrated?
+  domain facade, and opaque canonical `Error` kept distinct?
 - Are public leaf errors, arbitrary remarks, and source stringification kept
   out of stable semantic contracts?
 - Does the declarative catalog remain the sole owner of dotted code,
@@ -193,8 +171,8 @@ fingerprint requirement.
   error identity?
 - Are remoting, gRPC, HTTP, wire, and persistence contracts backed by
   regression evidence when affected?
-- Are producer and consumer migrations complete before removing the private
-  bridge?
+- Do producers and consumers use the same canonical contract without a
+  compatibility bridge?
 - Were focused tests, applicable guard, targeted scans, diff checks, and link
   checks run according to the change scope?
 

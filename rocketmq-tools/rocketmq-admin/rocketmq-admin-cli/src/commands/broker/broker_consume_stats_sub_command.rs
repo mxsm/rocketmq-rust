@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::broker::BrokerConsumeStatsQueryRequest;
@@ -54,7 +54,7 @@ pub struct BrokerConsumeStatsSubCommand {
 }
 
 impl BrokerConsumeStatsSubCommand {
-    fn request(&self) -> RocketMQResult<BrokerConsumeStatsQueryRequest> {
+    fn request(&self) -> CanonicalResult<BrokerConsumeStatsQueryRequest> {
         BrokerConsumeStatsQueryRequest::try_new(
             self.broker_addr.clone(),
             self.timeout_millis,
@@ -85,7 +85,7 @@ impl CommandExecute for BrokerConsumeStatsSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = BrokerService::query_broker_consume_stats_by_request_with_credentials(
             self.request()?,
             credentials,

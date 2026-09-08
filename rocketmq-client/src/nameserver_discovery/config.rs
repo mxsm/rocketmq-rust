@@ -17,8 +17,8 @@ use std::num::NonZeroU16;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use crate::ClientError;
+use crate::ClientResult;
 
 use crate::config_support::name_server_target::parse_legacy_namesrv_addr;
 
@@ -35,7 +35,7 @@ pub struct DnsName(Arc<str>);
 
 impl DnsName {
     /// Parses and normalizes a DNS name.
-    pub fn parse(value: impl AsRef<str>) -> RocketMQResult<Self> {
+    pub fn parse(value: impl AsRef<str>) -> ClientResult<Self> {
         let normalized = value.as_ref().trim().trim_end_matches('.').to_ascii_lowercase();
         validate_dns_name(&normalized)?;
         Ok(Self(Arc::from(normalized)))
@@ -60,7 +60,7 @@ pub struct NameServerAuthority(Arc<str>);
 
 impl NameServerAuthority {
     /// Parses exactly one canonical NameServer authority.
-    pub fn parse(value: impl AsRef<str>) -> RocketMQResult<Self> {
+    pub fn parse(value: impl AsRef<str>) -> ClientResult<Self> {
         let parsed = parse_legacy_namesrv_addr(value.as_ref())?;
         let addresses = parsed.into_addresses();
         if addresses.len() != 1 {
@@ -98,7 +98,7 @@ pub enum NameServerSource {
 
 impl NameServerSource {
     /// Creates a DNS A/AAAA source.
-    pub fn dns(host: impl AsRef<str>, port: u16) -> RocketMQResult<Self> {
+    pub fn dns(host: impl AsRef<str>, port: u16) -> ClientResult<Self> {
         let port = NonZeroU16::new(port)
             .ok_or_else(|| invalid_config("nameserver_discovery.port", port, "must be between 1 and 65535"))?;
         Ok(Self::Dns {
@@ -108,7 +108,7 @@ impl NameServerSource {
     }
 
     /// Creates a validated static source.
-    pub fn static_endpoints(endpoints: Vec<NameServerAuthority>) -> RocketMQResult<Self> {
+    pub fn static_endpoints(endpoints: Vec<NameServerAuthority>) -> ClientResult<Self> {
         if endpoints.is_empty() {
             return Err(invalid_config(
                 "nameserver_discovery.static",
@@ -153,7 +153,7 @@ impl NameServerDiscoveryConfig {
     }
 
     /// Sets the inclusive refresh interval clamp.
-    pub fn with_refresh_bounds(mut self, min: Duration, max: Duration) -> RocketMQResult<Self> {
+    pub fn with_refresh_bounds(mut self, min: Duration, max: Duration) -> ClientResult<Self> {
         if min.is_zero() || max < min {
             return Err(invalid_config(
                 "nameserver_discovery.refresh",
@@ -167,7 +167,7 @@ impl NameServerDiscoveryConfig {
     }
 
     /// Sets how long the last-known-good endpoint set may remain usable.
-    pub fn with_stale_max(mut self, stale_max: Duration) -> RocketMQResult<Self> {
+    pub fn with_stale_max(mut self, stale_max: Duration) -> ClientResult<Self> {
         if stale_max.is_zero() {
             return Err(invalid_config(
                 "nameserver_discovery.stale_max",
@@ -180,7 +180,7 @@ impl NameServerDiscoveryConfig {
     }
 
     /// Sets how long a removed endpoint may finish already in-flight work.
-    pub fn with_drain_timeout(mut self, drain_timeout: Duration) -> RocketMQResult<Self> {
+    pub fn with_drain_timeout(mut self, drain_timeout: Duration) -> ClientResult<Self> {
         if drain_timeout.is_zero() {
             return Err(invalid_config(
                 "nameserver_discovery.drain_timeout",
@@ -193,7 +193,7 @@ impl NameServerDiscoveryConfig {
     }
 
     /// Sets the resolved endpoint cap. Values above 64 are rejected.
-    pub fn with_endpoint_limit(mut self, endpoint_limit: usize) -> RocketMQResult<Self> {
+    pub fn with_endpoint_limit(mut self, endpoint_limit: usize) -> ClientResult<Self> {
         if !(1..=MAX_ENDPOINT_LIMIT).contains(&endpoint_limit) {
             return Err(invalid_config(
                 "nameserver_discovery.endpoint_limit",
@@ -236,7 +236,7 @@ impl NameServerDiscoveryConfig {
         self.endpoint_limit
     }
 
-    pub(crate) fn validate(&self) -> RocketMQResult<()> {
+    pub(crate) fn validate(&self) -> ClientResult<()> {
         match &self.source {
             NameServerSource::Static(endpoints) if endpoints.is_empty() => Err(invalid_config(
                 "nameserver_discovery.static",
@@ -288,7 +288,7 @@ impl NameServerDiscoveryConfig {
     }
 }
 
-fn validate_dns_name(value: &str) -> RocketMQResult<()> {
+fn validate_dns_name(value: &str) -> ClientResult<()> {
     if value.is_empty() || value.len() > 253 {
         return Err(invalid_config(
             "nameserver_discovery.dns_name",
@@ -320,12 +320,8 @@ fn validate_dns_name(value: &str) -> RocketMQResult<()> {
     Ok(())
 }
 
-fn invalid_config(key: &'static str, value: impl ToString, reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::ConfigInvalidValue {
-        key,
-        value: value.to_string(),
-        reason: reason.into(),
-    }
+fn invalid_config(key: &'static str, value: impl ToString, reason: impl Into<String>) -> ClientError {
+    ClientError::config_invalid(key, value.to_string(), reason.into())
 }
 
 #[cfg(test)]

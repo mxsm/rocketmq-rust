@@ -19,7 +19,9 @@ use clap::CommandFactory;
 use rocketmq_admin_cli::rocketmq_cli::RocketMQCli;
 use rocketmq_error::CliErrorView;
 use rocketmq_error::CliVerbosity;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::ErrorContext;
+use rocketmq_error::fields;
 use serde::Deserialize;
 
 const GOLDENS: &str = include_str!("../../../../scripts/fixtures/admin-java-55/operation-goldens.json");
@@ -48,18 +50,24 @@ fn fixture() -> GoldenFixture {
     serde_json::from_str(GOLDENS).expect("committed Admin golden fixture must be valid JSON")
 }
 
-fn error_for(kind: &str) -> RocketMQError {
+fn error_for(kind: &str) -> CanonicalError {
     match kind {
-        "invalid-input" => RocketMQError::IllegalArgument("invalid Admin golden input".to_string()),
-        "not-found" => RocketMQError::query_not_found("Admin golden target"),
-        "partial-failure" => RocketMQError::broker_operation_failed("ADMIN_GOLDEN", -1, "one target failed"),
-        "timeout" => RocketMQError::Timeout {
-            operation: "ADMIN_GOLDEN",
-            timeout_ms: 1,
-        },
-        "permission" => RocketMQError::BrokerPermissionDenied {
-            operation: "ADMIN_GOLDEN".to_string(),
-        },
+        "invalid-input" => CanonicalError::new(&rocketmq_error::CORE_ARGUMENT_INVALID)
+            .with_context(ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT)),
+        "not-found" => CanonicalError::new(&rocketmq_error::BROKER_QUERY_NOT_FOUND)
+            .with_context(ErrorContext::new().with_text(fields::RESOURCE, "Admin golden target")),
+        "partial-failure" => CanonicalError::new(&rocketmq_error::BROKER_OPERATION_FAILED).with_context(
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "ADMIN_GOLDEN")
+                .with_i64(fields::BROKER_CODE, -1),
+        ),
+        "timeout" => CanonicalError::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT).with_context(
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "ADMIN_GOLDEN")
+                .with_u64(fields::TIMEOUT_MS, 1),
+        ),
+        "permission" => CanonicalError::new(&rocketmq_error::AUTH_PERMISSION_DENIED)
+            .with_context(ErrorContext::new().with_text(fields::OPERATION, "ADMIN_GOLDEN")),
         other => panic!("unsupported Admin golden error kind: {other}"),
     }
 }

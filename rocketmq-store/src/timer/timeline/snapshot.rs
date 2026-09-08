@@ -289,13 +289,11 @@ pub(crate) enum TimelineSnapshotError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
-    Timeline(#[from] rocketmq_error::RocketMQError),
-    #[error(transparent)]
     Materializer(#[from] super::TimelineMaterializerError),
     #[error(transparent)]
     Completion(#[from] super::TimelineCompletionError),
     #[error(transparent)]
-    Artifact(#[from] rocketmq_store_api::StoreError),
+    Store(#[from] rocketmq_store_api::StoreError),
     #[error(transparent)]
     Manifest(#[from] rocketmq_store_api::StoreContractViolation),
     #[error(transparent)]

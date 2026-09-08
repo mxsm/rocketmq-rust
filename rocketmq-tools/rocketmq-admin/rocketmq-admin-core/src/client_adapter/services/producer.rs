@@ -30,9 +30,8 @@ use serde::Serialize;
 
 use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::errors;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Result as CanonicalResult;
 
 const SEND_MESSAGE_STATUS_PRODUCER_GROUP: &str = "PID_SMSC";
 
@@ -43,7 +42,7 @@ pub struct ProducerInfoQueryRequest {
 }
 
 impl ProducerInfoQueryRequest {
-    pub fn try_new(broker_addr: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(broker_addr: impl Into<String>) -> CanonicalResult<Self> {
         Ok(Self {
             broker_addr: trim_required_cheetah("brokerAddr", broker_addr)?,
             namesrv_addr: None,
@@ -95,11 +94,12 @@ impl SendMessageRequest {
         broker_name: Option<String>,
         queue_id: Option<i32>,
         msg_trace_enable: bool,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         if queue_id.is_some() && trim_optional_string(broker_name.clone()).is_none() {
-            return Err(
-                ToolsError::validation_error("brokerName", "brokerName must be set if queueId is provided").into(),
-            );
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "brokerName",
+                "brokerName must be set if queueId is provided",
+            ));
         }
 
         Ok(Self {
@@ -153,7 +153,7 @@ impl SendMessageRequest {
         self.namesrv_addr.as_deref()
     }
 
-    fn message(&self) -> RocketMQResult<Message> {
+    fn message(&self) -> CanonicalResult<Message> {
         let builder = Message::builder()
             .topic(self.topic.as_str())
             .body(self.body.as_bytes().to_vec());
@@ -167,7 +167,7 @@ impl SendMessageRequest {
         };
         builder
             .build()
-            .map_err(|error| errors::admin_validation_failed("message", error.to_string()))
+            .map_err(|error| errors::admin_validation_failed_by("message", error))
     }
 }
 
@@ -192,7 +192,7 @@ pub struct SendMessageStatusRequest {
 }
 
 impl SendMessageStatusRequest {
-    pub fn try_new(broker_name: impl Into<String>, message_size: usize, count: u32) -> RocketMQResult<Self> {
+    pub fn try_new(broker_name: impl Into<String>, message_size: usize, count: u32) -> CanonicalResult<Self> {
         Ok(Self {
             broker_name: trim_required_cheetah("brokerName", broker_name)?,
             message_size,
@@ -232,9 +232,12 @@ pub struct CheckMessageSendRtRequest {
 }
 
 impl CheckMessageSendRtRequest {
-    pub fn try_new(topic: impl Into<String>, amount: u64, size: usize) -> RocketMQResult<Self> {
+    pub fn try_new(topic: impl Into<String>, amount: u64, size: usize) -> CanonicalResult<Self> {
         if amount < 2 {
-            return Err(ToolsError::validation_error("amount", "amount must be at least 2").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "amount",
+                "amount must be at least 2",
+            ));
         }
         Ok(Self {
             topic: trim_required_cheetah("topic", topic)?,
@@ -277,10 +280,11 @@ impl ProducerService {
         request: ProducerInfoQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ProducerInfoQueryResult> {
+    ) -> CanonicalResult<ProducerInfoQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_producer_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -289,8 +293,11 @@ impl ProducerService {
     pub(crate) async fn query_producer_info_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ProducerInfoQueryRequest,
-    ) -> RocketMQResult<ProducerInfoQueryResult> {
-        let producer_table_info = admin.get_all_producer_info(request.broker_addr.clone()).await?;
+    ) -> CanonicalResult<ProducerInfoQueryResult> {
+        let producer_table_info = admin
+            .get_all_producer_info(request.broker_addr.clone())
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         Ok(ProducerInfoQueryResult { producer_table_info })
     }
 
@@ -298,7 +305,7 @@ impl ProducerService {
         request: SendMessageRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<SendMessageResult> {
+    ) -> CanonicalResult<SendMessageResult> {
         let mut builder = DefaultMQProducer::builder(client_runtime).producer_group(current_millis().to_string());
         if let Some(namesrv_addr) = request.namesrv_addr() {
             builder = builder.name_server_addr(namesrv_addr);
@@ -316,11 +323,11 @@ impl ProducerService {
     pub async fn send_message_with_producer(
         producer: &mut DefaultMQProducer,
         request: &SendMessageRequest,
-    ) -> RocketMQResult<SendMessageResult> {
+    ) -> CanonicalResult<SendMessageResult> {
         producer
             .start()
             .await
-            .map_err(|error| errors::admin_operation_failed("start_producer", error.to_string()))?;
+            .map_err(|error| errors::admin_response_failed_by("start_producer", error))?;
 
         let message = request.message()?;
         let send_result = if let (Some(broker_name), Some(queue_id)) = (request.broker_name(), request.queue_id()) {
@@ -329,7 +336,7 @@ impl ProducerService {
         } else {
             producer.send(message).await
         }
-        .map_err(|error| errors::broker_operation_failed("send_message", error.to_string()))?;
+        .map_err(|error| errors::broker_operation_failed_by("send_message", error))?;
 
         let row = if let Some(result) = send_result {
             SendMessageResultRow {
@@ -366,7 +373,7 @@ impl ProducerService {
         request: SendMessageStatusRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<SendMessageStatusResult> {
+    ) -> CanonicalResult<SendMessageStatusResult> {
         let instance_name = format!("{SEND_MESSAGE_STATUS_PRODUCER_GROUP}_{}", current_millis());
         let mut client_config = ClientConfig::default();
         client_config.set_instance_name(instance_name.into());
@@ -387,16 +394,16 @@ impl ProducerService {
     pub async fn send_message_status_with_producer(
         producer: &mut DefaultMQProducer,
         request: &SendMessageStatusRequest,
-    ) -> RocketMQResult<SendMessageStatusResult> {
+    ) -> CanonicalResult<SendMessageStatusResult> {
         producer
             .start()
             .await
-            .map_err(|error| errors::admin_operation_failed("start_producer", error.to_string()))?;
+            .map_err(|error| errors::admin_response_failed_by("start_producer", error))?;
 
         producer
             .send(build_diagnostic_message(request.broker_name().as_str(), 16))
             .await
-            .map_err(|error| errors::broker_operation_failed("send_message_status_warmup", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("send_message_status_warmup", error))?;
 
         let mut rows = Vec::with_capacity(request.count() as usize);
         for _ in 0..request.count() {
@@ -407,7 +414,7 @@ impl ProducerService {
                     request.message_size(),
                 ))
                 .await
-                .map_err(|error| errors::broker_operation_failed("send_message_status", error.to_string()))?;
+                .map_err(|error| errors::broker_operation_failed_by("send_message_status", error))?;
             let rt_millis = current_millis() - begin;
             rows.push(SendMessageStatusRow {
                 rt_millis,
@@ -424,7 +431,7 @@ impl ProducerService {
         request: CheckMessageSendRtRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<CheckMessageSendRtResult> {
+    ) -> CanonicalResult<CheckMessageSendRtResult> {
         let mut builder = DefaultMQProducer::builder(client_runtime).producer_group(current_millis().to_string());
         if let Some(credentials) = credentials {
             builder = builder.rpc_hook(crate::client_adapter::security::rpc_hook_from_credentials(&credentials));
@@ -439,17 +446,17 @@ impl ProducerService {
     pub async fn check_message_send_rt_with_producer(
         producer: &mut DefaultMQProducer,
         request: &CheckMessageSendRtRequest,
-    ) -> RocketMQResult<CheckMessageSendRtResult> {
+    ) -> CanonicalResult<CheckMessageSendRtResult> {
         producer
             .start()
             .await
-            .map_err(|error| errors::admin_operation_failed("start_producer", error.to_string()))?;
+            .map_err(|error| errors::admin_response_failed_by("start_producer", error))?;
 
         let message = Message::builder()
             .topic(request.topic().as_str())
             .body_slice(&vec![b'a'; request.size()])
             .build()
-            .map_err(|error| errors::admin_validation_failed("message", error.to_string()))?;
+            .map_err(|error| errors::admin_validation_failed_by("message", error))?;
         let broker_name_holder = Arc::new(Mutex::new(String::new()));
         let queue_id_holder = Arc::new(Mutex::new(0));
         let mut rows = Vec::with_capacity(request.amount() as usize);
@@ -510,20 +517,26 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        ));
     }
     Ok(CheetahString::from(value))
 }
 
-fn trim_required_string(field: &'static str, value: impl Into<String>) -> RocketMQResult<String> {
+fn trim_required_string(field: &'static str, value: impl Into<String>) -> CanonicalResult<String> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        ));
     }
     Ok(value.to_string())
 }

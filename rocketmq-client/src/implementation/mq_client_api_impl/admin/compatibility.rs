@@ -22,7 +22,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         decompress_body: bool,
         request_header: QueryMessageRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<Vec<MessageExt>> {
+    ) -> ClientResult<Vec<MessageExt>> {
         let topic = request_header.topic.clone();
         let key = request_header.key.clone();
         let mut request = self.create_request_command(RequestCode::QueryMessage, request_header);
@@ -41,7 +41,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
             Ok(OutboundRequestOutcome::Contract(contract)) => {
                 return Err(admin_request_error("query_message", RetryInput::Contract(contract)));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
@@ -66,7 +66,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: GetTopicStatsInfoRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<TopicStatsTable> {
+    ) -> ClientResult<TopicStatsTable> {
         let request = self.create_request_command(RequestCode::GetTopicStatsInfo, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -83,11 +83,11 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
-                return TopicStatsTable::decode(body.as_ref());
+                return TopicStatsTable::decode(body.as_ref()).map_err(ClientError::from);
             }
         }
         Err(mq_client_err!(
@@ -101,7 +101,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: QueryConsumeTimeSpanRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<Vec<QueueTimeSpan>> {
+    ) -> ClientResult<Vec<QueueTimeSpan>> {
         let request = self.create_request_command(RequestCode::QueryConsumeTimeSpan, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -118,7 +118,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
@@ -138,7 +138,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: CreateTopicRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let request = self.create_request_command(RequestCode::UpdateAndCreateTopic, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -155,7 +155,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
@@ -172,7 +172,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         config: SubscriptionGroupConfig,
         timeout_millis: u64,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let request = self
             .create_request_command(RequestCode::UpdateAndCreateSubscriptionGroup, EmptyHeader {})
             .set_body(config.encode()?);
@@ -191,7 +191,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
@@ -208,7 +208,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: DeleteTopicRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let request = self.create_request_command(RequestCode::DeleteTopicInBroker, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -225,7 +225,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
@@ -242,7 +242,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         topic_list: Vec<CheetahString>,
         timeout_millis: u64,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let request = delete_topic_list_request(&self.command_factory, topic_list)?;
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -259,7 +259,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => Ok(()),
@@ -276,7 +276,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: DeleteTopicFromNamesrvRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let request = self.create_request_command(RequestCode::DeleteTopicInNamesrv, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -293,7 +293,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
@@ -310,7 +310,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: DeleteKVConfigRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let request = self.create_request_command(RequestCode::DeleteKvConfig, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -321,7 +321,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
             Ok(OutboundRequestOutcome::Contract(contract)) => {
                 return Err(admin_request_error("delete_kv_config", RetryInput::Contract(contract)));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
@@ -338,7 +338,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: DeleteSubscriptionGroupRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let request = self.create_request_command(RequestCode::DeleteSubscriptionGroup, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -355,7 +355,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(());
@@ -373,7 +373,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         group_name_list: Vec<CheetahString>,
         clean_offset: bool,
         timeout_millis: u64,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let request = delete_subscription_group_list_request(&self.command_factory, group_name_list, clean_offset)?;
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -390,7 +390,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => Ok(()),
@@ -407,7 +407,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: ResetOffsetRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<HashMap<MessageQueue, i64>> {
+    ) -> ClientResult<HashMap<MessageQueue, i64>> {
         let request = self.create_request_command(RequestCode::InvokeBrokerToResetOffset, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -424,7 +424,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         reset_offset_table_from_response(&response)
     }
@@ -434,7 +434,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: ViewMessageRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<MessageExt> {
+    ) -> ClientResult<MessageExt> {
         let request = self.create_request_command(RequestCode::ViewMessageById, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -445,7 +445,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
             Ok(OutboundRequestOutcome::Contract(contract)) => {
                 return Err(admin_request_error("view_message", RetryInput::Contract(contract)));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
@@ -464,7 +464,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         }
     }
 
-    async fn get_broker_cluster_info(&self, address: &str, timeout_millis: u64) -> RocketMQResult<ClusterInfo> {
+    async fn get_broker_cluster_info(&self, address: &str, timeout_millis: u64) -> ClientResult<ClusterInfo> {
         let request = self.create_request_command(RequestCode::GetBrokerClusterInfo, EmptyHeader {});
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -481,11 +481,11 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
-                return ClusterInfo::decode(body.as_ref());
+                return ClusterInfo::decode(body.as_ref()).map_err(ClientError::from);
             }
         }
         Err(mq_client_err!(
@@ -499,7 +499,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: GetConsumerConnectionListRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<ConsumerConnection> {
+    ) -> ClientResult<ConsumerConnection> {
         let request = self.create_request_command(RequestCode::GetConsumerConnectionList, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -516,11 +516,11 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
-                return ConsumerConnection::decode(body.as_ref());
+                return ConsumerConnection::decode(body.as_ref()).map_err(ClientError::from);
             }
         }
         Err(mq_client_err!(
@@ -534,7 +534,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: QueryTopicsByConsumerRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<TopicList> {
+    ) -> ClientResult<TopicList> {
         let request = self.create_request_command(RequestCode::QueryTopicsByConsumer, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -551,11 +551,11 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
-                return TopicList::decode(body.as_ref());
+                return TopicList::decode(body.as_ref()).map_err(ClientError::from);
             }
         }
         Err(mq_client_err!(
@@ -569,7 +569,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: QuerySubscriptionByConsumerRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<SubscriptionData> {
+    ) -> ClientResult<SubscriptionData> {
         let request = self.create_request_command(RequestCode::QuerySubscriptionByConsumer, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -586,7 +586,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let body = response
@@ -608,7 +608,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: GetConsumeStatsRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<ConsumeStats> {
+    ) -> ClientResult<ConsumeStats> {
         let request = self.create_request_command(RequestCode::GetConsumeStats, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -622,11 +622,11 @@ impl MqClientAdminInner for MQClientAPIImpl {
             Ok(OutboundRequestOutcome::Contract(contract)) => {
                 return Err(admin_request_error("get_consume_stats", RetryInput::Contract(contract)));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
-                return ConsumeStats::decode(body.as_ref());
+                return ConsumeStats::decode(body.as_ref()).map_err(ClientError::from);
             }
         }
         Err(mq_client_err!(
@@ -640,7 +640,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: QueryTopicConsumeByWhoRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<GroupList> {
+    ) -> ClientResult<GroupList> {
         let request = self.create_request_command(RequestCode::QueryTopicConsumeByWho, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let response = match outcome {
@@ -657,11 +657,11 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
-                return GroupList::decode(body.as_ref());
+                return GroupList::decode(body.as_ref()).map_err(ClientError::from);
             }
         }
         Err(mq_client_err!(
@@ -675,7 +675,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: GetConsumerRunningInfoRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<ConsumerRunningInfo> {
+    ) -> ClientResult<ConsumerRunningInfo> {
         let request = self.create_request_command(RequestCode::GetConsumerRunningInfo, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let mut response = match outcome {
@@ -692,14 +692,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
                 let Some(body) = response.take_body() else {
                     return Err(mq_client_err!("get_consumer_running_info response body is empty"));
                 };
-                ConsumerRunningInfo::decode(body.as_ref())
+                ConsumerRunningInfo::decode(body.as_ref()).map_err(ClientError::from)
             }
             _ => Err(mq_client_err!(
                 response.code(),
@@ -714,7 +714,7 @@ impl MqClientAdminInner for MQClientAPIImpl {
         address: &str,
         request_header: ConsumeMessageDirectlyResultRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<ConsumeMessageDirectlyResult> {
+    ) -> ClientResult<ConsumeMessageDirectlyResult> {
         let request = self.create_request_command(RequestCode::ConsumeMessageDirectly, request_header);
         let outcome = self.invoke_admin_request(address, request, timeout_millis).await;
         let mut response = match outcome {
@@ -731,14 +731,14 @@ impl MqClientAdminInner for MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
                 let Some(body) = response.take_body() else {
                     return Err(mq_client_err!("consume_message_directly response body is empty"));
                 };
-                ConsumeMessageDirectlyResult::decode(body.as_ref())
+                ConsumeMessageDirectlyResult::decode(body.as_ref()).map_err(ClientError::from)
             }
             _ => Err(mq_client_err!(
                 response.code(),

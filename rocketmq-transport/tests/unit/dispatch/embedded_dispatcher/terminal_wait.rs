@@ -116,10 +116,10 @@ impl TerminalDeferredProcessor {
 }
 
 impl RequestProcessor for TerminalDeferredProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         let responder = terminal_responder(request.take_deferred_responder());
         let retained = DeferredRegistry::<()>::try_retained_size(DeferredRetainedSizeParts::new(0))
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+            .map_err(|_| crate::error_helpers::argument_invalid())?;
         let permit = terminal_permit(self.admission.try_reserve(retained));
         let mut registration = terminal_registration(
             self.registry
@@ -252,7 +252,7 @@ async fn terminal_wait_commits_resumes_and_returns_the_final_plan_with_compositi
                 RemotingCommand::create_response_command_with_code(0),
                 Bytes::from_static(b"embedded-terminal-response"),
             )
-            .map_err(|error| RocketMQError::response_process_failed("terminal_wait_test", error.to_string()))
+            .map_err(|_| crate::error_helpers::protocol_response_failed("terminal_wait_test"))
         })
         .await
         .expect("resume final embedded response");

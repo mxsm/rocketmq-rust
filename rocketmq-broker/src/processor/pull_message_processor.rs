@@ -112,7 +112,7 @@ pub struct PullMessageProcessor<MS: BrokerReadStore> {
     pull_deferred_service: OnceLock<Arc<PullDeferredService>>,
 }
 
-fn pull_command(response: RemotingCommand) -> rocketmq_error::RocketMQResult<PullMessageResult> {
+fn pull_command(response: RemotingCommand) -> crate::broker_error::BrokerResult<PullMessageResult> {
     Ok(PullMessageResult::Reply(BrokerResponseParts::command(response)?))
 }
 
@@ -128,7 +128,7 @@ impl<MS> RequestProcessor for PullMessageProcessor<MS>
 where
     MS: BrokerReadStore + Send + Sync + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -141,7 +141,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let request_code = RequestCode::from(request.original_identity().original_code());
         info!(?request_code, "PullMessageProcessor received a request");
         match request_code {
@@ -490,7 +490,7 @@ where
         &self,
         request_header: &PullMessageRequestHeader,
         response: &RemotingCommand,
-    ) -> Result<SubscriptionDataResult, RemotingCommand> {
+    ) -> Result<SubscriptionDataResult, Box<RemotingCommand>> {
         let subscription_data = FilterAPI::build(
             request_header.topic.as_ref(),
             request_header
@@ -500,11 +500,11 @@ where
             request_header.expression_type.clone(),
         );
         if subscription_data.is_err() {
-            return Err(Self::error_response(
+            return Err(Box::new(Self::error_response(
                 response.clone(),
                 ResponseCode::SubscriptionParseFailed,
                 "parse the consumer's subscription failed",
-            ));
+            )));
         }
         let subscription_data = subscription_data.unwrap();
         self.context.consumers().compensate_subscribe_data(
@@ -521,11 +521,11 @@ where
                 request_header.sub_version as u64,
             );
             if consumer_filter_data.is_none() {
-                return Err(Self::error_response(
+                return Err(Box::new(Self::error_response(
                     response.clone(),
                     ResponseCode::SubscriptionParseFailed,
                     "parse the consumer's subscription failed",
-                ));
+                )));
             }
             consumer_filter_data
         } else {
@@ -546,7 +546,7 @@ where
         subscription_group_config: &SubscriptionGroupConfig,
         response: &RemotingCommand,
         response_header: &mut PullMessageResponseHeader,
-    ) -> Result<SubscriptionDataResult, RemotingCommand> {
+    ) -> Result<SubscriptionDataResult, Box<RemotingCommand>> {
         let consumer_group_info = self
             .context
             .consumers()
@@ -556,14 +556,14 @@ where
                 "the consumer's group info not exist, group: {}",
                 request_header.consumer_group.as_str()
             );
-            return Err(Self::error_response(
+            return Err(Box::new(Self::error_response(
                 response.clone(),
                 ResponseCode::SubscriptionNotExist,
                 format!(
                     "the consumer's group info not exist {}",
                     FAQUrl::suggest_todo(FAQUrl::SAME_GROUP_DIFFERENT_TOPIC),
                 ),
-            ));
+            )));
         }
         let consumer_group_info = consumer_group_info.unwrap();
 
@@ -571,7 +571,7 @@ where
             && consumer_group_info.get_message_model() == MessageModel::Broadcasting
         {
             response_header.forbidden_type = Some(ForbiddenType::BROADCASTING_DISABLE_FORBIDDEN);
-            return Err(Self::error_response_with_header(
+            return Err(Box::new(Self::error_response_with_header(
                 response.clone(),
                 ResponseCode::NoPermission,
                 format!(
@@ -579,7 +579,7 @@ where
                     request_header.consumer_group.as_str(),
                 ),
                 response_header.clone(),
-            ));
+            )));
         }
 
         let read_forbidden = self.context.subscription_groups().get_forbidden(
@@ -589,7 +589,7 @@ where
         );
         if read_forbidden {
             response_header.forbidden_type = Some(ForbiddenType::SUBSCRIPTION_FORBIDDEN);
-            return Err(Self::error_response_with_header(
+            return Err(Box::new(Self::error_response_with_header(
                 response.clone(),
                 ResponseCode::NoPermission,
                 format!(
@@ -598,7 +598,7 @@ where
                     request_header.topic
                 ),
                 response_header.clone(),
-            ));
+            )));
         }
 
         let subscription_data = consumer_group_info.find_subscription_data(request_header.topic.as_ref());
@@ -607,14 +607,14 @@ where
                 "the consumer's subscription not exist, group: {}, topic:{}",
                 request_header.consumer_group, request_header.topic
             );
-            return Err(Self::error_response(
+            return Err(Box::new(Self::error_response(
                 response.clone(),
                 ResponseCode::SubscriptionNotExist,
                 format!(
                     "the consumer's subscription not exist {}",
                     FAQUrl::suggest_todo(FAQUrl::SAME_GROUP_DIFFERENT_TOPIC),
                 ),
-            ));
+            )));
         }
         let subscription_data = subscription_data.unwrap();
 
@@ -623,11 +623,11 @@ where
                 "The broker's subscription is not latest, group: {} {}",
                 request_header.consumer_group, subscription_data.sub_string
             );
-            return Err(Self::error_response(
+            return Err(Box::new(Self::error_response(
                 response.clone(),
                 ResponseCode::SubscriptionNotExist,
                 "the consumer's subscription not latest",
-            ));
+            )));
         }
 
         let consumer_filter_data = if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
@@ -636,11 +636,11 @@ where
                 .filters()
                 .get_consumer_filter_data(request_header.topic.as_ref(), request_header.consumer_group.as_ref());
             if consumer_filter_data.is_none() {
-                return Err(Self::error_response(
+                return Err(Box::new(Self::error_response(
                     response.clone(),
                     ResponseCode::FilterDataNotExist,
                     "The broker's consumer filter data is not exist!Your expression may be wrong!",
-                ));
+                )));
             }
             if consumer_filter_data.as_ref().unwrap().client_version() < request_header.sub_version as u64 {
                 warn!(
@@ -650,11 +650,11 @@ where
                     consumer_filter_data.as_ref().unwrap().client_version(),
                     request_header.sub_version,
                 );
-                return Err(Self::error_response(
+                return Err(Box::new(Self::error_response(
                     response.clone(),
                     ResponseCode::FilterDataNotLatest,
                     "the consumer's consumer filter data not latest",
-                ));
+                )));
             }
             consumer_filter_data
         } else {
@@ -804,7 +804,7 @@ where
         &self,
         request_code: RequestCode,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let effective_peer = trusted_pull_peer(request)?;
         let session_id = request.session().id();
         let request_header = request
@@ -883,7 +883,7 @@ where
         &self,
         opaque: i32,
         rejection: crate::long_polling::pull_deferred::PullDeferredRegisterRejection,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         use crate::long_polling::pull_deferred::PullDeferredRegisterRejection;
 
         match rejection {
@@ -917,7 +917,7 @@ where
         &self,
         opaque: i32,
         error: crate::long_polling::pull_deferred::PullDeferredRegisterError,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         use crate::long_polling::pull_deferred::PullDeferredRegisterError;
 
         match error {
@@ -931,17 +931,16 @@ where
                 ))?
                 .into_handler_outcome()
             }
-            PullDeferredRegisterError::RegistryContract(violation) => Err(rocketmq_error::RocketMQError::internal(
+            PullDeferredRegisterError::RegistryContract(violation) => Err(crate::broker_error::internal(
                 "register deferred Pull request",
                 violation,
             )),
-            PullDeferredRegisterError::RegistryOperational(error) => Err(rocketmq_error::RocketMQError::internal(
-                "register deferred Pull request",
-                error,
-            )),
+            PullDeferredRegisterError::RegistryOperational(error) => {
+                Err(crate::broker_error::internal("register deferred Pull request", error))
+            }
             PullDeferredRegisterError::Contract { violation, parts } => {
                 drop(parts);
-                Err(rocketmq_error::RocketMQError::internal(
+                Err(crate::broker_error::internal(
                     "register deferred Pull request",
                     violation,
                 ))
@@ -959,7 +958,7 @@ where
         hook_metadata: &PullHookMetadata,
         broadcast_client_resolver: &PullBroadcastClientResolver<'_>,
         broker_allow_suspend: bool,
-    ) -> rocketmq_error::RocketMQResult<PullMessageResult> {
+    ) -> crate::broker_error::BrokerResult<PullMessageResult> {
         let begin_time_mills = current_millis();
         let response = self
             .context
@@ -1091,7 +1090,7 @@ where
             consumer_filter_data,
         } = match subscription_result {
             Ok(result) => result,
-            Err(err_response) => return pull_command(err_response),
+            Err(err_response) => return pull_command(*err_response),
         };
 
         if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str()))
@@ -1308,19 +1307,16 @@ where
         &self,
         request_header: &PullMessageRequestHeader,
         session_id: SessionId,
-    ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
+    ) -> crate::broker_error::BrokerResult<Option<CheetahString>> {
         self.resolve_broadcast_client_id_with(request_header, || {
             let lookup = self.session_client_lookup.get().ok_or_else(|| {
-                rocketmq_error::RocketMQError::internal(
-                    "resume-pull-client-lookup",
-                    PullClientIdentityError::LookupUnavailable,
-                )
+                crate::broker_error::internal("resume-pull-client-lookup", PullClientIdentityError::LookupUnavailable)
             })?;
             lookup
                 .client_id(session_id, &request_header.consumer_group)
                 .map(Some)
                 .ok_or_else(|| {
-                    rocketmq_error::RocketMQError::internal(
+                    crate::broker_error::internal(
                         "resume-pull-client-lookup",
                         PullClientIdentityError::RegistrationMissing,
                     )
@@ -1331,8 +1327,8 @@ where
     fn resolve_broadcast_client_id_with(
         &self,
         request_header: &PullMessageRequestHeader,
-        resolve_normal_client: impl FnOnce() -> rocketmq_error::RocketMQResult<Option<CheetahString>>,
-    ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
+        resolve_normal_client: impl FnOnce() -> crate::broker_error::BrokerResult<Option<CheetahString>>,
+    ) -> crate::broker_error::BrokerResult<Option<CheetahString>> {
         if !self.context.policy().enable_broadcast_offset_store {
             return Ok(None);
         }
@@ -1351,7 +1347,7 @@ where
     }
 }
 
-fn trusted_pull_peer(request: &RemotingRequest) -> rocketmq_error::RocketMQResult<std::net::SocketAddr> {
+fn trusted_pull_peer(request: &RemotingRequest) -> crate::broker_error::BrokerResult<std::net::SocketAddr> {
     match (request.origin(), request.session()) {
         (
             RequestOrigin::Network { peer },
@@ -1361,7 +1357,7 @@ fn trusted_pull_peer(request: &RemotingRequest) -> rocketmq_error::RocketMQResul
                 ..
             },
         ) if peer.address() == *remote_addr => Ok(*remote_addr),
-        _ => Err(rocketmq_error::RocketMQError::invariant_violated(
+        _ => Err(crate::broker_error::invariant_violated(
             "Pull request origin does not match its network session view",
         )),
     }

@@ -44,29 +44,35 @@ pub(super) struct ConsumerGroupMeta {
     pub(super) orderly_flags: Vec<bool>,
 }
 
-pub(super) async fn query_consumer_connection_at<Query, QueryFuture>(
+pub(super) async fn query_consumer_connection_at<Query, QueryFuture, QueryError>(
     group: &str,
     address: Option<CheetahString>,
     query: Query,
-) -> rocketmq_error::RocketMQResult<ConsumerConnection>
+) -> rocketmq_error::Result<ConsumerConnection>
 where
     Query: FnOnce(CheetahString, Option<CheetahString>) -> QueryFuture,
-    QueryFuture: Future<Output = rocketmq_error::RocketMQResult<ConsumerConnection>>,
+    QueryFuture: Future<Output = Result<ConsumerConnection, QueryError>>,
+    QueryError: crate::IntoCanonicalError,
 {
-    query(CheetahString::from(group), address).await
+    query(CheetahString::from(group), address)
+        .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error)
 }
 
-pub(super) async fn query_consumer_progress_at<Query, QueryFuture>(
+pub(super) async fn query_consumer_progress_at<Query, QueryFuture, QueryError>(
     group: &str,
     address: Option<CheetahString>,
     timeout_millis: Option<u64>,
     query: Query,
-) -> rocketmq_error::RocketMQResult<ConsumeStats>
+) -> rocketmq_error::Result<ConsumeStats>
 where
     Query: FnOnce(CheetahString, Option<CheetahString>, Option<u64>) -> QueryFuture,
-    QueryFuture: Future<Output = rocketmq_error::RocketMQResult<ConsumeStats>>,
+    QueryFuture: Future<Output = Result<ConsumeStats, QueryError>>,
+    QueryError: crate::IntoCanonicalError,
 {
-    query(CheetahString::from(group), address, timeout_millis).await
+    query(CheetahString::from(group), address, timeout_millis)
+        .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error)
 }
 
 pub(super) async fn collect_consumer_group_meta(
@@ -720,25 +726,25 @@ mod tests {
 
         query_consumer_connection_at("orders-consumer", proxy.clone(), |_, address| {
             fake.query_connection(address);
-            std::future::ready(Ok(connection_fixture()))
+            std::future::ready(Ok::<_, rocketmq_client_rust::ClientError>(connection_fixture()))
         })
         .await
         .expect("explicit connection query");
         query_consumer_progress_at("orders-consumer", proxy, Some(3_000), |_, address, _| {
             fake.query_progress(address);
-            std::future::ready(Ok(consume_stats_fixture()))
+            std::future::ready(Ok::<_, rocketmq_client_rust::ClientError>(consume_stats_fixture()))
         })
         .await
         .expect("explicit progress query");
         query_consumer_connection_at("orders-consumer", None, |_, address| {
             fake.query_connection(address);
-            std::future::ready(Ok(connection_fixture()))
+            std::future::ready(Ok::<_, rocketmq_client_rust::ClientError>(connection_fixture()))
         })
         .await
         .expect("discovered connection query");
         query_consumer_progress_at("orders-consumer", None, None, |_, address, _| {
             fake.query_progress(address);
-            std::future::ready(Ok(consume_stats_fixture()))
+            std::future::ready(Ok::<_, rocketmq_client_rust::ClientError>(consume_stats_fixture()))
         })
         .await
         .expect("discovered progress query");

@@ -85,7 +85,6 @@ impl ProbeBrokerRuntimeRequest {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProbeBrokerRuntimeResult {
     pub attempted: usize,
-    pub failures: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -605,11 +604,6 @@ impl RestoreBrokerLogFilterRequest {
 pub trait BrokerAdmin: Send {
     fn list_brokers<'a>(&'a mut self, request: &'a ListBrokersRequest) -> AdminFuture<'a, ListBrokersResult>;
 
-    fn probe_broker_runtime<'a>(
-        &'a mut self,
-        request: &'a ProbeBrokerRuntimeRequest,
-    ) -> AdminFuture<'a, ProbeBrokerRuntimeResult>;
-
     fn list_brokers_with_evidence<'a>(
         &'a mut self,
         request: &'a ListBrokersRequest,
@@ -617,12 +611,10 @@ pub trait BrokerAdmin: Send {
         Box::pin(async move { self.list_brokers(request).await.map(AdminQueryResult::complete) })
     }
 
-    fn probe_broker_runtime_with_evidence<'a>(
+    fn probe_broker_runtime<'a>(
         &'a mut self,
         request: &'a ProbeBrokerRuntimeRequest,
-    ) -> AdminFuture<'a, AdminQueryResult<ProbeBrokerRuntimeResult>> {
-        Box::pin(async move { self.probe_broker_runtime(request).await.map(AdminQueryResult::complete) })
-    }
+    ) -> AdminFuture<'a, AdminQueryResult<ProbeBrokerRuntimeResult>>;
 
     fn probe_broker_runtime_target<'a>(
         &'a mut self,
@@ -714,11 +706,6 @@ pub trait BrokerAdmin: Send {
 pub trait BrokerQueryAdmin: Send {
     fn list_brokers<'a>(&'a mut self, request: &'a ListBrokersRequest) -> AdminFuture<'a, ListBrokersResult>;
 
-    fn probe_broker_runtime<'a>(
-        &'a mut self,
-        request: &'a ProbeBrokerRuntimeRequest,
-    ) -> AdminFuture<'a, ProbeBrokerRuntimeResult>;
-
     /// Evidence-aware sibling of [`Self::list_brokers`].
     fn list_brokers_with_evidence<'a>(
         &'a mut self,
@@ -727,13 +714,11 @@ pub trait BrokerQueryAdmin: Send {
         Box::pin(async move { self.list_brokers(request).await.map(AdminQueryResult::complete) })
     }
 
-    /// Evidence-aware sibling of [`Self::probe_broker_runtime`].
-    fn probe_broker_runtime_with_evidence<'a>(
+    /// Probes Broker runtimes and returns bounded typed source evidence.
+    fn probe_broker_runtime<'a>(
         &'a mut self,
         request: &'a ProbeBrokerRuntimeRequest,
-    ) -> AdminFuture<'a, AdminQueryResult<ProbeBrokerRuntimeResult>> {
-        Box::pin(async move { self.probe_broker_runtime(request).await.map(AdminQueryResult::complete) })
-    }
+    ) -> AdminFuture<'a, AdminQueryResult<ProbeBrokerRuntimeResult>>;
 
     /// Classifies one target independently of bounded public failure evidence.
     fn probe_broker_runtime_target<'a>(
@@ -830,7 +815,7 @@ impl<T: BrokerAdmin + ?Sized> BrokerQueryAdmin for T {
     fn probe_broker_runtime<'a>(
         &'a mut self,
         request: &'a ProbeBrokerRuntimeRequest,
-    ) -> AdminFuture<'a, ProbeBrokerRuntimeResult> {
+    ) -> AdminFuture<'a, AdminQueryResult<ProbeBrokerRuntimeResult>> {
         BrokerAdmin::probe_broker_runtime(self, request)
     }
 
@@ -839,13 +824,6 @@ impl<T: BrokerAdmin + ?Sized> BrokerQueryAdmin for T {
         request: &'a ListBrokersRequest,
     ) -> AdminFuture<'a, AdminQueryResult<ListBrokersResult>> {
         BrokerAdmin::list_brokers_with_evidence(self, request)
-    }
-
-    fn probe_broker_runtime_with_evidence<'a>(
-        &'a mut self,
-        request: &'a ProbeBrokerRuntimeRequest,
-    ) -> AdminFuture<'a, AdminQueryResult<ProbeBrokerRuntimeResult>> {
-        BrokerAdmin::probe_broker_runtime_with_evidence(self, request)
     }
 
     fn probe_broker_runtime_target<'a>(

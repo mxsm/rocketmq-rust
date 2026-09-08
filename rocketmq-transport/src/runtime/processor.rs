@@ -451,7 +451,6 @@ const fn default_request_ordering() -> RequestOrdering {
 /// environments that do not cross executor threads.
 ///
 /// ```
-/// use rocketmq_error::RocketMQError;
 /// use rocketmq_transport::api::{
 ///    HandlerOutcome, LocalRequestProcessor, RemotingRequest,
 /// };
@@ -462,8 +461,13 @@ const fn default_request_ordering() -> RequestOrdering {
 ///     async fn process(
 ///         &mut self,
 ///         _request: &mut RemotingRequest,
-///     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-///         Err(RocketMQError::illegal_argument("unsupported request"))
+///     ) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
+///         Err(std::sync::Arc::new(
+///             rocketmq_error::Error::new(&rocketmq_error::CORE_ARGUMENT_INVALID).with_context(
+///                 rocketmq_error::ErrorContext::new()
+///                     .with_secret_presence(rocketmq_error::fields::MESSAGE_PRESENT),
+///             ),
+///         ))
 ///     }
 /// }
 /// ```
@@ -471,7 +475,6 @@ const fn default_request_ordering() -> RequestOrdering {
 /// ```compile_fail
 /// use std::rc::Rc;
 ///
-/// use rocketmq_error::RocketMQError;
 /// use rocketmq_transport::api::{
 ///    HandlerOutcome, RemotingRequest, RequestProcessor,
 /// };
@@ -482,11 +485,16 @@ const fn default_request_ordering() -> RequestOrdering {
 ///     async fn process(
 ///         &mut self,
 ///         _request: &mut RemotingRequest,
-///     ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+///     ) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
 ///         let local = Rc::new(());
 ///         std::future::ready(()).await;
 ///         drop(local);
-///         Err(RocketMQError::illegal_argument("test processor"))
+///         Err(std::sync::Arc::new(
+///             rocketmq_error::Error::new(&rocketmq_error::CORE_ARGUMENT_INVALID).with_context(
+///                 rocketmq_error::ErrorContext::new()
+///                     .with_secret_presence(rocketmq_error::fields::MESSAGE_PRESENT),
+///             ),
+///         ))
 ///     }
 /// }
 /// ```
@@ -499,9 +507,9 @@ pub trait LocalRequestProcessor {
     ///
     /// # Errors
     ///
-    /// Returns [`rocketmq_error::RocketMQError`] when request processing
+    /// Returns [`rocketmq_error::SharedError`] when request processing
     /// cannot produce a terminal handler outcome.
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome>;
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError>;
 
     /// Decides whether a raw request code should enter processor execution.
     ///
@@ -528,8 +536,6 @@ pub trait LocalRequestProcessor {
 mod tests {
     use std::rc::Rc;
 
-    use rocketmq_error::RocketMQError;
-
     use super::*;
     use crate::dispatch::ResponseBody;
     use crate::dispatch::ResponseDisposition;
@@ -538,11 +544,14 @@ mod tests {
     struct LocalFutureProcessor;
 
     impl LocalRequestProcessor for LocalFutureProcessor {
-        async fn process(&mut self, _request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        async fn process(
+            &mut self,
+            _request: &mut RemotingRequest,
+        ) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
             let local = Rc::new(());
             std::future::ready(()).await;
             drop(local);
-            Err(RocketMQError::illegal_argument("test processor"))
+            Err(crate::error_helpers::argument_invalid())
         }
     }
 

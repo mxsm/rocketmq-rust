@@ -16,7 +16,7 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::connection::ConnectionService;
 use rocketmq_admin_core::client_adapter::services::connection::ProducerConnectionQueryRequest;
 use rocketmq_admin_core::client_adapter::services::connection::ProducerConnectionQueryResult;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::mq_version::RocketMqVersion;
 use rocketmq_protocol::protocol::body::producer_connection::ProducerConnection;
 
@@ -36,7 +36,7 @@ impl CommandExecute for ProducerConnectionSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = ProducerConnectionQueryRequest::try_new(self.producer_group.clone(), self.topic.clone())?;
         let result = ConnectionService::query_producer_connection_by_request_with_credentials(
             request,

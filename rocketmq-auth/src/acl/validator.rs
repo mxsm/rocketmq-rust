@@ -14,12 +14,13 @@
 
 use std::collections::HashSet;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-
 use crate::migration::alc::acl_config::AclConfig;
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
-pub fn validate_acl_config(config: &AclConfig) -> RocketMQResult<()> {
+pub fn validate_acl_config(config: &AclConfig) -> AuthServiceResult<()> {
     let Some(accounts) = config.plain_access_configs() else {
         return Ok(());
     };
@@ -46,12 +47,8 @@ pub fn validate_acl_config(config: &AclConfig) -> RocketMQResult<()> {
     Ok(())
 }
 
-fn invalid_acl_config(reason: &'static str, account: &str) -> RocketMQError {
-    RocketMQError::ConfigInvalidValue {
-        key: "aclConfig",
-        value: format!("account={account}"),
-        reason: reason.to_string(),
-    }
+fn invalid_acl_config(_reason: &'static str, _account: &str) -> AuthServiceError {
+    AuthServiceError::new(AuthOperation::Initialize, AuthFailureKind::InvalidConfiguration)
 }
 
 #[cfg(test)]
@@ -75,7 +72,7 @@ mod tests {
 
         let error = validate_acl_config(&config).unwrap_err();
 
-        assert!(error.to_string().contains("accessKey must not be blank"));
+        assert_eq!(error.kind(), AuthFailureKind::InvalidConfiguration);
     }
 
     #[test]
@@ -87,7 +84,7 @@ mod tests {
 
         let error = validate_acl_config(&config).unwrap_err();
 
-        assert!(error.to_string().contains("secretKey must not be blank"));
+        assert_eq!(error.kind(), AuthFailureKind::InvalidConfiguration);
         assert!(!error.to_string().contains("secret="));
     }
 
@@ -104,6 +101,6 @@ mod tests {
 
         let error = validate_acl_config(&config).unwrap_err();
 
-        assert!(error.to_string().contains("duplicate accessKey"));
+        assert_eq!(error.kind(), AuthFailureKind::InvalidConfiguration);
     }
 }

@@ -18,7 +18,13 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{normalize_nameserver_address, normalize_proxy_address, DashboardCommonError, DashboardCommonResult};
+use crate::normalize_nameserver_address;
+use crate::normalize_proxy_address;
+use crate::DashboardCommonError;
+use crate::DashboardCommonResult;
+use crate::DashboardContractViolation;
+use crate::DashboardEndpointKind;
+use crate::DashboardOperation;
 
 /// The endpoint family used by an operator-facing connection scope.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,7 +168,12 @@ pub fn normalize_nameserver_selection(
     endpoints: &[String],
     current: Option<&str>,
 ) -> DashboardCommonResult<(Vec<String>, Option<String>)> {
-    normalize_selection(endpoints, current, normalize_nameserver_address, "NameServer")
+    normalize_selection(
+        endpoints,
+        current,
+        normalize_nameserver_address,
+        DashboardEndpointKind::NameServer,
+    )
 }
 
 /// Normalizes, deduplicates, and validates a Proxy list plus current selection.
@@ -170,7 +181,12 @@ pub fn normalize_proxy_selection(
     endpoints: &[String],
     current: Option<&str>,
 ) -> DashboardCommonResult<(Vec<String>, Option<String>)> {
-    normalize_selection(endpoints, current, normalize_proxy_address, "Proxy")
+    normalize_selection(
+        endpoints,
+        current,
+        normalize_proxy_address,
+        DashboardEndpointKind::Proxy,
+    )
 }
 
 /// Adds one normalized endpoint without changing an existing current selection.
@@ -182,7 +198,12 @@ pub fn add_endpoint(
 ) -> DashboardCommonResult<()> {
     let normalized = normalize(address)?;
     if endpoints.iter().any(|endpoint| endpoint == &normalized) {
-        return Err(DashboardCommonError::validation("Endpoint already exists"));
+        return Err(DashboardCommonError::contract(
+            DashboardOperation::AddEndpoint,
+            DashboardContractViolation::EndpointAlreadyConfigured {
+                kind: DashboardEndpointKind::Endpoint,
+            },
+        ));
     }
     endpoints.push(normalized.clone());
     if current.is_none() {
@@ -200,7 +221,12 @@ pub fn switch_endpoint(
 ) -> DashboardCommonResult<()> {
     let normalized = normalize(address)?;
     if !endpoints.iter().any(|endpoint| endpoint == &normalized) {
-        return Err(DashboardCommonError::validation("Endpoint is not configured"));
+        return Err(DashboardCommonError::contract(
+            DashboardOperation::SwitchEndpoint,
+            DashboardContractViolation::EndpointNotConfigured {
+                kind: DashboardEndpointKind::Endpoint,
+            },
+        ));
     }
     *current = Some(normalized);
     Ok(())
@@ -217,7 +243,12 @@ pub fn remove_endpoint(
 ) -> DashboardCommonResult<()> {
     let normalized = normalize(address)?;
     if !endpoints.iter().any(|endpoint| endpoint == &normalized) {
-        return Err(DashboardCommonError::validation("Endpoint is not configured"));
+        return Err(DashboardCommonError::contract(
+            DashboardOperation::RemoveEndpoint,
+            DashboardContractViolation::EndpointNotConfigured {
+                kind: DashboardEndpointKind::Endpoint,
+            },
+        ));
     }
 
     if current.as_deref() == Some(normalized.as_str()) {
@@ -225,16 +256,18 @@ pub fn remove_endpoint(
             Some(replacement) => {
                 let replacement = normalize(replacement)?;
                 if replacement == normalized || !endpoints.iter().any(|endpoint| endpoint == &replacement) {
-                    return Err(DashboardCommonError::validation(
-                        "Active endpoint replacement must be another configured endpoint",
+                    return Err(DashboardCommonError::contract(
+                        DashboardOperation::RemoveEndpoint,
+                        DashboardContractViolation::ActiveEndpointReplacementInvalid,
                     ));
                 }
                 *current = Some(replacement);
             }
             None if allow_fallback => *current = None,
             None => {
-                return Err(DashboardCommonError::validation(
-                    "Active endpoint removal requires an explicit replacement",
+                return Err(DashboardCommonError::contract(
+                    DashboardOperation::RemoveEndpoint,
+                    DashboardContractViolation::ActiveEndpointReplacementRequired,
                 ));
             }
         }
@@ -248,15 +281,21 @@ fn normalize_selection(
     endpoints: &[String],
     current: Option<&str>,
     normalize: fn(&str) -> DashboardCommonResult<String>,
-    kind: &str,
+    kind: DashboardEndpointKind,
 ) -> DashboardCommonResult<(Vec<String>, Option<String>)> {
+    let operation = match kind {
+        DashboardEndpointKind::NameServer => DashboardOperation::NormalizeNameServerSelection,
+        DashboardEndpointKind::Proxy => DashboardOperation::NormalizeProxySelection,
+        DashboardEndpointKind::Endpoint => DashboardOperation::NormalizeEndpointSelection,
+    };
     let mut normalized = Vec::with_capacity(endpoints.len());
     for endpoint in endpoints {
         let endpoint = normalize(endpoint)?;
         if normalized.iter().any(|existing| existing == &endpoint) {
-            return Err(DashboardCommonError::validation(format!(
-                "{kind} endpoint already exists"
-            )));
+            return Err(DashboardCommonError::contract(
+                operation,
+                DashboardContractViolation::EndpointAlreadyConfigured { kind },
+            ));
         }
         normalized.push(endpoint);
     }
@@ -265,15 +304,18 @@ fn normalize_selection(
         .as_ref()
         .is_some_and(|selected| !normalized.iter().any(|endpoint| endpoint == selected))
     {
-        return Err(DashboardCommonError::validation(format!(
-            "Current {kind} must exist in the endpoint list"
-        )));
+        return Err(DashboardCommonError::contract(
+            operation,
+            DashboardContractViolation::SelectedEndpointNotConfigured { kind },
+        ));
     }
     Ok((normalized, current))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use super::*;
 
     #[test]
@@ -301,7 +343,15 @@ mod tests {
         )
         .expect_err("duplicate must be rejected");
 
-        assert!(error.to_string().contains("already exists"));
+        assert_eq!(error.code(), rocketmq_error::CORE_ARGUMENT_INVALID.code());
+        assert!(matches!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<DashboardContractViolation>()),
+            Some(DashboardContractViolation::EndpointAlreadyConfigured {
+                kind: DashboardEndpointKind::NameServer
+            })
+        ));
     }
 
     #[test]

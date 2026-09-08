@@ -173,7 +173,7 @@ where
     TM: TransactionalMessageService + 'static,
     MS: BrokerWriteStore + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -186,7 +186,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let result = match self.process_command(request.command_mut()).await {
@@ -223,7 +223,7 @@ where
     async fn process_command(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("EndTransactionProcessor received request code: {:?}", request_code);
         match request_code {
@@ -263,7 +263,7 @@ where
     async fn process_command_inner(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<EndTransactionRequestHeader>()?;
         debug!("Transaction request: {:?}", request_header);
 

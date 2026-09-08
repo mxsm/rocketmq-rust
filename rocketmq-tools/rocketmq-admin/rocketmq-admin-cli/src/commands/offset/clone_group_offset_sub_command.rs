@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::offset::CloneGroupOffsetRequest;
@@ -45,7 +45,7 @@ pub struct CloneGroupOffsetSubCommand {
 }
 
 impl CloneGroupOffsetSubCommand {
-    fn request(&self) -> RocketMQResult<CloneGroupOffsetRequest> {
+    fn request(&self) -> CanonicalResult<CloneGroupOffsetRequest> {
         CloneGroupOffsetRequest::try_new(
             self.src_group.clone(),
             self.dest_group.clone(),
@@ -60,7 +60,7 @@ impl CommandExecute for CloneGroupOffsetSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         OffsetService::clone_group_offset_by_request_with_credentials(
             request.clone(),

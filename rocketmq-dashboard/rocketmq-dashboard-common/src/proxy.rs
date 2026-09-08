@@ -16,6 +16,9 @@
 
 use crate::error::DashboardCommonError;
 use crate::error::DashboardCommonResult as Result;
+use crate::DashboardContractViolation;
+use crate::DashboardEndpointKind;
+use crate::DashboardOperation;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -42,22 +45,37 @@ pub struct ProxyMutationResult {
 
 pub fn normalize_proxy_address(address: &str) -> Result<String> {
     let trimmed = address.trim();
-    let (host_part, port_part) = trimmed
-        .rsplit_once(':')
-        .ok_or_else(|| DashboardCommonError::validation("Proxy address must be in host:port format"))?;
+    let (host_part, port_part) = trimmed.rsplit_once(':').ok_or_else(|| {
+        DashboardCommonError::contract(
+            DashboardOperation::NormalizeProxyAddress,
+            DashboardContractViolation::EndpointFormat {
+                kind: DashboardEndpointKind::Proxy,
+            },
+        )
+    })?;
 
     let host = host_part.trim().to_ascii_lowercase();
     if host.is_empty() {
-        return Err(DashboardCommonError::validation("Proxy host cannot be empty"));
+        return Err(DashboardCommonError::contract(
+            DashboardOperation::NormalizeProxyAddress,
+            DashboardContractViolation::EndpointHostEmpty {
+                kind: DashboardEndpointKind::Proxy,
+            },
+        ));
     }
     if host.chars().any(char::is_whitespace) {
-        return Err(DashboardCommonError::validation("Proxy host cannot contain whitespace"));
+        return Err(DashboardCommonError::contract(
+            DashboardOperation::NormalizeProxyAddress,
+            DashboardContractViolation::EndpointHostContainsWhitespace {
+                kind: DashboardEndpointKind::Proxy,
+            },
+        ));
     }
 
     let port = port_part.trim();
     let port_number: u16 = port
         .parse()
-        .map_err(|error| DashboardCommonError::parse_int(format!("Invalid Proxy port `{port}`"), error))?;
+        .map_err(|error| DashboardCommonError::endpoint_port(DashboardEndpointKind::Proxy, error))?;
 
     Ok(format!("{host}:{port_number}"))
 }
@@ -69,7 +87,12 @@ pub fn canonicalize_proxy_snapshot(snapshot: &ProxyConfigSnapshot) -> Result<Pro
     for address in &snapshot.proxy_addr_list {
         let normalized = normalize_proxy_address(address)?;
         if !seen.insert(normalized.clone()) {
-            return Err(DashboardCommonError::validation("Proxy address already exists"));
+            return Err(DashboardCommonError::contract(
+                DashboardOperation::CanonicalizeProxySnapshot,
+                DashboardContractViolation::EndpointAlreadyConfigured {
+                    kind: DashboardEndpointKind::Proxy,
+                },
+            ));
         }
         addresses.push(normalized);
     }
@@ -82,8 +105,11 @@ pub fn canonicalize_proxy_snapshot(snapshot: &ProxyConfigSnapshot) -> Result<Pro
 
     if let Some(current) = &current_proxy_addr {
         if !addresses.iter().any(|address| address == current) {
-            return Err(DashboardCommonError::validation(
-                "Current Proxy must exist in the address list",
+            return Err(DashboardCommonError::contract(
+                DashboardOperation::CanonicalizeProxySnapshot,
+                DashboardContractViolation::SelectedEndpointNotConfigured {
+                    kind: DashboardEndpointKind::Proxy,
+                },
             ));
         }
     }
@@ -96,6 +122,11 @@ pub fn canonicalize_proxy_snapshot(snapshot: &ProxyConfigSnapshot) -> Result<Pro
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
+    use crate::DashboardContractViolation;
+    use crate::DashboardEndpointKind;
+
     use super::canonicalize_proxy_snapshot;
     use super::normalize_proxy_address;
     use super::ProxyConfigSnapshot;
@@ -111,7 +142,14 @@ mod tests {
     fn normalize_proxy_address_rejects_missing_port() {
         let error = normalize_proxy_address("localhost").expect_err("missing port should fail");
 
-        assert!(error.to_string().contains("host:port"));
+        assert!(matches!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<DashboardContractViolation>()),
+            Some(DashboardContractViolation::EndpointFormat {
+                kind: DashboardEndpointKind::Proxy
+            })
+        ));
     }
 
     #[test]
@@ -122,7 +160,14 @@ mod tests {
         })
         .expect_err("duplicate proxy should fail");
 
-        assert!(error.to_string().contains("already exists"));
+        assert!(matches!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<DashboardContractViolation>()),
+            Some(DashboardContractViolation::EndpointAlreadyConfigured {
+                kind: DashboardEndpointKind::Proxy
+            })
+        ));
     }
 
     #[test]
@@ -133,6 +178,13 @@ mod tests {
         })
         .expect_err("missing current proxy should fail");
 
-        assert!(error.to_string().contains("Current Proxy"));
+        assert!(matches!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<DashboardContractViolation>()),
+            Some(DashboardContractViolation::SelectedEndpointNotConfigured {
+                kind: DashboardEndpointKind::Proxy
+            })
+        ));
     }
 }

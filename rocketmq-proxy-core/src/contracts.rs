@@ -23,7 +23,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_model::result::SendResult;
 use rocketmq_model::result::SendStatus;
@@ -38,6 +37,7 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 use crate::config::ProxyMode;
 use crate::context::ProxyContext;
 use crate::context::ResolvedEndpoint;
+use crate::error::canonical;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::processor::AckMessageRequest;
@@ -478,7 +478,7 @@ impl RouteService for StaticRouteService {
             self.routes
                 .get(topic)
                 .map(|entry| entry.clone())
-                .ok_or_else(|| RocketMQError::route_not_found(topic.name()).into())
+                .ok_or_else(|| canonical::route_not_found(topic.name()).into())
         })
     }
 }

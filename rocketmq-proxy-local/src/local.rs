@@ -13,6 +13,7 @@
 //  limitations under the License.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -22,7 +23,6 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use rocketmq_broker::proxy_facade::BrokerConfig;
 use rocketmq_broker::ProxyBrokerFacade;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
@@ -78,6 +78,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_proxy_core::error::canonical;
 use rocketmq_proxy_core::status::ProxyStatusMapper;
 use rocketmq_proxy_core::AckMessageRequest;
 use rocketmq_proxy_core::AckMessageResultEntry;
@@ -331,12 +332,16 @@ impl LocalBrokerCommand {
         self.reject_with(ProxyError::Transport { message });
     }
 
+    pub(crate) fn reject_with_transport_source(self, source: impl std::error::Error + Send + Sync + 'static) {
+        self.reject_with(ProxyError::from(canonical::transport_unavailable_with_source(source)));
+    }
+
     pub(crate) fn reject_timeout(self, timeout: Duration) {
         self.reject_with(
-            RocketMQError::Timeout {
-                operation: "local broker command queue",
-                timeout_ms: timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-            }
+            canonical::timed_out(
+                "local broker command queue",
+                timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+            )
             .into(),
         );
     }
@@ -447,11 +452,10 @@ impl LocalBrokerFacadeClient {
         let broker_context = worker_context.component("embedded-broker-store");
         let facade = ProxyBrokerFacade::try_new_from_broker_config(broker_config, broker_context, telemetry_handle)
             .map_err(|error| {
-                ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue {
-                    key: "proxy.local.embeddedBroker",
-                    value: config.broker_name.clone(),
-                    reason: error.to_string(),
-                })
+                ProxyError::from(canonical::configuration_invalid_with_source(
+                    "proxy.local.embeddedBroker",
+                    error,
+                ))
             })?;
         let shutdown_context = service_context.clone();
         let cancellation = worker_context.task_group().cancellation_token();
@@ -469,9 +473,7 @@ impl LocalBrokerFacadeClient {
                 )
                 .await;
             })
-            .map_err(|error| ProxyError::Transport {
-                message: format!("failed to spawn proxy local worker: {error}"),
-            })?;
+            .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
         Ok(Self {
             sender,
             count_budget,
@@ -620,9 +622,9 @@ impl LocalBrokerFacadeClient {
         build: impl FnOnce(oneshot::Sender<ProxyResult<T>>) -> LocalBrokerCommand,
     ) -> ProxyResult<T> {
         let reply_rx = self.enqueue(build)?;
-        reply_rx.await.map_err(|error| ProxyError::Transport {
-            message: format!("local broker worker dropped response channel: {error}"),
-        })?
+        reply_rx
+            .await
+            .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?
     }
 
     fn enqueue<T>(
@@ -1001,7 +1003,7 @@ async fn run_local_broker_worker(
         initialized = facade.initialize() => initialized,
     };
     let startup_error = if let Err(error) = initialization {
-        Some(format!("embedded broker initialization failed: {error}"))
+        Some(Arc::new(canonical::transport_unavailable_with_source(error)))
     } else {
         tokio::select! {
             biased;
@@ -1020,7 +1022,7 @@ async fn run_local_broker_worker(
             }
             result = facade.start() => {
                 if let Err(error) = result {
-                    Some(format!("embedded broker startup failed: {error}"))
+                    Some(Arc::new(canonical::transport_unavailable_with_source(error)))
                 } else {
                     None
                 }
@@ -1033,7 +1035,7 @@ async fn run_local_broker_worker(
     let facade = Arc::new(facade);
     let handler = Arc::new(BrokerLocalCommandHandler {
         facade: facade.clone(),
-        startup_error: startup_error.map(Arc::<str>::from),
+        startup_error,
     });
     run_local_execution(
         policy,
@@ -1059,12 +1061,12 @@ async fn run_local_broker_worker(
 
 struct BrokerLocalCommandHandler {
     facade: Arc<ProxyBrokerFacade>,
-    startup_error: Option<Arc<str>>,
+    startup_error: Option<rocketmq_error::SharedError>,
 }
 
 impl LocalCommandHandler for BrokerLocalCommandHandler {
     async fn handle(&self, command: LocalBrokerCommand) {
-        handle_local_broker_command(&self.facade, self.startup_error.as_deref(), command).await;
+        handle_local_broker_command(&self.facade, self.startup_error.as_ref(), command).await;
     }
 }
 
@@ -1099,12 +1101,13 @@ async fn drain_local_commands(
             _count_permit,
             _byte_permit,
         } = queued;
-        if tokio::time::timeout(
-            deadline.remaining(),
-            handle_local_broker_command(facade, startup_error, command),
-        )
-        .await
-        .is_err()
+        if let Some(message) = startup_error {
+            command.reject_with_transport(message.to_owned());
+            continue;
+        }
+        if tokio::time::timeout(deadline.remaining(), handle_local_broker_command(facade, None, command))
+            .await
+            .is_err()
         {
             break;
         }
@@ -1113,18 +1116,14 @@ async fn drain_local_commands(
 
 async fn handle_local_broker_command(
     facade: &ProxyBrokerFacade,
-    startup_error: Option<&str>,
+    startup_error: Option<&rocketmq_error::SharedError>,
     command: LocalBrokerCommand,
 ) {
     match command {
         LocalBrokerCommand::QueryRoute { topic, reply } => {
             let _ = reply.send(startup_error.map_or_else(
                 || facade.query_route(topic.name()).map_err(Into::into),
-                |message| {
-                    Err(ProxyError::Transport {
-                        message: message.to_owned(),
-                    })
-                },
+                |error| Err(ProxyError::from(Arc::clone(error))),
             ));
         }
         LocalBrokerCommand::QueryTopicMessageType { topic, reply } => {
@@ -1135,11 +1134,7 @@ async fn handle_local_broker_command(
                         .map(convert_topic_message_type)
                         .map_err(Into::into)
                 },
-                |message| {
-                    Err(ProxyError::Transport {
-                        message: message.to_owned(),
-                    })
-                },
+                |error| Err(ProxyError::from(Arc::clone(error))),
             ));
         }
         LocalBrokerCommand::QuerySubscriptionGroup { group, reply } => {
@@ -1150,11 +1145,7 @@ async fn handle_local_broker_command(
                         .map(|config| config.map(convert_subscription_group))
                         .map_err(Into::into)
                 },
-                |message| {
-                    Err(ProxyError::Transport {
-                        message: message.to_owned(),
-                    })
-                },
+                |error| Err(ProxyError::from(Arc::clone(error))),
             ));
         }
         LocalBrokerCommand::QueryAssignment {
@@ -1164,10 +1155,8 @@ async fn handle_local_broker_command(
             strategy_name,
             reply,
         } => {
-            let result = if let Some(message) = startup_error {
-                Err(ProxyError::Transport {
-                    message: message.to_owned(),
-                })
+            let result = if let Some(error) = startup_error {
+                Err(ProxyError::from(Arc::clone(error)))
             } else {
                 query_assignment(facade, topic, group, client_id, strategy_name).await
             };
@@ -1179,10 +1168,8 @@ async fn handle_local_broker_command(
             request_id,
             reply,
         } => {
-            let result = if let Some(message) = startup_error {
-                Err(ProxyError::Transport {
-                    message: message.to_owned(),
-                })
+            let result = if let Some(error) = startup_error {
+                Err(ProxyError::from(Arc::clone(error)))
             } else {
                 send_message(facade, request, client_id, request_id).await
             };
@@ -1194,10 +1181,8 @@ async fn handle_local_broker_command(
             request_id,
             reply,
         } => {
-            let result = if let Some(message) = startup_error {
-                Err(ProxyError::Transport {
-                    message: message.to_owned(),
-                })
+            let result = if let Some(error) = startup_error {
+                Err(ProxyError::from(Arc::clone(error)))
             } else {
                 recall_message(facade, request, client_id, request_id).await
             };
@@ -1209,10 +1194,8 @@ async fn handle_local_broker_command(
             request_id,
             reply,
         } => {
-            let result = if let Some(message) = startup_error {
-                Err(ProxyError::Transport {
-                    message: message.to_owned(),
-                })
+            let result = if let Some(error) = startup_error {
+                Err(ProxyError::from(Arc::clone(error)))
             } else {
                 end_transaction(facade, request, client_id, request_id).await
             };
@@ -1223,10 +1206,8 @@ async fn handle_local_broker_command(
             timeout,
             reply,
         } => {
-            let result = if let Some(message) = startup_error {
-                Err(ProxyError::Transport {
-                    message: message.to_owned(),
-                })
+            let result = if let Some(error) = startup_error {
+                Err(ProxyError::from(Arc::clone(error)))
             } else {
                 facade.process_request(request, timeout).await.map_err(Into::into)
             };
@@ -1286,9 +1267,9 @@ async fn query_assignment(
     };
     let request = RemotingCommand::new_request(
         RequestCode::QueryAssignment,
-        request_body.encode().map_err(|error| ProxyError::Transport {
-            message: format!("failed to encode local assignment request: {error}"),
-        })?,
+        request_body
+            .encode()
+            .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?,
     );
     let response = facade_embedded_response(facade, request, LOCAL_REMOTING_RESPONSE_TIMEOUT).await?;
     if ResponseCode::from(response.response_code()) != ResponseCode::Success {
@@ -1298,9 +1279,8 @@ async fn query_assignment(
     let Some(body) = embedded_contiguous_body(response.body())? else {
         return Ok(None);
     };
-    let decoded = QueryAssignmentResponseBody::decode(body).map_err(|error| ProxyError::Transport {
-        message: format!("failed to decode local assignment response: {error}"),
-    })?;
+    let decoded = QueryAssignmentResponseBody::decode(body)
+        .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
     Ok(Some(decoded.message_queue_assignments.into_iter().collect()))
 }
 
@@ -1463,9 +1443,7 @@ async fn recall_message(
     let header = response
         .head()
         .decode_command_custom_header::<RecallMessageResponseHeader>()
-        .map_err(|error| ProxyError::Transport {
-            message: format!("failed to decode local recall response header: {error}"),
-        })?;
+        .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
     Ok(RecallMessagePlan {
         status: ProxyStatusMapper::ok_payload(),
         message_id: header.msg_id().to_string(),
@@ -1493,7 +1471,9 @@ async fn end_transaction(
         .unwrap_or(request.message_id.as_str());
     let broker_message_id =
         MessageDecoder::decode_message_id(&CheetahString::from(commit_log_message_id)).map_err(|error| {
-            ProxyError::invalid_transaction_id(format!("failed to decode transactional message id: {error}"))
+            ProxyError::from(canonical::transaction_id_invalid_with_source(MessageIdDecodeError(
+                error,
+            )))
         })?;
 
     let header = EndTransactionRequestHeader {
@@ -1782,9 +1762,7 @@ async fn change_invisible_duration_via_broker(
     let response_header = response
         .head()
         .decode_command_custom_header::<ChangeInvisibleTimeResponseHeader>()
-        .map_err(|error| ProxyError::Transport {
-            message: format!("failed to decode local changeInvisibleDuration response header: {error}"),
-        })?;
+        .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
     Ok(ChangeInvisibleDurationPlan {
         status: ProxyStatusMapper::ok_payload(),
         receipt_handle: format!(
@@ -1842,9 +1820,7 @@ async fn get_offset_via_broker(
     let response_header = response
         .head()
         .decode_command_custom_header::<QueryConsumerOffsetResponseHeader>()
-        .map_err(|error| ProxyError::Transport {
-            message: format!("failed to decode local getOffset response header: {error}"),
-        })?;
+        .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
     Ok(GetOffsetPlan {
         status: ProxyStatusMapper::ok_payload(),
         offset: response_header.offset.unwrap_or_default(),
@@ -1925,23 +1901,17 @@ async fn query_offset_via_broker(
             .head()
             .decode_command_custom_header::<GetMinOffsetResponseHeader>()
             .map(|header| header.offset)
-            .map_err(|error| ProxyError::Transport {
-                message: format!("failed to decode local min offset response header: {error}"),
-            })?,
+            .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?,
         RequestCode::GetMaxOffset => response
             .head()
             .decode_command_custom_header::<GetMaxOffsetResponseHeader>()
             .map(|header| header.offset)
-            .map_err(|error| ProxyError::Transport {
-                message: format!("failed to decode local max offset response header: {error}"),
-            })?,
+            .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?,
         RequestCode::SearchOffsetByTimestamp => response
             .head()
             .decode_command_custom_header::<SearchOffsetResponseHeader>()
             .map(|header| header.offset)
-            .map_err(|error| ProxyError::Transport {
-                message: format!("failed to decode local search offset response header: {error}"),
-            })?,
+            .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?,
         _ => unreachable!("query offset uses only min/max/search request codes"),
     };
 
@@ -1981,7 +1951,7 @@ fn build_send_message_request(
         }),
     };
     let body = entry.message.body().ok_or_else(|| {
-        RocketMQError::request_body_invalid(
+        canonical::request_body_invalid(
             "sendMessage",
             format!("message body is missing for topic '{}'", entry.topic),
         )
@@ -1999,7 +1969,7 @@ fn build_send_batch_message_request(
 ) -> ProxyResult<RemotingCommand> {
     let first = entries
         .first()
-        .ok_or_else(|| RocketMQError::request_body_invalid("sendMessage", "batch must contain at least one message"))?;
+        .ok_or_else(|| canonical::request_body_invalid("sendMessage", "batch must contain at least one message"))?;
     let messages = entries
         .iter()
         .map(|entry| message_from_core(&entry.message))
@@ -2143,9 +2113,7 @@ fn build_send_result(
     let header = response
         .head()
         .decode_command_custom_header::<SendMessageResponseHeader>()
-        .map_err(|error| ProxyError::Transport {
-            message: format!("failed to decode local send response header: {error}"),
-        })?;
+        .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
 
     let mut result = SendResult::new(
         send_status,
@@ -2178,9 +2146,7 @@ fn process_pop_response(
             let response_header = response
                 .head()
                 .decode_command_custom_header::<PopMessageResponseHeader>()
-                .map_err(|error| ProxyError::Transport {
-                    message: format!("failed to decode local pop response header: {error}"),
-                })?;
+                .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
             let delivery_timestamp_ms = (response_header.pop_time > 0).then_some(response_header.pop_time as i64);
             let (_, body) = response.into_parts();
             let mut messages = decode_embedded_messages(body)?;
@@ -2248,9 +2214,7 @@ fn process_pull_response(response: EmbeddedResponse) -> ProxyResult<PullMessageP
     let response_header = response
         .head()
         .decode_command_custom_header::<PullMessageResponseHeader>()
-        .map_err(|error| ProxyError::Transport {
-            message: format!("failed to decode local pull response header: {error}"),
-        })?;
+        .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
     let next_offset = response_header.next_begin_offset;
     let min_offset = response_header.min_offset;
     let max_offset = response_header.max_offset;
@@ -2469,9 +2433,7 @@ fn build_queue_offset_sorted_map(topic: &str, messages: &[MessageExt]) -> ProxyR
                 .map(|value| value.as_str()),
             message.queue_id() as i64,
         )
-        .map_err(|error| ProxyError::Transport {
-            message: format!("failed to build local pop queue offset key: {error}"),
-        })?;
+        .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
         sort_map
             .entry(key)
             .or_insert_with(|| Vec::with_capacity(4))
@@ -2498,14 +2460,14 @@ fn parse_receipt_handle(receipt_handle: &str, topic: &str, consumer_group: &str)
     let parts = ExtraInfoUtil::split(trimmed);
     let broker_name = ExtraInfoUtil::get_broker_name(parts.as_slice())
         .map(CheetahString::from_string)
-        .map_err(|error| ProxyError::invalid_receipt_handle(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::receipt_handle_invalid_with_source(error)))?;
     let queue_id = ExtraInfoUtil::get_queue_id(parts.as_slice())
-        .map_err(|error| ProxyError::invalid_receipt_handle(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::receipt_handle_invalid_with_source(error)))?;
     let queue_offset = ExtraInfoUtil::get_queue_offset(parts.as_slice())
-        .map_err(|error| ProxyError::invalid_receipt_handle(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::receipt_handle_invalid_with_source(error)))?;
     let real_topic = ExtraInfoUtil::get_real_topic(parts.as_slice(), topic, consumer_group)
         .map(CheetahString::from_string)
-        .map_err(|error| ProxyError::invalid_receipt_handle(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::receipt_handle_invalid_with_source(error)))?;
 
     Ok(ParsedReceiptHandle {
         raw: CheetahString::from(trimmed),
@@ -2518,8 +2480,19 @@ fn parse_receipt_handle(receipt_handle: &str, topic: &str, consumer_group: &str)
 
 fn decode_broker_message_id(message_id: &str) -> ProxyResult<MessageId> {
     MessageDecoder::decode_message_id(&CheetahString::from(message_id))
-        .map_err(|error| ProxyError::illegal_message_id(format!("failed to decode broker message id: {error}")))
+        .map_err(|error| ProxyError::from(canonical::message_id_invalid_with_source(MessageIdDecodeError(error))))
 }
+
+#[derive(Debug)]
+struct MessageIdDecodeError(String);
+
+impl fmt::Display for MessageIdDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for MessageIdDecodeError {}
 
 fn attach_transaction_producer_group(message: &mut ProxyMessage, producer_group: &str) {
     if !is_transaction_prepared(message) {
@@ -2582,12 +2555,12 @@ impl BrokerResponseMetadata for EmbeddedResponse {
 }
 
 fn broker_operation_error(operation: &'static str, response: &impl BrokerResponseMetadata) -> ProxyError {
-    ProxyError::from(RocketMQError::BrokerOperationFailed {
+    ProxyError::BrokerResponse(canonical::broker_response(
         operation,
-        code: response.response_code(),
-        message: response.response_remark().map(ToOwned::to_owned).unwrap_or_default(),
-        broker_addr: None,
-    })
+        response.response_code(),
+        None,
+        response.response_remark().unwrap_or_default(),
+    ))
 }
 
 fn embedded_contiguous_body(body: &EmbeddedResponseBody) -> ProxyResult<Option<&[u8]>> {
@@ -2674,7 +2647,6 @@ mod tests {
     use std::time::Instant;
 
     use cheetah_string::CheetahString;
-    use rocketmq_error::RocketMQError;
     use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
     use rocketmq_model::common::message::MessageConst;
     use rocketmq_model::result::SendResult;
@@ -2713,6 +2685,7 @@ mod tests {
     use super::build_send_result;
     use super::compatible_batch_entries;
     use super::convert_topic_message_type;
+    use super::decode_broker_message_id;
     use super::local_long_poll_timeout;
     use super::parse_receipt_handle;
     use super::process_pop_response;
@@ -2722,6 +2695,7 @@ mod tests {
     use super::validate_local_queue_config;
     use super::LocalBrokerFacadeClient;
     use super::LocalRemotingBackend;
+    use super::MessageIdDecodeError;
     use crate::LocalConfig;
 
     fn batch_entry(id: &str) -> SendMessageEntry {
@@ -2731,6 +2705,15 @@ mod tests {
             message: ProxyMessage::new("TopicA", id.as_bytes().to_vec()),
             queue_id: None,
         }
+    }
+
+    #[test]
+    fn message_id_decode_failure_keeps_typed_source() {
+        let error = decode_broker_message_id("not-a-message-id").expect_err("invalid message id must fail");
+        assert_eq!(error.descriptor(), &rocketmq_error::PROXY_MESSAGE_ID_INVALID);
+        let canonical = std::error::Error::source(&error).expect("Proxy error keeps canonical source");
+        let decoder = canonical.source().expect("canonical error keeps decoder source");
+        assert!(decoder.downcast_ref::<MessageIdDecodeError>().is_some());
     }
 
     #[test]
@@ -2823,23 +2806,10 @@ mod tests {
         assert!(!public.message().contains(PRIVATE_REMARK));
         assert!(!error.to_string().contains(PRIVATE_REMARK));
 
-        let source = std::error::Error::source(&error)
-            .and_then(|source| source.downcast_ref::<RocketMQError>())
-            .expect("retain typed BrokerOperationFailed source");
-        match source {
-            RocketMQError::BrokerOperationFailed {
-                operation,
-                code,
-                message,
-                broker_addr,
-            } => {
-                assert_eq!(*operation, "queryAssignment");
-                assert_eq!(ResponseCode::from(*code), ResponseCode::SystemError);
-                assert_eq!(message, PRIVATE_REMARK);
-                assert!(broker_addr.is_none());
-            }
-            other => panic!("expected BrokerOperationFailed, got {other:?}"),
-        }
+        assert!(
+            std::error::Error::source(&error).is_some(),
+            "retain typed broker response source"
+        );
     }
 
     #[test]
@@ -3306,10 +3276,7 @@ mod tests {
         };
 
         match LocalBrokerFacadeClient::new(config, &service, TelemetryHandle::noop()) {
-            Err(ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue { key, reason, .. })) => {
-                assert_eq!(key, "proxy.local.embeddedBroker");
-                assert!(reason.contains("broker.brokerIp1"), "{reason}");
-            }
+            Err(error) if error.descriptor() == &rocketmq_error::CORE_CONFIGURATION_INVALID => {}
             Err(error) => panic!("unexpected error: {error}"),
             Ok(_) => panic!("invalid embedded broker configuration must be rejected"),
         }

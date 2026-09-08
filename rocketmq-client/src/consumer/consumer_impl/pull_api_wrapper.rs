@@ -302,7 +302,7 @@ impl PullAPIWrapper {
         timeout_millis: u64,
         communication_mode: CommunicationMode,
         pull_callback: PCB,
-    ) -> rocketmq_error::RocketMQResult<Option<PullResultExt>>
+    ) -> crate::ClientResult<Option<PullResultExt>>
     where
         PCB: PullCallback + 'static,
     {
@@ -396,7 +396,7 @@ impl PullAPIWrapper {
         &self,
         topic: &CheetahString,
         broker_addr: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<CheetahString> {
+    ) -> crate::ClientResult<CheetahString> {
         if let Some(topic_route_data) = self.client_instance.topic_route_table.get(topic) {
             let vec = topic_route_data.value().filter_server_table.get(broker_addr);
             if let Some(vec) = vec {
@@ -432,7 +432,7 @@ impl PullAPIWrapper {
         order: bool,
         expression_type: CheetahString,
         expression: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         PC: PopCallback + 'static,
     {
@@ -512,7 +512,7 @@ impl PullAPIWrapper {
         timeout_millis: u64,
         communication_mode: CommunicationMode,
         pull_callback: PCB,
-    ) -> rocketmq_error::RocketMQResult<Option<PullResultExt>>
+    ) -> crate::ClientResult<Option<PullResultExt>>
     where
         PCB: PullCallback + 'static,
     {

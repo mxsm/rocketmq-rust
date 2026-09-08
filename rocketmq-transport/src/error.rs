@@ -48,6 +48,9 @@ pub(crate) enum TransportOperation {
     CloseServiceShutdown,
     CloseSessionEnded,
     CloseClientShutdown,
+    CodecEncode,
+    CodecDecode,
+    CodecIo,
 }
 
 impl TransportOperation {
@@ -67,6 +70,9 @@ impl TransportOperation {
             Self::CloseServiceShutdown => "close_service_shutdown",
             Self::CloseSessionEnded => "close_session_ended",
             Self::CloseClientShutdown => "close_client_shutdown",
+            Self::CodecEncode => "codec_encode",
+            Self::CodecDecode => "codec_decode",
+            Self::CodecIo => "codec_io",
         }
     }
 }
@@ -173,22 +179,20 @@ impl TransportError {
         }
     }
 
-    #[track_caller]
-    pub(crate) fn request_canonicalized(
-        operation: RequestOperation,
-        stage: OutboundRequestStage,
-        source: rocketmq_error::RocketMQError,
-    ) -> Self {
-        let source = match source {
-            rocketmq_error::RocketMQError::Shared(error) => {
-                return Self::request(operation, stage, error);
-            }
-            source => source,
-        };
-        let descriptor = source.descriptor();
-        let context = source.context();
-        let error = CanonicalError::caused_by(descriptor, source).with_context(context);
-        Self::request(operation, stage, Arc::new(error))
+    pub(crate) fn codec_encode(error: SharedError) -> Self {
+        Self {
+            error,
+            operation: TransportOperation::CodecEncode,
+            request_stage: None,
+        }
+    }
+
+    pub(crate) fn codec_decode(error: SharedError) -> Self {
+        Self {
+            error,
+            operation: TransportOperation::CodecDecode,
+            request_stage: None,
+        }
     }
 
     #[track_caller]
@@ -355,6 +359,17 @@ impl StdError for TransportError {
     }
 }
 
+impl From<std::io::Error> for TransportError {
+    #[track_caller]
+    fn from(source: std::io::Error) -> Self {
+        Self::new(
+            &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+            TransportOperation::CodecIo,
+            source,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -406,10 +421,10 @@ mod tests {
             25,
             io::Error::other("socket write elapsed"),
         );
-        let error = TransportError::request_canonicalized(
+        let error = TransportError::request(
             RequestOperation::Write,
             OutboundRequestStage::Writing,
-            rocketmq_error::RocketMQError::Shared(Arc::clone(&shared)),
+            Arc::clone(&shared),
         );
 
         assert!(Arc::ptr_eq(&shared, error.shared_error()));

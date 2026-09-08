@@ -16,8 +16,7 @@ use chrono::Local;
 use chrono::NaiveDateTime;
 use chrono::TimeZone;
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::admin::rollback_stats::RollbackStats;
 use rocketmq_runtime::common::time_utils::current_millis;
 
@@ -34,7 +33,7 @@ const TIMESTAMP_FORMAT: &str = "%Y-%m-%d#%H:%M:%S:%3f";
 ///   - `"now"`  -> current system time in milliseconds
 ///   - a plain decimal integer -> milliseconds since epoch
 ///   - `"yyyy-MM-dd#HH:mm:ss:SSS"` formatted string
-fn parse_timestamp(s: &str) -> RocketMQResult<u64> {
+fn parse_timestamp(s: &str) -> CanonicalResult<u64> {
     let s = s.trim();
     if s.eq_ignore_ascii_case("now") {
         return Ok(current_millis());
@@ -46,16 +45,16 @@ fn parse_timestamp(s: &str) -> RocketMQResult<u64> {
         let millis = Local
             .from_local_datetime(&ndt)
             .single()
-            .ok_or_else(|| RocketMQError::IllegalArgument(format!("Ambiguous local datetime: {s}")))?
+            .ok_or_else(|| crate::errors::argument_invalid(format!("Ambiguous local datetime: {s}")))?
             .timestamp_millis();
         if millis < 0 {
-            return Err(RocketMQError::IllegalArgument(format!(
+            return Err(crate::errors::argument_invalid(format!(
                 "Parsed timestamp is negative (before epoch): {millis}"
             )));
         }
         return Ok(millis as u64);
     }
-    Err(RocketMQError::IllegalArgument(format!(
+    Err(crate::errors::argument_invalid(format!(
         "Cannot parse timestamp '{}'. Supported formats: 'now', milliseconds (integer), 'yyyy-MM-dd#HH:mm:ss:SSS'",
         s
     )))
@@ -89,18 +88,18 @@ pub struct ResetOffsetByTimeSubCommand {
 }
 
 impl ResetOffsetByTimeSubCommand {
-    fn request(&self) -> RocketMQResult<ResetOffsetByTimeRequest> {
+    fn request(&self) -> CanonicalResult<ResetOffsetByTimeRequest> {
         let group = self.group.trim();
         if group.is_empty() {
-            return Err(RocketMQError::IllegalArgument(
-                "Consumer group name (--group / -g) cannot be empty".into(),
+            return Err(crate::errors::argument_invalid(
+                "Consumer group name (--group / -g) cannot be empty",
             ));
         }
 
         let topic = self.topic.trim();
         if topic.is_empty() {
-            return Err(RocketMQError::IllegalArgument(
-                "Topic name (--topic / -t) cannot be empty".into(),
+            return Err(crate::errors::argument_invalid(
+                "Topic name (--topic / -t) cannot be empty",
             ));
         }
 
@@ -211,7 +210,7 @@ impl CommandExecute for ResetOffsetByTimeSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         let result = OffsetService::reset_offset_by_time_by_request_with_credentials(
             request.clone(),

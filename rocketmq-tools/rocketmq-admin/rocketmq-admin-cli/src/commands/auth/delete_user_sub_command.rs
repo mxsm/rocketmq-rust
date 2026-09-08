@@ -17,7 +17,7 @@ use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::auth::AuthService;
 use rocketmq_admin_core::client_adapter::services::auth::DeleteUserRequest;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
@@ -55,7 +55,7 @@ impl CommandExecute for DeleteUserSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = DeleteUserRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),

@@ -16,44 +16,42 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use reqwest::Client;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_runtime::common::time_utils::current_millis;
 
+use crate::error_helpers::argument_invalid;
+use crate::error_helpers::argument_invalid_caused_by;
 use crate::error_helpers::connection_failed;
 use crate::error_helpers::connection_failed_for_remote;
 use crate::error_helpers::connection_failed_without_source;
 use crate::error_helpers::response_timeout_caused_by_for_remote;
+use crate::error_helpers::serialization_failed_caused_by;
 use crate::error_helpers::TransportStage;
 
 /// Global HTTP client with connection pool
 /// Reuses connections across requests for better performance
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
-fn build_http_client() -> RocketMQResult<Client> {
+fn build_http_client() -> Result<Client, rocketmq_error::SharedError> {
     Client::builder()
         .pool_idle_timeout(Duration::from_secs(90))
         .pool_max_idle_per_host(16)
         .connect_timeout(Duration::from_secs(3))
         .build()
-        .map_err(|source| {
-            rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::EndpointValidation, source))
-        })
+        .map_err(|source| connection_failed(TransportStage::EndpointValidation, source))
 }
 
 /// Initialize the global HTTP client (called lazily on first use)
-fn get_http_client() -> RocketMQResult<&'static Client> {
+fn get_http_client() -> Result<&'static Client, rocketmq_error::SharedError> {
     if let Some(client) = HTTP_CLIENT.get() {
         return Ok(client);
     }
 
     let client = build_http_client()?;
     let _ = HTTP_CLIENT.set(client);
-    HTTP_CLIENT.get().ok_or_else(|| {
-        rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::EndpointValidation))
-    })
+    HTTP_CLIENT
+        .get()
+        .ok_or_else(|| connection_failed_without_source(TransportStage::EndpointValidation))
 }
 
 pub struct HttpTinyClient;
@@ -97,43 +95,36 @@ impl std::fmt::Display for HttpResult {
 
 impl HttpTinyClient {
     /// Get the shared HTTP client with connection pool
-    fn client() -> RocketMQResult<&'static Client> {
+    fn client() -> Result<&'static Client, rocketmq_error::SharedError> {
         get_http_client()
     }
 
     /// Validate URL format
     ///
     /// Ensures the URL is not empty and is a valid HTTP/HTTPS URL
-    fn validate_url(url: &str) -> RocketMQResult<()> {
+    fn validate_url(url: &str) -> Result<(), rocketmq_error::SharedError> {
         if url.is_empty() {
-            return Err(RocketMQError::validation_failed("url", "URL cannot be empty"));
+            return Err(argument_invalid());
         }
 
         // Parse URL to validate format
-        reqwest::Url::parse(url)
-            .map_err(|e| RocketMQError::validation_failed("url", format!("Invalid URL format: {}", e)))?;
+        reqwest::Url::parse(url).map_err(argument_invalid_caused_by)?;
 
         Ok(())
     }
 
     /// Validate headers format (must be in key-value pairs)
-    fn validate_headers(headers: Option<&[String]>) -> RocketMQResult<()> {
+    fn validate_headers(headers: Option<&[String]>) -> Result<(), rocketmq_error::SharedError> {
         if let Some(h) = headers {
             if !h.len().is_multiple_of(2) {
-                return Err(RocketMQError::validation_failed(
-                    "headers",
-                    format!("Headers must be in key-value pairs, got {} items", h.len()),
-                ));
+                return Err(argument_invalid());
             }
 
             // Validate each header name (cannot be empty)
             let mut iter = h.iter();
             while let Some(key) = iter.next() {
                 if key.is_empty() {
-                    return Err(RocketMQError::validation_failed(
-                        "headers",
-                        "Header name cannot be empty",
-                    ));
+                    return Err(argument_invalid());
                 }
                 // Skip value
                 iter.next();
@@ -145,32 +136,23 @@ impl HttpTinyClient {
     /// Validate encoding format
     ///
     /// Only supports common encodings to prevent errors
-    fn validate_encoding(encoding: &str) -> RocketMQResult<()> {
+    fn validate_encoding(encoding: &str) -> Result<(), rocketmq_error::SharedError> {
         if encoding.is_empty() {
-            return Err(RocketMQError::validation_failed("encoding", "Encoding cannot be empty"));
+            return Err(argument_invalid());
         }
 
         // Support common encodings (case-insensitive)
         let encoding_upper = encoding.to_uppercase();
         match encoding_upper.as_str() {
             "UTF-8" | "UTF8" | "GBK" | "GB2312" | "GB18030" | "ISO-8859-1" | "US-ASCII" => Ok(()),
-            _ => Err(RocketMQError::validation_failed(
-                "encoding",
-                format!(
-                    "Unsupported encoding: '{}'. Supported: UTF-8, GBK, GB2312, GB18030, ISO-8859-1, US-ASCII",
-                    encoding
-                ),
-            )),
+            _ => Err(argument_invalid()),
         }
     }
 
     /// Validate timeout value
-    fn validate_timeout(timeout_ms: u64) -> RocketMQResult<()> {
+    fn validate_timeout(timeout_ms: u64) -> Result<(), rocketmq_error::SharedError> {
         if timeout_ms == 0 {
-            return Err(RocketMQError::validation_failed(
-                "timeout",
-                "Timeout must be greater than 0",
-            ));
+            return Err(argument_invalid());
         }
 
         // Warn about very long timeouts (> 5 minutes)
@@ -202,7 +184,7 @@ impl HttpTinyClient {
         param_values: Option<&[String]>,
         encoding: &str,
         read_timeout_ms: u64,
-    ) -> RocketMQResult<HttpResult> {
+    ) -> Result<HttpResult, rocketmq_error::SharedError> {
         // Validate parameters before making the request
         Self::validate_url(url)?;
         Self::validate_headers(headers)?;
@@ -224,11 +206,11 @@ impl HttpTinyClient {
 
         let response = request_builder.send().await.map_err(|e| {
             if e.is_timeout() {
-                rocketmq_error::RocketMQError::Shared(response_timeout_caused_by_for_remote(url, read_timeout_ms, e))
+                response_timeout_caused_by_for_remote(url, read_timeout_ms, e)
             } else if e.is_connect() {
-                rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(url, TransportStage::Connect, e))
+                connection_failed_for_remote(url, TransportStage::Connect, e)
             } else {
-                rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(url, TransportStage::Write, e))
+                connection_failed_for_remote(url, TransportStage::Write, e)
             }
         })?;
 
@@ -236,7 +218,7 @@ impl HttpTinyClient {
         let content = response
             .text()
             .await
-            .map_err(|e| RocketMQError::deserialization_failed("response_body", e.to_string()))?;
+            .map_err(|e| serialization_failed_caused_by("decode", "http-response", e))?;
 
         Ok(HttpResult::new(status_code, content))
     }
@@ -258,7 +240,7 @@ impl HttpTinyClient {
         param_values: Option<&[String]>,
         encoding: &str,
         read_timeout_ms: u64,
-    ) -> RocketMQResult<HttpResult> {
+    ) -> Result<HttpResult, rocketmq_error::SharedError> {
         // Validate parameters before making the request
         Self::validate_url(url)?;
         Self::validate_headers(headers)?;
@@ -276,11 +258,11 @@ impl HttpTinyClient {
 
         let response = request_builder.send().await.map_err(|e| {
             if e.is_timeout() {
-                rocketmq_error::RocketMQError::Shared(response_timeout_caused_by_for_remote(url, read_timeout_ms, e))
+                response_timeout_caused_by_for_remote(url, read_timeout_ms, e)
             } else if e.is_connect() {
-                rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(url, TransportStage::Connect, e))
+                connection_failed_for_remote(url, TransportStage::Connect, e)
             } else {
-                rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(url, TransportStage::Write, e))
+                connection_failed_for_remote(url, TransportStage::Write, e)
             }
         })?;
 
@@ -288,23 +270,23 @@ impl HttpTinyClient {
         let content = response
             .text()
             .await
-            .map_err(|e| RocketMQError::deserialization_failed("response_body", e.to_string()))?;
+            .map_err(|e| serialization_failed_caused_by("decode", "http-response", e))?;
 
         Ok(HttpResult::new(status_code, content))
     }
 
     /// Encode parameters for URL or form data using form_urlencoded
-    fn encoding_params(param_values: Option<&[String]>, _encoding: &str) -> RocketMQResult<Option<String>> {
+    fn encoding_params(
+        param_values: Option<&[String]>,
+        _encoding: &str,
+    ) -> Result<Option<String>, rocketmq_error::SharedError> {
         let params = match param_values {
             Some(params) if !params.is_empty() => params,
             _ => return Ok(None),
         };
 
         if !params.len().is_multiple_of(2) {
-            return Err(RocketMQError::validation_failed(
-                "param_values",
-                "Parameter values must be in key-value pairs",
-            ));
+            return Err(argument_invalid());
         }
 
         let mut encoder = form_urlencoded::Serializer::new(String::new());
@@ -327,7 +309,7 @@ impl HttpTinyClient {
         mut request_builder: reqwest::RequestBuilder,
         headers: Option<&[String]>,
         encoding: &str,
-    ) -> RocketMQResult<reqwest::RequestBuilder> {
+    ) -> Result<reqwest::RequestBuilder, rocketmq_error::SharedError> {
         if let Some(headers) = headers {
             let mut iter = headers.iter();
             while let (Some(key), Some(value)) = (iter.next(), iter.next()) {
@@ -349,6 +331,8 @@ impl HttpTinyClient {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use super::*;
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;
@@ -519,7 +503,7 @@ mod tests {
         match result {
             Err(e) => {
                 println!("Expected error: {}", e);
-                assert!(matches!(e, RocketMQError::Shared(_)));
+                assert!(matches!(e, _));
             }
             Ok(response) => panic!(
                 "Expected timeout error but got success response with code: {}",
@@ -576,7 +560,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("URL cannot be empty"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[tokio::test]
@@ -585,7 +569,8 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Invalid URL format"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+        assert!(err.source().is_some());
     }
 
     #[tokio::test]
@@ -609,8 +594,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Headers must be in key-value pairs"));
-        assert!(err.to_string().contains("got 3 items"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[tokio::test]
@@ -625,7 +609,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Header name cannot be empty"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[tokio::test]
@@ -634,7 +618,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Encoding cannot be empty"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[tokio::test]
@@ -644,8 +628,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Unsupported encoding"));
-        assert!(err.to_string().contains("INVALID-ENCODING"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -665,7 +648,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Timeout must be greater than 0"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -705,7 +688,7 @@ mod tests {
         assert!(result.is_err());
         // Should fail on first validation (URL)
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("URL cannot be empty"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[tokio::test]

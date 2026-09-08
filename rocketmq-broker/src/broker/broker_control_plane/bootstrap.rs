@@ -20,9 +20,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::broker_error::BrokerResult as Result;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_store::BrokerReplicationStore;
@@ -263,7 +262,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         master_epoch: Option<i32>,
         sync_state_set_epoch: Option<i32>,
         sync_state_set: HashSet<i64>,
-    ) -> rocketmq_error::RocketMQResult<bool> {
+    ) -> crate::broker_error::BrokerResult<bool> {
         if master_broker_id.is_none() || master_epoch.is_none() {
             return Ok(false);
         }
@@ -284,9 +283,11 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         resource: &'static str,
         target: PathBuf,
         content: Vec<u8>,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         let metadata_io = self.metadata_io.as_ref().ok_or_else(|| {
-            RocketMQError::illegal_argument("broker-id metadata actor is unavailable in the production control plane")
+            crate::broker_error::invalid_argument(
+                "broker-id metadata actor is unavailable in the production control plane",
+            )
         })?;
         metadata_io
             .submit_next_durable(
@@ -301,21 +302,21 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         Ok(())
     }
 
-    async fn remove_broker_id_temporary(&self, target: PathBuf) -> RocketMQResult<()> {
+    async fn remove_broker_id_temporary(&self, target: PathBuf) -> Result<()> {
         if let Some(blocking) = self.blocking.as_ref() {
             return blocking
                 .spawn_io("broker.identity.remove-pending", move || remove_file_if_exists(&target))
                 .await
-                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?
-                .map_err(RocketMQError::IO);
+                .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?
+                .map_err(crate::broker_error::io);
         }
-        remove_file_if_exists(&target).map_err(RocketMQError::IO)
+        remove_file_if_exists(&target).map_err(crate::broker_error::io)
     }
 
     pub(crate) async fn ensure_controller_broker_id(
         &self,
         controller_leader: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<u64> {
+    ) -> crate::broker_error::BrokerResult<u64> {
         let _operation_guard = self.controller.lock_operation().await;
         let broker_config = self.config.broker_snapshot();
         let cluster_name = broker_config.broker_identity.broker_cluster_name.clone();
@@ -332,9 +333,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                 .get_next_broker_id(cluster_name.clone(), broker_name.clone(), controller_leader)
                 .await?;
             Some(next_broker_id_response.next_broker_id.ok_or_else(|| {
-                rocketmq_error::RocketMQError::illegal_argument(
-                    "controller get_next_broker_id returned empty next_broker_id",
-                )
+                crate::broker_error::invalid_argument("controller get_next_broker_id returned empty next_broker_id")
             })?)
         } else {
             None
@@ -343,7 +342,9 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             let plan = self
                 .replicas_snapshot()
                 .ok_or_else(|| {
-                    RocketMQError::illegal_argument("replicas manager missing while planning controller broker id")
+                    crate::broker_error::invalid_argument(
+                        "replicas manager missing while planning controller broker id",
+                    )
                 })?
                 .plan_controller_broker_id_persistence(&broker_config, next_broker_id)?;
             match plan {
@@ -370,7 +371,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                         .controller
                         .with_replicas_mut(|replicas_manager| replicas_manager.publish_pending_broker_id(record))
                         .ok_or_else(|| {
-                            RocketMQError::illegal_argument(
+                            crate::broker_error::invalid_argument(
                                 "replicas manager missing while publishing durable controller broker id",
                             )
                         })??;
@@ -384,7 +385,9 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                     replicas_manager.prepare_controller_broker_id_action(&broker_config, next_broker_id)
                 })
                 .ok_or_else(|| {
-                    RocketMQError::illegal_argument("replicas manager missing while preparing controller broker id")
+                    crate::broker_error::invalid_argument(
+                        "replicas manager missing while preparing controller broker id",
+                    )
                 })??;
             (action, None)
         };
@@ -429,7 +432,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             let snapshot = self
                 .replicas_snapshot()
                 .ok_or_else(|| {
-                    RocketMQError::illegal_argument("replicas manager missing while planning broker id commit")
+                    crate::broker_error::invalid_argument("replicas manager missing while planning broker id commit")
                 })?
                 .plan_controller_broker_id_commit(&broker_config)?;
             let Some(snapshot) = snapshot else {
@@ -442,7 +445,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                 .controller
                 .with_replicas_mut(|replicas_manager| replicas_manager.publish_committed_broker_id(snapshot.record))
                 .ok_or_else(|| {
-                    RocketMQError::illegal_argument("replicas manager missing while publishing broker id commit")
+                    crate::broker_error::invalid_argument("replicas manager missing while publishing broker id commit")
                 })?;
         }
 
@@ -451,7 +454,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                 replicas_manager.complete_controller_broker_id_application(&broker_config)
             })
             .ok_or_else(|| {
-                RocketMQError::illegal_argument("replicas manager missing while committing controller broker id")
+                crate::broker_error::invalid_argument("replicas manager missing while committing controller broker id")
             })?
     }
 
@@ -542,11 +545,12 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                     self.bootstrap_controller_mode().await;
                 }
             }
-            Err(rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. })
+            Err(error)
                 if self
                     .replicas_snapshot()
                     .map(|replicas_manager| {
-                        replicas_manager.replica_sync_error_followup(Some(code))
+                        replicas_manager
+                            .replica_sync_error_followup(crate::broker_error::broker_response_code(error.as_ref()))
                             == ControllerReplicaSyncFollowup::Bootstrap
                     })
                     .unwrap_or(true) =>
@@ -563,7 +567,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         &self,
         controller_leader: &CheetahString,
         broker_name: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<(
+    ) -> crate::broker_error::BrokerResult<(
         CheetahString,
         rocketmq_protocol::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader,
         rocketmq_protocol::protocol::body::sync_state_set_body::SyncStateSet,
@@ -715,12 +719,12 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
     pub(crate) async fn send_heartbeat_to_controller_leader(
         &self,
         controller_leader: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         let heartbeat_state = self
             .replicas_snapshot()
             .map(|replicas_manager| replicas_manager.controller_heartbeat_state())
             .ok_or_else(|| {
-                rocketmq_error::RocketMQError::illegal_argument(
+                crate::broker_error::invalid_argument(
                     "replicas manager missing while sending controller leader heartbeat",
                 )
             })?;
@@ -759,7 +763,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
             Ok(())
         } else {
             let _ = self.store.fence_controller_writes();
-            Err(RocketMQError::illegal_argument(
+            Err(crate::broker_error::invalid_argument(
                 "controller heartbeat completed without a valid committed write lease",
             ))
         }

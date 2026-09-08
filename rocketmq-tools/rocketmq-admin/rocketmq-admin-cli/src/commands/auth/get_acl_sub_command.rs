@@ -17,8 +17,7 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::auth::AuthService;
 use rocketmq_admin_core::client_adapter::services::auth::GetAclRequest;
 use rocketmq_admin_core::client_adapter::services::auth::GetAclResult;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 
 use crate::commands::CommandExecute;
@@ -43,7 +42,7 @@ impl CommandExecute for GetAclSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = GetAclRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
@@ -55,7 +54,7 @@ impl CommandExecute for GetAclSubCommand {
     }
 }
 
-fn render_get_acl_result(result: GetAclResult, subject: &str, single_broker_target: bool) -> RocketMQResult<()> {
+fn render_get_acl_result(result: GetAclResult, subject: &str, single_broker_target: bool) -> CanonicalResult<()> {
     if single_broker_target && result.acl_infos.is_empty() {
         eprintln!("No ACL with subject {} was found", subject);
         return Ok(());
@@ -76,14 +75,7 @@ fn render_get_acl_result(result: GetAclResult, subject: &str, single_broker_targ
     }
 
     if !result.failed_broker_addrs.is_empty() && result.acl_infos.is_empty() {
-        Err(RocketMQError::broker_operation_failed(
-            "GET_ACL",
-            -1,
-            format!(
-                "GetAclSubCommand: Failed to get ACL for brokers {}",
-                result.failed_broker_addrs.join(", ")
-            ),
-        ))
+        Err(crate::errors::broker_response_failed("GET_ACL", -1))
     } else {
         Ok(())
     }

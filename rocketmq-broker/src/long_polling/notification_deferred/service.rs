@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::convert::Infallible;
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
 use std::future::Future;
 use std::num::NonZeroU64;
@@ -28,7 +28,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -808,7 +807,7 @@ impl NotificationDeferredService {
     ) -> Result<DeferredResumeOutcome, TransportError>
     where
         F: FnOnce(ResumeNotification, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
     {
         let resume_executions = Arc::clone(&self.resume_executions);
         let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
@@ -833,7 +832,7 @@ impl NotificationDeferredService {
     ) -> Result<DeferredResumeSubmitOutcome, TransportError>
     where
         F: FnOnce(ResumeNotification, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
     {
         let resume_executions = Arc::clone(&self.resume_executions);
         let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
@@ -1119,8 +1118,8 @@ impl fmt::Display for NotificationPendingArrivalOperationalError {
     }
 }
 
-impl Error for NotificationPendingArrivalOperationalError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for NotificationPendingArrivalOperationalError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Continuation(source) => Some(source),
             Self::Latch(source) => Some(source),
@@ -1199,8 +1198,8 @@ impl fmt::Display for NotificationContinuationOperationalError {
     }
 }
 
-impl Error for NotificationContinuationOperationalError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for NotificationContinuationOperationalError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Allocation(source) => Some(source),
             Self::SizeOverflow => None,
@@ -1251,7 +1250,7 @@ pub(crate) enum NotificationDeferredPrepareFailure {
     InvalidExpiryMargins,
     RetainedSizeOverflow,
     Deadline(NotificationWaitDeadlineOperationalError),
-    Header(RocketMQError),
+    Header(rocketmq_error::Error),
     Index(NotificationIndexOperationalError),
     Contract(TransportContractViolation),
 }
@@ -1270,8 +1269,8 @@ impl fmt::Display for NotificationDeferredPrepareFailure {
     }
 }
 
-impl Error for NotificationDeferredPrepareFailure {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for NotificationDeferredPrepareFailure {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Header(source) => Some(source),
             Self::Index(source) => Some(source),
@@ -1364,8 +1363,8 @@ impl fmt::Display for NotificationDeferredRegisterFailure {
     }
 }
 
-impl Error for NotificationDeferredRegisterFailure {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for NotificationDeferredRegisterFailure {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::RegistryContract(violation) => Some(violation),
             Self::RegistryOperational(error) => Some(error),

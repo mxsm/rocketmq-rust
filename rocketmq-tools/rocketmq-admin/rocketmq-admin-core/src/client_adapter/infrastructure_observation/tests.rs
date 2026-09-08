@@ -45,7 +45,7 @@ struct FakeSource {
 }
 
 impl InfrastructureObservationSource for FakeSource {
-    async fn cluster_info(&self) -> Result<ClusterInfo, RocketMQError> {
+    async fn cluster_info(&self) -> Result<ClusterInfo, CanonicalError> {
         *self.cluster_calls.lock().unwrap() += 1;
         Ok(self.cluster_info.clone())
     }
@@ -296,7 +296,7 @@ async fn ha_address_reverse_lookup_failure_is_sanitized_partial_or_total() {
     };
     let request = QueryHaStatusRequest::try_new(CLUSTER, Vec::new(), false, Vec::new()).unwrap();
     let error = query_ha_status_from(&source, &[], &request).await.unwrap_err();
-    assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+    assert_eq!(error.code().as_str(), "client.component.unavailable");
     assert!(!format!("{error:?}").contains("unmapped-secret"));
 
     let source = FakeSource {
@@ -347,7 +347,7 @@ async fn ha_query_wide_row_budget_reserves_whole_sources_at_exact_and_plus_one()
     let error = query_ha_status_from(&total_source, &controllers, &request)
         .await
         .unwrap_err();
-    assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+    assert_eq!(error.code().as_str(), "client.component.unavailable");
     assert_eq!(total_source.sync_calls.lock().unwrap().len(), 1);
 }
 

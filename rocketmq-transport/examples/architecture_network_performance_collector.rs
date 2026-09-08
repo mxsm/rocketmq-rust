@@ -52,7 +52,6 @@ use anyhow::Context;
 use anyhow::Result;
 use futures_util::stream;
 use futures_util::StreamExt;
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -387,7 +386,7 @@ impl SessionProcessor for DelayedAckProcessor {
     fn process(
         &self,
         request: RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
         Box::pin(async move {
             if request.code() == RequestCode::SendMessage.to_i32() && !self.data_delay.is_zero() {
                 tokio::time::sleep(self.data_delay).await;

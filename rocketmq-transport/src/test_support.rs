@@ -19,10 +19,10 @@ use std::net::Ipv4Addr;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::TaskGroup;
 
 use crate::base::pending_request_table::PendingRequestTable;
+use crate::error_helpers::TransportStage;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
 use crate::session_view::SessionId;
@@ -81,16 +81,31 @@ impl LocalChannelHarness {
     ///
     /// Returns an error when the loopback socket cannot be created or the
     /// channel task cannot be registered with its lifecycle owner.
-    pub async fn new(parent_task_group: TaskGroup) -> RocketMQResult<Self> {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let server_addr = listener.local_addr()?;
+    pub async fn new(parent_task_group: TaskGroup) -> Result<Self, rocketmq_error::SharedError> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|source| crate::error_helpers::connection_failed(TransportStage::Connect, source))?;
+        let server_addr = listener
+            .local_addr()
+            .map_err(|source| crate::error_helpers::connection_failed(TransportStage::Connect, source))?;
         let (client_stream, (server_stream, _)) =
-            tokio::try_join!(tokio::net::TcpStream::connect(server_addr), listener.accept())?;
+            tokio::try_join!(tokio::net::TcpStream::connect(server_addr), listener.accept())
+                .map_err(|source| crate::error_helpers::connection_failed(TransportStage::Connect, source))?;
 
-        let local_address = server_stream.local_addr()?;
-        let remote_address = server_stream.peer_addr()?;
-        debug_assert_eq!(local_address, client_stream.peer_addr()?);
-        debug_assert_eq!(remote_address, client_stream.local_addr()?);
+        let local_address = server_stream
+            .local_addr()
+            .map_err(|source| crate::error_helpers::connection_failed(TransportStage::Connect, source))?;
+        let remote_address = server_stream
+            .peer_addr()
+            .map_err(|source| crate::error_helpers::connection_failed(TransportStage::Connect, source))?;
+        let client_peer = client_stream
+            .peer_addr()
+            .map_err(|source| crate::error_helpers::connection_failed(TransportStage::Connect, source))?;
+        let client_local = client_stream
+            .local_addr()
+            .map_err(|source| crate::error_helpers::connection_failed(TransportStage::Connect, source))?;
+        debug_assert_eq!(local_address, client_peer);
+        debug_assert_eq!(remote_address, client_local);
 
         let channel = TestChannelBuilder::new(Connection::new(server_stream), parent_task_group)
             .addresses(local_address, remote_address)
@@ -163,7 +178,7 @@ impl TestChannelBuilder {
     /// # Errors
     ///
     /// Returns an error when the lifecycle owner cannot register the send task.
-    pub fn build(self) -> RocketMQResult<Channel> {
+    pub fn build(self) -> Result<Channel, rocketmq_error::SharedError> {
         let inner =
             ChannelInner::try_new_with_pending_requests(self.connection, PendingRequestTable::new(), self.task_group)?;
         Ok(Channel::new(Arc::new(inner), self.local_address, self.remote_address))

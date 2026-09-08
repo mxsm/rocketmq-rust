@@ -35,6 +35,7 @@ use crate::context::ProxyContext;
 use crate::context::ResolvedAddressScheme;
 use crate::context::ResolvedEndpoint;
 use crate::contracts::ProxyTopicMessageType;
+use crate::error::canonical;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::identity::ResourceIdentity;
@@ -129,7 +130,7 @@ pub fn build_send_message_request_with_config(
     request: &v2::SendMessageRequest,
 ) -> ProxyResult<SendMessageRequest> {
     if request.messages.is_empty() {
-        return Err(rocketmq_error::RocketMQError::illegal_argument("messages must not be empty").into());
+        return Err(canonical::argument("messages must not be empty").into());
     }
 
     let now_ms = current_millis();
@@ -158,7 +159,7 @@ pub fn build_receive_message_request(request: &v2::ReceiveMessageRequest) -> Pro
     let message_queue = request
         .message_queue
         .as_ref()
-        .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("messageQueue must not be empty"))?;
+        .ok_or_else(|| canonical::argument("messageQueue must not be empty"))?;
     let topic = resource_identity(message_queue.topic.as_ref(), "messageQueue.topic")?;
     let batch_size = validate_batch_size(request.batch_size)?;
     let invisible_duration = request
@@ -227,7 +228,7 @@ pub fn build_pull_message_request(request: &v2::PullMessageRequest) -> ProxyResu
 
 pub fn build_ack_message_request(request: &v2::AckMessageRequest) -> ProxyResult<AckMessageRequest> {
     if request.entries.is_empty() {
-        return Err(rocketmq_error::RocketMQError::illegal_argument("entries must not be empty").into());
+        return Err(canonical::argument("entries must not be empty").into());
     }
 
     let entries = request
@@ -281,9 +282,10 @@ pub fn build_change_invisible_duration_request(
         topic: resource_identity(request.topic.as_ref(), "topic")?,
         receipt_handle: validate_non_empty_string("receiptHandle", request.receipt_handle.as_str())?,
         invisible_duration: positive_duration(
-            request.invisible_duration.as_ref().ok_or_else(|| {
-                rocketmq_error::RocketMQError::illegal_argument("invisibleDuration must not be empty")
-            })?,
+            request
+                .invisible_duration
+                .as_ref()
+                .ok_or_else(|| canonical::argument("invisibleDuration must not be empty"))?,
             "invisibleDuration",
             ProxyError::illegal_invisible_time,
         )?,
@@ -345,7 +347,7 @@ pub fn build_end_transaction_request(request: &v2::EndTransactionRequest) -> Pro
         v2::TransactionResolution::Commit => TransactionResolution::Commit,
         v2::TransactionResolution::Rollback => TransactionResolution::Rollback,
         v2::TransactionResolution::Unspecified => {
-            return Err(rocketmq_error::RocketMQError::illegal_argument("resolution must not be unspecified").into());
+            return Err(canonical::argument("resolution must not be unspecified").into());
         }
     };
     let source =
@@ -353,7 +355,7 @@ pub fn build_end_transaction_request(request: &v2::EndTransactionRequest) -> Pro
             v2::TransactionSource::SourceClient => TransactionSource::Client,
             v2::TransactionSource::SourceServerCheck => TransactionSource::ServerCheck,
             v2::TransactionSource::SourceUnspecified => {
-                return Err(rocketmq_error::RocketMQError::illegal_argument("source must not be unspecified").into());
+                return Err(canonical::argument("source must not be unspecified").into());
             }
         };
 
@@ -790,11 +792,9 @@ pub fn error_query_offset_response(status: v2::Status) -> v2::QueryOffsetRespons
 }
 
 fn resource_identity(resource: Option<&v2::Resource>, field: &'static str) -> ProxyResult<ResourceIdentity> {
-    let resource = resource.ok_or_else(|| {
-        rocketmq_error::RocketMQError::illegal_argument(format!("{field} resource must not be empty"))
-    })?;
+    let resource = resource.ok_or_else(|| canonical::argument(format!("{field} resource must not be empty")))?;
     if resource.name.trim().is_empty() {
-        return Err(rocketmq_error::RocketMQError::illegal_argument(format!("{field} name must not be empty")).into());
+        return Err(canonical::argument(format!("{field} name must not be empty")).into());
     }
 
     Ok(ResourceIdentity::new(
@@ -804,11 +804,10 @@ fn resource_identity(resource: Option<&v2::Resource>, field: &'static str) -> Pr
 }
 
 fn resolve_endpoints(config: &GrpcConfig, endpoints: Option<&v2::Endpoints>) -> ProxyResult<Vec<ResolvedEndpoint>> {
-    let endpoints =
-        endpoints.ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("endpoints must not be empty"))?;
+    let endpoints = endpoints.ok_or_else(|| canonical::argument("endpoints must not be empty"))?;
 
     if endpoints.addresses.is_empty() {
-        return Err(rocketmq_error::RocketMQError::illegal_argument("endpoints must not be empty").into());
+        return Err(canonical::argument("endpoints must not be empty").into());
     }
 
     let fallback_port = config.listen_port()?;
@@ -824,7 +823,7 @@ fn resolve_endpoints(config: &GrpcConfig, endpoints: Option<&v2::Endpoints>) -> 
         .iter()
         .map(|address| {
             if address.host.trim().is_empty() {
-                return Err(rocketmq_error::RocketMQError::illegal_argument("endpoint host must not be empty").into());
+                return Err(canonical::argument("endpoint host must not be empty").into());
             }
 
             let port = if config.use_endpoint_port_from_request {
@@ -834,10 +833,7 @@ fn resolve_endpoints(config: &GrpcConfig, endpoints: Option<&v2::Endpoints>) -> 
             };
 
             if !(0..=u16::MAX as i32).contains(&port) {
-                return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
-                    "endpoint port out of range: {port}"
-                ))
-                .into());
+                return Err(canonical::argument(format!("endpoint port out of range: {port}")).into());
             }
 
             Ok(ResolvedEndpoint {
@@ -862,8 +858,7 @@ fn message_queue_target(
     message_queue: Option<&v2::MessageQueue>,
     field: &'static str,
 ) -> ProxyResult<MessageQueueTarget> {
-    let message_queue = message_queue
-        .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument(format!("{field} must not be empty")))?;
+    let message_queue = message_queue.ok_or_else(|| canonical::argument(format!("{field} must not be empty")))?;
     if message_queue.id < 0 {
         return Err(ProxyError::illegal_offset(format!("{field}.id must not be negative")));
     }
@@ -917,7 +912,7 @@ fn default_tag_expression(expression: &str) -> String {
 
 fn validate_batch_size(batch_size: i32) -> ProxyResult<u32> {
     if batch_size <= 0 {
-        return Err(rocketmq_error::RocketMQError::illegal_argument("batchSize must be greater than zero").into());
+        return Err(canonical::argument("batchSize must be greater than zero").into());
     }
 
     Ok(batch_size as u32)
@@ -933,7 +928,7 @@ fn validate_offset(field: &'static str, offset: i64) -> ProxyResult<i64> {
 fn validate_non_empty_string(field: &'static str, value: &str) -> ProxyResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(rocketmq_error::RocketMQError::illegal_argument(format!("{field} must not be empty")).into());
+        return Err(canonical::argument(format!("{field} must not be empty")).into());
     }
 
     Ok(trimmed.to_owned())
@@ -1012,14 +1007,14 @@ fn build_send_message_entry(config: &GrpcConfig, message: &v2::Message, now_ms: 
     let system = message
         .system_properties
         .as_ref()
-        .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("message systemProperties must not be empty"))?;
+        .ok_or_else(|| canonical::argument("message systemProperties must not be empty"))?;
     let client_message_id = validate_client_message_id(system.message_id.as_str())?;
 
     if message.body.is_empty() {
-        return Err(rocketmq_error::RocketMQError::illegal_argument("message body must not be empty").into());
+        return Err(canonical::argument("message body must not be empty").into());
     }
     if message.body.len() > config.max_message_body_size {
-        return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+        return Err(canonical::argument(format!(
             "message body size {} exceeds the configured maximum {} bytes",
             message.body.len(),
             config.max_message_body_size
@@ -1206,10 +1201,10 @@ fn apply_message_type(
                     ProxyError::illegal_delivery_time("delay message requires systemProperties.deliveryTimestamp")
                 })?;
             let policy = TimerPolicySnapshot::try_new(config.timer_precision_ms, config.timer_max_delay_ms)
-                .map_err(|error| ProxyError::illegal_delivery_time(error.to_string()))?;
+                .map_err(|error| ProxyError::from(canonical::delivery_time_invalid_with_source(error)))?;
             let deliver_time = deliver_time_ms.to_string();
             normalize_timer_request_fields(None, None, Some(deliver_time.as_str()), now_ms, policy)
-                .map_err(|error| ProxyError::illegal_delivery_time(error.to_string()))?;
+                .map_err(|error| ProxyError::from(canonical::delivery_time_invalid_with_source(error)))?;
             message.put_property(PROPERTY_TIMER_DELIVER_MS, deliver_time_ms.to_string());
             Ok(())
         }

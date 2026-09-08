@@ -80,7 +80,7 @@ pub trait TraceDispatcher: Any {
     ///
     /// This method should be called once before any trace data is appended.
     /// Calling it multiple times may result in undefined behavior.
-    fn start(&self, name_srv_addr: &str, access_channel: AccessChannel) -> rocketmq_error::RocketMQResult<()>;
+    fn start(&self, name_srv_addr: &str, access_channel: AccessChannel) -> crate::ClientResult<()>;
 
     /// Appends a trace context to the dispatcher's queue for later transmission.
     ///
@@ -119,7 +119,7 @@ pub trait TraceDispatcher: Any {
     ///
     /// This operation may block until all data is sent. For production systems,
     /// consider implementing a timeout mechanism.
-    fn flush(&self) -> rocketmq_error::RocketMQResult<()>;
+    fn flush(&self) -> crate::ClientResult<()>;
 
     /// Shuts down the trace dispatcher and releases all resources.
     ///

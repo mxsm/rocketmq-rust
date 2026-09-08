@@ -16,7 +16,7 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::producer::CheckMessageSendRtRequest;
 use rocketmq_admin_core::client_adapter::services::producer::CheckMessageSendRtResult;
 use rocketmq_admin_core::client_adapter::services::producer::ProducerService;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 
@@ -45,7 +45,7 @@ pub struct CheckMsgSendRTSubCommand {
 }
 
 impl CheckMsgSendRTSubCommand {
-    fn request(&self) -> RocketMQResult<CheckMessageSendRtRequest> {
+    fn request(&self) -> CanonicalResult<CheckMessageSendRtRequest> {
         CheckMessageSendRtRequest::try_new(self.topic.clone(), self.amount, self.size)
     }
 
@@ -66,7 +66,7 @@ impl CommandExecute for CheckMsgSendRTSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = ProducerService::check_message_send_rt_by_request_with_credentials(
             self.request()?,
             credentials,

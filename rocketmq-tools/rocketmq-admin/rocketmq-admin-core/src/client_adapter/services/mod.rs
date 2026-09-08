@@ -18,9 +18,8 @@
 //! still require Client SDK types. Backend-neutral contracts remain in
 //! [`crate::core`].
 
-pub use rocketmq_error::RocketMQError;
-pub use rocketmq_error::RocketMQResult;
-pub use rocketmq_error::ToolsError;
+pub use rocketmq_error::Error;
+pub use rocketmq_error::Result;
 
 pub mod admin;
 pub mod auth;

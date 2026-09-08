@@ -14,8 +14,8 @@
 
 use std::fmt;
 
+use crate::ClientError;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::MessageTrait;
 
@@ -55,7 +55,7 @@ pub struct CheckForbiddenContext<'a> {
     /// Send result (available after sending)
     pub send_result: Option<SendResult>,
     /// Exception that occurred during sending
-    pub exception: Option<RocketMQError>,
+    pub exception: Option<ClientError>,
     /// Custom argument
     pub arg: Option<Box<dyn std::any::Any + Send + Sync>>,
     /// Whether unit mode is enabled

@@ -233,7 +233,7 @@ pub fn resolve_telemetry_values(
 ///
 /// # Errors
 ///
-/// Returns [`ObservabilityError::InvalidConfig`] when a ratio, duration,
+/// Returns [`ObservabilityError`] when a ratio, duration,
 /// exporter, endpoint, or Prometheus listener setting violates its invariant.
 pub fn normalize_and_validate(config: &crate::ObservabilityConfig) -> Result<(), ObservabilityError> {
     if !is_valid_sample_ratio(config.metrics.sample_ratio) {

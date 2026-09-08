@@ -16,7 +16,7 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::connection::ConnectionService;
 use rocketmq_admin_core::client_adapter::services::connection::ConsumerConnectionQueryRequest;
 use rocketmq_admin_core::client_adapter::services::connection::ConsumerConnectionQueryResult;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::mq_version::RocketMqVersion;
 use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
 
@@ -36,7 +36,7 @@ impl CommandExecute for ConsumerConnectionSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = ConsumerConnectionQueryRequest::try_new(self.consumer_group.clone(), self.broker_addr.clone())?;
         let result = ConnectionService::query_consumer_connection_by_request_with_credentials(
             request,

@@ -83,7 +83,7 @@ use rocketmq_auth::config::AuthConfig;
 use rocketmq_auth::AuthRuntimeBuilder;
 
 #[tokio::main]
-async fn main() -> rocketmq_error::RocketMQResult<()> {
+async fn main() -> rocketmq_error::Result<()> {
     let config = AuthConfig {
         auth_config_path: CheetahString::from_static_str("store/auth"),
         acl_file: CheetahString::from_static_str("conf/plain_acl.yml"),

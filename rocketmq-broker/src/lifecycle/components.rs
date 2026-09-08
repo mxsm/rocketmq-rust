@@ -119,7 +119,7 @@ impl BrokerReadiness {
         if missing.is_empty() {
             Ok(self)
         } else {
-            Err(BrokerStartupError::Readiness { missing })
+            Err(BrokerStartupError::readiness(missing))
         }
     }
 
@@ -187,11 +187,9 @@ mod tests {
         };
 
         let error = readiness.validate().expect_err("incomplete readiness must fail closed");
-        let BrokerStartupError::Readiness { missing } = error else {
-            panic!("unexpected readiness error: {error}");
-        };
+        assert_eq!(error.phase(), crate::lifecycle::BrokerStartupPhase::Readiness);
         assert_eq!(
-            missing,
+            error.missing_requirements(),
             vec![
                 "message_store_writable",
                 "normal_listener_bound",

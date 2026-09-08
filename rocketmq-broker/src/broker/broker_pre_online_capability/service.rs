@@ -18,8 +18,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Weak;
 use std::time::Duration;
 
+use crate::broker_error::BrokerResult as Result;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mix_all::MASTER_ID;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
@@ -98,7 +98,7 @@ impl<MS> BrokerPreOnlineServiceInner<MS>
 where
     MS: BrokerReplicationStore,
 {
-    async fn prepare_for_broker_online(&self) -> RocketMQResult<bool> {
+    async fn prepare_for_broker_online(&self) -> Result<bool> {
         let broker_member_group = match self
             .context
             .broker_outer_api
@@ -457,26 +457,18 @@ impl<MS> BrokerPreOnlineService<MS>
 where
     MS: BrokerReplicationStore,
 {
-    pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn start(&self) -> crate::broker_error::BrokerResult<()> {
         self.service_manager
             .start()
             .await
-            .map_err(|source| rocketmq_error::RocketMQError::BrokerAsyncTaskFailed {
-                task: "BrokerPreOnlineService",
-                context: "failed to start runtime-owned service task".to_string(),
-                source: Box::new(source),
-            })
+            .map_err(|source| crate::broker_error::broker_task_failed("BrokerPreOnlineService", source))
     }
 
-    pub async fn shutdown(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn shutdown(&self) -> crate::broker_error::BrokerResult<()> {
         self.service_manager
             .shutdown()
             .await
-            .map_err(|source| rocketmq_error::RocketMQError::BrokerAsyncTaskFailed {
-                task: "BrokerPreOnlineService",
-                context: "failed to shutdown runtime-owned service task".to_string(),
-                source: Box::new(source),
-            })
+            .map_err(|source| crate::broker_error::broker_task_failed("BrokerPreOnlineService", source))
     }
 }
 

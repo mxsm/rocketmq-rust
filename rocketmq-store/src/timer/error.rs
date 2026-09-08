@@ -189,7 +189,7 @@ impl QuarantineManifest {
 
 pub(crate) enum TimerEngineError {
     #[cfg(feature = "extended_timeline")]
-    Runtime(rocketmq_error::RocketMQError),
+    Runtime(rocketmq_store_api::StoreError),
     #[cfg(feature = "extended_timeline")]
     Materializer(Box<crate::timer::timeline::TimelineMaterializerError>),
     #[cfg(feature = "extended_timeline")]
@@ -325,10 +325,16 @@ mod tests {
     #[test]
     fn timer_engine_operational_variants_preserve_typed_sources_without_rendering_them() {
         const SENTINEL: &str = "sensitive-timer-source-9967";
-        let runtime = TimerEngineError::Runtime(rocketmq_error::RocketMQError::illegal_argument(SENTINEL));
+        let runtime = TimerEngineError::Runtime(
+            rocketmq_store_api::StoreError::new(
+                &rocketmq_error::STORAGE_REQUEST_INVALID,
+                rocketmq_store_api::StoreOperation::Admin,
+            )
+            .with_detail(SENTINEL),
+        );
         assert!(runtime
             .source()
-            .and_then(|source| source.downcast_ref::<rocketmq_error::RocketMQError>())
+            .and_then(|source| source.downcast_ref::<rocketmq_store_api::StoreError>())
             .is_some());
         assert!(!runtime.to_string().contains(SENTINEL));
         assert!(!format!("{runtime:?}").contains(SENTINEL));

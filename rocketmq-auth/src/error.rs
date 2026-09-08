@@ -14,15 +14,13 @@
 
 //! Stable operational error boundary for authentication and authorization services.
 
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
-use std::sync::Arc;
 
 use rocketmq_error::fields;
 use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::ErrorDescriptor;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::AUTH_CONFIGURATION_INVALID;
 use rocketmq_error::AUTH_OPERATION_FAILED;
 use rocketmq_error::CORE_ARGUMENT_INVALID;
@@ -30,6 +28,7 @@ use rocketmq_error::CORE_SERIALIZATION_FAILED;
 use rocketmq_error::STORAGE_BACKEND_UNAVAILABLE;
 use rocketmq_error::STORAGE_READ_FAILED;
 use rocketmq_error::STORAGE_WRITE_FAILED;
+use rocketmq_security_api::SecurityProviderError;
 
 /// Closed, low-cardinality classification of an authentication service failure.
 ///
@@ -42,6 +41,7 @@ pub enum AuthFailureKind {
     Conflict,
     Expired,
     Unauthenticated,
+    PermissionDenied,
     Timeout,
     Unavailable,
     InvalidData,
@@ -58,6 +58,7 @@ impl AuthFailureKind {
             Self::Conflict => "Authentication service state conflicts with the request",
             Self::Expired => "Authentication service request has expired",
             Self::Unauthenticated => "Authentication could not be verified",
+            Self::PermissionDenied => "Authorization was denied",
             Self::Timeout => "Authentication service operation timed out",
             Self::Unavailable => "Authentication service is unavailable",
             Self::InvalidData => "Authentication service data is invalid",
@@ -116,11 +117,11 @@ impl AuthOperation {
 /// Typed operational failure returned by authentication and authorization services.
 ///
 /// Public formatting deliberately excludes the operation and source. The typed source
-/// remains available to trusted diagnostics through [`Error::source`].
+/// remains available to trusted diagnostics through [`std::error::Error::source`].
 pub struct AuthServiceError {
     operation: AuthOperation,
     kind: AuthFailureKind,
-    source: Option<Box<dyn Error + Send + Sync + 'static>>,
+    source: Option<Box<dyn StdError + Send + Sync + 'static>>,
 }
 
 impl AuthServiceError {
@@ -135,13 +136,39 @@ impl AuthServiceError {
 
     pub fn with_source<E>(operation: AuthOperation, kind: AuthFailureKind, source: E) -> Self
     where
-        E: Error + Send + Sync + 'static,
+        E: StdError + Send + Sync + 'static,
     {
         Self {
             operation,
             kind,
             source: Some(Box::new(source)),
         }
+    }
+
+    /// Adapts a catalog-backed security-provider failure at an Auth operation boundary.
+    ///
+    /// Provider classification is derived from its canonical condition so every
+    /// Auth and composition-root consumer uses the same mapping.
+    #[must_use]
+    pub fn provider(operation: AuthOperation, source: SecurityProviderError) -> Self {
+        let kind = match source.condition() {
+            rocketmq_error::CanonicalCondition::InvalidArgument
+            | rocketmq_error::CanonicalCondition::FailedPrecondition => AuthFailureKind::InvalidConfiguration,
+            rocketmq_error::CanonicalCondition::NotFound => AuthFailureKind::NotFound,
+            rocketmq_error::CanonicalCondition::AlreadyExists | rocketmq_error::CanonicalCondition::Aborted => {
+                AuthFailureKind::Conflict
+            }
+            rocketmq_error::CanonicalCondition::Unauthenticated => AuthFailureKind::Unauthenticated,
+            rocketmq_error::CanonicalCondition::PermissionDenied => AuthFailureKind::PermissionDenied,
+            rocketmq_error::CanonicalCondition::ResourceExhausted
+            | rocketmq_error::CanonicalCondition::Unavailable
+            | rocketmq_error::CanonicalCondition::Cancelled => AuthFailureKind::Unavailable,
+            rocketmq_error::CanonicalCondition::DeadlineExceeded => AuthFailureKind::Timeout,
+            rocketmq_error::CanonicalCondition::DataLoss => AuthFailureKind::InvalidData,
+            rocketmq_error::CanonicalCondition::Unimplemented => AuthFailureKind::Unsupported,
+            rocketmq_error::CanonicalCondition::Internal => AuthFailureKind::Internal,
+        };
+        Self::with_source(operation, kind, source)
     }
 
     #[must_use]
@@ -165,7 +192,7 @@ impl AuthServiceError {
 
     pub(crate) fn invalid_context_source<E>(source: E) -> Self
     where
-        E: Error + Send + Sync + 'static,
+        E: StdError + Send + Sync + 'static,
     {
         Self::with_source(AuthOperation::BuildContext, AuthFailureKind::InvalidInput, source)
     }
@@ -197,21 +224,21 @@ impl AuthServiceError {
 
     pub(crate) fn provider_failed<E>(operation: AuthOperation, source: E) -> Self
     where
-        E: Error + Send + Sync + 'static,
+        E: StdError + Send + Sync + 'static,
     {
         Self::with_source(operation, AuthFailureKind::Unavailable, source)
     }
 
     pub(crate) fn storage_read_failed<E>(source: E) -> Self
     where
-        E: Error + Send + Sync + 'static,
+        E: StdError + Send + Sync + 'static,
     {
         Self::with_source(AuthOperation::ReadMetadata, AuthFailureKind::Unavailable, source)
     }
 
     pub(crate) fn storage_write_failed<E>(source: E) -> Self
     where
-        E: Error + Send + Sync + 'static,
+        E: StdError + Send + Sync + 'static,
     {
         Self::with_source(AuthOperation::WriteMetadata, AuthFailureKind::Unavailable, source)
     }
@@ -242,17 +269,32 @@ impl fmt::Debug for AuthServiceError {
     }
 }
 
-impl Error for AuthServiceError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        self.source.as_deref().map(|source| source as &(dyn Error + 'static))
+impl StdError for AuthServiceError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.source.as_deref().map(|source| source as &(dyn StdError + 'static))
     }
 }
 
-impl From<AuthServiceError> for RocketMQError {
+impl From<AuthServiceError> for CanonicalError {
     fn from(error: AuthServiceError) -> Self {
         let operation = error.operation();
         let kind = error.kind();
         match (operation, kind) {
+            (_, AuthFailureKind::PermissionDenied) => project_canonical(
+                error,
+                &rocketmq_error::AUTH_PERMISSION_DENIED,
+                ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation.as_str()),
+            ),
+            (AuthOperation::Authenticate, AuthFailureKind::NotFound) => project_canonical(
+                error,
+                &rocketmq_error::AUTH_CREDENTIALS_INVALID,
+                ErrorContext::new().with_secret_presence(fields::CREDENTIALS_PRESENT),
+            ),
+            (AuthOperation::ManageMetadata, AuthFailureKind::NotFound) => project_canonical(
+                error,
+                &rocketmq_error::AUTH_USER_NOT_FOUND,
+                ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation.as_str()),
+            ),
             (_, AuthFailureKind::InvalidInput | AuthFailureKind::NotFound) => project_canonical(
                 error,
                 &CORE_ARGUMENT_INVALID,
@@ -295,7 +337,7 @@ fn project_storage(
     error: AuthServiceError,
     descriptor: &'static ErrorDescriptor,
     operation: &'static str,
-) -> RocketMQError {
+) -> CanonicalError {
     project_canonical(
         error,
         descriptor,
@@ -305,7 +347,7 @@ fn project_storage(
     )
 }
 
-fn project_serialization(error: AuthServiceError, operation: &'static str) -> RocketMQError {
+fn project_serialization(error: AuthServiceError, operation: &'static str) -> CanonicalError {
     project_canonical(
         error,
         &CORE_SERIALIZATION_FAILED,
@@ -319,7 +361,7 @@ fn project_canonical(
     error: AuthServiceError,
     descriptor: &'static ErrorDescriptor,
     context: ErrorContext,
-) -> RocketMQError {
+) -> CanonicalError {
     let has_source = error.source_present();
     let context = if has_source
         && descriptor
@@ -336,7 +378,7 @@ fn project_canonical(
     } else {
         CanonicalError::new(descriptor)
     };
-    RocketMQError::Shared(Arc::new(canonical.with_context(context)))
+    canonical.with_context(context)
 }
 
 /// Result returned by authentication and authorization service operations.
@@ -385,7 +427,7 @@ mod tests {
 
     #[test]
     fn rocketmq_projection_uses_fixed_messages_and_retains_operational_sources() {
-        let invalid: RocketMQError = AuthServiceError::with_source(
+        let invalid: CanonicalError = AuthServiceError::with_source(
             AuthOperation::BuildContext,
             AuthFailureKind::InvalidInput,
             io::Error::other("secret\r\npath"),
@@ -394,17 +436,14 @@ mod tests {
         assert_eq!(invalid.descriptor(), &CORE_ARGUMENT_INVALID);
         assert!(!invalid.to_string().contains("secret"));
 
-        let operational: RocketMQError = AuthServiceError::with_source(
+        let operational: CanonicalError = AuthServiceError::with_source(
             AuthOperation::ReadMetadata,
             AuthFailureKind::Unavailable,
             io::Error::other("diagnostic cause"),
         )
         .into();
         assert_eq!(operational.descriptor(), &STORAGE_READ_FAILED);
-        let RocketMQError::Shared(canonical) = operational else {
-            panic!("canonical storage projection must use the shared carrier")
-        };
-        let auth = canonical.source().expect("auth facade source must be retained");
+        let auth = operational.source().expect("auth facade source must be retained");
         assert!(auth.downcast_ref::<AuthServiceError>().is_some());
         let io = auth.source().expect("I/O source must be retained");
         assert!(io.downcast_ref::<io::Error>().is_some());
@@ -413,6 +452,10 @@ mod tests {
     #[test]
     fn rocketmq_projection_preserves_frozen_error_categories() {
         let cases = [
+            (
+                AuthServiceError::new(AuthOperation::ManageMetadata, AuthFailureKind::NotFound),
+                &rocketmq_error::AUTH_USER_NOT_FOUND,
+            ),
             (
                 AuthServiceError::new(AuthOperation::Initialize, AuthFailureKind::InvalidConfiguration),
                 &AUTH_CONFIGURATION_INVALID,
@@ -448,7 +491,52 @@ mod tests {
         ];
 
         for (error, descriptor) in cases {
-            assert_eq!(RocketMQError::from(error).descriptor(), descriptor);
+            assert_eq!(CanonicalError::from(error).descriptor(), descriptor);
+        }
+    }
+
+    #[test]
+    fn provider_mapping_uses_canonical_conditions_and_preserves_source() {
+        let cases = [
+            (
+                rocketmq_security_api::SecurityProviderFailure::NotFound,
+                AuthFailureKind::NotFound,
+            ),
+            (
+                rocketmq_security_api::SecurityProviderFailure::Conflict,
+                AuthFailureKind::Conflict,
+            ),
+            (
+                rocketmq_security_api::SecurityProviderFailure::Unsupported,
+                AuthFailureKind::Unsupported,
+            ),
+            (
+                rocketmq_security_api::SecurityProviderFailure::InvalidData,
+                AuthFailureKind::InvalidData,
+            ),
+            (
+                rocketmq_security_api::SecurityProviderFailure::ContractViolation,
+                AuthFailureKind::InvalidConfiguration,
+            ),
+            (
+                rocketmq_security_api::SecurityProviderFailure::Unavailable,
+                AuthFailureKind::Unavailable,
+            ),
+            (
+                rocketmq_security_api::SecurityProviderFailure::OperationFailed,
+                AuthFailureKind::Internal,
+            ),
+        ];
+
+        for (provider_kind, auth_kind) in cases {
+            let provider =
+                SecurityProviderError::new(provider_kind, rocketmq_security_api::SecurityOperation::ReadSecret);
+            let error = AuthServiceError::provider(AuthOperation::LoadSecret, provider);
+            assert_eq!(error.kind(), auth_kind);
+            assert!(error
+                .source()
+                .and_then(|source| source.downcast_ref::<SecurityProviderError>())
+                .is_some());
         }
     }
 }

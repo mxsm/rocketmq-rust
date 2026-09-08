@@ -18,7 +18,7 @@ expression, and bitset utilities for higher-level crates.
 | Area | What it provides |
 |------|------------------|
 | SQL92 filtering | `SqlFilter` compiles SQL92-style property expressions into reusable `Expression` objects. |
-| Filter SPI | `Filter`, `FilterSpi`, `FilterError`, and `FilterFactory` provide a pluggable filter registration and lookup model. |
+| Filter SPI | `Filter`, `FilterSpi`, and `FilterFactory` provide a pluggable filter registration and lookup model. |
 | Expression runtime | `Expression`, `Value`, `EvaluationContext`, and `MessageEvaluationContext` evaluate message properties with typed results. |
 | Boolean expressions | Ready-to-use boolean primitives such as `AlwaysTrueExpression`, `AlwaysFalseExpression`, `PropertyEqualsExpression`, `AndExpression`, `OrExpression`, and `NotExpression`. |
 | Bloom filter utilities | Java-compatible Bloom filter generation and hit checks using byte-aligned bit arrays and MurmurHash3-based double hashing. |
@@ -51,7 +51,7 @@ coerces numeric and boolean literals where the SQL expression requires them.
 |------|---------|
 | [`src/lib.rs`](src/lib.rs) | Public module exports for constants, expressions, filters, and utilities. |
 | [`src/filter.rs`](src/filter.rs) | Filter module facade and public exports. |
-| [`src/filter/filter_spi.rs`](src/filter/filter_spi.rs) | Core `Filter` trait, Java-compatible `FilterSpi` alias, and `FilterError`. |
+| [`src/filter/filter_spi.rs`](src/filter/filter_spi.rs) | Core `Filter` trait and Java-compatible `FilterSpi` alias. |
 | [`src/filter/filter_factory.rs`](src/filter/filter_factory.rs) | Global filter registry backed by `DashMap`, with default `SQL92` registration. |
 | [`src/filter/filter_sql_filter.rs`](src/filter/filter_sql_filter.rs) | Stateless SQL92 filter implementation. |
 | [`src/filter/sql_runtime.rs`](src/filter/sql_runtime.rs) | SQL expression lexer, parser, evaluator, and three-valued evaluation behavior. |
@@ -110,24 +110,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Typed filter compilation
 
-New code must call `Filter::try_compile` and handle `FilterCompileError`. Its kind, stage, optional raw UTF-8 byte
-offset, and SQL92 source classification are stable and redaction-safe; a rejected expression can be converted to
-`RocketMQError` with `ErrorKind::Filter`.
+Implementations and callers use `Filter::try_compile` and handle `FilterCompileError`. Its kind, stage, optional raw UTF-8 byte
+offset, and SQL92 source classification are stable and redaction-safe. Compilation failures use the
+`protocol.filter.invalid` catalog descriptor.
 
-The deprecated 1.x `Filter::compile` façade and its local string `FilterError` remain available for existing
-implementations and callers. This change does not remove either API or authorize removal. Any future deletion
-requires a complete release cycle, an explicit 2.0 breaking window, and individual reviewed post-freeze approvals
-for every affected frozen public item.
+Custom `Filter` implementations provide the same structured method directly:
 
-#### Future custom filter implementer migration
-
-Only in a future, approved 2.0 breaking window would custom `Filter` implementers migrate their required trait
-implementation from `compile` returning the local string `FilterError` to `try_compile` returning
-`FilterCompileError`. The current 1.x trait still requires the legacy `compile` method. The following is a future
-2.0 sketch only, remains subject to the approvals above, and is not current 1.x-compilable code:
-
-```rust,ignore
-// Future 2.0 sketch only; not valid for the current 1.x Filter trait.
+```rust
 impl Filter for CustomFilter {
     fn try_compile(&self, expression: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
         // Compile the custom expression and return typed, redaction-safe failures.

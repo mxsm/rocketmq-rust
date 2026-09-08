@@ -14,8 +14,8 @@
 
 use std::sync::Arc;
 
+use crate::ClientResult;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::common::mix_all;
@@ -394,7 +394,7 @@ impl DefaultLitePullConsumerBuilder {
     }
 
     /// Builds the [`DefaultLitePullConsumer`].
-    pub fn build(self) -> RocketMQResult<DefaultLitePullConsumer> {
+    pub fn build(self) -> ClientResult<DefaultLitePullConsumer> {
         let Some(consumer_group) = self.consumer_group else {
             return Err(mq_client_err!("consumer_group is required"));
         };

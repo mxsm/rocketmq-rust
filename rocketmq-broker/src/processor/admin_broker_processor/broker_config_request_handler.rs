@@ -88,7 +88,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         &self,
         topic_config_list: Vec<Arc<TopicConfig>>,
         data_version: DataVersion,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         let runtime = self.broker_runtime_inner.clone();
         let single_topic_registration = runtime.broker_config().enable_single_topic_register;
         let registration: TopicRegistrationAction = Box::new(move || {
@@ -119,7 +119,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         new_master_epoch: Option<i32>,
         sync_state_set_epoch: Option<i32>,
         sync_state_set: HashSet<i64>,
-    ) -> rocketmq_error::RocketMQResult<bool> {
+    ) -> crate::broker_error::BrokerResult<bool> {
         self.broker_runtime_inner
             .clone()
             .apply_controller_role_change(
@@ -139,7 +139,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         metadata: &AdminRequestMetadata,
         request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
         let Some(body) = request.body() else {
             return Ok(Some(
@@ -265,7 +265,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         request: &RemotingCommand,
         response: RemotingCommand,
         properties: &HashMap<CheetahString, CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let broker_config = self.broker_runtime_inner.broker_config();
         if !broker_config.authentication_enabled || !broker_config.authorization_enabled {
             return Ok(Some(response.set_code(ResponseCode::NoPermission).set_remark(
@@ -326,7 +326,9 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
                     .audit_rejection(properties, operator, &source_ip, super_user, "validation_failure")
                     .await;
                 return Ok(Some(
-                    response.set_code(ResponseCode::InvalidParameter).set_remark(remark),
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark(remark.to_string()),
                 ));
             }
         };
@@ -353,7 +355,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         &self,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_success_response_command();
         // broker config => broker config
         // default message store config => message store config
@@ -372,15 +374,15 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
             response.set_body_mut_ref(body);
         }
         let generation = i64::try_from(snapshot.id().value())
-            .map_err(|_| rocketmq_error::RocketMQError::invariant_violated("broker config generation fits i64"))?;
+            .map_err(|_| crate::broker_error::invariant_violated("broker config generation fits i64"))?;
         let published_at_millis = i64::try_from(snapshot.published_at_millis())
-            .map_err(|_| rocketmq_error::RocketMQError::invariant_violated("broker config timestamp fits i64"))?;
+            .map_err(|_| crate::broker_error::invariant_violated("broker config timestamp fits i64"))?;
         let version = serde_json::to_string(&rocketmq_protocol::protocol::DataVersion::with_values(
             0,
             published_at_millis,
             generation,
         ))
-        .map_err(|error| rocketmq_error::RocketMQError::internal("serialize broker config version", error))?;
+        .map_err(|error| crate::broker_error::internal("serialize broker config version", error))?;
         response.set_command_custom_header_ref(GetBrokerConfigResponseHeader {
             version: Some(version.into()),
             config_generation: snapshot.id().value(),
@@ -392,7 +394,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         &self,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let (snapshot, live_message_index_enabled) = self.broker_runtime_inner.runtime_config_and_live_index_snapshot();
         let broker = snapshot.broker();
         let store = snapshot.store();
@@ -416,7 +418,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         &self,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_success_response_command();
         let runtime_info = self.prepare_runtime_info();
         let key_value_table = KVTable { table: runtime_info };
@@ -428,7 +430,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         &self,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let Some(ext_fields) = request.get_ext_fields() else {
             return Ok(Some(
@@ -479,7 +481,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         &self,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<ExportRocksdbConfigToJsonRequestHeader>()?;
         let config_types = match request_header.fetch_config_type() {
@@ -560,7 +562,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         &self,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         Ok(Some(self.build_timer_metrics_response()))
     }
 
@@ -568,7 +570,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         &self,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         Ok(Some(self.build_timer_checkpoint_response()))
     }
 
@@ -576,7 +578,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         &self,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
 
         if !self.broker_runtime_inner.message_store_config().is_timer_wheel_enable() {

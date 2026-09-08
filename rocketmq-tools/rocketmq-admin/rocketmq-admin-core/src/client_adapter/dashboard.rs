@@ -22,7 +22,6 @@ use cheetah_string::CheetahString;
 use rocketmq_client_rust::{
     AuthAdmin as _, BrokerAdmin as _, ConsumerAdmin as _, OffsetAdmin as _, RouteAdmin as _, TopicAdmin as _,
 };
-use rocketmq_error::RocketMQError;
 use rocketmq_model::message::MessageQueue;
 use rocketmq_model::result::PullStatus;
 use rocketmq_model::topic::TopicConfig;
@@ -105,7 +104,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 .examine_topic_route_info(CheetahString::from(topic))
                 .await
                 .map_err(|error| backend_error("examine_topic_route_info", error))?
-                .ok_or_else(|| AdminError::not_found("topic", topic))?;
+                .ok_or_else(|| AdminError::topic_not_found(topic))?;
             Ok(map_topic_route(topic, &route))
         })
     }
@@ -201,7 +200,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 .examine_topic_route_info(CheetahString::from(topic))
                 .await
                 .map_err(|error| backend_error("examine_topic_route_info", error))?
-                .ok_or_else(|| AdminError::not_found("topic", topic))?;
+                .ok_or_else(|| AdminError::topic_not_found(topic))?;
             let mut clusters = route
                 .broker_datas
                 .iter()
@@ -339,7 +338,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 ));
             }
             validate_subscription_group_name(group)
-                .map_err(|error| AdminError::invalid_argument("consumerGroup", error.to_string()))?;
+                .map_err(|error| AdminError::invalid_argument_source("consumerGroup", error))?;
 
             let cluster_info = self
                 .inner
@@ -366,7 +365,7 @@ impl dashboard::DashboardAdmin for AdminSession {
                 }
             }
             if items.is_empty() {
-                return Err(AdminError::not_found("consumerGroup", group));
+                return Err(AdminError::consumer_group_not_found(group));
             }
             items.sort_by(|left, right| left.broker_name.cmp(&right.broker_name));
             Ok(dashboard::DashboardConsumerBrokerList { items })
@@ -459,7 +458,10 @@ impl dashboard::DashboardAdmin for AdminSession {
                         let (entries, runtime_error) =
                             match self.inner.fetch_broker_runtime_stats(address.clone()).await {
                                 Ok(runtime) => (kv_table_to_map(&runtime), None),
-                                Err(error) => (BTreeMap::new(), Some(error.to_string())),
+                                Err(error) => (
+                                    BTreeMap::new(),
+                                    Some(crate::client_adapter::services::stable_error_message(&error)),
+                                ),
                             };
                         items.push(dashboard::DashboardBrokerInfo {
                             cluster_name: cluster_name.to_string(),
@@ -858,17 +860,8 @@ fn authoritative_consumer_broker_targets(
     Ok(targets)
 }
 
-fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
-    let view = error.boundary_view();
-    let context = (!view.context().is_empty()).then(|| view.context().to_string());
-    AdminError::backend_view(
-        operation,
-        view.code().as_str(),
-        view.message(),
-        context,
-        view.http().status.as_u16(),
-        view.is_retryable(),
-    )
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }
 
 #[cfg(test)]

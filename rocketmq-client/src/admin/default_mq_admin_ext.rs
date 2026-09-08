@@ -202,7 +202,7 @@ impl DefaultMQAdminExt {
     }
 
     #[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
-    pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn start(&mut self) -> crate::ClientResult<()> {
         #[cfg(feature = "admin-mutation")]
         {
             return self.default_mqadmin_ext_impl.start_admin().await;
@@ -263,7 +263,6 @@ mod tests {
     use std::time::Duration;
 
     use cheetah_string::CheetahString;
-    use rocketmq_error::RocketMQError;
 
     use crate::admin::capability::RouteAdmin;
 
@@ -327,6 +326,6 @@ mod tests {
             .await
             .expect_err("unstarted admin should return a typed error instead of panicking");
 
-        assert!(matches!(error, RocketMQError::ClientNotStarted));
+        assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
     }
 }

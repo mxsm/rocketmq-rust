@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
 use std::time::Duration;
 
@@ -145,4 +145,4 @@ impl fmt::Display for NotificationWaitDeadlineOperationalError {
     }
 }
 
-impl Error for NotificationWaitDeadlineOperationalError {}
+impl StdError for NotificationWaitDeadlineOperationalError {}

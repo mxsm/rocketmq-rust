@@ -764,11 +764,9 @@ mod tests {
     use rocketmq_filter::expression::Value as ExprValue;
     use rocketmq_filter::expression::Value;
     use rocketmq_filter::filter::Filter;
-    #[allow(
-        deprecated,
-        reason = "These compatibility fixtures verify that legacy Filter implementations remain usable."
-    )]
-    use rocketmq_filter::filter::FilterError;
+    use rocketmq_filter::filter::FilterCompileError;
+    use rocketmq_filter::filter::FilterCompileErrorKind;
+    use rocketmq_filter::filter::FilterCompileStage;
 
     fn new_manager() -> ConsumerFilterManager {
         ConsumerFilterManager::new(
@@ -919,14 +917,14 @@ mod tests {
         compile_count: Arc<AtomicUsize>,
     }
 
-    #[allow(
-        deprecated,
-        reason = "This compatibility fixture intentionally implements only the legacy Filter::compile method."
-    )]
     impl Filter for FailingFilter {
-        fn compile(&self, _expr: &str) -> Result<Box<dyn Expression>, FilterError> {
+        fn try_compile(&self, _expr: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
             self.compile_count.fetch_add(1, Ordering::Relaxed);
-            Err(FilterError::new("expected test compile failure"))
+            Err(FilterCompileError::new(
+                FilterCompileErrorKind::UnexpectedToken,
+                FilterCompileStage::Parse,
+                None,
+            ))
         }
 
         fn of_type(&self) -> &str {
@@ -954,12 +952,8 @@ mod tests {
         filter_type: String,
     }
 
-    #[allow(
-        deprecated,
-        reason = "This compatibility fixture intentionally implements only the legacy Filter::compile method."
-    )]
     impl Filter for PassingFilter {
-        fn compile(&self, _expr: &str) -> Result<Box<dyn Expression>, FilterError> {
+        fn try_compile(&self, _expr: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
             Ok(Box::new(LiteralTrueExpression))
         }
 
@@ -974,12 +968,8 @@ mod tests {
         compile_count: Arc<AtomicUsize>,
     }
 
-    #[allow(
-        deprecated,
-        reason = "This compatibility fixture intentionally implements only the legacy Filter::compile method."
-    )]
     impl Filter for CountingPassingFilter {
-        fn compile(&self, _expr: &str) -> Result<Box<dyn Expression>, FilterError> {
+        fn try_compile(&self, _expr: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
             self.compile_count.fetch_add(1, Ordering::Relaxed);
             Ok(Box::new(LiteralTrueExpression))
         }

@@ -38,7 +38,7 @@ use rocketmq_client_rust::SubscriptionGroupConfigPatchOutcome as ClientSubscript
 use rocketmq_client_rust::TopicConfigPatch as ClientTopicConfigPatch;
 use rocketmq_client_rust::TopicConfigPatchOutcome as ClientTopicConfigPatchOutcome;
 use rocketmq_client_rust::TopicOffsetMutationFailureCode as ClientTopicOffsetMutationFailureCode;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::topic::TopicConfig;
 use rocketmq_model::topic::DLQ_GROUP_TOPIC_PREFIX;
@@ -1434,7 +1434,7 @@ fn validate_exact_targets(
 }
 
 fn exact_target_drift(operation: &'static str, reason: impl Into<String>) -> AdminError {
-    AdminError::backend_view(operation, "TARGET_DRIFT", reason, None, 409, false)
+    AdminError::target_drift(operation, reason)
 }
 
 fn exact_target_label(target: &ConsumerExactBatchDeleteTarget) -> String {
@@ -1975,17 +1975,8 @@ fn map_offset_outcome(outcome: rocketmq_client_rust::TopicOffsetMutationOutcome)
     }
 }
 
-fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
-    let view = error.boundary_view();
-    let context = (!view.context().is_empty()).then(|| view.context().to_string());
-    AdminError::backend_view(
-        operation,
-        view.code().as_str(),
-        view.message(),
-        context,
-        view.http().status.as_u16(),
-        view.is_retryable(),
-    )
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }
 
 fn map_proxy_drain_state(
@@ -2091,8 +2082,8 @@ mod tests {
         ];
 
         let error = validate_exact_delete_targets(&cluster_info, &confirmed).expect_err("address drift");
-        assert_eq!(error.code(), Some("TARGET_DRIFT"));
-        assert_eq!(error.http_status(), Some(409));
+        assert_eq!(error.code().as_str(), "client.lifecycle.invalid_state");
+        assert_eq!(error.http_status(), rocketmq_error::HttpStatusCode::CONFLICT);
     }
 
     #[test]
@@ -2113,8 +2104,8 @@ mod tests {
         ];
 
         let error = validate_exact_upsert_targets(&cluster_info, &confirmed).expect_err("address drift");
-        assert_eq!(error.code(), Some("TARGET_DRIFT"));
-        assert_eq!(error.http_status(), Some(409));
+        assert_eq!(error.code().as_str(), "client.lifecycle.invalid_state");
+        assert_eq!(error.http_status(), rocketmq_error::HttpStatusCode::CONFLICT);
     }
 
     fn exact_delete_cluster(address: &str) -> ClusterInfo {

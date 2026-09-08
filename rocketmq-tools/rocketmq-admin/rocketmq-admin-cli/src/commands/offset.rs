@@ -19,7 +19,7 @@ mod reset_offset_by_time_sub_command;
 mod skip_accumulated_message_sub_command;
 
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::offset::clone_group_offset_sub_command::CloneGroupOffsetSubCommand;
@@ -92,7 +92,7 @@ impl CommandExecute for OffsetCommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             OffsetCommands::CloneGroupOffset(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
             OffsetCommands::GetConsumerStatus(cmd) => cmd.execute(credentials, client_runtime.clone()).await,

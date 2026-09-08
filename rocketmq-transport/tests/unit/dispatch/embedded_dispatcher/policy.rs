@@ -163,7 +163,7 @@ impl RPCHook for AddressHook {
         &self,
         _remote_addr: SocketAddr,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -173,7 +173,7 @@ impl RPCHook for AddressHook {
         _remote_addr: SocketAddr,
         _request: &RemotingCommand,
         _response: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }

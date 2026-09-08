@@ -16,10 +16,11 @@
 
 use crate::CliExitCode;
 use crate::DiagnosticView;
+use crate::Error;
 use crate::ErrorContext;
 use crate::ErrorDescriptor;
 use crate::PublicErrorView;
-use crate::RocketMQError;
+use crate::SharedError;
 use crate::ViewValueRef;
 
 /// Controls how much safe diagnostic information a CLI error line contains.
@@ -63,11 +64,17 @@ pub struct CliErrorView {
 impl CliErrorView {
     /// Builds a CLI view from the canonical descriptor catalog.
     #[inline]
-    pub fn from_error(error: &RocketMQError) -> Self {
+    pub fn from_error(error: &Error) -> Self {
         Self {
             descriptor: error.descriptor(),
-            context: error.context(),
+            context: error.context().clone(),
         }
+    }
+
+    /// Builds a CLI view from a shared canonical error allocation.
+    #[inline]
+    pub fn from_shared_error(error: &SharedError) -> Self {
+        Self::from_error(error.as_ref())
     }
 
     /// Produces the exit code and stderr line from one catalog projection.
@@ -122,10 +129,17 @@ fn append_diagnostics(stderr: &mut String, descriptor: &'static ErrorDescriptor,
     }
 }
 
-impl From<&RocketMQError> for CliErrorView {
+impl From<&Error> for CliErrorView {
     #[inline]
-    fn from(error: &RocketMQError) -> Self {
+    fn from(error: &Error) -> Self {
         Self::from_error(error)
+    }
+}
+
+impl From<&SharedError> for CliErrorView {
+    #[inline]
+    fn from(error: &SharedError) -> Self {
+        Self::from_shared_error(error)
     }
 }
 
@@ -134,11 +148,13 @@ mod tests {
     use crate::CliErrorView;
     use crate::CliExitCode;
     use crate::CliVerbosity;
-    use crate::RocketMQError;
+    use crate::Error;
+    use crate::ErrorContext;
 
     #[test]
     fn cli_view_uses_descriptor_exit_code_and_stable_code() {
-        let error = RocketMQError::validation_failed("topic", "topic must not be empty");
+        let error = Error::new(&crate::CORE_ARGUMENT_INVALID)
+            .with_context(ErrorContext::new().with_secret_presence(crate::fields::MESSAGE_PRESENT));
         let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
 
         assert_eq!(output.exit_code(), CliExitCode::USAGE);
@@ -147,7 +163,11 @@ mod tests {
 
     #[test]
     fn default_stderr_never_contains_context_or_source_text() {
-        let error = RocketMQError::storage_read_failed("C:/secret/token/file", "permission denied");
+        let error = Error::new(&crate::STORAGE_READ_FAILED).with_context(
+            ErrorContext::new()
+                .with_secret_presence(crate::fields::PATH_PRESENT)
+                .with_secret_presence(crate::fields::SOURCE_PRESENT),
+        );
         let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
         let rendered = output.stderr();
 
@@ -155,16 +175,16 @@ mod tests {
         assert!(!rendered.contains("secret/token"));
         assert!(!rendered.contains("permission denied"));
 
-        let route = CliErrorView::from_error(&RocketMQError::route_not_found("TopicA")).output(CliVerbosity::Default);
+        let route_error = Error::new(&crate::ROUTE_TOPIC_NOT_FOUND)
+            .with_context(ErrorContext::new().with_text(crate::fields::TOPIC, "TopicA"));
+        let route = CliErrorView::from_error(&route_error).output(CliVerbosity::Default);
         assert_eq!(route.stderr(), "ERROR route.topic.not_found: Topic route was not found");
     }
 
     #[test]
     fn verbose_stderr_uses_only_controlled_diagnostic_fields() {
-        let error = RocketMQError::validation_failed(
-            "topic\r\nInjected",
-            format!("password=plain-text C:/private/{}", "x".repeat(65_536)),
-        );
+        let error = Error::new(&crate::CORE_ARGUMENT_INVALID)
+            .with_context(ErrorContext::new().with_secret_presence(crate::fields::MESSAGE_PRESENT));
         let output = CliErrorView::from_error(&error).output(CliVerbosity::Verbose);
         let rendered = output.stderr();
 
@@ -178,17 +198,22 @@ mod tests {
 
     #[test]
     fn verbose_stderr_preserves_typed_scalar_fields() {
-        let error = RocketMQError::MessageTooLarge { actual: 7, limit: 9 };
+        let error = Error::new(&crate::BROKER_MESSAGE_TOO_LARGE).with_context(
+            ErrorContext::new()
+                .with_u64(crate::fields::ACTUAL_BYTES, 7)
+                .with_u64(crate::fields::LIMIT_BYTES, 9),
+        );
         let output = CliErrorView::from_error(&error).output(CliVerbosity::Verbose);
         let rendered = output.stderr();
 
         assert!(rendered.contains("actual_bytes=7"));
         assert!(rendered.contains("limit_bytes=9"));
 
-        let error = RocketMQError::from(crate::ObservabilityError::SubscriberInstallFailed {
-            attempted: true,
-            installed: false,
-        });
+        let error = Error::new(&crate::OBSERVABILITY_SUBSCRIBER_INSTALLATION_FAILED).with_context(
+            ErrorContext::new()
+                .with_bool(crate::fields::ATTEMPTED, true)
+                .with_bool(crate::fields::INSTALLED, false),
+        );
         let output = CliErrorView::from_error(&error).output(CliVerbosity::Verbose);
         assert!(output.stderr().contains("attempted=true"));
         assert!(output.stderr().contains("installed=false"));
@@ -196,7 +221,9 @@ mod tests {
 
     #[test]
     fn verbosity_never_changes_the_descriptor_exit_code() {
-        let view = CliErrorView::from_error(&RocketMQError::route_not_found("TopicA"));
+        let error = Error::new(&crate::ROUTE_TOPIC_NOT_FOUND)
+            .with_context(ErrorContext::new().with_text(crate::fields::TOPIC, "TopicA"));
+        let view = CliErrorView::from_error(&error);
 
         assert_eq!(
             view.output(CliVerbosity::Default).exit_code(),

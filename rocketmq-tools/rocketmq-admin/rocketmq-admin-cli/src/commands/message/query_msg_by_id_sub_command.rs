@@ -16,8 +16,7 @@ use cheetah_string::CheetahString;
 use chrono::Local;
 use chrono::TimeZone;
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::message::MessageConst;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_protocol::common::message::message_decoder::validate_message_id;
@@ -334,19 +333,19 @@ impl CommandExecute for QueryMsgByIdSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         if self.message_ids.is_empty() {
-            return Err(RocketMQError::IllegalArgument(
+            return Err(crate::errors::argument_invalid(
                 "At least one message ID is required".to_string(),
             ));
         }
 
         for msg_id in &self.message_ids {
-            validate_message_id(msg_id).map_err(RocketMQError::IllegalArgument)?;
+            validate_message_id(msg_id).map_err(crate::errors::argument_invalid)?;
         }
 
         if !Self::is_supported_charset(&self.charset) {
-            return Err(RocketMQError::IllegalArgument(format!(
+            return Err(crate::errors::argument_invalid(format!(
                 "Unsupported charset: '{}'. Supported charsets are: UTF-8, ASCII, ISO-8859-1 (also: latin1, latin-1)",
                 self.charset
             )));

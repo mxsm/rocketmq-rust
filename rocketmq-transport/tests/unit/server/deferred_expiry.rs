@@ -20,7 +20,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
@@ -92,14 +91,14 @@ struct TcpDeferredExpiryProcessor {
 }
 
 impl RequestProcessor for TcpDeferredExpiryProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         if request.command().code() == 12 {
             self.state.committed.notify_one();
             return RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                 ResponseCode::Success,
             ))
             .map(HandlerOutcome::Reply)
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()));
+            .map_err(|_| crate::error_helpers::argument_invalid());
         }
         self.state.processes.fetch_add(1, Ordering::SeqCst);
         let owner_deadline = request.control().deadline();
@@ -112,17 +111,17 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
             | DeferredResponderOutcome::Unavailable
             | DeferredResponderOutcome::AlreadyTaken
             | DeferredResponderOutcome::OutcomeCompleted => {
-                return Err(RocketMQError::illegal_argument("deferred responder unavailable"));
+                return Err(crate::error_helpers::argument_invalid());
             }
         };
         let retained = DeferredRegistry::<i32>::try_retained_size(DeferredRetainedSizeParts::new(0))
-            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))?;
+            .map_err(|_| crate::error_helpers::argument_invalid())?;
         let permit = match self.admission.try_reserve(retained) {
             DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
             DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
             | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
             | DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {
-                return Err(RocketMQError::illegal_argument("deferred admission rejected"));
+                return Err(crate::error_helpers::argument_invalid());
             }
         };
         let now = tokio::time::Instant::now();
@@ -134,22 +133,20 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
         let mut parts = DeferredParts::new(responder, permit);
         match parts
             .try_with_expiry(protocol_at, self.policy.margins)
-            .map_err(|_| RocketMQError::illegal_argument("deferred expiry contract failed"))?
+            .map_err(|_| crate::error_helpers::argument_invalid())?
         {
             DeferredExpiryOutcome::Attached => {}
             DeferredExpiryOutcome::AlreadyAttached => {
-                return Err(RocketMQError::illegal_argument("deferred expiry already attached"));
+                return Err(crate::error_helpers::argument_invalid());
             }
             DeferredExpiryOutcome::OwnerBudgetInsufficient => {
-                return Err(RocketMQError::illegal_argument(
-                    "deferred expiry owner budget is insufficient",
-                ));
+                return Err(crate::error_helpers::argument_invalid());
             }
             DeferredExpiryOutcome::ProtocolAlreadyExpired => {
-                return Err(RocketMQError::illegal_argument("deferred protocol expiry elapsed"));
+                return Err(crate::error_helpers::argument_invalid());
             }
             DeferredExpiryOutcome::OwnerAlreadyExpired => {
-                return Err(RocketMQError::illegal_argument("deferred owner deadline elapsed"));
+                return Err(crate::error_helpers::argument_invalid());
             }
         }
         let opaque = request.original_identity().original_opaque();
@@ -162,7 +159,7 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
             | DeferredRegistryOutcome::DeadlineExpired
             | DeferredRegistryOutcome::ContractViolation { .. }
             | DeferredRegistryOutcome::OperationalFailure { .. } => {
-                return Err(RocketMQError::illegal_argument("deferred registration rejected"));
+                return Err(crate::error_helpers::argument_invalid());
             }
             DeferredRegistryOutcome::BuilderRejected { error, .. } => match error {},
         };
@@ -171,7 +168,7 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
                 id: registration.deferred_id(),
                 scheduled_at,
             })
-            .map_err(|_| RocketMQError::illegal_argument("expiry registration observer closed"))?;
+            .map_err(|_| crate::error_helpers::argument_invalid())?;
         Ok(HandlerOutcome::Deferred(registration))
     }
 
@@ -309,7 +306,7 @@ async fn real_tcp_protocol_timeout_sweeps_and_resumes_exactly_once() {
                     RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                     Bytes::from_static(b"protocol-timeout"),
                 )
-                .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                .map_err(|_| crate::error_helpers::argument_invalid())
             },
         )
         .await
@@ -437,7 +434,7 @@ async fn real_tcp_parent_service_shutdown_terminalizes_accepted_resume_without_a
         RemotingResponse::command(RemotingCommand::create_response_command_with_code(
             ResponseCode::Success,
         ))
-        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+        .map_err(|_| crate::error_helpers::argument_invalid())
     });
     tokio::pin!(resume);
     tokio::select! {

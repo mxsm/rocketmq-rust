@@ -76,7 +76,7 @@ pub struct ProxyDrainSnapshot {
     pub pending: ProxyDrainPending,
 }
 
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[derive(Debug, Error, Clone)]
 pub enum ProxyDrainError {
     #[error("Proxy drain operation id must contain between 1 and {MAX_OPERATION_ID_BYTES} bytes")]
     InvalidOperationId,
@@ -96,8 +96,11 @@ pub enum ProxyDrainError {
     #[error("Proxy drain operation does not match the active operation")]
     OperationMismatch,
 
-    #[error("Proxy readiness transition failed: {message}")]
-    ReadinessTransition { message: String },
+    #[error("Proxy readiness transition failed")]
+    ReadinessTransition {
+        #[source]
+        source: Box<rocketmq_runtime::RuntimeError>,
+    },
 }
 
 #[derive(Debug)]
@@ -171,7 +174,7 @@ impl ProxyDrainController {
         lifecycle
             .suspend_readiness_for_maintenance()
             .map_err(|error| ProxyDrainError::ReadinessTransition {
-                message: error.to_string(),
+                source: Box::new(error),
             })?;
         state.phase = ProxyDrainPhase::Draining;
         state.operation_id = Some(operation_id.to_owned());
@@ -192,7 +195,7 @@ impl ProxyDrainController {
         lifecycle
             .restore_readiness_after_maintenance()
             .map_err(|error| ProxyDrainError::ReadinessTransition {
-                message: error.to_string(),
+                source: Box::new(error),
             })?;
         state.phase = ProxyDrainPhase::Accepting;
         state.operation_id = None;
@@ -318,10 +321,10 @@ mod tests {
     #[test]
     fn begin_fails_closed_without_ready_lifecycle() {
         let controller = ProxyDrainController::default();
-        assert_eq!(
+        assert!(matches!(
             controller.begin("restart-1"),
             Err(ProxyDrainError::LifecycleUnavailable)
-        );
+        ));
 
         let lifecycle = ServiceLifecycle::new(ServiceLifecycleConfig {
             service_name: Arc::from("proxy-drain-test"),
@@ -330,10 +333,14 @@ mod tests {
             liveness_stale_after: Duration::from_secs(30),
         });
         controller.attach_lifecycle(lifecycle).unwrap();
-        assert!(matches!(
-            controller.begin("restart-1"),
-            Err(ProxyDrainError::ReadinessTransition { .. })
-        ));
+        let error = controller.begin("restart-1").expect_err("unready lifecycle");
+        let ProxyDrainError::ReadinessTransition { source } = error else {
+            panic!("expected readiness transition error");
+        };
+        assert_eq!(
+            source.operation(),
+            rocketmq_runtime::RuntimeOperation::SuspendServiceReadiness
+        );
         assert_eq!(controller.phase(), ProxyDrainPhase::Accepting);
     }
 }

@@ -455,6 +455,9 @@ pub(crate) struct BrokerFastFailure {
     inner: Arc<BrokerFastFailureInner>,
 }
 
+type FastFailureEnqueueResult =
+    Result<(Arc<FastFailureTask>, oneshot::Receiver<Option<RemotingCommand>>), Box<RemotingCommand>>;
+
 impl BrokerFastFailure {
     #[cfg(test)]
     pub(crate) fn new(broker_config: Arc<BrokerConfig>) -> Self {
@@ -681,7 +684,7 @@ impl BrokerFastFailure {
         kind: FastFailureQueueKind,
         opaque: i32,
         retained_bytes: usize,
-    ) -> Result<(Arc<FastFailureTask>, oneshot::Receiver<Option<RemotingCommand>>), RemotingCommand> {
+    ) -> FastFailureEnqueueResult {
         self.try_enqueue_with_timestamp(kind, opaque, retained_bytes, current_millis())
     }
 
@@ -716,21 +719,21 @@ impl BrokerFastFailure {
         opaque: i32,
         retained_bytes: usize,
         created_timestamp_millis: u64,
-    ) -> Result<(Arc<FastFailureTask>, oneshot::Receiver<Option<RemotingCommand>>), RemotingCommand> {
+    ) -> FastFailureEnqueueResult {
         let pending_permit = self
             .inner
             .pending_budget
             .try_acquire_data(retained_bytes)
             .map_err(|error| {
                 let usage = self.inner.pending_budget.snapshot();
-                pending_budget_busy_response(
+                Box::new(pending_budget_busy_response(
                     &self.inner.command_factory,
                     opaque,
                     kind,
                     retained_bytes,
                     &usage,
                     error.dimension(),
-                )
+                ))
             })?;
         let (response_tx, response_rx) = oneshot::channel();
         let task_id = self.inner.next_task_id.fetch_add(1, Ordering::AcqRel);
@@ -915,7 +918,7 @@ mod tests {
     }
 
     fn expect_admitted(
-        result: Result<(Arc<FastFailureTask>, oneshot::Receiver<Option<RemotingCommand>>), RemotingCommand>,
+        result: FastFailureEnqueueResult,
     ) -> (Arc<FastFailureTask>, oneshot::Receiver<Option<RemotingCommand>>) {
         match result {
             Ok(admitted) => admitted,
@@ -923,12 +926,10 @@ mod tests {
         }
     }
 
-    fn expect_rejected(
-        result: Result<(Arc<FastFailureTask>, oneshot::Receiver<Option<RemotingCommand>>), RemotingCommand>,
-    ) -> RemotingCommand {
+    fn expect_rejected(result: FastFailureEnqueueResult) -> RemotingCommand {
         match result {
             Ok(_) => panic!("request should exceed the configured pending budget"),
-            Err(response) => response,
+            Err(response) => *response,
         }
     }
 

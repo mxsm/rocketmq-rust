@@ -15,8 +15,8 @@
 use std::net::SocketAddr;
 
 use rand::RngExt;
-use rocketmq_error::Error;
 use rocketmq_error::PublicErrorView;
+use rocketmq_error::SharedError;
 use rocketmq_error::AUTH_PERMISSION_DENIED;
 use rocketmq_error::CORE_ARGUMENT_INVALID;
 use rocketmq_model::common::constant::PermName;
@@ -55,7 +55,7 @@ where
         effective_peer: SocketAddr,
         opaque: i32,
         frozen_filter: Option<NotificationFilterContract>,
-    ) -> rocketmq_error::Result<NotificationCoreOutcome> {
+    ) -> crate::broker_error::BrokerResult<NotificationCoreOutcome> {
         let mut response = self
             .context
             .command_factory
@@ -63,7 +63,9 @@ where
         response.set_opaque_mut(opaque);
 
         if !PermName::is_readable(self.context.policy.broker_permission.get()) {
-            return Err(Error::new(&AUTH_PERMISSION_DENIED));
+            return Err(crate::broker_error::from_canonical(rocketmq_error::Error::new(
+                &AUTH_PERMISSION_DENIED,
+            )));
         }
 
         let Some(topic_config) = self
@@ -85,7 +87,9 @@ where
         };
 
         if !PermName::is_readable(topic_config.perm) {
-            return Err(Error::new(&AUTH_PERMISSION_DENIED));
+            return Err(crate::broker_error::from_canonical(rocketmq_error::Error::new(
+                &AUTH_PERMISSION_DENIED,
+            )));
         }
 
         if request_header.queue_id >= topic_config.get_read_queue_nums() as i32 {
@@ -97,7 +101,9 @@ where
                 effective_peer
             );
             warn!("{}", error_info);
-            return Err(Error::new(&CORE_ARGUMENT_INVALID));
+            return Err(crate::broker_error::from_canonical(rocketmq_error::Error::new(
+                &CORE_ARGUMENT_INVALID,
+            )));
         }
 
         let Some(subscription_group_config) = self
@@ -115,7 +121,9 @@ where
         };
 
         if !subscription_group_config.consume_enable() {
-            return Err(Error::new(&AUTH_PERMISSION_DENIED));
+            return Err(crate::broker_error::from_canonical(rocketmq_error::Error::new(
+                &AUTH_PERMISSION_DENIED,
+            )));
         }
 
         let filter_contract = match frozen_filter {
@@ -189,7 +197,7 @@ where
         }))
     }
 
-    pub(super) fn notification_error_response(&self, error: &Error, opaque: i32) -> RemotingCommand {
+    pub(super) fn notification_error_response(&self, error: &SharedError, opaque: i32) -> RemotingCommand {
         let view = error
             .public_view()
             .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));

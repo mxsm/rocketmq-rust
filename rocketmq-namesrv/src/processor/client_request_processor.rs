@@ -66,7 +66,7 @@ pub struct ClientRequestProcessor {
 
 impl RequestProcessor for ClientRequestProcessor {
     #[inline]
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<HandlerOutcome> {
         let response = self.handle_request(request.command_mut()).await?;
         crate::processor::response_outcome(response)
     }
@@ -76,10 +76,11 @@ impl ClientRequestProcessor {
     pub(crate) async fn handle_request(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let _runtime_guard = self.name_server_runtime_inner.upgrade().ok_or_else(|| {
-            rocketmq_error::RocketMQError::not_initialized("NameServer runtime is no longer available")
-        })?;
+    ) -> crate::NameServerResult<Option<RemotingCommand>> {
+        let _runtime_guard = self
+            .name_server_runtime_inner
+            .upgrade()
+            .ok_or_else(|| crate::namesrv_error::not_initialized("namesrv-runtime"))?;
         let request_code = RequestCode::from(request.code());
         debug!(
             "Name server ClientRequestProcessor Received request code: {:?}",
@@ -104,14 +105,14 @@ impl ClientRequestProcessor {
     fn get_route_info_by_topic(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::NameServerResult<Option<RemotingCommand>> {
         let route_span = rocketmq_observability::trace::namesrv::route_lookup_span();
         let _route_guard = route_span.enter();
         let request_header = match request.decode_command_custom_header::<GetRouteInfoRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
                 route_span.record("result", "invalid_request");
-                return Err(error);
+                return Err(crate::namesrv_error::from_error(error));
             }
         };
         let route_config = self.name_server_runtime_inner.name_server_config();
@@ -124,10 +125,9 @@ impl ClientRequestProcessor {
 
             if !namesrv_ready {
                 warn!("name server not ready. request code {}", request.code());
-                let error = rocketmq_error::RocketMQError::not_initialized("name server not ready");
+                let error = crate::namesrv_error::not_initialized("namesrv-runtime");
                 route_span.record("result", "not_ready");
-                let context = error.context();
-                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                let view = PublicErrorView::try_new(error.descriptor(), error.context())
                     .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
                 return Ok(Some(error_response(
                     view,
@@ -273,7 +273,7 @@ pub(crate) fn encode_topic_route_response(
     topic_route_data: &TopicRouteData,
     request_version: i32,
     accept_standard_json_only: Option<bool>,
-) -> rocketmq_error::RocketMQResult<Vec<u8>> {
+) -> crate::NameServerResult<Vec<u8>> {
     encode_topic_route_response_for_zone(topic_route_data, request_version, accept_standard_json_only, false)
 }
 
@@ -282,16 +282,17 @@ pub(crate) fn encode_topic_route_response_for_zone(
     request_version: i32,
     accept_standard_json_only: Option<bool>,
     force_java_zone_legacy_json: bool,
-) -> rocketmq_error::RocketMQResult<Vec<u8>> {
+) -> crate::NameServerResult<Vec<u8>> {
     #[cfg(test)]
     ROUTE_ENCODE_COUNT.with(|count| count.set(count.get() + 1));
-    if force_java_zone_legacy_json {
+    let result = if force_java_zone_legacy_json {
         topic_route_data.encode()
     } else if should_use_standard_json(request_version, accept_standard_json_only) {
         topic_route_data.encode_standard_json()
     } else {
         topic_route_data.encode()
-    }
+    };
+    result.map_err(|error| crate::namesrv_error::serialization("encode-topic-route", "json", error))
 }
 
 #[cfg(test)]

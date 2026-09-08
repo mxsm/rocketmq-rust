@@ -23,6 +23,7 @@ use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageR
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_proxy_core::error::canonical;
 use rocketmq_proxy_core::EmbeddedDispatchOutcome;
 use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyRemotingBackend;
@@ -83,9 +84,8 @@ impl ProxyRemotingBackend for ClusterRemotingBackend {
                 }
                 _ => return Err(ProxyError::not_implemented("cluster remoting backend request")),
             }?;
-            let response = RemotingResponse::from_command(response).map_err(|error| ProxyError::Transport {
-                message: format!("cluster backend response could not become a remoting response: {error}"),
-            })?;
+            let response = RemotingResponse::from_command(response)
+                .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
             Ok(EmbeddedDispatchOutcome::Reply(response))
         })
     }

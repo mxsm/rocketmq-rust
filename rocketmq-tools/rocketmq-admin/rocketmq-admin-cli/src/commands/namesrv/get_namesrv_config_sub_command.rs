@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use tabled::Table;
 use tabled::Tabled;
 use tabled::settings::Alignment;
@@ -36,7 +36,7 @@ pub struct GetNamesrvConfigSubCommand {
 }
 
 impl GetNamesrvConfigSubCommand {
-    fn request(&self) -> RocketMQResult<NamesrvConfigQueryRequest> {
+    fn request(&self) -> CanonicalResult<NamesrvConfigQueryRequest> {
         NamesrvConfigQueryRequest::try_new(self.common.namesrv_addr.clone())
     }
 }
@@ -46,7 +46,7 @@ impl CommandExecute for GetNamesrvConfigSubCommand {
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = match self.request() {
             Ok(request) => request,
             Err(_) => {

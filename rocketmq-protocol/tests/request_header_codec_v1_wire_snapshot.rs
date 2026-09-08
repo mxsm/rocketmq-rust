@@ -111,7 +111,11 @@ fn v1_named_struct_wire_map_and_decode_quirks_are_frozen() {
     assert!(decoded.nested.nested_flag);
 
     let missing_required = <LegacyHeader as FromMap>::from(&HeaderMap::new()).expect_err("missing requestName");
-    assert!(missing_required.to_string().contains("Missing requestName field"));
+    assert_eq!(missing_required.code().as_str(), "protocol.header.invalid");
+    assert_eq!(
+        missing_required.to_string(),
+        "protocol.header.invalid: Request header is invalid"
+    );
 }
 
 #[test]
@@ -121,9 +125,10 @@ fn v1_required_decode_order_and_absent_optional_defaults_are_frozen() {
         (CheetahString::from_static_str("nestedFlag"), "true".into()),
     ]))
     .expect_err("requestToken remains required after requestName and nested fields are present");
+    assert_eq!(missing_request_token.code().as_str(), "protocol.header.invalid");
     assert_eq!(
         missing_request_token.to_string(),
-        "Request header error: Missing requestToken field"
+        "protocol.header.invalid: Request header is invalid"
     );
 
     let decoded = <LegacyHeader as FromMap>::from(&HeaderMap::from([

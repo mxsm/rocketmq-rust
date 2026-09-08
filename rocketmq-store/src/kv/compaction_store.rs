@@ -21,10 +21,12 @@ use std::sync::Arc;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::utils::cleanup_policy_utils::get_delete_policy_arc_mut;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
@@ -146,7 +148,7 @@ impl CompactionStore {
         *self.payload_resolver.write() = Some(Arc::new(resolver));
     }
 
-    pub(crate) async fn load(&self) -> Result<(), RocketMQError> {
+    pub(crate) async fn load(&self) -> Result<(), StoreError> {
         let Some(root) = self.root.clone() else {
             return Ok(());
         };
@@ -437,15 +439,17 @@ impl CompactionStore {
         true
     }
 
-    pub async fn compact_once(&self) -> Result<usize, RocketMQError> {
+    pub async fn compact_once(&self) -> Result<usize, StoreError> {
         let _generation_guard = self.generation_lock.lock().await;
         self.cleanup_retired().await?;
         let (base_generation, delta_snapshot, inactive_snapshot, merged, generation, before) = {
             let state = self.state.read();
             if state.corrupted {
-                return Err(RocketMQError::StorageCorrupted {
-                    path: self.root_display(),
-                });
+                return Err(
+                    StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, StoreOperation::Read)
+                        .in_component(StoreComponent::Store)
+                        .with_detail(self.root_display()),
+                );
             }
             if state.delta.is_empty() && state.inactive_topics.is_empty() {
                 return Ok(0);
@@ -501,10 +505,14 @@ impl CompactionStore {
         {
             let mut state = self.state.write();
             if state.current.metadata.generation != base_generation {
-                return Err(RocketMQError::storage_write_failed(
-                    self.root_display(),
-                    "compaction generation changed during publication",
-                ));
+                return Err(
+                    StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Flush)
+                        .in_component(StoreComponent::Store)
+                        .with_detail(format!(
+                            "{}: compaction generation changed during publication",
+                            self.root_display()
+                        )),
+                );
             }
             let old_current = state.current.clone();
             if let Some(old_previous) = state.previous.replace(old_current) {
@@ -536,7 +544,7 @@ impl CompactionStore {
         Ok(removed)
     }
 
-    pub(crate) async fn rollback_to_previous_generation(&self) -> Result<bool, RocketMQError> {
+    pub(crate) async fn rollback_to_previous_generation(&self) -> Result<bool, StoreError> {
         let _generation_guard = self.generation_lock.lock().await;
         let (current, previous, next_generation) = {
             let state = self.state.read();
@@ -568,7 +576,7 @@ impl CompactionStore {
         Ok(true)
     }
 
-    async fn materialize_queues(&self, queues: &CompactionQueues) -> Result<CompactionQueues, RocketMQError> {
+    async fn materialize_queues(&self, queues: &CompactionQueues) -> Result<CompactionQueues, StoreError> {
         let mut materialized = queues.clone();
         for queue in materialized.values_mut() {
             for record in queue.values_mut() {
@@ -577,18 +585,25 @@ impl CompactionStore {
                     continue;
                 }
                 let Some(payload) = self.resolve_payload(record).await? else {
-                    return Err(RocketMQError::storage_read_failed(
-                        self.root_display(),
-                        format!(
-                            "compaction source payload is unavailable at physical offset {}",
-                            record.source_physical_offset
-                        ),
-                    ));
+                    return Err(
+                        StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::Read)
+                            .in_component(StoreComponent::Store)
+                            .with_detail(format!(
+                                "{}: compaction source payload is unavailable at physical offset {}",
+                                self.root_display(),
+                                record.source_physical_offset
+                            )),
+                    );
                 };
                 if payload.len() != record.source_size as usize {
-                    return Err(RocketMQError::StorageCorrupted {
-                        path: self.root_display(),
-                    });
+                    return Err(
+                        StoreError::new(&rocketmq_error::STORAGE_STATE_CORRUPTED, StoreOperation::Read)
+                            .in_component(StoreComponent::Store)
+                            .with_detail(format!(
+                                "{}: compaction payload size does not match source record",
+                                self.root_display()
+                            )),
+                    );
                 }
                 record.payload = CompactionPayload::Inline(payload);
             }
@@ -596,7 +611,7 @@ impl CompactionStore {
         Ok(materialized)
     }
 
-    async fn cleanup_retired(&self) -> Result<(), RocketMQError> {
+    async fn cleanup_retired(&self) -> Result<(), StoreError> {
         let deletable = {
             let state = self.state.read();
             state
@@ -781,7 +796,7 @@ impl CompactionStore {
         Some(result)
     }
 
-    async fn resolve_payload(&self, message: &CompactionRecord) -> Result<Option<Bytes>, RocketMQError> {
+    async fn resolve_payload(&self, message: &CompactionRecord) -> Result<Option<Bytes>, StoreError> {
         match &message.payload {
             CompactionPayload::Inline(payload) => Ok(Some(payload.clone())),
             CompactionPayload::CommitLog => Ok(self
@@ -810,12 +825,14 @@ impl CompactionStore {
         }
     }
 
-    fn runtime_scope(&self) -> Result<&StoreRuntimeScope, RocketMQError> {
+    fn runtime_scope(&self) -> Result<&StoreRuntimeScope, StoreError> {
         self.runtime_scope.as_ref().ok_or_else(|| {
-            RocketMQError::storage_write_failed(
-                self.root_display(),
-                "durable compaction store requires a service runtime scope",
-            )
+            StoreError::new(&rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED, StoreOperation::Start)
+                .in_component(StoreComponent::Store)
+                .with_detail(format!(
+                    "{}: durable compaction store requires a service runtime scope",
+                    self.root_display()
+                ))
         })
     }
 
@@ -865,7 +882,7 @@ impl CompactionStore {
     }
 
     #[cfg(test)]
-    fn fail_if(&self, stage: FaultStage) -> Result<(), RocketMQError> {
+    fn fail_if(&self, stage: FaultStage) -> Result<(), StoreError> {
         if self
             .fault_stage
             .compare_exchange(
@@ -876,16 +893,20 @@ impl CompactionStore {
             )
             .is_ok()
         {
-            return Err(RocketMQError::storage_write_failed(
-                self.root_display(),
-                format!("injected compaction {stage:?} failure"),
-            ));
+            return Err(
+                StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Flush)
+                    .in_component(StoreComponent::Store)
+                    .with_detail(format!(
+                        "{}: injected compaction {stage:?} failure",
+                        self.root_display()
+                    )),
+            );
         }
         Ok(())
     }
 
     #[cfg(not(test))]
-    fn fail_if(&self, _stage: FaultStage) -> Result<(), RocketMQError> {
+    fn fail_if(&self, _stage: FaultStage) -> Result<(), StoreError> {
         Ok(())
     }
 }

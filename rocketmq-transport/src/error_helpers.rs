@@ -20,8 +20,6 @@ use std::sync::Arc;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::ErrorDescriptor;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::SerializationError;
 use rocketmq_error::SharedError;
 
 /// Closed diagnostic stage captured by Transport producers.
@@ -237,11 +235,180 @@ pub(crate) fn response_timeout_caused_by_for_remote(
     )
 }
 
-/// Create a decoding error
-#[inline]
-pub(crate) fn decoding_error(required: usize, available: usize) -> RocketMQError {
-    RocketMQError::Serialization(SerializationError::DecodeFailed {
-        format: "binary",
-        message: format!("required {} bytes, got {}", required, available),
-    })
+#[track_caller]
+pub(crate) fn argument_invalid() -> SharedError {
+    source_free(
+        &rocketmq_error::CORE_ARGUMENT_INVALID,
+        ErrorContext::new().with_secret_presence(rocketmq_error::fields::MESSAGE_PRESENT),
+    )
+}
+
+#[track_caller]
+pub(crate) fn argument_invalid_caused_by(source: impl StdError + Send + Sync + 'static) -> SharedError {
+    caused_by(
+        &rocketmq_error::CORE_ARGUMENT_INVALID,
+        ErrorContext::new().with_secret_presence(rocketmq_error::fields::MESSAGE_PRESENT),
+        source,
+    )
+}
+
+#[track_caller]
+pub(crate) fn configuration_invalid(key: &'static str) -> SharedError {
+    source_free(
+        &rocketmq_error::CORE_CONFIGURATION_INVALID,
+        ErrorContext::new()
+            .with_text(rocketmq_error::fields::KEY, key)
+            .with_secret_presence(rocketmq_error::fields::VALUE_PRESENT)
+            .with_secret_presence(rocketmq_error::fields::REASON_PRESENT),
+    )
+}
+
+#[track_caller]
+pub(crate) fn configuration_invalid_caused_by(
+    key: &'static str,
+    source: impl StdError + Send + Sync + 'static,
+) -> SharedError {
+    caused_by(
+        &rocketmq_error::CORE_CONFIGURATION_INVALID,
+        ErrorContext::new()
+            .with_text(rocketmq_error::fields::KEY, key)
+            .with_secret_presence(rocketmq_error::fields::VALUE_PRESENT)
+            .with_secret_presence(rocketmq_error::fields::REASON_PRESENT),
+        source,
+    )
+}
+
+#[track_caller]
+pub(crate) fn client_not_started() -> SharedError {
+    source_free(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED, ErrorContext::new())
+}
+
+#[track_caller]
+pub(crate) fn client_shutting_down() -> SharedError {
+    source_free(&rocketmq_error::CLIENT_LIFECYCLE_SHUTTING_DOWN, ErrorContext::new())
+}
+
+#[track_caller]
+pub(crate) fn operation_timed_out(operation: &'static str, timeout_millis: u64) -> SharedError {
+    source_free(
+        &rocketmq_error::CORE_OPERATION_TIMED_OUT,
+        ErrorContext::new()
+            .with_text(rocketmq_error::fields::OPERATION_DIAGNOSTIC, operation)
+            .with_u64(rocketmq_error::fields::TIMEOUT_MS, timeout_millis),
+    )
+}
+
+#[track_caller]
+#[cfg(test)]
+pub(crate) fn internal_failure(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> SharedError {
+    caused_by(
+        &rocketmq_error::CORE_INTERNAL_FAILURE,
+        ErrorContext::new()
+            .with_text(rocketmq_error::fields::OPERATION_DIAGNOSTIC, operation)
+            .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT),
+        source,
+    )
+}
+
+#[track_caller]
+pub(crate) fn invariant_violated() -> SharedError {
+    source_free(
+        &rocketmq_error::CORE_INTERNAL_FAILURE,
+        ErrorContext::new().with_text(rocketmq_error::fields::OPERATION_DIAGNOSTIC, "invariant_violation"),
+    )
+}
+
+#[track_caller]
+pub(crate) fn serialization_failed(operation: &'static str, format: &'static str) -> SharedError {
+    source_free(
+        &rocketmq_error::CORE_SERIALIZATION_FAILED,
+        ErrorContext::new()
+            .with_text(rocketmq_error::fields::OPERATION_DIAGNOSTIC, operation)
+            .with_text(rocketmq_error::fields::FORMAT, format)
+            .with_secret_presence(rocketmq_error::fields::DETAIL_PRESENT),
+    )
+}
+
+#[track_caller]
+pub(crate) fn serialization_failed_caused_by(
+    operation: &'static str,
+    format: &'static str,
+    source: impl StdError + Send + Sync + 'static,
+) -> SharedError {
+    caused_by(
+        &rocketmq_error::CORE_SERIALIZATION_FAILED,
+        ErrorContext::new()
+            .with_text(rocketmq_error::fields::OPERATION_DIAGNOSTIC, operation)
+            .with_text(rocketmq_error::fields::FORMAT, format)
+            .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT),
+        source,
+    )
+}
+
+#[track_caller]
+pub(crate) fn decoding_error(_required: usize, _available: usize) -> SharedError {
+    serialization_failed("decode", "binary")
+}
+
+#[track_caller]
+pub(crate) fn protocol_response_failed(operation: &'static str) -> SharedError {
+    source_free(
+        &rocketmq_error::PROTOCOL_RESPONSE_FAILED,
+        ErrorContext::new()
+            .with_text(rocketmq_error::fields::OPERATION_DIAGNOSTIC, operation)
+            .with_secret_presence(rocketmq_error::fields::REASON_PRESENT),
+    )
+}
+
+#[track_caller]
+#[cfg(test)]
+pub(crate) fn message_property_invalid(property: impl Into<String>) -> SharedError {
+    source_free(
+        &rocketmq_error::PROTOCOL_MESSAGE_PROPERTY_INVALID,
+        ErrorContext::new().with_text(rocketmq_error::fields::PROPERTY, property.into()),
+    )
+}
+
+#[track_caller]
+pub(crate) fn rpc_broker_address_not_found(broker: impl Into<String>) -> SharedError {
+    source_free(
+        &rocketmq_error::RPC_BROKER_ADDRESS_NOT_FOUND,
+        ErrorContext::new().with_text(rocketmq_error::fields::BROKER, broker.into()),
+    )
+}
+
+#[track_caller]
+pub(crate) fn rpc_request_failed(
+    remote_addr: impl Into<String>,
+    request_code: i32,
+    timeout_millis: u64,
+    source: impl StdError + Send + Sync + 'static,
+) -> SharedError {
+    caused_by(
+        &rocketmq_error::RPC_REQUEST_FAILED,
+        ErrorContext::new()
+            .with_text(rocketmq_error::fields::REMOTE_ADDR, remote_addr.into())
+            .with_i64(rocketmq_error::fields::REQUEST_CODE, i64::from(request_code))
+            .with_u64(rocketmq_error::fields::TIMEOUT_MS, timeout_millis)
+            .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT),
+        source,
+    )
+}
+
+#[track_caller]
+pub(crate) fn rpc_response_failed(code: i32) -> SharedError {
+    source_free(
+        &rocketmq_error::RPC_RESPONSE_FAILED,
+        ErrorContext::new()
+            .with_i64(rocketmq_error::fields::REMOTE_CODE, i64::from(code))
+            .with_secret_presence(rocketmq_error::fields::MESSAGE_PRESENT),
+    )
+}
+
+#[track_caller]
+pub(crate) fn rpc_request_unsupported(code: i32) -> SharedError {
+    source_free(
+        &rocketmq_error::RPC_REQUEST_UNSUPPORTED,
+        ErrorContext::new().with_i64(rocketmq_error::fields::REQUEST_CODE, i64::from(code)),
+    )
 }

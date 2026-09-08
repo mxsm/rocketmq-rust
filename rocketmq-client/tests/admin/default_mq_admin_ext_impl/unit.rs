@@ -31,8 +31,8 @@ use std::time::Duration;
 use crate::admin::capability::{AuthAdmin, BrokerAdmin, ConsumerAdmin, OffsetAdmin, RouteAdmin, TopicAdmin};
 use crate::base::client_config::ClientConfig;
 use crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum;
+use crate::ClientError;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::base::plain_access_config::PlainAccessConfig;
 use rocketmq_model::common::base::service_state::ServiceState;
 use rocketmq_model::common::config::TopicConfig;
@@ -459,13 +459,13 @@ async fn acl_info_facades_without_started_client_return_typed_errors() {
         .create_acl_with_acl_info(CheetahString::from("127.0.0.1:10911"), acl_info.clone())
         .await
         .expect_err("create_acl_with_acl_info should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .update_acl_with_acl_info(CheetahString::from("127.0.0.1:10911"), acl_info)
         .await
         .expect_err("update_acl_with_acl_info should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[tokio::test]
@@ -479,7 +479,7 @@ async fn acl_subject_facades_without_started_client_return_typed_errors() {
     )
     .await
     .expect_err("create_acl_with_info should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = AuthAdmin::update_acl_with_info(
         &admin,
@@ -488,7 +488,7 @@ async fn acl_subject_facades_without_started_client_return_typed_errors() {
     )
     .await
     .expect_err("update_acl_with_info should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[tokio::test]
@@ -499,7 +499,7 @@ async fn examine_broker_cluster_acl_version_info_without_started_client_returns_
         .await
         .expect_err("examine_broker_cluster_acl_version_info should require a started client");
 
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[tokio::test]
@@ -514,13 +514,13 @@ async fn acl_info_facades_reject_blank_subject_before_remoting() {
         .create_acl_with_acl_info(CheetahString::from("127.0.0.1:10911"), acl_info.clone())
         .await
         .expect_err("create_acl_with_acl_info should reject blank subject locally");
-    assert!(matches!(error, rocketmq_error::RocketMQError::IllegalArgument(_)));
+    assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
 
     let error = admin
         .update_acl_with_acl_info(CheetahString::from("127.0.0.1:10911"), acl_info)
         .await
         .expect_err("update_acl_with_acl_info should reject blank subject locally");
-    assert!(matches!(error, rocketmq_error::RocketMQError::IllegalArgument(_)));
+    assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
 }
 
 #[tokio::test]
@@ -531,13 +531,13 @@ async fn acl_subject_facades_reject_blank_subject_before_remoting() {
         AuthAdmin::create_acl_with_info(&admin, CheetahString::from("127.0.0.1:10911"), CheetahString::default())
             .await
             .expect_err("create_acl_with_info should reject blank subject locally");
-    assert!(matches!(error, rocketmq_error::RocketMQError::IllegalArgument(_)));
+    assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
 
     let error =
         AuthAdmin::update_acl_with_info(&admin, CheetahString::from("127.0.0.1:10911"), CheetahString::default())
             .await
             .expect_err("update_acl_with_info should reject blank subject locally");
-    assert!(matches!(error, rocketmq_error::RocketMQError::IllegalArgument(_)));
+    assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
 }
 
 #[test]
@@ -760,16 +760,16 @@ fn topic_config_lookup_maps_topic_not_exist_to_false_only() {
     let missing = mq_client_err!(ResponseCode::TopicNotExist as i32, "topic not exist");
     assert!(!map_topic_config_lookup_result::<()>(Err(missing)).expect("TopicNotExist should map to false"));
 
-    let client_not_started = RocketMQError::ClientNotStarted;
+    let client_not_started = ClientError::not_started();
     let error = map_topic_config_lookup_result::<()>(Err(client_not_started))
         .expect_err("non broker topic-not-exist errors should stay typed errors");
-    assert!(matches!(error, RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[test]
 fn reset_offset_new_fallback_classifier_matches_java_consumer_not_online_branch() {
     let broker_error =
-        RocketMQError::broker_operation_failed("BROKER_OPERATION", ResponseCode::ConsumerNotOnline as i32, "offline")
+        ClientError::broker_operation_failed("BROKER_OPERATION", ResponseCode::ConsumerNotOnline as i32, "offline")
             .with_broker_addr("127.0.0.1:10911");
     assert!(is_consumer_not_online_error(&broker_error));
 
@@ -780,7 +780,7 @@ fn reset_offset_new_fallback_classifier_matches_java_consumer_not_online_branch(
     assert!(is_consumer_not_online_error(&legacy_client_error));
 
     let other_error =
-        RocketMQError::broker_operation_failed("BROKER_OPERATION", ResponseCode::SystemError as i32, "system error");
+        ClientError::broker_operation_failed("BROKER_OPERATION", ResponseCode::SystemError as i32, "system error");
     assert!(!is_consumer_not_online_error(&other_error));
 }
 
@@ -918,7 +918,7 @@ async fn update_consume_offset_without_started_client_returns_typed_error() {
         .await
         .expect_err("unstarted admin should not try to send update offset");
 
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[tokio::test]
@@ -936,7 +936,7 @@ async fn update_lite_pull_consumer_offset_without_started_client_returns_typed_e
         .await
         .expect_err("unstarted admin should not try to send lite pull update offset");
 
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[tokio::test]
@@ -952,7 +952,7 @@ async fn sync_broker_member_group_without_started_client_returns_typed_error() {
         .await
         .expect_err("sync_broker_member_group should require a started client");
 
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[tokio::test]
@@ -968,11 +968,7 @@ async fn sync_broker_member_group_rejects_controller_addr() {
         .await
         .expect_err("sync_broker_member_group should not silently ignore controller_addr");
 
-    assert!(matches!(
-        error,
-        rocketmq_error::RocketMQError::IllegalArgument(message)
-            if message.contains("controllerAddr is not supported")
-    ));
+    assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
 }
 
 #[tokio::test]
@@ -991,7 +987,7 @@ async fn notify_min_broker_id_changed_without_started_client_returns_typed_error
         .await
         .expect_err("notify_min_broker_id_changed should require a started client");
 
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[tokio::test]
@@ -1006,11 +1002,7 @@ async fn export_rocksdb_consumer_offset_to_json_rejects_local_file_path() {
         .await
         .expect_err("RPC export cannot accept local export file path");
 
-    assert!(matches!(
-        error,
-        rocketmq_error::RocketMQError::IllegalArgument(message)
-            if message.contains("filePath is local-mode only")
-    ));
+    assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
 }
 
 #[tokio::test]
@@ -1022,7 +1014,7 @@ async fn export_rocksdb_consumer_offset_to_json_without_started_client_returns_t
         .await
         .expect_err("RPC export should require a started client");
 
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[tokio::test]
@@ -1034,7 +1026,7 @@ async fn export_rocksdb_consumer_offset_from_memory_without_started_client_retur
         .await
         .expect_err("memory export should require a started client");
 
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[test]
@@ -1092,7 +1084,7 @@ async fn reset_offset_by_queue_id_without_started_client_returns_typed_error() {
         .await
         .expect_err("unstarted admin should not try to reset offset");
 
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[test]
@@ -1131,7 +1123,7 @@ async fn update_and_get_group_read_forbidden_without_started_client_returns_type
         .await
         .expect_err("unstarted admin should not try to update group forbidden state");
 
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[tokio::test]
@@ -1157,7 +1149,7 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
     let result = admin
         .pull_message_from_queue("127.0.0.1:10911", &mq, "*", 0, 32, 3000)
         .await;
-    assert!(matches!(result, Err(rocketmq_error::RocketMQError::ClientNotStarted)));
+    assert!(matches!(result, Err(error) if error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED)));
 
     let error = admin
         .delete_topic_in_broker(
@@ -1166,7 +1158,7 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("delete_topic_in_broker should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .set_message_request_mode(
@@ -1179,13 +1171,13 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("set_message_request_mode should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .get_parent_topic_info(CheetahString::from("127.0.0.1:10911"), CheetahString::from("TopicTest"))
         .await
         .expect_err("get_parent_topic_info should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .create_lite_pull_topic(
@@ -1198,7 +1190,7 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("create_lite_pull_topic should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .update_lite_pull_topic(
@@ -1209,13 +1201,13 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("update_lite_pull_topic should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .get_lite_pull_topic(CheetahString::from("127.0.0.1:10911"), CheetahString::from("LiteTopic"))
         .await
         .expect_err("get_lite_pull_topic should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .delete_lite_pull_topic(
@@ -1225,55 +1217,55 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("delete_lite_pull_topic should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .query_lite_pull_topic_list(CheetahString::from("127.0.0.1:10911"))
         .await
         .expect_err("query_lite_pull_topic_list should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .query_lite_pull_topic_by_cluster(CheetahString::from("cluster-a"))
         .await
         .expect_err("query_lite_pull_topic_by_cluster should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .query_lite_pull_subscription_list(CheetahString::from("127.0.0.1:10911"), CheetahString::from("TopicTest"))
         .await
         .expect_err("query_lite_pull_subscription_list should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .examine_topic_config(CheetahString::from("127.0.0.1:10911"), CheetahString::from("TopicTest"))
         .await
         .expect_err("examine_topic_config should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .get_topic_config_by_topic_name(CheetahString::from("127.0.0.1:10911"), CheetahString::from("TopicTest"))
         .await
         .expect_err("get_topic_config_by_topic_name should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .get_topic_stats_info(CheetahString::from("127.0.0.1:10911"), CheetahString::from("TopicTest"))
         .await
         .expect_err("get_topic_stats_info should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .query_broker_has_topic(CheetahString::from("127.0.0.1:10911"), CheetahString::from("TopicTest"))
         .await
         .expect_err("query_broker_has_topic should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .fetch_topics_by_cluster(CheetahString::from("cluster-a"))
         .await
         .expect_err("fetch_topics_by_cluster should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .create_and_update_plain_access_config(
@@ -1287,37 +1279,37 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("create_and_update_plain_access_config should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .delete_plain_access_config(CheetahString::from("127.0.0.1:10911"), CheetahString::from("AK"))
         .await
         .expect_err("delete_plain_access_config should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .get_system_topic_list_from_broker(CheetahString::from("127.0.0.1:10911"))
         .await
         .expect_err("get_system_topic_list_from_broker should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .get_kv_list_by_namespace(CheetahString::from("namespace-a"))
         .await
         .expect_err("get_kv_list_by_namespace should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .examine_topic_route_info_with_timeout(CheetahString::from("TopicTest"), 3000)
         .await
         .expect_err("examine_topic_route_info_with_timeout should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .query_consume_time_span(CheetahString::from("TopicTest"), CheetahString::from("group-a"))
         .await
         .expect_err("query_consume_time_span should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .reset_offset_new(
@@ -1327,7 +1319,7 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("reset_offset_new should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let result = admin
         .reset_offset_new_concurrent(
@@ -1343,7 +1335,7 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         .query_topics_by_consumer(CheetahString::from("group-a"))
         .await
         .expect_err("query_topics_by_consumer should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let result = admin
         .query_topics_by_consumer_concurrent(CheetahString::from("group-a"))
@@ -1359,7 +1351,7 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("examine_consume_stats_with_queue should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let result = admin
         .examine_consume_stats_concurrent(CheetahString::from("group-a"), Some(CheetahString::from("TopicTest")))
@@ -1381,7 +1373,7 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         .query_subscription(CheetahString::from("group-a"), CheetahString::from("TopicTest"))
         .await
         .expect_err("query_subscription should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .clone_group_offset(
@@ -1392,18 +1384,18 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("clone_group_offset should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .get_cluster_list(String::from("TopicTest"))
         .await
         .expect_err("get_cluster_list should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let result = admin
         .fetch_consume_stats_in_broker(CheetahString::from("127.0.0.1:10911"), false, 3000)
         .await;
-    assert!(matches!(result, Err(rocketmq_error::RocketMQError::ClientNotStarted)));
+    assert!(matches!(result, Err(error) if error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED)));
 
     let error = admin
         .update_global_white_addr_config(
@@ -1413,7 +1405,7 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("update_global_white_addr_config should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .update_global_white_addr_config(
@@ -1423,7 +1415,7 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("update_global_white_addr_config should require a started client before validating RPC fields");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .create_static_topic(
@@ -1435,7 +1427,7 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("create_static_topic should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .resume_check_half_message(
@@ -1444,7 +1436,7 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("resume_check_half_message should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .switch_timer_engine(
@@ -1453,25 +1445,25 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("switch_timer_engine should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .remove_cold_data_flow_ctr_group_config(CheetahString::from("127.0.0.1:10911"), CheetahString::from("group-a"))
         .await
         .expect_err("remove_cold_data_flow_ctr_group_config should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .get_cold_data_flow_ctr_info(CheetahString::from("127.0.0.1:10911"))
         .await
         .expect_err("get_cold_data_flow_ctr_info should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .set_commit_log_read_ahead_mode(CheetahString::from("127.0.0.1:10911"), CheetahString::from("1"))
         .await
         .expect_err("set_commit_log_read_ahead_mode should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .create_user_with_info(
@@ -1481,7 +1473,7 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("create_user_with_info should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .update_user_with_info(
@@ -1491,49 +1483,49 @@ async fn admin_api_facades_without_started_client_return_typed_errors() {
         )
         .await
         .expect_err("update_user_with_info should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .export_pop_records(CheetahString::from("127.0.0.1:10911"), 3000)
         .await
         .expect_err("export_pop_records should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .clean_expired_consumer_queue(None, Some(CheetahString::from("127.0.0.1:10911")))
         .await
         .expect_err("clean_expired_consumer_queue should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .clean_expired_consumer_queue_by_addr(CheetahString::from("127.0.0.1:10911"))
         .await
         .expect_err("clean_expired_consumer_queue_by_addr should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .delete_expired_commit_log(None, Some(CheetahString::from("127.0.0.1:10911")))
         .await
         .expect_err("delete_expired_commit_log should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .delete_expired_commit_log_by_addr(CheetahString::from("127.0.0.1:10911"))
         .await
         .expect_err("delete_expired_commit_log_by_addr should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .clean_unused_topic(None, Some(CheetahString::from("127.0.0.1:10911")))
         .await
         .expect_err("clean_unused_topic should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let error = admin
         .clean_unused_topic_by_addr(CheetahString::from("127.0.0.1:10911"))
         .await
         .expect_err("clean_unused_topic_by_addr should require a started client");
-    assert!(matches!(error, rocketmq_error::RocketMQError::ClientNotStarted));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 
     let result = admin
         .delete_topic_in_broker_concurrent(

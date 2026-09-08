@@ -24,7 +24,6 @@ use std::time::Instant;
 use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::RemotingAuthContext;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
 use rocketmq_observability::metrics::namesrv::NameServerAdmissionOutcome;
 use rocketmq_observability::metrics::namesrv::NameServerMetrics;
@@ -78,7 +77,7 @@ pub enum NameServerRequestProcessorWrapper {
 }
 
 impl RequestProcessor for NameServerRequestProcessorWrapper {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<HandlerOutcome> {
         let response = match self {
             NameServerRequestProcessorWrapper::ClientRequestProcessor(processor) => {
                 processor.handle_request(request.command_mut()).await
@@ -184,7 +183,7 @@ impl NameServerRequestProcessor {
         original_code: i32,
         request: &mut RemotingCommand,
         broker_session: Option<crate::route::types::BrokerSession>,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::NameServerResult<Option<RemotingCommand>> {
         let request_started = Instant::now();
         let _in_flight_guard = self
             .in_flight_requests
@@ -194,10 +193,9 @@ impl NameServerRequestProcessor {
         let request_class = match classify_namesrv_request(RequestCode::from(original_code)) {
             Some(request_class) => request_class,
             None => {
-                let error = RocketMQError::authentication_failed("request code is not authorized by NameServer");
+                let error = crate::namesrv_error::authentication_failed();
                 self.metrics.record_security_event(NameServerSecurityEvent::AuthDenied);
-                let context = error.context();
-                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                let view = PublicErrorView::try_new(error.descriptor(), error.context())
                     .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
                 return Ok(Some(error_response(
                     view,
@@ -233,9 +231,7 @@ impl NameServerRequestProcessor {
                 reason_code = "protocol-auth-denied",
                 "NameServer request denied"
             );
-            let error = RocketMQError::BrokerPermissionDenied {
-                operation: "authorize".to_owned(),
-            };
+            let error = crate::namesrv_error::permission_denied("authorize");
             self.metrics.record_security_event(NameServerSecurityEvent::AuthDenied);
             self.metrics.record_request(
                 metric_class,
@@ -243,8 +239,7 @@ impl NameServerRequestProcessor {
                 request_started.elapsed(),
                 0,
             );
-            let context = error.context();
-            let view = PublicErrorView::try_new(error.descriptor(), &context)
+            let view = PublicErrorView::try_new(error.descriptor(), error.context())
                 .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
             return Ok(Some(error_response(
                 view,
@@ -300,7 +295,7 @@ impl NameServerRequestProcessor {
                         if let Some(started) = route_request_started {
                             self.metrics.record_route_request(started.elapsed());
                             self.metrics.record_route_error(
-                                rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::Rejected,
+                                rocketmq_observability::metrics::namesrv::NameServerRouteFailureLabel::Rejected,
                             );
                         }
                         let response =
@@ -343,19 +338,19 @@ impl NameServerRequestProcessor {
                     if command.code() == rocketmq_protocol::code::response_code::ResponseCode::TopicNotExist as i32 =>
                 {
                     self.metrics.record_route_error(
-                        rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::NotFound,
+                        rocketmq_observability::metrics::namesrv::NameServerRouteFailureLabel::NotFound,
                     );
                 }
                 Ok(Some(command))
                     if command.code() != rocketmq_protocol::code::response_code::ResponseCode::Success as i32 =>
                 {
                     self.metrics.record_route_error(
-                        rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::Rejected,
+                        rocketmq_observability::metrics::namesrv::NameServerRouteFailureLabel::Rejected,
                     );
                 }
                 Err(_) => {
                     self.metrics.record_route_error(
-                        rocketmq_observability::metrics::namesrv::NameServerRouteErrorKind::Internal,
+                        rocketmq_observability::metrics::namesrv::NameServerRouteFailureLabel::Internal,
                     );
                 }
                 Ok(_) => {}
@@ -395,8 +390,9 @@ impl NameServerRequestProcessor {
 }
 
 impl RequestProcessor for NameServerRequestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
-        let auth_context = RemotingAuthContext::from_request(request)?;
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::NameServerResult<HandlerOutcome> {
+        let auth_context = RemotingAuthContext::from_request(request)
+            .map_err(|error| crate::namesrv_error::from_error(error.into()))?;
         let original_code = request.original_identity().original_code();
         let broker_session = if matches!(
             RequestCode::from(original_code),
@@ -430,7 +426,7 @@ async fn processor_response(
     processor: &mut NameServerRequestProcessorWrapper,
     request: &mut RemotingCommand,
     broker_session: Option<crate::route::types::BrokerSession>,
-) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+) -> crate::NameServerResult<Option<RemotingCommand>> {
     match processor {
         NameServerRequestProcessorWrapper::ClientRequestProcessor(processor) => processor.handle_request(request).await,
         NameServerRequestProcessorWrapper::ClusterTestRequestProcessor(processor) => {
@@ -442,14 +438,12 @@ async fn processor_response(
     }
 }
 
-pub(crate) fn response_outcome(response: Option<RemotingCommand>) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+pub(crate) fn response_outcome(response: Option<RemotingCommand>) -> crate::NameServerResult<HandlerOutcome> {
     let Some(response) = response else {
-        return Err(RocketMQError::invariant_violated(
-            "NameServer processor returned no response without a protocol marker",
-        ));
+        return Err(crate::namesrv_error::invariant("namesrv.processor.response_missing"));
     };
     let response = RemotingResponse::from_command(response)
-        .map_err(|error| RocketMQError::response_process_failed("namesrv.remoting_response", error.to_string()))?;
+        .map_err(|error| crate::namesrv_error::response_source("namesrv.remoting_response", error))?;
     Ok(HandlerOutcome::Reply(response))
 }
 

@@ -15,10 +15,10 @@
 use std::fmt;
 use std::net::SocketAddr;
 
+use crate::ClientError;
 use cheetah_string::CheetahString;
 use rocketmq_auth::cal_signature_segments_with_algorithm;
 use rocketmq_auth::SignatureAlgorithm;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::REDACTED;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_transport::api::RPCHook;
@@ -87,17 +87,17 @@ impl RPCHook for AclClientRPCHook {
         &self,
         _remote_addr: SocketAddr,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         let access_key = self
             .session_credentials
             .access_key()
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| RocketMQError::illegal_argument("ACL AccessKey must not be blank"))?;
+            .ok_or_else(|| ClientError::illegal_argument("ACL AccessKey must not be blank").into_shared_error())?;
         let secret_key = self
             .session_credentials
             .secret_key()
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| RocketMQError::illegal_argument("ACL SecretKey must not be blank"))?;
+            .ok_or_else(|| ClientError::illegal_argument("ACL SecretKey must not be blank").into_shared_error())?;
 
         request.ensure_ext_fields_initialized();
         request.add_ext_field(ACCESS_KEY, access_key.clone());
@@ -119,7 +119,7 @@ impl RPCHook for AclClientRPCHook {
                 secret_key.as_str(),
                 self.signature_algorithm,
             )
-            .map_err(|error| RocketMQError::illegal_argument(format!("Failed to calculate ACL signature: {error}")))?
+            .map_err(|source| ClientError::illegal_argument_source(source).into_shared_error())?
         };
         request.add_ext_field(SIGNATURE, signature);
 
@@ -131,7 +131,7 @@ impl RPCHook for AclClientRPCHook {
         _remote_addr: SocketAddr,
         _request: &RemotingCommand,
         _response: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         Ok(())
     }
 }

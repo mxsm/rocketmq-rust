@@ -20,7 +20,7 @@ mod export_pop_record_sub_command;
 mod rocksdb_config_to_json_sub_command;
 
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::export::export_configs_sub_command::ExportConfigsSubCommand;
@@ -80,7 +80,7 @@ impl CommandExecute for ExportCommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             ExportCommands::ExportConfigs(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
             ExportCommands::ExportMetrics(cmd) => cmd.execute(credentials, client_runtime.clone()).await,

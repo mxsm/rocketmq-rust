@@ -59,13 +59,13 @@ async fn pop_lite_deferred_caller_drop_keeps_gate_until_canonical_terminal_and_r
                     let _ = handler_started_tx.send(());
                     release_handler_rx
                         .await
-                        .map_err(|_| RocketMQError::illegal_argument("terminal handler release closed"))?;
+                        .map_err(|_| crate::broker_error::invalid_argument("terminal handler release closed"))?;
                     let batch = reservation.commit();
                     batch.complete(&HashSet::new());
                     RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                         ResponseCode::Success,
                     ))
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                    .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                 },
             )
             .await
@@ -178,7 +178,7 @@ async fn pop_lite_deferred_requeue_stays_affine_until_canonical_writer_terminal(
                         RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::Success,
                         ))
-                        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                     },
                 )
                 .await;
@@ -292,13 +292,13 @@ async fn pop_lite_deferred_staged_requeue_rolls_back_once_when_session_closes_be
                         assert_eq!(reason, DeferredWakeReason::MessageArrived);
                         reservation.commit().complete(&HashSet::from([requeued_event]));
                         let _ = staged_tx.send(());
-                        release_handler_rx
-                            .await
-                            .map_err(|_| RocketMQError::illegal_argument("staged-cancel handler release closed"))?;
+                        release_handler_rx.await.map_err(|_| {
+                            crate::broker_error::invalid_argument("staged-cancel handler release closed")
+                        })?;
                         RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::Success,
                         ))
-                        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                     },
                 )
                 .await;
@@ -407,7 +407,7 @@ async fn pop_lite_deferred_parent_shutdown_settles_staged_requeue_without_a_fram
                         RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::Success,
                         ))
-                        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                     },
                 )
                 .await;
@@ -498,16 +498,16 @@ async fn pop_lite_deferred_session_close_rolls_back_claimed_events_and_gate() {
                             drops: body_drops_for_handler,
                         });
                         let _ = handler_started_tx.send(());
-                        release_handler_rx
-                            .await
-                            .map_err(|_| RocketMQError::illegal_argument("session-close handler release closed"))?;
+                        release_handler_rx.await.map_err(|_| {
+                            crate::broker_error::invalid_argument("session-close handler release closed")
+                        })?;
                         let batch = reservation.commit();
                         batch.complete(&HashSet::new());
                         RemotingResponse::bytes(
                             RemotingCommand::create_response_command_with_code(ResponseCode::Success),
                             body,
                         )
-                        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                     },
                 )
                 .await;

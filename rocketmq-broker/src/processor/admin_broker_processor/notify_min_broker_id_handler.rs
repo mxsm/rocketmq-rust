@@ -62,7 +62,7 @@ impl NotifyMinBrokerChangeIdHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let change_header = request.decode_required_header::<NotifyMinBrokerIdChangeRequestHeader>(
             "decode minimum-broker-id change request header",
         )?;
@@ -71,7 +71,7 @@ impl NotifyMinBrokerChangeIdHandler {
 
         let latest_broker_id = change_header
             .min_broker_id
-            .ok_or_else(|| rocketmq_error::RocketMQError::request_header_error("minBrokerId is required"))?;
+            .ok_or_else(|| crate::broker_error::request_header_error("minBrokerId is required"))?;
 
         warn!(
             "min broker id changed, prev {}, new {}",
@@ -87,7 +87,7 @@ impl NotifyMinBrokerChangeIdHandler {
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         change_header: NotifyMinBrokerIdChangeRequestHeader,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         let broker_config = broker_runtime_inner.broker_config();
 
         if broker_config.enable_slave_acting_master && broker_config.broker_identity.broker_id != MASTER_ID {
@@ -96,7 +96,7 @@ impl NotifyMinBrokerChangeIdHandler {
                     if min_broker_id != broker_runtime_inner.get_min_broker_id_in_group() {
                         // on min broker change
                         let min_broker_addr = change_header.min_broker_addr.as_deref().ok_or_else(|| {
-                            rocketmq_error::RocketMQError::request_header_error(
+                            crate::broker_error::request_header_error(
                                 "minBrokerAddr is required when the minimum broker changes",
                             )
                         })?;

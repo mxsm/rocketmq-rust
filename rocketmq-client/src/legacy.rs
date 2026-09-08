@@ -24,9 +24,9 @@ use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::ClientError;
+use crate::ClientResult;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
@@ -45,15 +45,15 @@ pub use crate::consumer::default_mq_pull_consumer::MQPullConsumer;
 const MODERN_TRANSACTION_LISTENER: &str = "TransactionListener";
 const MODERN_TRACE_HOOKS: &str = "RocketMQ trace hooks";
 
-fn unsupported_legacy_api(api: &str, replacement: &str) -> RocketMQError {
-    RocketMQError::illegal_argument(format!(
+fn unsupported_legacy_api(api: &str, replacement: &str) -> ClientError {
+    ClientError::illegal_argument(format!(
         "{api} is deprecated in the RocketMQ Java client and is not supported by rocketmq-client-rust; use \
          {replacement} instead"
     ))
 }
 
-fn unsupported_impl_api(api: &str) -> RocketMQError {
-    RocketMQError::illegal_argument(format!(
+fn unsupported_impl_api(api: &str) -> ClientError {
+    ClientError::illegal_argument(format!(
         "{api} is a RocketMQ Java impl-package type and is not part of the rocketmq-client-rust public API"
     ))
 }
@@ -83,7 +83,7 @@ impl PullScheduleCore {
             .clone()
     }
 
-    async fn start(self: &Arc<Self>) -> RocketMQResult<()> {
+    async fn start(self: &Arc<Self>) -> ClientResult<()> {
         let mut state = self.state.lock().await;
         match *state {
             ScheduleServiceState::Created => {}
@@ -118,7 +118,7 @@ impl PullScheduleCore {
         Ok(())
     }
 
-    fn spawn_coordinator(self: &Arc<Self>) -> RocketMQResult<()> {
+    fn spawn_coordinator(self: &Arc<Self>) -> ClientResult<()> {
         let core = self.clone();
         let due = Arc::new(Mutex::new(HashMap::<MessageQueue, Instant>::new()));
         let refresh_interval = *self
@@ -168,12 +168,12 @@ impl PullScheduleCore {
                 }
             },
         )
-        .map_err(RocketMQError::from)?;
+        .map_err(|source| ClientError::service_source("classic_pull_schedule", source))?;
         *self.coordinator.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(handle);
         Ok(())
     }
 
-    async fn shutdown(&self) -> RocketMQResult<()> {
+    async fn shutdown(&self) -> ClientResult<()> {
         let mut state = self.state.lock().await;
         match *state {
             ScheduleServiceState::Shutdown => return Ok(()),
@@ -195,10 +195,7 @@ impl PullScheduleCore {
         self.consumer.shutdown().await?;
         *state = ScheduleServiceState::Shutdown;
         if !stopped {
-            return Err(RocketMQError::Timeout {
-                operation: "classic pull schedule shutdown",
-                timeout_ms: 5000,
-            });
+            return Err(ClientError::timeout("classic pull schedule shutdown", 5000));
         }
         Ok(())
     }
@@ -234,7 +231,7 @@ impl MQPullConsumerScheduleService {
     pub fn with_client_runtime(
         client_runtime: Arc<ClientRuntime>,
         consumer_group: impl Into<CheetahString>,
-    ) -> RocketMQResult<Self> {
+    ) -> ClientResult<Self> {
         let consumer_group = consumer_group.into();
         let consumer = DefaultMQPullConsumer::builder(client_runtime.clone())
             .consumer_group(consumer_group.clone())
@@ -252,11 +249,9 @@ impl MQPullConsumerScheduleService {
         })
     }
 
-    fn core(&self) -> RocketMQResult<&Arc<PullScheduleCore>> {
+    fn core(&self) -> ClientResult<&Arc<PullScheduleCore>> {
         self.core.as_ref().ok_or_else(|| {
-            RocketMQError::not_initialized(
-                "MQPullConsumerScheduleService has no ClientRuntime; use with_client_runtime",
-            )
+            ClientError::not_initialized("MQPullConsumerScheduleService has no ClientRuntime; use with_client_runtime")
         })
     }
 
@@ -271,7 +266,7 @@ impl MQPullConsumerScheduleService {
     ///
     /// Returns an initialization error for a detached value, a stable lifecycle error for a
     /// repeated or invalid start, or an underlying consumer or task-spawn error.
-    pub async fn start(&self) -> RocketMQResult<()> {
+    pub async fn start(&self) -> ClientResult<()> {
         self.core()?.start().await
     }
 
@@ -281,7 +276,7 @@ impl MQPullConsumerScheduleService {
     ///
     /// Returns an initialization error for a detached value, an underlying consumer shutdown
     /// error, or a timeout when the coordinator does not stop within the shutdown bound.
-    pub async fn shutdown(&self) -> RocketMQResult<()> {
+    pub async fn shutdown(&self) -> ClientResult<()> {
         self.core()?.shutdown().await
     }
 
@@ -290,7 +285,7 @@ impl MQPullConsumerScheduleService {
     /// # Errors
     ///
     /// Returns an error for a zero duration or a detached schedule service.
-    pub fn set_refresh_interval(&self, refresh_interval: Duration) -> RocketMQResult<()> {
+    pub fn set_refresh_interval(&self, refresh_interval: Duration) -> ClientResult<()> {
         if refresh_interval.is_zero() {
             return Err(crate::mq_client_err!("schedule refresh interval must be positive"));
         }
@@ -307,7 +302,7 @@ impl MQPullConsumerScheduleService {
     /// # Errors
     ///
     /// Returns an error for a blank topic or a detached schedule service.
-    pub fn register_pull_task_callback<C>(&self, topic: impl Into<CheetahString>, callback: C) -> RocketMQResult<()>
+    pub fn register_pull_task_callback<C>(&self, topic: impl Into<CheetahString>, callback: C) -> ClientResult<()>
     where
         C: PullTaskCallback,
     {
@@ -328,7 +323,7 @@ impl MQPullConsumerScheduleService {
     /// # Errors
     ///
     /// Returns an initialization error for a detached schedule service.
-    pub fn default_mq_pull_consumer(&self) -> RocketMQResult<DefaultMQPullConsumer> {
+    pub fn default_mq_pull_consumer(&self) -> ClientResult<DefaultMQPullConsumer> {
         Ok(self.core()?.consumer.clone())
     }
 }
@@ -346,7 +341,7 @@ pub trait PullTaskCallback: Send + Sync + 'static {
         &'a self,
         _message_queue: &'a MessageQueue,
         _context: &'a mut PullTaskContext,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ClientResult<()>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
 }
@@ -414,10 +409,10 @@ impl PullTaskContext {
     ///
     /// Returns an initialization error when the context was constructed directly and no consumer
     /// has been attached.
-    pub fn get_pull_consumer(&self) -> RocketMQResult<DefaultMQPullConsumer> {
+    pub fn get_pull_consumer(&self) -> ClientResult<DefaultMQPullConsumer> {
         self.pull_consumer
             .clone()
-            .ok_or_else(|| RocketMQError::not_initialized("PullTaskContext has no pull consumer"))
+            .ok_or_else(|| ClientError::not_initialized("PullTaskContext has no pull consumer"))
     }
 
     /// Replaces the consumer attached to this context.
@@ -446,11 +441,11 @@ impl PullTaskImpl {
         self.message_queue.as_ref()
     }
 
-    pub fn run(&self) -> RocketMQResult<()> {
+    pub fn run(&self) -> ClientResult<()> {
         self.message_queue
             .as_ref()
             .map(|_| ())
-            .ok_or_else(|| RocketMQError::not_initialized("PullTaskImpl has no message queue"))
+            .ok_or_else(|| ClientError::not_initialized("PullTaskImpl has no message queue"))
     }
 }
 
@@ -462,7 +457,7 @@ impl PullTaskImpl {
 pub struct RebalancePullImpl;
 
 impl RebalancePullImpl {
-    pub fn new() -> RocketMQResult<Self> {
+    pub fn new() -> ClientResult<Self> {
         Ok(Self)
     }
 }
@@ -485,8 +480,8 @@ impl MQHelper {
         _consumer_group: impl Into<CheetahString>,
         _topic: impl Into<CheetahString>,
         _timestamp: u64,
-    ) -> RocketMQResult<()> {
-        Err(RocketMQError::not_initialized(
+    ) -> ClientResult<()> {
+        Err(ClientError::not_initialized(
             "MQHelper requires an application-owned ClientRuntime; use reset_offset_by_timestamp_with_client_runtime",
         ))
     }
@@ -504,7 +499,7 @@ impl MQHelper {
         consumer_group: impl Into<CheetahString>,
         topic: impl Into<CheetahString>,
         timestamp: u64,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let consumer = DefaultMQPullConsumer::builder(client_runtime)
             .consumer_group(consumer_group)
             .message_model(message_model)
@@ -543,7 +538,7 @@ impl MQHelper {
     note = "Java TransactionCheckListener is deprecated; use TransactionListener"
 )]
 pub trait TransactionCheckListener {
-    fn check_local_transaction_state(&self, _message: &MessageExt) -> RocketMQResult<LocalTransactionState> {
+    fn check_local_transaction_state(&self, _message: &MessageExt) -> ClientResult<LocalTransactionState> {
         Err(unsupported_legacy_api(
             "TransactionCheckListener",
             MODERN_TRANSACTION_LISTENER,
@@ -567,7 +562,7 @@ impl SendMessageOpenTracingHookImpl {
         "SendMessageOpenTracingHook"
     }
 
-    pub fn unsupported(&self) -> RocketMQResult<()> {
+    pub fn unsupported(&self) -> ClientResult<()> {
         Err(unsupported_legacy_api(
             "SendMessageOpenTracingHookImpl",
             MODERN_TRACE_HOOKS,
@@ -591,7 +586,7 @@ impl ConsumeMessageOpenTracingHookImpl {
         "ConsumeMessageOpenTracingHook"
     }
 
-    pub fn unsupported(&self) -> RocketMQResult<()> {
+    pub fn unsupported(&self) -> ClientResult<()> {
         Err(unsupported_legacy_api(
             "ConsumeMessageOpenTracingHookImpl",
             MODERN_TRACE_HOOKS,
@@ -615,7 +610,7 @@ impl EndTransactionOpenTracingHookImpl {
         "EndTransactionOpenTracingHook"
     }
 
-    pub fn unsupported(&self) -> RocketMQResult<()> {
+    pub fn unsupported(&self) -> ClientResult<()> {
         Err(unsupported_legacy_api(
             "EndTransactionOpenTracingHookImpl",
             MODERN_TRACE_HOOKS,
@@ -640,11 +635,11 @@ impl DoNothingClientRemotingProcessor {
 pub struct RebalanceImpl;
 
 impl RebalanceImpl {
-    pub fn new() -> RocketMQResult<Self> {
+    pub fn new() -> ClientResult<Self> {
         Err(unsupported_impl_api("RebalanceImpl"))
     }
 
-    pub fn do_rebalance(&self) -> RocketMQResult<()> {
+    pub fn do_rebalance(&self) -> ClientResult<()> {
         Err(unsupported_impl_api("RebalanceImpl"))
     }
 }
@@ -657,7 +652,7 @@ impl ConsumeRequest {
         Self
     }
 
-    pub fn run(&self) -> RocketMQResult<()> {
+    pub fn run(&self) -> ClientResult<()> {
         Err(unsupported_impl_api("ConsumeRequest"))
     }
 }

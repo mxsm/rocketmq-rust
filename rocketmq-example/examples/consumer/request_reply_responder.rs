@@ -16,6 +16,7 @@
 
 #![recursion_limit = "512"]
 
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::DefaultMQProducer;
@@ -23,7 +24,6 @@ use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
 use rocketmq_client_rust::MessageUtil;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
@@ -41,11 +41,11 @@ pub const REPLY_TIMEOUT_MS: u64 = 3000;
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let mut reply_producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
@@ -88,7 +88,7 @@ impl MessageListenerConcurrently for RequestReplyListener {
         &self,
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         for message in messages {
             let request = message.message.clone();
             let mut producer = self.reply_producer.clone();

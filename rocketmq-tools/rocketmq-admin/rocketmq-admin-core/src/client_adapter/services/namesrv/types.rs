@@ -21,8 +21,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::client_adapter::services::admin::AdminBuilder;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
+use rocketmq_error::Result as CanonicalResult;
 
 fn trim_optional_string(value: Option<String>) -> Option<String> {
     value
@@ -30,11 +29,14 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        ));
     }
     Ok(CheetahString::from(value))
 }
@@ -72,12 +74,19 @@ pub struct NamesrvConfigQueryRequest {
 }
 
 impl NamesrvConfigQueryRequest {
-    pub fn try_new(namesrv_addr: Option<String>) -> RocketMQResult<Self> {
-        let namesrv_addr = trim_optional_string(namesrv_addr)
-            .ok_or_else(|| ToolsError::validation_error("namesrvAddr", "namesrvAddr must be provided"))?;
+    pub fn try_new(namesrv_addr: Option<String>) -> CanonicalResult<Self> {
+        let namesrv_addr = trim_optional_string(namesrv_addr).ok_or_else(|| {
+            crate::client_adapter::services::errors::admin_validation_failed(
+                "namesrvAddr",
+                "namesrvAddr must be provided",
+            )
+        })?;
         let namesrv_addrs = parse_namesrv_addrs(Some(&namesrv_addr));
         if namesrv_addrs.is_empty() {
-            return Err(ToolsError::validation_error("namesrvAddr", "namesrvAddr must be provided").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "namesrvAddr",
+                "namesrvAddr must be provided",
+            ));
         }
 
         Ok(Self {
@@ -115,7 +124,7 @@ impl NamesrvConfigUpdateRequest {
         key: impl Into<String>,
         value: impl Into<String>,
         namesrv_addr: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let key = trim_required_cheetah("key", key)?;
         let value = trim_required_cheetah("value", value)?;
         let mut properties = HashMap::with_capacity(1);
@@ -167,7 +176,7 @@ impl KvConfigUpdateRequest {
         namespace: impl Into<String>,
         key: impl Into<String>,
         value: impl Into<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             namespace: trim_required_cheetah("namespace", namespace)?,
             key: trim_required_cheetah("key", key)?,
@@ -214,7 +223,7 @@ pub struct KvConfigDeleteRequest {
 }
 
 impl KvConfigDeleteRequest {
-    pub fn try_new(namespace: impl Into<String>, key: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(namespace: impl Into<String>, key: impl Into<String>) -> CanonicalResult<Self> {
         Ok(Self {
             namespace: trim_required_cheetah("namespace", namespace)?,
             key: trim_required_cheetah("key", key)?,
@@ -262,7 +271,7 @@ pub struct WritePermRequest {
 }
 
 impl WritePermRequest {
-    pub fn try_new(broker_name: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(broker_name: impl Into<String>) -> CanonicalResult<Self> {
         Ok(Self {
             broker_name: trim_required_cheetah("brokerName", broker_name)?,
             namesrv_addr: None,

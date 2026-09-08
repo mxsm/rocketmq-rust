@@ -14,11 +14,14 @@
 
 use std::net::SocketAddr;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_transport::api::EmbeddedCaller;
 use rocketmq_transport::api::RemotingRequest;
 use rocketmq_transport::api::RequestOrigin;
+
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 use rocketmq_transport::api::SessionView;
 
 /// Typed, read-only transport facts used by remoting authentication and authorization.
@@ -73,7 +76,7 @@ impl RemotingAuthContext {
     ///
     /// Returns an authentication error if origin and session kinds disagree or
     /// required network/session metadata is missing.
-    pub fn from_request(request: &RemotingRequest) -> RocketMQResult<Self> {
+    pub fn from_request(request: &RemotingRequest) -> AuthServiceResult<Self> {
         let channel_id = format!(
             "transport-session-{}",
             request.original_identity().request_id().owner_id()
@@ -88,9 +91,7 @@ impl RemotingAuthContext {
                 Self::embedded(channel_id)
             }
             _ => {
-                return Err(RocketMQError::authentication_failed(
-                    "remoting request origin does not match its session",
-                ));
+                return Err(invalid_remoting_context());
             }
         };
         context.validate()?;
@@ -122,46 +123,40 @@ impl RemotingAuthContext {
     ///
     /// Returns an authentication error for missing session identity, missing
     /// network source, or mixed embedded/network facts.
-    pub fn validate(&self) -> RocketMQResult<()> {
+    pub fn validate(&self) -> AuthServiceResult<()> {
         let channel_id = self.channel_id().filter(|value| !value.trim().is_empty());
         if channel_id.is_none() {
-            return Err(RocketMQError::authentication_failed(
-                "remoting authentication context is missing a session identity",
-            ));
+            return Err(invalid_remoting_context());
         }
         if self.embedded {
             if self.source_ip.is_some() {
-                return Err(RocketMQError::authentication_failed(
-                    "embedded remoting authentication context cannot carry a network source",
-                ));
+                return Err(invalid_remoting_context());
             }
             return Ok(());
         }
         if self.source_ip().filter(|value| !value.trim().is_empty()).is_none() {
-            return Err(RocketMQError::authentication_failed(
-                "network remoting authentication context is missing a source address",
-            ));
+            return Err(invalid_remoting_context());
         }
         Ok(())
     }
 }
 
-fn validate_network_origin(peer: SocketAddr, remote_addr: SocketAddr) -> RocketMQResult<()> {
+fn validate_network_origin(peer: SocketAddr, remote_addr: SocketAddr) -> AuthServiceResult<()> {
     if peer != remote_addr {
-        return Err(RocketMQError::authentication_failed(
-            "remoting request peer does not match its session source",
-        ));
+        return Err(invalid_remoting_context());
     }
     Ok(())
 }
 
-fn validate_embedded_caller(caller: EmbeddedCaller) -> RocketMQResult<()> {
+fn validate_embedded_caller(caller: EmbeddedCaller) -> AuthServiceResult<()> {
     match caller {
         EmbeddedCaller::BrokerProxy => Ok(()),
-        _ => Err(RocketMQError::authentication_failed(
-            "embedded remoting caller is not trusted by Broker authentication",
-        )),
+        _ => Err(invalid_remoting_context()),
     }
+}
+
+fn invalid_remoting_context() -> AuthServiceError {
+    AuthServiceError::new(AuthOperation::BuildContext, AuthFailureKind::Unauthenticated)
 }
 
 #[cfg(test)]

@@ -54,11 +54,10 @@ use crate::authorization::model::policy::Policy;
 use crate::authorization::model::policy_entry::PolicyEntry;
 use crate::authorization::model::resource::Resource;
 use crate::config::AuthConfig;
+use crate::AuthFailureKind;
 use crate::AuthServiceError;
 use crate::AuthServiceResult;
 use crate::ProviderRegistry;
-use rocketmq_error::AuthError;
-use rocketmq_error::RocketMQError;
 
 /// Authorization metadata manager.
 ///
@@ -560,7 +559,7 @@ impl AuthorizationMetadataManager {
 
         match provider.get_user(username).await {
             Ok(_) => Ok(()),
-            Err(RocketMQError::Authentication(AuthError::UserNotFound(_))) => Err(AuthServiceError::subject_not_found(
+            Err(error) if error.kind() == AuthFailureKind::NotFound => Err(AuthServiceError::subject_not_found(
                 format!("The subject of {subject_key} is not exist."),
             )),
             Err(error) => Err(AuthServiceError::storage_read_failed(error)),

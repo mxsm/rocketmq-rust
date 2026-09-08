@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use crate::ClientError;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -28,19 +28,16 @@ use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::consumer_impl::re_balance::Rebalance;
 use crate::consumer::pull_status::PullStatus;
 
-pub type PullCallbackFn = Arc<dyn FnOnce(Option<PullResultExt>, Option<RocketMQError>) + Send + Sync>;
+pub type PullCallbackFn = Arc<dyn FnOnce(Option<PullResultExt>, Option<ClientError>) + Send + Sync>;
 
-fn broker_response_code(error: &RocketMQError) -> Option<ResponseCode> {
-    match error {
-        RocketMQError::BrokerOperationFailed { code, .. } => Some(ResponseCode::from(*code)),
-        _ => None,
-    }
+fn broker_response_code(error: &ClientError) -> Option<ResponseCode> {
+    error.broker_response_code().map(ResponseCode::from)
 }
 
 #[trait_variant::make(PullCallback: Send)]
 pub trait PullCallbackLocal: Sync {
     async fn on_success(&mut self, pull_result: PullResultExt);
-    fn on_exception(&mut self, e: RocketMQError);
+    fn on_exception(&mut self, e: ClientError);
 }
 
 pub(crate) struct DefaultPullCallback {
@@ -193,7 +190,7 @@ impl PullCallback for DefaultPullCallback {
         };
     }
 
-    fn on_exception(&mut self, err: RocketMQError) {
+    fn on_exception(&mut self, err: ClientError) {
         let Some(message_queue_inner) = self.message_queue_inner.take() else {
             warn!(
                 "pull callback exception ignored: message queue is missing, error={}",
@@ -261,7 +258,7 @@ mod tests {
 
     #[test]
     fn broker_response_code_reads_broker_error_without_downcast() {
-        let error = rocketmq_error::RocketMQError::broker_operation_failed(
+        let error = crate::ClientError::broker_operation_failed(
             "PULL_MESSAGE",
             ResponseCode::FlowControl.to_i32(),
             "flow control",
@@ -288,6 +285,6 @@ mod tests {
         let mut callback = new_callback();
         callback.message_queue_inner = Some(MessageQueue::from_parts("topic", "broker-a", 0));
 
-        PullCallback::on_exception(&mut callback, RocketMQError::illegal_argument("test error"));
+        PullCallback::on_exception(&mut callback, ClientError::illegal_argument("test error"));
     }
 }

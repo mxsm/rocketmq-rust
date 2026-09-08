@@ -84,9 +84,9 @@ impl DashboardStorageOperationResult {
     }
 }
 
-/// Fixed error kinds that deliberately exclude backend error messages.
+/// Fixed failure labels that deliberately exclude backend error messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DashboardStorageErrorKind {
+pub enum DashboardStorageFailureLabel {
     Capacity,
     Connection,
     Conflict,
@@ -95,7 +95,7 @@ pub enum DashboardStorageErrorKind {
 }
 
 #[cfg(feature = "otel-metrics")]
-impl DashboardStorageErrorKind {
+impl DashboardStorageFailureLabel {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Capacity => "capacity",
@@ -173,18 +173,18 @@ impl DashboardStorageMetricsRecorder {
         backend: DashboardStorageBackend,
         operation: DashboardStorageOperation,
         result: DashboardStorageOperationResult,
-        error_kind: Option<DashboardStorageErrorKind>,
+        failure: Option<DashboardStorageFailureLabel>,
         elapsed: std::time::Duration,
     ) {
         #[cfg(feature = "otel-metrics")]
         if self.telemetry.is_active() {
             if let Some(metrics) = &self.metrics {
-                metrics.record_operation(backend, operation, result, error_kind, elapsed);
+                metrics.record_operation(backend, operation, result, failure, elapsed);
             }
         }
 
         #[cfg(not(feature = "otel-metrics"))]
-        let _ = (backend, operation, result, error_kind, elapsed);
+        let _ = (backend, operation, result, failure, elapsed);
     }
 
     /// Records safe capacity and connection-pool observations from the status view.
@@ -262,7 +262,7 @@ impl DashboardStorageMetrics {
         backend: DashboardStorageBackend,
         operation: DashboardStorageOperation,
         result: DashboardStorageOperationResult,
-        error_kind: Option<DashboardStorageErrorKind>,
+        failure: Option<DashboardStorageFailureLabel>,
         elapsed: std::time::Duration,
     ) {
         let labels = [
@@ -274,13 +274,13 @@ impl DashboardStorageMetrics {
         let elapsed_milliseconds = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
         self.operation_duration_milliseconds
             .record(elapsed_milliseconds, &labels);
-        if let Some(error_kind) = error_kind {
+        if let Some(failure) = failure {
             self.operation_errors_total.add(
                 1,
                 &[
                     opentelemetry::KeyValue::new("backend", backend.as_str()),
                     opentelemetry::KeyValue::new("operation", operation.as_str()),
-                    opentelemetry::KeyValue::new("error_kind", error_kind.as_str()),
+                    opentelemetry::KeyValue::new("error_kind", failure.as_str()),
                 ],
             );
         }
@@ -321,7 +321,7 @@ impl DashboardStorageMetrics {
 #[cfg(test)]
 mod tests {
     use super::DashboardStorageBackend;
-    use super::DashboardStorageErrorKind;
+    use super::DashboardStorageFailureLabel;
     use super::DashboardStorageMetricsRecorder;
     use super::DashboardStorageOperation;
     use super::DashboardStorageOperationResult;
@@ -336,7 +336,7 @@ mod tests {
             DashboardStorageBackend::Sqlite,
             DashboardStorageOperation::HistoryCollection,
             DashboardStorageOperationResult::Failure,
-            Some(DashboardStorageErrorKind::Timeout),
+            Some(DashboardStorageFailureLabel::Timeout),
             std::time::Duration::from_millis(1),
         );
         recorder.record_state(DashboardStorageBackend::File, Some(1), None, None);

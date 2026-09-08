@@ -49,10 +49,11 @@ pub(crate) enum DnsErrorKind {
     Other,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct DnsResolutionError {
     kind: DnsErrorKind,
     message: Arc<str>,
+    source: Option<crate::ClientError>,
 }
 
 impl DnsResolutionError {
@@ -60,11 +61,24 @@ impl DnsResolutionError {
         Self {
             kind,
             message: message.into(),
+            source: None,
+        }
+    }
+
+    pub(crate) fn from_source(kind: DnsErrorKind, source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self {
+            kind,
+            message: Arc::from("DNS resolver returned a typed failure"),
+            source: Some(crate::ClientError::dns_failed_source(source)),
         }
     }
 
     pub(crate) fn kind(&self) -> DnsErrorKind {
         self.kind
+    }
+
+    pub(crate) fn into_client_error(self) -> crate::ClientError {
+        self.source.unwrap_or_else(crate::ClientError::dns_failed)
     }
 }
 
@@ -74,7 +88,11 @@ impl std::fmt::Display for DnsResolutionError {
     }
 }
 
-impl std::error::Error for DnsResolutionError {}
+impl std::error::Error for DnsResolutionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_ref().map(|source| source as _)
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DnsFamilyResult {
@@ -187,7 +205,7 @@ pub(crate) async fn resolve_dns(
         .unwrap_or_else(|| config.min_refresh())
         .clamp(config.min_refresh(), config.max_refresh());
     let authority = NameServerAuthority::parse(format!("{}:{}", host.as_str(), port.get()))
-        .map_err(|error| DnsResolutionError::new(DnsErrorKind::Other, error.to_string()))?;
+        .map_err(|error| DnsResolutionError::from_source(DnsErrorKind::Other, error))?;
     let endpoints = addresses
         .into_iter()
         .map(|address| ResolvedNameServerEndpoint::new(authority.clone(), SocketAddr::new(address, port.get())))
@@ -220,7 +238,7 @@ fn classify_hickory_error(error: NetError) -> DnsResolutionError {
         NetError::Dns(DnsError::NoRecordsFound(_)) => DnsErrorKind::Empty,
         _ => DnsErrorKind::Other,
     };
-    DnsResolutionError::new(kind, error.to_string())
+    DnsResolutionError::from_source(kind, error)
 }
 
 #[cfg(test)]

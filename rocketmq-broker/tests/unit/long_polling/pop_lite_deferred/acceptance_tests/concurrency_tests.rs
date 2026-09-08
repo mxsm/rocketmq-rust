@@ -46,13 +46,13 @@ struct OpaqueRegistrationProcessor {
 }
 
 impl RequestProcessor for OpaqueRegistrationProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let opaque = request.command().opaque();
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         let registration = registration_or_test_error(self.service.register(prepared, request))?;
         self.registrations
             .send((opaque, registration.deferred_id()))
-            .map_err(|_| RocketMQError::illegal_argument("opaque registration observer closed"))?;
+            .map_err(|_| crate::broker_error::invalid_argument("opaque registration observer closed"))?;
         Ok(HandlerOutcome::Deferred(registration))
     }
 
@@ -124,14 +124,14 @@ async fn pop_lite_deferred_different_clients_resume_and_write_in_parallel() {
                             release_handler
                                 .acquire()
                                 .await
-                                .map_err(|_| RocketMQError::illegal_argument("parallel release closed"))?
+                                .map_err(|_| crate::broker_error::invalid_argument("parallel release closed"))?
                                 .forget();
                             let batch = reservation.commit();
                             batch.complete(&HashSet::new());
                             RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                                 ResponseCode::Success,
                             ))
-                            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                            .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                         },
                     )
                     .await;
@@ -234,7 +234,7 @@ async fn pop_lite_deferred_same_client_timeout_is_not_serialized_by_event_gate()
                         RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                             ResponseCode::Success,
                         ))
-                        .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                        .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                     },
                 )
                 .await;
@@ -263,7 +263,7 @@ async fn pop_lite_deferred_same_client_timeout_is_not_serialized_by_event_gate()
                     RemotingResponse::command(RemotingCommand::create_response_command_with_code(
                         ResponseCode::PollingTimeout,
                     ))
-                    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                    .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                 },
             )
             .await
@@ -309,16 +309,16 @@ struct CommitWindowProcessor {
 }
 
 impl RequestProcessor for CommitWindowProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let prepared = prepared_or_test_error(self.service.prepare(request, PopLiteRetainedEstimate::default()))?;
         let registration = registration_or_test_error(self.service.register(prepared, request))?;
         self.registrations
             .send(registration.deferred_id())
-            .map_err(|_| RocketMQError::illegal_argument("commit-window observer closed"))?;
+            .map_err(|_| crate::broker_error::invalid_argument("commit-window observer closed"))?;
         self.release
             .acquire()
             .await
-            .map_err(|_| RocketMQError::illegal_argument("commit-window release closed"))?
+            .map_err(|_| crate::broker_error::invalid_argument("commit-window release closed"))?
             .forget();
         Ok(HandlerOutcome::Deferred(registration))
     }

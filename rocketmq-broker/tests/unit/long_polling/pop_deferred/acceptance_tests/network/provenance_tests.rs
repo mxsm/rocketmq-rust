@@ -27,12 +27,12 @@ use crate::long_polling::pop_deferred::service::PopDeferredRegisterOutcome;
 use crate::long_polling::pop_deferred::service::PopDeferredRegisterRejectionKind;
 use crate::long_polling::pop_deferred::service::PreparedPopRegistration;
 
-fn success_reply() -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+fn success_reply() -> crate::broker_error::BrokerResult<HandlerOutcome> {
     RemotingResponse::command(RemotingCommand::create_response_command_with_code(
         ResponseCode::Success,
     ))
     .map(HandlerOutcome::Reply)
-    .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+    .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
 }
 
 #[derive(Default)]
@@ -47,7 +47,7 @@ struct ProvenanceProbeProcessor {
 }
 
 impl RequestProcessor for ProvenanceProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let prepared = {
             let mut state = self.state.lock();
             state.prepared.take()
@@ -67,11 +67,13 @@ impl RequestProcessor for ProvenanceProbeProcessor {
             .service
             .prepare(request, None, None, PopRetainedEstimate::default())
             .map_err(|error| {
-                RocketMQError::Shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
+                crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(&CORE_ARGUMENT_INVALID, error)))
             })? {
             PopDeferredPrepareOutcome::Prepared(prepared) => *prepared,
             PopDeferredPrepareOutcome::Rejected(_) => {
-                return Err(RocketMQError::illegal_argument("unexpected POP preparation rejection"));
+                return Err(crate::broker_error::invalid_argument(
+                    "unexpected POP preparation rejection",
+                ));
             }
         };
         self.state.lock().prepared = Some(prepared);
@@ -86,7 +88,7 @@ struct EmbeddedOriginProbeProcessor {
 }
 
 impl RequestProcessor for EmbeddedOriginProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let Err(error) = self
             .service
             .prepare(request, None, None, PopRetainedEstimate::default())

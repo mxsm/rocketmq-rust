@@ -485,7 +485,7 @@ impl MQConsumer for DefaultMQPushConsumer {
         new_topic: &str,
         queue_num: i32,
         attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         self.create_topic_with_flag(key, new_topic, queue_num, 0, attributes)
             .await
     }
@@ -497,47 +497,47 @@ impl MQConsumer for DefaultMQPushConsumer {
         queue_num: i32,
         topic_sys_flag: i32,
         attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let new_topic = self.client_config.with_namespace(CheetahString::from(new_topic));
         self.default_mqpush_consumer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?
             .create_topic(key, new_topic.as_str(), queue_num, topic_sys_flag, attributes)
             .await
     }
 
-    async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+    async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> crate::ClientResult<i64> {
         let mq = self.client_config.queue_with_namespace(mq.clone());
         self.default_mqpush_consumer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?
             .search_offset(&mq, timestamp)
             .await
     }
 
-    async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn max_offset(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         let mq = self.client_config.queue_with_namespace(mq.clone());
         self.default_mqpush_consumer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?
             .max_offset(&mq)
             .await
     }
 
-    async fn min_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn min_offset(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         let mq = self.client_config.queue_with_namespace(mq.clone());
         self.default_mqpush_consumer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?
             .min_offset(&mq)
             .await
     }
 
-    async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         let mq = self.client_config.queue_with_namespace(mq.clone());
         self.default_mqpush_consumer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?
             .earliest_msg_store_time(&mq)
             .await
     }
@@ -549,21 +549,21 @@ impl MQConsumer for DefaultMQPushConsumer {
         max_num: i32,
         begin: u64,
         end: u64,
-    ) -> rocketmq_error::RocketMQResult<QueryResult> {
+    ) -> crate::ClientResult<QueryResult> {
         let topic = self.client_config.with_namespace(CheetahString::from(topic));
         self.default_mqpush_consumer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?
             .query_message(topic.as_str(), key, max_num, begin, end)
             .await
     }
 
-    async fn view_message(&mut self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
+    async fn view_message(&mut self, topic: &str, msg_id: &str) -> crate::ClientResult<MessageExt> {
         let topic = self.client_config.with_namespace(CheetahString::from(topic));
         let consumer_impl = self
             .default_mqpush_consumer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?;
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?;
         if MessageDecoder::decode_message_id(msg_id).is_ok() {
             consumer_impl.view_message(topic.as_str(), msg_id).await
         } else {
@@ -576,11 +576,11 @@ impl MQConsumer for DefaultMQPushConsumer {
         mut msg: MessageExt,
         delay_level: i32,
         broker_name: &str,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let consumer_impl = self
             .default_mqpush_consumer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?;
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?;
         let topic = msg.topic().clone();
         msg.set_topic(self.client_config.with_namespace(topic));
         let broker_name = (!broker_name.is_empty()).then(|| CheetahString::from(broker_name));
@@ -589,21 +589,18 @@ impl MQConsumer for DefaultMQPushConsumer {
             .await
     }
 
-    async fn fetch_subscribe_message_queues(
-        &mut self,
-        topic: &str,
-    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
+    async fn fetch_subscribe_message_queues(&mut self, topic: &str) -> crate::ClientResult<Vec<MessageQueue>> {
         let topic = self.client_config.with_namespace(CheetahString::from(topic));
         let consumer_impl = self
             .default_mqpush_consumer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?;
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?;
         consumer_impl.fetch_subscribe_message_queues(topic.as_str()).await
     }
 }
 
 impl MQPushConsumer for DefaultMQPushConsumer {
-    async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    async fn start(&mut self) -> crate::ClientResult<()> {
         let consumer_config = self.consumer_config_snapshot();
         let consumer_group = NamespaceUtil::wrap_namespace(
             self.client_config.get_namespace().unwrap_or_default().as_str(),
@@ -613,7 +610,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         let consumer_impl = self
             .default_mqpush_consumer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?;
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?;
         consumer_impl.start().await?;
 
         let trace_dispatcher_to_start = Self::prepare_trace_dispatcher(
@@ -683,13 +680,13 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         &mut self,
         topic: impl Into<CheetahString>,
         sub_expression: impl Into<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let topic = self.client_config.with_namespace(topic);
         let sub_expression = sub_expression.into();
 
         self.default_mqpush_consumer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?
             .subscribe(topic, sub_expression)
             .await
     }
@@ -698,11 +695,11 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         &mut self,
         topic: &str,
         selector: Option<MessageSelector>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let consumer_impl = self
             .default_mqpush_consumer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?;
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?;
         let topic = self.client_config.with_namespace(CheetahString::from(topic));
         consumer_impl.subscribe_with_selector(topic, selector).await
     }
@@ -725,11 +722,11 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         }
     }
 
-    fn update_core_pool_size(&self, core_pool_size: usize) -> rocketmq_error::RocketMQResult<()> {
+    fn update_core_pool_size(&self, core_pool_size: usize) -> crate::ClientResult<()> {
         let consumer_impl = self
             .default_mqpush_consumer_impl
             .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?;
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?;
         consumer_impl.update_core_pool_size(core_pool_size);
         Ok(())
     }
@@ -740,7 +737,7 @@ impl DefaultMQPushConsumer {
         DefaultMQPushConsumerBuilder::new(client_runtime)
     }
 
-    pub async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn start(&mut self) -> crate::ClientResult<()> {
         <Self as MQPushConsumer>::start(self).await
     }
 
@@ -754,7 +751,7 @@ impl DefaultMQPushConsumer {
         new_topic: &str,
         queue_num: i32,
         attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         <Self as MQConsumer>::create_topic(self, key, new_topic, queue_num, attributes).await
     }
 
@@ -765,23 +762,23 @@ impl DefaultMQPushConsumer {
         queue_num: i32,
         topic_sys_flag: i32,
         attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         <Self as MQConsumer>::create_topic_with_flag(self, key, new_topic, queue_num, topic_sys_flag, attributes).await
     }
 
-    pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> crate::ClientResult<i64> {
         <Self as MQConsumer>::search_offset(self, mq, timestamp).await
     }
 
-    pub async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn max_offset(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         <Self as MQConsumer>::max_offset(self, mq).await
     }
 
-    pub async fn min_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn min_offset(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         <Self as MQConsumer>::min_offset(self, mq).await
     }
 
-    pub async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         <Self as MQConsumer>::earliest_msg_store_time(self, mq).await
     }
 
@@ -792,11 +789,11 @@ impl DefaultMQPushConsumer {
         max_num: i32,
         begin: u64,
         end: u64,
-    ) -> rocketmq_error::RocketMQResult<QueryResult> {
+    ) -> crate::ClientResult<QueryResult> {
         <Self as MQConsumer>::query_message(self, topic, key, max_num, begin, end).await
     }
 
-    pub async fn view_message(&mut self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
+    pub async fn view_message(&mut self, topic: &str, msg_id: &str) -> crate::ClientResult<MessageExt> {
         <Self as MQConsumer>::view_message(self, topic, msg_id).await
     }
 
@@ -805,7 +802,7 @@ impl DefaultMQPushConsumer {
         msg: MessageExt,
         delay_level: i32,
         broker_name: &str,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         <Self as MQConsumer>::send_message_back(self, msg, delay_level, broker_name).await
     }
 
@@ -813,14 +810,11 @@ impl DefaultMQPushConsumer {
         &mut self,
         msg: MessageExt,
         delay_level: i32,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         <Self as MQConsumer>::send_message_back_to_origin_broker(self, msg, delay_level).await
     }
 
-    pub async fn fetch_subscribe_message_queues(
-        &mut self,
-        topic: &str,
-    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
+    pub async fn fetch_subscribe_message_queues(&mut self, topic: &str) -> crate::ClientResult<Vec<MessageQueue>> {
         <Self as MQConsumer>::fetch_subscribe_message_queues(self, topic).await
     }
 
@@ -828,7 +822,7 @@ impl DefaultMQPushConsumer {
         &mut self,
         topic: impl Into<CheetahString>,
         sub_expression: impl Into<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         <Self as MQPushConsumer>::subscribe(self, topic, sub_expression).await
     }
 
@@ -836,7 +830,7 @@ impl DefaultMQPushConsumer {
         &mut self,
         topic: &str,
         selector: Option<MessageSelector>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         <Self as MQPushConsumer>::subscribe_with_selector(self, topic, selector).await
     }
 
@@ -852,16 +846,16 @@ impl DefaultMQPushConsumer {
         <Self as MQPushConsumer>::resume(self).await;
     }
 
-    pub fn update_core_pool_size(&self, core_pool_size: usize) -> rocketmq_error::RocketMQResult<()> {
+    pub fn update_core_pool_size(&self, core_pool_size: usize) -> crate::ClientResult<()> {
         <Self as MQPushConsumer>::update_core_pool_size(self, core_pool_size)
     }
 
     /// Returns a Java-compatible running snapshot for broker admin diagnostics.
-    pub async fn consumer_running_info(&self) -> rocketmq_error::RocketMQResult<ConsumerRunningInfo> {
+    pub async fn consumer_running_info(&self) -> crate::ClientResult<ConsumerRunningInfo> {
         let consumer_impl = self
             .default_mqpush_consumer_impl
             .as_ref()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?;
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?;
         Ok(MQConsumerInner::consumer_running_info(consumer_impl.as_ref()).await)
     }
 
@@ -944,11 +938,11 @@ impl DefaultMQPushConsumer {
     pub fn register_consume_message_hook(
         &mut self,
         hook: impl ConsumeMessageHook + 'static,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let consumer_impl = self
             .default_mqpush_consumer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQPushConsumerImpl"))?;
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQPushConsumerImpl"))?;
         consumer_impl.register_consume_message_hook(hook);
         Ok(())
     }
@@ -1467,7 +1461,7 @@ mod tests {
     }
 
     impl TraceDispatcher for CapturingTraceDispatcher {
-        fn start(&self, name_srv_addr: &str, access_channel: AccessChannel) -> rocketmq_error::RocketMQResult<()> {
+        fn start(&self, name_srv_addr: &str, access_channel: AccessChannel) -> crate::ClientResult<()> {
             self.start_count.fetch_add(1, Ordering::SeqCst);
             *self.last_name_srv_addr.lock().expect("name server lock") = Some(name_srv_addr.to_string());
             *self.last_access_channel.lock().expect("access channel lock") = Some(access_channel);
@@ -1479,7 +1473,7 @@ mod tests {
             true
         }
 
-        fn flush(&self) -> rocketmq_error::RocketMQResult<()> {
+        fn flush(&self) -> crate::ClientResult<()> {
             Ok(())
         }
 
@@ -1503,7 +1497,7 @@ mod tests {
             &self,
             _msgs: &[&MessageExt],
             _context: &ConsumeConcurrentlyContext,
-        ) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus> {
+        ) -> crate::ClientResult<ConsumeConcurrentlyStatus> {
             Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
         }
     }

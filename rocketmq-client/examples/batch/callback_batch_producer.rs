@@ -21,8 +21,8 @@ use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 use std::thread::sleep;
 
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::DefaultMQProducer;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_single::Message;
 use tracing::info;
 
@@ -32,7 +32,7 @@ pub const TOPIC: &str = "TopicTest";
 pub const TAG: &str = "TagA";
 
 #[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+pub async fn main() -> ClientResult<()> {
     let example_runtime = support::ExampleClientRuntime::try_new("callback-batch-producer")?;
     let client_runtime = example_runtime.client_runtime();
     // create a producer builder with default configuration

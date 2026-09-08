@@ -116,14 +116,23 @@ python scripts/architecture_debt_guard.py --check --scope core-release
 When adding or changing an error that can cross crate, process, protocol, or CLI
 boundaries:
 
-- Prefer `RocketMQResult` or a domain-specific result type in library code.
-- Do not add legacy aliases such as `RocketmqError`, `LegacyRocketMQResult`, or `LegacyResult`.
+- Prefer `rocketmq_error::Result<T>` in canonical library APIs. A component may
+  expose a narrow result facade only when it carries `Error` or `SharedError`
+  without losing descriptor identity, context, or typed sources.
+- Maintain one current error model; do not add compatibility aliases or
+  versioned error facades.
 - Do not expose `anyhow::Result` from library or public business APIs.
-- Add or reuse one canonical `ErrorDescriptor` entry and associate every retained typed leaf before exposing a new public error.
-- Use `BoundaryErrorView` and descriptor-owned projection primitives for remoting, gRPC, HTTP, and CLI responses.
-- Keep sensitive values in `Sensitive<T>` or redacted `ErrorContext` fields.
+- Add or reuse one canonical `ErrorDescriptor` entry before exposing a new
+  public failure. Construct source-free failures with `Error::new` and retain
+  typed causes with `Error::caused_by`.
+- Use `PublicErrorView` or `DiagnosticView` for approved context fields and descriptor-owned projection primitives for remoting, gRPC, HTTP, and CLI responses.
+- Store only descriptor-approved bounded values in `ErrorContext`; represent
+  sensitive details with typed presence fields rather than their raw values.
 - Preserve source chains with typed wrappers and `#[source]` instead of early stringification.
-- Keep `RocketMQError::Internal` for audited internal invariants, not ordinary business failures.
+- Use `SharedError` when several owners need the same canonical failure; do not
+  clone or reconstruct an error from `Display` output.
+- Select `CORE_INTERNAL_FAILURE` only for audited internal invariants, not
+  ordinary business failures.
 
 Run the error hygiene guard before opening a pull request:
 

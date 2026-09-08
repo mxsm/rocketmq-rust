@@ -17,8 +17,7 @@ use std::collections::BTreeMap;
 use clap::ArgAction;
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigUpdateApplyResult;
@@ -96,7 +95,7 @@ pub struct UpdateBrokerConfigSubCommand {
 }
 
 impl UpdateBrokerConfigSubCommand {
-    fn request(&self) -> RocketMQResult<BrokerConfigUpdateRequest> {
+    fn request(&self) -> CanonicalResult<BrokerConfigUpdateRequest> {
         Ok(BrokerConfigUpdateRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
@@ -105,7 +104,7 @@ impl UpdateBrokerConfigSubCommand {
         .with_rollback_enabled(!self.no_rollback))
     }
 
-    fn parse_update_entries(&self) -> RocketMQResult<BTreeMap<String, String>> {
+    fn parse_update_entries(&self) -> CanonicalResult<BTreeMap<String, String>> {
         let mut entries = BTreeMap::new();
 
         if let (Some(key), Some(value)) = (self.key.as_deref(), self.value.as_deref()) {
@@ -118,7 +117,7 @@ impl UpdateBrokerConfigSubCommand {
         }
 
         if entries.is_empty() {
-            return Err(RocketMQError::IllegalArgument(
+            return Err(crate::errors::argument_invalid(
                 "UpdateBrokerConfigSubCommand: No config entries provided".to_string(),
             ));
         }
@@ -132,7 +131,7 @@ impl CommandExecute for UpdateBrokerConfigSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         let plan = BrokerService::build_broker_config_update_plan_by_request_with_credentials(
             request.clone(),
@@ -169,12 +168,12 @@ fn insert_update_entry(
     key: &str,
     value: &str,
     source: &str,
-) -> RocketMQResult<()> {
+) -> CanonicalResult<()> {
     let key = key.trim();
     let value = value.trim();
 
     match entries.get(key) {
-        Some(existing) if existing != value => Err(RocketMQError::IllegalArgument(format!(
+        Some(existing) if existing != value => Err(crate::errors::argument_invalid(format!(
             "UpdateBrokerConfigSubCommand: Conflicting values for key '{}' from {}",
             key, source
         ))),
@@ -186,9 +185,9 @@ fn insert_update_entry(
     }
 }
 
-fn parse_property_entry(property: &str) -> RocketMQResult<(String, String)> {
+fn parse_property_entry(property: &str) -> CanonicalResult<(String, String)> {
     let (key, value) = property.split_once('=').ok_or_else(|| {
-        RocketMQError::IllegalArgument(format!(
+        crate::errors::argument_invalid(format!(
             "UpdateBrokerConfigSubCommand: Invalid property '{}', expected KEY=VALUE",
             property
         ))

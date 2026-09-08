@@ -18,14 +18,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::NameServerResult;
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_error::fields;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::RpcClientError;
+use rocketmq_error::SharedError;
 use rocketmq_error::TRANSPORT_CONNECTION_TIMEOUT;
 use rocketmq_error::TRANSPORT_DNS_FAILED;
 use rocketmq_model::common::mix_all;
@@ -56,7 +55,7 @@ use crate::NamesrvConfig;
 const ROUTE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 const ROUTE_LOOKUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
-pub(crate) type ClusterTestLookupFuture<'a, T> = Pin<Box<dyn Future<Output = RocketMQResult<T>> + Send + 'a>>;
+pub(crate) type ClusterTestLookupFuture<'a, T> = Pin<Box<dyn Future<Output = NameServerResult<T>> + Send + 'a>>;
 type EndpointResolveFuture<'a> = ClusterTestLookupFuture<'a, EndpointResolutionOutcome>;
 
 #[derive(Debug)]
@@ -212,7 +211,7 @@ impl TransportClusterTestRouteLookup {
         &self,
         topic: &CheetahString,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<RouteLookupOutcome<Option<TopicRouteData>>> {
+    ) -> NameServerResult<RouteLookupOutcome<Option<TopicRouteData>>> {
         let (endpoints, endpoint_generation) = match self.resolve_endpoints(deadline).await? {
             RouteLookupOutcome::Resolved(endpoints) => endpoints,
             RouteLookupOutcome::Unavailable => return Ok(RouteLookupOutcome::Unavailable),
@@ -233,7 +232,7 @@ impl TransportClusterTestRouteLookup {
         endpoints: Vec<SocketAddr>,
         endpoint_generation: u64,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<RouteLookupOutcome<ResolvedRoute>> {
+    ) -> NameServerResult<RouteLookupOutcome<ResolvedRoute>> {
         let mut last_error = None;
 
         for endpoint in endpoints {
@@ -264,7 +263,7 @@ impl TransportClusterTestRouteLookup {
     async fn resolve_endpoints(
         &self,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<RouteLookupOutcome<(Vec<SocketAddr>, u64)>> {
+    ) -> NameServerResult<RouteLookupOutcome<(Vec<SocketAddr>, u64)>> {
         {
             let cached = self.cached_endpoints.read();
             if !cached.endpoints.is_empty() {
@@ -347,35 +346,33 @@ fn route_request(command_factory: &RemotingCommandFactory, topic: &CheetahString
     request
 }
 
-fn decode_route_response(response: RemotingCommand) -> RocketMQResult<ResolvedRoute> {
+fn decode_route_response(response: RemotingCommand) -> NameServerResult<ResolvedRoute> {
     let code = response.code();
     match ResponseCode::from(code) {
         ResponseCode::Success => {
-            let body = response.body().ok_or_else(|| {
-                RpcClientError::remote_error(code, "successful route response did not include a body")
-            })?;
+            let body = response
+                .body()
+                .ok_or_else(|| crate::namesrv_error::rpc_response_failed(code))?;
             let response_bytes = body.len();
-            TopicRouteData::decode(body.as_ref()).map(|route| ResolvedRoute {
-                route: Some(route),
-                response_bytes,
-            })
+            TopicRouteData::decode(body.as_ref())
+                .map(|route| ResolvedRoute {
+                    route: Some(route),
+                    response_bytes,
+                })
+                .map_err(|error| crate::namesrv_error::serialization("decode-route-response", "json", error))
         }
         ResponseCode::TopicNotExist => Ok(ResolvedRoute {
             route: None,
             response_bytes: response.body().map_or(0, bytes::Bytes::len),
         }),
-        _ => Err(RpcClientError::remote_error(
-            code,
-            response.remark().map_or("route lookup failed", CheetahString::as_str),
-        )
-        .into()),
+        _ => Err(crate::namesrv_error::rpc_response_failed(code)),
     }
 }
 
 async fn resolve_socket_addresses(
     address_list: &str,
     deadline: RequestDeadline,
-) -> RocketMQResult<EndpointResolutionOutcome> {
+) -> NameServerResult<EndpointResolutionOutcome> {
     let mut resolved = Vec::new();
     let mut last_error = None;
 
@@ -410,13 +407,11 @@ async fn resolve_socket_addresses(
 }
 
 #[track_caller]
-fn route_lookup_timeout(deadline: RequestDeadline, remote_addr: &str) -> RocketMQError {
+fn route_lookup_timeout(deadline: RequestDeadline, remote_addr: &str) -> SharedError {
     let context = ErrorContext::new()
         .with_u64(fields::TIMEOUT_MS, deadline.budget_millis())
         .with_text(fields::REMOTE_ADDR, remote_addr);
-    RocketMQError::Shared(Arc::new(
-        Error::new(&TRANSPORT_CONNECTION_TIMEOUT).with_context(context),
-    ))
+    Arc::new(Error::new(&TRANSPORT_CONNECTION_TIMEOUT).with_context(context))
 }
 
 #[track_caller]
@@ -424,32 +419,26 @@ fn route_lookup_timeout_caused_by(
     deadline: RequestDeadline,
     remote_addr: &str,
     source: tokio::time::error::Elapsed,
-) -> RocketMQError {
+) -> SharedError {
     let context = ErrorContext::new()
         .with_u64(fields::TIMEOUT_MS, deadline.budget_millis())
         .with_text(fields::REMOTE_ADDR, remote_addr)
         .with_secret_presence(fields::SOURCE_PRESENT);
-    RocketMQError::Shared(Arc::new(
-        Error::caused_by(&TRANSPORT_CONNECTION_TIMEOUT, source).with_context(context),
-    ))
+    Arc::new(Error::caused_by(&TRANSPORT_CONNECTION_TIMEOUT, source).with_context(context))
 }
 
 #[track_caller]
-fn route_lookup_cancelled_error() -> RocketMQError {
+fn route_lookup_cancelled_error() -> SharedError {
     let context = ErrorContext::new().with_text(fields::PHASE, "closed");
-    RocketMQError::Shared(Arc::new(
-        Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED).with_context(context),
-    ))
+    Arc::new(Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED).with_context(context))
 }
 
 #[track_caller]
-fn route_lookup_dns_failure_from_source(source: std::io::Error) -> RocketMQError {
+fn route_lookup_dns_failure_from_source(source: std::io::Error) -> SharedError {
     let context = ErrorContext::new()
         .with_secret_presence(fields::HOST_PRESENT)
         .with_secret_presence(fields::SOURCE_PRESENT);
-    RocketMQError::Shared(Arc::new(
-        Error::caused_by(&TRANSPORT_DNS_FAILED, source).with_context(context),
-    ))
+    Arc::new(Error::caused_by(&TRANSPORT_DNS_FAILED, source).with_context(context))
 }
 
 #[derive(Debug)]
@@ -464,17 +453,17 @@ impl std::fmt::Display for RouteLookupShutdownFailure {
 impl std::error::Error for RouteLookupShutdownFailure {}
 
 #[track_caller]
-fn route_lookup_shutdown_error(detail: String) -> RocketMQError {
+fn route_lookup_shutdown_error(detail: String) -> SharedError {
     let context = ErrorContext::new()
         .with_text(fields::PHASE, "closed")
         .with_secret_presence(fields::SOURCE_PRESENT);
-    RocketMQError::Shared(Arc::new(
+    Arc::new(
         Error::caused_by(
             &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
             RouteLookupShutdownFailure(detail),
         )
         .with_context(context),
-    ))
+    )
 }
 
 #[cfg(test)]
@@ -506,22 +495,19 @@ mod tests {
     fn route_lookup_failures_use_canonical_descriptors_and_preserve_remoting() {
         let timeout = route_lookup_timeout(RequestDeadline::from_timeout_millis(25), "address-server:80");
         assert_eq!(timeout.descriptor().code().as_str(), "transport.connection.timeout");
-        assert_eq!(timeout.boundary_view().remoting().code.as_i32(), 2);
+        assert_eq!(timeout.descriptor().projection().remoting().code.as_i32(), 2);
 
         let dns = route_lookup_dns_failure_from_source(std::io::Error::other("resolver unavailable"));
         assert_eq!(dns.descriptor().code().as_str(), "transport.dns.failed");
-        assert_eq!(dns.boundary_view().remoting().code.as_i32(), 2);
-        let RocketMQError::Shared(canonical) = &dns else {
-            panic!("DNS failure must use the canonical shared carrier");
-        };
-        let io_source = std::error::Error::source(canonical.as_ref())
+        assert_eq!(dns.descriptor().projection().remoting().code.as_i32(), 2);
+        let io_source = std::error::Error::source(dns.as_ref())
             .and_then(|source| source.downcast_ref::<std::io::Error>())
             .expect("DNS failure must retain the physical resolver error");
         assert_eq!(io_source.kind(), std::io::ErrorKind::Other);
 
         let cancelled = route_lookup_cancelled_error();
         assert_eq!(cancelled.descriptor().code().as_str(), "transport.connection.failed");
-        assert_eq!(cancelled.boundary_view().remoting().code.as_i32(), 2);
+        assert_eq!(cancelled.descriptor().projection().remoting().code.as_i32(), 2);
     }
 
     #[tokio::test]
@@ -531,10 +517,7 @@ mod tests {
             .expect_err("pending future must time out");
         let error =
             route_lookup_timeout_caused_by(RequestDeadline::from_timeout_millis(25), "address-server:80", elapsed);
-        let RocketMQError::Shared(canonical) = error else {
-            panic!("timeout must use the canonical shared carrier");
-        };
-        assert!(std::error::Error::source(canonical.as_ref())
+        assert!(std::error::Error::source(error.as_ref())
             .and_then(|source| source.downcast_ref::<tokio::time::error::Elapsed>())
             .is_some());
     }
@@ -594,14 +577,15 @@ mod tests {
     }
 
     impl RequestProcessor for RouteProcessor {
-        async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+        async fn process(&mut self, request: &mut RemotingRequest) -> NameServerResult<HandlerOutcome> {
             assert_eq!(request.command().code(), RequestCode::GetRouteinfoByTopic as i32);
             let header = request
                 .command()
-                .decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
+                .decode_command_custom_header::<GetRouteInfoRequestHeader>()
+                .map_err(crate::namesrv_error::from_error)?;
             assert_eq!(header.topic, CheetahString::from("missing-topic"));
             let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
-                .set_body(self.route.encode()?);
+                .set_body(self.route.encode().map_err(crate::namesrv_error::from_error)?);
             response_outcome(response)
         }
     }
@@ -610,7 +594,7 @@ mod tests {
     struct MissingRouteProcessor;
 
     impl RequestProcessor for MissingRouteProcessor {
-        async fn process(&mut self, _request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+        async fn process(&mut self, _request: &mut RemotingRequest) -> NameServerResult<HandlerOutcome> {
             response_outcome(RemotingCommand::create_response_command_with_code(
                 ResponseCode::TopicNotExist,
             ))
@@ -624,7 +608,7 @@ mod tests {
     }
 
     impl RequestProcessor for BlockingRouteProcessor {
-        async fn process(&mut self, _request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+        async fn process(&mut self, _request: &mut RemotingRequest) -> NameServerResult<HandlerOutcome> {
             self.entered.notify_one();
             self.release.notified().await;
             response_outcome(RemotingCommand::create_response_command_with_code(
@@ -633,9 +617,9 @@ mod tests {
         }
     }
 
-    fn response_outcome(response: RemotingCommand) -> RocketMQResult<HandlerOutcome> {
+    fn response_outcome(response: RemotingCommand) -> NameServerResult<HandlerOutcome> {
         let response = RemotingResponse::from_command(response).map_err(|error| {
-            RocketMQError::response_process_failed("namesrv.route_lookup_test.remoting_response", error.to_string())
+            crate::namesrv_error::response_source("namesrv.route_lookup_test.remoting_response", error)
         })?;
         Ok(HandlerOutcome::Reply(response))
     }

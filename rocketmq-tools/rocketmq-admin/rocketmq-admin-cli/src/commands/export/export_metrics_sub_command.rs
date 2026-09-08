@@ -17,8 +17,7 @@ use std::path::Path;
 use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportMetricsRequest;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -53,7 +52,7 @@ impl CommandExecute for ExportMetricsSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = ExportService::export_metrics_by_request_with_credentials(
             self.request()?,
             credentials,
@@ -61,22 +60,17 @@ impl CommandExecute for ExportMetricsSubCommand {
         )
         .await?;
         let output_path = self.output_path();
-        let json_content = serde_json::to_string_pretty(&result).map_err(|source| {
-            RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                "encode exported metrics",
-                "JSON",
-                source,
-            ))
-        })?;
+        let json_content = serde_json::to_string_pretty(&result)
+            .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?;
         rocketmq_runtime::common::file_utils::string_to_file(&json_content, &output_path)
-            .map_err(crate::runtime_to_rocketmq_error)?;
+            .map_err(crate::runtime_error)?;
         println!("export {} success", output_path);
         Ok(())
     }
 }
 
 impl ExportMetricsSubCommand {
-    fn request(&self) -> RocketMQResult<ExportMetricsRequest> {
+    fn request(&self) -> CanonicalResult<ExportMetricsRequest> {
         ExportMetricsRequest::try_new(self.cluster_name.clone())
             .map(|request| request.with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }

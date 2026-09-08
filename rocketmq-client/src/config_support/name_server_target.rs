@@ -18,9 +18,9 @@ use std::net::SocketAddr;
 use std::num::NonZeroU16;
 use std::str::FromStr;
 
+use crate::ClientError;
+use crate::ClientResult;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct NameServerTarget {
@@ -55,7 +55,7 @@ impl NormalizedNameServerTargets {
     }
 }
 
-pub(crate) fn parse_legacy_namesrv_addr(value: &str) -> RocketMQResult<NormalizedNameServerTargets> {
+pub(crate) fn parse_legacy_namesrv_addr(value: &str) -> ClientResult<NormalizedNameServerTargets> {
     let value = normalize_java_endpoint(value.trim());
     let mut seen = HashSet::new();
     let mut targets = Vec::new();
@@ -92,7 +92,7 @@ fn normalize_java_endpoint(value: &str) -> &str {
         .unwrap_or(value)
 }
 
-fn normalize_authority(value: &str) -> RocketMQResult<String> {
+fn normalize_authority(value: &str) -> ClientResult<String> {
     if value.contains("//") || value.contains(['/', '?', '#', '@']) || value.chars().any(char::is_whitespace) {
         return Err(invalid_namesrv_addr(
             value,
@@ -152,12 +152,8 @@ fn validate_dns_name(host: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn invalid_namesrv_addr(value: &str, reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::ConfigInvalidValue {
-        key: "namesrv_addr",
-        value: value.to_owned(),
-        reason: reason.into(),
-    }
+fn invalid_namesrv_addr(value: &str, reason: impl Into<String>) -> ClientError {
+    ClientError::config_invalid("namesrv_addr", value, reason.into())
 }
 
 #[cfg(test)]
@@ -207,13 +203,7 @@ mod tests {
         ] {
             let error = parse_legacy_namesrv_addr(value).expect_err(value);
             assert!(
-                matches!(
-                    error,
-                    RocketMQError::ConfigInvalidValue {
-                        key: "namesrv_addr",
-                        ..
-                    }
-                ),
+                error.is(&rocketmq_error::CORE_CONFIGURATION_INVALID),
                 "unexpected error for {value}: {error:?}"
             );
         }

@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use chrono::Local;
 use chrono::TimeZone;
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_runtime::common::util_all::YYYY_MM_DD_HH_MM_SS_SSS;
 
 use crate::commands::CommandExecute;
@@ -155,7 +155,7 @@ impl CommandExecute for QueryMsgTraceByIdSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = QueryMessageTraceByIdRequest::try_new(
             self.msg_id.clone(),
             self.trace_topic.clone(),

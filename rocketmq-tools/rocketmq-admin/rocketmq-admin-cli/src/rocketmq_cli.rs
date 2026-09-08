@@ -25,8 +25,8 @@ use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::core::security::AdminCredentials;
 use rocketmq_error::CliErrorView;
 use rocketmq_error::CliVerbosity;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::Commands;
@@ -89,10 +89,9 @@ impl RocketMQCli {
                 }
                 _ => {
                     return render_cli_error(
-                        &RocketMQError::validation_failed(
-                            "generate-completion",
-                            format!("unsupported shell '{shell}', supported shells: bash, zsh, fish"),
-                        ),
+                        &crate::errors::argument_invalid(format!(
+                            "unsupported shell '{shell}', supported shells: bash, zsh, fish"
+                        )),
                         self.verbosity(),
                     );
                 }
@@ -111,17 +110,14 @@ impl RocketMQCli {
             0
         } else {
             render_cli_error(
-                &RocketMQError::validation_failed(
-                    "command",
-                    "command must be specified; use --help for usage information",
-                ),
+                &crate::errors::argument_invalid("command must be specified; use --help for usage information"),
                 self.verbosity(),
             )
         }
     }
 }
 
-fn credentials_from_environment() -> RocketMQResult<Option<AdminCredentials>> {
+fn credentials_from_environment() -> CanonicalResult<Option<AdminCredentials>> {
     credentials_from_values(
         read_optional_env(ACL_ACCESS_KEY_ENV)?,
         read_optional_env(ACL_SECRET_KEY_ENV)?,
@@ -129,14 +125,13 @@ fn credentials_from_environment() -> RocketMQResult<Option<AdminCredentials>> {
     )
 }
 
-fn read_optional_env(name: &'static str) -> RocketMQResult<Option<String>> {
+fn read_optional_env(name: &'static str) -> CanonicalResult<Option<String>> {
     match std::env::var(name) {
         Ok(value) => Ok(non_blank(value)),
         Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => Err(RocketMQError::validation_failed(
-            "admin-acl-environment",
-            format!("{name} must contain valid Unicode"),
-        )),
+        Err(std::env::VarError::NotUnicode(_)) => Err(crate::errors::argument_invalid(format!(
+            "{name} must contain valid Unicode"
+        ))),
     }
 }
 
@@ -144,7 +139,7 @@ fn credentials_from_values(
     access_key: Option<String>,
     secret_key: Option<String>,
     security_token: Option<String>,
-) -> RocketMQResult<Option<AdminCredentials>> {
+) -> CanonicalResult<Option<AdminCredentials>> {
     let access_key = access_key.and_then(non_blank);
     let secret_key = secret_key.and_then(non_blank);
     let security_token = security_token.and_then(non_blank);
@@ -153,10 +148,9 @@ fn credentials_from_values(
         (Some(access_key), Some(secret_key), security_token) => {
             AdminCredentials::try_new(access_key, secret_key, security_token)
                 .map(Some)
-                .map_err(|error| RocketMQError::validation_failed("admin-acl-environment", error.to_string()))
+                .map_err(|error| error.into_error())
         }
-        _ => Err(RocketMQError::validation_failed(
-            "admin-acl-environment",
+        _ => Err(crate::errors::argument_invalid(
             "ROCKETMQ_ACL_ACCESS_KEY and ROCKETMQ_ACL_SECRET_KEY must be supplied together; the security token is \
              optional",
         )),
@@ -169,7 +163,7 @@ fn non_blank(value: String) -> Option<String> {
 }
 
 /// Writes the single canonical CLI projection and returns its process exit code.
-pub fn render_cli_error(error: &RocketMQError, verbosity: CliVerbosity) -> i32 {
+pub fn render_cli_error(error: &CanonicalError, verbosity: CliVerbosity) -> i32 {
     let output = CliErrorView::from_error(error).output(verbosity);
     eprintln!("{}", output.stderr());
     output.exit_code().as_i32()

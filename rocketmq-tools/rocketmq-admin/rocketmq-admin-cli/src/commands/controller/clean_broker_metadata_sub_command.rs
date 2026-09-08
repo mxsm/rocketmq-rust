@@ -15,7 +15,7 @@
 use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::controller::ControllerMetadataCleanRequest;
 use rocketmq_admin_core::client_adapter::services::controller::ControllerService;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 
@@ -68,7 +68,7 @@ impl CommandExecute for CleanBrokerMetadataSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         let broker_name = request.broker_name().to_string();
         ControllerService::clean_controller_metadata_by_request_with_credentials(
@@ -83,7 +83,7 @@ impl CommandExecute for CleanBrokerMetadataSubCommand {
 }
 
 impl CleanBrokerMetadataSubCommand {
-    fn request(&self) -> RocketMQResult<ControllerMetadataCleanRequest> {
+    fn request(&self) -> CanonicalResult<ControllerMetadataCleanRequest> {
         ControllerMetadataCleanRequest::try_new(
             self.controller_address.clone(),
             self.broker_name.clone(),

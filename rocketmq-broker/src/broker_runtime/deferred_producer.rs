@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -748,7 +748,7 @@ impl fmt::Display for BrokerDeferredProducerInstallError {
     }
 }
 
-impl Error for BrokerDeferredProducerInstallError {}
+impl StdError for BrokerDeferredProducerInstallError {}
 
 impl<MS: BrokerReadWriteStore> Drop for BrokerDeferredProducer<MS> {
     fn drop(&mut self) {

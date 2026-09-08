@@ -291,7 +291,7 @@ impl Rebalance for RebalancePushImpl {
     }
 
     #[allow(deprecated)]
-    async fn compute_pull_from_where_with_exception(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn compute_pull_from_where_with_exception(&self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         let consumer_config = self.consumer_config.load_full();
         let consume_from_where = consumer_config.consume_from_where;
         let default_mqpush_consumer_impl = self

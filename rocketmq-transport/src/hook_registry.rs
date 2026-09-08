@@ -94,7 +94,6 @@ impl HookRegistry {
 mod tests {
     use std::net::SocketAddr;
 
-    use rocketmq_error::RocketMQResult;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
     use super::*;
@@ -102,7 +101,11 @@ mod tests {
     struct NoopHook;
 
     impl RPCHook for NoopHook {
-        fn do_before_request(&self, _remote_addr: SocketAddr, _request: &mut RemotingCommand) -> RocketMQResult<()> {
+        fn do_before_request(
+            &self,
+            _remote_addr: SocketAddr,
+            _request: &mut RemotingCommand,
+        ) -> Result<(), rocketmq_error::SharedError> {
             Ok(())
         }
 
@@ -111,7 +114,7 @@ mod tests {
             _remote_addr: SocketAddr,
             _request: &RemotingCommand,
             _response: &mut RemotingCommand,
-        ) -> RocketMQResult<()> {
+        ) -> Result<(), rocketmq_error::SharedError> {
             Ok(())
         }
     }

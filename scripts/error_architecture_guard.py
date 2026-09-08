@@ -58,20 +58,6 @@ NON_SENSITIVE_DEBUG_FIELD_NAMES = {
     "signature_algorithm",
 }
 
-INTERNAL_ERROR_ALLOWLIST = (
-    "rocketmq-broker/src/",
-    "rocketmq-client/src/",
-    "rocketmq-controller/src/",
-    "rocketmq-namesrv/src/",
-    "rocketmq-proxy/src/",
-    "rocketmq-transport/src/error_response.rs",
-    "rocketmq-tieredstore/src/",
-    "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/src/commands/",
-    "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/admin/",
-    "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/core/",
-    "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/admin_facade/",
-)
-
 ANYHOW_RESULT_ALLOWLIST: dict[str, str] = {
     "rocketmq-dashboard/rocketmq-dashboard-gpui/build.rs": "build script boundary",
     "rocketmq-dashboard/rocketmq-dashboard-gpui/src/main.rs": "standalone GPUI process boundary",
@@ -88,51 +74,6 @@ ANYHOW_RESULT_ALLOWLIST: dict[str, str] = {
     "rocketmq-ai/rocketmq-mcp/src/transport/stdio.rs": "R0 public compatibility wrapper forwards to the typed stdio service API",
     "rocketmq-ai/rocketmq-mcp/src/transport/streamable_http.rs": "R0 public compatibility wrappers forward to typed HTTP service and router APIs",
 }
-
-PROCESSOR_GENERIC_RESPONSE_ALLOWLIST: dict[str, str] = {
-    "rocketmq-broker/src/processor/admin_broker_processor/": "admin remoting APIs retain Java-compatible local response codes pending typed handler migration",
-    "rocketmq-broker/src/processor/change_invisible_time_processor.rs": "pop invisible-time protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/client_manage_processor.rs": "client management protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/consumer_manage_processor.rs": "consumer management protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/end_transaction_processor.rs": "transaction end protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/lite_manager_processor.rs": "lite management protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/lite_subscription_ctl_processor.rs": "lite subscription protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/notification_processor.rs": "long-poll notification protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/peek_message_processor.rs": "peek message protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/polling_info_processor.rs": "polling info protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/pop_lite_message_processor.rs": "lite pop protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/pop_message_processor.rs": "pop message protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/pull_message_processor.rs": "pull message protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/query_assignment_processor.rs": "assignment query protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/query_message_processor.rs": "message query protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/recall_message_processor.rs": "recall message protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/reply_message_processor.rs": "reply message protocol keeps Java-compatible broker response codes",
-    "rocketmq-broker/src/processor/send_message_processor.rs": "send message protocol keeps Java-compatible broker response codes",
-}
-
-PROCESSOR_FIXED_SAFE_RESPONSE_ALLOWLIST: dict[str, frozenset[tuple[str, str]]] = {
-    "rocketmq-namesrv/src/processor/default_request_processor.rs": frozenset(
-        {
-            (
-                "ResponseCode::QueryNotFound,",
-                '"NameServer KV configuration was not found",',
-            ),
-            (
-                "ResponseCode::QueryNotFound,",
-                '"NameServer KV namespace was not found",',
-            ),
-        }
-    ),
-}
-
-PROCESSOR_GENERIC_RESPONSE_TERMS = (
-    "ResponseCode::SystemError",
-    "ResponseCode::InvalidParameter",
-    "ResponseCode::NoPermission",
-    "ResponseCode::QueryNotFound",
-    "RemotingSysResponseCode::SystemError",
-    "RemotingSysResponseCode::NoPermission",
-)
 
 TRANSPORT_REMOTING_ERROR_LEGACY_FUNCTIONS = (
     "command_from_error",
@@ -168,33 +109,6 @@ PROTOCOL_REMOTING_ERROR_LEGACY_FUNCTIONS = (
     "create_response_command_from_error",
     "create_response_command_from_error_with_remark",
 )
-
-SOURCE_STRINGIFICATION_ALLOWLIST: dict[str, str] = {
-    "rocketmq-auth/src/acl/loader.rs": "ACL file loader still maps serde and filesystem failures into public auth storage errors",
-    "rocketmq-auth/src/authentication/factory/authentication_factory.rs": "authentication factory exposes stable auth config errors while provider errors remain string reasons",
-    "rocketmq-auth/src/authentication/provider/default_authentication_provider.rs": "default authentication provider maps AuthError into public authentication failure text",
-    "rocketmq-auth/src/authentication/provider/local_authentication_metadata_provider.rs": "local authentication metadata provider persists JSON/filesystem details as public storage reasons",
-    "rocketmq-auth/src/authentication/strategy.rs": "authentication strategy trait returns local AuthError without a source-bearing variant",
-    "rocketmq-auth/src/lib.rs": "auth bootstrap helpers expose storage errors through public RocketMQError storage variants",
-    "rocketmq-auth/src/migration/alc/plain_permission_manager.rs": "legacy ACL migration keeps parser detail as compatibility text",
-    "rocketmq-auth/src/runtime.rs": "auth runtime composes provider failures into public authentication errors",
-    "rocketmq-auth/src/runtime_bridge.rs": "runtime bridge exports string diagnostics across a trait boundary",
-    "rocketmq-broker/src/command.rs": "broker CLI argument parser stores address parse detail in command error text",
-    "rocketmq-broker/src/broker/broker_registration_runtime.rs": "broker registration reports coordinator domain failures through its compatibility diagnostic enum",
-    "rocketmq-broker/src/broker/log_filter_control.rs": "log filter control translates scheduler, reload, and audit boundary errors into its typed control error",
-    "rocketmq-broker/src/processor/admin_broker_processor.rs": "admin remoting parser keeps Java-compatible request body remarks",
-    "rocketmq-broker/src/processor/admin_broker_processor/message_related_handler.rs": "message admin remoting path keeps decode detail as protocol remark",
-    "rocketmq-broker/src/schedule/schedule_message_service.rs": "legacy schedule compatibility constructs local runtime capabilities through a string-result facade",
-    "rocketmq-broker/src/topic/manager/topic_queue_mapping_manager.rs": "topic queue mapping persistence currently reports executor/persist failures as broker internal diagnostics",
-    "rocketmq-controller/src/controller/open_raft_controller.rs": "OpenRaft controller startup and scheduler runtime boundaries report task and bind failures as typed controller diagnostics",
-    "rocketmq-controller/src/processor/controller_request_processor.rs": "controller config remoting endpoint maps UTF-8 parser detail into request validation text",
-    "rocketmq-controller/src/openraft/log_store.rs": "OpenRaft log store trait requires std::io::Error at the storage boundary",
-    "rocketmq-controller/src/openraft/network/grpc_client.rs": "OpenRaft network API requires std::io::Error-backed NetworkError values",
-    "rocketmq-controller/src/openraft/state_machine.rs": "OpenRaft state machine and snapshot traits require std::io::Error at the storage boundary",
-    "rocketmq-store/src/message_store/local_file_message_store.rs": "local file message store records recovery progress and HA/storage diagnostics as display text",
-    "rocketmq-store/src/rocksdb/consume_queue.rs": "RocksDB group commit background worker stores task failure text for later reporting",
-    "rocketmq-store/src/utils/ffi.rs": "FFI helpers expose OS error reasons across a C-compatible boundary",
-}
 
 BACKEND_SOURCE_PRESERVATION_TOKENS: dict[str, tuple[tuple[str, int], ...]] = {
     "rocketmq-tieredstore/src/metadata/metadata_store.rs": (
@@ -464,24 +378,6 @@ def is_anyhow_result_allowlisted(path: Path) -> bool:
     return rel in ANYHOW_RESULT_ALLOWLIST
 
 
-def is_processor_generic_response_allowlisted(path: Path) -> bool:
-    rel = rel_path(path)
-    return any(rel == prefix or rel.startswith(prefix) for prefix in PROCESSOR_GENERIC_RESPONSE_ALLOWLIST)
-
-
-def is_processor_fixed_safe_response_allowlisted(path: Path, lines: list[str], line_index: int) -> bool:
-    allowed = PROCESSOR_FIXED_SAFE_RESPONSE_ALLOWLIST.get(rel_path(path))
-    if allowed is None:
-        return False
-
-    previous = next((line.strip() for line in reversed(lines[:line_index]) if line.strip()), "")
-    following = next((line.strip() for line in lines[line_index + 1 :] if line.strip()), "")
-    return (
-        previous.endswith("create_response_command_with_code_remark(")
-        and (lines[line_index].strip(), following) in allowed
-    )
-
-
 def scan_forbidden_terms(paths: Iterable[Path], forbidden: dict[str, str]) -> list[Finding]:
     findings: list[Finding] = []
     for path in paths:
@@ -498,7 +394,6 @@ def check_error_and_model_public_surface() -> list[Finding]:
     forbidden = {
         "RocketmqError": "legacy RocketmqError must not re-enter core public error code",
         "RocketMqError": "legacy RocketMqError spelling must not re-enter core public error code",
-        "rocketmq_error::Result": "old rocketmq_error::Result alias must not be used",
         "anyhow::Result": "rocketmq-error/model must not expose public anyhow Result",
         "anyhow::Error": "rocketmq-error/model must not expose anyhow Error",
     }
@@ -641,43 +536,6 @@ def find_sensitive_derive_debug_fields(paths: Iterable[Path]) -> list[Finding]:
     return findings
 
 
-def check_processor_generic_response_allowlist() -> list[Finding]:
-    findings: list[Finding] = []
-    processor_roots = [
-        ROOT / "rocketmq-broker" / "src" / "processor.rs",
-        ROOT / "rocketmq-broker" / "src" / "processor",
-        ROOT / "rocketmq-namesrv" / "src" / "processor.rs",
-        ROOT / "rocketmq-namesrv" / "src" / "processor",
-    ]
-    paths: list[Path] = []
-    for root in processor_roots:
-        if root.is_file():
-            paths.append(root)
-        elif root.is_dir():
-            paths.extend(rust_files_under(*root.relative_to(ROOT).parts))
-
-    for path in sorted(set(paths)):
-        lines = read_text(path).splitlines()
-        for line_index, line in enumerate(lines):
-            line_number = line_index + 1
-            stripped = line.strip()
-            if stripped.startswith("//") or is_test_context(path, line_number):
-                continue
-            if not any(term in line for term in PROCESSOR_GENERIC_RESPONSE_TERMS):
-                continue
-            if not is_processor_generic_response_allowlisted(path) and not is_processor_fixed_safe_response_allowlisted(
-                path, lines, line_index
-            ):
-                findings.append(
-                    Finding(
-                        path,
-                        line_number,
-                        "generic processor response codes require typed error_response helpers or an allowlist entry",
-                    )
-                )
-    return findings
-
-
 def public_response_policy_functions(source: str) -> list[str]:
     return re.findall(r"(?m)^\s*pub(?:\(crate\))?\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)\b", source)
 
@@ -703,7 +561,7 @@ def check_required_mapping_adapters() -> list[Finding]:
             "RemotingErrorTarget::Existing(response) =>",
         ],
         PROXY_STATUS_MAPPER: [
-            "ProxyErrorKind",
+            "descriptor == &PROXY_METADATA_INVALID",
             "let descriptor = error.descriptor();",
             "descriptor.projection().grpc()",
             "descriptor.public_message()",
@@ -717,11 +575,11 @@ def check_required_mapping_adapters() -> list[Finding]:
         / "src"
         / "error"
         / "dashboard_error.rs": [
-            "PublicErrorView::try_new(error.descriptor(), &context)",
+            ".public_view()",
+            "metadata_io_source(error)",
             "for field in view.fields()",
             "view.projection().http().status.as_u16()",
             "DashboardErrorResponse::from(projection)",
-            "descriptor_by_code(code)",
             "DashboardHttpProjection::unknown",
             "config_source",
             "internal_source",
@@ -740,7 +598,7 @@ def check_required_mapping_adapters() -> list[Finding]:
             "CliVerbosity::Verbose",
             ".output(verbosity)",
             "output.exit_code().as_i32()",
-            "RocketMQError::validation_failed",
+            "crate::errors::argument_invalid",
         ],
         ROOT / "rocketmq-tools" / "rocketmq-admin" / "rocketmq-admin-cli" / "src" / "main.rs": [
             "render_cli_error(&error, verbosity)",
@@ -754,10 +612,10 @@ def check_required_mapping_adapters() -> list[Finding]:
         / "client_adapter"
         / "services"
         / "error_view.rs": [
-            "error.boundary_view()",
-            "boundary.code().as_str()",
-            "boundary.message()",
-            "boundary.context()",
+            "PublicErrorView::try_new(error.descriptor(), context)",
+            "public.code().as_str()",
+            "public.message()",
+            "fn render_public_context(view: &PublicErrorView<'_>)",
         ],
         ROOT
         / "rocketmq-tools"
@@ -862,7 +720,8 @@ def check_proxy_remoting_boundary() -> list[Finding]:
             findings.append(Finding(path, line_number, message))
     source = "\n".join(line for _, line in iter_non_test_lines(path))
     for token in (
-        "local if local.local_kind().is_some()",
+        "source @ ProxyError::Canonical(_) | source @ ProxyError::SharedCanonical(_) =>",
+        "local =>",
         "PublicErrorView::try_new(local.descriptor(), &context)",
     ):
         if token not in source:
@@ -1006,21 +865,21 @@ def check_cli_boundary() -> list[Finding]:
 def check_client_callback_boundary() -> list[Finding]:
     required_tokens = {
         ROOT / "rocketmq-client" / "src" / "consumer" / "pull_callback.rs": [
-            "fn on_exception(&mut self, e: RocketMQError)",
-            "fn broker_response_code(error: &RocketMQError)",
-            "RocketMQError::BrokerOperationFailed",
+            "fn on_exception(&mut self, e: ClientError)",
+            "fn broker_response_code(error: &ClientError)",
+            "error.broker_response_code()",
         ],
         ROOT / "rocketmq-client" / "src" / "consumer" / "pop_callback.rs": [
-            "fn on_error(&mut self, e: RocketMQError)",
-            "fn broker_response_code(error: &RocketMQError)",
-            "RocketMQError::BrokerOperationFailed",
+            "fn on_error(&mut self, e: ClientError)",
+            "fn broker_response_code(error: &ClientError)",
+            "error.broker_response_code()",
         ],
         ROOT / "rocketmq-client" / "src" / "producer" / "request_callback.rs": [
-            "Option<&RocketMQError>",
+            "Option<&ClientError>",
         ],
         ROOT / "rocketmq-client" / "src" / "producer" / "request_response_future.rs": [
-            "type RequestCause = Arc<RocketMQError>",
-            "pub fn set_cause(&self, cause: RocketMQError)",
+            "type RequestCause = Arc<ClientError>",
+            "pub fn set_cause(&self, cause: ClientError)",
         ],
     }
     findings: list[Finding] = []
@@ -1034,12 +893,11 @@ def check_client_callback_boundary() -> list[Finding]:
                 findings.append(Finding(path, 1, f"required client callback boundary token missing: {needle}"))
 
     forbidden = {
-        "downcast_ref::<RocketMQError>": "client callback error paths must use typed RocketMQError directly",
-        "downcast_ref::<rocketmq_error::RocketMQError>": "client callback error paths must use typed RocketMQError directly",
+        "RocketMQError": "client callback error paths must use ClientError directly",
         "broker_response_code(error: &(dyn": "client broker response code lookup must not downcast dyn Error",
         "type RequestCause = Arc<dyn": "request future cause must store RocketMQError directly",
-        "Option<&dyn std::error::Error>": "request callback must expose RocketMQError directly",
-        "Box<dyn std::error::Error + Send>": "pull/pop callbacks must expose RocketMQError directly",
+        "Option<&dyn std::error::Error>": "request callback must expose ClientError directly",
+        "Box<dyn std::error::Error + Send>": "pull/pop callbacks must expose ClientError directly",
     }
     guarded_paths = list(required_tokens)
     return [*findings, *scan_forbidden_terms(guarded_paths, forbidden)]
@@ -1115,27 +973,28 @@ def check_error_descriptor_contract() -> list[Finding]:
             "pub(crate) const fn try_new(",
             "pub const fn recovery_hint(&self) -> RecoveryHint",
         ],
-        ROOT / "rocketmq-error" / "src" / "context.rs": [
-            "pub(crate) fn public_projection(&self, descriptor: &'static ErrorDescriptor) -> Self",
-            "if matches!(descriptor.exposure(), Exposure::Generic)",
-        ],
+        ROOT / "rocketmq-error" / "src" / "context.rs": ["pub(crate) fn fields(&self) -> &[ErrorContextField]"],
         ROOT / "rocketmq-error" / "src" / "catalog.rs": [
             "macro_rules! define_error_catalog",
             "pub const ALL_DESCRIPTORS: &[ErrorDescriptor]",
             "pub fn descriptor_by_code(code: &str)",
         ],
-        ROOT / "rocketmq-error" / "src" / "domain.rs": [
-            "fn descriptor(&self) -> &'static ErrorDescriptor",
-            "BoundaryErrorView::new(self.descriptor(), self.context())",
+        ROOT / "rocketmq-error" / "src" / "error.rs": [
+            "pub fn public_view(&self) -> std::result::Result<PublicErrorView<'_>, ViewContextViolation>",
+            "pub fn diagnostic_view(&self) -> std::result::Result<DiagnosticView<'_>, ViewContextViolation>",
+        ],
+        ROOT / "rocketmq-error" / "src" / "view.rs": [
+            "pub struct PublicErrorView<'a>",
+            "pub struct DiagnosticView<'a>",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_descriptor_catalog.rs": [
-            "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 128",
+            "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 136",
             "descriptor_catalog_snapshot_is_exact",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_context_redaction.rs": [
-            "rocketmq_error_exposes_public_message_and_redacted_context",
+            "canonical_error_exposes_only_catalog_message_and_safe_context",
             "source_present=<redacted>",
-            "view.context().is_empty()",
+            "view.fields().count()",
         ],
     }
     findings: list[Finding] = []
@@ -1148,11 +1007,6 @@ def check_error_descriptor_contract() -> list[Finding]:
             if needle not in text:
                 findings.append(Finding(path, 1, f"required error descriptor contract token missing: {needle}"))
     return findings
-
-
-def is_source_stringification_allowlisted(path: Path) -> bool:
-    rel = path.relative_to(ROOT).as_posix()
-    return rel in SOURCE_STRINGIFICATION_ALLOWLIST
 
 
 FORMAT_MACRO = re.compile(r"\bformat\s*!\s*(?P<opening>\()")
@@ -1180,8 +1034,8 @@ def source_stringification_message(
         re.search(r"\b(error|err|e|source)\.to_string\(\)", code) is not None
         or format_source_interpolation
     )
-    if (backend_source_to_text or is_source_stringification_line(code)) and relative_path not in SOURCE_STRINGIFICATION_ALLOWLIST:
-        return "source stringification requires a typed source wrapper or SOURCE_STRINGIFICATION_ALLOWLIST entry"
+    if backend_source_to_text or is_source_stringification_line(code):
+        return "source stringification requires a typed source wrapper"
     return None
 
 
@@ -1232,7 +1086,7 @@ def find_source_stringification(paths: Iterable[Path]) -> list[Finding]:
 
 def is_source_stringification_line(line: str) -> bool:
     if ".to_string()" not in line:
-        return "RocketMQError::Internal(format!(" in line
+        return False
 
     if re.search(r"\b(error|err|e)\b", line) is None:
         return False
@@ -1241,15 +1095,7 @@ def is_source_stringification_line(line: str) -> bool:
         return True
     if "std::io::Error::other(" in line or "io::Error::other(" in line:
         return True
-    if "RocketMQError::Internal(" in line:
-        return True
-    if "RocketMQError::storage_" in line or "RocketMQError::auth_config_invalid(" in line:
-        return True
-    if "RocketMQError::authentication_failed(" in line or "RocketMQError::request_body_invalid(" in line:
-        return True
     if "StoreError::" in line or "HAError::" in line or "MappedFileError::" in line:
-        return True
-    if "AuthorizationError::" in line or "AuthError::" in line:
         return True
     return False
 
@@ -1314,7 +1160,7 @@ def check_backend_source_preservation() -> list[Finding]:
     return findings
 
 
-def check_source_stringification_allowlist() -> list[Finding]:
+def check_source_preservation() -> list[Finding]:
     required_tokens = {
         ROOT / "rocketmq-store-api" / "src" / "error.rs": [
             "error: CanonicalError",
@@ -1365,25 +1211,19 @@ def check_source_stringification_allowlist() -> list[Finding]:
     return findings
 
 
-def is_internal_error_allowlisted(path: Path) -> bool:
-    rel = path.relative_to(ROOT).as_posix()
-    return any(rel == prefix or rel.startswith(prefix) for prefix in INTERNAL_ERROR_ALLOWLIST)
-
-
-def check_internal_error_allowlist() -> list[Finding]:
+def check_legacy_error_types() -> list[Finding]:
     findings: list[Finding] = []
+    forbidden = ("RocketMQError", "RocketMQResult", "DomainError", "BoundaryErrorView")
     for path in rust_files():
         for line_number, line in enumerate(read_text(path).splitlines(), start=1):
-            if "RocketMQError::Internal(" not in line:
-                continue
-            if is_test_context(path, line_number):
-                continue
-            if not is_internal_error_allowlisted(path):
+            for term in forbidden:
+                if term not in line:
+                    continue
                 findings.append(
                     Finding(
                         path,
                         line_number,
-                        "RocketMQError::Internal requires a typed variant or an internal-error allowlist entry",
+                        f"legacy error type {term} must not re-enter Rust sources",
                     )
                 )
     return findings
@@ -1638,7 +1478,6 @@ def run() -> int:
     checks = [
         ("core public surface", check_error_and_model_public_surface),
         ("processor boundary mappings", check_processor_boundary_mappings),
-        ("processor generic response allowlist", check_processor_generic_response_allowlist),
         ("required mapping adapters", check_required_mapping_adapters),
         ("proxy grpc boundary", check_proxy_grpc_boundary),
         ("proxy remoting boundary", check_proxy_remoting_boundary),
@@ -1647,8 +1486,8 @@ def run() -> int:
         ("client callback boundary", check_client_callback_boundary),
         ("client retry boundary", check_client_retry_boundary),
         ("error descriptor contract", check_error_descriptor_contract),
-        ("source stringification allowlist", check_source_stringification_allowlist),
-        ("internal error allowlist", check_internal_error_allowlist),
+        ("source preservation", check_source_preservation),
+        ("legacy error types", check_legacy_error_types),
         ("anyhow result allowlist", check_anyhow_result_allowlist),
         ("redaction guards", check_redaction_guards),
         ("authorization decision contract", check_authorization_decision_contract),

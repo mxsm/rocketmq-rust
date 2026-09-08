@@ -18,8 +18,10 @@ use rocketmq_error::CliErrorView;
 use rocketmq_error::CliExitCode;
 use rocketmq_error::CliVerbosity;
 use rocketmq_error::Error;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::ErrorContext;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::CORE_ARGUMENT_INVALID;
+use rocketmq_error::CORE_SERIALIZATION_FAILED;
 use rocketmq_error::STORAGE_WRITE_FAILED;
 use rocketmq_store_inspect::command_line::Commands;
 use rocketmq_store_inspect::command_line::RootCli;
@@ -86,7 +88,8 @@ fn run() -> ProcessOutcome {
         }
         Err(_) => {
             return render_error(
-                &rocketmq_error::RocketMQError::validation_failed("command-line", "invalid command-line arguments"),
+                &Error::new(&CORE_ARGUMENT_INVALID)
+                    .with_context(ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT)),
                 verbosity,
             );
         }
@@ -131,7 +134,7 @@ fn run() -> ProcessOutcome {
                     Ok(body) => format!("{body}\n"),
                     Err(error) => {
                         return render_error(
-                            &rocketmq_error::RocketMQError::internal("serialize downgrade preflight report", error),
+                            &serialization_error("serialize_downgrade_preflight_report", error),
                             verbosity,
                         );
                     }
@@ -180,25 +183,32 @@ fn verbosity_requested() -> CliVerbosity {
     }
 }
 
-fn print_json(value: &impl serde::Serialize) -> Result<(), rocketmq_error::RocketMQError> {
+fn print_json(value: &impl serde::Serialize) -> Result<(), rocketmq_error::Error> {
     let body = serde_json::to_string_pretty(value)
-        .map_err(|error| rocketmq_error::RocketMQError::internal("serialize store inspection report", error))?;
+        .map_err(|error| serialization_error("serialize_store_inspection_report", error))?;
     println!("{body}");
     Ok(())
 }
 
-fn storage_write_error(operation: &'static str, source: std::io::Error) -> RocketMQError {
+fn storage_write_error(operation: &'static str, source: std::io::Error) -> CanonicalError {
     let context = ErrorContext::new()
         .with_text(fields::STORE_OPERATION, operation)
         .with_text(fields::STORE_COMPONENT, "store-inspect")
         .with_secret_presence(fields::STORE_DETAIL_PRESENT)
         .with_secret_presence(fields::SOURCE_PRESENT);
-    RocketMQError::Shared(std::sync::Arc::new(
-        Error::caused_by(&STORAGE_WRITE_FAILED, source).with_context(context),
-    ))
+    Error::caused_by(&STORAGE_WRITE_FAILED, source).with_context(context)
 }
 
-fn render_error(error: &rocketmq_error::RocketMQError, verbosity: CliVerbosity) -> ProcessOutcome {
+fn serialization_error(operation: &'static str, source: serde_json::Error) -> CanonicalError {
+    Error::caused_by(&CORE_SERIALIZATION_FAILED, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_text(fields::FORMAT, "JSON")
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    )
+}
+
+fn render_error(error: &rocketmq_error::Error, verbosity: CliVerbosity) -> ProcessOutcome {
     let output = CliErrorView::from_error(error).output(verbosity);
     eprintln!("{}", output.stderr());
     ProcessOutcome::Error(output.exit_code())
@@ -217,10 +227,7 @@ mod tests {
             "C:/secret/report.json password=plain-text",
         );
         let error = storage_write_error("write_preflight_report", source);
-        let RocketMQError::Shared(shared) = &error else {
-            panic!("storage write bridge must use the canonical shared carrier");
-        };
-        assert!(StdError::source(shared.as_ref())
+        assert!(StdError::source(&error)
             .and_then(|source| source.downcast_ref::<std::io::Error>())
             .is_some());
 

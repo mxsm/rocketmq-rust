@@ -13,14 +13,11 @@ projections, bounded context, and redaction-safe boundary views.
 ## What This Crate Owns
 
 - The opaque canonical `Error`, `Result<T>`, and `SharedError` types.
-- `RocketMQError`, `RocketMQResult<T>`, and the retained domain error enums
-  used throughout the workspace.
 - `ErrorDescriptor` and the single `ALL_DESCRIPTORS` catalog.
 - Stable descriptor metadata: code, class, condition, fault attribution,
   component, fixed public message, severity, recovery hint, backtrace policy,
   exposure, four explicit boundary projections, and ordered field schemas.
-- `ErrorContext`, `PublicErrorView`, `DiagnosticView`,
-  `BoundaryErrorView`, and `CliErrorView`.
+- `ErrorContext`, `PublicErrorView`, `DiagnosticView`, and `CliErrorView`.
 
 The crate intentionally does not depend on transport implementations or
 generated protobuf bindings. Its remoting, gRPC, HTTP, and CLI projection types
@@ -31,39 +28,37 @@ are dependency-light values consumed by boundary adapters.
 ```rust
 use std::sync::Arc;
 
-use rocketmq_error::Error;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::TRANSPORT_ENDPOINT_INVALID;
+use rocketmq_error::{Error, Result, SharedError, TRANSPORT_ENDPOINT_INVALID};
 
-fn validate_transport_endpoint(addr: &str) -> RocketMQResult<()> {
+fn validate_transport_endpoint(addr: &str) -> Result<()> {
     if addr.is_empty() {
-        return Err(RocketMQError::Shared(Arc::new(Error::new(
-            &TRANSPORT_ENDPOINT_INVALID,
-        ))));
+        return Err(Error::new(&TRANSPORT_ENDPOINT_INVALID));
     }
 
     Ok(())
 }
+
+let error = validate_transport_endpoint("").expect_err("empty endpoint must fail");
+let shared: SharedError = Arc::new(error);
+assert_eq!(shared.code().as_str(), "transport.endpoint.invalid");
 ```
 
-The `Shared` variant is the sole canonical `SharedError` carrier, so descriptor
-identity, context, and a typed physical source can cross crate boundaries
-without reconstruction. Retained domain errors such as
-`SerializationError`, `ProtocolError`, `RpcClientError`, `AuthError`,
-`ToolsError`, `FilterError`, `ObservabilityError`, and
-`UnifiedServiceError` convert to `RocketMQError` through `From`.
+`Error` is the sole canonical envelope. It is intentionally not cloneable;
+`SharedError` is `Arc<Error>` and preserves the same descriptor, context, and
+typed source when an error needs multiple owners. Crate-specific facades should
+carry `Error` or `SharedError` without reconstructing them from display text.
 
 ## Canonical Descriptors
 
-Every retained error leaf associates with exactly one immutable descriptor.
-Code that needs stable behavior reads the descriptor rather than deriving policy
-from an enum, display string, or caller override.
+Every canonical error selects exactly one immutable descriptor. Code that needs
+stable behavior reads the descriptor rather than deriving policy from a display
+string or caller override.
 
 ```rust
-use rocketmq_error::RocketMQError;
+use rocketmq_error::{fields, Error, ErrorContext, ROUTE_TOPIC_NOT_FOUND};
 
-let error = RocketMQError::route_not_found("TopicA");
+let error = Error::new(&ROUTE_TOPIC_NOT_FOUND)
+    .with_context(ErrorContext::new().with_text(fields::TOPIC, "TopicA"));
 let descriptor = error.descriptor();
 
 assert_eq!(descriptor.code().as_str(), "route.topic.not_found");
@@ -88,22 +83,26 @@ A descriptor explicitly owns all four projections:
 
 ## Boundary Views and Redaction
 
-Use `boundary_view()` for remoting, gRPC, HTTP, CLI, dashboard, or other public
-adapters. The view reads identity and projections from the descriptor and
-enforces its exposure policy.
+Use `PublicErrorView` for approved public context fields at remoting, gRPC,
+HTTP, dashboard, or other public adapters. Read protocol mappings directly
+from the descriptor-owned projection. `CliErrorView` provides the corresponding
+CLI projection.
 
 ```rust
-use rocketmq_error::RocketMQError;
+use rocketmq_error::{fields, Error, ErrorContext, STORAGE_READ_FAILED};
 
-let error = RocketMQError::storage_read_failed(
-    "/var/lib/rocketmq/commitlog/00000000000000000000",
-    "permission denied",
+let error = Error::new(&STORAGE_READ_FAILED).with_context(
+    ErrorContext::new()
+        .with_text(fields::STORE_OPERATION, "read")
+        .with_text(fields::STORE_COMPONENT, "commitlog")
+        .with_secret_presence(fields::STORE_DETAIL_PRESENT)
+        .with_secret_presence(fields::SOURCE_PRESENT),
 );
-let view = error.boundary_view();
+let view = error.public_view().unwrap();
 
 assert_eq!(view.code().as_str(), "storage.read.failed");
 assert_eq!(view.message(), "Storage read failed");
-assert!(view.context().is_empty());
+assert_eq!(view.fields().count(), 0);
 ```
 
 For `Exposure::Generic`, a boundary view exposes the fixed message and no
@@ -153,23 +152,30 @@ assert_eq!(error.descriptor().severity(), ErrorSeverity::Warn);
 ## Typed Sources
 
 Use source-preserving constructors when a lower-level operation failed.
-`std::error::Error::source()` retains the original typed cause; boundary views
+`std::error::Error::source()` retains the original typed cause; safe views
 never stringify it.
 
 ```rust
 use std::error::Error as _;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::{fields, Error, ErrorContext, PROTOCOL_BODY_INVALID};
 
-let error = RocketMQError::request_header_source(
-    "decode header",
+let error = Error::caused_by(
+    &PROTOCOL_BODY_INVALID,
     std::io::Error::other("private detail"),
+)
+.with_context(
+    ErrorContext::new()
+        .with_text(fields::OPERATION_DIAGNOSTIC, "decode header")
+        .with_secret_presence(fields::INVALID_VALUE_PRESENT)
+        .with_secret_presence(fields::SOURCE_PRESENT),
 );
 
 assert!(error
     .source()
     .and_then(|source| source.downcast_ref::<std::io::Error>())
     .is_some());
-assert!(error.boundary_view().context().is_empty());
+let public = error.public_view().unwrap();
+assert_eq!(public.fields().count(), 0);
 ```
 
 ## Public API Notes
@@ -177,11 +183,10 @@ assert!(error.boundary_view().context().is_empty());
 - Stable integrations use descriptor codes and projections, not `Display`.
 - Descriptor and projection construction is private; catalog constants are
   read-only public values.
-- Deleted legacy `ErrorSpec`, recovery/observability policy tables, and
-  category/scope metadata are not compatibility aliases.
-- The six obsolete `ProtocolError` leaves, the Controller-specific error enum
-  and facade variants, and the unused required-property leaf are removed.
-  Retained callers use canonical `RocketMQError` variants and descriptors.
+- The crate maintains one current error model and does not provide a versioned
+  compatibility facade.
+- Component-specific adapters may expose narrow facades, but canonical identity,
+  context, typed sources, and boundary projections remain descriptor-owned.
 
 ## Tests
 
@@ -197,7 +202,8 @@ Focused catalog and association suites:
 
 ```bash
 cargo test -p rocketmq-error --test error_descriptor_catalog
-cargo test -p rocketmq-error --test legacy_descriptor_associations
+cargo test -p rocketmq-error --test typed_error_public_api
+cargo test -p rocketmq-error --test shared_error_contract
 cargo test -p rocketmq-error --test error_context_redaction
 ```
 

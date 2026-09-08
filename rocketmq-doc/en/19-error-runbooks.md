@@ -38,20 +38,22 @@ If the guard fails:
 4. Add or update a focused test when the failure exposed missing coverage.
 5. Re-run the guard and the relevant Cargo command.
 
-## Runbook: Legacy Or Public Anyhow Regression
+## Runbook: Compatibility Alias Or Public Anyhow Regression
 
 Symptoms:
 
-- `RocketmqError`, `RocketMqError`, or `rocketmq_error::Result` appears in core
-  error/common code.
+- A compatibility alias or versioned error facade appears around the canonical
+  error model.
 - `anyhow::Result` or `anyhow::Error` appears in `rocketmq-error` or
   `rocketmq-common` public contracts.
 
 Action:
 
-1. Replace the old type with `RocketMQError` or `RocketMQResult<T>`.
-2. If a domain crate needs private error detail, keep it local and convert to
-   `RocketMQError` at the boundary.
+1. Use `rocketmq_error::Error`, `rocketmq_error::Result<T>`, or
+   `rocketmq_error::SharedError` in canonical APIs. Use an established narrow
+   facade such as `rocketmq_client_rust::ClientResult<T>` at its owning boundary.
+2. If an owning crate needs private error detail, keep it local and retain its
+   typed source with `Error::caused_by` or the facade's source-bearing helper.
 3. If the code is a binary or tool entry point, keep `anyhow` at that boundary
    and avoid exporting it back into library APIs.
 
@@ -79,7 +81,8 @@ Action:
 
 Symptoms:
 
-- Proxy returns the wrong `v2::Code` or `tonic::Code` for a `RocketMQError`.
+- Proxy returns the wrong `v2::Code` or `tonic::Code` for a canonical `Error`
+  or source-preserving proxy facade.
 - A new proxy mapping table appears outside `rocketmq-proxy::status`.
 
 Action:
@@ -99,8 +102,9 @@ Symptoms:
 
 Action:
 
-1. Wrap sensitive values with `Sensitive<T>` or a local helper that returns
-   `<redacted>`.
+1. Do not store sensitive values in `ErrorContext`; record only the matching
+   typed presence field. Use `Sensitive<T>` for unavoidable local values whose
+   `Display` and `Debug` output must be redacted.
 2. Update `Display` and `Debug` implementations together.
 3. Add a test that checks the secret value is absent and `<redacted>` is
    present.
@@ -116,10 +120,10 @@ python scripts/error_architecture_guard.py
 
 Action:
 
-1. Add or reuse the structural `ErrorKind` only when local exhaustive matching
-   requires it.
-2. Add one canonical descriptor and associate every retained direct and wrapped
-   leaf with it.
+1. Reuse an existing canonical descriptor when its semantics and projections
+   match; otherwise add exactly one descriptor to the central catalog.
+2. Associate every retained direct and wrapped leaf with that descriptor; do
+   not add a parallel structural classification enum.
 3. Fill code, class, condition, fault, component, fixed message, recovery hint,
    severity, exposure, backtrace policy, remoting/gRPC/HTTP/CLI projections, and
    ordered context schema.

@@ -27,9 +27,8 @@ use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::ClientError;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::UnifiedServiceError;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedItem;
@@ -682,7 +681,7 @@ impl PullMessageService {
     ///
     /// # Errors
     /// Returns error if service is already started
-    pub async fn start(&self, instance: Arc<MQClientInstance>) -> Result<(), RocketMQError> {
+    pub async fn start(&self, instance: Arc<MQClientInstance>) -> Result<(), ClientError> {
         let _transition = self.lifecycle_transition.lock().await;
         if self
             .tx
@@ -698,7 +697,7 @@ impl PullMessageService {
         let main_queue = tx.clone();
         let shard_queues = (0..self.shard_count)
             .map(|index| self.build_request_queue(format!("pull-worker-shard-{index}"), FullPolicy::Reject))
-            .collect::<Result<Vec<BudgetedQueue<PullRequest>>, RocketMQError>>()?;
+            .collect::<Result<Vec<BudgetedQueue<PullRequest>>, ClientError>>()?;
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
         let pop_instance = instance.clone();
         let service_context = instance.service_context().component("pull-message-service");
@@ -912,7 +911,7 @@ impl PullMessageService {
         }
     }
 
-    fn build_delayed_scheduler_queue(&self) -> Result<BudgetedQueue<DelayedScheduleCommand>, RocketMQError> {
+    fn build_delayed_scheduler_queue(&self) -> Result<BudgetedQueue<DelayedScheduleCommand>, ClientError> {
         self.build_request_queue("pull-delayed-scheduler", FullPolicy::DropStale)
     }
 
@@ -920,7 +919,7 @@ impl PullMessageService {
         &self,
         name: impl Into<String>,
         policy: FullPolicy,
-    ) -> Result<BudgetedQueue<T>, RocketMQError> {
+    ) -> Result<BudgetedQueue<T>, ClientError> {
         let queue_count = self.queue_capacity.max(1);
         let queue_bytes = (self.resource_budget.limit().capacity.bytes / 16).max(1);
         let queue_rate = u64::try_from(queue_count).unwrap_or(u64::MAX).max(1);
@@ -932,11 +931,7 @@ impl PullMessageService {
                     .with_rate(RateLimit::new(queue_rate, queue_rate))
                     .with_max_age(Duration::from_secs(300)),
             )
-            .map_err(|error| RocketMQError::ConfigInvalidValue {
-                key: "client.pull.requestQueue",
-                value: queue_count.to_string(),
-                reason: error.to_string(),
-            })?;
+            .map_err(|error| ClientError::config_invalid_source("client.pull.requestQueue", true, error))?;
         Ok(BudgetedQueue::new(budget))
     }
 
@@ -951,7 +946,7 @@ impl PullMessageService {
     async fn process_request(
         request: Box<dyn MessageRequest + Send + 'static>,
         instance: &MQClientInstance,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), ClientError> {
         match request.get_message_request_mode() {
             MessageRequestMode::Pull => {
                 // Safe downcast using Any trait
@@ -1129,7 +1124,7 @@ impl PullMessageService {
     /// - Sends shutdown signal to main loop
     /// - Cancels all scheduled tasks
     /// - Waits for main loop to finish (with timeout)
-    pub async fn shutdown(&self, timeout_ms: u64) -> Result<(), RocketMQError> {
+    pub async fn shutdown(&self, timeout_ms: u64) -> Result<(), ClientError> {
         let _transition = self.lifecycle_transition.lock().await;
         if self.is_stopped() {
             warn!("{} already stopped", self.get_service_name());
@@ -1214,7 +1209,7 @@ impl PullMessageService {
     }
 
     /// Shuts down with default timeout
-    pub async fn shutdown_default(&self) -> Result<(), RocketMQError> {
+    pub async fn shutdown_default(&self) -> Result<(), ClientError> {
         self.shutdown(DEFAULT_SHUTDOWN_TIMEOUT_MS).await
     }
 }
@@ -1300,24 +1295,19 @@ fn spawn_scheduled_pull_message_task<F>(
     }
 }
 
-fn pull_message_service_startup_failed(operation: &'static str, error: impl std::fmt::Display) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
-        "PullMessageService {operation}: {error}"
-    )))
+fn pull_message_service_startup_failed(
+    operation: &'static str,
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> ClientError {
+    ClientError::service_source(operation, error)
 }
 
-fn pull_message_service_request_type_mismatch(expected: &'static str) -> RocketMQError {
-    RocketMQError::ClientInvalidState {
-        expected,
-        actual: "message request payload type mismatch".to_string(),
-    }
+fn pull_message_service_request_type_mismatch(expected: &'static str) -> ClientError {
+    ClientError::invalid_state(expected, "message request payload type mismatch")
 }
 
-fn pull_message_service_shutdown_signal_failed() -> RocketMQError {
-    RocketMQError::ClientInvalidState {
-        expected: "active shutdown receiver",
-        actual: "shutdown receiver unavailable".to_string(),
-    }
+fn pull_message_service_shutdown_signal_failed() -> ClientError {
+    ClientError::invalid_state("active shutdown receiver", "shutdown receiver unavailable")
 }
 
 #[cfg(test)]
@@ -1415,10 +1405,11 @@ mod tests {
 
     #[test]
     fn pull_message_service_startup_failed_uses_service_descriptor() {
-        let error = pull_message_service_startup_failed("spawn test worker", "task group closed");
+        let error =
+            pull_message_service_startup_failed("spawn test worker", std::io::Error::other("task group closed"));
 
         assert_eq!(error.descriptor().code(), rocketmq_error::CORE_SERVICE_FAILED.code());
-        assert!(error.to_string().contains("PullMessageService spawn test worker"));
+        assert!(std::error::Error::source(&error).is_some());
     }
 
     #[test]
@@ -1442,7 +1433,7 @@ mod tests {
         }
     }
 
-    async fn process_mismatched_request(mode: MessageRequestMode) -> RocketMQError {
+    async fn process_mismatched_request(mode: MessageRequestMode) -> ClientError {
         let runtime = crate::runtime::test_client_runtime("pull-message-mismatch-test");
         let instance = MQClientInstance::new_arc(
             ClientConfig::default(),

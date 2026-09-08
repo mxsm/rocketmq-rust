@@ -22,6 +22,7 @@ use serde::Deserializer;
 use serde::Serialize;
 
 use crate::core::AdminError;
+use crate::core::AdminOutcome;
 use crate::core::AdminResult;
 
 /// Maximum number of source failures exposed by one admin query.
@@ -154,14 +155,9 @@ impl<T> AdminQueryResult<T> {
         source_failures: Vec<AdminSourceFailure>,
     ) -> AdminResult<Self> {
         if successful_sources == 0 && !source_failures.is_empty() {
-            let retryable = source_failures.iter().all(AdminSourceFailure::retryable);
-            return Err(AdminError::backend_view(
+            return Err(AdminError::unavailable(
                 "admin_query_sources",
-                "ADMIN_QUERY_ALL_SOURCES_FAILED",
                 "All required admin query sources failed",
-                None,
-                503,
-                retryable,
             ));
         }
 
@@ -175,6 +171,15 @@ impl<T> AdminQueryResult<T> {
             partial: self.partial,
             warnings: self.warnings,
             source_failures: self.source_failures,
+        }
+    }
+
+    /// Returns the closed completion state represented by this successful result.
+    pub const fn outcome(&self) -> AdminOutcome {
+        if self.partial {
+            AdminOutcome::PartialSuccess
+        } else {
+            AdminOutcome::Success
         }
     }
 
@@ -252,7 +257,9 @@ mod tests {
         assert!(empty.source_failures.is_empty());
 
         let error = AdminQueryResult::from_sources(Vec::<u8>::new(), 0, vec![failure("broker-a")]).unwrap_err();
-        assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+        assert_eq!(empty.outcome(), AdminOutcome::Success);
+        assert_eq!(error.outcome(), AdminOutcome::Failure);
+        assert_eq!(error.code().as_str(), "client.component.unavailable");
         assert!(error.is_retryable());
     }
 
@@ -267,6 +274,7 @@ mod tests {
         let result = AdminQueryResult::from_sources((), 1, failures).unwrap();
 
         assert!(result.partial);
+        assert_eq!(result.outcome(), AdminOutcome::PartialSuccess);
         assert_eq!(result.source_failures.len(), MAX_ADMIN_SOURCE_FAILURES);
         assert_eq!(result.source_failures[0].logical_target(), "broker-00");
         assert!(result

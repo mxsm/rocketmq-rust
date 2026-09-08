@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -34,7 +34,7 @@ pub struct UpdateNamesrvConfigSubCommand {
 }
 
 impl UpdateNamesrvConfigSubCommand {
-    fn request(&self) -> RocketMQResult<NamesrvConfigUpdateRequest> {
+    fn request(&self) -> CanonicalResult<NamesrvConfigUpdateRequest> {
         NamesrvConfigUpdateRequest::try_new(
             self.key.clone(),
             self.value.clone(),
@@ -64,7 +64,7 @@ impl CommandExecute for UpdateNamesrvConfigSubCommand {
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = NameServerService::update_namesrv_config_by_request(self.request()?).await?;
         Self::print_result(result);
         Ok(())

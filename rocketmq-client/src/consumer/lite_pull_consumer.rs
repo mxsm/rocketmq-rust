@@ -57,7 +57,7 @@ pub trait SubscriptionControl: Send + Sync {
     ///
     /// Returns an error if the topic name is invalid or if the subscription cannot be
     /// registered with the broker.
-    async fn subscribe(&self, topic: &str) -> rocketmq_error::RocketMQResult<()>;
+    async fn subscribe(&self, topic: &str) -> crate::ClientResult<()>;
 
     /// Subscribes to the specified topic with a tag-based or SQL-based filter expression.
     ///
@@ -73,7 +73,7 @@ pub trait SubscriptionControl: Send + Sync {
     ///
     /// Returns an error if the topic name is invalid, the expression cannot be parsed,
     /// or the subscription cannot be registered with the broker.
-    async fn subscribe_with_expression(&self, topic: &str, sub_expression: &str) -> rocketmq_error::RocketMQResult<()>;
+    async fn subscribe_with_expression(&self, topic: &str, sub_expression: &str) -> crate::ClientResult<()>;
 
     /// Subscribes to the specified topic with a filter expression and a queue-change listener.
     ///
@@ -97,7 +97,7 @@ pub trait SubscriptionControl: Send + Sync {
         topic: &str,
         sub_expression: &str,
         listener: MQL,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         MQL: MessageQueueListener + 'static;
 
@@ -114,11 +114,7 @@ pub trait SubscriptionControl: Send + Sync {
     ///
     /// Returns an error if the topic name is invalid, the selector expression is rejected
     /// by the broker, or the subscription cannot be registered.
-    async fn subscribe_with_selector(
-        &self,
-        topic: &str,
-        selector: Option<MessageSelector>,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    async fn subscribe_with_selector(&self, topic: &str, selector: Option<MessageSelector>) -> crate::ClientResult<()>;
 
     /// Removes the subscription for the specified topic.
     ///
@@ -146,7 +142,7 @@ pub trait SubscriptionControl: Send + Sync {
     async fn build_subscriptions_for_heartbeat(
         &self,
         sub_expression_map: &mut HashMap<String, MessageSelector>,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    ) -> crate::ClientResult<()>;
 
     /// Returns the subscriptions currently advertised in heartbeat payloads.
     async fn subscriptions_for_heartbeat(&self) -> HashSet<SubscriptionData>;
@@ -167,7 +163,7 @@ pub trait SubscriptionControl: Send + Sync {
     /// # Errors
     ///
     /// Returns an error for legacy `ConsumeFromWhere` values that Java LitePull rejects.
-    async fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> rocketmq_error::RocketMQResult<()>;
+    async fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> crate::ClientResult<()>;
 
     /// Returns the timestamp used by `ConsumeFromWhere::ConsumeFromTimestamp`.
     async fn consume_timestamp(&self) -> Option<CheetahString>;
@@ -245,7 +241,7 @@ pub trait SubscriptionControl: Send + Sync {
         &self,
         topic: &str,
         listener: TL,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         TL: TopicMessageQueueChangeListener + 'static;
 
@@ -268,7 +264,7 @@ pub trait AssignmentControl: Send + Sync {
     /// # Errors
     ///
     /// Returns an error if the consumer is not in the running state.
-    async fn assignment(&self) -> rocketmq_error::RocketMQResult<HashSet<MessageQueue>>;
+    async fn assignment(&self) -> crate::ClientResult<HashSet<MessageQueue>>;
 
     /// Manually assigns the given [`MessageQueue`]s to this consumer, bypassing broker rebalance.
     ///
@@ -282,7 +278,7 @@ pub trait AssignmentControl: Send + Sync {
     /// # Errors
     ///
     /// Returns an error if `message_queues` is empty or the assignment cannot be applied.
-    async fn assign(&self, message_queues: Vec<MessageQueue>) -> rocketmq_error::RocketMQResult<()>;
+    async fn assign(&self, message_queues: Vec<MessageQueue>) -> crate::ClientResult<()>;
 
     /// Sets the subscription filter expression applied when fetching from manually assigned queues.
     ///
@@ -297,11 +293,7 @@ pub trait AssignmentControl: Send + Sync {
     ///
     /// Returns an error if the expression is blank, the consumer has already started, or
     /// the subscription cannot be switched to manual assignment mode.
-    async fn set_sub_expression_for_assign(
-        &self,
-        topic: &str,
-        sub_expression: &str,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    async fn set_sub_expression_for_assign(&self, topic: &str, sub_expression: &str) -> crate::ClientResult<()>;
 
     /// Seeks the fetch position of the specified [`MessageQueue`] to the given offset.
     ///
@@ -319,7 +311,7 @@ pub trait AssignmentControl: Send + Sync {
     /// or if the specified offset is out of the valid range.
     ///
     /// [`poll`]: MessagePoll::poll
-    async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> rocketmq_error::RocketMQResult<()>;
+    async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> crate::ClientResult<()>;
 
     /// Suspends message fetching for the specified [`MessageQueue`]s.
     ///
@@ -355,7 +347,7 @@ pub trait AssignmentControl: Send + Sync {
     ///
     /// Returns an error if the queue is not assigned to this consumer or if the earliest
     /// offset cannot be retrieved from the broker.
-    async fn seek_to_begin(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
+    async fn seek_to_begin(&self, message_queue: &MessageQueue) -> crate::ClientResult<()>;
 
     /// Seeks the fetch position of the specified [`MessageQueue`] to its latest available offset.
     ///
@@ -372,7 +364,7 @@ pub trait AssignmentControl: Send + Sync {
     /// offset cannot be retrieved from the broker.
     ///
     /// [`poll`]: MessagePoll::poll
-    async fn seek_to_end(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
+    async fn seek_to_end(&self, message_queue: &MessageQueue) -> crate::ClientResult<()>;
 
     /// Checks whether a specific [`MessageQueue`] is currently paused.
     ///
@@ -591,7 +583,7 @@ pub trait ConsumerOffsetControl: Send + Sync {
     /// This mirrors Java `DefaultLitePullConsumer.setOffsetStore`. The store
     /// should be set before startup so load, rebalance, and commit paths share
     /// the same backend.
-    async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> rocketmq_error::RocketMQResult<()>;
+    async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> crate::ClientResult<()>;
 
     /// Returns whether automatic offset commit is enabled.
     ///
@@ -643,7 +635,7 @@ pub trait ConsumerOffsetControl: Send + Sync {
     ///
     /// Returns an error if the topic does not exist, if the name server is unreachable,
     /// or if the consumer is not in the running state.
-    async fn fetch_message_queues(&self, topic: &str) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>>;
+    async fn fetch_message_queues(&self, topic: &str) -> crate::ClientResult<Vec<MessageQueue>>;
 
     /// Queries the broker for the offset corresponding to the given timestamp in a queue.
     ///
@@ -658,11 +650,7 @@ pub trait ConsumerOffsetControl: Send + Sync {
     /// # Errors
     ///
     /// Returns an error if the queue is not found on the broker or the query fails.
-    async fn offset_for_timestamp(
-        &self,
-        message_queue: &MessageQueue,
-        timestamp: u64,
-    ) -> rocketmq_error::RocketMQResult<i64>;
+    async fn offset_for_timestamp(&self, message_queue: &MessageQueue, timestamp: u64) -> crate::ClientResult<i64>;
 
     /// Queries the broker for the earliest message store time of the specified queue.
     ///
@@ -676,7 +664,7 @@ pub trait ConsumerOffsetControl: Send + Sync {
     ///
     /// Returns an error if the queue is not found on the broker, the consumer is not running,
     /// or this LitePull implementation does not support broker offset metadata queries.
-    async fn earliest_msg_store_time(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<i64>;
+    async fn earliest_msg_store_time(&self, message_queue: &MessageQueue) -> crate::ClientResult<i64>;
 
     /// Queries the broker for the current maximum offset of the specified queue.
     ///
@@ -690,7 +678,7 @@ pub trait ConsumerOffsetControl: Send + Sync {
     ///
     /// Returns an error if the queue is not found on the broker, the consumer is not running,
     /// or this LitePull implementation does not support broker offset metadata queries.
-    async fn max_offset(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<i64>;
+    async fn max_offset(&self, message_queue: &MessageQueue) -> crate::ClientResult<i64>;
 
     /// Queries the broker for the current minimum offset of the specified queue.
     ///
@@ -704,7 +692,7 @@ pub trait ConsumerOffsetControl: Send + Sync {
     ///
     /// Returns an error if the queue is not found on the broker, the consumer is not running,
     /// or this LitePull implementation does not support broker offset metadata queries.
-    async fn min_offset(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<i64>;
+    async fn min_offset(&self, message_queue: &MessageQueue) -> crate::ClientResult<i64>;
 
     /// Commits all consumed offsets to the consumer offset store.
     ///
@@ -778,7 +766,7 @@ pub trait ConsumerOffsetControl: Send + Sync {
     ///
     /// Returns an error if the queue is not assigned to this consumer or if the offset
     /// cannot be retrieved from the offset store.
-    async fn committed(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<i64>;
+    async fn committed(&self, message_queue: &MessageQueue) -> crate::ClientResult<i64>;
 
     /// Commits all consumed offsets for all assigned queues to the local offset store.
     ///
@@ -795,7 +783,7 @@ pub trait ConsumerOffsetControl: Send + Sync {
     /// Returns an error if the consumer is not in the running state.
     ///
     /// [`commit`]: ConsumerOffsetControl::commit
-    async fn commit_all(&self) -> rocketmq_error::RocketMQResult<()>;
+    async fn commit_all(&self) -> crate::ClientResult<()>;
 }
 
 #[allow(async_fn_in_trait)]
@@ -808,7 +796,7 @@ pub trait ConsumerLifecycle: Send + Sync {
     ///
     /// Returns an error if the consumer is already running, if required configuration is
     /// invalid, or if the connection to the name server cannot be established.
-    async fn start(&self) -> rocketmq_error::RocketMQResult<()>;
+    async fn start(&self) -> crate::ClientResult<()>;
 
     /// Shuts down the consumer and releases all associated resources.
     ///

@@ -20,12 +20,13 @@ use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::ClientConfig;
+use rocketmq_client_rust::ClientError;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -41,11 +42,11 @@ pub const TAG: &str = "*";
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let client_config = broadcast_client_config()?;
 
     let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
@@ -67,7 +68,7 @@ async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>
     Ok(())
 }
 
-fn broadcast_client_config() -> RocketMQResult<ClientConfig> {
+fn broadcast_client_config() -> ClientResult<ClientConfig> {
     let mut client_config = ClientConfig::new();
     client_config.set_namesrv_addr(CheetahString::from_static_str(DEFAULT_NAMESRVADDR));
     client_config.client_ip = Some(CheetahString::from_static_str("127.0.0.1"));
@@ -76,10 +77,12 @@ fn broadcast_client_config() -> RocketMQResult<ClientConfig> {
     let offset_dir = local_offset_store_dir()
         .join(client_config.build_mq_client_id())
         .join(CONSUMER_GROUP);
-    std::fs::create_dir_all(&offset_dir)?;
+    std::fs::create_dir_all(&offset_dir)
+        .map_err(|error| ClientError::internal("create broadcast offset directory", error))?;
     let offset_file = offset_dir.join("offsets.json");
     if !offset_file.exists() {
-        std::fs::write(offset_file, r#"{"offsetTable":{}}"#)?;
+        std::fs::write(offset_file, r#"{"offsetTable":{}}"#)
+            .map_err(|error| ClientError::internal("initialize broadcast offset file", error))?;
     }
 
     Ok(client_config)
@@ -114,7 +117,7 @@ impl MessageListenerConcurrently for BroadcastListener {
         &self,
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         for message in messages {
             info!(
                 "broadcast receive msg_id={}, topic={}, tags={}, body={}",

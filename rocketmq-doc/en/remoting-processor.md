@@ -22,7 +22,7 @@ impl RequestProcessor for Processor {
     async fn process(
         &mut self,
         _request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         Ok(HandlerOutcome::Reply(RemotingResponse::empty_response(0)))
     }
 }

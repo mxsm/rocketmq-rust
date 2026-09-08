@@ -20,8 +20,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use ipnet::IpNet;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
@@ -81,7 +80,7 @@ impl ProxyProtocolConfig {
     /// # Errors
     ///
     /// Returns a configuration error when enabled without a trust root or with unusable limits.
-    pub fn validate(&self) -> RocketMQResult<()> {
+    pub fn validate(&self) -> Result<(), rocketmq_error::SharedError> {
         if !self.enabled {
             return Ok(());
         }
@@ -160,7 +159,7 @@ pub async fn read_proxy_protocol(
     stream: &mut TcpStream,
     transport_peer: SocketAddr,
     config: &ProxyProtocolConfig,
-) -> RocketMQResult<Option<ProxyProtocolMetadata>> {
+) -> Result<Option<ProxyProtocolMetadata>, rocketmq_error::SharedError> {
     if !config.enabled {
         return Ok(None);
     }
@@ -174,7 +173,14 @@ pub async fn read_proxy_protocol(
         }
         let count = tokio::time::timeout(remaining, stream.peek(&mut peeked))
             .await
-            .map_err(|_| protocol_error("candidate header timed out"))??;
+            .map_err(|_| protocol_error("candidate header timed out"))?
+            .map_err(|source| {
+                crate::error_helpers::connection_failed_for_remote(
+                    transport_peer.to_string(),
+                    crate::error_helpers::TransportStage::Read,
+                    source,
+                )
+            })?;
         if count == 0 {
             return Err(protocol_error("candidate header was truncated"));
         }
@@ -194,11 +200,18 @@ pub async fn read_proxy_protocol(
     let remaining = deadline.saturating_duration_since(Instant::now());
     tokio::time::timeout(remaining, stream.read_exact(&mut header))
         .await
-        .map_err(|_| protocol_error("candidate header timed out"))??;
+        .map_err(|_| protocol_error("candidate header timed out"))?
+        .map_err(|source| {
+            crate::error_helpers::connection_failed_for_remote(
+                transport_peer.to_string(),
+                crate::error_helpers::TransportStage::Read,
+                source,
+            )
+        })?;
     parse_header(&header, transport_peer, config)
 }
 
-fn detect_header(input: &[u8], max_header_bytes: usize) -> RocketMQResult<Detection> {
+fn detect_header(input: &[u8], max_header_bytes: usize) -> Result<Detection, rocketmq_error::SharedError> {
     if input.starts_with(V1_PREFIX) {
         if let Some(end) = input.windows(2).position(|window| window == b"\r\n") {
             let length = end + 2;
@@ -237,7 +250,7 @@ fn parse_header(
     header: &[u8],
     transport_peer: SocketAddr,
     config: &ProxyProtocolConfig,
-) -> RocketMQResult<Option<ProxyProtocolMetadata>> {
+) -> Result<Option<ProxyProtocolMetadata>, rocketmq_error::SharedError> {
     if header.starts_with(V1_PREFIX) {
         parse_v1(header, transport_peer).map(Some)
     } else if header.starts_with(V2_SIGNATURE) {
@@ -247,7 +260,7 @@ fn parse_header(
     }
 }
 
-fn parse_v1(header: &[u8], transport_peer: SocketAddr) -> RocketMQResult<ProxyProtocolMetadata> {
+fn parse_v1(header: &[u8], transport_peer: SocketAddr) -> Result<ProxyProtocolMetadata, rocketmq_error::SharedError> {
     let line = std::str::from_utf8(header).map_err(|_| protocol_error("PROXY v1 header is not UTF-8"))?;
     let fields: Vec<&str> = line.trim_end_matches("\r\n").split_ascii_whitespace().collect();
     if fields.len() != 6 || fields[0] != "PROXY" {
@@ -269,7 +282,7 @@ fn parse_v1(header: &[u8], transport_peer: SocketAddr) -> RocketMQResult<ProxyPr
     })
 }
 
-fn parse_ip(value: &str, family: &str) -> RocketMQResult<IpAddr> {
+fn parse_ip(value: &str, family: &str) -> Result<IpAddr, rocketmq_error::SharedError> {
     let address = value
         .parse::<IpAddr>()
         .map_err(|_| protocol_error("PROXY v1 address is invalid"))?;
@@ -284,7 +297,7 @@ fn parse_v2(
     header: &[u8],
     transport_peer: SocketAddr,
     config: &ProxyProtocolConfig,
-) -> RocketMQResult<Option<ProxyProtocolMetadata>> {
+) -> Result<Option<ProxyProtocolMetadata>, rocketmq_error::SharedError> {
     let version_command = header[12];
     if version_command >> 4 != 2 {
         return Err(protocol_error("PROXY v2 version is invalid"));
@@ -308,7 +321,7 @@ fn parse_v2(
     }))
 }
 
-fn parse_v2_tcp4(header: &[u8]) -> RocketMQResult<(SocketAddr, SocketAddr, usize)> {
+fn parse_v2_tcp4(header: &[u8]) -> Result<(SocketAddr, SocketAddr, usize), rocketmq_error::SharedError> {
     if header.len() < 28 {
         return Err(protocol_error("PROXY v2 TCP4 address block is truncated"));
     }
@@ -323,7 +336,7 @@ fn parse_v2_tcp4(header: &[u8]) -> RocketMQResult<(SocketAddr, SocketAddr, usize
     ))
 }
 
-fn parse_v2_tcp6(header: &[u8]) -> RocketMQResult<(SocketAddr, SocketAddr, usize)> {
+fn parse_v2_tcp6(header: &[u8]) -> Result<(SocketAddr, SocketAddr, usize), rocketmq_error::SharedError> {
     if header.len() < 52 {
         return Err(protocol_error("PROXY v2 TCP6 address block is truncated"));
     }
@@ -344,7 +357,10 @@ fn parse_v2_tcp6(header: &[u8]) -> RocketMQResult<(SocketAddr, SocketAddr, usize
     ))
 }
 
-fn parse_tlvs(input: &[u8], config: &ProxyProtocolConfig) -> RocketMQResult<BTreeMap<u8, Vec<u8>>> {
+fn parse_tlvs(
+    input: &[u8],
+    config: &ProxyProtocolConfig,
+) -> Result<BTreeMap<u8, Vec<u8>>, rocketmq_error::SharedError> {
     let mut cursor = 0;
     let mut tlvs = BTreeMap::new();
     while cursor < input.len() {
@@ -368,18 +384,13 @@ fn parse_tlvs(input: &[u8], config: &ProxyProtocolConfig) -> RocketMQResult<BTre
     Ok(tlvs)
 }
 
-fn protocol_error(_reason: impl Into<String>) -> RocketMQError {
-    rocketmq_error::RocketMQError::Shared(crate::error_helpers::connection_failed_without_source(
-        crate::error_helpers::TransportStage::EndpointValidation,
-    ))
+fn protocol_error(_reason: impl Into<String>) -> SharedError {
+    crate::error_helpers::connection_failed_without_source(crate::error_helpers::TransportStage::EndpointValidation)
 }
 
-fn config_error(key: &'static str, reason: &'static str) -> RocketMQError {
-    RocketMQError::ConfigInvalidValue {
-        key,
-        value: "<configured>".to_owned(),
-        reason: reason.to_owned(),
-    }
+fn config_error(key: &'static str, reason: &'static str) -> SharedError {
+    let _ = reason;
+    crate::error_helpers::configuration_invalid(key)
 }
 
 #[cfg(test)]

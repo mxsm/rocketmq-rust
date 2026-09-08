@@ -19,12 +19,11 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crate::NameServerResult;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use moka::sync::SegmentedCache;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::SerializationError;
+use rocketmq_error::SharedError;
 
 use crate::config::NamesrvConfig;
 use crate::route::topic_route_snapshot::RouteVariant;
@@ -105,7 +104,7 @@ impl CachedRouteBody {
 
 #[derive(Debug)]
 struct SharedRouteEncodeFailure {
-    source: Arc<RocketMQError>,
+    source: Arc<SharedError>,
 }
 
 impl fmt::Display for SharedRouteEncodeFailure {
@@ -116,16 +115,12 @@ impl fmt::Display for SharedRouteEncodeFailure {
 
 impl StdError for SharedRouteEncodeFailure {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        Some(self.source.as_ref())
+        Some(self.source.as_ref().as_ref())
     }
 }
 
-fn route_encode_failure(source: Arc<RocketMQError>) -> RocketMQError {
-    RocketMQError::Serialization(SerializationError::source(
-        "encode",
-        "namesrv-route-response",
-        SharedRouteEncodeFailure { source },
-    ))
+fn route_encode_failure(source: Arc<SharedError>) -> SharedError {
+    crate::namesrv_error::serialization("encode-route-response", "json", SharedRouteEncodeFailure { source })
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -188,8 +183,8 @@ impl RouteResponseCache {
     pub(crate) fn get_or_try_insert_with(
         &self,
         key: RouteCacheKey,
-        encode: impl FnOnce() -> RocketMQResult<Vec<u8>>,
-    ) -> RocketMQResult<RouteCacheOutcome> {
+        encode: impl FnOnce() -> NameServerResult<Vec<u8>>,
+    ) -> NameServerResult<RouteCacheOutcome> {
         if let Some(value) = self.cache.get(&key) {
             return Ok(match value {
                 CachedRouteBody::Ready(body) => {
@@ -389,25 +384,20 @@ mod tests {
             std::io::Error::other("private route encoder detail"),
         ));
 
-        let error =
-            match cache.get_or_try_insert_with(key.clone(), || Err(RocketMQError::Shared(Arc::clone(&canonical)))) {
-                Ok(_) => panic!("route encoding failure must remain visible"),
-                Err(error) => error,
-            };
+        let error = match cache.get_or_try_insert_with(key.clone(), || Err(Arc::clone(&canonical))) {
+            Ok(_) => panic!("route encoding failure must remain visible"),
+            Err(error) => error,
+        };
 
         assert_eq!(error.descriptor(), &CORE_SERIALIZATION_FAILED);
         assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 1);
-        let context = error.context();
-        let view = PublicErrorView::try_new(error.descriptor(), &context).expect("source context must be valid");
+        let view = PublicErrorView::try_new(error.descriptor(), error.context()).expect("source context must be valid");
         assert_eq!(view.message(), "Serialization failed");
         assert!(!error.to_string().contains("private route encoder detail"));
-        let wrapper = find_source::<SharedRouteEncodeFailure>(&error)
+        let wrapper = find_source::<SharedRouteEncodeFailure>(error.as_ref())
             .expect("cache failure must retain its shared typed source wrapper");
-        let RocketMQError::Shared(retained) = wrapper.source.as_ref() else {
-            panic!("cache failure wrapper must retain the original canonical carrier")
-        };
-        assert!(Arc::ptr_eq(retained, &canonical));
-        assert!(find_source::<std::io::Error>(&error).is_some());
+        assert!(Arc::ptr_eq(wrapper.source.as_ref(), &canonical));
+        assert!(find_source::<std::io::Error>(error.as_ref()).is_some());
 
         let retry = cache
             .get_or_try_insert_with(key, || Ok(vec![1, 2, 3]))

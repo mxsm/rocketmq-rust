@@ -507,7 +507,7 @@ impl BrokerRuntime {
                 )
                 .await
             } else {
-                Err(rocketmq_error::RocketMQError::not_initialized(
+                Err(crate::broker_error::not_initialized(
                     "broker consumer-filter persistence requires ChildServiceContext",
                 ))
             };
@@ -531,7 +531,7 @@ impl BrokerRuntime {
                 )
                 .await
             } else {
-                Err(rocketmq_error::RocketMQError::not_initialized(
+                Err(crate::broker_error::not_initialized(
                     "broker consumer-order persistence requires ChildServiceContext",
                 ))
             };
@@ -576,7 +576,7 @@ impl BrokerRuntime {
                 }
                 result
             } else {
-                Err(rocketmq_error::RocketMQError::not_initialized(
+                Err(crate::broker_error::not_initialized(
                     "broker subscription-group persistence requires ChildServiceContext",
                 ))
             };
@@ -631,7 +631,7 @@ impl BrokerRuntime {
             }
             result
         } else {
-            Err(rocketmq_error::RocketMQError::not_initialized(
+            Err(crate::broker_error::not_initialized(
                 "broker consumer-offset persistence requires ChildServiceContext",
             ))
         };
@@ -962,28 +962,25 @@ impl BrokerRuntime {
 
     pub(crate) async fn initialize(&mut self) -> Result<(), BrokerStartupError> {
         if let Some(detail) = self.composition.metadata.configuration_error.clone() {
-            return Err(BrokerStartupError::Initialization {
-                component: "broker_configuration",
-                detail,
-            });
+            return Err(BrokerStartupError::initialization("broker_configuration", detail));
         }
         self.initialize_metadata().await?;
         self.lifecycle.startup_journal.complete(BrokerComponent::Metadata);
         info!("====== initialize metadata Success========");
         if !self.initialize_message_store().await {
-            return Err(BrokerStartupError::Initialization {
-                component: "message_store",
-                detail: "message store initialization returned an unsuccessful status".to_owned(),
-            });
+            return Err(BrokerStartupError::initialization(
+                "message_store",
+                "message store initialization returned an unsuccessful status".to_owned(),
+            ));
         }
         self.lifecycle
             .startup_journal
             .complete(BrokerComponent::BrokerStorePort);
         if !self.recover_initialize_service().await {
-            return Err(BrokerStartupError::Initialization {
-                component: "broker_services",
-                detail: "service recovery or security initialization returned an unsuccessful status".to_owned(),
-            });
+            return Err(BrokerStartupError::initialization(
+                "broker_services",
+                "service recovery or security initialization returned an unsuccessful status".to_owned(),
+            ));
         }
         self.lifecycle.startup_journal.complete(BrokerComponent::Security);
         Ok(())
@@ -1000,10 +997,10 @@ impl BrokerRuntime {
         let broker_config = self.composition.state.broker_config();
         let message_store_config = self.composition.state.message_store_config();
         if message_store_config.cold_data_flow_control_enable {
-            return Err(BrokerStartupError::UnsupportedCapability {
-                capability: "cold_data_flow_control",
-                reason: "the legacy cold-data hold queue had no bounded wakeup or shutdown contract",
-            });
+            return Err(BrokerStartupError::unsupported_capability(
+                "cold_data_flow_control",
+                "the legacy cold-data hold queue had no bounded wakeup or shutdown contract",
+            ));
         }
         self.composition.state.should_start_time.store(
             (current_millis() as i64 + message_store_config.disappear_time_after_start) as u64,
@@ -1195,9 +1192,6 @@ impl BrokerRuntime {
         let report = self
             .shutdown_basic_service_until(ShutdownDeadline::after(BROKER_BASIC_SERVICE_SHUTDOWN_TIMEOUT))
             .await;
-        BrokerStartupError::RolledBack {
-            cause: Box::new(cause),
-            unhealthy_components: report.unhealthy_component_names(),
-        }
+        BrokerStartupError::rolled_back(cause, report.unhealthy_component_names())
     }
 }

@@ -62,11 +62,11 @@ struct FakeSource {
 }
 
 impl ConsumerObservationSource for FakeSource {
-    async fn cluster_info(&self) -> Result<ClusterInfo, RocketMQError> {
+    async fn cluster_info(&self) -> Result<ClusterInfo, CanonicalError> {
         Ok(self.cluster_info.clone())
     }
 
-    async fn consumer_route(&self, _consumer_group: &str) -> Result<Option<TopicRouteData>, RocketMQError> {
+    async fn consumer_route(&self, _consumer_group: &str) -> Result<Option<TopicRouteData>, CanonicalError> {
         Ok(self.route.clone())
     }
 
@@ -74,7 +74,7 @@ impl ConsumerObservationSource for FakeSource {
         &self,
         broker_addr: CheetahString,
         _consumer_group: &str,
-    ) -> Result<ConsumerGroupConfigRead, RocketMQError> {
+    ) -> Result<ConsumerGroupConfigRead, CanonicalError> {
         self.config_calls.lock().unwrap().push(broker_addr.to_string());
         match self.configs.get(broker_addr.as_str()) {
             Some(ConfigReply::Present(config)) => Ok(ConsumerGroupConfigRead::Present(config.clone())),
@@ -87,7 +87,7 @@ impl ConsumerObservationSource for FakeSource {
         &self,
         broker_addr: CheetahString,
         _consumer_group: &str,
-    ) -> Result<ConsumerConnectionRead, RocketMQError> {
+    ) -> Result<ConsumerConnectionRead, CanonicalError> {
         self.connection_calls.lock().unwrap().push(broker_addr.to_string());
         match self.connections.get(broker_addr.as_str()) {
             Some(ConnectionReply::Online(connection)) => Ok(ConsumerConnectionRead::Online(connection.clone())),
@@ -100,7 +100,7 @@ impl ConsumerObservationSource for FakeSource {
         &self,
         broker_addr: CheetahString,
         _consumer_group: &str,
-    ) -> Result<ConsumerProgressRead, RocketMQError> {
+    ) -> Result<ConsumerProgressRead, CanonicalError> {
         self.progress_calls.lock().unwrap().push(broker_addr.to_string());
         match self.progress.lock().unwrap().remove(broker_addr.as_str()) {
             Some(ProgressReply::Observed(stats)) => Ok(ConsumerProgressRead::Observed(stats)),
@@ -367,7 +367,7 @@ async fn details_map_offline_and_all_absent_or_no_valid_config_semantics() {
     let error = query_consumer_group_details_from(&absent, &details_request())
         .await
         .unwrap_err();
-    assert!(matches!(error, AdminError::NotFound { .. }));
+    assert_eq!(error.failure(), crate::core::AdminFailure::NotFound);
     assert!(absent.connection_calls.lock().unwrap().is_empty());
 
     let mut mixed = source(&[
@@ -381,7 +381,7 @@ async fn details_map_offline_and_all_absent_or_no_valid_config_semantics() {
     let error = query_consumer_group_details_from(&mixed, &details_request())
         .await
         .unwrap_err();
-    assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+    assert_eq!(error.code().as_str(), "client.component.unavailable");
     assert!(mixed.connection_calls.lock().unwrap().is_empty());
 }
 
@@ -446,7 +446,7 @@ async fn all_progress_sources_failing_or_absent_is_total_failure() {
         let error = query_consumer_progress_from(&source, &progress_request(10))
             .await
             .unwrap_err();
-        assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+        assert_eq!(error.code().as_str(), "client.component.unavailable");
     }
 }
 
@@ -668,7 +668,7 @@ async fn oversized_source_is_total_failure_or_partial_without_polluting_aggregat
     let error = query_consumer_progress_from(&only_oversized, &progress_request(10))
         .await
         .unwrap_err();
-    assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+    assert_eq!(error.code().as_str(), "client.component.unavailable");
 
     let mut mixed = source(&[
         ("cluster-a", "broker-a", ADDRESS_A),
@@ -755,7 +755,7 @@ async fn query_budget_rejects_whole_later_source_and_preserves_partial_or_total_
         let error = query_consumer_progress_from(&total, &progress_request(10))
             .await
             .unwrap_err();
-        assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+        assert_eq!(error.code().as_str(), "client.component.unavailable");
         assert_eq!(total.progress_calls.lock().unwrap().as_slice(), [ADDRESS_A, ADDRESS_B]);
     }
 
@@ -871,7 +871,7 @@ async fn corrupt_topology_is_zero_rpc_or_partial_beside_valid_evidence() {
     let error = query_consumer_group_details_from(&invalid, &details_request())
         .await
         .unwrap_err();
-    assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+    assert_eq!(error.code().as_str(), "client.component.unavailable");
     assert!(invalid.config_calls.lock().unwrap().is_empty());
 
     let mut mixed = source(&[
@@ -910,7 +910,7 @@ async fn embedded_cluster_and_broker_name_corruption_are_zero_rpc_for_both_tools
         let error = query_consumer_group_details_from(&details, &details_request())
             .await
             .unwrap_err();
-        assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+        assert_eq!(error.code().as_str(), "client.component.unavailable");
         assert!(details.config_calls.lock().unwrap().is_empty());
         assert!(details.connection_calls.lock().unwrap().is_empty());
 
@@ -919,7 +919,7 @@ async fn embedded_cluster_and_broker_name_corruption_are_zero_rpc_for_both_tools
         let error = query_consumer_progress_from(&progress, &progress_request(10))
             .await
             .unwrap_err();
-        assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+        assert_eq!(error.code().as_str(), "client.component.unavailable");
         assert!(progress.config_calls.lock().unwrap().is_empty());
         assert!(progress.progress_calls.lock().unwrap().is_empty());
     }
@@ -1018,17 +1018,21 @@ fn target_cap_accepts_64_and_rejects_65() {
         if count == MAX_CONSUMER_OBSERVATION_TARGETS {
             assert_eq!(resolved.unwrap().0.len(), count);
         } else {
-            assert_eq!(
-                resolved.unwrap_err().code(),
-                Some("CONSUMER_OBSERVATION_TARGET_LIMIT_EXCEEDED")
-            );
+            let error = resolved.unwrap_err();
+            assert_eq!(error.code().as_str(), "core.argument.invalid");
+            assert_eq!(error.http_status(), rocketmq_error::HttpStatusCode::BAD_REQUEST);
         }
     }
 }
 
-fn test_error(reason: &str) -> RocketMQError {
-    RocketMQError::ResponseProcessFailed {
-        operation: "consumer_observation_test",
-        reason: reason.to_string(),
-    }
+fn test_error(reason: &str) -> CanonicalError {
+    let _ = reason;
+    CanonicalError::new(&rocketmq_error::PROTOCOL_RESPONSE_FAILED).with_context(
+        rocketmq_error::ErrorContext::new()
+            .with_text(
+                rocketmq_error::fields::OPERATION_DIAGNOSTIC,
+                "consumer_observation_test",
+            )
+            .with_secret_presence(rocketmq_error::fields::REASON_PRESENT),
+    )
 }

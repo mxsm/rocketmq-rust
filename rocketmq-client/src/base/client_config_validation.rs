@@ -18,8 +18,8 @@
 //! ensuring that configuration values are within acceptable bounds and
 //! properly formatted.
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use crate::ClientError;
+use crate::ClientResult;
 
 use crate::base::client_config::ClientConfig;
 
@@ -78,7 +78,7 @@ impl ClientConfigValidator {
     // =========================================================================
 
     /// Validates every runtime-affecting public client setting.
-    pub fn validate_config(config: &ClientConfig) -> RocketMQResult<()> {
+    pub fn validate_config(config: &ClientConfig) -> ClientResult<()> {
         Self::validate_poll_name_server_interval(config.poll_name_server_interval)?;
         Self::validate_heartbeat_broker_interval(config.heartbeat_broker_interval)?;
         Self::validate_persist_consumer_offset_interval(config.persist_consumer_offset_interval)?;
@@ -96,17 +96,17 @@ impl ClientConfigValidator {
     /// Validate poll name server interval
     ///
     /// Ensures the interval is between 10 seconds and 10 minutes.
-    pub fn validate_poll_name_server_interval(interval: u32) -> RocketMQResult<()> {
+    pub fn validate_poll_name_server_interval(interval: u32) -> ClientResult<()> {
         if !(Self::MIN_POLL_NAME_SERVER_INTERVAL..=Self::MAX_POLL_NAME_SERVER_INTERVAL).contains(&interval) {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "poll_name_server_interval",
-                value: interval.to_string(),
-                reason: format!(
+            return Err(ClientError::config_invalid(
+                "poll_name_server_interval",
+                interval.to_string(),
+                format!(
                     "must be between {} and {} milliseconds",
                     Self::MIN_POLL_NAME_SERVER_INTERVAL,
                     Self::MAX_POLL_NAME_SERVER_INTERVAL
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -114,17 +114,17 @@ impl ClientConfigValidator {
     /// Validate heartbeat broker interval
     ///
     /// Ensures the interval is between 10 seconds and 10 minutes.
-    pub fn validate_heartbeat_broker_interval(interval: u32) -> RocketMQResult<()> {
+    pub fn validate_heartbeat_broker_interval(interval: u32) -> ClientResult<()> {
         if !(Self::MIN_HEARTBEAT_BROKER_INTERVAL..=Self::MAX_HEARTBEAT_BROKER_INTERVAL).contains(&interval) {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "heartbeat_broker_interval",
-                value: interval.to_string(),
-                reason: format!(
+            return Err(ClientError::config_invalid(
+                "heartbeat_broker_interval",
+                interval.to_string(),
+                format!(
                     "must be between {} and {} milliseconds",
                     Self::MIN_HEARTBEAT_BROKER_INTERVAL,
                     Self::MAX_HEARTBEAT_BROKER_INTERVAL
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -132,19 +132,19 @@ impl ClientConfigValidator {
     /// Validate persist consumer offset interval
     ///
     /// Ensures the interval is between 1 second and 1 minute.
-    pub fn validate_persist_consumer_offset_interval(interval: u32) -> RocketMQResult<()> {
+    pub fn validate_persist_consumer_offset_interval(interval: u32) -> ClientResult<()> {
         if !(Self::MIN_PERSIST_CONSUMER_OFFSET_INTERVAL..=Self::MAX_PERSIST_CONSUMER_OFFSET_INTERVAL)
             .contains(&interval)
         {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "persist_consumer_offset_interval",
-                value: interval.to_string(),
-                reason: format!(
+            return Err(ClientError::config_invalid(
+                "persist_consumer_offset_interval",
+                interval.to_string(),
+                format!(
                     "must be between {} and {} milliseconds",
                     Self::MIN_PERSIST_CONSUMER_OFFSET_INTERVAL,
                     Self::MAX_PERSIST_CONSUMER_OFFSET_INTERVAL
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -152,17 +152,17 @@ impl ClientConfigValidator {
     /// Validate trace message batch number
     ///
     /// Ensures the batch number is between 1 and 10,000.
-    pub fn validate_trace_msg_batch_num(num: usize) -> RocketMQResult<()> {
+    pub fn validate_trace_msg_batch_num(num: usize) -> ClientResult<()> {
         if !(Self::MIN_TRACE_MSG_BATCH_NUM..=Self::MAX_TRACE_MSG_BATCH_NUM).contains(&num) {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "trace_msg_batch_num",
-                value: num.to_string(),
-                reason: format!(
+            return Err(ClientError::config_invalid(
+                "trace_msg_batch_num",
+                num.to_string(),
+                format!(
                     "must be between {} and {}",
                     Self::MIN_TRACE_MSG_BATCH_NUM,
                     Self::MAX_TRACE_MSG_BATCH_NUM
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -170,17 +170,17 @@ impl ClientConfigValidator {
     /// Validate max page size in get metadata
     ///
     /// Ensures the page size is between 1 and 100,000.
-    pub fn validate_max_page_size_in_get_metadata(size: usize) -> RocketMQResult<()> {
+    pub fn validate_max_page_size_in_get_metadata(size: usize) -> ClientResult<()> {
         if !(Self::MIN_MAX_PAGE_SIZE_IN_GET_METADATA..=Self::MAX_MAX_PAGE_SIZE_IN_GET_METADATA).contains(&size) {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "max_page_size_in_get_metadata",
-                value: size.to_string(),
-                reason: format!(
+            return Err(ClientError::config_invalid(
+                "max_page_size_in_get_metadata",
+                size.to_string(),
+                format!(
                     "must be between {} and {}",
                     Self::MIN_MAX_PAGE_SIZE_IN_GET_METADATA,
                     Self::MAX_MAX_PAGE_SIZE_IN_GET_METADATA
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -188,17 +188,17 @@ impl ClientConfigValidator {
     /// Validate MQ client API timeout
     ///
     /// Ensures the timeout is between 100ms and 60 seconds.
-    pub fn validate_mq_client_api_timeout(timeout: u64) -> RocketMQResult<()> {
+    pub fn validate_mq_client_api_timeout(timeout: u64) -> ClientResult<()> {
         if !(Self::MIN_MQ_CLIENT_API_TIMEOUT..=Self::MAX_MQ_CLIENT_API_TIMEOUT).contains(&timeout) {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "mq_client_api_timeout",
-                value: timeout.to_string(),
-                reason: format!(
+            return Err(ClientError::config_invalid(
+                "mq_client_api_timeout",
+                timeout.to_string(),
+                format!(
                     "must be between {} and {} milliseconds",
                     Self::MIN_MQ_CLIENT_API_TIMEOUT,
                     Self::MAX_MQ_CLIENT_API_TIMEOUT
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -207,13 +207,13 @@ impl ClientConfigValidator {
     ///
     /// Ensures the thread pool size is greater than 0 and doesn't exceed
     /// a reasonable maximum (CPU cores * 4).
-    pub fn validate_concurrent_heartbeat_thread_pool_size(size: usize) -> RocketMQResult<()> {
+    pub fn validate_concurrent_heartbeat_thread_pool_size(size: usize) -> ClientResult<()> {
         if size == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "concurrent_heartbeat_thread_pool_size",
-                value: size.to_string(),
-                reason: "must be greater than 0".to_string(),
-            });
+            return Err(ClientError::config_invalid(
+                "concurrent_heartbeat_thread_pool_size",
+                size.to_string(),
+                "must be greater than 0",
+            ));
         }
 
         // Get CPU count with a reasonable default if num_cpus fails
@@ -222,11 +222,11 @@ impl ClientConfigValidator {
         let max_size = cpu_count * 4;
 
         if size > max_size {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "concurrent_heartbeat_thread_pool_size",
-                value: size.to_string(),
-                reason: format!("should not exceed {} (CPU cores * 4)", max_size),
-            });
+            return Err(ClientError::config_invalid(
+                "concurrent_heartbeat_thread_pool_size",
+                size.to_string(),
+                format!("should not exceed {} (CPU cores * 4)", max_size),
+            ));
         }
 
         Ok(())
@@ -235,13 +235,13 @@ impl ClientConfigValidator {
     /// Validate client callback executor threads
     ///
     /// Ensures the thread count is greater than 0.
-    pub fn validate_client_callback_executor_threads(threads: usize) -> RocketMQResult<()> {
+    pub fn validate_client_callback_executor_threads(threads: usize) -> ClientResult<()> {
         if threads == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "client_callback_executor_threads",
-                value: threads.to_string(),
-                reason: "must be greater than 0".to_string(),
-            });
+            return Err(ClientError::config_invalid(
+                "client_callback_executor_threads",
+                threads.to_string(),
+                "must be greater than 0",
+            ));
         }
 
         // Get CPU count with a reasonable default if num_cpus fails
@@ -250,11 +250,11 @@ impl ClientConfigValidator {
         let max_threads = cpu_count * 8;
 
         if threads > max_threads {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "client_callback_executor_threads",
-                value: threads.to_string(),
-                reason: format!("should not exceed {} (CPU cores * 8)", max_threads),
-            });
+            return Err(ClientError::config_invalid(
+                "client_callback_executor_threads",
+                threads.to_string(),
+                format!("should not exceed {} (CPU cores * 8)", max_threads),
+            ));
         }
 
         Ok(())
@@ -264,13 +264,13 @@ impl ClientConfigValidator {
     ///
     /// Ensures the shard count is greater than 0 and stays within a reasonable
     /// CPU-scaled upper bound.
-    pub fn validate_pull_message_service_shards(shards: usize) -> RocketMQResult<()> {
+    pub fn validate_pull_message_service_shards(shards: usize) -> ClientResult<()> {
         if shards == 0 {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "pull_message_service_shards",
-                value: shards.to_string(),
-                reason: "must be greater than 0".to_string(),
-            });
+            return Err(ClientError::config_invalid(
+                "pull_message_service_shards",
+                shards.to_string(),
+                "must be greater than 0",
+            ));
         }
 
         #[allow(clippy::redundant_closure)]
@@ -278,11 +278,11 @@ impl ClientConfigValidator {
         let max_shards = cpu_count * Self::MAX_PULL_MESSAGE_SERVICE_SHARDS_PER_CPU;
 
         if shards > max_shards {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "pull_message_service_shards",
-                value: shards.to_string(),
-                reason: format!("should not exceed {} (CPU cores * 8)", max_shards),
-            });
+            return Err(ClientError::config_invalid(
+                "pull_message_service_shards",
+                shards.to_string(),
+                format!("should not exceed {} (CPU cores * 8)", max_shards),
+            ));
         }
 
         Ok(())

@@ -29,6 +29,7 @@ default = []
 
 [dependencies]
 cheetah-string.workspace = true
+rocketmq-error.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true

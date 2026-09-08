@@ -39,7 +39,7 @@ impl MQClientAPIImpl {
 pub(super) fn lite_subscription_ctl_request(
     command_factory: &RemotingCommandFactory,
     lite_subscription_dto: LiteSubscriptionDTO,
-) -> RocketMQResult<RemotingCommand> {
+) -> ClientResult<RemotingCommand> {
     let mut request_body = LiteSubscriptionCtlRequestBody::new();
     request_body.set_subscription_set(vec![lite_subscription_dto]);
     let mut request = command_factory.create_request_command(RequestCode::LiteSubscriptionCtl, EmptyHeader {});
@@ -58,7 +58,7 @@ pub(super) fn notification_request(
 pub(super) fn create_and_update_plain_access_config_request(
     command_factory: &RemotingCommandFactory,
     plain_access_config: &PlainAccessConfig,
-) -> RocketMQResult<RemotingCommand> {
+) -> ClientResult<RemotingCommand> {
     let mut request = command_factory.create_request_command(RequestCode::UpdateAndCreateAclConfig, EmptyHeader {});
     request.set_body_mut_ref(plain_access_config.encode()?);
     Ok(request)
@@ -82,7 +82,7 @@ pub(super) fn heartbeat_request(
     command_factory: &RemotingCommandFactory,
     heartbeat_data: &HeartbeatData,
     language: LanguageCode,
-) -> RocketMQResult<RemotingCommand> {
+) -> ClientResult<RemotingCommand> {
     Ok(command_factory
         .create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
         .set_language(language)
@@ -97,7 +97,7 @@ pub(super) fn get_all_consumer_offset_request(command_factory: &RemotingCommandF
 pub(super) fn create_topic_list_request(
     command_factory: &RemotingCommandFactory,
     topic_config_list: Vec<TopicConfig>,
-) -> RocketMQResult<RemotingCommand> {
+) -> ClientResult<RemotingCommand> {
     let body = CreateTopicListRequestBody { topic_config_list };
     Ok(command_factory
         .create_request_command(
@@ -111,7 +111,7 @@ pub(super) fn create_topic_list_request(
 pub(super) fn create_subscription_group_list_request(
     command_factory: &RemotingCommandFactory,
     configs: Vec<SubscriptionGroupConfig>,
-) -> RocketMQResult<RemotingCommand> {
+) -> ClientResult<RemotingCommand> {
     let body = SubscriptionGroupList {
         group_config_list: configs,
     };
@@ -124,7 +124,7 @@ pub(super) fn create_subscription_group_list_request(
 pub(super) fn delete_topic_list_request(
     command_factory: &RemotingCommandFactory,
     topic_list: Vec<CheetahString>,
-) -> RocketMQResult<RemotingCommand> {
+) -> ClientResult<RemotingCommand> {
     let body = DeleteTopicListRequestBody { topic_list };
     Ok(command_factory
         .create_request_command(RequestCode::DeleteTopicInBrokerList, EmptyHeader {})
@@ -136,7 +136,7 @@ pub(super) fn delete_subscription_group_list_request(
     command_factory: &RemotingCommandFactory,
     group_name_list: Vec<CheetahString>,
     clean_offset: bool,
-) -> RocketMQResult<RemotingCommand> {
+) -> ClientResult<RemotingCommand> {
     let body = DeleteSubscriptionGroupListRequestBody {
         group_name_list,
         clean_offset,

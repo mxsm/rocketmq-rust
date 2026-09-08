@@ -17,11 +17,10 @@ use std::sync::OnceLock;
 use std::sync::Weak;
 use std::time::Duration;
 
+use crate::broker_error::BrokerResult as Result;
 use crate::config::config_manager::ConfigManager;
 use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_runtime::common::file_utils;
 use rocketmq_runtime::BlockingExecutor;
@@ -198,7 +197,7 @@ impl<MS: BrokerReplicationStore> SlaveSynchronizeContext<MS> {
         }
     }
 
-    async fn persist_snapshot(&self, resource: &'static str, path: String, content: String) -> RocketMQResult<()> {
+    async fn persist_snapshot(&self, resource: &'static str, path: String, content: String) -> Result<()> {
         if content.is_empty() {
             return Ok(());
         }
@@ -227,7 +226,7 @@ impl<MS: BrokerReplicationStore> SlaveSynchronizeContext<MS> {
         file_utils::string_to_file(content.as_str(), path.as_str()).map_err(crate::runtime_to_rocketmq_error)
     }
 
-    async fn persist_config_manager<T>(&self, resource: &'static str, manager: Arc<T>) -> RocketMQResult<()>
+    async fn persist_config_manager<T>(&self, resource: &'static str, manager: Arc<T>) -> Result<()>
     where
         T: ConfigManager + Send + Sync + 'static,
     {
@@ -244,7 +243,7 @@ impl<MS: BrokerReplicationStore> SlaveSynchronizeContext<MS> {
             return blocking
                 .spawn_io(resource, move || manager.persist())
                 .await
-                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
+                .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?;
         }
         manager.persist()
     }
@@ -393,7 +392,7 @@ where
         }
     }
 
-    async fn sync_topic_config_internal(&self, master_addr: &CheetahString) -> RocketMQResult<()> {
+    async fn sync_topic_config_internal(&self, master_addr: &CheetahString) -> Result<()> {
         let topic_wrapper = self.context.broker_outer_api.get_all_topic_config(master_addr).await?;
         if topic_wrapper.is_none() {
             warn!("GetAllTopicConfig return null, {}", master_addr);

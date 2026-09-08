@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use bitvec::prelude::BitVec;
 use bitvec::prelude::Lsb0;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error;
 
 use crate::protocol::body::batch_ack::BatchAck;
 use crate::protocol::body::batch_ack::SerializableBitVec;
@@ -54,7 +54,7 @@ pub struct BatchAckInput<'a> {
 #[derive(Debug)]
 pub struct BatchAckBuildFailure {
     pub entry_index: usize,
-    pub error: RocketMQError,
+    pub error: Error,
 }
 
 #[derive(Debug)]
@@ -102,7 +102,7 @@ pub fn build_batch_ack_requests_with_limits(
         if position >= limits.max_entries {
             result.failures.push(BatchAckBuildFailure {
                 entry_index: input.entry_index,
-                error: RocketMQError::illegal_argument(format!(
+                error: crate::error::invalid_argument(format!(
                     "batch ACK input exceeds the configured {} entry limit",
                     limits.max_entries
                 )),
@@ -176,26 +176,23 @@ pub fn build_batch_ack_requests_with_limits(
     result
 }
 
-fn parse_input<'a>(
-    input: BatchAckInput<'a>,
-    max_offset_span: usize,
-) -> Result<(AckExtraInfo<'a>, usize), RocketMQError> {
+fn parse_input<'a>(input: BatchAckInput<'a>, max_offset_span: usize) -> Result<(AckExtraInfo<'a>, usize), Error> {
     if input.consumer_group.trim().is_empty() {
-        return Err(RocketMQError::illegal_argument("batch ACK consumer group is blank"));
+        return Err(crate::error::invalid_argument("batch ACK consumer group is blank"));
     }
     if input.topic.trim().is_empty() {
-        return Err(RocketMQError::illegal_argument("batch ACK topic is blank"));
+        return Err(crate::error::invalid_argument("batch ACK topic is blank"));
     }
 
     let extra = ExtraInfoUtil::parse_ack_extra_info(input.receipt_handle)?;
     let delta = extra
         .queue_offset
         .checked_sub(extra.ck_queue_offset)
-        .ok_or_else(|| RocketMQError::illegal_argument("batch ACK queue offset overflow"))?;
+        .ok_or_else(|| crate::error::invalid_argument("batch ACK queue offset overflow"))?;
     let bit_index = usize::try_from(delta)
-        .map_err(|_| RocketMQError::illegal_argument("batch ACK queue offset precedes checkpoint offset"))?;
+        .map_err(|_| crate::error::invalid_argument("batch ACK queue offset precedes checkpoint offset"))?;
     if bit_index >= max_offset_span {
-        return Err(RocketMQError::illegal_argument(format!(
+        return Err(crate::error::invalid_argument(format!(
             "batch ACK offset span {bit_index} exceeds the configured {max_offset_span} bit limit"
         )));
     }

@@ -24,12 +24,12 @@
 
 #![recursion_limit = "256"]
 
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
@@ -61,11 +61,11 @@ const USE_CLOSURE: bool = false;
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     // Create a push consumer with cluster mode
     let builder = DefaultMQPushConsumer::builder(client_runtime.clone());
 
@@ -150,7 +150,7 @@ impl MessageListenerConcurrently for ClusterMessageListener {
         &self,
         msgs: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         for msg in msgs {
             info!(
                 "[Struct] Received message [MsgId: {}, Topic: {}, Tags: {}]",

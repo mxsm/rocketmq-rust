@@ -148,10 +148,7 @@ impl DefaultMQProducerImpl {
             .expect("public producer builders always bind a ClientRuntime")
     }
 
-    pub(crate) fn bind_client_instance(
-        &self,
-        client_instance: &Arc<MQClientInstance>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    pub(crate) fn bind_client_instance(&self, client_instance: &Arc<MQClientInstance>) -> crate::ClientResult<()> {
         let candidate = Arc::downgrade(client_instance);
         if let Some(current) = self.client_instance.get() {
             if current.ptr_eq(&candidate) {
@@ -219,10 +216,7 @@ impl DefaultMQProducerImpl {
         *self.service_state.write() = state;
     }
 
-    pub(crate) fn initialize_self_reference(
-        &self,
-        producer: &Arc<DefaultMQProducerImpl>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    pub(crate) fn initialize_self_reference(&self, producer: &Arc<DefaultMQProducerImpl>) -> crate::ClientResult<()> {
         if !std::ptr::eq(self, Arc::as_ref(producer)) {
             return Err(mq_client_err!(
                 "DefaultMQProducerImpl self reference must use its owning root"
@@ -243,7 +237,7 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub(super) fn self_reference(&self) -> rocketmq_error::RocketMQResult<Arc<DefaultMQProducerImpl>> {
+    pub(super) fn self_reference(&self) -> crate::ClientResult<Arc<DefaultMQProducerImpl>> {
         self.default_mqproducer_impl_inner
             .get()
             .and_then(Weak::upgrade)
@@ -255,7 +249,7 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub(super) fn registry_owner(&self) -> rocketmq_error::RocketMQResult<MQProducerInnerImpl> {
+    pub(super) fn registry_owner(&self) -> crate::ClientResult<MQProducerInnerImpl> {
         Ok(MQProducerInnerImpl::new(Arc::downgrade(&self.self_reference()?)))
     }
 
@@ -279,10 +273,7 @@ impl DefaultMQProducerImpl {
         )
     }
 
-    pub(super) fn initialize_oneway_egress(
-        &self,
-        runtime: &ProducerRuntimeSnapshot,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    pub(super) fn initialize_oneway_egress(&self, runtime: &ProducerRuntimeSnapshot) -> crate::ClientResult<()> {
         if self.oneway_egress.get().is_some() {
             return Ok(());
         }
@@ -311,7 +302,7 @@ impl DefaultMQProducerImpl {
             .map_err(|_| mq_client_err!("producer one-way egress initialization raced"))
     }
 
-    pub(super) fn oneway_egress(&self) -> rocketmq_error::RocketMQResult<&BoundedEgress> {
+    pub(super) fn oneway_egress(&self) -> crate::ClientResult<&BoundedEgress> {
         self.oneway_egress
             .get()
             .ok_or_else(|| mq_client_err!("producer one-way egress is not initialized"))
@@ -406,7 +397,7 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub(super) fn notify_callback_exception(send_callback: &Option<ArcSendCallback>, error: &RocketMQError) {
+    pub(super) fn notify_callback_exception(send_callback: &Option<ArcSendCallback>, error: &ClientError) {
         if let Some(send_callback) = send_callback.as_ref() {
             send_callback.on_exception(error);
         } else {
@@ -415,13 +406,13 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub(super) fn async_send_rejected_error(message: impl Into<String>) -> RocketMQError {
-        RocketMQError::illegal_argument(message)
+    pub(super) fn async_send_rejected_error(message: impl Into<String>) -> ClientError {
+        ClientError::illegal_argument(message)
     }
 
     #[inline]
-    pub(super) fn request_cause_from_error(error: &RocketMQError) -> RocketMQError {
-        RocketMQError::response_process_failed("request_response_callback", error.to_string())
+    pub(super) fn request_cause_from_error(error: &ClientError) -> ClientError {
+        ClientError::response_process_source("request_response_callback", error.clone())
     }
 
     #[inline]
@@ -430,22 +421,20 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub(super) fn remaining_request_timeout(timeout: u64, elapsed: u64) -> rocketmq_error::RocketMQResult<u64> {
-        Self::remaining_async_timeout(timeout, elapsed).ok_or(rocketmq_error::RocketMQError::Timeout {
-            operation: "send request message",
-            timeout_ms: timeout,
-        })
+    pub(super) fn remaining_request_timeout(timeout: u64, elapsed: u64) -> crate::ClientResult<u64> {
+        Self::remaining_async_timeout(timeout, elapsed)
+            .ok_or(crate::ClientError::timeout("send request message", timeout))
     }
 
     #[inline]
-    pub(super) fn client_instance(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientInstance>> {
+    pub(super) fn client_instance(&self) -> crate::ClientResult<Arc<MQClientInstance>> {
         self.client_instance
             .get()
             .and_then(Weak::upgrade)
             .ok_or_else(|| mq_client_err!("MQClientInstance is not available; producer has not been started"))
     }
 
-    pub fn get_mq_client_factory(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientInstance>> {
+    pub fn get_mq_client_factory(&self) -> crate::ClientResult<Arc<MQClientInstance>> {
         self.client_instance()
     }
 
@@ -552,7 +541,7 @@ impl DefaultMQProducerImpl {
         &self,
         semaphore_async_num: i32,
         semaphore_async_size: i32,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let _update = self.config_update.lock();
         let current = self.runtime_snapshot();
         let current_num = current.producer_config.back_pressure_for_async_send_num() as i64;
@@ -561,13 +550,13 @@ impl DefaultMQProducerImpl {
         let new_size = current_size + semaphore_async_size as i64;
 
         if new_num <= 0 || new_num > u32::MAX as i64 {
-            return Err(rocketmq_error::RocketMQError::IllegalArgument(format!(
+            return Err(crate::ClientError::illegal_argument(format!(
                 "semaphoreAsyncNum adjustment out of range: current={}, delta={}",
                 current_num, semaphore_async_num
             )));
         }
         if new_size <= 0 || new_size > u32::MAX as i64 {
-            return Err(rocketmq_error::RocketMQError::IllegalArgument(format!(
+            return Err(crate::ClientError::illegal_argument(format!(
                 "semaphoreAsyncSize adjustment out of range: current={}, delta={}",
                 current_size, semaphore_async_size
             )));
@@ -694,9 +683,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 (msg, unique_key, transaction_state)
             };
             let check_result =
-                spawn_client_blocking_io_with_context(&service_context, "client.transaction.check", check_task)
-                    .await
-                    .map_err(|error| error.to_string());
+                spawn_client_blocking_io_with_context(&service_context, "client.transaction.check", check_task).await;
 
             let Ok((msg, unique_key, transaction_state)) = check_result else {
                 tracing::error!("Transaction check task join failed for producer group {}", group);
@@ -765,12 +752,12 @@ impl MQProducerInner for DefaultMQProducerImpl {
 #[allow(unused_must_use)]
 #[allow(unused_assignments)]
 impl DefaultMQProducerImpl {
-    pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn start(&self) -> crate::ClientResult<()> {
         Box::pin(self.start_with_factory(true)).await
     }
 
     #[inline]
-    pub async fn start_with_factory(&self, start_factory: bool) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn start_with_factory(&self, start_factory: bool) -> crate::ClientResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
         if self.load_state(Ordering::SeqCst) == ProducerState::Starting {
             // A cancelled start future releases the transition mutex but leaves the
@@ -896,7 +883,7 @@ impl DefaultMQProducerImpl {
     }
 
     /// Shutdown the producer gracefully
-    pub async fn shutdown(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn shutdown(&self) -> crate::ClientResult<()> {
         Box::pin(self.shutdown_with_factory(true)).await
     }
 
@@ -926,7 +913,7 @@ impl DefaultMQProducerImpl {
     }
 
     /// Shutdown the producer with option to shutdown factory
-    pub async fn shutdown_with_factory(&self, shutdown_factory: bool) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn shutdown_with_factory(&self, shutdown_factory: bool) -> crate::ClientResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
         match self.load_state(Ordering::SeqCst) {
             ProducerState::Stopped => Ok(()),
@@ -958,7 +945,7 @@ impl DefaultMQProducerImpl {
         }
     }
 
-    pub(super) fn begin_task_shutdown(&self, expected: ProducerState) -> rocketmq_error::RocketMQResult<()> {
+    pub(super) fn begin_task_shutdown(&self, expected: ProducerState) -> crate::ClientResult<()> {
         let _admission = self.task_admission.lock();
         self.compare_exchange_state(expected, ProducerState::Stopping, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|actual| mq_client_err!(format!("Cannot shutdown producer in state {:?}", actual)))?;
@@ -969,7 +956,7 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    pub(super) async fn shutdown_running_locked(&self, shutdown_factory: bool) -> rocketmq_error::RocketMQResult<()> {
+    pub(super) async fn shutdown_running_locked(&self, shutdown_factory: bool) -> crate::ClientResult<()> {
         self.begin_task_shutdown(ProducerState::Running)?;
         self.shutdown_producer_tasks().await;
         self.do_shutdown_internal(shutdown_factory).await?;
@@ -993,7 +980,7 @@ impl DefaultMQProducerImpl {
     pub(crate) async fn shutdown_after_partial_start_with_factory(
         &self,
         shutdown_factory: bool,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
         match self.load_state(Ordering::SeqCst) {
             ProducerState::Created | ProducerState::Stopped => Ok(()),
@@ -1018,7 +1005,7 @@ impl DefaultMQProducerImpl {
         }
     }
 
-    pub(super) async fn cleanup_partial_start(&self, shutdown_factory: bool) -> rocketmq_error::RocketMQResult<()> {
+    pub(super) async fn cleanup_partial_start(&self, shutdown_factory: bool) -> crate::ClientResult<()> {
         let runtime = self.runtime_snapshot();
         if let Ok(client_instance) = self.client_instance() {
             if let Ok(owner) = self.registry_owner() {
@@ -1041,7 +1028,7 @@ impl DefaultMQProducerImpl {
     }
 
     /// Internal shutdown logic
-    pub(super) async fn do_shutdown_internal(&self, shutdown_factory: bool) -> rocketmq_error::RocketMQResult<()> {
+    pub(super) async fn do_shutdown_internal(&self, shutdown_factory: bool) -> crate::ClientResult<()> {
         let runtime = self.runtime_snapshot();
         let producer_group = runtime.producer_config.producer_group().to_string();
 
@@ -1074,7 +1061,7 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub(super) fn check_config(&self, runtime: &ProducerRuntimeSnapshot) -> rocketmq_error::RocketMQResult<()> {
+    pub(super) fn check_config(&self, runtime: &ProducerRuntimeSnapshot) -> crate::ClientResult<()> {
         Validators::check_group(runtime.producer_config.producer_group())?;
         if runtime.producer_config.producer_group() == DEFAULT_PRODUCER_GROUP {
             return Err(mq_client_err!(format!(

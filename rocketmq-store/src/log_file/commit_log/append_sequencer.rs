@@ -17,7 +17,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQResult;
+use crate::StoreResult;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
@@ -614,7 +614,7 @@ impl CommitLogAppendProcessor {
         &self,
         outcome: rocketmq_store_local::commit_log::append_attempt::CommitLogAppendOutcome<
             Arc<DefaultMappedFile>,
-            rocketmq_error::RocketMQError,
+            rocketmq_store_api::StoreError,
         >,
         topic: &str,
         born_host: String,
@@ -658,7 +658,7 @@ impl CommitLogAppendProcessor {
         }
     }
 
-    fn prepare_active_segment(&self, mapped_file: &Arc<DefaultMappedFile>) -> RocketMQResult<()> {
+    fn prepare_active_segment(&self, mapped_file: &Arc<DefaultMappedFile>) -> StoreResult<()> {
         let target = CommitLog::active_memory_lock_target_for_config(
             self.message_store_config.as_ref(),
             mapped_file.get_wrote_position().max(0) as u64,

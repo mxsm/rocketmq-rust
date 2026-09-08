@@ -19,7 +19,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
@@ -190,10 +189,11 @@ impl ClientLifecycle {
         }
     }
 
-    fn begin_start(&mut self, task_group: TaskGroup) -> RocketMQResult<ClientGeneration> {
-        self.generation = self.generation.checked_add(1).ok_or_else(|| {
-            rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
-        })?;
+    fn begin_start(&mut self, task_group: TaskGroup) -> Result<ClientGeneration, rocketmq_error::SharedError> {
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| connection_failed_without_source(TransportStage::Closed))?;
         let generation = ClientGeneration {
             number: self.generation,
             cancellation: task_group.cancellation_token(),
@@ -580,7 +580,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     /// Returns a typed runtime error when a lifecycle task group cannot be
     /// created or a configured background task cannot be spawned. Failed starts
     /// cancel and await only their uncommitted background generation.
-    pub async fn start(self: &Arc<Self>) -> RocketMQResult<ClientStartReport> {
+    pub async fn start(self: &Arc<Self>) -> Result<ClientStartReport, rocketmq_error::SharedError> {
         let start_attempt = {
             let mut lifecycle = self.lifecycle.lock();
             if !lifecycle.is_stopped() {
@@ -595,16 +595,12 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 .service_context
                 .task_group()
                 .try_child("rocketmq-transport.client")
-                .map_err(|source| {
-                    rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::Closed, source))
-                })?;
+                .map_err(|source| connection_failed(TransportStage::Closed, source))?;
             let generation = lifecycle.begin_start(task_group.clone())?;
             let token = generation.cancellation.clone();
 
             let scan_result = if lifecycle.should_fail_background_spawn() {
-                Err(rocketmq_error::RocketMQError::Shared(connection_failed_without_source(
-                    TransportStage::Closed,
-                )))
+                Err(connection_failed_without_source(TransportStage::Closed))
             } else {
                 let client = Arc::clone(self);
                 let scan_token = token.clone();
@@ -620,9 +616,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                             }
                         }
                     })
-                    .map_err(|source| {
-                        rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::Closed, source))
-                    })
+                    .map_err(|source| connection_failed(TransportStage::Closed, source))
             };
             if let Err(error) = scan_result {
                 StartAttempt::Failed { generation, error }
@@ -663,9 +657,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                     StartAttempt::Interrupted
                 } else {
                     let idle_result = if lifecycle.should_fail_background_spawn() {
-                        Err(rocketmq_error::RocketMQError::Shared(connection_failed_without_source(
-                            TransportStage::Closed,
-                        )))
+                        Err(connection_failed_without_source(TransportStage::Closed))
                     } else {
                         let client = Arc::clone(self);
                         task_group
@@ -677,9 +669,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                                     }
                                 }
                             })
-                            .map_err(|source| {
-                                rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::Closed, source))
-                            })
+                            .map_err(|source| connection_failed(TransportStage::Closed, source))
                     };
                     match idle_result {
                         Ok(_) => {
@@ -726,9 +716,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                 self.lifecycle
                     .lock()
                     .restore_stopped_after_failed_start(generation.number);
-                Err(rocketmq_error::RocketMQError::Shared(connection_failed_without_source(
-                    TransportStage::Closed,
-                )))
+                Err(connection_failed_without_source(TransportStage::Closed))
             }
         }
     }
@@ -920,7 +908,7 @@ enum StartAttempt {
     },
     Failed {
         generation: ClientGeneration,
-        error: rocketmq_error::RocketMQError,
+        error: rocketmq_error::SharedError,
     },
     Interrupted,
 }

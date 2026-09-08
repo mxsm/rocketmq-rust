@@ -18,8 +18,7 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::auth::AuthService;
 use rocketmq_admin_core::client_adapter::services::auth::ListUsersRequest;
 use rocketmq_admin_core::client_adapter::services::auth::ListUsersResult;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
 
 use crate::commands::CommandExecute;
@@ -44,7 +43,7 @@ impl CommandExecute for ListUsersSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request =
             ListUsersRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone(), self.filter.clone())?;
         let result =
@@ -76,19 +75,12 @@ fn format_row(user: &UserInfo) -> String {
     )
 }
 
-fn render_list_users_result(result: ListUsersResult) -> RocketMQResult<()> {
+fn render_list_users_result(result: ListUsersResult) -> CanonicalResult<()> {
     print_users(result.users);
     if result.failed_broker_addrs.is_empty() {
         Ok(())
     } else {
-        Err(RocketMQError::broker_operation_failed(
-            "LIST_USERS",
-            -1,
-            format!(
-                "ListUsersSubCommand: Failed to list users for brokers {}",
-                result.failed_broker_addrs.join(", ")
-            ),
-        ))
+        Err(crate::errors::broker_response_failed("LIST_USERS", -1))
     }
 }
 

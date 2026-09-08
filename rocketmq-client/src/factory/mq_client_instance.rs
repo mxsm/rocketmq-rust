@@ -22,6 +22,8 @@ use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::ClientError;
+use crate::ClientResult;
 use arc_swap::ArcSwapOption;
 use cheetah_string::CheetahString;
 use dashmap::mapref::entry::Entry;
@@ -29,9 +31,6 @@ use dashmap::DashMap;
 use futures::stream;
 use futures::StreamExt;
 use rand::seq::IndexedRandom;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::UnifiedServiceError;
 use rocketmq_model::common::base::service_state::ServiceState;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::config::TopicConfig;
@@ -150,17 +149,18 @@ where
     stream::iter(tasks).buffer_unordered(limit.max(1)).collect().await
 }
 
-fn client_scheduled_task_startup_failed(task: &'static str, error: impl std::fmt::Display) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
-        "MQClientInstance scheduled task {task}: {error}"
-    )))
+fn client_scheduled_task_startup_failed(
+    task: &'static str,
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> ClientError {
+    ClientError::service_source(task, error)
 }
 
-fn sync_pull_result_missing(operation: &'static str) -> RocketMQError {
-    RocketMQError::ClientInvalidState {
-        expected: "PullResultExt returned by sync pull_message",
-        actual: format!("{operation} returned None"),
-    }
+fn sync_pull_result_missing(operation: &'static str) -> ClientError {
+    ClientError::invalid_state(
+        "PullResultExt returned by sync pull_message",
+        format!("{operation} returned None"),
+    )
 }
 
 fn get_topic_config_request_header(topic: CheetahString) -> GetTopicConfigRequestHeader {
@@ -610,7 +610,7 @@ impl MQClientInstance {
         &self.consumer_stats_manager
     }
 
-    async fn start_default_producer(&self) -> rocketmq_error::RocketMQResult<()> {
+    async fn start_default_producer(&self) -> crate::ClientResult<()> {
         let mut default_producer = self.default_producer.lock().await;
         let Some(producer_impl) = default_producer.default_mqproducer_impl.as_mut() else {
             return Err(mq_client_err!("default producer impl is None"));
@@ -620,7 +620,7 @@ impl MQClientInstance {
         Box::pin(producer_impl.start_with_factory(false)).await
     }
 
-    async fn shutdown_default_producer(&self) -> rocketmq_error::RocketMQResult<()> {
+    async fn shutdown_default_producer(&self) -> crate::ClientResult<()> {
         let mut default_producer = self.default_producer.lock().await;
         let Some(producer_impl) = default_producer.default_mqproducer_impl.as_mut() else {
             return Ok(());
@@ -628,10 +628,7 @@ impl MQClientInstance {
         Box::pin(producer_impl.shutdown_with_factory(false)).await
     }
 
-    pub(crate) async fn send_with_default_producer(
-        &self,
-        message: Message,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
+    pub(crate) async fn send_with_default_producer(&self, message: Message) -> crate::ClientResult<Option<SendResult>> {
         let mut default_producer = self.default_producer.lock().await;
         default_producer.send(message).await
     }
@@ -639,12 +636,12 @@ impl MQClientInstance {
     pub(crate) async fn send_with_default_producer_impl(
         &self,
         message: &mut Message,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
+    ) -> crate::ClientResult<Option<SendResult>> {
         let mut default_producer = self.default_producer.lock().await;
         let producer_impl = default_producer
             .default_mqproducer_impl
             .as_mut()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl"))?;
+            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQProducerImpl"))?;
         producer_impl.send(message).await
     }
 
@@ -695,7 +692,7 @@ impl MQClientInstance {
         );
     }
 
-    pub async fn start(self: &Arc<Self>) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn start(self: &Arc<Self>) -> crate::ClientResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
         {
             let admission = self
@@ -888,7 +885,7 @@ impl MQClientInstance {
         info!("MQClientInstance[{}] shutdown completed successfully", self.client_id);
     }
 
-    async fn start_nameserver_discovery(&self) -> RocketMQResult<()> {
+    async fn start_nameserver_discovery(&self) -> ClientResult<()> {
         let Some(config) = self.nameserver_discovery_config.clone() else {
             return Ok(());
         };
@@ -898,11 +895,11 @@ impl MQClientInstance {
 
         #[cfg(not(feature = "nameserver-dns-discovery"))]
         {
-            Err(RocketMQError::ConfigInvalidValue {
-                key: "nameserver_discovery.dns",
-                value: "enabled".to_string(),
-                reason: "requires the nameserver-dns-discovery Cargo feature".to_string(),
-            })
+            Err(ClientError::config_invalid(
+                "nameserver_discovery.dns",
+                "enabled",
+                "requires the nameserver-dns-discovery Cargo feature",
+            ))
         }
 
         #[cfg(feature = "nameserver-dns-discovery")]
@@ -1080,7 +1077,7 @@ impl MQClientInstance {
         true
     }
 
-    fn start_scheduled_task(&self, this: Arc<Self>) -> rocketmq_error::RocketMQResult<()> {
+    fn start_scheduled_task(&self, this: Arc<Self>) -> crate::ClientResult<()> {
         info!("Starting scheduled tasks with ScheduledTaskManager");
 
         if self.client_config.namesrv_addr.is_none() {
@@ -1286,7 +1283,7 @@ impl MQClientInstance {
                 started,
                 TopicRouteApplyOutcome::Unchanged,
             );
-            return Err(RetryInput::BusinessError(RocketMQError::ClientNotStarted));
+            return Err(RetryInput::BusinessError(ClientError::not_started()));
         };
 
         let topic_route_data = match mq_client_api_impl
@@ -1325,7 +1322,7 @@ impl MQClientInstance {
         let request_version = self.topic_route_version(topic);
         let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
             self.record_single_route_refresh_failure(started);
-            return Err(RetryInput::BusinessError(RocketMQError::ClientNotStarted));
+            return Err(RetryInput::BusinessError(ClientError::not_started()));
         };
 
         let topic_route_data = match mq_client_api_impl
@@ -1658,10 +1655,10 @@ impl MQClientInstance {
         }
     }
 
-    pub fn get_mq_client_api_impl(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientAPIImpl>> {
+    pub fn get_mq_client_api_impl(&self) -> crate::ClientResult<Arc<MQClientAPIImpl>> {
         self.mq_client_api_impl
             .load_full()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)
+            .ok_or(crate::ClientError::not_started())
     }
 
     pub async fn pull_message_from_broker(
@@ -1669,19 +1666,19 @@ impl MQClientInstance {
         broker_addr: &str,
         request_header: PullMessageRequestHeader,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<PullResult> {
+    ) -> crate::ClientResult<PullResult> {
         struct NoopPullCallback;
 
         impl PullCallback for NoopPullCallback {
             async fn on_success(&mut self, _pull_result: PullResultExt) {}
 
-            fn on_exception(&mut self, _e: rocketmq_error::RocketMQError) {}
+            fn on_exception(&mut self, _e: crate::ClientError) {}
         }
 
         let api_impl = self
             .mq_client_api_impl
             .load_full()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+            .ok_or(crate::ClientError::not_started())?;
 
         let mut result = MQClientAPIImpl::pull_message(
             api_impl.clone(),
@@ -1709,11 +1706,11 @@ impl MQClientInstance {
         broker_addr: &str,
         request_header: QueryConsumerOffsetRequestHeader,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    ) -> crate::ClientResult<i64> {
         let api_impl = self
             .mq_client_api_impl
             .load_full()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+            .ok_or(crate::ClientError::not_started())?;
         api_impl
             .clone()
             .query_consumer_offset(broker_addr, request_header, timeout_millis)
@@ -1725,11 +1722,11 @@ impl MQClientInstance {
         broker_addr: &CheetahString,
         request_header: UpdateConsumerOffsetRequestHeader,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let api_impl = self
             .mq_client_api_impl
             .load_full()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+            .ok_or(crate::ClientError::not_started())?;
         api_impl
             .clone()
             .update_consumer_offset(broker_addr, request_header, timeout_millis)
@@ -1745,11 +1742,11 @@ impl MQClientInstance {
         delay_level: i32,
         timeout_millis: u64,
         max_consume_retry_times: i32,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let api_impl = self
             .mq_client_api_impl
             .load_full()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+            .ok_or(crate::ClientError::not_started())?;
         api_impl
             .clone()
             .consumer_send_message_back(
@@ -1769,11 +1766,11 @@ impl MQClientInstance {
         broker_addr: &str,
         message_queue: &MessageQueue,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    ) -> crate::ClientResult<i64> {
         let api_impl = self
             .mq_client_api_impl
             .load_full()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+            .ok_or(crate::ClientError::not_started())?;
         api_impl
             .clone()
             .get_max_offset(broker_addr, message_queue, timeout_millis)
@@ -1785,11 +1782,11 @@ impl MQClientInstance {
         broker_addr: &str,
         message_queue: &MessageQueue,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    ) -> crate::ClientResult<i64> {
         let api_impl = self
             .mq_client_api_impl
             .load_full()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+            .ok_or(crate::ClientError::not_started())?;
         api_impl
             .clone()
             .get_min_offset(broker_addr, message_queue, timeout_millis)
@@ -1803,11 +1800,11 @@ impl MQClientInstance {
         timestamp: i64,
         boundary_type: BoundaryType,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    ) -> crate::ClientResult<i64> {
         let api_impl = self
             .mq_client_api_impl
             .load_full()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+            .ok_or(crate::ClientError::not_started())?;
         api_impl
             .clone()
             .search_offset_by_timestamp(broker_addr, message_queue, timestamp, boundary_type, timeout_millis)
@@ -1819,12 +1816,12 @@ impl MQClientInstance {
         broker_addr: &CheetahString,
         topic: CheetahString,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<TopicConfig> {
+    ) -> crate::ClientResult<TopicConfig> {
         let request_header = get_topic_config_request_header(topic);
         let api_impl = self
             .mq_client_api_impl
             .load_full()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+            .ok_or(crate::ClientError::not_started())?;
         let topic_mapping = api_impl
             .get_topic_config(broker_addr, request_header, timeout_millis)
             .await?;
@@ -1836,21 +1833,21 @@ impl MQClientInstance {
         broker_addr: &CheetahString,
         group: CheetahString,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfig> {
+    ) -> crate::ClientResult<SubscriptionGroupConfig> {
         let api_impl = self
             .mq_client_api_impl
             .load_full()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+            .ok_or(crate::ClientError::not_started())?;
         api_impl
             .get_subscription_group_config(broker_addr, group, timeout_millis)
             .await
     }
 
-    pub async fn get_broker_cluster_info(&self, timeout_millis: u64) -> rocketmq_error::RocketMQResult<ClusterInfo> {
+    pub async fn get_broker_cluster_info(&self, timeout_millis: u64) -> crate::ClientResult<ClusterInfo> {
         let api_impl = self
             .mq_client_api_impl
             .load_full()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+            .ok_or(crate::ClientError::not_started())?;
         api_impl.get_broker_cluster_info(timeout_millis).await
     }
 
@@ -1859,11 +1856,11 @@ impl MQClientInstance {
         broker_addr: CheetahString,
         username: CheetahString,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<UserInfo>> {
+    ) -> crate::ClientResult<Option<UserInfo>> {
         let api_impl = self
             .mq_client_api_impl
             .load_full()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+            .ok_or(crate::ClientError::not_started())?;
         api_impl.get_user(broker_addr, username, timeout_millis).await
     }
 
@@ -1872,11 +1869,11 @@ impl MQClientInstance {
         broker_addr: CheetahString,
         subject: CheetahString,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<AclInfo>> {
+    ) -> crate::ClientResult<Option<AclInfo>> {
         let api_impl = self
             .mq_client_api_impl
             .load_full()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+            .ok_or(crate::ClientError::not_started())?;
         let acl_infos = api_impl
             .list_acl(broker_addr, subject.clone(), CheetahString::default(), timeout_millis)
             .await?;
@@ -2426,7 +2423,7 @@ impl MQClientInstance {
         true
     }
 
-    pub async fn check_client_in_broker(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn check_client_in_broker(&self) -> crate::ClientResult<()> {
         for (consumer_group, consumer) in self.consumer_snapshot() {
             let subscription_inner = consumer.subscriptions();
             if subscription_inner.is_empty() {
@@ -2439,7 +2436,7 @@ impl MQClientInstance {
                 let addr = self.find_broker_addr_by_topic(subscription_data.topic.as_str()).await;
                 if let Some(addr) = addr {
                     let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() else {
-                        return Err(rocketmq_error::RocketMQError::ClientNotStarted);
+                        return Err(crate::ClientError::not_started());
                     };
                     match mq_client_api_impl
                         .check_client_in_broker(
@@ -2452,11 +2449,10 @@ impl MQClientInstance {
                         .await
                     {
                         Ok(_) => {}
-                        Err(e) => match e {
-                            rocketmq_error::RocketMQError::IllegalArgument(_) => {
+                        Err(e) => {
+                            if e.is(&rocketmq_error::CORE_ARGUMENT_INVALID) {
                                 return Err(e);
-                            }
-                            _ => {
+                            } else {
                                 let _desc = format!(
                                     "Check client in broker error, maybe because you use {} to filter message, but \
                                      server has not been upgraded to support!This error would not affect the launch \
@@ -2465,7 +2461,7 @@ impl MQClientInstance {
                                     subscription_data.expression_type
                                 );
                             }
-                        },
+                        }
                     }
                 }
             }
@@ -2474,7 +2470,7 @@ impl MQClientInstance {
         Ok(())
     }
 
-    pub async fn do_rebalance(&self) -> RocketMQResult<bool> {
+    pub async fn do_rebalance(&self) -> ClientResult<bool> {
         let mut balanced = true;
         for (consumer_group, consumer) in self.consumer_snapshot() {
             match consumer.try_rebalance().await {
@@ -3017,8 +3013,8 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
+    use crate::ClientError;
     use futures::FutureExt;
-    use rocketmq_error::RocketMQError;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::header::client_request_header::GetRouteInfoRequestHeader;
@@ -3065,13 +3061,12 @@ mod tests {
         fn process(
             &self,
             request: RemotingCommand,
-        ) -> Pin<Box<dyn Future<Output = rocketmq_error::RocketMQResult<RemotingCommand>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
             Box::pin(async move {
                 if request.code() != RequestCode::GetRouteinfoByTopic.to_i32() {
-                    return Err(RocketMQError::illegal_argument(format!(
-                        "unexpected request code {}",
-                        request.code()
-                    )));
+                    return Err(
+                        ClientError::illegal_argument(format!("unexpected request code {}", request.code())).into(),
+                    );
                 }
                 let header = request.decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
                 self.topics.lock().expect("route preparation topics").push(header.topic);
@@ -3080,7 +3075,7 @@ mod tests {
                     .lock()
                     .expect("route preparation responses")
                     .pop_front()
-                    .ok_or_else(|| RocketMQError::illegal_argument("unexpected route preparation request"))?;
+                    .ok_or_else(|| ClientError::illegal_argument("unexpected route preparation request"))?;
                 Ok(response.set_opaque(request.opaque()))
             })
         }
@@ -3272,10 +3267,11 @@ mod tests {
 
     #[test]
     fn client_scheduled_task_startup_failed_uses_service_descriptor() {
-        let error = client_scheduled_task_startup_failed("fetchNameServerAddr", "scheduler closed");
+        let error =
+            client_scheduled_task_startup_failed("fetchNameServerAddr", std::io::Error::other("scheduler closed"));
 
         assert_eq!(error.descriptor().code(), rocketmq_error::CORE_SERVICE_FAILED.code());
-        assert!(error.to_string().contains("fetchNameServerAddr"));
+        assert!(std::error::Error::source(&error).is_some());
     }
 
     #[test]
@@ -3348,13 +3344,7 @@ mod tests {
 
         let error = api.start().await.expect_err("start must revalidate raw config");
 
-        assert!(matches!(
-            error,
-            RocketMQError::ConfigInvalidValue {
-                key: "client_callback_executor_threads",
-                ..
-            }
-        ));
+        assert!(error.is(&rocketmq_error::CORE_CONFIGURATION_INVALID));
         instance.shutdown().await;
     }
 
@@ -3365,7 +3355,7 @@ mod tests {
 
         let result = instance.get_mq_client_api_impl();
 
-        assert!(matches!(result, Err(RocketMQError::ClientNotStarted)));
+        assert!(matches!(result, Err(error) if error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED)));
     }
 
     #[tokio::test]

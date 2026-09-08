@@ -187,7 +187,7 @@ struct ControlCaptureProcessor {
 }
 
 impl RequestProcessor for ControlCaptureProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         if let Some(sender) = self.sender.lock().take() {
             let _ = sender.send(request.control().clone());
         }
@@ -309,7 +309,7 @@ struct PendingFastFailureProcessor {
 }
 
 impl RequestProcessor for PendingFastFailureProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let admission = match try_admit(
             &self.service,
             FastFailureQueueKind::Send,
@@ -330,7 +330,7 @@ impl RequestProcessor for PendingFastFailureProcessor {
                 ));
             }
             Err(FastFailureAwaitError::LifecycleStopped) => {
-                return Err(rocketmq_error::RocketMQError::invariant_violated(
+                return Err(crate::broker_error::invariant_violated(
                     "dispatcher lifecycle stopped before fast-failure execution",
                 ));
             }
@@ -399,7 +399,7 @@ struct CanonicalFastFailureProcessor {
 }
 
 impl RequestProcessor for CanonicalFastFailureProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.admissions.fetch_add(1, Ordering::SeqCst);
         let metadata = FastFailureRequestMetadata::from_command(request.command());
         let plan = match try_admit(&self.service, FastFailureQueueKind::Send, metadata) {
@@ -414,13 +414,9 @@ impl RequestProcessor for CanonicalFastFailureProcessor {
                     let response = run
                         .complete(Some(response))
                         .await
-                        .map_err(|_| {
-                            rocketmq_error::RocketMQError::invariant_violated("fast-failure completion failed")
-                        })?
+                        .map_err(|_| crate::broker_error::invariant_violated("fast-failure completion failed"))?
                         .ok_or_else(|| {
-                            rocketmq_error::RocketMQError::invariant_violated(
-                                "fast-failure completion lost its response",
-                            )
+                            crate::broker_error::invariant_violated("fast-failure completion lost its response")
                         })?;
                     RemotingResponse::command(response).expect("completed remoting response")
                 }
@@ -428,7 +424,7 @@ impl RequestProcessor for CanonicalFastFailureProcessor {
                     rejection.into_remoting_response().expect("queued rejection plan")
                 }
                 Err(FastFailureAwaitError::LifecycleStopped) => {
-                    return Err(rocketmq_error::RocketMQError::invariant_violated(
+                    return Err(crate::broker_error::invariant_violated(
                         "fast-failure request lifecycle stopped",
                     ));
                 }

@@ -18,8 +18,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use ipnet::IpNet;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::SharedError;
 use serde::Deserialize;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -27,6 +26,7 @@ use tokio::net::TcpStream;
 use zeroize::Zeroizing;
 
 use crate::deadline::RequestDeadline;
+use crate::error_helpers::configuration_invalid;
 use crate::error_helpers::connection_failed_for_remote;
 use crate::error_helpers::connection_failed_without_source_for_remote;
 use crate::error_helpers::connection_timeout_caused_by;
@@ -105,7 +105,7 @@ impl SocksProxyConfig {
     ///
     /// CIDR keys retain Java compatibility. Exact domains and `*.example.com`
     /// suffix rules are accepted as a Rust extension and take precedence over CIDR rules.
-    pub fn parse_java_json(json: &str) -> RocketMQResult<Self> {
+    pub fn parse_java_json(json: &str) -> Result<Self, rocketmq_error::SharedError> {
         let raw_routes = serde_json::from_str::<std::collections::BTreeMap<String, RawProxyConfig>>(json)
             .map_err(|_| invalid_config("invalid JSON object"))?;
         let mut routes = Vec::with_capacity(raw_routes.len());
@@ -160,25 +160,13 @@ impl SocksProxyRoute {
         target_host: &str,
         target_port: u16,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<TcpStream> {
+    ) -> Result<TcpStream, rocketmq_error::SharedError> {
         let endpoint = self.endpoint.authority.clone();
         let mut stream = deadline
             .timeout(TcpStream::connect(&endpoint))
             .await
-            .map_err(|source| {
-                rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
-                    &endpoint,
-                    deadline.budget_millis(),
-                    source,
-                ))
-            })?
-            .map_err(|source| {
-                rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
-                    &endpoint,
-                    TransportStage::Connect,
-                    source,
-                ))
-            })?;
+            .map_err(|source| connection_timeout_caused_by(&endpoint, deadline.budget_millis(), source))?
+            .map_err(|source| connection_failed_for_remote(&endpoint, TransportStage::Connect, source))?;
         deadline
             .timeout(negotiate(
                 &mut stream,
@@ -187,13 +175,7 @@ impl SocksProxyRoute {
                 target_port,
             ))
             .await
-            .map_err(|source| {
-                rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
-                    &endpoint,
-                    deadline.budget_millis(),
-                    source,
-                ))
-            })??;
+            .map_err(|source| connection_timeout_caused_by(&endpoint, deadline.budget_millis(), source))??;
         Ok(stream)
     }
 
@@ -205,18 +187,12 @@ impl SocksProxyRoute {
         target_port: u16,
         tls_config: &crate::config::TlsConfig,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<tokio_rustls::client::TlsStream<TcpStream>> {
+    ) -> Result<tokio_rustls::client::TlsStream<TcpStream>, rocketmq_error::SharedError> {
         let stream = self.connect(target_host, target_port, deadline).await?;
         deadline
             .timeout(crate::tls::connect_tls_stream(stream, target_host, tls_config))
             .await
-            .map_err(|source| {
-                rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
-                    target_host,
-                    deadline.budget_millis(),
-                    source,
-                ))
-            })?
+            .map_err(|source| connection_timeout_caused_by(target_host, deadline.budget_millis(), source))?
     }
 }
 
@@ -225,10 +201,10 @@ pub(crate) async fn connect_target(
     authority: &str,
     resolved_addr: Option<SocketAddr>,
     deadline: RequestDeadline,
-) -> RocketMQResult<TcpStream> {
+) -> Result<TcpStream, rocketmq_error::SharedError> {
     let (host, port) = split_host_port(authority)?;
     if host.is_empty() || host.as_bytes().contains(&0) {
-        return Err(rocketmq_error::RocketMQError::Shared(endpoint_invalid(true)));
+        return Err(endpoint_invalid(true));
     }
     let resolved_ip = match resolved_addr {
         Some(address) => Some(address.ip()),
@@ -236,14 +212,8 @@ pub(crate) async fn connect_target(
             let addresses = deadline
                 .timeout(tokio::net::lookup_host(authority))
                 .await
-                .map_err(|source| {
-                    rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
-                        authority,
-                        deadline.budget_millis(),
-                        source,
-                    ))
-                })?
-                .map_err(|source| rocketmq_error::RocketMQError::Shared(dns_failed(source)))?;
+                .map_err(|source| connection_timeout_caused_by(authority, deadline.budget_millis(), source))?
+                .map_err(|source| dns_failed(source))?;
             let mut first_ip = None;
             let mut matching_ip = None;
             for address in addresses {
@@ -266,24 +236,12 @@ pub(crate) async fn connect_target(
     deadline
         .timeout(TcpStream::connect(&destination))
         .await
-        .map_err(|source| {
-            rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
-                authority,
-                deadline.budget_millis(),
-                source,
-            ))
-        })?
-        .map_err(|source| {
-            rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
-                authority,
-                TransportStage::Connect,
-                source,
-            ))
-        })
+        .map_err(|source| connection_timeout_caused_by(authority, deadline.budget_millis(), source))?
+        .map_err(|source| connection_failed_for_remote(authority, TransportStage::Connect, source))
 }
 
 impl ProxyEndpoint {
-    fn parse(authority: String) -> RocketMQResult<Self> {
+    fn parse(authority: String) -> Result<Self, rocketmq_error::SharedError> {
         let (host, port) = split_host_port(&authority)?;
         if host.is_empty() || port == 0 {
             return Err(invalid_config(
@@ -312,7 +270,7 @@ impl RouteMatcher {
     }
 }
 
-fn parse_matcher(rule: &str) -> RocketMQResult<RouteMatcher> {
+fn parse_matcher(rule: &str) -> Result<RouteMatcher, rocketmq_error::SharedError> {
     let rule = rule.trim().to_ascii_lowercase();
     if rule.is_empty() {
         return Err(invalid_config("target rule must not be empty"));
@@ -346,7 +304,7 @@ fn valid_domain(domain: &str) -> bool {
         })
 }
 
-fn split_host_port(authority: &str) -> RocketMQResult<(&str, u16)> {
+fn split_host_port(authority: &str) -> Result<(&str, u16), rocketmq_error::SharedError> {
     let authority = authority.trim();
     let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
         let (host, port) = rest
@@ -369,7 +327,7 @@ async fn negotiate(
     credentials: Option<&Credentials>,
     target_host: &str,
     target_port: u16,
-) -> RocketMQResult<()> {
+) -> Result<(), rocketmq_error::SharedError> {
     let methods: &[u8] = if credentials.is_some() { &[2] } else { &[0] };
     stream
         .write_all(&[5, methods.len() as u8])
@@ -404,7 +362,7 @@ async fn negotiate(
     discard_bound_address(stream, response[3]).await
 }
 
-async fn authenticate(stream: &mut TcpStream, credentials: &Credentials) -> RocketMQResult<()> {
+async fn authenticate(stream: &mut TcpStream, credentials: &Credentials) -> Result<(), rocketmq_error::SharedError> {
     let username = credentials.username.as_bytes();
     let password = credentials.password.as_bytes();
     if username.len() > u8::MAX as usize || password.len() > u8::MAX as usize {
@@ -424,7 +382,7 @@ async fn authenticate(stream: &mut TcpStream, credentials: &Credentials) -> Rock
     Ok(())
 }
 
-fn encode_target(request: &mut Vec<u8>, target_host: &str) -> RocketMQResult<()> {
+fn encode_target(request: &mut Vec<u8>, target_host: &str) -> Result<(), rocketmq_error::SharedError> {
     let target_host = target_host.trim_matches(['[', ']']);
     match target_host.parse::<IpAddr>() {
         Ok(IpAddr::V4(ip)) => {
@@ -448,7 +406,7 @@ fn encode_target(request: &mut Vec<u8>, target_host: &str) -> RocketMQResult<()>
     Ok(())
 }
 
-async fn discard_bound_address(stream: &mut TcpStream, address_type: u8) -> RocketMQResult<()> {
+async fn discard_bound_address(stream: &mut TcpStream, address_type: u8) -> Result<(), rocketmq_error::SharedError> {
     let address_len = match address_type {
         1 => 4,
         4 => 16,
@@ -460,25 +418,14 @@ async fn discard_bound_address(stream: &mut TcpStream, address_type: u8) -> Rock
     Ok(())
 }
 
-fn invalid_config(reason: &'static str) -> RocketMQError {
-    RocketMQError::ConfigInvalidValue {
-        key: "com.rocketmq.socks.proxy.config",
-        value: "<redacted>".to_string(),
-        reason: reason.to_string(),
-    }
+fn invalid_config(_reason: &'static str) -> SharedError {
+    configuration_invalid("com.rocketmq.socks.proxy.config")
 }
 
-fn proxy_io_error(error: std::io::Error) -> RocketMQError {
-    rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
-        "socks5-proxy",
-        TransportStage::Connect,
-        error,
-    ))
+fn proxy_io_error(error: std::io::Error) -> SharedError {
+    connection_failed_for_remote("socks5-proxy", TransportStage::Connect, error)
 }
 
-fn proxy_protocol_error(_reason: &'static str) -> RocketMQError {
-    rocketmq_error::RocketMQError::Shared(connection_failed_without_source_for_remote(
-        "socks5-proxy",
-        TransportStage::Connect,
-    ))
+fn proxy_protocol_error(_reason: &'static str) -> SharedError {
+    connection_failed_without_source_for_remote("socks5-proxy", TransportStage::Connect)
 }

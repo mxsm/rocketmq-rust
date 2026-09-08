@@ -15,8 +15,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use crate::broker_error::BrokerResult as Result;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -89,7 +88,7 @@ pub trait ConfigManager {
     ///
     /// This method persists the configuration with a given topic.
     /// The actual implementation is delegated to the `persist` method.
-    fn persist_with_topic(&mut self, _topic_name: &str, _t: Box<dyn Any>) -> RocketMQResult<()> {
+    fn persist_with_topic(&mut self, _topic_name: &str, _t: Box<dyn Any>) -> Result<()> {
         self.persist()
     }
 
@@ -97,7 +96,7 @@ pub trait ConfigManager {
     ///
     /// This method persists the configuration with a given map.
     /// The actual implementation is delegated to the `persist` method.
-    fn persist_map(&mut self, _m: &HashMap<String, Box<dyn Any>>) -> RocketMQResult<()> {
+    fn persist_map(&mut self, _m: &HashMap<String, Box<dyn Any>>) -> Result<()> {
         self.persist()
     }
 
@@ -111,12 +110,12 @@ pub trait ConfigManager {
     ///
     /// Returns the typed serialization or durability failure. Persistence
     /// errors are never converted into a successful return value.
-    fn persist(&self) -> RocketMQResult<()> {
+    fn persist(&self) -> Result<()> {
         let json = self.encode_pretty(true);
         if !json.is_empty() {
             let file_name = self.config_file_path();
             file_utils::string_to_file(json.as_str(), file_name.as_str())
-                .map_err(|error| RocketMQError::IO(std::io::Error::other(error)))?;
+                .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?;
         }
         Ok(())
     }

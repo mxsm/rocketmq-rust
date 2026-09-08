@@ -19,17 +19,30 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::StoreResult;
 use parking_lot::Condvar;
 use parking_lot::Mutex;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tracing::warn;
 
 use crate::base::memory_lock_manager::MemoryLockManager;
 use crate::utils::ffi::lock_memory_region;
 use crate::utils::ffi::unlock_memory_region;
 
-type BufferUnlocker = dyn Fn(&[u8]) -> RocketMQResult<()> + Send + Sync;
+type BufferUnlocker = dyn Fn(&[u8]) -> StoreResult<()> + Send + Sync;
+
+#[track_caller]
+fn transient_pool_failure(
+    descriptor: &'static rocketmq_error::ErrorDescriptor,
+    operation: StoreOperation,
+    detail: impl Into<String>,
+) -> StoreError {
+    StoreError::new(descriptor, operation)
+        .in_component(StoreComponent::MappedFile)
+        .with_detail(detail)
+}
 
 struct TransientStorePoolInner {
     pool_size: usize,
@@ -197,7 +210,7 @@ impl TransientStorePool {
     #[cfg(test)]
     fn new_for_test<F>(pool_size: usize, file_size: usize, late_unlocker: F) -> Self
     where
-        F: Fn(&[u8]) -> RocketMQResult<()> + Send + Sync + 'static,
+        F: Fn(&[u8]) -> StoreResult<()> + Send + Sync + 'static,
     {
         Self::with_manager(
             pool_size,
@@ -207,18 +220,20 @@ impl TransientStorePool {
         )
     }
 
-    pub fn init(&self) -> RocketMQResult<()> {
+    pub fn init(&self) -> StoreResult<()> {
         self.init_with_locker(lock_memory_region)
     }
 
-    pub(crate) fn init_with_locker<F>(&self, mut locker: F) -> RocketMQResult<()>
+    pub(crate) fn init_with_locker<F>(&self, mut locker: F) -> StoreResult<()>
     where
-        F: FnMut(&[u8]) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> StoreResult<()>,
     {
         let mut state = self.inner.state.lock();
         if !state.accepting {
-            return Err(RocketMQError::IllegalArgument(
-                "transient store pool is already shut down".to_owned(),
+            return Err(transient_pool_failure(
+                &rocketmq_error::STORAGE_REQUEST_INVALID,
+                StoreOperation::Start,
+                "transient store pool is already shut down",
             ));
         }
         for _ in 0..self.inner.pool_size {
@@ -229,20 +244,20 @@ impl TransientStorePool {
         Ok(())
     }
 
-    pub fn destroy(&self) -> RocketMQResult<()> {
+    pub fn destroy(&self) -> StoreResult<()> {
         self.shutdown(Duration::ZERO).map(|_| ())
     }
 
     /// Stops new leases, drains currently available buffers, and waits up to `wait_timeout` for
     /// outstanding leases to return.
-    pub fn shutdown(&self, wait_timeout: Duration) -> RocketMQResult<TransientStorePoolShutdownReport> {
+    pub fn shutdown(&self, wait_timeout: Duration) -> StoreResult<TransientStorePoolShutdownReport> {
         self.shutdown_with_unlocker(wait_timeout, unlock_memory_region)
     }
 
     #[cfg(test)]
-    fn destroy_with_unlocker<F>(&self, unlocker: F) -> RocketMQResult<()>
+    fn destroy_with_unlocker<F>(&self, unlocker: F) -> StoreResult<()>
     where
-        F: FnMut(&[u8]) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> StoreResult<()>,
     {
         self.shutdown_with_unlocker(Duration::ZERO, unlocker).map(|_| ())
     }
@@ -251,9 +266,9 @@ impl TransientStorePool {
         &self,
         wait_timeout: Duration,
         mut unlocker: F,
-    ) -> RocketMQResult<TransientStorePoolShutdownReport>
+    ) -> StoreResult<TransientStorePoolShutdownReport>
     where
-        F: FnMut(&[u8]) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> StoreResult<()>,
     {
         let available_buffers = {
             let mut state = self.inner.state.lock();
@@ -424,8 +439,6 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use rocketmq_error::RocketMQError;
-
     use super::*;
 
     #[test]
@@ -433,9 +446,11 @@ mod tests {
         let pool = TransientStorePool::new(2, 4096);
 
         let result = pool.init_with_locker(|_| {
-            Err(RocketMQError::StorageLockFailed {
-                path: "test mlock failure".to_string(),
-            })
+            Err(transient_pool_failure(
+                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                StoreOperation::Start,
+                "test mlock failure",
+            ))
         });
 
         assert!(result.is_ok());
@@ -486,9 +501,11 @@ mod tests {
     fn destroy_unlocks_failed_lock_buffers_without_updating_manager_statistics() {
         let pool = TransientStorePool::new(2, 32);
         pool.init_with_locker(|_| {
-            Err(RocketMQError::StorageLockFailed {
-                path: "injected lock failure".to_string(),
-            })
+            Err(transient_pool_failure(
+                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                StoreOperation::Start,
+                "injected lock failure",
+            ))
         })
         .expect("warn-only init keeps failed buffers");
         let mut unlock_calls = 0;
@@ -539,16 +556,15 @@ mod tests {
         let error = pool
             .destroy_with_unlocker(|_| {
                 unlock_calls += 1;
-                Err(RocketMQError::StorageLockFailed {
-                    path: "injected unlock failure".to_string(),
-                })
+                Err(transient_pool_failure(
+                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                    StoreOperation::Shutdown,
+                    "injected unlock failure",
+                ))
             })
             .expect_err("first unlock error is returned");
 
-        assert!(matches!(
-            error,
-            RocketMQError::StorageLockFailed { path } if path == "injected unlock failure"
-        ));
+        assert_eq!(error.code(), rocketmq_error::STORAGE_BACKEND_UNAVAILABLE.code());
         assert_eq!(unlock_calls, 1);
         assert_eq!(pool.available_buffer_nums(), 0);
     }
@@ -652,6 +668,6 @@ mod tests {
             .init_with_locker(|_| Ok(()))
             .expect_err("shutdown pool cannot be reinitialized");
 
-        assert!(matches!(error, RocketMQError::IllegalArgument(message) if message.contains("shut down")));
+        assert_eq!(error.code(), rocketmq_error::STORAGE_REQUEST_INVALID.code());
     }
 }

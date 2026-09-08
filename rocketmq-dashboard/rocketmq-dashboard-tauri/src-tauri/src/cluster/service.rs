@@ -204,7 +204,7 @@ impl ClusterManager {
         matches!(
             result,
             Err(ClusterError::Admin(error)) if error.is_retryable()
-                || matches!(error, rocketmq_admin_core::core::AdminError::SessionClosed)
+                || error.is_session_closed()
         )
     }
 

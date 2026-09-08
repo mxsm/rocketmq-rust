@@ -293,7 +293,7 @@ mod tests {
     }
 
     impl TraceDispatcher for CapturingTraceDispatcher {
-        fn start(&self, _name_srv_addr: &str, _access_channel: AccessChannel) -> rocketmq_error::RocketMQResult<()> {
+        fn start(&self, _name_srv_addr: &str, _access_channel: AccessChannel) -> crate::ClientResult<()> {
             Ok(())
         }
 
@@ -305,7 +305,7 @@ mod tests {
             true
         }
 
-        fn flush(&self) -> rocketmq_error::RocketMQResult<()> {
+        fn flush(&self) -> crate::ClientResult<()> {
             Ok(())
         }
 

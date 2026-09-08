@@ -16,7 +16,25 @@ use rocketmq_error::fields;
 use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::ErrorDescriptor;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
+use rocketmq_error::ViewValueRef;
+use rocketmq_error::AUTH_CREDENTIALS_INVALID;
+use rocketmq_error::AUTH_OPERATION_FAILED;
+use rocketmq_error::AUTH_PERMISSION_DENIED;
+use rocketmq_error::BROKER_LEADERSHIP_NOT_MASTER;
+use rocketmq_error::BROKER_LOOKUP_NOT_FOUND;
+use rocketmq_error::BROKER_OPERATION_FAILED;
+use rocketmq_error::BROKER_QUEUE_ID_OUT_OF_RANGE;
+use rocketmq_error::BROKER_QUEUE_NOT_FOUND;
+use rocketmq_error::BROKER_SUBSCRIPTION_GROUP_NOT_FOUND;
+use rocketmq_error::BROKER_TOPIC_NOT_FOUND;
+use rocketmq_error::CLIENT_RETRY_BUDGET_EXHAUSTED;
+use rocketmq_error::CORE_ARGUMENT_INVALID;
+use rocketmq_error::CORE_CONFIGURATION_INVALID;
+use rocketmq_error::CORE_CONFIGURATION_PARSE_FAILED;
+use rocketmq_error::CORE_INTERNAL_FAILURE;
+use rocketmq_error::CORE_OPERATION_TIMED_OUT;
+use rocketmq_error::PROTOCOL_BODY_INVALID;
 use rocketmq_error::PROXY_BROKER_CONSUMER_GROUP_NOT_FOUND;
 use rocketmq_error::PROXY_BROKER_OFFSET_INVALID;
 use rocketmq_error::PROXY_BROKER_OFFSET_NOT_FOUND;
@@ -45,67 +63,19 @@ use rocketmq_error::PROXY_REQUEST_DRAINING;
 use rocketmq_error::PROXY_SETTINGS_UNAVAILABLE;
 use rocketmq_error::PROXY_TRANSACTION_ID_INVALID;
 use rocketmq_error::PROXY_TRANSPORT_UNAVAILABLE;
+use rocketmq_error::ROUTE_TOPIC_NOT_FOUND;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use thiserror::Error;
 
 pub type ProxyResult<T> = std::result::Result<T, ProxyError>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ProxyErrorKind {
-    ClientIdRequired,
-    UnrecognizedClientType,
-    NotImplemented,
-    TooManyRequests,
-    Draining,
-    InvalidMetadata,
-    Transport,
-    IllegalMessageId,
-    InvalidTransactionId,
-    IllegalMessageGroup,
-    IllegalDeliveryTime,
-    IllegalPollingTime,
-    IllegalOffset,
-    IllegalInvisibleTime,
-    IllegalFilterExpression,
-    InvalidReceiptHandle,
-    IllegalLiteTopic,
-    LiteSubscriptionQuotaExceeded,
-    MessagePropertyConflictWithType,
-    SettingsUnavailable,
-}
-
-impl ProxyErrorKind {
-    /// Returns the catalog descriptor that owns every external projection for this kind.
-    pub const fn descriptor(self) -> &'static ErrorDescriptor {
-        match self {
-            Self::ClientIdRequired => &PROXY_CLIENT_ID_REQUIRED,
-            Self::UnrecognizedClientType => &PROXY_CLIENT_TYPE_UNRECOGNIZED,
-            Self::NotImplemented => &PROXY_CAPABILITY_UNSUPPORTED,
-            Self::TooManyRequests => &PROXY_CAPACITY_EXHAUSTED,
-            Self::Draining => &PROXY_REQUEST_DRAINING,
-            Self::InvalidMetadata => &PROXY_METADATA_INVALID,
-            Self::Transport => &PROXY_TRANSPORT_UNAVAILABLE,
-            Self::IllegalMessageId => &PROXY_MESSAGE_ID_INVALID,
-            Self::InvalidTransactionId => &PROXY_TRANSACTION_ID_INVALID,
-            Self::IllegalMessageGroup => &PROXY_MESSAGE_GROUP_INVALID,
-            Self::IllegalDeliveryTime => &PROXY_DELIVERY_TIME_INVALID,
-            Self::IllegalPollingTime => &PROXY_POLLING_TIME_INVALID,
-            Self::IllegalOffset => &PROXY_OFFSET_INVALID,
-            Self::IllegalInvisibleTime => &PROXY_INVISIBLE_TIME_INVALID,
-            Self::IllegalFilterExpression => &PROXY_FILTER_EXPRESSION_INVALID,
-            Self::InvalidReceiptHandle => &PROXY_RECEIPT_HANDLE_INVALID,
-            Self::IllegalLiteTopic => &PROXY_LITE_TOPIC_INVALID,
-            Self::LiteSubscriptionQuotaExceeded => &PROXY_LITE_SUBSCRIPTION_QUOTA_EXCEEDED,
-            Self::MessagePropertyConflictWithType => &PROXY_MESSAGE_PROPERTY_CONFLICT,
-            Self::SettingsUnavailable => &PROXY_SETTINGS_UNAVAILABLE,
-        }
-    }
-}
-
 #[derive(Debug, Error)]
 pub enum ProxyError {
     #[error("{0}")]
-    RocketMQ(#[source] RocketMQError),
+    Canonical(#[source] CanonicalError),
+
+    #[error("{0}")]
+    SharedCanonical(#[source] SharedError),
 
     #[error("{0}")]
     BrokerResponse(#[source] CanonicalError),
@@ -172,66 +142,40 @@ pub enum ProxyError {
 }
 
 impl ProxyError {
-    pub fn local_kind(&self) -> Option<ProxyErrorKind> {
-        Some(match self {
-            Self::RocketMQ(_) | Self::BrokerResponse(_) => return None,
-            Self::ClientIdRequired => ProxyErrorKind::ClientIdRequired,
-            Self::UnrecognizedClientType(_) => ProxyErrorKind::UnrecognizedClientType,
-            Self::NotImplemented { .. } => ProxyErrorKind::NotImplemented,
-            Self::TooManyRequests { .. } => ProxyErrorKind::TooManyRequests,
-            Self::Draining => ProxyErrorKind::Draining,
-            Self::InvalidMetadata { .. } => ProxyErrorKind::InvalidMetadata,
-            Self::Transport { .. } => ProxyErrorKind::Transport,
-            Self::IllegalMessageId { .. } => ProxyErrorKind::IllegalMessageId,
-            Self::InvalidTransactionId { .. } => ProxyErrorKind::InvalidTransactionId,
-            Self::IllegalMessageGroup { .. } => ProxyErrorKind::IllegalMessageGroup,
-            Self::IllegalDeliveryTime { .. } => ProxyErrorKind::IllegalDeliveryTime,
-            Self::IllegalPollingTime { .. } => ProxyErrorKind::IllegalPollingTime,
-            Self::IllegalOffset { .. } => ProxyErrorKind::IllegalOffset,
-            Self::IllegalInvisibleTime { .. } => ProxyErrorKind::IllegalInvisibleTime,
-            Self::IllegalFilterExpression { .. } => ProxyErrorKind::IllegalFilterExpression,
-            Self::InvalidReceiptHandle { .. } => ProxyErrorKind::InvalidReceiptHandle,
-            Self::IllegalLiteTopic { .. } => ProxyErrorKind::IllegalLiteTopic,
-            Self::LiteSubscriptionQuotaExceeded { .. } => ProxyErrorKind::LiteSubscriptionQuotaExceeded,
-            Self::MessagePropertyConflictWithType { .. } => ProxyErrorKind::MessagePropertyConflictWithType,
-            Self::SettingsUnavailable { .. } => ProxyErrorKind::SettingsUnavailable,
-        })
-    }
-
     /// Returns the single catalog descriptor that owns this error's boundary behavior.
     pub fn descriptor(&self) -> &'static ErrorDescriptor {
         match self {
-            Self::RocketMQ(error) => error.descriptor(),
+            Self::Canonical(error) => error.descriptor(),
+            Self::SharedCanonical(error) => error.descriptor(),
             Self::BrokerResponse(error) => error.descriptor(),
-            Self::ClientIdRequired => ProxyErrorKind::ClientIdRequired.descriptor(),
-            Self::UnrecognizedClientType(_) => ProxyErrorKind::UnrecognizedClientType.descriptor(),
-            Self::NotImplemented { .. } => ProxyErrorKind::NotImplemented.descriptor(),
-            Self::TooManyRequests { .. } => ProxyErrorKind::TooManyRequests.descriptor(),
-            Self::Draining => ProxyErrorKind::Draining.descriptor(),
-            Self::InvalidMetadata { .. } => ProxyErrorKind::InvalidMetadata.descriptor(),
-            Self::Transport { .. } => ProxyErrorKind::Transport.descriptor(),
-            Self::IllegalMessageId { .. } => ProxyErrorKind::IllegalMessageId.descriptor(),
-            Self::InvalidTransactionId { .. } => ProxyErrorKind::InvalidTransactionId.descriptor(),
-            Self::IllegalMessageGroup { .. } => ProxyErrorKind::IllegalMessageGroup.descriptor(),
-            Self::IllegalDeliveryTime { .. } => ProxyErrorKind::IllegalDeliveryTime.descriptor(),
-            Self::IllegalPollingTime { .. } => ProxyErrorKind::IllegalPollingTime.descriptor(),
-            Self::IllegalOffset { .. } => ProxyErrorKind::IllegalOffset.descriptor(),
-            Self::IllegalInvisibleTime { .. } => ProxyErrorKind::IllegalInvisibleTime.descriptor(),
-            Self::IllegalFilterExpression { .. } => ProxyErrorKind::IllegalFilterExpression.descriptor(),
-            Self::InvalidReceiptHandle { .. } => ProxyErrorKind::InvalidReceiptHandle.descriptor(),
-            Self::IllegalLiteTopic { .. } => ProxyErrorKind::IllegalLiteTopic.descriptor(),
-            Self::LiteSubscriptionQuotaExceeded { .. } => ProxyErrorKind::LiteSubscriptionQuotaExceeded.descriptor(),
-            Self::MessagePropertyConflictWithType { .. } => {
-                ProxyErrorKind::MessagePropertyConflictWithType.descriptor()
-            }
-            Self::SettingsUnavailable { .. } => ProxyErrorKind::SettingsUnavailable.descriptor(),
+            Self::ClientIdRequired => &PROXY_CLIENT_ID_REQUIRED,
+            Self::UnrecognizedClientType(_) => &PROXY_CLIENT_TYPE_UNRECOGNIZED,
+            Self::NotImplemented { .. } => &PROXY_CAPABILITY_UNSUPPORTED,
+            Self::TooManyRequests { .. } => &PROXY_CAPACITY_EXHAUSTED,
+            Self::Draining => &PROXY_REQUEST_DRAINING,
+            Self::InvalidMetadata { .. } => &PROXY_METADATA_INVALID,
+            Self::Transport { .. } => &PROXY_TRANSPORT_UNAVAILABLE,
+            Self::IllegalMessageId { .. } => &PROXY_MESSAGE_ID_INVALID,
+            Self::InvalidTransactionId { .. } => &PROXY_TRANSACTION_ID_INVALID,
+            Self::IllegalMessageGroup { .. } => &PROXY_MESSAGE_GROUP_INVALID,
+            Self::IllegalDeliveryTime { .. } => &PROXY_DELIVERY_TIME_INVALID,
+            Self::IllegalPollingTime { .. } => &PROXY_POLLING_TIME_INVALID,
+            Self::IllegalOffset { .. } => &PROXY_OFFSET_INVALID,
+            Self::IllegalInvisibleTime { .. } => &PROXY_INVISIBLE_TIME_INVALID,
+            Self::IllegalFilterExpression { .. } => &PROXY_FILTER_EXPRESSION_INVALID,
+            Self::InvalidReceiptHandle { .. } => &PROXY_RECEIPT_HANDLE_INVALID,
+            Self::IllegalLiteTopic { .. } => &PROXY_LITE_TOPIC_INVALID,
+            Self::LiteSubscriptionQuotaExceeded { .. } => &PROXY_LITE_SUBSCRIPTION_QUOTA_EXCEEDED,
+            Self::MessagePropertyConflictWithType { .. } => &PROXY_MESSAGE_PROPERTY_CONFLICT,
+            Self::SettingsUnavailable { .. } => &PROXY_SETTINGS_UNAVAILABLE,
         }
     }
 
     /// Builds descriptor-declared diagnostic context without retaining raw values in public output.
     pub fn context(&self) -> ErrorContext {
         match self {
-            Self::RocketMQ(error) => error.context(),
+            Self::Canonical(error) => error.context().clone(),
+            Self::SharedCanonical(error) => error.context().clone(),
             Self::BrokerResponse(error) => error.context().clone(),
             Self::ClientIdRequired | Self::UnrecognizedClientType(_) | Self::Draining => ErrorContext::new(),
             Self::NotImplemented { feature } => ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, *feature),
@@ -347,18 +291,311 @@ impl ProxyError {
             message: message.into(),
         }
     }
+
+    /// Normalizes a client-originated broker response while retaining the
+    /// canonical client error as the direct typed source.
+    pub fn from_client_error(error: CanonicalError) -> Self {
+        if error.descriptor() != &rocketmq_error::BROKER_OPERATION_FAILED {
+            return Self::Canonical(error);
+        }
+
+        let mut broker_code = None;
+        let mut broker_addr = None;
+        if let Ok(view) = error.diagnostic_view() {
+            for field in view.fields() {
+                match (field.name(), field.value()) {
+                    ("broker_code", ViewValueRef::I64(value)) => broker_code = i32::try_from(value).ok(),
+                    ("broker_addr", ViewValueRef::Text(value)) => broker_addr = Some(value.to_owned()),
+                    _ => {}
+                }
+            }
+        }
+
+        let Some(broker_code) = broker_code else {
+            return Self::Canonical(error);
+        };
+        let descriptor = proxy_broker_response_descriptor(broker_code);
+        let mut context = ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, "proxy_client")
+            .with_i64(fields::BROKER_CODE, i64::from(broker_code));
+        if let Some(broker_addr) = broker_addr.as_deref() {
+            context = context.with_text(fields::BROKER_ADDR, broker_addr);
+        }
+        context = context
+            .with_secret_presence(fields::MESSAGE_PRESENT)
+            .with_secret_presence(fields::SOURCE_PRESENT);
+        Self::BrokerResponse(CanonicalError::caused_by(descriptor, error).with_context(context))
+    }
 }
 
-impl From<RocketMQError> for ProxyError {
-    fn from(error: RocketMQError) -> Self {
-        match error {
-            source @ RocketMQError::BrokerOperationFailed { code, .. } => {
-                let descriptor = proxy_broker_response_descriptor(code);
-                let context = source.context().with_secret_presence(fields::SOURCE_PRESENT);
-                Self::BrokerResponse(CanonicalError::caused_by(descriptor, source).with_context(context))
-            }
-            source => Self::RocketMQ(source),
+impl From<CanonicalError> for ProxyError {
+    fn from(error: CanonicalError) -> Self {
+        Self::Canonical(error)
+    }
+}
+
+impl From<SharedError> for ProxyError {
+    fn from(error: SharedError) -> Self {
+        Self::SharedCanonical(error)
+    }
+}
+
+/// Canonical constructors used by Proxy boundaries.
+///
+/// The Proxy intentionally retains no second domain-error hierarchy. Each
+/// helper chooses a catalog descriptor and stores request detail only as a
+/// typed, redacted source or catalog-approved diagnostic context.
+pub mod canonical {
+    use std::fmt;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct DiagnosticMessage(String);
+
+    impl fmt::Display for DiagnosticMessage {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str(&self.0)
         }
+    }
+
+    impl std::error::Error for DiagnosticMessage {}
+
+    fn message(descriptor: &'static ErrorDescriptor, value: impl Into<String>) -> CanonicalError {
+        CanonicalError::caused_by(descriptor, DiagnosticMessage(value.into()))
+            .with_context(ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT))
+    }
+
+    fn message_with_source(
+        descriptor: &'static ErrorDescriptor,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> CanonicalError {
+        CanonicalError::caused_by(descriptor, source)
+            .with_context(ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT))
+    }
+
+    pub fn argument(value: impl Into<String>) -> CanonicalError {
+        message(&CORE_ARGUMENT_INVALID, value)
+    }
+
+    pub fn argument_with_source(source: impl std::error::Error + Send + Sync + 'static) -> CanonicalError {
+        message_with_source(&CORE_ARGUMENT_INVALID, source)
+    }
+
+    pub fn transport_unavailable_with_source(source: impl std::error::Error + Send + Sync + 'static) -> CanonicalError {
+        message_with_source(&PROXY_TRANSPORT_UNAVAILABLE, source)
+    }
+
+    pub fn invalid_metadata_with_source(source: impl std::error::Error + Send + Sync + 'static) -> CanonicalError {
+        message_with_source(&PROXY_METADATA_INVALID, source)
+    }
+
+    pub fn message_id_invalid_with_source(source: impl std::error::Error + Send + Sync + 'static) -> CanonicalError {
+        message_with_source(&PROXY_MESSAGE_ID_INVALID, source)
+    }
+
+    pub fn transaction_id_invalid_with_source(
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> CanonicalError {
+        message_with_source(&PROXY_TRANSACTION_ID_INVALID, source)
+    }
+
+    pub fn delivery_time_invalid_with_source(source: impl std::error::Error + Send + Sync + 'static) -> CanonicalError {
+        message_with_source(&PROXY_DELIVERY_TIME_INVALID, source)
+    }
+
+    pub fn receipt_handle_invalid_with_source(
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> CanonicalError {
+        message_with_source(&PROXY_RECEIPT_HANDLE_INVALID, source)
+    }
+
+    pub fn request_body_invalid(operation: &'static str, reason: impl Into<String>) -> CanonicalError {
+        CanonicalError::caused_by(&PROTOCOL_BODY_INVALID, DiagnosticMessage(reason.into())).with_context(
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+                .with_secret_presence(fields::INVALID_VALUE_PRESENT)
+                .with_secret_presence(fields::SOURCE_PRESENT),
+        )
+    }
+
+    pub fn configuration_parse_failed(key: &'static str, reason: impl Into<String>) -> CanonicalError {
+        CanonicalError::caused_by(&CORE_CONFIGURATION_PARSE_FAILED, DiagnosticMessage(reason.into())).with_context(
+            ErrorContext::new()
+                .with_text(fields::KEY, key)
+                .with_secret_presence(fields::REASON_PRESENT),
+        )
+    }
+
+    pub fn configuration_parse_failed_with_source(
+        key: &'static str,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> CanonicalError {
+        CanonicalError::caused_by(&CORE_CONFIGURATION_PARSE_FAILED, source).with_context(
+            ErrorContext::new()
+                .with_text(fields::KEY, key)
+                .with_secret_presence(fields::REASON_PRESENT),
+        )
+    }
+
+    pub fn configuration_invalid(key: &'static str, reason: impl Into<String>) -> CanonicalError {
+        CanonicalError::caused_by(&CORE_CONFIGURATION_INVALID, DiagnosticMessage(reason.into())).with_context(
+            ErrorContext::new()
+                .with_text(fields::KEY, key)
+                .with_secret_presence(fields::VALUE_PRESENT)
+                .with_secret_presence(fields::REASON_PRESENT),
+        )
+    }
+
+    pub fn configuration_invalid_with_source(
+        key: &'static str,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> CanonicalError {
+        CanonicalError::caused_by(&CORE_CONFIGURATION_INVALID, source).with_context(
+            ErrorContext::new()
+                .with_text(fields::KEY, key)
+                .with_secret_presence(fields::VALUE_PRESENT)
+                .with_secret_presence(fields::REASON_PRESENT),
+        )
+    }
+
+    pub fn authentication_failed(_operation: &'static str, reason: impl Into<String>) -> CanonicalError {
+        CanonicalError::caused_by(&AUTH_CREDENTIALS_INVALID, DiagnosticMessage(reason.into()))
+            .with_context(ErrorContext::new().with_secret_presence(fields::CREDENTIALS_PRESENT))
+    }
+
+    pub fn authentication_failed_with_source(
+        _operation: &'static str,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> CanonicalError {
+        CanonicalError::caused_by(&AUTH_CREDENTIALS_INVALID, source)
+            .with_context(ErrorContext::new().with_secret_presence(fields::CREDENTIALS_PRESENT))
+    }
+
+    pub fn authentication_operation_failed(operation: &'static str, reason: impl Into<String>) -> CanonicalError {
+        CanonicalError::caused_by(&AUTH_OPERATION_FAILED, DiagnosticMessage(reason.into())).with_context(
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+                .with_secret_presence(fields::SOURCE_PRESENT),
+        )
+    }
+
+    pub fn authorization_denied(operation: &'static str) -> CanonicalError {
+        CanonicalError::new(&AUTH_PERMISSION_DENIED)
+            .with_context(ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation))
+    }
+
+    pub fn timed_out(operation: &'static str, timeout_ms: u64) -> CanonicalError {
+        CanonicalError::new(&CORE_OPERATION_TIMED_OUT).with_context(
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+                .with_u64(fields::TIMEOUT_MS, timeout_ms),
+        )
+    }
+
+    pub fn broker_not_found(name: impl AsRef<str>) -> CanonicalError {
+        CanonicalError::new(&BROKER_LOOKUP_NOT_FOUND)
+            .with_context(ErrorContext::new().with_text(fields::BROKER, name.as_ref()))
+    }
+
+    pub fn topic_not_found(topic: impl AsRef<str>) -> CanonicalError {
+        CanonicalError::new(&BROKER_TOPIC_NOT_FOUND)
+            .with_context(ErrorContext::new().with_text(fields::TOPIC, topic.as_ref()))
+    }
+
+    pub fn route_not_found(topic: impl AsRef<str>) -> CanonicalError {
+        CanonicalError::new(&ROUTE_TOPIC_NOT_FOUND)
+            .with_context(ErrorContext::new().with_text(fields::TOPIC, topic.as_ref()))
+    }
+
+    pub fn subscription_group_not_found(group: impl AsRef<str>) -> CanonicalError {
+        CanonicalError::new(&BROKER_SUBSCRIPTION_GROUP_NOT_FOUND)
+            .with_context(ErrorContext::new().with_text(fields::GROUP, group.as_ref()))
+    }
+
+    pub fn queue_not_found(topic: impl AsRef<str>, queue_id: i32) -> CanonicalError {
+        CanonicalError::new(&BROKER_QUEUE_NOT_FOUND).with_context(
+            ErrorContext::new()
+                .with_text(fields::TOPIC, topic.as_ref())
+                .with_i64(fields::QUEUE_ID, i64::from(queue_id)),
+        )
+    }
+
+    pub fn queue_id_out_of_range(topic: impl AsRef<str>, queue_id: i32, max_queue_id: i32) -> CanonicalError {
+        CanonicalError::new(&BROKER_QUEUE_ID_OUT_OF_RANGE).with_context(
+            ErrorContext::new()
+                .with_text(fields::TOPIC, topic.as_ref())
+                .with_i64(fields::QUEUE_ID, i64::from(queue_id))
+                .with_i64(fields::MAX_QUEUE_ID, i64::from(max_queue_id)),
+        )
+    }
+
+    pub fn retry_budget_exhausted(group: impl AsRef<str>, current: i32, max: i32) -> CanonicalError {
+        CanonicalError::new(&CLIENT_RETRY_BUDGET_EXHAUSTED).with_context(
+            ErrorContext::new()
+                .with_text(fields::GROUP, group.as_ref())
+                .with_i64(fields::CURRENT, i64::from(current))
+                .with_i64(fields::MAX, i64::from(max)),
+        )
+    }
+
+    pub fn not_master(master_address: impl AsRef<str>) -> CanonicalError {
+        CanonicalError::new(&BROKER_LEADERSHIP_NOT_MASTER)
+            .with_context(ErrorContext::new().with_text(fields::MASTER_ADDRESS, master_address.as_ref()))
+    }
+
+    pub fn internal(operation: &'static str, reason: impl Into<String>) -> CanonicalError {
+        CanonicalError::caused_by(&CORE_INTERNAL_FAILURE, DiagnosticMessage(reason.into())).with_context(
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+                .with_secret_presence(fields::SOURCE_PRESENT),
+        )
+    }
+
+    pub fn internal_with_source(
+        operation: &'static str,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> CanonicalError {
+        CanonicalError::caused_by(&CORE_INTERNAL_FAILURE, source).with_context(
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+                .with_secret_presence(fields::SOURCE_PRESENT),
+        )
+    }
+
+    pub fn broker_response(
+        operation: &'static str,
+        code: i32,
+        broker_addr: Option<&str>,
+        message: impl Into<String>,
+    ) -> CanonicalError {
+        let descriptor = proxy_broker_response_descriptor(code);
+        let mut context = ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_i64(fields::BROKER_CODE, i64::from(code));
+        if let Some(broker_addr) = broker_addr {
+            context = context.with_text(fields::BROKER_ADDR, broker_addr);
+        }
+        context = context
+            .with_secret_presence(fields::MESSAGE_PRESENT)
+            .with_secret_presence(fields::SOURCE_PRESENT);
+        CanonicalError::caused_by(descriptor, DiagnosticMessage(message.into())).with_context(context)
+    }
+
+    pub fn broker_operation(
+        operation: &'static str,
+        code: i32,
+        broker_addr: Option<&str>,
+        message: impl Into<String>,
+    ) -> CanonicalError {
+        let mut context = ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_i64(fields::BROKER_CODE, i64::from(code))
+            .with_secret_presence(fields::MESSAGE_PRESENT);
+        if let Some(broker_addr) = broker_addr {
+            context = context.with_text(fields::BROKER_ADDR, broker_addr);
+        }
+        CanonicalError::caused_by(&BROKER_OPERATION_FAILED, DiagnosticMessage(message.into())).with_context(context)
     }
 }
 
@@ -384,9 +621,12 @@ mod tests {
     use super::*;
 
     fn normalized_broker_error(code: ResponseCode, message: &str) -> ProxyError {
-        RocketMQError::broker_operation_failed("BROKER_TEST", code.to_i32(), message)
-            .with_broker_addr("127.0.0.1:10911")
-            .into()
+        ProxyError::BrokerResponse(canonical::broker_response(
+            "BROKER_TEST",
+            code.to_i32(),
+            Some("127.0.0.1:10911"),
+            message,
+        ))
     }
 
     #[test]
@@ -406,17 +646,15 @@ mod tests {
             (ResponseCode::SystemBusy, &PROXY_BROKER_RESPONSE_FAILED),
         ] {
             let ProxyError::BrokerResponse(error) = normalized_broker_error(code, "broker rejected request") else {
-                panic!("BrokerOperationFailed must normalize at Proxy ingress");
+                panic!("broker response must normalize at Proxy ingress");
             };
             assert_eq!(error.descriptor(), descriptor);
         }
 
-        let ProxyError::BrokerResponse(error) = ProxyError::from(RocketMQError::broker_operation_failed(
-            "BROKER_TEST",
-            987_654,
-            "unknown code",
-        )) else {
-            panic!("BrokerOperationFailed must normalize at Proxy ingress");
+        let ProxyError::BrokerResponse(error) =
+            ProxyError::BrokerResponse(canonical::broker_response("BROKER_TEST", 987_654, None, "unknown code"))
+        else {
+            panic!("broker response must normalize at Proxy ingress");
         };
         assert_eq!(error.descriptor(), &PROXY_BROKER_RESPONSE_FAILED);
     }
@@ -427,20 +665,10 @@ mod tests {
         let canonical = StdError::source(&proxy_error)
             .and_then(|source| source.downcast_ref::<CanonicalError>())
             .expect("ProxyError retains the normalized canonical carrier");
-        let source = StdError::source(canonical)
-            .and_then(|source| source.downcast_ref::<RocketMQError>())
-            .expect("normalized response retains the original typed source");
-        assert!(matches!(
-            source,
-            RocketMQError::BrokerOperationFailed {
-                code,
-                message,
-                broker_addr: Some(addr),
-                ..
-            } if *code == ResponseCode::TopicNotExist.to_i32()
-                && message == "secret\r\nC:\\private\\broker.conf"
-                && addr == "127.0.0.1:10911"
-        ));
+        assert!(
+            StdError::source(canonical).is_some(),
+            "normalized response retains its typed source"
+        );
 
         let ProxyError::BrokerResponse(error) = proxy_error else {
             panic!("BrokerOperationFailed must normalize at Proxy ingress");
@@ -466,8 +694,38 @@ mod tests {
     }
 
     #[test]
-    fn non_broker_rocketmq_errors_keep_the_existing_proxy_variant() {
-        let error = ProxyError::from(RocketMQError::illegal_argument("invalid request"));
-        assert!(matches!(error, ProxyError::RocketMQ(_)));
+    fn non_broker_canonical_errors_keep_the_existing_proxy_variant() {
+        let error = ProxyError::from(canonical::argument("invalid request"));
+        assert!(matches!(error, ProxyError::Canonical(_)));
+    }
+
+    #[test]
+    fn transport_source_preserves_its_typed_cause_and_projection() {
+        let error = ProxyError::from(canonical::transport_unavailable_with_source(std::io::Error::other(
+            "injected transport failure",
+        )));
+
+        assert_eq!(error.descriptor(), &PROXY_TRANSPORT_UNAVAILABLE);
+        let ProxyError::Canonical(error) = error else {
+            panic!("source-bearing transport errors must use the canonical proxy carrier");
+        };
+        assert!(StdError::source(&error)
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
+    }
+
+    #[test]
+    fn shared_canonical_errors_remain_in_the_standard_source_chain() {
+        let physical = std::sync::Arc::new(CanonicalError::caused_by(
+            &CORE_INTERNAL_FAILURE,
+            std::io::Error::other("injected failure"),
+        ));
+        let proxy = ProxyError::SharedCanonical(std::sync::Arc::clone(&physical));
+
+        let source = StdError::source(&proxy).expect("shared canonical error must be a source");
+        assert_eq!(source.to_string(), physical.to_string());
+        assert!(StdError::source(source)
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
     }
 }

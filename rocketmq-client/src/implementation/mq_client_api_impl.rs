@@ -56,8 +56,8 @@ use crate::common::retry_policy::RetryIdempotency;
 use crate::common::retry_policy::RetryInput;
 use crate::common::retry_policy::RetryOperation;
 use crate::common::retry_policy::RetryPolicy;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use crate::ClientError;
+use crate::ClientResult;
 use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
 #[cfg(feature = "admin-mutation")]
 use rocketmq_model::common::base::plain_access_config::PlainAccessConfig;
@@ -326,13 +326,9 @@ static SEND_SMART_MSG: LazyLock<bool> = LazyLock::new(|| {
         .unwrap_or(false)
 });
 
-fn java_long_to_u64_field(
-    operation: &'static str,
-    field: &'static str,
-    value: i64,
-) -> rocketmq_error::RocketMQResult<u64> {
+fn java_long_to_u64_field(operation: &'static str, field: &'static str, value: i64) -> crate::ClientResult<u64> {
     u64::try_from(value).map_err(|_| {
-        RocketMQError::illegal_argument(format!(
+        ClientError::illegal_argument(format!(
             "{operation} {field} is negative and cannot be represented as Rust u64"
         ))
     })
@@ -344,9 +340,9 @@ fn trace_on_from_ext_fields(ext_fields: Option<&HashMap<CheetahString, CheetahSt
         .is_none_or(|trace_on| trace_on.as_str() != "false")
 }
 
-fn duration_millis_to_u64(operation: &'static str, duration: Duration) -> rocketmq_error::RocketMQResult<u64> {
+fn duration_millis_to_u64(operation: &'static str, duration: Duration) -> crate::ClientResult<u64> {
     u64::try_from(duration.as_millis())
-        .map_err(|_| RocketMQError::illegal_argument(format!("{operation} timeout exceeds Rust u64 millisecond range")))
+        .map_err(|_| ClientError::illegal_argument(format!("{operation} timeout exceeds Rust u64 millisecond range")))
 }
 
 #[derive(Clone, Default)]

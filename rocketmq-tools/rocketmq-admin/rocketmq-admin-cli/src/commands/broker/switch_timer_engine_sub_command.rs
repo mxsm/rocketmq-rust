@@ -14,7 +14,7 @@
 
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::broker::BrokerOperationResult;
@@ -43,7 +43,7 @@ pub struct SwitchTimerEngineSubCommand {
 }
 
 impl SwitchTimerEngineSubCommand {
-    fn request(&self) -> RocketMQResult<SwitchTimerEngineRequest> {
+    fn request(&self) -> CanonicalResult<SwitchTimerEngineRequest> {
         SwitchTimerEngineRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
@@ -57,7 +57,7 @@ impl CommandExecute for SwitchTimerEngineSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = match self.request() {
             Ok(request) => request,
             Err(error) if error.to_string().contains("engineType") => {

@@ -132,7 +132,7 @@ impl DashboardAdminClient {
                 .items
                 .into_iter()
                 .find(|item| item.raw_group_name == group_owned || item.display_group_name == group_owned)
-                .ok_or_else(|| AdminError::not_found("consumerGroup", group_owned.clone()))?;
+                .ok_or_else(|| AdminError::consumer_group_not_found(group_owned.clone()))?;
 
             let mut fetches = Vec::with_capacity(item.broker_addresses.len());
             for broker_address in item.broker_addresses {

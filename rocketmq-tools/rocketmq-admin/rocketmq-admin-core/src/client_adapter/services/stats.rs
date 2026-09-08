@@ -27,9 +27,9 @@ use serde::Serialize;
 use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::stable_error_code;
 use crate::client_adapter::services::stable_error_message;
-use crate::client_adapter::services::RocketMQError;
-use crate::client_adapter::services::RocketMQResult;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::Result as CanonicalResult;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatsAllQueryRequest {
@@ -92,7 +92,7 @@ pub struct StatsAllTopicFailure {
 }
 
 impl StatsAllTopicFailure {
-    pub fn from_error(topic: CheetahString, error: &RocketMQError) -> Self {
+    pub fn from_error(topic: CheetahString, error: &CanonicalError) -> Self {
         Self {
             topic,
             error_code: stable_error_code(error),
@@ -114,10 +114,11 @@ impl StatsService {
         request: StatsAllQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<StatsAllQueryResult> {
+    ) -> CanonicalResult<StatsAllQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_stats_all_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -126,8 +127,11 @@ impl StatsService {
     pub(crate) async fn query_stats_all_with_admin(
         admin: &DefaultMQAdminExt,
         request: &StatsAllQueryRequest,
-    ) -> RocketMQResult<StatsAllQueryResult> {
-        let topic_list = admin.fetch_all_topic_list().await?;
+    ) -> CanonicalResult<StatsAllQueryResult> {
+        let topic_list = admin
+            .fetch_all_topic_list()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let mut result = StatsAllQueryResult::default();
 
         for topic in &topic_list.topic_list {
@@ -164,9 +168,15 @@ async fn collect_topic_detail(
     admin: &DefaultMQAdminExt,
     topic: &CheetahString,
     active_topic: bool,
-) -> RocketMQResult<Vec<StatsAllRow>> {
-    let topic_route_data = admin.examine_topic_route_info(topic.clone()).await?;
-    let group_list = admin.query_topic_consume_by_who(topic.clone()).await?;
+) -> CanonicalResult<Vec<StatsAllRow>> {
+    let topic_route_data = admin
+        .examine_topic_route_info(topic.clone())
+        .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+    let group_list = admin
+        .query_topic_consume_by_who(topic.clone())
+        .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error)?;
 
     let mut in_tps = 0.0;
     let mut in_msg_count_24h = 0;

@@ -854,8 +854,6 @@ fn config_fingerprint(config: &TimerStoreConfig) -> u64 {
 pub(crate) enum TimelineMaterializerError {
     #[error("local store failure: {0}")]
     Store(#[from] rocketmq_store_api::StoreError),
-    #[error("Timeline store failure: {0}")]
-    Timeline(#[from] rocketmq_error::RocketMQError),
     #[error("Timeline index migration failure: {0}")]
     IndexMigration(#[from] super::index_migration::IndexMigrationError),
     #[error("Timer ConsumeQueue is unavailable")]

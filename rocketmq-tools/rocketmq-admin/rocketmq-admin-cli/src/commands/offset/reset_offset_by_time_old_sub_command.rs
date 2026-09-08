@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::admin::rollback_stats::RollbackStats;
 use rocketmq_runtime::common::util_all::YYYY_MM_DD_HH_MM_SS_SSS;
 use rocketmq_runtime::common::util_all::parse_date;
@@ -60,7 +60,7 @@ pub struct ResetOffsetByTimeOldSubCommand {
 }
 
 impl ResetOffsetByTimeOldSubCommand {
-    fn request(&self) -> RocketMQResult<Option<ResetOffsetByTimeOldRequest>> {
+    fn request(&self) -> CanonicalResult<Option<ResetOffsetByTimeOldRequest>> {
         let timestamp_str = self.timestamp.trim();
         let timestamp = match timestamp_str.parse::<u64>() {
             Ok(timestamp) => timestamp,
@@ -134,7 +134,7 @@ impl CommandExecute for ResetOffsetByTimeOldSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let Some(request) = self.request()? else {
             return Ok(());
         };

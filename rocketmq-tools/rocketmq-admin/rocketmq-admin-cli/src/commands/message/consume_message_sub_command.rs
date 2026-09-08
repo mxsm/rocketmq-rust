@@ -14,8 +14,7 @@
 
 use chrono::NaiveDateTime;
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_runtime::common::util_all::YYYY_MM_DD_HH_MM_SS_SSS;
 use rocketmq_runtime::common::util_all::parse_date;
@@ -71,7 +70,7 @@ pub struct ConsumeMessageSubCommand {
 }
 
 impl ConsumeMessageSubCommand {
-    fn timestamp_format(value: &str) -> RocketMQResult<i64> {
+    fn timestamp_format(value: &str) -> CanonicalResult<i64> {
         if let Ok(ts) = value.trim().parse::<i64>() {
             return Ok(ts);
         }
@@ -85,7 +84,7 @@ impl ConsumeMessageSubCommand {
             return Ok(dt.and_utc().timestamp_millis());
         }
 
-        Err(RocketMQError::IllegalArgument(format!(
+        Err(crate::errors::argument_invalid(format!(
             "Invalid timestamp format: {}",
             value
         )))
@@ -108,7 +107,7 @@ impl CommandExecute for ConsumeMessageSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let begin_timestamp = self
             .begin_timestamp
             .as_deref()

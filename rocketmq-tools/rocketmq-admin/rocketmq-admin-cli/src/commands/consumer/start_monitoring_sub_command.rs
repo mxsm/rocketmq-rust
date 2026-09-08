@@ -40,7 +40,7 @@ impl CommandExecute for StartMonitoringSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> rocketmq_error::Result<()> {
         let result = ConsumerService::start_monitoring_by_request_with_credentials(
             self.request(),
             credentials,

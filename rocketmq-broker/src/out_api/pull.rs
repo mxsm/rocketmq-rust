@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -73,19 +72,19 @@ pub(super) fn build_pull_message_request(
 pub(super) fn process_pull_response(
     mut response: RemotingCommand,
     addr: &CheetahString,
-) -> rocketmq_error::RocketMQResult<BrokerPullResponse> {
+) -> crate::broker_error::BrokerResult<BrokerPullResponse> {
     let status = match ResponseCode::from(response.code()) {
         ResponseCode::Success => PullStatus::Found,
         ResponseCode::PullNotFound => PullStatus::NoNewMsg,
         ResponseCode::PullRetryImmediately => PullStatus::NoMatchedMsg,
         ResponseCode::PullOffsetMoved => PullStatus::OffsetIllegal,
         _ => {
-            return Err(RocketMQError::BrokerOperationFailed {
-                operation: "pull_message",
-                code: response.code(),
-                message: response.remark().map_or("".to_string(), |remark| remark.to_string()),
-                broker_addr: Some(addr.to_string()),
-            })
+            return Err(crate::broker_error::broker_operation_failed_with_address(
+                "pull_message",
+                response.code(),
+                response.remark().map_or("".to_string(), |remark| remark.to_string()),
+                Some(addr.to_string()),
+            ))
         }
     };
     let header = response.decode_command_custom_header::<PullMessageResponseHeader>()?;

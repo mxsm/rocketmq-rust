@@ -14,7 +14,7 @@
 
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::broker::BrokerEpochQueryRequest;
@@ -44,7 +44,7 @@ pub struct GetBrokerEpochSubCommand {
 }
 
 impl GetBrokerEpochSubCommand {
-    fn request(&self) -> RocketMQResult<BrokerEpochQueryRequest> {
+    fn request(&self) -> CanonicalResult<BrokerEpochQueryRequest> {
         BrokerEpochQueryRequest::try_new(self.broker_name.clone(), self.cluster_name.clone())
     }
 
@@ -70,7 +70,7 @@ impl CommandExecute for GetBrokerEpochSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         if let Some(interval) = self.interval {
             let flush_second = if interval > 0 { interval } else { 3 };

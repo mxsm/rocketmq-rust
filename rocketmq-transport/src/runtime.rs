@@ -45,7 +45,7 @@ pub trait RPCHook: Send + Sync + 'static {
         &self,
         remote_addr: SocketAddr,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    ) -> Result<(), rocketmq_error::SharedError>;
 
     /// Invoked after generating an RPC response.
     ///
@@ -60,7 +60,7 @@ pub trait RPCHook: Send + Sync + 'static {
         remote_addr: SocketAddr,
         request: &RemotingCommand,
         response: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    ) -> Result<(), rocketmq_error::SharedError>;
 }
 
 /// Thread-safe, reference-counted RPC hook.

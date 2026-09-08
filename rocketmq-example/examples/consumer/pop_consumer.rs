@@ -14,12 +14,12 @@
 
 #![recursion_limit = "256"]
 
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_runtime::wait_for_signal;
 use rocketmq_tools::client_adapter::AdminBuilder;
@@ -36,11 +36,11 @@ pub const TAG: &str = "*";
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     switch_pop_consumer(client_runtime.clone()).await?;
 
     // create a producer builder with default configuration
@@ -60,21 +60,19 @@ async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>
     Ok(())
 }
 
-async fn switch_pop_consumer(
-    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-) -> RocketMQResult<()> {
+async fn switch_pop_consumer(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let mut admin = AdminBuilder::new(client_runtime)
         .namesrv_addr(DEFAULT_NAMESRVADDR)
         .build_and_start()
         .await
-        .map_err(|source| rocketmq_error::RocketMQError::internal("start admin client", source))?;
+        .map_err(|source| rocketmq_client_rust::ClientError::internal("start admin client", source))?;
     let request = SetConsumerRequestModeRequest::try_new(TOPIC, CONSUMER_GROUP, ConsumerRequestMode::Pop, 8, 3_000)
-        .map_err(|source| rocketmq_error::RocketMQError::internal("build consumer request mode", source))?;
+        .map_err(|source| rocketmq_client_rust::ClientError::internal("build consumer request mode", source))?;
     let result = admin.set_consumer_request_mode(&request).await;
     admin.shutdown().await;
     result
         .map(|_| ())
-        .map_err(|source| rocketmq_error::RocketMQError::internal("set consumer request mode", source))
+        .map_err(|source| rocketmq_client_rust::ClientError::internal("set consumer request mode", source))
 }
 
 pub struct MyMessageListener;
@@ -84,7 +82,7 @@ impl MessageListenerConcurrently for MyMessageListener {
         &self,
         msgs: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         for msg in msgs {
             info!("Receive message: {:?}", msg);
         }

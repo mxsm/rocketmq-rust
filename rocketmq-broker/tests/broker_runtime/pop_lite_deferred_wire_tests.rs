@@ -15,7 +15,6 @@
 use std::num::NonZeroUsize;
 
 use rocketmq_error::Error as CanonicalError;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::CORE_ARGUMENT_INVALID;
 use rocketmq_model::common::key_builder::POP_ORDER_REVIVE_QUEUE;
 use rocketmq_runtime::ChildServiceContext;
@@ -94,16 +93,16 @@ struct RegisteringProcessor {
 }
 
 impl RequestProcessor for RegisteringProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let prepared = match self.service.prepare(request, PopLiteRetainedEstimate::default()) {
             Ok(PopLiteDeferredPrepareOutcome::Prepared(prepared)) => *prepared,
             Ok(PopLiteDeferredPrepareOutcome::Rejected(_)) => {
-                return Err(RocketMQError::Shared(Arc::new(CanonicalError::new(
+                return Err(crate::broker_error::from_shared(Arc::new(CanonicalError::new(
                     &CORE_ARGUMENT_INVALID,
                 ))));
             }
             Err(error) => {
-                return Err(RocketMQError::Shared(Arc::new(CanonicalError::caused_by(
+                return Err(crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(
                     &CORE_ARGUMENT_INVALID,
                     error,
                 ))));
@@ -112,12 +111,12 @@ impl RequestProcessor for RegisteringProcessor {
         let registration = match self.service.register(prepared, request) {
             Ok(PopLiteDeferredRegisterOutcome::Registered(registration)) => *registration,
             Ok(PopLiteDeferredRegisterOutcome::Rejected(_)) => {
-                return Err(RocketMQError::Shared(Arc::new(CanonicalError::new(
+                return Err(crate::broker_error::from_shared(Arc::new(CanonicalError::new(
                     &CORE_ARGUMENT_INVALID,
                 ))));
             }
             Err(error) => {
-                return Err(RocketMQError::Shared(Arc::new(CanonicalError::caused_by(
+                return Err(crate::broker_error::from_shared(Arc::new(CanonicalError::caused_by(
                     &CORE_ARGUMENT_INVALID,
                     error,
                 ))));
@@ -125,7 +124,7 @@ impl RequestProcessor for RegisteringProcessor {
         };
         self.registrations
             .send(registration.deferred_id())
-            .map_err(|_| RocketMQError::illegal_argument("PopLite registration observer closed"))?;
+            .map_err(|_| crate::broker_error::invalid_argument("PopLite registration observer closed"))?;
         Ok(HandlerOutcome::Deferred(registration))
     }
 

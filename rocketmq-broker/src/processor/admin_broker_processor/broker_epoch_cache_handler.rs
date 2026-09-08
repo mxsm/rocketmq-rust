@@ -33,7 +33,7 @@ impl BrokerEpochCacheHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let broker_config = broker_runtime_inner.broker_config();
         let response = RemotingCommand::create_java_default_error_response_command();
 

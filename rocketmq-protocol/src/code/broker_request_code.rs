@@ -14,7 +14,7 @@
 
 use std::str::FromStr;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum BrokerRequestCode {
@@ -47,14 +47,14 @@ impl BrokerRequestCode {
 }
 
 impl FromStr for BrokerRequestCode {
-    type Err = RocketMQError;
+    type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_uppercase().as_str() {
             "REGISTERBROKER" => Ok(BrokerRequestCode::RegisterBroker),
             "BROKERHEARTBEAT" => Ok(BrokerRequestCode::BrokerHeartbeat),
             "GETBROKERCLUSTERINFO" => Ok(BrokerRequestCode::GetBrokerClusterInfo),
-            _ => Err(RocketMQError::illegal_argument(format!(
+            _ => Err(crate::error::invalid_argument(format!(
                 "Parse from string error,Invalid BrokerRequestCode: {s}"
             ))),
         }

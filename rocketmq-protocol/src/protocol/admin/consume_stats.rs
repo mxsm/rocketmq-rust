@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 
-use rocketmq_error::SerializationError;
 use rocketmq_model::message::MessageQueue;
 use serde::de::Error as DeError;
 use serde::de::MapAccess;
@@ -116,7 +115,7 @@ impl ConsumeStats {
         self.consume_tps = consume_tps;
     }
 
-    pub fn decode(body: &[u8]) -> rocketmq_error::RocketMQResult<Self> {
+    pub fn decode(body: &[u8]) -> rocketmq_error::Result<Self> {
         match <Self as RemotingDeserializable>::decode(body) {
             Ok(stats) => Ok(stats),
             Err(error) => {
@@ -133,22 +132,23 @@ impl ConsumeStats {
     }
 
     /// Decodes a consume-stats body while rejecting duplicate logical queue keys.
-    pub fn decode_strict(body: &[u8]) -> rocketmq_error::RocketMQResult<Self> {
-        let raw_body = std::str::from_utf8(body)?;
+    pub fn decode_strict(body: &[u8]) -> rocketmq_error::Result<Self> {
+        let raw_body = std::str::from_utf8(body)
+            .map_err(|source| crate::error::serialization_source("deserialize", "JSON", source))?;
         let normalized_body = normalize_nonstandard_offset_table_keys(raw_body);
         let strict = serde_json::from_str::<StrictConsumeStats>(&normalized_body)
-            .map_err(|error| SerializationError::source("deserialize", "JSON", error))?;
+            .map_err(|error| crate::error::serialization_source("deserialize", "JSON", error))?;
         Ok(Self {
             offset_table: strict.offset_table,
             consume_tps: strict.consume_tps,
         })
     }
 
-    pub fn encode_java_compatible(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
+    pub fn encode_java_compatible(&self) -> rocketmq_error::Result<Vec<u8>> {
         Ok(self.to_java_compatible_json()?.into_bytes())
     }
 
-    pub fn to_java_compatible_json(&self) -> rocketmq_error::RocketMQResult<String> {
+    pub fn to_java_compatible_json(&self) -> rocketmq_error::Result<String> {
         let mut body = String::new();
         body.push_str("{\"offsetTable\":{");
 
@@ -160,14 +160,14 @@ impl ConsumeStats {
             body.push(':');
             body.push_str(
                 &serde_json::to_string(offset)
-                    .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+                    .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
             );
         }
 
         body.push_str("},\"consumeTps\":");
         body.push_str(
             &serde_json::to_string(&self.consume_tps)
-                .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+                .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
         );
         body.push('}');
         Ok(body)
@@ -222,20 +222,17 @@ pub(crate) fn normalize_nonstandard_offset_table_keys(input: &str) -> String {
     output
 }
 
-pub(crate) fn append_message_queue_object_key(
-    output: &mut String,
-    queue: &MessageQueue,
-) -> rocketmq_error::RocketMQResult<()> {
+pub(crate) fn append_message_queue_object_key(output: &mut String, queue: &MessageQueue) -> rocketmq_error::Result<()> {
     output.push('{');
     output.push_str("\"topic\":");
     output.push_str(
         &serde_json::to_string(queue.topic_str())
-            .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
     );
     output.push_str(",\"brokerName\":");
     output.push_str(
         &serde_json::to_string(queue.broker_name().as_str())
-            .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
     );
     output.push_str(",\"queueId\":");
     output.push_str(&queue.queue_id().to_string());

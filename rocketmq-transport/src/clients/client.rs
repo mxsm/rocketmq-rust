@@ -26,8 +26,6 @@ use crate::clients::nameserver_endpoint::ConnectTarget;
 #[cfg(test)]
 use crate::config::TlsConfig;
 use crate::runtime::config::client_config::TransportClientConfig;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::OperationContext;
@@ -99,7 +97,8 @@ pub(crate) struct TransportSession<PR> {
 }
 
 type ConnectedClientSession = (Channel, PendingRequestOwner, SessionHandle, SocketAddr, bool);
-type ClientConnectFuture = Pin<Box<dyn Future<Output = RocketMQResult<ConnectedClientSession>> + Send>>;
+type ClientConnectFuture =
+    Pin<Box<dyn Future<Output = Result<ConnectedClientSession, rocketmq_error::SharedError>> + Send>>;
 
 pub(crate) trait ClientInboundOwner: Send + Sync + 'static {
     fn pending_requests(&self) -> PendingRequestTable;
@@ -118,14 +117,14 @@ pub(crate) trait ClientInboundOwner: Send + Sync + 'static {
         task_group: TaskGroup,
         process_budget: ResourceBudget,
         ready: tokio::sync::oneshot::Sender<(Channel, PendingRequestOwner, SessionHandle)>,
-    ) -> RocketMQResult<Pin<Box<dyn Future<Output = ()> + Send>>>;
+    ) -> Result<Pin<Box<dyn Future<Output = ()> + Send>>, rocketmq_error::SharedError>;
 
     fn do_before_rpc_hooks_with_snapshot(
         &self,
         snapshot: Option<&crate::hook_registry::HookSnapshot>,
         remote_address: SocketAddr,
         request: Option<&mut RemotingCommand>,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         if let Some(request) = request {
             crate::remoting::inner::run_before_rpc_hooks(snapshot, remote_address, request)?;
         }
@@ -138,7 +137,7 @@ pub(crate) trait ClientInboundOwner: Send + Sync + 'static {
         remote_address: SocketAddr,
         request: &RemotingCommand,
         response: Option<&mut RemotingCommand>,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         if let Some(response) = response {
             crate::remoting::inner::run_after_rpc_hooks(snapshot, remote_address, request, response)?;
         }
@@ -204,7 +203,7 @@ where
         task_group: TaskGroup,
         _process_budget: ResourceBudget,
         ready: tokio::sync::oneshot::Sender<(Channel, PendingRequestOwner, SessionHandle)>,
-    ) -> RocketMQResult<Pin<Box<dyn Future<Output = ()> + Send>>> {
+    ) -> Result<Pin<Box<dyn Future<Output = ()> + Send>>, rocketmq_error::SharedError> {
         let route = Arc::new(ClientRoute {
             dispatcher: Arc::clone(&self.dispatcher),
             pending_requests: self.pending_requests.clone(),
@@ -442,22 +441,12 @@ fn connect(
         )?;
         task_group
             .spawn_operation(&operation, "rocketmq.transport.client-session", session_runner)
-            .map_err(|source| {
-                rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::Connect, source))
-            })?;
+            .map_err(|source| connection_failed(TransportStage::Connect, source))?;
         let (channel, pending_request_owner, session) = deadline
             .timeout(connected_session)
             .await
-            .map_err(|source| {
-                rocketmq_error::RocketMQError::Shared(connection_timeout_caused_by(
-                    error_identity,
-                    deadline.budget_millis(),
-                    source,
-                ))
-            })?
-            .map_err(|_| {
-                rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
-            })?;
+            .map_err(|source| connection_timeout_caused_by(error_identity, deadline.budget_millis(), source))?
+            .map_err(|_| connection_failed_without_source(TransportStage::Closed))?;
         if let Some(tx) = tx {
             let _ = tx.send(ConnectionNetEvent::CONNECTED(channel.remote_address()));
         }
@@ -474,7 +463,7 @@ impl<PR> TransportSession<PR> {
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         tls_config: TlsConfig,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<TransportSession<PR>> {
+    ) -> Result<TransportSession<PR>, rocketmq_error::SharedError> {
         Self::connect_with_service_context_until_and_telemetry(
             context,
             addr,
@@ -496,7 +485,7 @@ impl<PR> TransportSession<PR> {
         tls_config: TlsConfig,
         deadline: RequestDeadline,
         telemetry: TransportTelemetry,
-    ) -> RocketMQResult<TransportSession<PR>> {
+    ) -> Result<TransportSession<PR>, rocketmq_error::SharedError> {
         Self::connect_target_with_service_context_until_and_telemetry(
             context,
             SessionConnectTarget::Legacy(addr),
@@ -522,7 +511,7 @@ impl<PR> TransportSession<PR> {
         frame_limits: FrameLimits,
         deadline: RequestDeadline,
         telemetry: TransportTelemetry,
-    ) -> RocketMQResult<TransportSession<PR>> {
+    ) -> Result<TransportSession<PR>, rocketmq_error::SharedError> {
         let (task_group, operation) = new_client_connection_task_group_with_service_context(context);
         Self::connect_with_task_group(
             target,
@@ -552,7 +541,7 @@ impl<PR> TransportSession<PR> {
         process_budget: ResourceBudget,
         deadline: RequestDeadline,
         telemetry: TransportTelemetry,
-    ) -> RocketMQResult<TransportSession<PR>> {
+    ) -> Result<TransportSession<PR>, rocketmq_error::SharedError> {
         let (notify_shutdown, _) = broadcast::channel(1);
         let receiver = notify_shutdown.subscribe();
         let send_receiver = notify_shutdown.subscribe();
@@ -601,34 +590,39 @@ impl<PR> TransportSession<PR> {
         &self,
         request: &mut RemotingCommand,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         if !self.accepting_requests.load(Ordering::Acquire) {
-            return Err(rocketmq_error::RocketMQError::Shared(
-                connection_failed_without_source_for_remote(self.peer.address().to_string(), TransportStage::Closed),
+            return Err(connection_failed_without_source_for_remote(
+                self.peer.address().to_string(),
+                TransportStage::Closed,
             ));
         }
         self.last_used_millis.store(current_millis(), Ordering::Release);
         let transport_security = &self.transport_security;
         let target = self.peer.address().to_string();
         deadline.ensure_before_send()?;
-        transport_security.sign(request, Some(&self.peer)).map_err(|source| {
-            rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
-                &target,
-                TransportStage::Connect,
-                source,
-            ))
-        })?;
+        transport_security
+            .sign(request, Some(&self.peer))
+            .map_err(|source| connection_failed_for_remote(&target, TransportStage::Connect, source))?;
         deadline.ensure_before_send()
     }
 
-    async fn send_prepared_transport(&self, request: RemotingCommand, deadline: RequestDeadline) -> RocketMQResult<()> {
+    async fn send_prepared_transport(
+        &self,
+        request: RemotingCommand,
+        deadline: RequestDeadline,
+    ) -> Result<(), rocketmq_error::SharedError> {
         let target = self.peer.address().to_string();
         deadline.ensure_before_send()?;
         let mut connection = self.session.connection();
         connection.send_command_with_deadline(request, deadline, target).await
     }
 
-    async fn send_transport(&self, mut request: RemotingCommand, deadline: RequestDeadline) -> RocketMQResult<()> {
+    async fn send_transport(
+        &self,
+        mut request: RemotingCommand,
+        deadline: RequestDeadline,
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.prepare_transport_request(&mut request, deadline)?;
         self.send_prepared_transport(request, deadline).await
     }
@@ -638,7 +632,7 @@ impl<PR> TransportSession<PR> {
         mut request: RemotingCommand,
         deadline: RequestDeadline,
         permit: ResourcePermit,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.prepare_transport_request(&mut request, deadline)?;
         let target = self.peer.address().to_string();
         deadline.ensure_before_send()?;
@@ -776,18 +770,11 @@ impl<PR> TransportSession<PR> {
                     OutboundRequestRejection::queue_saturated(OutboundRequestStage::BeforeWrite, REMOTE_ADDR_PRESENT),
                 ));
             }
-            CommandSendOutcome::EncodingFailed(RocketMQError::Shared(error)) => {
+            CommandSendOutcome::EncodingFailed(error) => {
                 return Err(TransportError::request(
                     RequestOperation::Write,
                     OutboundRequestStage::BeforeWrite,
                     error,
-                ));
-            }
-            CommandSendOutcome::EncodingFailed(source) => {
-                return Err(TransportError::request_canonicalized(
-                    RequestOperation::Write,
-                    OutboundRequestStage::BeforeWrite,
-                    source,
                 ));
             }
             CommandSendOutcome::OperationalFailure { progress, error } => {
@@ -887,7 +874,11 @@ impl<PR> TransportSession<PR> {
     ///
     /// Returns an error when request signing or deadline validation fails, or
     /// when the session writer rejects or fails the command.
-    pub async fn send_until(&mut self, request: RemotingCommand, deadline: RequestDeadline) -> RocketMQResult<()> {
+    pub async fn send_until(
+        &mut self,
+        request: RemotingCommand,
+        deadline: RequestDeadline,
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.send_transport(request, deadline).await
     }
 
@@ -903,7 +894,7 @@ impl<PR> TransportSession<PR> {
         request: RemotingCommand,
         deadline: RequestDeadline,
         permit: ResourcePermit,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.send_transport_with_permit(request, deadline, permit).await
     }
 
@@ -943,7 +934,7 @@ impl<PR> TransportSession<PR> {
         &mut self,
         requests: Vec<RemotingCommand>,
         timeout_millis: u64,
-    ) -> RocketMQResult<Vec<RocketMQResult<RemotingCommand>>> {
+    ) -> Result<Vec<Result<RemotingCommand, rocketmq_error::SharedError>>, rocketmq_error::SharedError> {
         let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
         let mut receivers = Vec::with_capacity(requests.len());
 
@@ -962,18 +953,16 @@ impl<PR> TransportSession<PR> {
                 PendingRegistrationOutcome::Registered(guard) => guard,
                 PendingRegistrationOutcome::DeadlineExpired => return Err(deadline.elapsed_error()),
                 PendingRegistrationOutcome::SessionClosed => {
-                    return Err(RocketMQError::Shared(connection_failed_without_source_for_remote(
+                    return Err(connection_failed_without_source_for_remote(
                         self.peer.address().to_string(),
                         TransportStage::Closed,
-                    )));
+                    ));
                 }
                 PendingRegistrationOutcome::QueueSaturated => {
-                    return Err(RocketMQError::Shared(crate::error_helpers::admission_queue_saturated(
-                        "pending_request",
-                    )));
+                    return Err(crate::error_helpers::admission_queue_saturated("pending_request"));
                 }
                 PendingRegistrationOutcome::OperationalFailure(error) => {
-                    return Err(RocketMQError::Shared(error));
+                    return Err(error);
                 }
             };
 
@@ -989,17 +978,17 @@ impl<PR> TransportSession<PR> {
                 Ok(Ok(PendingRequestCompletion::Response(value))) => Ok(value),
                 Ok(Ok(PendingRequestCompletion::DeadlineExpired)) => Err(deadline.elapsed_error()),
                 Ok(Ok(PendingRequestCompletion::Cancelled | PendingRequestCompletion::SessionClosed)) => {
-                    Err(RocketMQError::Shared(connection_failed_without_source_for_remote(
+                    Err(connection_failed_without_source_for_remote(
                         self.peer.address().to_string(),
                         TransportStage::Closed,
-                    )))
+                    ))
                 }
-                Ok(Ok(PendingRequestCompletion::OperationalFailure(error))) => Err(RocketMQError::Shared(error)),
-                Ok(Err(source)) => Err(rocketmq_error::RocketMQError::Shared(connection_failed_for_remote(
+                Ok(Ok(PendingRequestCompletion::OperationalFailure(error))) => Err(error),
+                Ok(Err(source)) => Err(connection_failed_for_remote(
                     self.peer.address().to_string(),
                     TransportStage::Closed,
                     source,
-                ))),
+                )),
                 Err(source) => {
                     timed_out = true;
                     let source = response_timeout_caused_by_for_remote(
@@ -1007,7 +996,7 @@ impl<PR> TransportSession<PR> {
                         deadline.budget_millis(),
                         source,
                     );
-                    Err(RocketMQError::Shared(guard.expire_with_error(source)))
+                    Err(guard.expire_with_error(source))
                 }
             };
             results.push(result);
@@ -1121,7 +1110,6 @@ impl<PR> TransportSession<PR> {
 #[cfg(test)]
 mod inbound_tests {
     use bytes::Bytes;
-    use rocketmq_error::RocketMQError;
     use rocketmq_runtime::RuntimeContext;
 
     use super::*;
@@ -1133,12 +1121,13 @@ mod inbound_tests {
     struct EchoProcessor;
 
     impl RequestProcessor for EchoProcessor {
-        async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+        async fn process(
+            &mut self,
+            request: &mut RemotingRequest,
+        ) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
             let response = RemotingCommand::create_response_command_with_code(request.command().code() + 1);
-            let response =
-                RemotingResponse::bytes(response, Bytes::from_static(b"client-inbound")).map_err(|error| {
-                    RocketMQError::response_process_failed("client_inbound_test.remoting_response", error.to_string())
-                })?;
+            let response = RemotingResponse::bytes(response, Bytes::from_static(b"client-inbound"))
+                .map_err(|_| crate::error_helpers::protocol_response_failed("client_inbound_test.remoting_response"))?;
             Ok(HandlerOutcome::Reply(response))
         }
     }
@@ -1194,7 +1183,6 @@ mod lifecycle_tests {
     use std::error::Error as _;
     use std::time::Duration;
 
-    use rocketmq_error::RocketMQError;
     use rocketmq_runtime::RuntimeContext;
     use rocketmq_runtime::TaskGroupLifecycleState;
     use tokio::net::TcpListener;
@@ -1309,7 +1297,7 @@ mod lifecycle_tests {
         assert_eq!(results.len(), 3);
         assert!(results.iter().all(|result| matches!(
             result,
-            Err(RocketMQError::Shared(source))
+            Err(source)
                 if source.code() == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code()
                     && source
                         .source()

@@ -52,6 +52,7 @@ use crate::dispatch::WriteProgress;
 use crate::error_helpers::admission_queue_saturated;
 use crate::error_helpers::connection_failed;
 use crate::error_helpers::connection_failed_without_source;
+use crate::error_helpers::operation_timed_out;
 use crate::error_helpers::TransportStage;
 use crate::file_region::FileRegion;
 use crate::file_region::FileRegionSequence;
@@ -156,7 +157,7 @@ enum ConnectionWriter {
     Queued(QueuedConnection),
 }
 
-/// Private send mechanics shared by `RocketMQResult` facades and the
+/// Private send mechanics shared by canonical result facades and the
 /// server's typed response completion path.
 enum SendFailure {
     DeadlineExceeded {
@@ -184,7 +185,7 @@ pub(crate) enum CommandSendOutcome {
     SessionClosed,
     Cancelled,
     QueueSaturated,
-    EncodingFailed(rocketmq_error::RocketMQError),
+    EncodingFailed(rocketmq_error::SharedError),
     OperationalFailure {
         progress: WriteProgress,
         error: SharedError,
@@ -192,17 +193,12 @@ pub(crate) enum CommandSendOutcome {
 }
 
 impl SendFailure {
-    fn into_error(self) -> rocketmq_error::RocketMQError {
+    fn into_error(self) -> rocketmq_error::SharedError {
         match self {
-            Self::DeadlineExceeded { timeout_ms } => rocketmq_error::RocketMQError::Timeout {
-                operation: "transport_before_send",
-                timeout_ms,
-            },
-            Self::SessionClosed | Self::Cancelled => {
-                rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
-            }
-            Self::QueueSaturated { target } => rocketmq_error::RocketMQError::Shared(admission_queue_saturated(target)),
-            Self::Writer { error, .. } => rocketmq_error::RocketMQError::Shared(error),
+            Self::DeadlineExceeded { timeout_ms } => operation_timed_out("transport_before_send", timeout_ms),
+            Self::SessionClosed | Self::Cancelled => connection_failed_without_source(TransportStage::Closed),
+            Self::QueueSaturated { target } => admission_queue_saturated(target),
+            Self::Writer { error, .. } => error,
         }
     }
 
@@ -925,9 +921,12 @@ impl Connection {
     /// }
     /// // Connection closed
     /// ```
-    pub async fn receive_command(&mut self) -> Option<rocketmq_error::RocketMQResult<RemotingCommand>> {
+    pub async fn receive_command(&mut self) -> Option<Result<RemotingCommand, rocketmq_error::SharedError>> {
         match self.inbound.as_mut() {
-            Some(inbound) => inbound.next().await,
+            Some(inbound) => inbound
+                .next()
+                .await
+                .map(|result| result.map_err(crate::error::TransportError::into_shared_error)),
             None => None,
         }
     }
@@ -950,7 +949,7 @@ impl Connection {
         reservation: Option<ResourcePermit>,
         deadline: Option<RequestDeadline>,
         target: String,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.send_payload_inner(
             payload,
             class,
@@ -1349,7 +1348,7 @@ impl Connection {
     ///
     /// - Plaintext retains three segments through `write_vectored`.
     /// - TLS uses one writer-owned, bounded coalescing buffer.
-    pub async fn send_command(&mut self, command: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_command(&mut self, command: RemotingCommand) -> Result<(), rocketmq_error::SharedError> {
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
@@ -1378,7 +1377,7 @@ impl Connection {
         command: RemotingCommand,
         deadline: RequestDeadline,
         target: impl Into<String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         let target = target.into();
         deadline.ensure_before_send()?;
         let class = self
@@ -1442,7 +1441,7 @@ impl Connection {
         command_without_body: RemotingCommand,
         body: FileRegion,
         deadline: RequestDeadline,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.send_file_regions_command(command_without_body, FileRegionSequence::single(body), deadline)
             .await
     }
@@ -1453,7 +1452,7 @@ impl Connection {
         command_without_body: RemotingCommand,
         body: FileRegionSequence,
         deadline: RequestDeadline,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.send_file_regions_inner(command_without_body, body, Some(deadline))
             .await
     }
@@ -1463,7 +1462,7 @@ impl Connection {
         &mut self,
         command_without_body: RemotingCommand,
         body: FileRegionSequence,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.send_file_regions_inner(command_without_body, body, None).await
     }
 
@@ -1472,7 +1471,7 @@ impl Connection {
         command_without_body: RemotingCommand,
         body: FileRegionSequence,
         deadline: Option<RequestDeadline>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         let target = "transport-file-region-writer".to_string();
         if let Some(deadline) = deadline {
             deadline.ensure_before_send()?;
@@ -1480,9 +1479,7 @@ impl Connection {
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command_without_body.code()));
-        let body_len = usize::try_from(body.len()).map_err(|_| {
-            rocketmq_error::RocketMQError::illegal_argument("file region sequence length exceeds this platform's usize")
-        })?;
+        let body_len = usize::try_from(body.len()).map_err(|_| crate::error_helpers::argument_invalid())?;
         let head = self.limits.encode_frame_head(command_without_body, body_len)?;
         if let Some(deadline) = deadline {
             deadline.ensure_before_send()?;
@@ -1504,7 +1501,7 @@ impl Connection {
         deadline: RequestDeadline,
         target: impl Into<String>,
         permit: ResourcePermit,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         let target = target.into();
         deadline.ensure_before_send()?;
         let class = self
@@ -1542,7 +1539,7 @@ impl Connection {
     ///
     /// This method may consume the command's body (`take_body()`), modifying
     /// the original command.
-    pub async fn send_command_ref(&mut self, command: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_command_ref(&mut self, command: &mut RemotingCommand) -> Result<(), rocketmq_error::SharedError> {
         let class = self
             .response_class()
             .unwrap_or_else(|| AdmissionClass::for_request_code(command.code()));
@@ -1581,7 +1578,7 @@ impl Connection {
     /// let batch = vec![cmd1, cmd2, cmd3];
     /// connection.send_batch(batch).await?;
     /// ```
-    pub async fn send_batch(&mut self, commands: Vec<RemotingCommand>) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_batch(&mut self, commands: Vec<RemotingCommand>) -> Result<(), rocketmq_error::SharedError> {
         if commands.is_empty() {
             return Ok(());
         }
@@ -1589,7 +1586,7 @@ impl Connection {
         let frames = commands
             .into_iter()
             .map(|command| limits.encode_command(command))
-            .collect::<rocketmq_error::RocketMQResult<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, rocketmq_error::SharedError>>()?;
         let payload = OutboundPayload::batch(frames)?;
         self.send_payload(
             payload,
@@ -1620,7 +1617,7 @@ impl Connection {
     ///
     /// This is the most efficient send method as it avoids intermediate buffering
     /// and serialization overhead.
-    pub async fn send_bytes(&mut self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_bytes(&mut self, bytes: Bytes) -> Result<(), rocketmq_error::SharedError> {
         self.limits.validate_frame_segments(std::slice::from_ref(&bytes))?;
         self.send_payload(
             OutboundPayload::Contiguous(bytes),
@@ -1653,7 +1650,7 @@ impl Connection {
     /// const PING: &[u8] = b"PING\r\n";
     /// connection.send_slice(PING).await?;
     /// ```
-    pub async fn send_slice(&mut self, slice: &'static [u8]) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_slice(&mut self, slice: &'static [u8]) -> Result<(), rocketmq_error::SharedError> {
         let bytes = Bytes::from_static(slice);
         self.limits.validate_raw_payload(bytes.len())?;
         self.send_payload(
@@ -1676,7 +1673,7 @@ impl Connection {
     ///
     /// Returns a typed serialization error before socket progress when the prefix, aggregate
     /// length, header length, body length, or endpoint profile is invalid.
-    pub async fn send_frame_segments(&mut self, segments: Vec<Bytes>) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_frame_segments(&mut self, segments: Vec<Bytes>) -> Result<(), rocketmq_error::SharedError> {
         let encoded_len = self.limits.validate_frame_segments(&segments)?;
         self.send_payload(
             OutboundPayload::FrameSegments { segments, encoded_len },
@@ -1823,20 +1820,23 @@ impl Connection {
     }
 
     /// Flushes and actively shuts down the socket write half before marking the connection closed.
-    pub async fn shutdown(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn shutdown(&mut self) -> Result<(), rocketmq_error::SharedError> {
         let result = match &mut self.outbound {
             ConnectionWriter::Queued(queued) => {
                 let (completion, result) = oneshot::channel();
-                queued.writer.close(completion).await.map_err(|_| {
-                    rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
-                })?;
-                result.await.map_err(|source| {
-                    rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::Closed, source))
-                })?
+                queued
+                    .writer
+                    .close(completion)
+                    .await
+                    .map_err(|_| connection_failed_without_source(TransportStage::Closed))?;
+                result
+                    .await
+                    .map_err(|source| connection_failed(TransportStage::Closed, source))?
             }
-            ConnectionWriter::Direct(writer) => writer.shutdown().await.map_err(|source| {
-                rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::Closed, source))
-            }),
+            ConnectionWriter::Direct(writer) => writer
+                .shutdown()
+                .await
+                .map_err(|source| connection_failed(TransportStage::Closed, source)),
         };
         self.mark_closed();
         result

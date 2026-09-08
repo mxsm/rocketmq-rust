@@ -14,8 +14,7 @@
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result;
 
 use crate::common::message::message_body::MessageBody;
 use crate::common::message::message_flag::MessageFlag;
@@ -160,9 +159,9 @@ impl MessageBuilder {
     }
 
     /// Tries to set the message priority with Java-compatible non-negative validation.
-    pub fn try_priority(mut self, priority: i32) -> RocketMQResult<Self> {
+    pub fn try_priority(mut self, priority: i32) -> Result<Self> {
         if priority < 0 {
-            return Err(RocketMQError::illegal_argument(
+            return Err(crate::error::invalid_argument(
                 "The priority must be greater than or equal to 0",
             ));
         }
@@ -237,17 +236,13 @@ impl MessageBuilder {
     /// # Errors
     ///
     /// Returns an error if the property name is reserved by the system.
-    pub fn raw_property(
-        mut self,
-        key: impl Into<CheetahString>,
-        value: impl Into<CheetahString>,
-    ) -> RocketMQResult<Self> {
+    pub fn raw_property(mut self, key: impl Into<CheetahString>, value: impl Into<CheetahString>) -> Result<Self> {
         let key = key.into();
         let value = value.into();
 
         // Validate not a reserved key
         if crate::common::message::STRING_HASH_SET.contains(key.as_str()) {
-            return Err(RocketMQError::InvalidProperty(format!(
+            return Err(crate::error::invalid_property(format!(
                 "The Property<{key}> is used by system, input another please"
             )));
         }
@@ -261,10 +256,10 @@ impl MessageBuilder {
     /// # Errors
     ///
     /// Returns an error if required fields (topic) are not set.
-    pub fn build(mut self) -> RocketMQResult<super::message_single::Message> {
+    pub fn build(mut self) -> Result<super::message_single::Message> {
         let topic = self
             .topic
-            .ok_or_else(|| RocketMQError::InvalidProperty("Topic is required for message".to_string()))?;
+            .ok_or_else(|| crate::error::invalid_property("Topic is required for message"))?;
         if self.properties.get(MessagePropertyKey::WaitStoreMsgOk).is_none() {
             self.properties.insert(MessagePropertyKey::WaitStoreMsgOk, "true");
         }
@@ -343,7 +338,7 @@ mod tests {
     fn test_builder_try_priority_rejects_negative_like_java() {
         match MessageBuilder::new().topic("test-topic").try_priority(-1) {
             Ok(_) => panic!("negative priority should be rejected"),
-            Err(error) => assert!(error.to_string().contains("greater than or equal to 0")),
+            Err(error) => assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID),
         }
     }
 

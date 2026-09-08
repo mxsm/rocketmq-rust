@@ -198,13 +198,9 @@ pub fn mark_protocol_type(source: i32, serialize_type: SerializeType) -> i32 {
 
 /// Extract serialize type from the combined field
 #[inline]
-pub fn parse_serialize_type(size: i32) -> rocketmq_error::RocketMQResult<SerializeType> {
+pub fn parse_serialize_type(size: i32) -> rocketmq_error::Result<SerializeType> {
     let code = (size >> 24) as u8;
-    SerializeType::value_of(code).ok_or({
-        rocketmq_error::RocketMQError::Protocol(rocketmq_error::ProtocolError::UnsupportedSerializationType {
-            serialize_type: code,
-        })
-    })
+    SerializeType::value_of(code).ok_or_else(|| crate::error::unsupported_encoding(code))
 }
 
 #[cfg(test)]

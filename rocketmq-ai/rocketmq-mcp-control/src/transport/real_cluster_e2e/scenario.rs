@@ -36,6 +36,7 @@ use rocketmq_admin_core::core::topic::ResetTopicConsumerOffsetRequest;
 use rocketmq_admin_core::core::topic::TopicMutationAdmin;
 use rocketmq_admin_core::core::topic::TopicSendRequest;
 use rocketmq_admin_core::core::AdminError;
+use rocketmq_admin_core::core::AdminFailure;
 use rocketmq_admin_core::mutation_client_adapter::MutationAdminBuilder;
 use rocketmq_admin_core::mutation_client_adapter::MutationAdminSession;
 use serde_json::Value;
@@ -1539,22 +1540,18 @@ fn unique_id() -> E2eResult<String> {
 }
 
 fn safe_admin_error(error: &AdminError) -> String {
-    match error {
-        AdminError::InvalidArgument { field, .. } => format!("invalid_argument:{field}"),
-        AdminError::NotFound { resource, .. } => format!("not_found:{resource}"),
-        AdminError::Backend {
-            operation,
-            code,
-            http_status,
-            retryable,
-            ..
-        } => format!(
-            "backend:{operation}:code={}:http={}:retryable={retryable}",
-            code.as_deref().unwrap_or("none"),
-            http_status.map_or_else(|| "none".to_owned(), |status| status.to_string())
-        ),
-        AdminError::SessionClosed => "session_closed".to_owned(),
-    }
+    let failure = match error.failure() {
+        AdminFailure::InvalidArgument => "invalid_argument",
+        AdminFailure::NotFound => "not_found",
+        AdminFailure::Backend => "backend",
+        AdminFailure::SessionClosed => "session_closed",
+    };
+    format!(
+        "{failure}:code={}:http={}:retryable={}",
+        error.code(),
+        error.http_status().as_u16(),
+        error.is_retryable()
+    )
 }
 
 #[cfg(test)]

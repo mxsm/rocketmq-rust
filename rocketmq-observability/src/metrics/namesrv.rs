@@ -64,8 +64,9 @@ use std::sync::atomic::Ordering;
 #[cfg(feature = "otel-metrics")]
 use std::sync::Arc;
 
+/// Fixed low-cardinality labels for failed route requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NameServerRouteErrorKind {
+pub enum NameServerRouteFailureLabel {
     NotFound,
     Rejected,
     Internal,
@@ -248,7 +249,7 @@ impl NameServerConnectionEvent {
 }
 
 #[cfg(feature = "otel-metrics")]
-impl NameServerRouteErrorKind {
+impl NameServerRouteFailureLabel {
     const fn as_str(self) -> &'static str {
         match self {
             Self::NotFound => "not_found",
@@ -316,7 +317,7 @@ impl NameServerMetrics {
     pub fn record_active_broker_count(&self, _active_brokers: usize) {}
 
     #[inline]
-    pub fn record_route_error(&self, _kind: NameServerRouteErrorKind) {}
+    pub fn record_route_error(&self, _failure: NameServerRouteFailureLabel) {}
 
     #[inline]
     pub fn record_route_freshness(&self, _freshness_ms: u64) {}
@@ -563,14 +564,14 @@ impl NameServerMetrics {
         self.record_active_brokers(active_brokers as u64, &[]);
     }
 
-    pub fn record_route_error(&self, kind: NameServerRouteErrorKind) {
+    pub fn record_route_error(&self, failure: NameServerRouteFailureLabel) {
         if self.is_active() {
             if let Some(instruments) = &self.instruments {
                 instruments.record_route_errors_total(
                     1,
                     &[opentelemetry::KeyValue::new(
                         crate::semantic::labels::RESULT,
-                        kind.as_str(),
+                        failure.as_str(),
                     )],
                 );
             }
@@ -1202,7 +1203,7 @@ mod tests {
         metrics.record_route_request_latency(3, &attrs);
         metrics.record_broker_registrations(1, &attrs);
         metrics.record_active_brokers(2, &attrs);
-        metrics.record_route_error(NameServerRouteErrorKind::NotFound);
+        metrics.record_route_error(NameServerRouteFailureLabel::NotFound);
         metrics.record_route_freshness(25);
         metrics.record_registration_delta("changed", 3);
         metrics.record_unregistration_queue("queued", 2);
@@ -1233,7 +1234,7 @@ mod tests {
         metrics.record_route_request(Duration::from_millis(1));
         metrics.record_broker_registration(2);
         metrics.record_active_broker_count(2);
-        metrics.record_route_error(NameServerRouteErrorKind::NotFound);
+        metrics.record_route_error(NameServerRouteFailureLabel::NotFound);
         metrics.record_route_freshness(25);
         metrics.record_registration_delta("unchanged", 0);
         metrics.record_unregistration_queue("coalesced", 0);

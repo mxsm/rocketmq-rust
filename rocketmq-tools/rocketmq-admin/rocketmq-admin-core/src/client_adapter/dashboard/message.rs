@@ -234,7 +234,7 @@ pub(super) async fn scan_messages(
         .examine_topic_route_info(topic.into())
         .await
         .map_err(|error| backend_error("examine_topic_route_info", error))?;
-    let route = route.ok_or_else(|| AdminError::not_found("topic", topic))?;
+    let route = route.ok_or_else(|| AdminError::topic_not_found(topic))?;
     let targets = topic_queue_targets(topic, &route);
     let page_size = request
         .page_size

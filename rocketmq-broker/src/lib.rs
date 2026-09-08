@@ -14,7 +14,6 @@
 
 #![allow(dead_code)]
 #![allow(incomplete_features)]
-#![allow(clippy::result_large_err)]
 #![recursion_limit = "512"]
 
 pub use broker_bootstrap::BrokerBootstrap;
@@ -23,6 +22,7 @@ pub use broker_runtime::build_broker_telemetry_bootstrap_config;
 pub use broker_runtime::build_broker_telemetry_bootstrap_config_with_overrides;
 pub use lifecycle::BrokerReadiness;
 pub use lifecycle::BrokerStartupError;
+pub use lifecycle::BrokerStartupPhase;
 pub use lifecycle::Configured;
 pub use lifecycle::Initialized;
 pub use lifecycle::Running;
@@ -33,6 +33,8 @@ pub use proxy_facade::ProxyBrokerFacade;
 pub mod command;
 pub mod proxy_facade;
 pub mod send_message_constants;
+
+pub(crate) mod broker_error;
 
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
@@ -344,17 +346,17 @@ mod lifecycle;
 
 pub(crate) fn runtime_to_rocketmq_error(
     error: impl std::error::Error + Send + Sync + 'static,
-) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::IO(std::io::Error::other(error))
+) -> rocketmq_error::SharedError {
+    crate::broker_error::internal("metadata_io", error)
 }
 
 pub(crate) fn require_metadata_durability(
     outcome: rocketmq_runtime::MetadataIoDurabilityOutcome,
-) -> rocketmq_error::RocketMQResult<()> {
+) -> crate::broker_error::BrokerResult<()> {
     match outcome {
         rocketmq_runtime::MetadataIoDurabilityOutcome::Durable(_) => Ok(()),
         rocketmq_runtime::MetadataIoDurabilityOutcome::TargetConflict(request) => {
-            Err(rocketmq_error::RocketMQError::storage_write_failed(
+            Err(crate::broker_error::storage_write_failed(
                 request.target().display().to_string(),
                 "metadata resource target conflict",
             ))

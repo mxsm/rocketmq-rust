@@ -240,7 +240,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         new_master_epoch: Option<i32>,
         sync_state_set_epoch: Option<i32>,
         sync_state_set: std::collections::HashSet<i64>,
-    ) -> rocketmq_error::RocketMQResult<bool> {
+    ) -> crate::broker_error::BrokerResult<bool> {
         let _operation_guard = self.controller.lock_operation().await;
         let outcome = self
             .controller
@@ -255,7 +255,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                 )
             })
             .ok_or_else(|| {
-                rocketmq_error::RocketMQError::illegal_argument(
+                crate::broker_error::invalid_argument(
                     "controller mode role change received before replicas manager initialization",
                 )
             })??;
@@ -306,7 +306,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                     .await
             }
         }
-        .map_err(|error| rocketmq_error::RocketMQError::internal("apply controller role to message store", error))?;
+        .map_err(|error| crate::broker_error::internal("apply controller role to message store", error))?;
         #[cfg(not(test))]
         let role_applied = self
             .store
@@ -318,9 +318,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                 outcome.master_epoch,
             )
             .await
-            .map_err(|error| {
-                rocketmq_error::RocketMQError::internal("apply controller role to message store", error)
-            })?;
+            .map_err(|error| crate::broker_error::internal("apply controller role to message store", error))?;
         if !role_applied {
             return Ok(false);
         }
@@ -378,7 +376,7 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
         &self,
         local_broker_id: u64,
         target_store_role: rocketmq_model::common::broker::broker_role::BrokerRole,
-    ) -> rocketmq_error::RocketMQResult<Arc<crate::broker::broker_runtime_config_state::BrokerRuntimeConfigGeneration>>
+    ) -> crate::broker_error::BrokerResult<Arc<crate::broker::broker_runtime_config_state::BrokerRuntimeConfigGeneration>>
     {
         let config_mutation = self.config.lock_mutation().await;
         let role_update = self

@@ -19,6 +19,7 @@
 mod action;
 mod admin_facade;
 mod commands;
+mod errors;
 mod event;
 mod rocketmq_tui_app;
 mod state;

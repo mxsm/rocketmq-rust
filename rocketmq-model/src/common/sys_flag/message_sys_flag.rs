@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::common::compression::compression_type::CompressionType;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result;
 
 // Meaning of each bit in the system flag
 ///
@@ -65,13 +65,13 @@ impl MessageSysFlag {
     }
 
     #[inline]
-    pub fn get_compression_type(flag: i32) -> RocketMQResult<CompressionType> {
+    pub fn get_compression_type(flag: i32) -> Result<CompressionType> {
         let compression_type_value = (flag & Self::COMPRESSION_TYPE_COMPARATOR) >> 8;
         CompressionType::find_by_value(compression_type_value)
     }
 
     #[inline]
-    pub fn try_get_compression_type(flag: i32) -> RocketMQResult<CompressionType> {
+    pub fn try_get_compression_type(flag: i32) -> Result<CompressionType> {
         Self::get_compression_type(flag)
     }
 
@@ -122,7 +122,7 @@ mod tests {
         let flag = MessageSysFlag::COMPRESSED_FLAG | (0x7 << 8);
         let error = MessageSysFlag::try_get_compression_type(flag).expect_err("unknown compression bits should error");
 
-        assert!(error.to_string().contains("unknown compression type value: 7"));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
     }
 
     #[test]

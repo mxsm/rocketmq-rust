@@ -21,10 +21,10 @@
 //! - `send_to_queue_with_callback_timeout`: Send to a specific queue with callback and timeout
 //! - `send_oneway_to_queue`: One-way send to a specific queue
 
+use rocketmq_client_rust::ClientError;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::SendResult;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
 
@@ -37,11 +37,11 @@ pub const TIMEOUT_MS: u64 = 3000;
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
@@ -86,7 +86,7 @@ async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>
 ///
 /// Sends a message directly to a specified message queue, bypassing
 /// the default queue selection logic.
-async fn send_to_queue(producer: &mut DefaultMQProducer, queue: MessageQueue) -> RocketMQResult<()> {
+async fn send_to_queue(producer: &mut DefaultMQProducer, queue: MessageQueue) -> ClientResult<()> {
     println!("1. Send to Specific Queue");
     println!("   Method: producer.send_to_queue(message, queue).await");
 
@@ -108,7 +108,7 @@ async fn send_to_queue(producer: &mut DefaultMQProducer, queue: MessageQueue) ->
 /// 2. Send to queue with timeout
 ///
 /// Sends a message to a specific queue with a timeout limit.
-async fn send_to_queue_with_timeout(producer: &mut DefaultMQProducer, queue: MessageQueue) -> RocketMQResult<()> {
+async fn send_to_queue_with_timeout(producer: &mut DefaultMQProducer, queue: MessageQueue) -> ClientResult<()> {
     println!("2. Send to Queue with Timeout");
     println!("   Method: producer.send_to_queue_with_timeout(message, queue, timeout_ms).await");
     println!("   Timeout: {}ms", TIMEOUT_MS);
@@ -131,7 +131,7 @@ async fn send_to_queue_with_timeout(producer: &mut DefaultMQProducer, queue: Mes
 /// 3. Send to queue with callback
 ///
 /// Sends a message to a specific queue asynchronously with callback.
-async fn send_to_queue_with_callback(producer: &mut DefaultMQProducer, queue: MessageQueue) -> RocketMQResult<()> {
+async fn send_to_queue_with_callback(producer: &mut DefaultMQProducer, queue: MessageQueue) -> ClientResult<()> {
     println!("3. Send to Queue with Callback");
     println!("   Method: producer.send_to_queue_with_callback(message, queue, callback_fn).await");
 
@@ -145,7 +145,7 @@ async fn send_to_queue_with_callback(producer: &mut DefaultMQProducer, queue: Me
         .send_to_queue_with_callback(
             message,
             queue,
-            |result: Option<&SendResult>, error: Option<&RocketMQError>| match (result, error) {
+            |result: Option<&SendResult>, error: Option<&ClientError>| match (result, error) {
                 (Some(r), None) => println!("   Callback: Success - {:?}", r),
                 (None, Some(e)) => println!("   Callback: Error - {}", e),
                 _ => println!("   Callback: Unknown state"),
@@ -163,7 +163,7 @@ async fn send_to_queue_with_callback(producer: &mut DefaultMQProducer, queue: Me
 async fn send_to_queue_with_callback_timeout(
     producer: &mut DefaultMQProducer,
     queue: MessageQueue,
-) -> RocketMQResult<()> {
+) -> ClientResult<()> {
     println!("4. Send to Queue with Callback and Timeout");
     println!("   Method: producer.send_to_queue_with_callback_timeout(message, queue, callback_fn, timeout_ms).await");
     println!("   Timeout: {}ms", TIMEOUT_MS);
@@ -178,7 +178,7 @@ async fn send_to_queue_with_callback_timeout(
         .send_to_queue_with_callback_timeout(
             message,
             queue,
-            |result: Option<&SendResult>, error: Option<&RocketMQError>| match (result, error) {
+            |result: Option<&SendResult>, error: Option<&ClientError>| match (result, error) {
                 (Some(r), None) => println!("   Callback: Success - {:?}", r),
                 (None, Some(e)) => println!("   Callback: Error - {}", e),
                 _ => println!("   Callback: Unknown state"),
@@ -194,7 +194,7 @@ async fn send_to_queue_with_callback_timeout(
 /// 5. One-way send to queue
 ///
 /// Sends a message to a specific queue without waiting for a response.
-async fn send_oneway_to_queue(producer: &mut DefaultMQProducer, queue: MessageQueue) -> RocketMQResult<()> {
+async fn send_oneway_to_queue(producer: &mut DefaultMQProducer, queue: MessageQueue) -> ClientResult<()> {
     println!("5. One-way Send to Queue");
     println!("   Method: producer.send_oneway_to_queue(message, queue).await");
 

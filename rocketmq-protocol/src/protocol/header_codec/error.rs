@@ -14,12 +14,12 @@
 
 use crate::ProtocolContractViolation;
 
-/// Adapts a classified codec error to the legacy remoting error boundary.
+/// Adapts a classified codec error to the canonical error boundary.
 #[doc(hidden)]
 #[cold]
 #[inline(never)]
-pub fn into_rocketmq_error(_error: ProtocolContractViolation) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::request_header_error("Request header is invalid")
+pub fn into_error(_error: ProtocolContractViolation) -> rocketmq_error::Error {
+    crate::error::request_header_failure()
 }
 
 #[cfg(test)]
@@ -34,10 +34,10 @@ mod tests {
             rule: SENTINEL,
         };
 
-        let adapted = into_rocketmq_error(error);
+        let adapted = into_error(error);
 
         assert_eq!(adapted.descriptor(), &rocketmq_error::PROTOCOL_HEADER_INVALID);
-        assert_eq!(adapted.boundary_view().message(), "Request header is invalid");
+        assert_eq!(adapted.descriptor().public_message(), "Request header is invalid");
         assert!(!adapted.to_string().contains(SENTINEL));
     }
 }

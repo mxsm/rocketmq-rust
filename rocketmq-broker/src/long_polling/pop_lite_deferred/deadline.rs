@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
 use std::time::Duration;
 
@@ -159,4 +159,4 @@ impl fmt::Display for PopLiteWaitDeadlineOperationalError {
     }
 }
 
-impl Error for PopLiteWaitDeadlineOperationalError {}
+impl StdError for PopLiteWaitDeadlineOperationalError {}

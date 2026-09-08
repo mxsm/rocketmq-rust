@@ -97,8 +97,8 @@ pub struct SendMessageRequestHeaderV2 {
 }
 
 impl CommandCustomHeader for SendMessageRequestHeaderV2 {
-    fn check_fields(&self) -> rocketmq_error::RocketMQResult<()> {
-        <Self as HeaderCodec>::validate_for_wire(self).map_err(crate::protocol::header_codec::into_rocketmq_error)
+    fn check_fields(&self) -> rocketmq_error::Result<()> {
+        <Self as HeaderCodec>::validate_for_wire(self).map_err(crate::protocol::header_codec::into_error)
     }
 
     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
@@ -174,7 +174,7 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         result
     }
 
-    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> rocketmq_error::RocketMQResult<()> {
+    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> rocketmq_error::Result<()> {
         #[derive(Default)]
         struct BorrowedFields<'a> {
             a: Option<&'a CheetahString>,
@@ -206,40 +206,28 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         fn required<'a>(
             value: Option<&'a CheetahString>,
             field: &'static str,
-        ) -> rocketmq_error::RocketMQResult<&'a CheetahString> {
+        ) -> rocketmq_error::Result<&'a CheetahString> {
             value.ok_or_else(|| {
-                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                    format: "header",
-                    message: format!("The field {field} is required."),
-                })
+                crate::error::serialization_decode_failed("header", format!("The field {field} is required."))
             })
         }
 
         #[inline(always)]
-        fn parse_required<T: FromStr>(
-            value: Option<&CheetahString>,
-            field: &'static str,
-        ) -> rocketmq_error::RocketMQResult<T> {
-            required(value, field)?.parse().map_err(|_| {
-                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                    format: "header",
-                    message: format!("Parse field {field} error"),
-                })
-            })
+        fn parse_required<T: FromStr>(value: Option<&CheetahString>, field: &'static str) -> rocketmq_error::Result<T> {
+            required(value, field)?
+                .parse()
+                .map_err(|_| crate::error::serialization_decode_failed("header", format!("Parse field {field} error")))
         }
 
         #[inline(always)]
         fn parse_optional<T: FromStr>(
             value: Option<&CheetahString>,
             field: &'static str,
-        ) -> rocketmq_error::RocketMQResult<Option<T>> {
+        ) -> rocketmq_error::Result<Option<T>> {
             value
                 .map(|value| {
                     value.parse().map_err(|_| {
-                        rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                            format: "header",
-                            message: format!("Parse field {field} error"),
-                        })
+                        crate::error::serialization_decode_failed("header", format!("Parse field {field} error"))
                     })
                 })
                 .transpose()
@@ -312,17 +300,17 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
 }
 
 impl FromMap for SendMessageRequestHeaderV2 {
-    type Error = rocketmq_error::RocketMQError;
+    type Error = rocketmq_error::Error;
 
     type Target = Self;
     const SUPPORTS_HEADER_FIELD_SOURCE: bool = true;
 
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        <Self as HeaderCodec>::decode_from_map(map).map_err(crate::protocol::header_codec::into_rocketmq_error)
+        <Self as HeaderCodec>::decode_from_map(map).map_err(crate::protocol::header_codec::into_error)
     }
 
     fn from_field_source(source: &dyn HeaderFieldSource) -> Result<Self::Target, Self::Error> {
-        Self::decode_from_field_source(source).map_err(crate::protocol::header_codec::into_rocketmq_error)
+        Self::decode_from_field_source(source).map_err(crate::protocol::header_codec::into_error)
     }
 }
 

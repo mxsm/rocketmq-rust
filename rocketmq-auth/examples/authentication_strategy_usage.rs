@@ -21,10 +21,12 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_auth::AllowAllAuthenticationStrategy;
+use rocketmq_auth::AuthFailureKind;
+use rocketmq_auth::AuthOperation;
+use rocketmq_auth::AuthServiceError;
 use rocketmq_auth::AuthenticationFuture;
 use rocketmq_auth::AuthenticationStrategy;
 use rocketmq_auth::DefaultAuthenticationContext;
-use rocketmq_error::AuthError;
 
 /// Example 1: Using AllowAllAuthenticationStrategy
 async fn example_allow_all_strategy() {
@@ -89,20 +91,23 @@ impl AuthenticationStrategy for CustomAuthenticationStrategy {
             let ctx = context
                 .as_any()
                 .downcast_ref::<DefaultAuthenticationContext>()
-                .ok_or_else(|| AuthError::ContextCreationError("Invalid context type".into()))?;
+                .ok_or_else(|| AuthServiceError::new(AuthOperation::BuildContext, AuthFailureKind::InvalidInput))?;
 
             // Check if username is in allowed list
             if let Some(username) = ctx.username() {
                 if self.allowed_users.contains(&username.to_string()) {
                     return Ok(());
                 }
-                return Err(AuthError::AuthenticationFailed(format!(
-                    "User '{}' is not in the allowed list",
-                    username
-                )));
+                return Err(AuthServiceError::new(
+                    AuthOperation::Authenticate,
+                    AuthFailureKind::Unauthenticated,
+                ));
             }
 
-            Err(AuthError::InvalidCredential("Missing username".into()))
+            Err(AuthServiceError::new(
+                AuthOperation::Authenticate,
+                AuthFailureKind::Unauthenticated,
+            ))
         })
     }
 }

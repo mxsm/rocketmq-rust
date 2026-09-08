@@ -15,8 +15,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::ClientError;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_enum::MessageType;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::MessageTrait;
@@ -53,7 +53,7 @@ pub struct SendMessageContext<'a> {
     pub born_host: Option<CheetahString>,
     pub communication_mode: Option<CommunicationMode>,
     pub send_result: Option<&'a SendResult>,
-    pub exception: Option<Arc<RocketMQError>>,
+    pub exception: Option<Arc<ClientError>>,
     pub mq_trace_context: Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
     pub trace_start_time: Option<u64>,
     pub props: HashMap<CheetahString, CheetahString>,

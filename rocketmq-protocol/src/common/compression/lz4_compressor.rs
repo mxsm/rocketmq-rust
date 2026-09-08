@@ -20,11 +20,11 @@ use rocketmq_model::common::compression::compression_type::CompressionType;
 pub struct Lz4Compressor;
 
 impl Compressor for Lz4Compressor {
-    fn compress(&self, src: &[u8], _level: i32) -> rocketmq_error::RocketMQResult<Bytes> {
+    fn compress(&self, src: &[u8], _level: i32) -> rocketmq_error::Result<Bytes> {
         CompressionType::LZ4.try_compression(src)
     }
 
-    fn decompress(&self, src: &[u8]) -> rocketmq_error::RocketMQResult<Bytes> {
+    fn decompress(&self, src: &[u8]) -> rocketmq_error::Result<Bytes> {
         CompressionType::LZ4.try_decompression(src)
     }
 }

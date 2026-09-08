@@ -29,7 +29,7 @@ use cheetah_string::CheetahString;
 // Lock-free design provides better throughput under high load
 use flume::Receiver;
 use flume::Sender;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
@@ -261,7 +261,7 @@ impl Channel {
     }
 
     /// Sends a command through the serialized connection writer.
-    pub async fn send_command(&self, command: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_command(&self, command: RemotingCommand) -> Result<(), rocketmq_error::SharedError> {
         self.inner.send_command(command).await
     }
 
@@ -275,7 +275,7 @@ impl Channel {
         command_without_body: RemotingCommand,
         body: FileRegion,
         deadline: RequestDeadline,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.inner
             .send_file_region_command(command_without_body, body, deadline)
             .await
@@ -287,7 +287,7 @@ impl Channel {
         command_without_body: RemotingCommand,
         body: FileRegionSequence,
         deadline: RequestDeadline,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.inner
             .send_file_regions_command(command_without_body, body, deadline)
             .await
@@ -298,22 +298,22 @@ impl Channel {
         &self,
         command_without_body: RemotingCommand,
         body: FileRegionSequence,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.inner.send_file_regions_response(command_without_body, body).await
     }
 
     /// Sends a borrowed command through the serialized connection writer.
-    pub async fn send_command_ref(&self, command: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_command_ref(&self, command: &mut RemotingCommand) -> Result<(), rocketmq_error::SharedError> {
         self.inner.send_command_ref(command).await
     }
 
     /// Sends pre-encoded bytes through the serialized connection writer.
-    pub async fn send_bytes(&self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_bytes(&self, bytes: Bytes) -> Result<(), rocketmq_error::SharedError> {
         self.inner.send_bytes(bytes).await
     }
 
     /// Sends one pre-encoded frame as an atomically validated immutable segment sequence.
-    pub async fn send_frame_segments(&self, segments: Vec<Bytes>) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_frame_segments(&self, segments: Vec<Bytes>) -> Result<(), rocketmq_error::SharedError> {
         self.inner.send_frame_segments(segments).await
     }
 
@@ -322,7 +322,7 @@ impl Channel {
         &self,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    ) -> Result<RemotingCommand, rocketmq_error::SharedError> {
         self.inner.send_wait_response(request, timeout_millis).await
     }
 
@@ -331,7 +331,7 @@ impl Channel {
         &self,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.inner.send_oneway(request, timeout_millis).await
     }
 
@@ -340,7 +340,7 @@ impl Channel {
         &self,
         request: RemotingCommand,
         timeout_millis: Option<u64>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.inner.send(request, timeout_millis).await
     }
 
@@ -411,18 +411,12 @@ impl OutboundProgress {
         self.0.store(stage, Ordering::Release);
     }
 
-    fn deadline_error(&self, deadline: RequestDeadline, source: tokio::time::error::Elapsed) -> RocketMQError {
+    fn deadline_error(&self, deadline: RequestDeadline, source: tokio::time::error::Elapsed) -> SharedError {
         match self.0.load(Ordering::Acquire) {
             OUTBOUND_QUEUED | OUTBOUND_FAILED_BEFORE_SEND => deadline.elapsed_error(),
-            OUTBOUND_WRITING => rocketmq_error::RocketMQError::Shared(write_timeout_caused_by(
-                TransportStage::Writing,
-                deadline.budget_millis(),
-                source,
-            )),
-            OUTBOUND_SENT => {
-                rocketmq_error::RocketMQError::Shared(response_timeout_caused_by(deadline.budget_millis(), source))
-            }
-            _ => rocketmq_error::RocketMQError::Shared(response_timeout_caused_by(deadline.budget_millis(), source)),
+            OUTBOUND_WRITING => write_timeout_caused_by(TransportStage::Writing, deadline.budget_millis(), source),
+            OUTBOUND_SENT => response_timeout_caused_by(deadline.budget_millis(), source),
+            _ => response_timeout_caused_by(deadline.budget_millis(), source),
         }
     }
 }
@@ -564,12 +558,12 @@ async fn handle_send(
                 }
             }
             Err(error) => {
-                if matches!(error, RocketMQError::Timeout { .. }) {
+                if error.descriptor() == &rocketmq_error::CORE_OPERATION_TIMED_OUT {
                     if let Some(progress) = progress.as_ref() {
                         progress.set(OUTBOUND_FAILED_BEFORE_SEND);
                     }
                 }
-                let connection_broken = matches!(error, rocketmq_error::RocketMQError::IO(_));
+                let connection_broken = error.descriptor() == &rocketmq_error::TRANSPORT_CONNECTION_FAILED;
                 error!(error = %error, "send request failed");
                 complete_send_error(reservation, &response_table, error);
                 if connection_broken {
@@ -583,7 +577,7 @@ async fn handle_send(
 fn complete_send_error(
     reservation: Option<ResponseReservation>,
     response_table: &PendingRequestTable,
-    error: RocketMQError,
+    error: SharedError,
 ) {
     match reservation {
         Some(ResponseReservation::Pending(reservation)) => {
@@ -621,7 +615,7 @@ impl ChannelInner {
         connection: Connection,
         response_table: PendingRequestTable,
         parent_task_group: TaskGroup,
-    ) -> rocketmq_error::RocketMQResult<Self> {
+    ) -> Result<Self, rocketmq_error::SharedError> {
         Self::try_new_with_pending_requests_and_task_group(connection, response_table, parent_task_group)
     }
 
@@ -629,7 +623,7 @@ impl ChannelInner {
         connection: Connection,
         response_table: PendingRequestTable,
         parent_task_group: TaskGroup,
-    ) -> rocketmq_error::RocketMQResult<Self> {
+    ) -> Result<Self, rocketmq_error::SharedError> {
         let owner = response_table.new_owner();
         Self::try_new_with_send_task_group(connection, response_table, Some(owner), parent_task_group, true)
     }
@@ -638,7 +632,7 @@ impl ChannelInner {
         connection: Connection,
         response_table: PendingRequestTable,
         parent_task_group: TaskGroup,
-    ) -> rocketmq_error::RocketMQResult<Self> {
+    ) -> Result<Self, rocketmq_error::SharedError> {
         Self::new_transport_session_with_task_group(connection, response_table, parent_task_group)
     }
 
@@ -653,7 +647,7 @@ impl ChannelInner {
         connection: Connection,
         response_table: PendingRequestTable,
         task_group: TaskGroup,
-    ) -> rocketmq_error::RocketMQResult<Self> {
+    ) -> Result<Self, rocketmq_error::SharedError> {
         let pending_request_owner = Some(response_table.new_owner());
         Self::try_new_with_send_task_group(connection, response_table, pending_request_owner, task_group, false)
     }
@@ -664,7 +658,7 @@ impl ChannelInner {
         pending_request_owner: Option<PendingRequestOwner>,
         task_group: TaskGroup,
         start_send_task: bool,
-    ) -> rocketmq_error::RocketMQResult<Self> {
+    ) -> Result<Self, rocketmq_error::SharedError> {
         const QUEUE_CAPACITY: usize = 1024;
 
         // Use flume bounded channel for better performance
@@ -680,9 +674,7 @@ impl ChannelInner {
                         "remoting.channel.send",
                         handle_send(connection.clone(), outbound_queue_rx, response_table.clone()),
                     )
-                    .map_err(|source| {
-                        rocketmq_error::RocketMQError::Shared(connection_failed(TransportStage::Closed, source))
-                    })?,
+                    .map_err(|source| connection_failed(TransportStage::Closed, source))?,
             )
         } else {
             drop(outbound_queue_rx);
@@ -749,10 +741,12 @@ impl ChannelInner {
         }
     }
 
-    fn outbound_queue_sender(&self) -> rocketmq_error::RocketMQResult<Sender<ChannelMessage>> {
-        self.outbound_queue_tx.lock().as_ref().cloned().ok_or_else(|| {
-            rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
-        })
+    fn outbound_queue_sender(&self) -> Result<Sender<ChannelMessage>, rocketmq_error::SharedError> {
+        self.outbound_queue_tx
+            .lock()
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| connection_failed_without_source(TransportStage::Closed))
     }
 
     // === Connection Accessors ===
@@ -768,7 +762,7 @@ impl ChannelInner {
     }
 
     /// Sends a command through the serialized writer capability.
-    pub async fn send_command(&self, command: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_command(&self, command: RemotingCommand) -> Result<(), rocketmq_error::SharedError> {
         self.connection.lock().await.send_command(command).await
     }
 
@@ -778,7 +772,7 @@ impl ChannelInner {
         command_without_body: RemotingCommand,
         body: FileRegion,
         deadline: RequestDeadline,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.connection
             .lock()
             .await
@@ -792,7 +786,7 @@ impl ChannelInner {
         command_without_body: RemotingCommand,
         body: FileRegionSequence,
         deadline: RequestDeadline,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.connection
             .lock()
             .await
@@ -805,7 +799,7 @@ impl ChannelInner {
         &self,
         command_without_body: RemotingCommand,
         body: FileRegionSequence,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.connection
             .lock()
             .await
@@ -814,17 +808,17 @@ impl ChannelInner {
     }
 
     /// Sends a borrowed command through the serialized writer capability.
-    pub async fn send_command_ref(&self, command: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_command_ref(&self, command: &mut RemotingCommand) -> Result<(), rocketmq_error::SharedError> {
         self.connection.lock().await.send_command_ref(command).await
     }
 
     /// Sends pre-encoded bytes through the serialized writer capability.
-    pub async fn send_bytes(&self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_bytes(&self, bytes: Bytes) -> Result<(), rocketmq_error::SharedError> {
         self.connection.lock().await.send_bytes(bytes).await
     }
 
     /// Sends one pre-encoded frame without allowing multipart output to bypass endpoint limits.
-    pub async fn send_frame_segments(&self, segments: Vec<Bytes>) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_frame_segments(&self, segments: Vec<Bytes>) -> Result<(), rocketmq_error::SharedError> {
         self.connection.lock().await.send_frame_segments(segments).await
     }
 
@@ -864,14 +858,15 @@ impl ChannelInner {
         &self,
         mut request: RemotingCommand,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    ) -> Result<RemotingCommand, rocketmq_error::SharedError> {
         let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
         let progress = Arc::new(OutboundProgress::queued());
         let (response_tx, mut response_rx) = tokio::sync::oneshot::channel::<PendingRequestCompletion>();
         let opaque = request.opaque();
-        let owner = self.pending_request_owner.as_ref().ok_or_else(|| {
-            rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
-        })?;
+        let owner = self
+            .pending_request_owner
+            .as_ref()
+            .ok_or_else(|| connection_failed_without_source(TransportStage::Closed))?;
         let retained_bytes = materialize_and_estimate_remoting_command_retained_bytes(&mut request);
         let guard = match self.response_table.register_for_owner_with_bytes(
             owner,
@@ -883,15 +878,13 @@ impl ChannelInner {
             PendingRegistrationOutcome::Registered(guard) => guard,
             PendingRegistrationOutcome::DeadlineExpired => return Err(deadline.elapsed_error()),
             PendingRegistrationOutcome::SessionClosed => {
-                return Err(RocketMQError::Shared(connection_failed_without_source(
-                    TransportStage::Closed,
-                )));
+                return Err(connection_failed_without_source(TransportStage::Closed));
             }
             PendingRegistrationOutcome::QueueSaturated => {
-                return Err(RocketMQError::Shared(admission_queue_saturated("channel")));
+                return Err(admission_queue_saturated("channel"));
             }
             PendingRegistrationOutcome::OperationalFailure(error) => {
-                return Err(RocketMQError::Shared(error));
+                return Err(error);
             }
         };
         let reservation = ResponseReservation::Pending(guard.token());
@@ -908,7 +901,7 @@ impl ChannelInner {
                 .send_command_with_deadline(request, deadline, "channel")
                 .await
             {
-                if matches!(error, RocketMQError::Timeout { .. }) {
+                if error.descriptor() == &rocketmq_error::CORE_OPERATION_TIMED_OUT {
                     progress.set(OUTBOUND_FAILED_BEFORE_SEND);
                 }
                 return Err(error);
@@ -920,12 +913,8 @@ impl ChannelInner {
             outbound_queue_tx
                 .try_send((request, Some(reservation), Some(deadline), Some(progress.clone())))
                 .map_err(|error| match error {
-                    flume::TrySendError::Full(_) => {
-                        rocketmq_error::RocketMQError::Shared(admission_queue_saturated("channel"))
-                    }
-                    flume::TrySendError::Disconnected(_) => {
-                        rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
-                    }
+                    flume::TrySendError::Full(_) => admission_queue_saturated("channel"),
+                    flume::TrySendError::Disconnected(_) => connection_failed_without_source(TransportStage::Closed),
                 })?;
         }
 
@@ -934,23 +923,19 @@ impl ChannelInner {
             Ok(result) => match result {
                 Ok(PendingRequestCompletion::Response(response)) => Ok(response),
                 Ok(PendingRequestCompletion::DeadlineExpired) => Err(deadline.elapsed_error()),
-                Ok(PendingRequestCompletion::Cancelled | PendingRequestCompletion::SessionClosed) => Err(
-                    RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed)),
-                ),
-                Ok(PendingRequestCompletion::OperationalFailure(error)) => Err(RocketMQError::Shared(error)),
-                Err(source) => Err(rocketmq_error::RocketMQError::Shared(connection_failed(
-                    TransportStage::Closed,
-                    source,
-                ))),
+                Ok(PendingRequestCompletion::Cancelled | PendingRequestCompletion::SessionClosed) => {
+                    Err(connection_failed_without_source(TransportStage::Closed))
+                }
+                Ok(PendingRequestCompletion::OperationalFailure(error)) => Err(error),
+                Err(source) => Err(connection_failed(TransportStage::Closed, source)),
             },
             Err(source) => {
                 let stage_error = progress.deadline_error(deadline, source);
-                match stage_error {
-                    RocketMQError::Shared(source) => Err(RocketMQError::Shared(guard.expire_with_error(source))),
-                    error => {
-                        guard.complete(PendingRequestCompletion::DeadlineExpired);
-                        Err(error)
-                    }
+                if stage_error.descriptor() == &rocketmq_error::CORE_OPERATION_TIMED_OUT {
+                    guard.complete(PendingRequestCompletion::DeadlineExpired);
+                    Err(stage_error)
+                } else {
+                    Err(guard.expire_with_error(stage_error))
                 }
             }
         }
@@ -978,7 +963,7 @@ impl ChannelInner {
         &self,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
         let request = request.mark_oneway_rpc();
         if let Some(connection) = self.direct_network_connection() {
@@ -997,12 +982,8 @@ impl ChannelInner {
         outbound_queue_tx
             .try_send((request, None, Some(deadline), None))
             .map_err(|error| match error {
-                flume::TrySendError::Full(_) => {
-                    rocketmq_error::RocketMQError::Shared(admission_queue_saturated("channel"))
-                }
-                flume::TrySendError::Disconnected(_) => {
-                    rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
-                }
+                flume::TrySendError::Full(_) => admission_queue_saturated("channel"),
+                flume::TrySendError::Disconnected(_) => connection_failed_without_source(TransportStage::Closed),
             })
     }
 
@@ -1024,7 +1005,7 @@ impl ChannelInner {
         &self,
         request: RemotingCommand,
         timeout_millis: Option<u64>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         let deadline = timeout_millis.map(RequestDeadline::from_timeout_millis);
         if let Some(deadline) = deadline {
             deadline.ensure_before_send()?;
@@ -1050,12 +1031,8 @@ impl ChannelInner {
         outbound_queue_tx
             .try_send((request, None, deadline, None))
             .map_err(|error| match error {
-                flume::TrySendError::Full(_) => {
-                    rocketmq_error::RocketMQError::Shared(admission_queue_saturated("channel"))
-                }
-                flume::TrySendError::Disconnected(_) => {
-                    rocketmq_error::RocketMQError::Shared(connection_failed_without_source(TransportStage::Closed))
-                }
+                flume::TrySendError::Full(_) => admission_queue_saturated("channel"),
+                flume::TrySendError::Disconnected(_) => connection_failed_without_source(TransportStage::Closed),
             })
     }
 
@@ -1100,19 +1077,12 @@ mod tests {
     async fn deadline_error_preserves_elapsed_only_for_operational_stages() {
         let deadline = RequestDeadline::from_timeout_millis(25);
         let queued = OutboundProgress::queued().deadline_error(deadline, elapsed_timeout_source().await);
-        assert!(matches!(
-            queued,
-            RocketMQError::Timeout {
-                operation: "transport_before_send",
-                timeout_ms: 25,
-            }
-        ));
+        assert_eq!(queued.descriptor(), &rocketmq_error::CORE_OPERATION_TIMED_OUT);
+        assert!(queued.context().to_string().contains("timeout_ms=25"));
 
         let writing = OutboundProgress::queued();
         writing.set(OUTBOUND_WRITING);
-        let RocketMQError::Shared(writing) = writing.deadline_error(deadline, elapsed_timeout_source().await) else {
-            panic!("writing timeout must be a canonical Shared error");
-        };
+        let writing = writing.deadline_error(deadline, elapsed_timeout_source().await);
         assert_eq!(writing.code(), rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code());
         assert!(writing
             .source()
@@ -1121,9 +1091,7 @@ mod tests {
 
         let sent = OutboundProgress::queued();
         sent.set(OUTBOUND_SENT);
-        let RocketMQError::Shared(sent) = sent.deadline_error(deadline, elapsed_timeout_source().await) else {
-            panic!("response timeout must be a canonical Shared error");
-        };
+        let sent = sent.deadline_error(deadline, elapsed_timeout_source().await);
         assert_eq!(sent.code(), rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code());
         assert!(sent
             .source()
@@ -1305,16 +1273,8 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(
-            matches!(
-                error,
-                RocketMQError::Timeout {
-                    operation: "transport_before_send",
-                    timeout_ms: 50,
-                }
-            ),
-            "unexpected error: {error:?}"
-        );
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_OPERATION_TIMED_OUT);
+        assert!(error.context().to_string().contains("timeout_ms=50"));
         let mut byte = [0_u8; 1];
         tokio::select! {
             biased;

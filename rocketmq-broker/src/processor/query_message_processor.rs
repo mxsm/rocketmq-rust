@@ -142,7 +142,7 @@ impl QueryResponseParts {
         Self { head, body: Some(body) }
     }
 
-    fn into_broker_response_parts(self) -> rocketmq_error::RocketMQResult<BrokerResponseParts> {
+    fn into_broker_response_parts(self) -> crate::broker_error::BrokerResult<BrokerResponseParts> {
         let parts = match self.body {
             Some(body) => BrokerResponseParts::bytes(self.head, body)?,
             None => BrokerResponseParts::command(self.head)?,
@@ -150,7 +150,7 @@ impl QueryResponseParts {
         Ok(parts)
     }
 
-    fn into_handler_outcome(self) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    fn into_handler_outcome(self) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.into_broker_response_parts()?.into_handler_outcome()
     }
 }
@@ -159,7 +159,7 @@ impl<S> RequestProcessor for QueryMessageProcessor<S>
 where
     S: QueryMessageStore + Clone + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -171,7 +171,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original = request.original_identity();
         match self
             .process_command(
@@ -184,7 +184,7 @@ where
             Ok(outcome) => Ok(outcome),
             Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
                 let context = error.context();
-                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                let view = PublicErrorView::try_new(error.descriptor(), context)
                     .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
                 BrokerResponseParts::from_command(remoting_error_response(
                     view,
@@ -241,7 +241,7 @@ where
         request: &mut RemotingCommand,
         original_code: i32,
         original_opaque: i32,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let request_code = RequestCode::from(original_code);
         info!("QueryMessageProcessor received request code: {:?}", request_code);
         let parts = match request_code {
@@ -267,7 +267,7 @@ where
     async fn query_message_parts(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<QueryResponseParts> {
+    ) -> crate::broker_error::BrokerResult<QueryResponseParts> {
         let mut response = self
             .command_factory
             .create_success_response_command_with_header(QueryMessageResponseHeader::default());
@@ -331,7 +331,7 @@ where
         };
 
         let Some(response_header) = response.read_custom_header_mut::<QueryMessageResponseHeader>() else {
-            return Err(rocketmq_error::RocketMQError::invariant_violated(
+            return Err(crate::broker_error::invariant_violated(
                 "query response lost its required response header",
             ));
         };
@@ -359,7 +359,7 @@ where
     async fn view_message_by_id_parts(
         &self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<QueryResponseParts> {
+    ) -> crate::broker_error::BrokerResult<QueryResponseParts> {
         let response = self.command_factory.create_success_response_command();
         let request_header = request.decode_command_custom_header::<ViewMessageRequestHeader>()?;
 
@@ -428,7 +428,7 @@ impl QueryMessageStore for QueryWireFixtureStore {
 async fn query_wire_fixture_response(
     kind: QueryWireFixtureKind,
     body: Option<&[u8]>,
-) -> rocketmq_error::RocketMQResult<QueryResponseParts> {
+) -> crate::broker_error::BrokerResult<QueryResponseParts> {
     use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandDefaults;
 
     let body = body.map(bytes::Bytes::copy_from_slice);
@@ -478,7 +478,7 @@ async fn query_wire_fixture_response(
 pub(crate) async fn query_wire_fixture_parts(
     kind: QueryWireFixtureKind,
     body: Option<&[u8]>,
-) -> rocketmq_error::RocketMQResult<BrokerResponseParts> {
+) -> crate::broker_error::BrokerResult<BrokerResponseParts> {
     query_wire_fixture_response(kind, body)
         .await?
         .into_broker_response_parts()
@@ -591,7 +591,7 @@ mod tests {
         fn call_shared<'a>(
             leaf: &'a Arc<QueryMessageProcessor<TestQueryStore>>,
             request: &'a mut RemotingRequest,
-        ) -> impl Future<Output = rocketmq_error::RocketMQResult<HandlerOutcome>> + 'a {
+        ) -> impl Future<Output = crate::broker_error::BrokerResult<HandlerOutcome>> + 'a {
             leaf.process_shared(request)
         }
 

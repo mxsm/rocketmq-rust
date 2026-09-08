@@ -41,11 +41,6 @@ use rocketmq_model::common::filter::expression_type::ExpressionType;
 
 use crate::expression::Expression;
 use crate::filter::filter_spi::Filter;
-#[allow(
-    deprecated,
-    reason = "SqlFilter's deprecated compile wrapper preserves the legacy error type."
-)]
-use crate::filter::filter_spi::FilterError;
 use crate::filter::sql_runtime;
 
 /// SQL-92 expression filter implementation.
@@ -96,14 +91,6 @@ impl SqlFilter {
 }
 
 impl Filter for SqlFilter {
-    #[allow(
-        deprecated,
-        reason = "This compatibility wrapper preserves the deprecated Filter::compile API."
-    )]
-    fn compile(&self, expr: &str) -> Result<Box<dyn Expression>, FilterError> {
-        self.try_compile(expr).map_err(sql_runtime::legacy_projection)
-    }
-
     fn try_compile(&self, expr: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
         sql_runtime::compile_expression(expr)
     }
@@ -144,14 +131,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(
-        deprecated,
-        reason = "This test verifies the deprecated compile compatibility wrapper."
-    )]
     fn test_sql_filter_compile_and_evaluate() {
         let filter = SqlFilter::new();
         let expression = filter
-            .compile("color = 'blue' AND retries >= 3")
+            .try_compile("color = 'blue' AND retries >= 3")
             .expect("SQL92 expression should compile");
 
         let mut properties = HashMap::with_hasher(RandomState::default());
@@ -163,14 +146,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(
-        deprecated,
-        reason = "This test verifies the deprecated compile compatibility wrapper."
-    )]
     fn test_sql_filter_rejects_invalid_expression() {
         let filter = SqlFilter::new();
 
-        assert!(filter.compile("color = ").is_err());
+        assert!(filter.try_compile("color = ").is_err());
     }
 
     #[test]

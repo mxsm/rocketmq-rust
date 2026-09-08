@@ -257,7 +257,7 @@ impl<MS> RequestProcessor for ChangeInvisibleTimeProcessor<MS>
 where
     MS: BrokerReadWriteStore + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -266,7 +266,7 @@ impl<MS: BrokerReadWriteStore> ChangeInvisibleTimeProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let request_source = request_origin_label(request.origin());
@@ -297,7 +297,7 @@ where
         &self,
         request: &mut RemotingCommand,
         request_source: &str,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("ChangeInvisibleTimeProcessor received request code: {:?}", request_code);
         match request_code {
@@ -334,7 +334,7 @@ where
         &self,
         request: &mut RemotingCommand,
         request_source: &str,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<ChangeInvisibleTimeRequestHeader>()?;
         if request_header
             .lite_topic
@@ -472,7 +472,7 @@ where
         &self,
         request_header: &ChangeInvisibleTimeRequestHeader,
         extra_info: &[String],
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::broker_error::BrokerResult<()> {
         let ack_msg = AckMsg {
             ack_offset: request_header.offset,
             start_offset: ExtraInfoUtil::get_ck_queue_offset(extra_info)?,
@@ -535,7 +535,7 @@ where
         offset: i64,
         pop_time: u64,
         broker_name: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<PutMessageResult>> {
+    ) -> crate::broker_error::BrokerResult<Option<PutMessageResult>> {
         let mut ck = PopCheckPoint {
             bit_map: 0,
             num: 1,
@@ -590,7 +590,7 @@ where
         &self,
         request_header: &ChangeInvisibleTimeRequestHeader,
         extra_info: &[String],
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let pop_time = ExtraInfoUtil::get_pop_time(extra_info)?;
         let old_offset = self.context.consumer_offset_query.query_offset(
             &request_header.consumer_group,
@@ -659,7 +659,7 @@ where
     async fn process_change_invisible_time_for_lite(
         &self,
         request_header: &ChangeInvisibleTimeRequestHeader,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let Some(lite_topic) = request_header.lite_topic.as_ref() else {
             return Ok(None);
         };
@@ -749,7 +749,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use rocketmq_error::RocketMQResult;
+    use crate::broker_error::BrokerResult as Result;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_runtime::RuntimeConfig;
@@ -796,7 +796,7 @@ mod tests {
     where
         P: RequestProcessor + Send,
     {
-        async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+        async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome> {
             self.processor.lock().await.process(request).await
         }
     }
@@ -812,7 +812,7 @@ mod tests {
     async fn dispatch_embedded<P>(
         processor: P,
         command: RemotingCommand,
-    ) -> Result<EmbeddedDispatchOutcome, TransportError>
+    ) -> std::result::Result<EmbeddedDispatchOutcome, TransportError>
     where
         P: RequestProcessor + Send + 'static,
     {

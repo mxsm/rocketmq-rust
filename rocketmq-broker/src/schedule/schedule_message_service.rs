@@ -29,15 +29,14 @@ use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Duration;
 
+use crate::broker_error::BrokerResult as Result;
 use crate::config::broker_config::BrokerConfig;
 use crate::config::config_manager::ConfigManager;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex as ParkingMutex;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::UnifiedServiceError;
+use rocketmq_error::SharedError;
 use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -131,7 +130,7 @@ struct DelayLevelConfig {
     max_level: i32,
 }
 
-fn parse_delay_level_config(level_string: &str) -> Result<DelayLevelConfig, String> {
+fn parse_delay_level_config(level_string: &str) -> std::result::Result<DelayLevelConfig, String> {
     let level_array = level_string.split_whitespace().collect::<Vec<_>>();
     if level_array.is_empty() {
         return Err("delay level configuration is empty".to_string());
@@ -254,10 +253,8 @@ impl ScheduleOffsetState {
     }
 }
 
-fn schedule_message_service_startup_failed(error: impl Display) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::StartupFailed(format!(
-        "ScheduleMessageService: {error}"
-    )))
+fn schedule_message_service_startup_failed(_error: impl Display) -> SharedError {
+    crate::broker_error::service_failed("schedule_message_service_start")
 }
 
 /// `ScheduleMessageService` is the core service in RocketMQ specifically designed to manage and
@@ -318,14 +315,12 @@ pub struct ScheduleMessageService<MS: BrokerWriteStore> {
     persistence_gate: Mutex<()>,
 }
 
-fn schedule_message_service_shutdown_failed(error: impl Display) -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::ShutdownFailed(format!(
-        "ScheduleMessageService: {error}"
-    )))
+fn schedule_message_service_shutdown_failed(_error: impl Display) -> SharedError {
+    crate::broker_error::service_failed("schedule_message_service_shutdown")
 }
 
-fn schedule_message_service_interrupted() -> RocketMQError {
-    RocketMQError::Service(UnifiedServiceError::Interrupted)
+fn schedule_message_service_interrupted() -> SharedError {
+    crate::broker_error::service_failed("schedule_message_service_interrupted")
 }
 
 async fn wait_for_schedule_activation(
@@ -473,29 +468,22 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
     /// # Returns
     ///
     /// `Ok(())` on successful start, error otherwise
-    pub async fn start(this: Arc<Self>) -> RocketMQResult<()> {
+    pub async fn start(this: Arc<Self>) -> Result<()> {
         Self::start_with_persist_initial_delay(this, Duration::from_millis(PERSIST_DELAY_INITIAL_DELAY)).await
     }
 
     pub(crate) async fn start_with_persist_initial_delay(
         this: Arc<Self>,
         persist_initial_delay: Duration,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         Self::start_internal(this, persist_initial_delay, true).await
     }
 
-    pub(crate) async fn start_persist_task_for_probe(
-        this: Arc<Self>,
-        persist_initial_delay: Duration,
-    ) -> RocketMQResult<()> {
+    pub(crate) async fn start_persist_task_for_probe(this: Arc<Self>, persist_initial_delay: Duration) -> Result<()> {
         Self::start_internal(this, persist_initial_delay, false).await
     }
 
-    async fn start_internal(
-        this: Arc<Self>,
-        persist_initial_delay: Duration,
-        start_delivery: bool,
-    ) -> RocketMQResult<()> {
+    async fn start_internal(this: Arc<Self>, persist_initial_delay: Duration, start_delivery: bool) -> Result<()> {
         let mut lifecycle = this.lifecycle.lock().await;
         if lifecycle.finalized {
             return Err(schedule_message_service_startup_failed("service is already finalized"));
@@ -602,7 +590,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         scheduled_tasks: &ScheduledTaskGroup,
         activation: watch::Receiver<bool>,
         initial_delay: Duration,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         let service = Arc::downgrade(this);
         let context = run_context.clone();
         let period = Duration::from_millis(this.message_store_config.flush_delay_offset_interval.max(1));
@@ -638,15 +626,15 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
     /// Gracefully shuts down the schedule message service.
     ///
     /// Signals all tasks to stop, waits for them to complete, and persists final state.
-    pub async fn shutdown(&self) -> RocketMQResult<()> {
+    pub async fn shutdown(&self) -> Result<()> {
         self.stop_inner(true).await.map(|_| ())
     }
 
-    pub async fn stop(&self) -> RocketMQResult<bool> {
+    pub async fn stop(&self) -> Result<bool> {
         self.stop_inner(false).await
     }
 
-    async fn stop_inner(&self, finalize: bool) -> RocketMQResult<bool> {
+    async fn stop_inner(&self, finalize: bool) -> Result<bool> {
         let mut lifecycle = self.lifecycle.lock().await;
         if lifecycle.finalized {
             return Ok(true);
@@ -715,7 +703,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         run_context: &ScheduleRunContext,
         task_name: &'static str,
         future: ScheduleTaskFuture,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         run_context
             .task_group
             .spawn_operation(&run_context.operation, task_name, future)
@@ -729,7 +717,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
             && self.active_generation.load(Ordering::Acquire) == generation
     }
 
-    async fn persist_generation(&self, run_context: &ScheduleRunContext) -> RocketMQResult<()> {
+    async fn persist_generation(&self, run_context: &ScheduleRunContext) -> Result<()> {
         let _guard = tokio::select! {
             _ = run_context.cancellation.cancelled() => return Ok(()),
             guard = self.persistence_gate.lock() => guard,
@@ -740,12 +728,12 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         self.persist_current_locked().await
     }
 
-    async fn persist_current(&self) -> RocketMQResult<()> {
+    async fn persist_current(&self) -> Result<()> {
         let _guard = self.persistence_gate.lock().await;
         self.persist_current_locked().await
     }
 
-    async fn persist_current_locked(&self) -> RocketMQResult<()> {
+    async fn persist_current_locked(&self) -> Result<()> {
         let runtime_capabilities = self.runtime_capabilities();
         let json = self.encode_pretty(true);
         let file_name = self.config_file_path();
@@ -772,7 +760,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         self.offset_state.set_data_version(data_version);
     }
 
-    pub fn load_when_sync_delay_offset(&self, snapshot: &DelayOffsetSerializeWrapper) -> RocketMQResult<bool> {
+    pub fn load_when_sync_delay_offset(&self, snapshot: &DelayOffsetSerializeWrapper) -> Result<bool> {
         let offset_table = snapshot.offset_table().cloned().unwrap_or_default();
         self.offset_state
             .install_snapshot(&offset_table, snapshot.data_version());
@@ -949,7 +937,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         inner
     }
 
-    pub(crate) async fn load_async(&self) -> RocketMQResult<bool> {
+    pub(crate) async fn load_async(&self) -> Result<bool> {
         let runtime_capabilities = self.runtime_capabilities();
         let file_name = self.config_file_path();
         let load_result = runtime_capabilities
@@ -978,7 +966,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         &self,
         encoded_snapshot: &str,
         snapshot: &DelayOffsetSerializeWrapper,
-    ) -> RocketMQResult<bool> {
+    ) -> Result<bool> {
         let lifecycle = self.lifecycle.lock().await;
         if lifecycle.run.is_some() {
             return Err(schedule_message_service_shutdown_failed(
@@ -1191,7 +1179,7 @@ impl<MS: BrokerWriteStore> DeliverDelayedMessageTimerTask<MS> {
     }
 
     /// Execute when the scheduled time is up for messages
-    async fn execute_on_time_up(&self) -> RocketMQResult<()> {
+    async fn execute_on_time_up(&self) -> Result<()> {
         let schedule_service = self
             .schedule_service
             .upgrade()
@@ -1400,7 +1388,7 @@ impl<MS: BrokerWriteStore> DeliverDelayedMessageTimerTask<MS> {
         offset: i64,
         offset_py: i64,
         size_py: i32,
-    ) -> RocketMQResult<bool> {
+    ) -> Result<bool> {
         let mut result_process = self
             .deliver_message(msg_inner, msg_id, offset, offset_py, size_py, false)
             .await?;
@@ -1426,7 +1414,7 @@ impl<MS: BrokerWriteStore> DeliverDelayedMessageTimerTask<MS> {
         offset: i64,
         offset_py: i64,
         size_py: i32,
-    ) -> RocketMQResult<bool> {
+    ) -> Result<bool> {
         let schedule_service = self
             .schedule_service
             .upgrade()
@@ -1502,7 +1490,7 @@ impl<MS: BrokerWriteStore> DeliverDelayedMessageTimerTask<MS> {
         offset_py: i64,
         size_py: i32,
         auto_resend: bool,
-    ) -> RocketMQResult<PutResultProcess<MS>> {
+    ) -> Result<PutResultProcess<MS>> {
         // Create a channel for the async result
 
         let topic = msg_inner.get_topic().clone();
@@ -2405,10 +2393,10 @@ mod tests {
     fn schedule_message_service_uses_typed_errors() {
         let source = include_str!("schedule_message_service.rs");
 
-        assert!(source.contains("async fn persist_current(&self) -> RocketMQResult<()>"));
-        assert!(source.contains("RocketMQResult<PutResultProcess<MS>>"));
+        assert!(source.contains("async fn persist_current(&self) -> Result<()>"));
+        assert!(source.contains("Result<PutResultProcess<MS>>"));
         assert!(!source.contains(concat!("ArcMut<", "ScheduleMessageService")));
         assert!(!source.contains(concat!("mut_from_ref()", ".escape_bridge_mut()")));
-        assert!(!source.contains(concat!("Box<dyn std::error::", "Error")));
+        assert!(!source.contains(concat!("Box<dyn std::error::", "SharedError")));
     }
 }

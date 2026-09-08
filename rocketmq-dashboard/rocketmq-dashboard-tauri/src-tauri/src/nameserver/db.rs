@@ -16,6 +16,7 @@ use crate::error::DashboardResult as Result;
 use chrono::Utc;
 use rocketmq_dashboard_common::DashboardCommonError;
 use rocketmq_dashboard_common::DashboardCommonResult;
+use rocketmq_dashboard_common::DashboardOperation;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use rocketmq_dashboard_common::NameServerConfigStore;
 use rocketmq_dashboard_common::NameServerConfigTransaction;
@@ -249,8 +250,8 @@ fn save_snapshot_to_transaction(
     Ok(())
 }
 
-fn store_error(_error: impl std::error::Error) -> DashboardCommonError {
-    DashboardCommonError::store("local NameServer storage operation failed")
+fn store_error(error: impl std::error::Error + Send + Sync + 'static) -> DashboardCommonError {
+    DashboardCommonError::storage(DashboardOperation::NameServerStorage, error)
 }
 
 fn repair_snapshot_tables(transaction: &Transaction<'_>) -> Result<()> {

@@ -27,7 +27,6 @@ use crate::expression::Value;
 
 mod compile_error;
 
-pub(super) use compile_error::legacy_projection;
 use compile_error::SpannedToken;
 
 const MAX_EXPRESSION_BYTES: usize = 64 * 1024;

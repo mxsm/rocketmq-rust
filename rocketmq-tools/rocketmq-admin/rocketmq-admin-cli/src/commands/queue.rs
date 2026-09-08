@@ -16,7 +16,7 @@ mod check_rocksdb_cq_write_progress_sub_command;
 mod query_consume_queue_sub_command;
 
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::queue::check_rocksdb_cq_write_progress_sub_command::CheckRocksdbCqWriteProgressSubCommand;
@@ -44,7 +44,7 @@ impl CommandExecute for QueueCommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             QueueCommands::CheckRocksdbCqWriteProgress(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
             QueueCommands::QueryCq(cmd) => cmd.execute(credentials, client_runtime.clone()).await,

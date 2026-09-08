@@ -27,6 +27,7 @@ use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 
 use crate::config::ProxyConfig;
+use crate::error::canonical;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::grpc::middleware;
@@ -238,9 +239,7 @@ where
                         }
                     })
                     .await
-                    .map_err(|error| ProxyError::Transport {
-                        message: format!("proxy gRPC TLS server failed: {error}"),
-                    });
+                    .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)));
             }
             Server::builder()
                 .concurrency_limit_per_connection(concurrency_limit_per_connection)
@@ -253,9 +252,7 @@ where
                     }
                 })
                 .await
-                .map_err(|error| ProxyError::Transport {
-                    message: format!("proxy gRPC server failed: {error}"),
-                })
+                .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))
         },
     )
     .await?;

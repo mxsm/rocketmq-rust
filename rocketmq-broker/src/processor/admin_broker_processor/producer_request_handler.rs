@@ -32,7 +32,7 @@ impl ProducerRequestHandler {
     pub async fn get_producer_connection_list(
         &self,
         request: &RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header_fast::<GetProducerConnectionListRequestHeader>()?;
         let mut producer_connection = ProducerConnection::new();
@@ -61,7 +61,7 @@ impl ProducerRequestHandler {
     pub async fn get_all_producer_info(
         &self,
         _request: &RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let producer_table_info = self.producer_registry.producer_table();
         let body = producer_table_info.encode()?;
         Ok(Some(RemotingCommand::create_success_response_command().set_body(body)))

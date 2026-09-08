@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rocketmq_client::DefaultMQProducer;
 use rocketmq_client::ProducerConfig;
 use rocketmq_model::common::message::message_single::Message;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 use tracing::{error, info};
 
 const TOPIC: &str = "CallbackExample";
@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn run() -> RocketMQResult<()> {
+async fn run() -> ClientResult<()> {
     info!("=== SendCallback Examples ===\n");
 
     let mut producer = setup_producer().await?;
@@ -76,7 +76,7 @@ async fn run() -> RocketMQResult<()> {
     Ok(())
 }
 
-async fn setup_producer() -> RocketMQResult<DefaultMQProducer> {
+async fn setup_producer() -> ClientResult<DefaultMQProducer> {
     let mut producer = DefaultMQProducer::new(
         ProducerConfig {
             name_server_addr: NAME_SERVER.to_string(),
@@ -94,7 +94,7 @@ async fn setup_producer() -> RocketMQResult<DefaultMQProducer> {
 }
 
 /// Example 1: Basic callback usage with pattern matching
-async fn send_with_basic_callback(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_with_basic_callback(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     let message = Message::builder()
         .topic(TOPIC)
         .tags(TAG)
@@ -126,7 +126,7 @@ async fn send_with_basic_callback(producer: &mut DefaultMQProducer) -> RocketMQR
 }
 
 /// Example 2: Callback with state tracking using atomic counters
-async fn send_with_state_tracking(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_with_state_tracking(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     let success_count = Arc::new(AtomicUsize::new(0));
     let failure_count = Arc::new(AtomicUsize::new(0));
     let total_messages = 10;
@@ -172,7 +172,7 @@ async fn send_with_state_tracking(producer: &mut DefaultMQProducer) -> RocketMQR
 }
 
 /// Example 3: Callback with detailed error handling
-async fn send_with_error_handling(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_with_error_handling(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     let message = Message::builder()
         .topic(TOPIC)
         .tags(TAG)
@@ -210,7 +210,7 @@ async fn send_with_error_handling(producer: &mut DefaultMQProducer) -> RocketMQR
 }
 
 /// Example 4: Batch sending with progress tracking
-async fn send_batch_with_progress(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_batch_with_progress(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     let batch_size = 5;
     let completed = Arc::new(AtomicUsize::new(0));
 

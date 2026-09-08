@@ -65,7 +65,7 @@ const MATCH_TAG: &str = "match";
 struct PullLeaf(Arc<PullMessageProcessor<BrokerMessageStore>>);
 
 impl RequestProcessor for PullLeaf {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.0.process_shared(request).await
     }
 }
@@ -77,7 +77,7 @@ struct PopLeaf {
 }
 
 impl RequestProcessor for PopLeaf {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let prepared = match self.service.prepare(
             request,
             None,
@@ -121,7 +121,7 @@ impl MessageFilter for FrozenPopTagFilter {
 struct NotificationLeaf(Arc<NotificationProcessor<BrokerMessageStore>>);
 
 impl RequestProcessor for NotificationLeaf {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.0.process_shared(request).await
     }
 }

@@ -57,7 +57,6 @@ fn storage_api_is_consumed_only_through_root_exports() {
     assert_eq!("storage.write.failed", error.code().as_str());
     assert!(!source.contains(concat!("StoreError", "Kind")));
     assert!(!error_source.contains(concat!("StoreError", "Kind")));
-    assert!(!error_source.contains("impl DomainError for StoreError"));
 }
 
 #[test]

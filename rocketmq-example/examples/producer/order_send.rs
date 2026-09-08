@@ -14,8 +14,8 @@
 
 //! Demonstrates ordered sends by routing the same order id to the same queue.
 
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::DefaultMQProducer;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_single::Message;
 
 pub const PRODUCER_GROUP: &str = "producer_order_send_group";
@@ -26,11 +26,11 @@ pub const TAG: &str = "OrderTag";
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)

@@ -110,9 +110,9 @@ impl RemotingCommand {
         self.custom_header_to_net = false;
     }
 
-    pub fn decode_command_custom_header<T>(&self) -> rocketmq_error::RocketMQResult<T>
+    pub fn decode_command_custom_header<T>(&self) -> rocketmq_error::Result<T>
     where
-        T: FromMap<Target = T, Error = rocketmq_error::RocketMQError>,
+        T: FromMap<Target = T, Error = rocketmq_error::Error>,
     {
         if T::SUPPORTS_HEADER_FIELD_SOURCE {
             if let Some(source) = self.ext_fields.as_field_source() {
@@ -120,19 +120,17 @@ impl RemotingCommand {
             }
         }
         match self.ext_fields.as_map() {
-            None => Err(rocketmq_error::RocketMQError::Serialization(
-                rocketmq_error::SerializationError::DecodeFailed {
-                    format: "header",
-                    message: "ExtFields is None".to_string(),
-                },
+            None => Err(crate::error::serialization_decode_failed(
+                "header",
+                "extension fields absent",
             )),
             Some(header) => T::from(header),
         }
     }
 
-    pub fn decode_command_custom_header_fast<T>(&self) -> rocketmq_error::RocketMQResult<T>
+    pub fn decode_command_custom_header_fast<T>(&self) -> rocketmq_error::Result<T>
     where
-        T: FromMap<Target = T, Error = rocketmq_error::RocketMQError>,
+        T: FromMap<Target = T, Error = rocketmq_error::Error>,
         T: Default + CommandCustomHeader,
     {
         if T::SUPPORTS_HEADER_FIELD_SOURCE {
@@ -141,11 +139,9 @@ impl RemotingCommand {
             }
         }
         match self.ext_fields.as_map() {
-            None => Err(rocketmq_error::RocketMQError::Serialization(
-                rocketmq_error::SerializationError::DecodeFailed {
-                    format: "header",
-                    message: "ExtFields is None".to_string(),
-                },
+            None => Err(crate::error::serialization_decode_failed(
+                "header",
+                "extension fields absent",
             )),
             Some(header) => {
                 let mut target = T::default();
@@ -168,11 +164,11 @@ impl RemotingCommand {
     ///
     /// # Errors
     ///
-    /// Returns [`rocketmq_error::RocketMQError::RequestHeaderSource`] when the
-    /// extension fields are absent or the header cannot be decoded.
-    pub fn decode_required_header<T>(&self, operation: &'static str) -> rocketmq_error::RocketMQResult<T>
+    /// Returns a canonical request-header error when the extension fields are
+    /// absent or the header cannot be decoded.
+    pub fn decode_required_header<T>(&self, operation: &'static str) -> rocketmq_error::Result<T>
     where
-        T: FromMap<Target = T, Error = rocketmq_error::RocketMQError>,
+        T: FromMap<Target = T, Error = rocketmq_error::Error>,
     {
         self.decode_command_custom_header::<T>()
             .map_err(|source| required_header_decode_error(operation, source))
@@ -187,18 +183,18 @@ impl RemotingCommand {
     ///
     /// # Errors
     ///
-    /// Returns [`rocketmq_error::RocketMQError::RequestHeaderSource`] when the
-    /// extension fields are absent or the header cannot be decoded.
-    pub fn decode_required_header_fast<T>(&self, operation: &'static str) -> rocketmq_error::RocketMQResult<T>
+    /// Returns a canonical request-header error when the extension fields are
+    /// absent or the header cannot be decoded.
+    pub fn decode_required_header_fast<T>(&self, operation: &'static str) -> rocketmq_error::Result<T>
     where
-        T: FromMap<Target = T, Error = rocketmq_error::RocketMQError>,
+        T: FromMap<Target = T, Error = rocketmq_error::Error>,
         T: Default + CommandCustomHeader,
     {
         self.decode_command_custom_header_fast::<T>()
             .map_err(|source| required_header_decode_error(operation, source))
     }
 
-    pub fn try_read_custom_header_ref<T>(&self) -> rocketmq_error::RocketMQResult<&T>
+    pub fn try_read_custom_header_ref<T>(&self) -> rocketmq_error::Result<&T>
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
@@ -212,7 +208,7 @@ impl RemotingCommand {
         }
     }
 
-    pub fn try_read_custom_header_mut<T>(&mut self) -> rocketmq_error::RocketMQResult<&mut T>
+    pub fn try_read_custom_header_mut<T>(&mut self) -> rocketmq_error::Result<&mut T>
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
@@ -268,44 +264,41 @@ impl RemotingCommand {
         }
     }
 
-    fn custom_header_missing_error<T>() -> rocketmq_error::RocketMQError
+    fn custom_header_missing_error<T>() -> rocketmq_error::Error
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-            format: "header",
-            message: format!(
+        crate::error::serialization_decode_failed(
+            "header",
+            format!(
                 "Command custom header is missing; expected {}.",
                 std::any::type_name::<T>()
             ),
-        })
+        )
     }
 
-    fn custom_header_type_mismatch_error<T>() -> rocketmq_error::RocketMQError
+    fn custom_header_type_mismatch_error<T>() -> rocketmq_error::Error
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-            format: "header",
-            message: format!(
+        crate::error::serialization_decode_failed(
+            "header",
+            format!(
                 "Command custom header type mismatch; expected {}.",
                 std::any::type_name::<T>()
             ),
-        })
+        )
     }
 
-    fn custom_header_shared_error() -> rocketmq_error::RocketMQError {
-        rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-            format: "header",
-            message: "Command custom header is shared by a cloned command and cannot be mutated safely.".to_string(),
-        })
+    fn custom_header_shared_error() -> rocketmq_error::Error {
+        crate::error::serialization_decode_failed(
+            "header",
+            "Command custom header is shared by a cloned command and cannot be mutated safely.",
+        )
     }
 }
 
 #[inline]
-fn required_header_decode_error(
-    operation: &'static str,
-    source: rocketmq_error::RocketMQError,
-) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::request_header_source(operation, source)
+fn required_header_decode_error(operation: &'static str, source: rocketmq_error::Error) -> rocketmq_error::Error {
+    crate::error::request_header_source(operation, source)
 }

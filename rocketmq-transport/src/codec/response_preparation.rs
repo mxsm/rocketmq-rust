@@ -14,14 +14,13 @@
 
 //! One-pass preparation of bound structured responses.
 
-use rocketmq_error::SerializationError;
-
 use super::remoting_command_codec::FrameLimits;
 use crate::dispatch::BoundResponse;
 use crate::dispatch::RequestId;
 use crate::dispatch::ResponseBody;
 use crate::dispatch::ResponseBodyKind;
 use crate::dispatch::ResponseOperationalFailure;
+use crate::error_helpers::serialization_failed;
 use crate::write_strategy::OutboundPayload;
 use crate::write_strategy::PreparedStructuredResponseBody;
 use crate::write_strategy::StructuredResponseFrame;
@@ -138,7 +137,9 @@ pub(crate) fn prepare_response(
     dead_code,
     reason = "the later private response preparation seam computes body metadata before encoding"
 )]
-fn prepare_body(body: ResponseBody) -> rocketmq_error::RocketMQResult<(ResponseBodyKind, usize, usize, PreparedBody)> {
+fn prepare_body(
+    body: ResponseBody,
+) -> Result<(ResponseBodyKind, usize, usize, PreparedBody), rocketmq_error::SharedError> {
     match body {
         ResponseBody::Empty => {
             let body = PreparedStructuredResponseBody::empty()?;
@@ -169,12 +170,8 @@ fn prepare_body(body: ResponseBody) -> rocketmq_error::RocketMQResult<(ResponseB
             ))
         }
         ResponseBody::FileRegions(regions) => {
-            let body_len = usize::try_from(regions.len()).map_err(|_| {
-                SerializationError::encode_failed(
-                    "structured-response-frame",
-                    "file-region response body length is not representable as usize",
-                )
-            })?;
+            let body_len = usize::try_from(regions.len())
+                .map_err(|_| serialization_failed("encode", "structured-response-frame"))?;
             let body_part_count = regions.regions().len();
             Ok((
                 ResponseBodyKind::FileRegions,
@@ -195,7 +192,7 @@ enum PreparedBody {
     dead_code,
     reason = "the later private response preparation seam retains typed encoding failures"
 )]
-fn encode_error(source: rocketmq_error::RocketMQError) -> ResponseOperationalFailure {
+fn encode_error(source: rocketmq_error::SharedError) -> ResponseOperationalFailure {
     ResponseOperationalFailure::encode(source)
 }
 

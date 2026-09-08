@@ -34,10 +34,8 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::ControllerResult;
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_runtime::common::parse_config_file::render_safe_config_error;
 use tracing::info;
 
 use crate::config::ControllerConfig;
@@ -55,37 +53,21 @@ const REMOVED_CONTROLLER_TELEMETRY_KEYS: [&str; 10] = [
     "metricsInDelta",
 ];
 
-fn parse_controller_config_file(config_path: &Path) -> RocketMQResult<ControllerConfig> {
+fn parse_controller_config_file(config_path: &Path) -> ControllerResult<ControllerConfig> {
     let config = config::Config::builder()
         .add_source(config::File::from(config_path))
         .build()
-        .map_err(|error| RocketMQError::ConfigParseFailed {
-            key: "controller.config",
-            reason: format!(
-                "failed to build Controller configuration: {}",
-                render_safe_config_error(&error)
-            ),
-        })?;
+        .map_err(|error| crate::error::configuration_invalid_by("controller.config", error))?;
 
     for key in REMOVED_CONTROLLER_TELEMETRY_KEYS {
         if config.get::<config::Value>(key).is_ok() {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "property",
-                value: key.to_string(),
-                reason: "removed Controller telemetry property; use [observability] instead".to_string(),
-            });
+            return Err(crate::error::configuration_invalid("property"));
         }
     }
 
     config
         .try_deserialize()
-        .map_err(|error| RocketMQError::ConfigParseFailed {
-            key: "controller.config",
-            reason: format!(
-                "failed to deserialize Controller configuration: {}",
-                render_safe_config_error(&error)
-            ),
-        })
+        .map_err(|error| crate::error::configuration_invalid_by("controller.config", error))
 }
 
 /// RocketMQ Controller Command Line Arguments
@@ -153,21 +135,27 @@ impl ControllerCli {
     /// # Errors
     ///
     /// Returns error if validation fails
-    pub fn validate(&self) -> RocketMQResult<()> {
+    pub fn validate(&self) -> ControllerResult<()> {
         // Validate config file if specified
         if let Some(ref path) = self.config_file {
             if !path.exists() {
-                return Err(rocketmq_error::RocketMQError::from(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("Config file not found: {}", path.display()),
-                )));
+                return Err(crate::error::io_failed(
+                    "validate Controller config file",
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("Config file not found: {}", path.display()),
+                    ),
+                ));
             }
 
             if !path.is_file() {
-                return Err(rocketmq_error::RocketMQError::from(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("Config path is not a file: {}", path.display()),
-                )));
+                return Err(crate::error::io_failed(
+                    "validate Controller config file",
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("Config path is not a file: {}", path.display()),
+                    ),
+                ));
             }
         }
 
@@ -197,7 +185,7 @@ impl ControllerCli {
     /// Returns error if:
     /// - Config file cannot be read
     /// - Config file format is invalid
-    pub fn load_config(&self, config: ControllerConfig) -> RocketMQResult<ControllerConfig> {
+    pub fn load_config(&self, config: ControllerConfig) -> ControllerResult<ControllerConfig> {
         // Load from config file if specified
         if let Some(ref config_path) = self.config_file {
             info!("Loading configuration from file: {}", config_path.display());
@@ -285,7 +273,7 @@ impl ControllerCli {
 ///     Ok(())
 /// }
 /// ```
-pub fn parse_command_line() -> RocketMQResult<(ControllerCli, ControllerConfig)> {
+pub fn parse_command_line() -> ControllerResult<(ControllerCli, ControllerConfig)> {
     // Parse arguments (exits on --help or --version)
     let cli = ControllerCli::parse_args();
 

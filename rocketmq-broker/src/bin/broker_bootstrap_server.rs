@@ -31,6 +31,11 @@ use rocketmq_broker::config::java_properties::JavaBrokerProperties;
 use rocketmq_broker::config::raw::RawBrokerConfig;
 use rocketmq_broker::config::validated::ValidatedBrokerConfig;
 use rocketmq_broker::Builder;
+use rocketmq_error::fields;
+use rocketmq_error::CliErrorView;
+use rocketmq_error::CliVerbosity;
+use rocketmq_error::ErrorContext;
+use rocketmq_error::CORE_SERVICE_FAILED;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
@@ -87,7 +92,22 @@ fn print_release_version_if_requested(component: &str) -> bool {
     true
 }
 
-fn main() -> Result<()> {
+fn main() {
+    if let Err(source) = try_main() {
+        let error = rocketmq_error::Error::new(&CORE_SERVICE_FAILED)
+            .with_boxed_source(source.into_boxed_dyn_error())
+            .with_context(
+                ErrorContext::new()
+                    .with_text(fields::OPERATION_DIAGNOSTIC, "run-broker-service")
+                    .with_secret_presence(fields::SOURCE_PRESENT),
+            );
+        let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
+        eprintln!("{}", output.stderr());
+        std::process::exit(output.exit_code().as_i32());
+    }
+}
+
+fn try_main() -> Result<()> {
     if print_release_version_if_requested("rocketmq-broker-rust") {
         return Ok(());
     }

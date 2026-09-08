@@ -27,17 +27,19 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::controller::broker_heartbeat_manager::BrokerSession;
+use crate::error::not_initialized;
+use crate::error::request_body_invalid;
+use crate::error::request_header_invalid_by;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::manager::ControllerManager;
 use crate::metrics::RequestHandleStatus;
 use crate::metrics::RequestType as MetricsRequestType;
 use crate::Controller;
+use crate::ControllerResult;
 use cheetah_string::CheetahString;
 use rocketmq_error::fields;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_error::PROTOCOL_RESPONSE_FAILED;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -57,14 +59,12 @@ use tracing::warn;
 
 const WAIT_TIMEOUT_SECONDS: u64 = 5;
 
-fn controller_response_failed(source: impl std::error::Error + Send + Sync + 'static) -> RocketMQError {
-    RocketMQError::Shared(Arc::new(
-        Error::caused_by(&PROTOCOL_RESPONSE_FAILED, source).with_context(
-            ErrorContext::new()
-                .with_text(fields::OPERATION_DIAGNOSTIC, "controller.remoting_response")
-                .with_secret_presence(fields::REASON_PRESENT),
-        ),
-    ))
+fn controller_response_failed(source: impl std::error::Error + Send + Sync + 'static) -> Error {
+    Error::caused_by(&PROTOCOL_RESPONSE_FAILED, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, "controller.remoting_response")
+            .with_secret_presence(fields::REASON_PRESENT),
+    )
 }
 
 /// Routes Controller remoting requests without retaining the manager after shutdown.
@@ -91,10 +91,10 @@ impl ControllerRequestProcessor {
         }
     }
 
-    fn controller_manager(&self) -> RocketMQResult<Arc<ControllerManager>> {
+    fn controller_manager(&self) -> ControllerResult<Arc<ControllerManager>> {
         self.controller_manager
             .upgrade()
-            .ok_or_else(|| RocketMQError::not_initialized("controller manager is no longer available"))
+            .ok_or_else(|| not_initialized("controller-manager"))
     }
 
     pub(crate) async fn handle_request(
@@ -102,7 +102,7 @@ impl ControllerRequestProcessor {
         session: BrokerSession,
         channel_identity: &str,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         match RequestCode::from(request.code()) {
             RequestCode::ControllerAlterSyncStateSet => self.handle_alter_sync_state_set(request).await,
             RequestCode::ControllerElectMaster => self.handle_elect_master(request).await,
@@ -136,23 +136,15 @@ impl ControllerRequestProcessor {
     async fn handle_alter_sync_state_set(
         &self,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<AlterSyncStateSetRequestHeader>()
-            .map_err(|error| {
-                RocketMQError::request_header_error(format!(
-                    "Failed to decode AlterSyncStateSetRequestHeader: {:?}",
-                    error
-                ))
-            })?;
+            .map_err(|error| request_header_invalid_by("decode-alter-sync-state-header", error))?;
 
         let sync_state_set = if let Some(body) = request.body() {
             SyncStateSet::decode(body)?
         } else {
-            return Err(RocketMQError::request_body_invalid(
-                "ALTER_SYNC_STATE_SET",
-                "Request body is empty",
-            ));
+            return Err(request_body_invalid("alter-sync-state-set"));
         };
 
         self.controller_manager()?
@@ -161,12 +153,10 @@ impl ControllerRequestProcessor {
             .await
     }
 
-    async fn handle_elect_master(&self, request: &mut RemotingCommand) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn handle_elect_master(&self, request: &mut RemotingCommand) -> ControllerResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<ElectMasterRequestHeader>()
-            .map_err(|error| {
-                RocketMQError::request_header_error(format!("Failed to decode ElectMasterRequestHeader: {:?}", error))
-            })?;
+            .map_err(|error| request_header_invalid_by("decode-elect-master-header", error))?;
 
         let controller_manager = self.controller_manager()?;
         let config = controller_manager.controller_config();
@@ -186,15 +176,13 @@ impl ControllerRequestProcessor {
         Ok(response)
     }
 
-    async fn handle_get_replica_info(&self, request: &mut RemotingCommand) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn handle_get_replica_info(
+        &self,
+        request: &mut RemotingCommand,
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<GetReplicaInfoRequestHeader>()
-            .map_err(|error| {
-                RocketMQError::request_header_error(format!(
-                    "Failed to decode GetReplicaInfoRequestHeader: {:?}",
-                    error
-                ))
-            })?;
+            .map_err(|error| request_header_invalid_by("decode-replica-info-header", error))?;
 
         self.controller_manager()?
             .controller()
@@ -202,14 +190,14 @@ impl ControllerRequestProcessor {
             .await
     }
 
-    async fn handle_get_metadata_info(&self) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn handle_get_metadata_info(&self) -> ControllerResult<Option<RemotingCommand>> {
         self.controller_manager()?.controller().get_controller_metadata().await
     }
 
     async fn handle_get_sync_state_data(
         &self,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         if let Some(body) = request.body() {
             let broker_names: Vec<CheetahString> = serde_json::from_slice(body).unwrap_or_default();
             if !broker_names.is_empty() {
@@ -242,9 +230,9 @@ impl ControllerRequestProcessor {
         &self,
         request_name: Option<&'static str>,
         dispatch: F,
-    ) -> RocketMQResult<RemotingCommand>
+    ) -> ControllerResult<RemotingCommand>
     where
-        F: Future<Output = RocketMQResult<Option<RemotingCommand>>>,
+        F: Future<Output = ControllerResult<Option<RemotingCommand>>>,
     {
         let start = Instant::now();
         let result = tokio::time::timeout(Duration::from_secs(WAIT_TIMEOUT_SECONDS), dispatch).await;
@@ -286,7 +274,7 @@ impl ControllerRequestProcessor {
         }
     }
 
-    fn response_outcome(mut response: RemotingCommand) -> RocketMQResult<HandlerOutcome> {
+    fn response_outcome(mut response: RemotingCommand) -> ControllerResult<HandlerOutcome> {
         let body = response.take_body();
         let response = match body {
             Some(body) => RemotingResponse::bytes(response, body),
@@ -298,7 +286,7 @@ impl ControllerRequestProcessor {
 }
 
 impl RequestProcessor for ControllerRequestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         let owner_id = request.original_identity().request_id().owner_id();
         let channel_identity = match request.session() {
             SessionView::Network { .. } => format!("transport-session-{owner_id}"),
@@ -308,8 +296,8 @@ impl RequestProcessor for ControllerRequestProcessor {
         let session = BrokerSession::new(request.session().id(), owner_id, request.session().state().clone());
         let request_name = RequestCode::from(request.command().code()).get_controller_request_name();
         let dispatch = self.handle_request(session, &channel_identity, request.command_mut());
-        let response = self.complete_request(request_name, dispatch).await?;
-        Self::response_outcome(response)
+        let response = self.complete_request(request_name, dispatch).await.map_err(Arc::new)?;
+        Self::response_outcome(response).map_err(Arc::new)
     }
 }
 
@@ -329,9 +317,6 @@ mod canonical_error_tests {
             error.to_string(),
             "protocol.response.failed: Response processing failed"
         );
-        let RocketMQError::Shared(error) = error else {
-            panic!("response failure must use the canonical carrier");
-        };
         assert!(error
             .source()
             .and_then(|source| source.downcast_ref::<std::io::Error>())

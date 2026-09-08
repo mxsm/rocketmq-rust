@@ -20,7 +20,6 @@ use rocketmq_broker::config::broker_config::BrokerConfig;
 use rocketmq_broker::config::error::BrokerConfigError;
 use rocketmq_broker::config::error::ConfigSection;
 use rocketmq_broker::config::validated::ValidatedBrokerConfig;
-use rocketmq_broker::BrokerStartupError;
 use rocketmq_broker::Builder;
 use rocketmq_observability::TelemetryRuntimeGuard;
 use rocketmq_runtime::RuntimeContext;
@@ -109,23 +108,16 @@ async fn listener_bind_failure_rolls_back_already_started_components() {
         }
         Err(error) => error,
     };
-    let BrokerStartupError::RolledBack {
-        cause,
-        unhealthy_components,
-    } = error
-    else {
-        panic!("startup failure should include rollback evidence");
-    };
+    assert_eq!(error.phase(), rocketmq_broker::BrokerStartupPhase::Rollback);
+    let cause = error
+        .rollback_cause()
+        .expect("startup failure should include rollback evidence");
+    assert_eq!(cause.phase(), rocketmq_broker::BrokerStartupPhase::ListenerStartup);
+    assert_eq!(cause.component(), Some("normal"));
     assert!(
-        matches!(
-            cause.as_ref(),
-            BrokerStartupError::ListenerStartup { listener: "normal", .. }
-        ),
-        "unexpected startup failure: {cause:?}"
-    );
-    assert!(
-        unhealthy_components.is_empty(),
-        "rollback should be healthy: {unhealthy_components:?}"
+        error.unhealthy_components().is_empty(),
+        "rollback should be healthy: {:?}",
+        error.unhealthy_components()
     );
 
     drop(reserved_normal_listener);
@@ -161,16 +153,11 @@ async fn unsupported_cold_data_hold_capability_fails_before_listener_startup() {
         }
         Err(error) => error,
     };
-    let BrokerStartupError::RolledBack { cause, .. } = error else {
-        panic!("unsupported capability should be reported through transactional rollback");
-    };
-    assert!(matches!(
-        *cause,
-        BrokerStartupError::UnsupportedCapability {
-            capability: "cold_data_flow_control",
-            ..
-        }
-    ));
+    let cause = error
+        .rollback_cause()
+        .expect("unsupported capability should be reported through transactional rollback");
+    assert_eq!(cause.phase(), rocketmq_broker::BrokerStartupPhase::CapabilityValidation);
+    assert_eq!(cause.component(), Some("cold_data_flow_control"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -207,14 +194,9 @@ async fn configured_but_unreachable_name_server_prevents_readiness() {
         }
         Err(error) => error,
     };
-    let BrokerStartupError::RolledBack { cause, .. } = error else {
-        panic!("registration failure should trigger transactional rollback");
-    };
-    assert!(matches!(
-        *cause,
-        BrokerStartupError::ComponentStart {
-            component: "broker_registration",
-            ..
-        }
-    ));
+    let cause = error
+        .rollback_cause()
+        .expect("registration failure should trigger transactional rollback");
+    assert_eq!(cause.phase(), rocketmq_broker::BrokerStartupPhase::ComponentStart);
+    assert_eq!(cause.component(), Some("broker_registration"));
 }

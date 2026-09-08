@@ -16,7 +16,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use crate::ClientError;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::code::response_code::ResponseCode;
@@ -46,12 +46,12 @@ pub trait PopCallbackInner {
     /// # Arguments
     ///
     /// * `e` - The error encountered during the pop operation.
-    fn on_error(&mut self, e: RocketMQError);
+    fn on_error(&mut self, e: ClientError);
 }
 
 /*impl<F, Fut> PopCallback for F
 where
-    F: Fn(Option<PopResult>, Option<RocketMQError>) -> Fut + Send + Sync,
+    F: Fn(Option<PopResult>, Option<ClientError>) -> Fut + Send + Sync,
     Fut: Future<Output = ()> + Send,
 {
     /// Calls the function with the pop result when the pop operation is successful.
@@ -68,7 +68,7 @@ where
     /// # Arguments
     ///
     /// * `e` - The error encountered during the pop operation.
-    fn on_error(&self, e: RocketMQError) {
+    fn on_error(&self, e: ClientError) {
         (*self)(None, Some(e));
     }
 }*/
@@ -77,14 +77,11 @@ where
 ///
 /// This type alias defines a callback function that takes a `PopResult` and returns a boxed future.
 pub type PopCallbackFn = Arc<
-    dyn Fn(Option<PopResult>, Option<RocketMQError>) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> + Send + Sync,
+    dyn Fn(Option<PopResult>, Option<ClientError>) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>> + Send + Sync,
 >;
 
-fn broker_response_code(error: &RocketMQError) -> Option<ResponseCode> {
-    match error {
-        RocketMQError::BrokerOperationFailed { code, .. } => Some(ResponseCode::from(*code)),
-        _ => None,
-    }
+fn broker_response_code(error: &ClientError) -> Option<ResponseCode> {
+    error.broker_response_code().map(ResponseCode::from)
 }
 
 pub struct DefaultPopCallback {
@@ -163,7 +160,7 @@ impl PopCallback for DefaultPopCallback {
         }
     }
 
-    fn on_error(&mut self, err: RocketMQError) {
+    fn on_error(&mut self, err: ClientError) {
         let push_consumer_impl = self.push_consumer_impl.clone();
 
         let Some(message_queue_inner) = self.message_queue_inner.take() else {
@@ -240,7 +237,7 @@ mod tests {
 
     #[test]
     fn broker_response_code_reads_broker_error_without_downcast() {
-        let error = rocketmq_error::RocketMQError::broker_operation_failed(
+        let error = crate::ClientError::broker_operation_failed(
             "POP_MESSAGE",
             ResponseCode::SubscriptionNotLatest.to_i32(),
             "subscription not latest",
@@ -293,7 +290,7 @@ mod tests {
     fn error_without_message_queue_is_ignored_without_panic() {
         let mut callback = new_callback();
 
-        PopCallback::on_error(&mut callback, RocketMQError::illegal_argument("test error"));
+        PopCallback::on_error(&mut callback, ClientError::illegal_argument("test error"));
     }
 
     #[test]
@@ -301,6 +298,6 @@ mod tests {
         let mut callback = new_callback();
         callback.message_queue_inner = Some(message_queue());
 
-        PopCallback::on_error(&mut callback, RocketMQError::illegal_argument("test error"));
+        PopCallback::on_error(&mut callback, ClientError::illegal_argument("test error"));
     }
 }

@@ -15,8 +15,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::ClientResult;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::common::mix_all;
@@ -93,7 +93,7 @@ pub(crate) fn default_lite_pull_consume_timestamp() -> CheetahString {
 }
 
 #[allow(deprecated)]
-pub(crate) fn validate_lite_pull_consume_from_where(consume_from_where: ConsumeFromWhere) -> RocketMQResult<()> {
+pub(crate) fn validate_lite_pull_consume_from_where(consume_from_where: ConsumeFromWhere) -> ClientResult<()> {
     match consume_from_where {
         ConsumeFromWhere::ConsumeFromFirstOffset
         | ConsumeFromWhere::ConsumeFromLastOffset

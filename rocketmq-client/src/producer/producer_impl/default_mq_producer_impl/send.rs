@@ -19,17 +19,13 @@ use tracing::Instrument;
 #[allow(unused_assignments)]
 impl DefaultMQProducerImpl {
     #[inline]
-    pub(super) fn request_correlation_id<M: MessageTrait>(msg: &M) -> rocketmq_error::RocketMQResult<CheetahString> {
+    pub(super) fn request_correlation_id<M: MessageTrait>(msg: &M) -> crate::ClientResult<CheetahString> {
         msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .ok_or_else(|| mq_client_err!("Request correlation id was not set before sending request message"))
     }
 
     #[inline]
-    pub async fn send_with_timeout<T>(
-        &self,
-        msg: &mut T,
-        timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    pub async fn send_with_timeout<T>(&self, msg: &mut T, timeout: u64) -> crate::ClientResult<Option<SendResult>>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -39,7 +35,7 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub async fn send<T>(&self, msg: &mut T) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    pub async fn send<T>(&self, msg: &mut T) -> crate::ClientResult<Option<SendResult>>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -54,7 +50,7 @@ impl DefaultMQProducerImpl {
         &self,
         msg: T,
         send_callback: Option<ArcSendCallback>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -68,7 +64,7 @@ impl DefaultMQProducerImpl {
         &self,
         msg: T,
         mq: MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -78,7 +74,7 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub async fn send_oneway<T>(&self, mut msg: T) -> rocketmq_error::RocketMQResult<()>
+    pub async fn send_oneway<T>(&self, mut msg: T) -> crate::ClientResult<()>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -89,11 +85,7 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    pub async fn send_oneway_with_message_queue<T>(
-        &self,
-        mut msg: T,
-        mq: MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<()>
+    pub async fn send_oneway_with_message_queue<T>(&self, mut msg: T, mq: MessageQueue) -> crate::ClientResult<()>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -131,7 +123,7 @@ impl DefaultMQProducerImpl {
     /// let messages = vec![msg1, msg2, msg3];
     /// producer.send_oneway_batch(messages).await?;
     /// ```
-    pub async fn send_oneway_batch<T>(&self, msgs: impl IntoIterator<Item = T>) -> rocketmq_error::RocketMQResult<usize>
+    pub async fn send_oneway_batch<T>(&self, msgs: impl IntoIterator<Item = T>) -> crate::ClientResult<usize>
     where
         T: MessageTrait + Send + Sync + 'static,
     {
@@ -211,7 +203,7 @@ impl DefaultMQProducerImpl {
         mut msg: T,
         mq: MessageQueue,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -224,10 +216,7 @@ impl DefaultMQProducerImpl {
             return Err(mq_client_err!("message's topic not equal mq's topic"));
         }
         if deadline.is_expired() {
-            return Err(rocketmq_error::RocketMQError::Timeout {
-                operation: "send_with_timeout",
-                timeout_ms: timeout,
-            });
+            return Err(crate::ClientError::timeout("send_with_timeout", timeout));
         }
         self.send_kernel_impl_with_runtime(&mut msg, &mq, CommunicationMode::Sync, None, None, deadline, &runtime)
             .await
@@ -240,7 +229,7 @@ impl DefaultMQProducerImpl {
         msg: T,
         mq: MessageQueue,
         send_callback: Option<ArcSendCallback>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -261,7 +250,7 @@ impl DefaultMQProducerImpl {
         arg: T,
         send_callback: Option<ArcSendCallback>,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -292,12 +281,7 @@ impl DefaultMQProducerImpl {
             .await
     }
 
-    pub async fn send_oneway_with_selector<M, S, T>(
-        &self,
-        msg: M,
-        selector: S,
-        arg: T,
-    ) -> rocketmq_error::RocketMQResult<()>
+    pub async fn send_oneway_with_selector<M, S, T>(&self, msg: M, selector: S, arg: T) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -318,7 +302,7 @@ impl DefaultMQProducerImpl {
         communication_mode: CommunicationMode,
         send_message_callback: Option<ArcSendCallback>,
         deadline: RequestDeadline,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
@@ -344,10 +328,7 @@ impl DefaultMQProducerImpl {
                     &arg,
                 );
                 if deadline.is_expired() {
-                    return Err(rocketmq_error::RocketMQError::Timeout {
-                        operation: "sendSelectImpl",
-                        timeout_ms: deadline.budget_millis(),
-                    });
+                    return Err(crate::ClientError::timeout("sendSelectImpl", deadline.budget_millis()));
                 }
                 if let Some(message_queue) = message_queue {
                     return self
@@ -377,7 +358,7 @@ impl DefaultMQProducerImpl {
         mq: MessageQueue,
         send_callback: Option<ArcSendCallback>,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -434,7 +415,7 @@ impl DefaultMQProducerImpl {
         mut msg: T,
         send_callback: Option<ArcSendCallback>,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -476,7 +457,7 @@ impl DefaultMQProducerImpl {
         send_callback: Option<ArcSendCallback>,
         deadline: RequestDeadline,
         msg_len: usize,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         F: Future + Send + 'static,
         F::Output: Send + 'static,
@@ -560,11 +541,9 @@ impl DefaultMQProducerImpl {
             f.await;
         };
         if let Err(error) = self.spawn_tracked_task("rocketmq-client-producer-async-send", task) {
-            Self::notify_callback_exception(
-                &send_callback,
-                &mq_client_err!(format!("failed to spawn async send task: {error}")),
-            );
-            return Err(mq_client_err!(format!("failed to spawn async send task: {error}")));
+            let error = ClientError::service_source("producer_async_send", error);
+            Self::notify_callback_exception(&send_callback, &error);
+            return Err(error);
         }
         Ok(())
     }
@@ -575,7 +554,7 @@ impl DefaultMQProducerImpl {
         communication_mode: CommunicationMode,
         send_callback: Option<ArcSendCallback>,
         deadline: RequestDeadline,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -591,7 +570,7 @@ impl DefaultMQProducerImpl {
         send_callback: Option<ArcSendCallback>,
         deadline: RequestDeadline,
         runtime: &ProducerRuntimeSnapshot,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -640,7 +619,7 @@ impl DefaultMQProducerImpl {
         send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -875,11 +854,7 @@ impl DefaultMQProducerImpl {
         let send_result = match communication_mode {
             CommunicationMode::Async => {
                 if deadline.is_expired() {
-                    return Err(rocketmq_error::RocketMQError::Timeout {
-                        operation: "sendKernelImpl",
-                        timeout_ms: deadline.budget_millis(),
-                    }
-                    .into());
+                    return Err(crate::ClientError::timeout("sendKernelImpl", deadline.budget_millis()).into());
                 }
                 client_instance
                     .get_mq_client_api_impl()?
@@ -901,11 +876,7 @@ impl DefaultMQProducerImpl {
             }
             CommunicationMode::Oneway | CommunicationMode::Sync => {
                 if deadline.is_expired() {
-                    return Err(rocketmq_error::RocketMQError::Timeout {
-                        operation: "sendKernelImpl",
-                        timeout_ms: deadline.budget_millis(),
-                    }
-                    .into());
+                    return Err(crate::ClientError::timeout("sendKernelImpl", deadline.budget_millis()).into());
                 }
                 client_instance
                     .get_mq_client_api_impl()?
@@ -972,8 +943,8 @@ impl DefaultMQProducerImpl {
         !self.send_message_hook_list.read().is_empty()
     }
 
-    pub(super) fn context_error(message: String) -> Arc<RocketMQError> {
-        Arc::new(RocketMQError::response_process_failed("send_message", message))
+    pub(super) fn context_error(message: String) -> Arc<ClientError> {
+        Arc::new(ClientError::response_process_failed("send_message", message))
     }
 
     #[inline]
@@ -986,7 +957,7 @@ impl DefaultMQProducerImpl {
         !self.end_transaction_hook_list.read().is_empty()
     }
 
-    pub fn execute_check_forbidden_hook(&self, context: &CheckForbiddenContext) -> rocketmq_error::RocketMQResult<()> {
+    pub fn execute_check_forbidden_hook(&self, context: &CheckForbiddenContext) -> crate::ClientResult<()> {
         let hooks = Arc::clone(&self.check_forbidden_hook_list.read());
         for hook in hooks.iter() {
             hook.check_forbidden(context)?;
@@ -1052,7 +1023,7 @@ impl DefaultMQProducerImpl {
             .select_one_message_queue(tp_info, last_broker_name, reset_index)
     }
 
-    pub(super) fn validate_name_server_setting(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub(super) fn validate_name_server_setting(&self) -> crate::ClientResult<()> {
         let binding = self.client_instance()?.get_mq_client_api_impl()?;
         let ns_list = binding.get_name_server_address_list();
         if ns_list.is_empty() {
@@ -1123,7 +1094,7 @@ impl DefaultMQProducerImpl {
             .map(|entry| Arc::clone(entry.value()))
     }
 
-    pub(super) fn make_sure_state_ok(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub(super) fn make_sure_state_ok(&self) -> crate::ClientResult<()> {
         let current_state = ProducerState::from_u8(self.state.load(Ordering::Acquire));
         if current_state != ProducerState::Running {
             return Err(mq_client_err!(format!(
@@ -1165,7 +1136,7 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub(super) fn ensure_running(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub(super) fn ensure_running(&self) -> crate::ClientResult<()> {
         if self.state.load(Ordering::Acquire) != ProducerState::Running as u8 {
             return Err(mq_client_err!(format!(
                 "Producer is not running, current state: {:?}",
@@ -1181,7 +1152,7 @@ impl DefaultMQProducerImpl {
         selector: S,
         arg: &T,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<MessageQueue>
+    ) -> crate::ClientResult<MessageQueue>
     where
         M: MessageTrait,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
@@ -1209,10 +1180,7 @@ impl DefaultMQProducerImpl {
                 );
                 let cost_time = begin_start_time.elapsed().as_millis() as u64;
                 if timeout < cost_time {
-                    return Err(rocketmq_error::RocketMQError::Timeout {
-                        operation: "sendSelectImpl",
-                        timeout_ms: timeout,
-                    });
+                    return Err(crate::ClientError::timeout("sendSelectImpl", timeout));
                 }
                 if let Some(message_queue) = message_queue {
                     return Ok(runtime.client_config.queue_with_resolved_namespace(message_queue));
@@ -1230,7 +1198,7 @@ impl DefaultMQProducerImpl {
         selector: S,
         arg: T,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
@@ -1247,10 +1215,7 @@ impl DefaultMQProducerImpl {
         .await
     }
 
-    pub async fn fetch_publish_message_queues(
-        &self,
-        topic: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
+    pub async fn fetch_publish_message_queues(&self, topic: &CheetahString) -> crate::ClientResult<Vec<MessageQueue>> {
         self.make_sure_state_ok()?;
         let runtime = self.runtime_snapshot();
         let client_instance = self.client_instance()?;
@@ -1271,7 +1236,7 @@ impl DefaultMQProducerImpl {
         queue_num: i32,
         topic_sys_flag: i32,
         attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         self.make_sure_state_ok()?;
         self.client_instance()?
             .mq_admin_impl
@@ -1279,7 +1244,7 @@ impl DefaultMQProducerImpl {
             .await
     }
 
-    pub async fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> crate::ClientResult<i64> {
         self.make_sure_state_ok()?;
         let mq = self
             .runtime_snapshot()
@@ -1291,7 +1256,7 @@ impl DefaultMQProducerImpl {
             .await
     }
 
-    pub async fn max_offset(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn max_offset(&self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         self.make_sure_state_ok()?;
         let mq = self
             .runtime_snapshot()
@@ -1300,7 +1265,7 @@ impl DefaultMQProducerImpl {
         self.client_instance()?.mq_admin_impl.max_offset(&mq).await
     }
 
-    pub async fn min_offset(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn min_offset(&self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         self.make_sure_state_ok()?;
         let mq = self
             .runtime_snapshot()
@@ -1309,7 +1274,7 @@ impl DefaultMQProducerImpl {
         self.client_instance()?.mq_admin_impl.min_offset(&mq).await
     }
 
-    pub async fn earliest_msg_store_time(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn earliest_msg_store_time(&self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         self.make_sure_state_ok()?;
         let mq = self
             .runtime_snapshot()
@@ -1325,7 +1290,7 @@ impl DefaultMQProducerImpl {
         max_num: i32,
         begin: u64,
         end: u64,
-    ) -> rocketmq_error::RocketMQResult<QueryResult> {
+    ) -> crate::ClientResult<QueryResult> {
         self.make_sure_state_ok()?;
         self.client_instance()?
             .mq_admin_impl
@@ -1333,11 +1298,7 @@ impl DefaultMQProducerImpl {
             .await
     }
 
-    pub async fn query_message_by_uniq_key(
-        &self,
-        topic: &str,
-        uniq_key: &str,
-    ) -> rocketmq_error::RocketMQResult<MessageExt> {
+    pub async fn query_message_by_uniq_key(&self, topic: &str, uniq_key: &str) -> crate::ClientResult<MessageExt> {
         self.make_sure_state_ok()?;
         let begin = current_millis().saturating_sub(QUERY_UNIQ_KEY_LOOKBACK_MILLIS);
         let result = self
@@ -1352,7 +1313,7 @@ impl DefaultMQProducerImpl {
             .ok_or_else(|| mq_client_err!("query message by uniq key finished, but no message."))
     }
 
-    pub async fn view_message(&self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
+    pub async fn view_message(&self, topic: &str, msg_id: &str) -> crate::ClientResult<MessageExt> {
         self.make_sure_state_ok()?;
         self.client_instance()?.mq_admin_impl.view_message(topic, msg_id).await
     }
@@ -1363,7 +1324,7 @@ impl DefaultMQProducerImpl {
         selector: S,
         arg: T,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
         T: Send + Sync,
@@ -1378,7 +1339,7 @@ impl DefaultMQProducerImpl {
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_response_future_inner = request_response_future.clone();
-        let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&ClientError>| {
             if result.is_some() {
                 request_response_future_inner.set_send_request_ok(true);
                 return;
@@ -1427,7 +1388,7 @@ impl DefaultMQProducerImpl {
         arg: T,
         request_callback: RequestCallbackFn,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
         T: Send + Sync,
@@ -1445,7 +1406,7 @@ impl DefaultMQProducerImpl {
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_future_holder = Arc::clone(&self.request_future_holder);
-        let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&ClientError>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
                 return;
@@ -1473,7 +1434,7 @@ impl DefaultMQProducerImpl {
         mut msg: M,
         mq: MessageQueue,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1486,7 +1447,7 @@ impl DefaultMQProducerImpl {
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_response_future_inner = request_response_future.clone();
-        let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&ClientError>| {
             if result.is_some() {
                 request_response_future_inner.set_send_request_ok(true);
                 return;
@@ -1537,7 +1498,7 @@ impl DefaultMQProducerImpl {
         mq: MessageQueue,
         request_callback: RequestCallbackFn,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1553,7 +1514,7 @@ impl DefaultMQProducerImpl {
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_future_holder = Arc::clone(&self.request_future_holder);
-        let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&ClientError>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
                 return;
@@ -1584,7 +1545,7 @@ impl DefaultMQProducerImpl {
         mut msg: M,
         request_callback: RequestCallbackFn,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1600,7 +1561,7 @@ impl DefaultMQProducerImpl {
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_future_holder = Arc::clone(&self.request_future_holder);
-        let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&ClientError>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
                 request_response_future.execute_request_callback();
@@ -1621,11 +1582,7 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    pub async fn request<M>(
-        &self,
-        mut msg: M,
-        timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    pub async fn request<M>(&self, mut msg: M, timeout: u64) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1639,7 +1596,7 @@ impl DefaultMQProducerImpl {
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_response_future_inner = request_response_future.clone();
-        let send_callback = move |result: Option<&SendResult>, err: Option<&RocketMQError>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&ClientError>| {
             if result.is_some() {
                 request_response_future_inner.set_send_request_ok(true);
                 return;
@@ -1686,7 +1643,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
         request_response_future: Arc<RequestResponseFuture>,
         remaining_timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>> {
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>> {
         let response_message = request_response_future
             .wait_response_message(Duration::from_millis(remaining_timeout))
             .await;
@@ -1694,10 +1651,7 @@ impl DefaultMQProducerImpl {
         if let Some(response_message) = response_message {
             Ok(response_message)
         } else if request_response_future.is_send_request_ok().await {
-            Err(rocketmq_error::RocketMQError::Timeout {
-                operation: "send request message",
-                timeout_ms: timeout,
-            })
+            Err(crate::ClientError::timeout("send request message", timeout))
         } else {
             Err(mq_client_err!(format!(
                 "send request message to <{}> fail, {}",
@@ -1709,7 +1663,7 @@ impl DefaultMQProducerImpl {
         }
     }
 
-    pub(super) async fn prepare_send_request<M>(&self, msg: &mut M, timeout: u64) -> rocketmq_error::RocketMQResult<()>
+    pub(super) async fn prepare_send_request<M>(&self, msg: &mut M, timeout: u64) -> crate::ClientResult<()>
     where
         M: MessageTrait,
     {
@@ -1756,7 +1710,7 @@ impl DefaultMQProducerImpl {
         &self,
         topic: impl Into<CheetahString>,
         recall_handle: impl Into<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<String> {
+    ) -> crate::ClientResult<String> {
         let topic = topic.into();
         let recall_handle = recall_handle.into();
 
@@ -1771,8 +1725,7 @@ impl DefaultMQProducerImpl {
             return Err(mq_client_err!("topic is not supported"));
         }
 
-        let handle_entity = RecallMessageHandle::decode_handle(&recall_handle)
-            .map_err(|e| mq_client_err!(format!("Failed to decode recall handle: {}", e)))?;
+        let handle_entity = RecallMessageHandle::decode_handle(&recall_handle).map_err(ClientError::from_error)?;
 
         self.try_to_find_topic_publish_info(&topic).await;
 
@@ -1864,7 +1817,7 @@ pub(super) fn build_oneway_request_internal<T>(
     send_config: &ProducerSendConfigSnapshot,
     command_factory: rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory,
     _namespace: Option<&str>,
-) -> rocketmq_error::RocketMQResult<RemotingCommand>
+) -> crate::ClientResult<RemotingCommand>
 where
     T: MessageTrait,
 {

@@ -48,7 +48,7 @@ use crate::prompts;
 use crate::resources;
 use crate::tools;
 use crate::tools::executor::ToolExecutor;
-use rocketmq_observability::metrics::mcp::McpErrorKind;
+use rocketmq_observability::metrics::mcp::McpFailureLabel;
 use rocketmq_observability::metrics::mcp::McpMetricsRecorder;
 use rocketmq_observability::metrics::mcp::McpOperationKind;
 use rocketmq_observability::metrics::mcp::McpOperationOutcome;
@@ -199,7 +199,7 @@ impl ServerHandler for RocketmqMcpServer {
                 Ok(access) => access,
                 Err(error) => {
                     span_recorder.denied();
-                    record_resource_error("resource_access_context", McpErrorKind::PermissionDenied);
+                    record_resource_error("resource_access_context", McpFailureLabel::PermissionDenied);
                     record_resource_operation("resource_access_context", McpOperationOutcome::Denied, started_at);
                     return Err(error);
                 }
@@ -210,7 +210,7 @@ impl ServerHandler for RocketmqMcpServer {
                     self.app
                         .guard()
                         .record_resource_rejection(&access, "resource:unavailable", "invalid_resource_uri");
-                    record_resource_error("invalid_resource_uri", McpErrorKind::InvalidRequest);
+                    record_resource_error("invalid_resource_uri", McpFailureLabel::InvalidRequest);
                     record_resource_operation("invalid_resource_uri", McpOperationOutcome::Failure, started_at);
                     return Err(resource_unavailable(&request_id_string(&context.id)));
                 }
@@ -225,7 +225,7 @@ impl ServerHandler for RocketmqMcpServer {
                 Ok(guarded_resource) => guarded_resource,
                 Err(error) => {
                     span_recorder.denied();
-                    record_resource_error(operation, guard_error_metric_kind(&error));
+                    record_resource_error(operation, guard_failure_label(&error));
                     record_resource_operation(operation, McpOperationOutcome::Denied, started_at);
                     return Err(resource_guard_error(error, &request_id_string(&context.id)));
                 }
@@ -270,7 +270,7 @@ impl ServerHandler for RocketmqMcpServer {
                 }
             });
             let outcome = if let Err(error) = &result {
-                record_resource_error(operation, resource_error_metric_kind(error));
+                record_resource_error(operation, resource_failure_label(error));
                 McpOperationOutcome::Failure
             } else {
                 McpOperationOutcome::Success
@@ -395,19 +395,19 @@ fn resource_unavailable(correlation_id: &str) -> ErrorData {
     )
 }
 
-fn guard_error_metric_kind(error: &GuardRejection) -> McpErrorKind {
+fn guard_failure_label(error: &GuardRejection) -> McpFailureLabel {
     match error {
-        GuardRejection::InvalidArgument => McpErrorKind::InvalidRequest,
-        GuardRejection::RateLimited => McpErrorKind::RateLimited,
+        GuardRejection::InvalidArgument => McpFailureLabel::InvalidRequest,
+        GuardRejection::RateLimited => McpFailureLabel::RateLimited,
         GuardRejection::PermissionDenied
         | GuardRejection::UnauthorizedScope
         | GuardRejection::TenantMismatch
         | GuardRejection::ClusterNotAllowed
-        | GuardRejection::ChangePlanningDisabled => McpErrorKind::PermissionDenied,
+        | GuardRejection::ChangePlanningDisabled => McpFailureLabel::PermissionDenied,
     }
 }
 
-fn resource_error_metric_kind(error: &ErrorData) -> McpErrorKind {
+fn resource_failure_label(error: &ErrorData) -> McpFailureLabel {
     let code = error
         .data
         .as_ref()
@@ -415,20 +415,20 @@ fn resource_error_metric_kind(error: &ErrorData) -> McpErrorKind {
         .and_then(serde_json::Value::as_str);
     match code {
         Some("permission_denied" | "unauthorized_scope" | "tenant_mismatch" | "cluster_not_allowed") => {
-            McpErrorKind::PermissionDenied
+            McpFailureLabel::PermissionDenied
         }
-        Some("resource_rate_limited") => McpErrorKind::RateLimited,
+        Some("resource_rate_limited") => McpFailureLabel::RateLimited,
         Some("source_unavailable" | "resource_query_timeout" | "resource_query_cancelled") => {
-            McpErrorKind::SourceUnavailable
+            McpFailureLabel::SourceUnavailable
         }
-        Some("output_too_large") => McpErrorKind::OutputTooLarge,
-        Some("invalid_arguments" | "resource_not_found") => McpErrorKind::InvalidRequest,
-        _ => McpErrorKind::Internal,
+        Some("output_too_large") => McpFailureLabel::OutputTooLarge,
+        Some("invalid_arguments" | "resource_not_found") => McpFailureLabel::InvalidRequest,
+        _ => McpFailureLabel::Internal,
     }
 }
 
-fn record_resource_error(operation: &'static str, error: McpErrorKind) {
-    rocketmq_observability::metrics::mcp::record_error(McpOperationKind::Resource, operation, error);
+fn record_resource_error(operation: &'static str, failure: McpFailureLabel) {
+    rocketmq_observability::metrics::mcp::record_error(McpOperationKind::Resource, operation, failure);
 }
 
 fn record_resource_operation(operation: &'static str, outcome: McpOperationOutcome, started_at: Instant) {

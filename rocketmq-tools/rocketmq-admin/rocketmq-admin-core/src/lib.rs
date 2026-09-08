@@ -23,6 +23,62 @@
 
 pub mod core;
 
+#[cfg(any(feature = "read-client-adapter", feature = "mutation-client-adapter"))]
+pub(crate) trait IntoCanonicalError {
+    fn into_canonical_error(self) -> rocketmq_error::Error;
+}
+
+#[cfg(any(feature = "read-client-adapter", feature = "mutation-client-adapter"))]
+impl IntoCanonicalError for rocketmq_error::Error {
+    fn into_canonical_error(self) -> rocketmq_error::Error {
+        self
+    }
+}
+
+#[cfg(any(feature = "read-client-adapter", feature = "mutation-client-adapter"))]
+impl IntoCanonicalError for rocketmq_client_rust::ClientError {
+    fn into_canonical_error(self) -> rocketmq_error::Error {
+        self.into_error()
+    }
+}
+
+#[cfg(feature = "read-client-adapter")]
+pub(crate) fn canonical_http_status(error: &rocketmq_error::Error) -> u16 {
+    error.descriptor().projection().http().status.as_u16()
+}
+
+#[cfg(any(feature = "read-client-adapter", feature = "mutation-client-adapter"))]
+pub(crate) fn canonical_is_retryable(error: &rocketmq_error::Error) -> bool {
+    matches!(
+        error.descriptor().recovery_hint(),
+        rocketmq_error::RecoveryHint::Backoff
+            | rocketmq_error::RecoveryHint::RefreshRoute
+            | rocketmq_error::RecoveryHint::RefreshLeader
+            | rocketmq_error::RecoveryHint::SwitchBroker
+    )
+}
+
+#[cfg(feature = "mutation-client-adapter")]
+pub(crate) fn canonical_broker_response_code(error: &rocketmq_error::Error) -> Option<i32> {
+    error
+        .diagnostic_view()
+        .ok()?
+        .fields()
+        .find_map(|field| match (field.name(), field.value()) {
+            ("broker_code", rocketmq_error::ViewValueRef::I64(code)) => i32::try_from(code).ok(),
+            _ => None,
+        })
+}
+
+#[cfg(all(test, feature = "mutation-client-adapter"))]
+pub(crate) fn canonical_admin_validation_failed(
+    _field: impl Into<String>,
+    _reason: impl Into<String>,
+) -> rocketmq_error::Error {
+    rocketmq_error::Error::new(&rocketmq_error::CORE_ARGUMENT_INVALID)
+        .with_context(rocketmq_error::ErrorContext::new().with_secret_presence(rocketmq_error::fields::MESSAGE_PRESENT))
+}
+
 #[cfg(feature = "read-client-adapter")]
 #[path = "client_adapter/consumer_observation.rs"]
 mod consumer_observation;

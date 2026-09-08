@@ -18,10 +18,10 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crate::ClientError;
+use crate::ClientResult;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::FullPolicy;
@@ -36,7 +36,7 @@ use crate::runtime::ClientMetrics;
 
 const DEFAULT_EGRESS_WORKERS: usize = 2;
 
-pub(crate) type OnewaySendFuture = Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'static>>;
+pub(crate) type OnewaySendFuture = Pin<Box<dyn Future<Output = ClientResult<()>> + Send + 'static>>;
 pub(crate) type OnewaySend =
     Box<dyn FnOnce(CheetahString, RequestDeadline, ResourcePermit) -> OnewaySendFuture + Send + 'static>;
 
@@ -101,7 +101,7 @@ impl BoundedEgress {
         tracker: &TaskTracker,
         cancellation: &CancellationToken,
         client_metrics: ClientMetrics,
-    ) -> RocketMQResult<Self> {
+    ) -> ClientResult<Self> {
         let process_budget = service_context.process_budget();
         let process_capacity = process_budget.limit().capacity;
         let count_limit = count_limit.min(process_capacity.count).max(1);
@@ -118,11 +118,7 @@ impl BoundedEgress {
                     BudgetLimit::new(count_limit, byte_limit, FullPolicy::Reject),
                 )
             })
-            .map_err(|error| RocketMQError::ConfigInvalidValue {
-                key: "producer.onewayEgress",
-                value: format!("{count_limit} items/{byte_limit} bytes"),
-                reason: error.to_string(),
-            })?;
+            .map_err(|error| ClientError::config_invalid_source("producer.onewayEgress", true, error))?;
         let (sender, receiver) = mpsc::channel(count_limit);
         let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
         let metrics = Arc::new(OnewayEgressMetrics::default());
@@ -138,9 +134,7 @@ impl BoundedEgress {
             });
             service_context
                 .spawn_service(format!("producer.oneway-egress.worker-{worker_index}"), task)
-                .map_err(|error| {
-                    RocketMQError::response_process_failed("producer.onewayEgress.worker", error.to_string())
-                })?;
+                .map_err(|error| ClientError::response_process_source("producer.onewayEgress.worker", error))?;
         }
 
         Ok(Self {
@@ -156,9 +150,9 @@ impl BoundedEgress {
         retained_bytes: usize,
         deadline: RequestDeadline,
         build: F,
-    ) -> RocketMQResult<OnewayAdmissionOutcome>
+    ) -> ClientResult<OnewayAdmissionOutcome>
     where
-        F: FnOnce() -> RocketMQResult<OnewayEnvelope>,
+        F: FnOnce() -> ClientResult<OnewayEnvelope>,
     {
         if deadline.is_expired() {
             return Ok(self.reject(OnewayAdmissionRejection::DeadlineExpired));

@@ -421,14 +421,18 @@ fn stable_failure(
     }
 }
 
-fn rocketmq_failure(target: String, stage: TopicInspectionStage, error: &RocketMQError) -> TopicInspectionFailure {
-    let view = error.boundary_view();
-    let code = if view.http().status.as_u16() == 404 {
+fn rocketmq_failure(target: String, stage: TopicInspectionStage, error: &CanonicalError) -> TopicInspectionFailure {
+    let code = if crate::client_adapter::services::error_view::rocketmq_http_status(error) == 404 {
         TopicInspectionFailureCode::NotFound
     } else {
         TopicInspectionFailureCode::Unavailable
     };
-    stable_failure(target, stage, code, view.is_retryable())
+    stable_failure(
+        target,
+        stage,
+        code,
+        crate::client_adapter::services::error_view::rocketmq_is_retryable(error),
+    )
 }
 
 #[cfg(test)]

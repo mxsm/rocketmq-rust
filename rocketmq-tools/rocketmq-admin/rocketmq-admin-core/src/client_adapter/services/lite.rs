@@ -29,9 +29,8 @@ use serde::Serialize;
 
 use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::resolver::BrokerAddressResolver;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Result as CanonicalResult;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BrokerLiteInfoTarget {
@@ -46,25 +45,23 @@ pub struct BrokerLiteInfoQueryRequest {
 }
 
 impl BrokerLiteInfoQueryRequest {
-    pub fn try_new(broker_addr: Option<String>, cluster_name: Option<String>) -> RocketMQResult<Self> {
+    pub fn try_new(broker_addr: Option<String>, cluster_name: Option<String>) -> CanonicalResult<Self> {
         let broker_addr = trim_optional_string(broker_addr);
         let cluster_name = trim_optional_string(cluster_name);
         let target = match (broker_addr, cluster_name) {
             (Some(broker_addr), None) => BrokerLiteInfoTarget::Broker(CheetahString::from(broker_addr)),
             (None, Some(cluster_name)) => BrokerLiteInfoTarget::Cluster(CheetahString::from(cluster_name)),
             (None, None) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerAddr or clusterName must be provided",
-                )
-                .into());
+                ));
             }
             (Some(_), Some(_)) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerAddr and clusterName cannot be provided together",
-                )
-                .into());
+                ));
             }
         };
 
@@ -115,7 +112,7 @@ pub struct ParentTopicInfoQueryRequest {
 }
 
 impl ParentTopicInfoQueryRequest {
-    pub fn try_new(parent_topic: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(parent_topic: impl Into<String>) -> CanonicalResult<Self> {
         Ok(Self {
             parent_topic: trim_required_cheetah("parentTopic", parent_topic)?,
             namesrv_addr: None,
@@ -165,7 +162,7 @@ pub struct LiteTopicInfoQueryRequest {
 }
 
 impl LiteTopicInfoQueryRequest {
-    pub fn try_new(parent_topic: impl Into<String>, lite_topic: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(parent_topic: impl Into<String>, lite_topic: impl Into<String>) -> CanonicalResult<Self> {
         Ok(Self {
             parent_topic: trim_required_cheetah("parentTopic", parent_topic)?,
             lite_topic: trim_required_cheetah("liteTopic", lite_topic)?,
@@ -228,7 +225,7 @@ impl LiteGroupInfoQueryRequest {
         group: impl Into<String>,
         lite_topic: Option<String>,
         top_k: Option<i32>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             parent_topic: trim_required_cheetah("parentTopic", parent_topic)?,
             group: trim_required_cheetah("group", group)?,
@@ -314,7 +311,7 @@ impl LiteClientInfoQueryRequest {
         parent_topic: impl Into<String>,
         group: impl Into<String>,
         client_id: impl Into<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             parent_topic: trim_required_cheetah("parentTopic", parent_topic)?,
             group: trim_required_cheetah("group", group)?,
@@ -383,7 +380,7 @@ impl TriggerLiteDispatchRequest {
         group: impl Into<String>,
         client_id: Option<String>,
         broker_name: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             parent_topic: trim_required_cheetah("parentTopic", parent_topic)?,
             group: trim_required_cheetah("group", group)?,
@@ -450,10 +447,11 @@ impl LiteService {
         request: BrokerLiteInfoQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<BrokerLiteInfoQueryResult> {
+    ) -> CanonicalResult<BrokerLiteInfoQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_broker_lite_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -462,10 +460,13 @@ impl LiteService {
     pub(crate) async fn query_broker_lite_info_with_admin(
         admin: &DefaultMQAdminExt,
         request: &BrokerLiteInfoQueryRequest,
-    ) -> RocketMQResult<BrokerLiteInfoQueryResult> {
+    ) -> CanonicalResult<BrokerLiteInfoQueryResult> {
         match request.target() {
             BrokerLiteInfoTarget::Broker(broker_addr) => {
-                let body = admin.get_broker_lite_info(broker_addr.clone()).await?;
+                let body = admin
+                    .get_broker_lite_info(broker_addr.clone())
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 Ok(BrokerLiteInfoQueryResult {
                     entries: vec![BrokerLiteInfoEntry {
                         broker_addr: broker_addr.clone(),
@@ -475,7 +476,10 @@ impl LiteService {
                 })
             }
             BrokerLiteInfoTarget::Cluster(cluster_name) => {
-                let cluster_info = admin.examine_broker_cluster_info().await?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 let broker_addrs =
                     BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name)?;
                 let mut entries = Vec::with_capacity(broker_addrs.len());
@@ -489,7 +493,7 @@ impl LiteService {
                         Err(error) => entries.push(BrokerLiteInfoEntry {
                             broker_addr,
                             body: None,
-                            error: Some(error.to_string()),
+                            error: Some(crate::client_adapter::services::stable_error_message(&error)),
                         }),
                     }
                 }
@@ -502,10 +506,11 @@ impl LiteService {
         request: ParentTopicInfoQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ParentTopicInfoQueryResult> {
+    ) -> CanonicalResult<ParentTopicInfoQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_parent_topic_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -514,12 +519,13 @@ impl LiteService {
     pub(crate) async fn query_parent_topic_info_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ParentTopicInfoQueryRequest,
-    ) -> RocketMQResult<ParentTopicInfoQueryResult> {
+    ) -> CanonicalResult<ParentTopicInfoQueryResult> {
         let route = admin
             .examine_topic_route_info(request.parent_topic().clone())
-            .await?
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?
             .ok_or_else(|| {
-                ToolsError::internal(format!(
+                crate::client_adapter::services::errors::internal(format!(
                     "Topic route not found for parentTopic '{}'",
                     request.parent_topic()
                 ))
@@ -543,7 +549,7 @@ impl LiteService {
                 Err(error) => entries.push(ParentTopicInfoEntry {
                     broker_name,
                     body: None,
-                    error: Some(error.to_string()),
+                    error: Some(crate::client_adapter::services::stable_error_message(&error)),
                 }),
             }
         }
@@ -558,10 +564,11 @@ impl LiteService {
         request: LiteTopicInfoQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<LiteTopicInfoQueryResult> {
+    ) -> CanonicalResult<LiteTopicInfoQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_lite_topic_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -570,12 +577,13 @@ impl LiteService {
     pub(crate) async fn query_lite_topic_info_with_admin(
         admin: &DefaultMQAdminExt,
         request: &LiteTopicInfoQueryRequest,
-    ) -> RocketMQResult<LiteTopicInfoQueryResult> {
+    ) -> CanonicalResult<LiteTopicInfoQueryResult> {
         let route = admin
             .examine_topic_route_info(request.parent_topic().clone())
-            .await?
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?
             .ok_or_else(|| {
-                ToolsError::internal(format!(
+                crate::client_adapter::services::errors::internal(format!(
                     "Topic route not found for parentTopic '{}'",
                     request.parent_topic()
                 ))
@@ -603,7 +611,7 @@ impl LiteService {
                 Err(error) => entries.push(LiteTopicInfoEntry {
                     broker_name,
                     body: None,
-                    error: Some(error.to_string()),
+                    error: Some(crate::client_adapter::services::stable_error_message(&error)),
                 }),
             }
         }
@@ -619,10 +627,11 @@ impl LiteService {
         request: LiteGroupInfoQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<LiteGroupInfoQueryResult> {
+    ) -> CanonicalResult<LiteGroupInfoQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_lite_group_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -631,12 +640,13 @@ impl LiteService {
     pub(crate) async fn query_lite_group_info_with_admin(
         admin: &DefaultMQAdminExt,
         request: &LiteGroupInfoQueryRequest,
-    ) -> RocketMQResult<LiteGroupInfoQueryResult> {
+    ) -> CanonicalResult<LiteGroupInfoQueryResult> {
         let route = admin
             .examine_topic_route_info(request.parent_topic().clone())
-            .await?
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?
             .ok_or_else(|| {
-                ToolsError::internal(format!(
+                crate::client_adapter::services::errors::internal(format!(
                     "Topic route not found for parentTopic '{}'",
                     request.parent_topic()
                 ))
@@ -678,7 +688,7 @@ impl LiteService {
                 Err(error) => entries.push(LiteGroupInfoEntry {
                     broker_name,
                     body: None,
-                    error: Some(error.to_string()),
+                    error: Some(crate::client_adapter::services::stable_error_message(&error)),
                 }),
             }
         }
@@ -702,10 +712,11 @@ impl LiteService {
         request: LiteClientInfoQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<LiteClientInfoQueryResult> {
+    ) -> CanonicalResult<LiteClientInfoQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::query_lite_client_info_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -714,12 +725,13 @@ impl LiteService {
     pub(crate) async fn query_lite_client_info_with_admin(
         admin: &DefaultMQAdminExt,
         request: &LiteClientInfoQueryRequest,
-    ) -> RocketMQResult<LiteClientInfoQueryResult> {
+    ) -> CanonicalResult<LiteClientInfoQueryResult> {
         let route = admin
             .examine_topic_route_info(request.parent_topic().clone())
-            .await?
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?
             .ok_or_else(|| {
-                ToolsError::internal(format!(
+                crate::client_adapter::services::errors::internal(format!(
                     "Topic route not found for parentTopic '{}'",
                     request.parent_topic()
                 ))
@@ -748,7 +760,7 @@ impl LiteService {
                 Err(error) => entries.push(LiteClientInfoEntry {
                     broker_name,
                     body: None,
-                    error: Some(error.to_string()),
+                    error: Some(crate::client_adapter::services::stable_error_message(&error)),
                 }),
             }
         }
@@ -765,10 +777,11 @@ impl LiteService {
         request: TriggerLiteDispatchRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<TriggerLiteDispatchResult> {
+    ) -> CanonicalResult<TriggerLiteDispatchResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
-            .await?;
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         let result = Self::trigger_lite_dispatch_with_admin(&admin, &request).await;
         admin.shutdown().await;
         result
@@ -777,12 +790,13 @@ impl LiteService {
     pub(crate) async fn trigger_lite_dispatch_with_admin(
         admin: &DefaultMQAdminExt,
         request: &TriggerLiteDispatchRequest,
-    ) -> RocketMQResult<TriggerLiteDispatchResult> {
+    ) -> CanonicalResult<TriggerLiteDispatchResult> {
         let route = admin
             .examine_topic_route_info(request.parent_topic().clone())
-            .await?
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?
             .ok_or_else(|| {
-                ToolsError::internal(format!(
+                crate::client_adapter::services::errors::internal(format!(
                     "Topic route not found for parentTopic '{}'",
                     request.parent_topic()
                 ))
@@ -813,7 +827,7 @@ impl LiteService {
                 Err(error) => entries.push(TriggerLiteDispatchEntry {
                     broker_name,
                     dispatched: false,
-                    error: Some(error.to_string()),
+                    error: Some(crate::client_adapter::services::stable_error_message(&error)),
                 }),
             }
         }
@@ -834,11 +848,14 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        ));
     }
     Ok(CheetahString::from(value))
 }

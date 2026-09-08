@@ -13,12 +13,11 @@
 // limitations under the License.
 
 use std::convert::Infallible;
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_transport::api::DeferredAdmissionAcquireOutcome;
@@ -139,8 +138,10 @@ impl PopLiteDeferredService {
             .command()
             .decode_command_custom_header::<PopLiteMessageRequestHeader>()
             .map_err(PopLiteDeferredPrepareFailure::Header)?;
-        if let Err(rejection) = validate_header(&header) {
-            return Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection));
+        if !header_is_valid(&header) {
+            return Ok(PopLiteDeferredPrepareOutcome::Rejected(
+                PopLiteDeferredPrepareRejection::InvalidHeader,
+            ));
         }
         let wall_now = current_millis();
         let monotonic_now = tokio::time::Instant::now();
@@ -324,11 +325,8 @@ impl PopLiteDeferredService {
     }
 }
 
-fn validate_header(header: &PopLiteMessageRequestHeader) -> Result<(), PopLiteDeferredPrepareRejection> {
-    if header.client_id.is_empty() || header.consumer_group.is_empty() || header.topic.is_empty() {
-        return Err(PopLiteDeferredPrepareRejection::InvalidHeader);
-    }
-    Ok(())
+fn header_is_valid(header: &PopLiteMessageRequestHeader) -> bool {
+    !header.client_id.is_empty() && !header.consumer_group.is_empty() && !header.topic.is_empty()
 }
 
 pub(crate) enum PopLiteDeferredPrepareRejection {
@@ -376,7 +374,7 @@ pub(crate) enum PopLiteDeferredPrepareFailure {
     InvalidExpiryMargins,
     RetainedSizeOverflow,
     Deadline(PopLiteWaitDeadlineOperationalError),
-    Header(RocketMQError),
+    Header(rocketmq_error::Error),
     Index(PopLiteIndexOperationalError),
     Contract(TransportContractViolation),
 }
@@ -395,8 +393,8 @@ impl fmt::Display for PopLiteDeferredPrepareFailure {
     }
 }
 
-impl Error for PopLiteDeferredPrepareFailure {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for PopLiteDeferredPrepareFailure {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Header(source) => Some(source),
             Self::Index(source) => Some(source),
@@ -489,8 +487,8 @@ impl fmt::Display for PopLiteDeferredRegisterFailure {
     }
 }
 
-impl Error for PopLiteDeferredRegisterFailure {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for PopLiteDeferredRegisterFailure {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::RegistryContract(violation) => Some(violation),
             Self::RegistryOperational(error) => Some(error),

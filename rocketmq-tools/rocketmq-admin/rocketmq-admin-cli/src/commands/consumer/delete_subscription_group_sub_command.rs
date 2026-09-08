@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -60,7 +59,7 @@ pub struct DeleteSubscriptionGroupSubCommand {
 }
 
 impl DeleteSubscriptionGroupSubCommand {
-    fn request(&self) -> RocketMQResult<DeleteSubscriptionGroupRequest> {
+    fn request(&self) -> CanonicalResult<DeleteSubscriptionGroupRequest> {
         DeleteSubscriptionGroupRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
@@ -70,7 +69,7 @@ impl DeleteSubscriptionGroupSubCommand {
         .map(|request| request.with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
 
-    fn print_result(request: &DeleteSubscriptionGroupRequest, result: ConsumerOperationResult) -> RocketMQResult<()> {
+    fn print_result(request: &DeleteSubscriptionGroupRequest, result: ConsumerOperationResult) -> CanonicalResult<()> {
         match request.target() {
             BrokerTarget::BrokerAddr(_) => {
                 for broker_addr in &result.broker_addrs {
@@ -104,27 +103,16 @@ impl DeleteSubscriptionGroupSubCommand {
                 .iter()
                 .find(|failure| failure.error_code == "BROKER_PERMISSION_DENIED")
             {
-                return Err(RocketMQError::BrokerPermissionDenied {
-                    operation: format!(
-                        "delete subscription group {} from {}: {}",
-                        request.group_name(),
-                        failure.broker_addr,
-                        failure.error
-                    ),
-                });
+                return Err(crate::errors::broker_permission_denied(format!(
+                    "delete subscription group {} from {}: {}",
+                    request.group_name(),
+                    failure.broker_addr,
+                    failure.error
+                )));
             }
-            Err(RocketMQError::broker_operation_failed(
+            Err(crate::errors::broker_response_failed(
                 "DELETE_SUBSCRIPTION_GROUP_LIST",
                 -1,
-                format!(
-                    "DeleteSubscriptionGroupSubCommand: Failed to delete from brokers {}",
-                    result
-                        .failures
-                        .iter()
-                        .map(|failure| failure.broker_addr.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
             ))
         }
     }
@@ -135,7 +123,7 @@ impl CommandExecute for DeleteSubscriptionGroupSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         let result = ConsumerService::delete_subscription_group_by_request_with_credentials(
             request.clone(),

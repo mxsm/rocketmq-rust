@@ -63,7 +63,7 @@ impl RemoteBrokerOffsetStore {
         persisted_offset_table.insert(mq.clone(), offset);
     }
 
-    async fn fetch_consume_offset_from_broker(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn fetch_consume_offset_from_broker(&self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         let broker_name = self.client_instance.get_broker_name_from_message_queue(mq).await;
         let mut find_broker_result = self
             .client_instance
@@ -97,7 +97,7 @@ impl RemoteBrokerOffsetStore {
                 }),
             };
             let Some(mq_client_api_impl) = self.client_instance.mq_client_api_impl.load_full() else {
-                return Err(rocketmq_error::RocketMQError::not_initialized("MQClientAPIImpl"));
+                return Err(crate::ClientError::not_initialized("MQClientAPIImpl"));
             };
             mq_client_api_impl
                 .query_consumer_offset(find_broker_result.broker_addr.as_str(), request_header, 5_000)
@@ -109,7 +109,7 @@ impl RemoteBrokerOffsetStore {
 }
 
 impl OffsetStoreTrait for RemoteBrokerOffsetStore {
-    async fn load(&self) -> rocketmq_error::RocketMQResult<()> {
+    async fn load(&self) -> crate::ClientResult<()> {
         Ok(())
     }
 
@@ -155,17 +155,16 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                         self.update_offset(mq, value, false).await;
                         value
                     }
-                    Err(e) => match e {
-                        rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. }
-                            if code == rocketmq_protocol::code::response_code::ResponseCode::QueryNotFound as i32 =>
-                        {
-                            -1
-                        }
-                        _ => {
-                            warn!("fetchConsumeOffsetFromBroker exception: {:?}", mq);
-                            -2
-                        }
-                    },
+                    Err(error)
+                        if error.broker_response_code()
+                            == Some(rocketmq_protocol::code::response_code::ResponseCode::QueryNotFound as i32) =>
+                    {
+                        -1
+                    }
+                    Err(_) => {
+                        warn!("fetchConsumeOffsetFromBroker exception: {:?}", mq);
+                        -2
+                    }
                 }
             }
             ReadOffsetType::ReadFromStore => match self.fetch_consume_offset_from_broker(mq).await {
@@ -173,17 +172,16 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                     self.update_offset(mq, value, false).await;
                     value
                 }
-                Err(e) => match e {
-                    rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. }
-                        if code == rocketmq_protocol::code::response_code::ResponseCode::QueryNotFound as i32 =>
-                    {
-                        -1
-                    }
-                    _ => {
-                        warn!("fetchConsumeOffsetFromBroker exception: {:?}", mq);
-                        -2
-                    }
-                },
+                Err(error)
+                    if error.broker_response_code()
+                        == Some(rocketmq_protocol::code::response_code::ResponseCode::QueryNotFound as i32) =>
+                {
+                    -1
+                }
+                Err(_) => {
+                    warn!("fetchConsumeOffsetFromBroker exception: {:?}", mq);
+                    -2
+                }
             },
         }
     }
@@ -285,7 +283,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let broker_name = self.client_instance.get_broker_name_from_message_queue(mq).await;
         let mut find_broker_result = self
             .client_instance
@@ -320,7 +318,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                 }),
             };
             let Some(mq_client_api_impl) = self.client_instance.mq_client_api_impl.load_full() else {
-                return Err(rocketmq_error::RocketMQError::not_initialized("MQClientAPIImpl"));
+                return Err(crate::ClientError::not_initialized("MQClientAPIImpl"));
             };
             if is_oneway {
                 mq_client_api_impl

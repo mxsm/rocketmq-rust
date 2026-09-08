@@ -26,10 +26,9 @@ use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::errors;
 use crate::client_adapter::services::stable_error_code;
 use crate::client_adapter::services::stable_error_message;
-use crate::client_adapter::services::RocketMQError;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::Result as CanonicalResult;
 
 const THIRTY_DAYS_MILLIS: i64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -39,11 +38,14 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        ));
     }
     Ok(CheetahString::from(value))
 }
@@ -67,7 +69,7 @@ impl QueryConsumeQueueRequest {
         count: i32,
         broker_addr: Option<String>,
         consumer_group: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             topic: trim_required_cheetah("topic", topic)?,
             queue_id,
@@ -143,11 +145,14 @@ impl CheckRocksdbCqWriteProgressRequest {
         namesrv_addr: impl Into<String>,
         topic: Option<String>,
         check_from: Option<i64>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let namesrv_addr = namesrv_addr.into();
         let namesrv_addr = namesrv_addr.trim();
         if namesrv_addr.is_empty() {
-            return Err(ToolsError::validation_error("nameserverAddr", "nameserverAddr must not be empty").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "nameserverAddr",
+                "nameserverAddr must not be empty",
+            ));
         }
 
         Ok(Self {
@@ -195,7 +200,7 @@ pub struct QueueOperationFailure {
 }
 
 impl QueueOperationFailure {
-    pub fn from_error(broker_name: CheetahString, broker_addr: CheetahString, error: &RocketMQError) -> Self {
+    pub fn from_error(broker_name: CheetahString, broker_addr: CheetahString, error: &CanonicalError) -> Self {
         Self {
             broker_name,
             broker_addr,
@@ -219,7 +224,7 @@ impl QueueService {
         request: QueryConsumeQueueRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<QueryConsumeQueueResult> {
+    ) -> CanonicalResult<QueryConsumeQueueResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -231,7 +236,7 @@ impl QueueService {
     pub(crate) async fn query_consume_queue_with_admin(
         admin: &DefaultMQAdminExt,
         request: &QueryConsumeQueueRequest,
-    ) -> RocketMQResult<QueryConsumeQueueResult> {
+    ) -> CanonicalResult<QueryConsumeQueueResult> {
         let broker_addr = match request.broker_addr() {
             Some(addr) => addr.clone(),
             None => resolve_topic_master_broker(admin, request.topic()).await?,
@@ -247,12 +252,7 @@ impl QueueService {
                 request.consumer_group().clone(),
             )
             .await
-            .map_err(|error| {
-                errors::broker_operation_failed(
-                    "query_consume_queue",
-                    format!("failed to query consume queue from {broker_addr}: {error}"),
-                )
-            })?;
+            .map_err(|error| errors::broker_operation_failed_by("query_consume_queue", error))?;
 
         Ok(QueryConsumeQueueResult {
             broker_addr,
@@ -264,7 +264,7 @@ impl QueueService {
         request: CheckRocksdbCqWriteProgressRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<CheckRocksdbCqWriteProgressResult> {
+    ) -> CanonicalResult<CheckRocksdbCqWriteProgressResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -276,11 +276,11 @@ impl QueueService {
     pub(crate) async fn check_rocksdb_cq_write_progress_with_admin(
         admin: &DefaultMQAdminExt,
         request: &CheckRocksdbCqWriteProgressRequest,
-    ) -> RocketMQResult<CheckRocksdbCqWriteProgressResult> {
+    ) -> CanonicalResult<CheckRocksdbCqWriteProgressResult> {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| errors::broker_operation_failed("examine_broker_cluster_info", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
         let Some(cluster_addr_table) = cluster_info.cluster_addr_table.as_ref() else {
             return Ok(CheckRocksdbCqWriteProgressResult {
                 cluster_found: false,
@@ -341,11 +341,11 @@ impl QueueService {
 async fn resolve_topic_master_broker(
     admin: &DefaultMQAdminExt,
     topic: &CheetahString,
-) -> RocketMQResult<CheetahString> {
+) -> CanonicalResult<CheetahString> {
     let topic_route_data = admin
         .examine_topic_route_info(topic.clone())
         .await
-        .map_err(|error| errors::broker_operation_failed("examine_topic_route_info", error.to_string()))?;
+        .map_err(|error| errors::broker_operation_failed_by("examine_topic_route_info", error))?;
 
     let topic_route_data = topic_route_data.ok_or_else(|| errors::topic_route_not_found(topic.to_string()))?;
     if topic_route_data.broker_datas.is_empty() {

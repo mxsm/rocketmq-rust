@@ -138,7 +138,7 @@ impl TopicRequestHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let broker_runtime_inner = broker_config_request_handler.broker_runtime_inner();
         let response = RemotingCommand::create_java_default_error_response_command();
         let request_header =
@@ -233,7 +233,7 @@ impl TopicRequestHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let broker_runtime_inner = broker_config_request_handler.broker_runtime_inner();
         let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
         let request_header = match request.decode_command_custom_header::<UpdateTopicConfigCasRequestHeader>() {
@@ -402,7 +402,7 @@ impl TopicRequestHandler {
         broker_config_request_handler: &BrokerConfigRequestHandler<MS>,
         _metadata: &AdminRequestMetadata,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command().set_opaque(request.opaque());
         let header = match request.decode_command_custom_header::<GetTopicConfigRequestHeader>() {
             Ok(header) => header,
@@ -528,9 +528,8 @@ impl TopicRequestHandler {
                 ));
             }
         };
-        let version = u64::try_from(update.data_version.counter()).map_err(|_| {
-            rocketmq_error::RocketMQError::invariant_violated("Topic state version must remain non-negative")
-        })?;
+        let version = u64::try_from(update.data_version.counter())
+            .map_err(|_| crate::broker_error::invariant_violated("Topic state version must remain non-negative"))?;
         if !update.changed {
             return Ok(Some(
                 RemotingCommand::create_success_response_command()
@@ -579,7 +578,7 @@ impl TopicRequestHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let broker_runtime_inner = broker_config_request_handler.broker_runtime_inner();
         let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<CreateTopicRequestHeader>()?;
@@ -677,7 +676,7 @@ impl TopicRequestHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let broker_runtime_inner = broker_config_request_handler.broker_runtime_inner();
         let request_body = CreateTopicListRequestBody::decode(request.body().as_ref().unwrap().as_ref()).unwrap();
         let mut topic_names = String::new();
@@ -748,7 +747,7 @@ impl TopicRequestHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let request_header =
             request.decode_required_header::<DeleteTopicRequestHeader>("decode delete-topic request header")?;
@@ -832,7 +831,7 @@ impl TopicRequestHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let Some(encoded) = request.body() else {
             return Ok(Some(
@@ -957,7 +956,7 @@ impl TopicRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_success_response_command();
         let (topic_config_table, topic_config_data_version) =
             broker_runtime_inner.topic_config_manager().metadata_snapshot();
@@ -992,7 +991,7 @@ impl TopicRequestHandler {
         &self,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_success_response_command();
         let topics = TopicValidator::get_system_topic_set();
         let topic_list = TopicList {
@@ -1008,7 +1007,7 @@ impl TopicRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let request_header =
             request.decode_required_header::<GetTopicStatsRequestHeader>("decode get-topic-stats request header")?;
@@ -1068,7 +1067,7 @@ impl TopicRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_java_default_error_response_command();
         let request_header = request.decode_command_custom_header::<GetTopicConfigRequestHeader>()?;
         let topic = &request_header.topic;
@@ -1123,7 +1122,7 @@ impl TopicRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_success_response_command();
         let request_header = request.decode_command_custom_header::<QueryTopicConsumeByWhoRequestHeader>()?;
         let topic = request_header.topic.as_ref();
@@ -1144,7 +1143,7 @@ impl TopicRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_success_response_command();
         let request_header = request.decode_required_header::<QueryTopicsByConsumerRequestHeader>(
             "decode query-topics-by-consumer request header",
@@ -1170,7 +1169,7 @@ impl TopicRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let retain_topics = broker_runtime_inner
             .topic_config_manager()
             .topic_config_table_hash_map()

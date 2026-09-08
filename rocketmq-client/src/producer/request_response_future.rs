@@ -19,8 +19,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::ClientError;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::message::MessageTrait;
 use tokio::sync::Notify;
@@ -28,7 +28,7 @@ use tokio::sync::Notify;
 use crate::producer::request_callback::RequestCallbackFn;
 
 type ResponseMessage = Box<dyn MessageTrait + Send>;
-type RequestCause = Arc<RocketMQError>;
+type RequestCause = Arc<ClientError>;
 
 pub struct RequestResponseFuture {
     correlation_id: CheetahString,
@@ -88,10 +88,7 @@ impl RequestResponseFuture {
         match tokio::time::timeout(timeout, self.notify.notified()).await {
             Ok(_) => self.get_response_msg(),
             Err(_) => {
-                self.set_cause(RocketMQError::Timeout {
-                    operation: "request_reply_wait",
-                    timeout_ms: timeout.as_millis() as u64,
-                });
+                self.set_cause(ClientError::timeout("request_reply_wait", timeout.as_millis() as u64));
                 None
             }
         }
@@ -175,7 +172,7 @@ impl RequestResponseFuture {
             .clone()
     }
 
-    pub fn set_cause(&self, cause: RocketMQError) {
+    pub fn set_cause(&self, cause: ClientError) {
         let mut stored_cause = self.cause.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         *stored_cause = Some(Arc::new(cause));
     }

@@ -13,16 +13,16 @@
 // limitations under the License.
 
 use bytes::BytesMut;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error;
 use rocketmq_protocol::code::BrokerRequestCode;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_protocol::protocol::rocketmq_serializable::RocketMQSerializable;
 
 #[test]
 fn broker_request_code_parse_returns_typed_error() {
-    let err: RocketMQError = "UNKNOWN".parse::<BrokerRequestCode>().unwrap_err();
+    let err: Error = "UNKNOWN".parse::<BrokerRequestCode>().unwrap_err();
 
-    assert!(matches!(err, RocketMQError::IllegalArgument(_)));
+    assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
 }
 
 #[test]
@@ -30,14 +30,14 @@ fn remoting_decode_boundaries_return_typed_serialization_error() {
     let mut buf = BytesMut::from(&[0_u8][..]);
     let err = RocketMQSerializable::read_str(&mut buf, true, 10).unwrap_err();
 
-    assert!(matches!(err, RocketMQError::Serialization(_)));
+    assert_eq!(err.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
 }
 
 #[test]
 fn extra_info_boundaries_return_typed_illegal_argument_error() {
     let err = ExtraInfoUtil::get_ck_queue_offset(&[]).unwrap_err();
 
-    assert!(matches!(err, RocketMQError::IllegalArgument(_)));
+    assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
 }
 
 #[test]

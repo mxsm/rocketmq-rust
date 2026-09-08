@@ -17,13 +17,17 @@ use rocketmq_error::GrpcPayloadCode;
 use rocketmq_error::GrpcStatusCode;
 use rocketmq_error::HttpStatusCode;
 use rocketmq_error::RemotingResponseCode;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::AUTH_CREDENTIALS_INVALID;
+use rocketmq_error::AUTH_USER_NOT_FOUND;
+use rocketmq_error::CORE_ARGUMENT_INVALID;
+use rocketmq_error::ROUTE_TOPIC_NOT_FOUND;
+use rocketmq_error::STORAGE_CAPACITY_EXHAUSTED;
 
 #[test]
 fn four_boundary_mappings_match_the_golden_contract() {
     let cases = [
         (
-            RocketMQError::authentication_failed("invalid signature"),
+            &AUTH_CREDENTIALS_INVALID,
             (
                 "auth.credentials.invalid",
                 RemotingResponseCode::NoPermission,
@@ -34,7 +38,18 @@ fn four_boundary_mappings_match_the_golden_contract() {
             ),
         ),
         (
-            RocketMQError::route_not_found("orders"),
+            &AUTH_USER_NOT_FOUND,
+            (
+                "auth.user.not_found",
+                RemotingResponseCode::UserNotExist,
+                GrpcPayloadCode::NotFound,
+                GrpcStatusCode::NotFound,
+                HttpStatusCode::NOT_FOUND,
+                CliExitCode::NOT_FOUND,
+            ),
+        ),
+        (
+            &ROUTE_TOPIC_NOT_FOUND,
             (
                 "route.topic.not_found",
                 RemotingResponseCode::TopicNotExist,
@@ -45,7 +60,7 @@ fn four_boundary_mappings_match_the_golden_contract() {
             ),
         ),
         (
-            RocketMQError::illegal_argument("queue id"),
+            &CORE_ARGUMENT_INVALID,
             (
                 "core.argument.invalid",
                 RemotingResponseCode::InvalidParameter,
@@ -56,9 +71,7 @@ fn four_boundary_mappings_match_the_golden_contract() {
             ),
         ),
         (
-            RocketMQError::StorageOutOfSpace {
-                path: "commitlog".to_owned(),
-            },
+            &STORAGE_CAPACITY_EXHAUSTED,
             (
                 "storage.capacity.exhausted",
                 RemotingResponseCode::SystemError,
@@ -70,21 +83,16 @@ fn four_boundary_mappings_match_the_golden_contract() {
         ),
     ];
 
-    for (error, expected) in cases {
-        let view = error.boundary_view();
+    for (descriptor, expected) in cases {
+        let projection = descriptor.projection();
         let actual = (
-            view.code().as_str(),
-            view.remoting().code,
-            view.grpc().payload,
-            view.grpc().status,
-            view.http().status,
-            view.cli().exit_code,
+            descriptor.code().as_str(),
+            projection.remoting().code,
+            projection.grpc().payload,
+            projection.grpc().status,
+            projection.http().status,
+            projection.cli().exit_code,
         );
-        assert_eq!(
-            expected,
-            actual,
-            "boundary mapping changed for {}",
-            error.descriptor().code()
-        );
+        assert_eq!(expected, actual, "boundary mapping changed for {}", descriptor.code());
     }
 }

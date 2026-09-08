@@ -57,7 +57,7 @@ where
         request_header: &PopLiteMessageRequestHeader,
         result: PopLiteCoreResult,
         kind: PopLiteResponseKind,
-    ) -> rocketmq_error::RocketMQResult<RemotingResponse> {
+    ) -> crate::broker_error::BrokerResult<RemotingResponse> {
         compose_pop_lite_response(&self.context.command_factory, request_header, result, kind)
     }
 
@@ -76,7 +76,7 @@ pub(crate) fn compose_pop_lite_response(
     request_header: &PopLiteMessageRequestHeader,
     result: PopLiteCoreResult,
     kind: PopLiteResponseKind,
-) -> rocketmq_error::RocketMQResult<RemotingResponse> {
+) -> crate::broker_error::BrokerResult<RemotingResponse> {
     let (head, body) = compose_pop_lite_response_parts(command_factory, request_header, result, kind);
     match body {
         Some(body) => BrokerResponseParts::bytes(head, body)?.into_remoting_response(),

@@ -17,7 +17,6 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 use rocketmq_model::common::FAQUrl;
@@ -73,7 +72,7 @@ impl<MS> RequestProcessor for PopMessageProcessor<MS>
 where
     MS: BrokerReadWriteStore + Send + Sync + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -85,7 +84,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         if RequestCode::from(request.original_identity().original_code()) != RequestCode::PopMessage {
             return BrokerResponseParts::command(remoting_error_response(
                 PublicErrorView::descriptor_only(&rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED),
@@ -145,7 +144,7 @@ where
         &self,
         request: &mut RemotingCommand,
         effective_peer: SocketAddr,
-    ) -> rocketmq_error::RocketMQResult<PopInitialOutcome> {
+    ) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
         normalize_born_time(request);
         let opaque = request.opaque();
         let request_header = match request.decode_command_custom_header::<PopMessageRequestHeader>() {
@@ -273,7 +272,7 @@ where
                 Some(CheetahString::from_static_str(ExpressionType::TAG)),
             )
             .map_err(|error| {
-                RocketMQError::internal("build POP wildcard subscription", std::io::Error::other(error))
+                crate::broker_error::internal("build POP wildcard subscription", std::io::Error::other(error))
             })?;
             let retry_topic = CheetahString::from_string(
                 retry_policy.write_topic(&request_header.topic, &request_header.consumer_group),
@@ -284,7 +283,7 @@ where
                 Some(CheetahString::from_static_str(ExpressionType::TAG)),
             )
             .map_err(|error| {
-                RocketMQError::internal("build retry POP wildcard subscription", std::io::Error::other(error))
+                crate::broker_error::internal("build retry POP wildcard subscription", std::io::Error::other(error))
             })?;
             (subscription_data, retry_subscription_data, None)
         };
@@ -304,7 +303,7 @@ where
                     request_header.exp_type.clone(),
                 )
                 .map_err(|error| {
-                    RocketMQError::internal("build durable POP subscription", std::io::Error::other(error))
+                    crate::broker_error::internal("build durable POP subscription", std::io::Error::other(error))
                 })?,
             );
         }
@@ -385,7 +384,7 @@ where
         &self,
         mut head: RemotingCommand,
         rejection: PopDeferredPrepareRejection,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match rejection {
             PopDeferredPrepareRejection::DeadlineElapsed => {
                 head.set_code_ref(ResponseCode::PollingTimeout);
@@ -406,7 +405,7 @@ where
         &self,
         mut head: RemotingCommand,
         error: PopDeferredPrepareError,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match error {
             PopDeferredPrepareError::EmbeddedOrigin
             | PopDeferredPrepareError::Header(_)
@@ -426,7 +425,7 @@ where
         &self,
         mut head: RemotingCommand,
         rejection: PopDeferredRegisterRejection,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match rejection {
             PopDeferredRegisterRejection::ProvenanceMismatch => self.internal_reply(head.opaque()),
             PopDeferredRegisterRejection::ServiceClosed => self.reply_with_code(
@@ -460,18 +459,22 @@ where
         &self,
         head: RemotingCommand,
         error: PopDeferredRegisterError,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match error {
             PopDeferredRegisterError::RegistryIdentityExhausted => self.internal_reply(head.opaque()),
-            PopDeferredRegisterError::RegistryContract(violation) => {
-                Err(RocketMQError::internal("register deferred POP request", violation))
-            }
+            PopDeferredRegisterError::RegistryContract(violation) => Err(crate::broker_error::internal(
+                "register deferred POP request",
+                violation,
+            )),
             PopDeferredRegisterError::RegistryOperational(error) => {
-                Err(RocketMQError::internal("register deferred POP request", error))
+                Err(crate::broker_error::internal("register deferred POP request", error))
             }
             PopDeferredRegisterError::Contract { violation, parts } => {
                 drop(parts);
-                Err(RocketMQError::internal("register deferred POP request", violation))
+                Err(crate::broker_error::internal(
+                    "register deferred POP request",
+                    violation,
+                ))
             }
         }
     }
@@ -481,7 +484,7 @@ where
         opaque: i32,
         code: ResponseCode,
         remark: impl Into<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<PopInitialOutcome> {
+    ) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
         let command = self
             .context
             .command_factory
@@ -490,7 +493,7 @@ where
         Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
     }
 
-    fn initial_invalid_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<PopInitialOutcome> {
+    fn initial_invalid_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
         let command = remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_ARGUMENT_INVALID),
             RemotingErrorTarget::Reply {
@@ -501,7 +504,7 @@ where
         Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
     }
 
-    fn initial_permission_denied(&self, opaque: i32) -> rocketmq_error::RocketMQResult<PopInitialOutcome> {
+    fn initial_permission_denied(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
         let command = remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::AUTH_PERMISSION_DENIED),
             RemotingErrorTarget::Reply {
@@ -512,7 +515,7 @@ where
         Ok(PopInitialOutcome::Reply(BrokerResponseParts::command(command)?))
     }
 
-    fn initial_internal_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<PopInitialOutcome> {
+    fn initial_internal_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<PopInitialOutcome> {
         let command = remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
             RemotingErrorTarget::Reply {
@@ -527,7 +530,7 @@ where
         &self,
         code: ResponseCode,
         remark: &'static str,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         BrokerResponseParts::command(
             self.context
                 .command_factory
@@ -536,7 +539,7 @@ where
         .into_handler_outcome()
     }
 
-    fn invalid_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    fn invalid_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         BrokerResponseParts::command(remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_ARGUMENT_INVALID),
             RemotingErrorTarget::Reply {
@@ -547,7 +550,7 @@ where
         .into_handler_outcome()
     }
 
-    fn internal_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    fn internal_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         BrokerResponseParts::command(remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
             RemotingErrorTarget::Reply {
@@ -608,7 +611,10 @@ mod tests {
     }
 
     impl RequestProcessor for ArcHeldPopProcessor {
-        async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        async fn process(
+            &mut self,
+            request: &mut RemotingRequest,
+        ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
             self.inner.process_shared(request).await
         }
     }

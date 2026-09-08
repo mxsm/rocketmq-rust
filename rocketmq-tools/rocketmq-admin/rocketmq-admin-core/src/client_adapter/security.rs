@@ -67,7 +67,7 @@ impl SecurityAdmin for AdminSession {
                     CheetahString::from(request.filter.as_str()),
                 )
                 .await
-                .map_err(|error| AdminError::backend("list_users", error.to_string()))?;
+                .map_err(|error| AdminError::backend_source("list_users", error))?;
             Ok(ListUsersResult {
                 users: users
                     .into_iter()

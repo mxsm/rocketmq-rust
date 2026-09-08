@@ -4218,6 +4218,7 @@ dependencies = [
  "crossterm",
  "ratatui",
  "rocketmq-admin-core",
+ "rocketmq-error",
  "rocketmq-model",
  "rocketmq-protocol",
  "rocketmq-runtime",
@@ -4403,6 +4404,7 @@ name = "rocketmq-dashboard-common"
 version = "1.0.0"
 dependencies = [
  "async-trait",
+ "rocketmq-error",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -4722,6 +4724,7 @@ name = "rocketmq-security-api"
 version = "1.0.0"
 dependencies = [
  "cheetah-string",
+ "rocketmq-error",
  "serde",
  "serde_json",
  "tempfile",

@@ -16,8 +16,7 @@ use std::path::PathBuf;
 
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -56,26 +55,21 @@ pub struct UpdateSubGroupListSubCommand {
 }
 
 impl UpdateSubGroupListSubCommand {
-    async fn request(&self) -> RocketMQResult<UpdateSubscriptionGroupListRequest> {
+    async fn request(&self) -> CanonicalResult<UpdateSubscriptionGroupListRequest> {
         let mut group_config_list_bytes = Vec::new();
         File::open(&self.file)
             .await
-            .map_err(RocketMQError::IO)?
+            .map_err(|source| crate::errors::io_failed_by("open_subscription_group_list", source))?
             .read_to_end(&mut group_config_list_bytes)
-            .await?;
+            .await
+            .map_err(|source| crate::errors::io_failed_by("read_subscription_group_list", source))?;
 
-        let group_configs =
-            serde_json::from_slice::<Vec<SubscriptionGroupConfig>>(&group_config_list_bytes).map_err(|source| {
-                RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                    "decode subscription group list",
-                    "JSON",
-                    source,
-                ))
-            })?;
+        let group_configs = serde_json::from_slice::<Vec<SubscriptionGroupConfig>>(&group_config_list_bytes)
+            .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?;
         UpdateSubscriptionGroupListRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone(), group_configs)
     }
 
-    fn print_result(result: ConsumerOperationResult) -> RocketMQResult<()> {
+    fn print_result(result: ConsumerOperationResult) -> CanonicalResult<()> {
         for broker_address in &result.broker_addrs {
             println!(
                 "submit batch of subscription group config to {} success, please check the result later",
@@ -91,18 +85,9 @@ impl UpdateSubGroupListSubCommand {
         if result.failures.is_empty() {
             Ok(())
         } else {
-            Err(RocketMQError::broker_operation_failed(
+            Err(crate::errors::broker_response_failed(
                 "UPDATE_SUBSCRIPTION_GROUP_LIST",
                 -1,
-                format!(
-                    "UpdateSubGroupListSubCommand: Failed to update brokers: {}",
-                    result
-                        .failures
-                        .iter()
-                        .map(|failure| failure.broker_addr.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
             ))
         }
     }
@@ -113,7 +98,7 @@ impl CommandExecute for UpdateSubGroupListSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request().await?;
         if request.configs().is_empty() {
             return Ok(());

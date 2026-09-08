@@ -23,13 +23,10 @@ pub struct DefaultRequestProcessor;
 
 impl RequestProcessor for DefaultRequestProcessor {
     #[inline]
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         let response = RemotingCommand::create_response_command_with_code(request.command().code());
-        let response = RemotingResponse::command(response).map_err(|error| {
-            rocketmq_error::RocketMQError::response_process_failed(
-                "default_request_processor.remoting_response",
-                error.to_string(),
-            )
+        let response = RemotingResponse::command(response).map_err(|_| {
+            crate::error_helpers::protocol_response_failed("default_request_processor.remoting_response")
         })?;
         Ok(HandlerOutcome::Reply(response))
     }

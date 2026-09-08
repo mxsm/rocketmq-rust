@@ -21,7 +21,7 @@ pub type RpcClientHookFn = Arc<
     dyn Fn(
             Option<&dyn TopicRequestHeaderTrait>,
             Option<&RpcResponse>,
-        ) -> rocketmq_error::RocketMQResult<Option<RpcResponse>>
+        ) -> Result<Option<RpcResponse>, rocketmq_error::SharedError>
         + Send
         + Sync,
 >;

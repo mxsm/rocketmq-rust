@@ -14,10 +14,10 @@
 
 use std::sync::Arc;
 
+use rocketmq_client_rust::ClientError;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 
@@ -28,17 +28,17 @@ pub struct ExampleClientRuntime {
 }
 
 impl ExampleClientRuntime {
-    pub fn try_new(scope: &str) -> RocketMQResult<Self> {
+    pub fn try_new(scope: &str) -> ClientResult<Self> {
         let owner = RuntimeOwner::plan(RuntimeConfig {
             thread_name: format!("rocketmq-client-example-{scope}"),
             ..Default::default()
         })
         .expect("test runtime configuration is valid")
         .build()
-        .map_err(|source| RocketMQError::internal("create client example runtime", source))?;
+        .map_err(|source| ClientError::internal("create client example runtime", source))?;
         let telemetry_guard =
             rocketmq_observability::install_global(&rocketmq_observability::TelemetryBootstrapConfig::default())
-                .map_err(|source| RocketMQError::internal("initialize client example telemetry", source))?;
+                .map_err(|source| ClientError::internal("initialize client example telemetry", source))?;
         let client_runtime = ClientRuntime::try_new(
             owner.root_context().component("client"),
             ClientRuntimeConfig::default(),

@@ -14,7 +14,7 @@
 
 use std::alloc::Layout;
 use std::convert::Infallible;
-use std::error::Error;
+use std::error::Error as StdError;
 use std::fmt;
 use std::future::Future;
 use std::num::NonZeroU64;
@@ -28,7 +28,6 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -717,7 +716,7 @@ impl PopDeferredService {
     ) -> Result<DeferredResumeOutcome, TransportError>
     where
         F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
     {
         let observation = Arc::new(Mutex::new(None));
         let accepted = Arc::clone(&observation);
@@ -749,7 +748,7 @@ impl PopDeferredService {
     ) -> Result<DeferredResumeOutcome, TransportError>
     where
         F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
     {
         let result = self.resume_claimed(claimed, handler_retained, handler).await;
         observer.complete_resume_result(&result);
@@ -766,7 +765,7 @@ impl PopDeferredService {
     ) -> Result<DeferredResumeSubmitOutcome, TransportError>
     where
         F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
     {
         let resume_executions = Arc::clone(&self.resume_executions);
         let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
@@ -786,7 +785,7 @@ impl PopDeferredService {
     ) -> Result<DeferredResumeSubmitOutcome, TransportError>
     where
         F: FnOnce(ResumePop, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = rocketmq_error::RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = crate::broker_error::BrokerResult<RemotingResponse>> + Send + 'static,
     {
         let resume_executions = Arc::clone(&self.resume_executions);
         let resume_execution_bytes = Arc::clone(&self.resume_execution_bytes);
@@ -1239,8 +1238,8 @@ impl fmt::Display for PopPendingArrivalError {
     }
 }
 
-impl Error for PopPendingArrivalError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for PopPendingArrivalError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Continuation(source) => Some(source),
             Self::Latch(source) => Some(source),
@@ -1338,7 +1337,7 @@ impl PopDeferredPrepareRejection {
 
 pub(crate) enum PopDeferredPrepareError {
     EmbeddedOrigin,
-    Header(RocketMQError),
+    Header(rocketmq_error::Error),
     MissingCallerHost,
     InvalidExpiryMargins,
     RetainedSizeOverflow,
@@ -1378,8 +1377,8 @@ impl fmt::Display for PopDeferredPrepareError {
     }
 }
 
-impl Error for PopDeferredPrepareError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for PopDeferredPrepareError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::Header(source) => Some(source),
             Self::Deadline(source) => Some(source),
@@ -1487,8 +1486,8 @@ impl fmt::Display for PopDeferredRegisterError {
     }
 }
 
-impl Error for PopDeferredRegisterError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl StdError for PopDeferredRegisterError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::RegistryContract(violation) => Some(violation),
             Self::RegistryOperational(error) => Some(error),

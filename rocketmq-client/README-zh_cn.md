@@ -31,7 +31,10 @@ ACL hook、路由管理、延迟容错、消息轨迹以及面向热路径的 be
 `MQClientInstance`，由它围绕 broker remoting 路径统一管理 client 注册、路由刷新、heartbeat、pull/rebalance 服务、
 `MQClientAPIImpl`、hook、ACL 签名、trace dispatch、latency fault strategy 和 offset store。
 
-该 crate 为常见概念保留 Java 风格命名，同时通过 Rust async API 和 `rocketmq_error::RocketMQResult` 暴露类型化错误。
+该 crate 为常见概念保留 Java 风格命名，同时通过 Rust async API、
+`rocketmq_client_rust::ClientError` 和 `rocketmq_client_rust::ClientResult<T>` 暴露类型化错误。
+Client facade 在内部保留共享的规范 `rocketmq_error::Error`，因此 callback 与 retry coordinator
+不会丢失 descriptor 标识和类型化 source。
 
 ## Crate 结构
 
@@ -85,11 +88,11 @@ rocketmq-client-rust = { version = "1.0.0", features = ["observability", "otlp-t
 ```rust
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_common::common::message::message_single::Message;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_rust::rocketmq;
 
 #[rocketmq::main]
-async fn main() -> RocketMQResult<()> {
+async fn main() -> ClientResult<()> {
     rocketmq_common::log::init_logger()?;
 
     let mut producer = DefaultMQProducer::builder(client_runtime.clone())
@@ -122,11 +125,11 @@ use rocketmq_client_rust::consumer::listener::consume_concurrently_status::Consu
 use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_rust::rocketmq;
 
 #[rocketmq::main]
-async fn main() -> RocketMQResult<()> {
+async fn main() -> ClientResult<()> {
     rocketmq_common::log::init_logger()?;
 
     let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
@@ -150,7 +153,7 @@ impl MessageListenerConcurrently for PrintListener {
         &self,
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         for message in messages {
             println!("received: {:?}", message);
         }

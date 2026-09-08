@@ -33,7 +33,7 @@ impl LiteAdmin for AdminSession {
                 .inner
                 .get_broker_lite_info(CheetahString::from(request.broker_addr.as_str()))
                 .await
-                .map_err(|error| AdminError::backend("get_broker_lite_info", error.to_string()))?;
+                .map_err(|error| AdminError::backend_source("get_broker_lite_info", error))?;
             Ok(LiteBrokerInfo {
                 store_type: info.get_store_type().map(ToString::to_string),
                 max_lmq_num: info.get_max_lmq_num(),

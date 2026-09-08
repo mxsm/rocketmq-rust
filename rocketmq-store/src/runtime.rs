@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::CanonicalCondition;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingExecutorSnapshot;
 use rocketmq_runtime::BudgetLimit;
@@ -24,6 +24,9 @@ use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone)]
@@ -94,7 +97,7 @@ impl StoreRuntimeScope {
         self.group_commit_budget.clone()
     }
 
-    pub(crate) async fn spawn_io<F, R>(&self, name: &'static str, operation: F) -> Result<R, RocketMQError>
+    pub(crate) async fn spawn_io<F, R>(&self, name: &'static str, operation: F) -> Result<R, StoreError>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
@@ -102,7 +105,7 @@ impl StoreRuntimeScope {
         self.blocking_executor
             .spawn_io(name, operation)
             .await
-            .map_err(|error| RocketMQError::storage_write_failed("store", format!("{name}: {error}")))
+            .map_err(|error| runtime_error(name, StoreOperation::Admin, error))
     }
 
     pub(crate) async fn spawn_io_until<F, R>(
@@ -110,7 +113,7 @@ impl StoreRuntimeScope {
         name: &'static str,
         deadline: ShutdownDeadline,
         operation: F,
-    ) -> Result<R, RocketMQError>
+    ) -> Result<R, StoreError>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
@@ -118,7 +121,7 @@ impl StoreRuntimeScope {
         self.blocking_executor
             .spawn_io_until(name, deadline, operation)
             .await
-            .map_err(|error| RocketMQError::storage_write_failed("store", format!("{name}: {error}")))
+            .map_err(|error| runtime_error(name, StoreOperation::Admin, error))
     }
 
     pub(crate) fn task_group(&self, name: &'static str) -> TaskGroup {
@@ -134,11 +137,7 @@ impl StoreRuntimeScope {
     }
 }
 
-pub(crate) async fn spawn_io<F, R>(
-    scope: &StoreRuntimeScope,
-    name: &'static str,
-    operation: F,
-) -> Result<R, RocketMQError>
+pub(crate) async fn spawn_io<F, R>(scope: &StoreRuntimeScope, name: &'static str, operation: F) -> Result<R, StoreError>
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
@@ -150,7 +149,7 @@ pub(crate) fn spawn_background_io<F>(
     scope: &StoreRuntimeScope,
     name: &'static str,
     operation: F,
-) -> Result<TaskId, RocketMQError>
+) -> Result<TaskId, StoreError>
 where
     F: FnOnce() + Send + 'static,
 {
@@ -162,17 +161,33 @@ where
                 tracing::warn!(error = %error, task_name = name, "store background blocking task failed");
             }
         })
-        .map_err(|error| RocketMQError::storage_write_failed("store", format!("{name}: {error}")))
+        .map_err(|error| runtime_error(name, StoreOperation::Start, error))
 }
 
 pub(crate) fn task_group(scope: &StoreRuntimeScope, name: &'static str) -> TaskGroup {
     scope.task_group(name)
 }
 
-pub(crate) fn shutdown_report_result(component: &'static str, report: ShutdownReport) -> Result<(), RocketMQError> {
-    report
-        .assert_no_task_leak()
-        .map_err(|error| RocketMQError::storage_write_failed("store", format!("{component}: {error}")))
+pub(crate) fn shutdown_report_result(component: &'static str, report: ShutdownReport) -> Result<(), StoreError> {
+    report.assert_no_task_leak().map_err(|error| {
+        StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, StoreOperation::Shutdown)
+            .in_component(StoreComponent::Store)
+            .with_detail(component)
+            .with_source(std::io::Error::other(error))
+    })
+}
+
+fn runtime_error(name: &'static str, operation: StoreOperation, error: rocketmq_runtime::RuntimeError) -> StoreError {
+    let descriptor = match error.condition() {
+        CanonicalCondition::DeadlineExceeded => &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
+        CanonicalCondition::ResourceExhausted => &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+        CanonicalCondition::Unavailable | CanonicalCondition::Cancelled => &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+        _ => &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+    };
+    StoreError::new(descriptor, operation)
+        .in_component(StoreComponent::Store)
+        .with_detail(name)
+        .with_source(error)
 }
 
 pub(crate) fn blocking_snapshot(scope: &StoreRuntimeScope) -> BlockingExecutorSnapshot {

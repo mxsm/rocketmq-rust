@@ -19,7 +19,6 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetSnapshot;
@@ -32,6 +31,7 @@ use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::RuntimeError;
 
+use crate::error::canonical;
 use crate::proto::v2;
 use crate::ProxyError;
 use crate::ProxyResult;
@@ -110,7 +110,7 @@ impl ExecutionGuards {
             BudgetLimit::new(total_permits, managed_bytes.max(1), FullPolicy::Reject)
                 .with_control_reserve(BudgetCapacity::new(control_permits, control_reserve_bytes)),
         )
-        .map_err(|error| ProxyError::invalid_metadata(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::invalid_metadata_with_source(error)))?;
         let root = tree.root();
 
         let route = execution_budget(
@@ -164,7 +164,7 @@ impl ExecutionGuards {
                     ))
                     .with_max_age(telemetry_limits.max_age),
             )
-            .map_err(|error| ProxyError::invalid_metadata(error.to_string()))?;
+            .map_err(|error| ProxyError::from(canonical::invalid_metadata_with_source(error)))?;
 
         Ok(Self {
             route,
@@ -228,7 +228,7 @@ impl ExecutionGuards {
                 ))
                 .with_max_age(self.telemetry_limits.max_age),
             )
-            .map_err(|error| ProxyError::invalid_metadata(error.to_string()))?;
+            .map_err(|error| ProxyError::from(canonical::invalid_metadata_with_source(error)))?;
         Ok(BudgetedQueue::new(budget))
     }
 
@@ -261,15 +261,11 @@ fn execution_budget(
         limit = limit.with_rate(RateLimit::new(rate_per_second, rate_per_second));
     }
     root.child(name, limit)
-        .map_err(|error| ProxyError::invalid_metadata(error.to_string()))
+        .map_err(|error| ProxyError::from(canonical::invalid_metadata_with_source(error)))
 }
 
 fn runtime_memory_detection_error(source: RuntimeError) -> ProxyError {
-    RocketMQError::Internal {
-        operation: "detect-process-memory-limit",
-        source: Box::new(source),
-    }
-    .into()
+    ProxyError::from(canonical::internal_with_source("detect-process-memory-limit", source))
 }
 
 #[cfg(test)]

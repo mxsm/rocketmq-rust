@@ -4,6 +4,8 @@
 
 本文档解释了 RocketMQ Rust 版本的 `DefaultMQProducer` 和 `TransactionMQProducer` 的实现状态和使用方法。
 
+下文签名中的 `ClientResult<T>` 指 `rocketmq_client_rust::ClientResult<T>`。
+
 ## 目录
 
 - [快速概览](#快速概览)
@@ -64,7 +66,7 @@ let send_result = producer.send(msg).await?;
 
 **方法签名**:
 ```rust
-pub async fn send<M>(&mut self, msg: M) -> RocketMQResult<Option<SendResult>>
+pub async fn send<M>(&mut self, msg: M) -> ClientResult<Option<SendResult>>
 where
     M: MessageTrait + Send + Sync
 ```
@@ -89,7 +91,7 @@ pub async fn send_with_callback<M, F>(
     &mut self,
     msg: M,
     send_callback: F,
-) -> RocketMQResult<()>
+) -> ClientResult<()>
 where
     M: MessageTrait + Send + Sync,
     F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static
@@ -103,7 +105,7 @@ let send_result = producer.send_oneway(msg).await?;
 
 **方法签名**:
 ```rust
-pub async fn send_oneway<M>(&mut self, msg: M) -> RocketMQResult<()>
+pub async fn send_oneway<M>(&mut self, msg: M) -> ClientResult<()>
 where
     M: MessageTrait + Send + Sync
 ```
@@ -122,7 +124,7 @@ let send_result = producer.send_to_queue(msg, mq).await?;
 
 **方法签名**:
 ```rust
-pub async fn send_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> RocketMQResult<Option<SendResult>>
+pub async fn send_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> ClientResult<Option<SendResult>>
 where
     M: MessageTrait + Send + Sync
 ```
@@ -146,7 +148,7 @@ pub async fn send_with_selector<M, S, T>(
     msg: M,
     selector: S,
     arg: T,
-) -> RocketMQResult<Option<SendResult>>
+) -> ClientResult<Option<SendResult>>
 where
     M: MessageTrait + Send + Sync,
     S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
@@ -166,7 +168,7 @@ let send_result = producer.send_batch(msgs).await?;
 pub async fn send_batch<M>(
     &mut self,
     msgs: Vec<M>,
-) -> RocketMQResult<SendResult>
+) -> ClientResult<SendResult>
 where
     M: MessageTrait + Send + Sync
 ```
@@ -218,7 +220,7 @@ pub async fn request_with_timeout<M>(
     &mut self,
     msg: M,
     timeout: u64,
-) -> RocketMQResult<Box<dyn MessageTrait>>
+) -> ClientResult<Box<dyn MessageTrait>>
 ```
 
 ### 异步请求
@@ -375,7 +377,7 @@ producer.shutdown().await?;
 
 **Rust 版本**:
 - 使用 `Result<T, E>` 类型
-- 返回 `RocketMQResult<T>` 包装错误
+- 返回包含 `rocketmq_client_rust::ClientError` 的 `ClientResult<T>`
 
 ### 3. 类型系统
 

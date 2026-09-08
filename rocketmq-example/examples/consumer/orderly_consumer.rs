@@ -16,12 +16,12 @@
 
 #![recursion_limit = "512"]
 
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ConsumeOrderlyContext;
 use rocketmq_client_rust::ConsumeOrderlyStatus;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerOrderly;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -37,11 +37,11 @@ pub const TAG: &str = "*";
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
         .consumer_group(CONSUMER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
@@ -68,7 +68,7 @@ impl MessageListenerOrderly for OrderlyListener {
         &self,
         messages: &[&MessageExt],
         context: &mut ConsumeOrderlyContext,
-    ) -> RocketMQResult<ConsumeOrderlyStatus> {
+    ) -> ClientResult<ConsumeOrderlyStatus> {
         context.set_auto_commit(true);
         for message in messages {
             info!(

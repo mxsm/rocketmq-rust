@@ -20,12 +20,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::ControllerResult;
 use rocketmq_error::fields;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::Result;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_error::CORE_INTERNAL_FAILURE;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_security_api::MaintenanceAuthorizationGrant;
@@ -170,11 +169,11 @@ impl MembershipChangeCoordinator {
         port: &P,
         authorization: &MaintenanceAuthorizationGrant,
         request: MembershipChangeRequest,
-    ) -> RocketMQResult<MembershipChangeOutcome> {
+    ) -> ControllerResult<MembershipChangeOutcome> {
         if let Err(error) = request.validate() {
-            return self.reject_invalid_request(authorization, &request, RocketMQError::Shared(Arc::new(error)));
+            return self.reject_invalid_request(authorization, &request, error);
         }
-        let fingerprint = request_fingerprint(&request).map_err(|error| RocketMQError::Shared(Arc::new(error)))?;
+        let fingerprint = request_fingerprint(&request)?;
         self.validate_authorization(authorization, &request)?;
         let mut operations = self.operations.lock().await;
         if let Some(previous) = operations.get(request.operation_id()).cloned() {
@@ -184,7 +183,7 @@ impl MembershipChangeCoordinator {
                     &request,
                     None,
                     "operation_id_conflict",
-                    RocketMQError::Shared(Arc::new(request_invalid("reuse membership operation id"))),
+                    request_invalid("reuse membership operation id"),
                 );
             }
             match previous {
@@ -221,7 +220,7 @@ impl MembershipChangeCoordinator {
                                 None,
                                 MembershipAuditOutcome::Pending,
                                 "pending_state_read_failed",
-                                RocketMQError::Shared(Arc::new(error)),
+                                error,
                             );
                         }
                     };
@@ -254,7 +253,7 @@ impl MembershipChangeCoordinator {
                         Some(membership.version),
                         MembershipAuditOutcome::Pending,
                         "operation_still_pending",
-                        RocketMQError::Shared(Arc::new(controller_internal("reconcile pending Controller membership"))),
+                        controller_internal("reconcile pending Controller membership"),
                     );
                 }
             }
@@ -265,12 +264,10 @@ impl MembershipChangeCoordinator {
                 &request,
                 None,
                 "idempotency_journal_full",
-                RocketMQError::Shared(Arc::new(
-                    Error::new(&CORE_INTERNAL_FAILURE).with_context(
-                        ErrorContext::new()
-                            .with_text(fields::OPERATION_DIAGNOSTIC, "admit Controller membership operation"),
-                    ),
-                )),
+                Error::new(&CORE_INTERNAL_FAILURE).with_context(
+                    ErrorContext::new()
+                        .with_text(fields::OPERATION_DIAGNOSTIC, "admit Controller membership operation"),
+                ),
             );
         }
         let before = match self
@@ -285,7 +282,7 @@ impl MembershipChangeCoordinator {
                     None,
                     MembershipAuditOutcome::Rejected,
                     "membership_read_failed",
-                    RocketMQError::Shared(Arc::new(error)),
+                    error,
                 );
             }
         };
@@ -295,18 +292,12 @@ impl MembershipChangeCoordinator {
                 &request,
                 Some(before.version),
                 "stale_membership_version",
-                RocketMQError::Shared(Arc::new(request_invalid("validate membership version"))),
+                request_invalid("validate membership version"),
             );
         }
 
         if let Err((decision, error)) = validate_transition(&before, &request.change) {
-            return self.reject(
-                authorization,
-                &request,
-                Some(before.version),
-                decision,
-                RocketMQError::Shared(Arc::new(error)),
-            );
+            return self.reject(authorization, &request, Some(before.version), decision, error);
         }
 
         let desired = DesiredMembership::from_change(&request.change);
@@ -325,7 +316,7 @@ impl MembershipChangeCoordinator {
                 Some(before.version),
                 MembershipAuditOutcome::Pending,
                 "mutation_outcome_unknown",
-                RocketMQError::Shared(Arc::new(error)),
+                error,
             );
         }
         let verification_started = Instant::now();
@@ -345,7 +336,7 @@ impl MembershipChangeCoordinator {
                         Some(before.version),
                         MembershipAuditOutcome::Pending,
                         "verification_read_failed",
-                        RocketMQError::Shared(Arc::new(error)),
+                        error,
                     );
                 }
             };
@@ -358,7 +349,7 @@ impl MembershipChangeCoordinator {
                         Some(observed.version),
                         MembershipAuditOutcome::Pending,
                         "verification_pending",
-                        RocketMQError::Shared(Arc::new(error)),
+                        error,
                     );
                 }
                 Err(_) => tokio::time::sleep(MEMBERSHIP_VERIFICATION_POLL_INTERVAL).await,
@@ -392,16 +383,14 @@ impl MembershipChangeCoordinator {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: &MembershipChangeRequest,
-    ) -> RocketMQResult<()> {
+    ) -> ControllerResult<()> {
         if authorization.capability() != MaintenanceCapability::ReleaseCheckpoint {
             return self.reject(
                 authorization,
                 request,
                 None,
                 "capability_denied",
-                RocketMQError::authentication_failed(
-                    "membership changes temporarily require the release-checkpoint maintenance capability",
-                ),
+                crate::error::authentication_failed(),
             );
         }
         if authorization.deadline_unix_millis() <= current_millis() {
@@ -410,7 +399,7 @@ impl MembershipChangeCoordinator {
                 request,
                 None,
                 "authorization_expired",
-                RocketMQError::Shared(Arc::new(consensus_timed_out("authorize Controller membership", 0))),
+                consensus_timed_out("authorize Controller membership", 0),
             );
         }
         Ok(())
@@ -441,8 +430,8 @@ impl MembershipChangeCoordinator {
         request: &MembershipChangeRequest,
         observed_version: Option<u64>,
         decision: &'static str,
-        error: RocketMQError,
-    ) -> RocketMQResult<T> {
+        error: Error,
+    ) -> ControllerResult<T> {
         self.record_error(
             authorization,
             request,
@@ -457,8 +446,8 @@ impl MembershipChangeCoordinator {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: &MembershipChangeRequest,
-        error: RocketMQError,
-    ) -> RocketMQResult<T> {
+        error: Error,
+    ) -> ControllerResult<T> {
         let audit = MembershipAuditRecord {
             operation_id: "<invalid>".to_string(),
             principal: authorization.principal().to_string(),
@@ -484,8 +473,8 @@ impl MembershipChangeCoordinator {
         observed_version: Option<u64>,
         outcome: MembershipAuditOutcome,
         decision: &'static str,
-        error: RocketMQError,
-    ) -> RocketMQResult<T> {
+        error: Error,
+    ) -> ControllerResult<T> {
         let audit = self.audit_record(authorization, request, observed_version, None, outcome, decision);
         self.audit_sink.record(&audit);
         Err(error)

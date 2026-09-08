@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
@@ -42,7 +41,7 @@ impl<MS> RequestProcessor for PopLiteMessageProcessor<MS>
 where
     MS: BrokerReadWriteStore + Send + Sync + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -54,7 +53,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         if RequestCode::from(request.original_identity().original_code()) != RequestCode::PopLiteMessage {
             return command_outcome(remoting_error_response(
                 PublicErrorView::descriptor_only(&rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED),
@@ -128,7 +127,7 @@ where
         &self,
         request_header: &PopLiteMessageRequestHeader,
         rejection: PopLiteDeferredPrepareRejection,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match rejection {
             PopLiteDeferredPrepareRejection::Deadline(_) | PopLiteDeferredPrepareRejection::OneWay => {
                 self.empty_pop_lite_outcome(request_header, PopLiteResponseKind::PollingTimeout)
@@ -153,7 +152,7 @@ where
         &self,
         request_header: &PopLiteMessageRequestHeader,
         failure: PopLiteDeferredPrepareFailure,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match failure {
             PopLiteDeferredPrepareFailure::Header(_) => self.invalid_reply(0),
             PopLiteDeferredPrepareFailure::Deadline(_) => {
@@ -170,7 +169,7 @@ where
         &self,
         request_header: &PopLiteMessageRequestHeader,
         rejection: PopLiteDeferredRegisterRejection,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match rejection {
             PopLiteDeferredRegisterRejection::ServiceClosed
             | PopLiteDeferredRegisterRejection::ServiceClosedAfterTake => self.reply_with_code(
@@ -206,18 +205,23 @@ where
     fn register_failure_outcome(
         &self,
         failure: PopLiteDeferredRegisterFailure,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match failure {
             PopLiteDeferredRegisterFailure::IdentityExhausted => self.internal_reply(0),
-            PopLiteDeferredRegisterFailure::RegistryContract(violation) => {
-                Err(RocketMQError::internal("register deferred POP Lite request", violation))
-            }
-            PopLiteDeferredRegisterFailure::RegistryOperational(error) => {
-                Err(RocketMQError::internal("register deferred POP Lite request", error))
-            }
+            PopLiteDeferredRegisterFailure::RegistryContract(violation) => Err(crate::broker_error::internal(
+                "register deferred POP Lite request",
+                violation,
+            )),
+            PopLiteDeferredRegisterFailure::RegistryOperational(error) => Err(crate::broker_error::internal(
+                "register deferred POP Lite request",
+                error,
+            )),
             PopLiteDeferredRegisterFailure::Contract { violation, parts } => {
                 drop(parts);
-                Err(RocketMQError::internal("register deferred POP Lite request", violation))
+                Err(crate::broker_error::internal(
+                    "register deferred POP Lite request",
+                    violation,
+                ))
             }
         }
     }
@@ -226,7 +230,7 @@ where
         &self,
         request_header: &PopLiteMessageRequestHeader,
         kind: PopLiteResponseKind,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         Ok(HandlerOutcome::Reply(self.compose_pop_lite_response(
             request_header,
             PopLiteCoreResult {
@@ -242,7 +246,7 @@ where
         &self,
         code: ResponseCode,
         remark: &'static str,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         command_outcome(
             self.context
                 .command_factory
@@ -250,7 +254,7 @@ where
         )
     }
 
-    fn invalid_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    fn invalid_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         command_outcome(remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_ARGUMENT_INVALID),
             RemotingErrorTarget::Reply {
@@ -260,7 +264,7 @@ where
         ))
     }
 
-    fn internal_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    fn internal_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         command_outcome(remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
             RemotingErrorTarget::Reply {
@@ -273,7 +277,7 @@ where
 
 fn command_outcome(
     command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+) -> crate::broker_error::BrokerResult<HandlerOutcome> {
     BrokerResponseParts::command(command)?.into_handler_outcome()
 }
 
@@ -307,7 +311,10 @@ mod tests {
     }
 
     impl RequestProcessor for ArcHeldPopLiteProcessor {
-        async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        async fn process(
+            &mut self,
+            request: &mut RemotingRequest,
+        ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
             self.inner.process_shared(request).await
         }
     }

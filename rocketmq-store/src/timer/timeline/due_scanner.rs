@@ -510,8 +510,6 @@ pub(crate) struct DueScanResult {
 
 #[derive(Debug, Error)]
 pub(crate) enum TimelineDueScannerError {
-    #[error("Timeline store failure: {0}")]
-    Timeline(#[from] rocketmq_error::RocketMQError),
     #[error("shadow Timeline contains a claimable or non-Java record")]
     ShadowNamespaceViolation,
     #[error("formal Timeline contains a shadow or non-Extended state")]
@@ -526,7 +524,7 @@ pub(crate) enum TimelineDueScannerError {
     ClockUnsafe,
     #[error("Timeline continuation belongs to a different index backend")]
     CursorBackendMismatch,
-    #[error("native Timeline failure: {0}")]
+    #[error("Timeline storage failure: {0}")]
     Store(#[from] rocketmq_store_api::StoreError),
 }
 

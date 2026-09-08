@@ -70,7 +70,7 @@ use rocketmq_client_rust::producer::transaction_mq_producer::TransactionMQProduc
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_single::Message;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 
 pub const MESSAGE_COUNT: usize = 1;
 pub const PRODUCER_GROUP: &str = "please_rename_unique_group_name";
@@ -79,7 +79,7 @@ pub const TOPIC: &str = "TopicTest";
 pub const TAG: &str = "TagA";
 
 #[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+pub async fn main() -> ClientResult<()> {
     //init logger
     rocketmq_common::log::init_logger()?;
 

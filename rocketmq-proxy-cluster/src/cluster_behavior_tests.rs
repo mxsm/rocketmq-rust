@@ -22,6 +22,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::result::PullOutcome;
 use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_proxy_core::ConsumerFilterExpression;
@@ -37,7 +38,7 @@ use tokio_util::sync::CancellationToken;
 use super::*;
 
 type EventLog = Arc<Mutex<Vec<&'static str>>>;
-type SendScript = Arc<Mutex<VecDeque<Result<Option<SendResult>, RocketMQError>>>>;
+type SendScript = Arc<Mutex<VecDeque<Result<Option<SendResult>, CanonicalError>>>>;
 
 struct EmptySigner;
 
@@ -54,10 +55,10 @@ struct ProducerStartControl {
 
 struct ScriptedClientIo {
     events: EventLog,
-    routes: Mutex<VecDeque<Result<Option<TopicRouteData>, RocketMQError>>>,
-    pulls: Mutex<VecDeque<Result<PullOutcome<MessageExt>, RocketMQError>>>,
-    pops: Mutex<VecDeque<Result<PopResult, RocketMQError>>>,
-    acks: Mutex<VecDeque<Result<AckResult, RocketMQError>>>,
+    routes: Mutex<VecDeque<Result<Option<TopicRouteData>, CanonicalError>>>,
+    pulls: Mutex<VecDeque<Result<PullOutcome<MessageExt>, CanonicalError>>>,
+    pops: Mutex<VecDeque<Result<PopResult, CanonicalError>>>,
+    acks: Mutex<VecDeque<Result<AckResult, CanonicalError>>>,
     broker_lookup_misses: AtomicUsize,
     route_panics: AtomicUsize,
     route_calls: AtomicUsize,
@@ -153,7 +154,7 @@ impl ScriptedClientIo {
         self.acks
             .lock()
             .expect("ack script lock poisoned")
-            .push_back(Err(RocketMQError::IllegalArgument(message.to_owned())));
+            .push_back(Err(canonical::argument(message.to_owned())));
     }
 
     fn fail_broker_lookup_times(&self, count: usize) {
@@ -164,7 +165,7 @@ impl ScriptedClientIo {
         self.route_panics.store(count, Ordering::Release);
     }
 
-    fn scripted<T>(queue: &Mutex<VecDeque<Result<T, RocketMQError>>>, operation: &str) -> Result<T, RocketMQError> {
+    fn scripted<T>(queue: &Mutex<VecDeque<Result<T, CanonicalError>>>, operation: &str) -> Result<T, CanonicalError> {
         queue
             .lock()
             .expect("Client script lock poisoned")
@@ -173,13 +174,13 @@ impl ScriptedClientIo {
     }
 }
 
-fn unexpected_client_call(operation: &str) -> RocketMQError {
-    RocketMQError::IllegalArgument(format!("unexpected scripted Client operation: {operation}"))
+fn unexpected_client_call(operation: &str) -> CanonicalError {
+    canonical::argument(format!("unexpected scripted Client operation: {operation}"))
 }
 
 #[async_trait]
 impl ClusterClientIo for ScriptedClientIo {
-    async fn start(&self) -> Result<(), RocketMQError> {
+    async fn start(&self) -> Result<(), CanonicalError> {
         self.record("client.start");
         if let Some(sender) = self
             .start_entered
@@ -202,7 +203,7 @@ impl ClusterClientIo for ScriptedClientIo {
         }
     }
 
-    async fn topic_route(&self, _topic: &str, _timeout_millis: u64) -> Result<Option<TopicRouteData>, RocketMQError> {
+    async fn topic_route(&self, _topic: &str, _timeout_millis: u64) -> Result<Option<TopicRouteData>, CanonicalError> {
         self.record("client.route");
         self.route_calls.fetch_add(1, Ordering::AcqRel);
         if self
@@ -222,7 +223,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: &str,
         _request: LockBatchRequestBody,
         _timeout_millis: u64,
-    ) -> Result<HashSet<MessageQueue>, RocketMQError> {
+    ) -> Result<HashSet<MessageQueue>, CanonicalError> {
         Err(unexpected_client_call("lock_batch_mq"))
     }
 
@@ -231,7 +232,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: &CheetahString,
         _request: UnlockBatchRequestBody,
         _timeout_millis: u64,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), CanonicalError> {
         Err(unexpected_client_call("unlock_batch_mq"))
     }
 
@@ -244,7 +245,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _strategy_name: CheetahString,
         _message_model: MessageModel,
         _timeout_millis: u64,
-    ) -> Result<Option<Vec<MessageQueueAssignment>>, RocketMQError> {
+    ) -> Result<Option<Vec<MessageQueueAssignment>>, CanonicalError> {
         Err(unexpected_client_call("query_assignment"))
     }
 
@@ -254,7 +255,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: &CheetahString,
         _request: PopMessageRequestHeader,
         _timeout_millis: u64,
-    ) -> Result<PopResult, RocketMQError> {
+    ) -> Result<PopResult, CanonicalError> {
         self.record("client.pop");
         Self::scripted(&self.pops, "pop_message")
     }
@@ -264,7 +265,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: &CheetahString,
         _request: AckMessageRequestHeader,
         _timeout_millis: u64,
-    ) -> Result<AckResult, RocketMQError> {
+    ) -> Result<AckResult, CanonicalError> {
         self.record("client.ack");
         self.ack_calls.fetch_add(1, Ordering::AcqRel);
         Self::scripted(&self.acks, "ack_message")
@@ -275,7 +276,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: &CheetahString,
         _request: BatchAckMessageRequestBody,
         _timeout_millis: u64,
-    ) -> Result<AckResult, RocketMQError> {
+    ) -> Result<AckResult, CanonicalError> {
         self.record("client.batch-ack");
         self.ack_calls.fetch_add(1, Ordering::AcqRel);
         Self::scripted(&self.acks, "batch_ack_message")
@@ -287,7 +288,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: &CheetahString,
         _request: ChangeInvisibleTimeRequestHeader,
         _timeout_millis: u64,
-    ) -> Result<AckResult, RocketMQError> {
+    ) -> Result<AckResult, CanonicalError> {
         Err(unexpected_client_call("change_invisible_time"))
     }
 
@@ -297,7 +298,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _request: EndTransactionRequestHeader,
         _remark: CheetahString,
         _timeout_millis: u64,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), CanonicalError> {
         Err(unexpected_client_call("end_transaction"))
     }
 
@@ -338,7 +339,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: &str,
         _request: PullMessageRequestHeader,
         _timeout_millis: u64,
-    ) -> Result<PullOutcome<MessageExt>, RocketMQError> {
+    ) -> Result<PullOutcome<MessageExt>, CanonicalError> {
         self.record("client.pull");
         self.pull_calls.fetch_add(1, Ordering::AcqRel);
         if let Some(sender) = self
@@ -364,7 +365,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _delay_level: i32,
         _timeout_millis: u64,
         _max_consume_retry_times: i32,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), CanonicalError> {
         Err(unexpected_client_call("consumer_send_message_back"))
     }
 
@@ -373,7 +374,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: &CheetahString,
         _request: UpdateConsumerOffsetRequestHeader,
         _timeout_millis: u64,
-    ) -> Result<(), RocketMQError> {
+    ) -> Result<(), CanonicalError> {
         Err(unexpected_client_call("update_consumer_offset"))
     }
 
@@ -382,7 +383,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: &str,
         _request: QueryConsumerOffsetRequestHeader,
         _timeout_millis: u64,
-    ) -> Result<i64, RocketMQError> {
+    ) -> Result<i64, CanonicalError> {
         Err(unexpected_client_call("query_consumer_offset"))
     }
 
@@ -391,7 +392,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: &str,
         _queue: &MessageQueue,
         _timeout_millis: u64,
-    ) -> Result<i64, RocketMQError> {
+    ) -> Result<i64, CanonicalError> {
         Err(unexpected_client_call("min_offset"))
     }
 
@@ -400,7 +401,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: &str,
         _queue: &MessageQueue,
         _timeout_millis: u64,
-    ) -> Result<i64, RocketMQError> {
+    ) -> Result<i64, CanonicalError> {
         Err(unexpected_client_call("max_offset"))
     }
 
@@ -411,7 +412,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _timestamp: i64,
         _boundary_type: BoundaryType,
         _timeout_millis: u64,
-    ) -> Result<i64, RocketMQError> {
+    ) -> Result<i64, CanonicalError> {
         Err(unexpected_client_call("search_offset"))
     }
 
@@ -420,7 +421,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: &CheetahString,
         _topic: CheetahString,
         _timeout_millis: u64,
-    ) -> Result<rocketmq_model::topic::TopicConfig, RocketMQError> {
+    ) -> Result<rocketmq_model::topic::TopicConfig, CanonicalError> {
         Err(unexpected_client_call("topic_config"))
     }
 
@@ -429,11 +430,11 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: &CheetahString,
         _group: CheetahString,
         _timeout_millis: u64,
-    ) -> Result<SubscriptionGroupConfig, RocketMQError> {
+    ) -> Result<SubscriptionGroupConfig, CanonicalError> {
         Err(unexpected_client_call("subscription_group_config"))
     }
 
-    async fn broker_cluster_info(&self, _timeout_millis: u64) -> Result<ClusterInfo, RocketMQError> {
+    async fn broker_cluster_info(&self, _timeout_millis: u64) -> Result<ClusterInfo, CanonicalError> {
         self.readiness_calls.fetch_add(1, Ordering::AcqRel);
         Err(unexpected_client_call("broker_cluster_info"))
     }
@@ -443,7 +444,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: CheetahString,
         _username: CheetahString,
         _timeout_millis: u64,
-    ) -> Result<Option<UserInfo>, RocketMQError> {
+    ) -> Result<Option<UserInfo>, CanonicalError> {
         Err(unexpected_client_call("user"))
     }
 
@@ -452,7 +453,7 @@ impl ClusterClientIo for ScriptedClientIo {
         _broker_addr: CheetahString,
         _subject: CheetahString,
         _timeout_millis: u64,
-    ) -> Result<Option<AclInfo>, RocketMQError> {
+    ) -> Result<Option<AclInfo>, CanonicalError> {
         Err(unexpected_client_call("acl"))
     }
 }
@@ -475,7 +476,7 @@ impl ClusterClientFactory for CapturingClientFactory {
         domain_id: u64,
         _client_config: RocketmqClientConfig,
         rpc_hook: Option<Arc<ClientRpcHook>>,
-    ) -> Result<Arc<dyn ClusterClientIo>, RocketMQError> {
+    ) -> Result<Arc<dyn ClusterClientIo>, CanonicalError> {
         *self.observed.lock().expect("Client factory observation lock poisoned") =
             Some((domain_id, rpc_hook.is_some()));
         Ok(self.client.clone())
@@ -530,7 +531,7 @@ impl ClusterProducerIo for ScriptedProducer {
         self.group.clone().into()
     }
 
-    async fn start(&mut self) -> Result<(), RocketMQError> {
+    async fn start(&mut self) -> Result<(), CanonicalError> {
         self.events
             .lock()
             .expect("event log lock poisoned")
@@ -560,15 +561,15 @@ impl ClusterProducerIo for ScriptedProducer {
         &mut self,
         _topic: CheetahString,
         _recall_handle: CheetahString,
-    ) -> Result<String, RocketMQError> {
+    ) -> Result<String, CanonicalError> {
         Err(unexpected_client_call("producer.recall_message"))
     }
 
-    async fn fetch_publish_message_queues(&mut self, _topic: &str) -> Result<Vec<MessageQueue>, RocketMQError> {
+    async fn fetch_publish_message_queues(&mut self, _topic: &str) -> Result<Vec<MessageQueue>, CanonicalError> {
         Err(unexpected_client_call("producer.fetch_publish_message_queues"))
     }
 
-    async fn send(&mut self, _message: Message, _timeout_millis: u64) -> Result<Option<SendResult>, RocketMQError> {
+    async fn send(&mut self, _message: Message, _timeout_millis: u64) -> Result<Option<SendResult>, CanonicalError> {
         self.events
             .lock()
             .expect("event log lock poisoned")
@@ -585,11 +586,15 @@ impl ClusterProducerIo for ScriptedProducer {
         message: Message,
         _queue: MessageQueue,
         timeout_millis: u64,
-    ) -> Result<Option<SendResult>, RocketMQError> {
+    ) -> Result<Option<SendResult>, CanonicalError> {
         self.send(message, timeout_millis).await
     }
 
-    async fn send_batch(&mut self, _messages: Vec<Message>, _timeout_millis: u64) -> Result<SendResult, RocketMQError> {
+    async fn send_batch(
+        &mut self,
+        _messages: Vec<Message>,
+        _timeout_millis: u64,
+    ) -> Result<SendResult, CanonicalError> {
         self.events
             .lock()
             .expect("event log lock poisoned")
@@ -607,7 +612,7 @@ impl ClusterProducerIo for ScriptedProducer {
         messages: Vec<Message>,
         _queue: MessageQueue,
         timeout_millis: u64,
-    ) -> Result<SendResult, RocketMQError> {
+    ) -> Result<SendResult, CanonicalError> {
         self.send_batch(messages, timeout_millis).await
     }
 }
@@ -1244,13 +1249,12 @@ async fn request_timeout_cancels_remote_io_and_releases_all_permits() {
             pull_entered.await.expect("pull entered remote I/O");
         };
         let (result, ()) = tokio::join!(request, observe);
-        assert!(matches!(
-            result,
-            Err(ProxyError::RocketMQ(RocketMQError::Timeout {
-                operation: "proxy cluster command",
-                timeout_ms: 10,
-            }))
-        ));
+        assert_eq!(
+            result
+                .expect_err("deadline must reject the queued command")
+                .descriptor(),
+            &rocketmq_error::CORE_OPERATION_TIMED_OUT
+        );
         wait_until(|| {
             let snapshot = executor.lanes.snapshot();
             snapshot.current_inflight == 0
@@ -1580,7 +1584,7 @@ async fn worker_maps_send_results_and_orders_shutdown() {
     let client = Arc::new(ScriptedClientIo::new(events.clone()));
     let send_results = Arc::new(Mutex::new(VecDeque::from([
         Ok(Some(SendResult::default())),
-        Err(RocketMQError::IllegalArgument("scripted send failure".to_owned())),
+        Err(canonical::argument("scripted send failure".to_owned())),
     ])));
     let factory = Arc::new(ScriptedProducerFactory {
         events: events.clone(),

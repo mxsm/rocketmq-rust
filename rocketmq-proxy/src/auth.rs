@@ -22,7 +22,6 @@ use cheetah_string::CheetahString;
 use rocketmq_auth::Acl;
 #[cfg(feature = "cluster-mode")]
 use rocketmq_auth::AclClientRpcHook;
-#[cfg(test)]
 use rocketmq_auth::AuthFailureKind;
 use rocketmq_auth::AuthMetricsSnapshot;
 #[cfg(test)]
@@ -46,8 +45,7 @@ use rocketmq_auth::RemotingAuthContext;
 use rocketmq_auth::Subject;
 use rocketmq_auth::SubjectType;
 use rocketmq_auth::User;
-use rocketmq_error::AuthError;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 #[cfg(feature = "cluster-mode")]
 use rocketmq_model::common::mix_all::ACL_CONF_TOOLS_FILE;
 #[cfg(feature = "cluster-mode")]
@@ -74,6 +72,7 @@ use crate::config::ProxyAuthConfig;
 #[cfg(feature = "cluster-mode")]
 use crate::config::ProxyConfig;
 use crate::context::ProxyContext;
+use crate::error::canonical;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::processor::AckMessageRequest;
@@ -247,13 +246,13 @@ impl ProxyAuthRuntime {
             AuthRuntimeBuilder::new(auth_config.clone(), service_context.component("proxy.auth.runtime"))
                 .build()
                 .await
-                .map_err(ProxyError::from)?;
+                .map_err(map_authorization_error)?;
         let provider_registry = auth_runtime.provider_registry().clone();
 
         let mut authentication_provider = DefaultAuthenticationProvider::new();
         authentication_provider
             .initialize_with_registry(auth_config.clone(), provider_registry.clone())
-            .map_err(ProxyError::from)?;
+            .map_err(map_authorization_error)?;
 
         let mut authorization_provider = DefaultAuthorizationProvider::new();
         authorization_provider
@@ -278,7 +277,7 @@ impl ProxyAuthRuntime {
     }
 
     pub async fn shutdown(&self) -> ProxyResult<()> {
-        self.auth_runtime.shutdown().await.map_err(ProxyError::from)
+        self.auth_runtime.shutdown().await.map_err(map_authorization_error)
     }
 
     pub fn acl_generation(&self) -> u64 {
@@ -323,7 +322,7 @@ impl ProxyAuthRuntime {
         if self
             .auth_runtime
             .is_acl_white_remote_address(username.as_deref(), Some(source_ip.as_str()))
-            .map_err(ProxyError::from)?
+            .map_err(map_authorization_error)?
         {
             return Ok(Some(AuthenticatedPrincipal::white_listed(
                 username, source_ip, channel_id,
@@ -336,13 +335,14 @@ impl ProxyAuthRuntime {
             self.authentication_provider
                 .authenticate(&authentication_context)
                 .await
-                .map_err(ProxyError::from)?;
+                .map_err(map_authorization_error)?;
         }
 
         let username = username.ok_or_else(|| {
-            ProxyError::from(RocketMQError::authentication_failed(format!(
-                "gRPC request {rpc_name} is missing credential information",
-            )))
+            ProxyError::from(canonical::authentication_failed(
+                "authenticate_grpc",
+                format!("gRPC request {rpc_name} is missing credential information",),
+            ))
         })?;
 
         Ok(Some(AuthenticatedPrincipal::new(username, source_ip, channel_id)))
@@ -359,9 +359,10 @@ impl ProxyAuthRuntime {
         }
 
         let principal = principal.ok_or_else(|| {
-            ProxyError::from(RocketMQError::authentication_failed(format!(
-                "gRPC request {rpc_name} does not carry an authenticated principal",
-            )))
+            ProxyError::from(canonical::authentication_failed(
+                "authorize_grpc",
+                format!("gRPC request {rpc_name} does not carry an authenticated principal",),
+            ))
         })?;
 
         if principal.is_white_listed() {
@@ -400,7 +401,7 @@ impl ProxyAuthRuntime {
         command: &RemotingCommand,
         auth_context: &RemotingAuthContext,
     ) -> ProxyResult<Option<AuthenticatedPrincipal>> {
-        auth_context.validate().map_err(ProxyError::from)?;
+        auth_context.validate().map_err(map_authorization_error)?;
         let code = command.code().to_string();
         let requires_authentication = self.authentication_required(code.as_str());
         let requires_authorization = self.authorization_required(code.as_str());
@@ -411,7 +412,12 @@ impl ProxyAuthRuntime {
         let authentication_context = self
             .authentication_builder
             .build_from_remoting(command, auth_context.channel_id())
-            .map_err(|error| ProxyError::from(RocketMQError::authentication_failed(error.to_string())))?;
+            .map_err(|error| {
+                ProxyError::from(canonical::authentication_failed_with_source(
+                    "build_remoting_context",
+                    error,
+                ))
+            })?;
         let username = authentication_context.username().map(ToString::to_string);
         let source_ip = auth_context.source_ip().unwrap_or("embedded").to_owned();
         let channel_id = authentication_context
@@ -423,7 +429,7 @@ impl ProxyAuthRuntime {
         if self
             .auth_runtime
             .is_acl_white_remote_address(username.as_deref(), Some(source_ip.as_str()))
-            .map_err(ProxyError::from)?
+            .map_err(map_authorization_error)?
         {
             return Ok(Some(AuthenticatedPrincipal::white_listed(
                 username, source_ip, channel_id,
@@ -438,14 +444,14 @@ impl ProxyAuthRuntime {
             self.authentication_provider
                 .authenticate(&authentication_context)
                 .await
-                .map_err(ProxyError::from)?;
+                .map_err(map_authorization_error)?;
         }
 
         let username = username.ok_or_else(|| {
-            ProxyError::from(RocketMQError::authentication_failed(format!(
-                "remoting request {} is missing credential information",
-                command.code()
-            )))
+            ProxyError::from(canonical::authentication_failed(
+                "authenticate_remoting",
+                format!("remoting request {} is missing credential information", command.code()),
+            ))
         })?;
 
         Ok(Some(AuthenticatedPrincipal::new(username, source_ip, channel_id)))
@@ -456,7 +462,7 @@ impl ProxyAuthRuntime {
         auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
     ) -> ProxyResult<()> {
-        auth_context.validate().map_err(ProxyError::from)?;
+        auth_context.validate().map_err(map_authorization_error)?;
         let code = command.code().to_string();
         if !self.authorization_required(code.as_str()) {
             return Ok(());
@@ -465,7 +471,7 @@ impl ProxyAuthRuntime {
         if self
             .auth_runtime
             .is_acl_white_remote_address(access_key_from_command(command), auth_context.source_ip())
-            .map_err(ProxyError::from)?
+            .map_err(map_authorization_error)?
         {
             return Ok(());
         }
@@ -513,8 +519,8 @@ impl ProxyAuthRuntime {
             Some(user) => {
                 let existing = match provider.get_user(user.username().as_str()).await {
                     Ok(existing) => Some(existing),
-                    Err(RocketMQError::Authentication(AuthError::UserNotFound(_))) => None,
-                    Err(error) => return Err(ProxyError::from(error)),
+                    Err(error) if error.kind() == AuthFailureKind::NotFound => None,
+                    Err(error) => return Err(map_authorization_error(error)),
                 };
                 if existing
                     .as_ref()
@@ -522,16 +528,16 @@ impl ProxyAuthRuntime {
                 {
                     return Ok(());
                 }
-                provider.update_user(user).await.map_err(ProxyError::from)?;
+                provider.update_user(user).await.map_err(map_authorization_error)?;
                 self.auth_runtime.invalidate_acl_cache();
             }
             None => match provider.get_user(username).await {
                 Ok(_) => {
-                    provider.delete_user(username).await.map_err(ProxyError::from)?;
+                    provider.delete_user(username).await.map_err(map_authorization_error)?;
                     self.auth_runtime.invalidate_acl_cache();
                 }
-                Err(RocketMQError::Authentication(AuthError::UserNotFound(_))) => {}
-                Err(error) => return Err(ProxyError::from(error)),
+                Err(error) if error.kind() == AuthFailureKind::NotFound => {}
+                Err(error) => return Err(map_authorization_error(error)),
             },
         }
 
@@ -581,7 +587,12 @@ impl ProxyAuthRuntime {
         let mut context = self
             .authentication_builder
             .build_from_grpc(request.metadata(), request.get_ref())
-            .map_err(|error| ProxyError::from(RocketMQError::authentication_failed(error.to_string())))?;
+            .map_err(|error| {
+                ProxyError::from(canonical::authentication_failed_with_source(
+                    "build_auth_context",
+                    error,
+                ))
+            })?;
 
         context.base.set_rpc_code(Some(CheetahString::from(rpc_name)));
         if context.base.channel_id().is_none() {
@@ -602,7 +613,7 @@ impl ProxyAuthRuntime {
             .authentication_metadata_provider()
             .create_user(user)
             .await
-            .map_err(ProxyError::from)
+            .map_err(map_authorization_error)
     }
 
     #[cfg(test)]
@@ -794,20 +805,22 @@ fn metadata_string<T>(request: &Request<T>, key: &'static str) -> Option<String>
         .map(str::to_owned)
 }
 
+pub(crate) fn map_auth_service_error(error: AuthServiceError) -> ProxyError {
+    ProxyError::from(CanonicalError::from(error))
+}
+
 fn map_authorization_error(error: AuthServiceError) -> ProxyError {
-    ProxyError::from(RocketMQError::from(error))
+    map_auth_service_error(error)
 }
 
 fn require_authorization_allow(decision: AuthorizationDecision) -> ProxyResult<()> {
     match decision {
         AuthorizationDecision::Allow => Ok(()),
-        AuthorizationDecision::Deny(_) => Err(ProxyError::from(RocketMQError::BrokerPermissionDenied {
-            operation: "authorize".to_owned(),
-        })),
+        AuthorizationDecision::Deny(_) => Err(ProxyError::from(canonical::authorization_denied("authorize"))),
     }
 }
 
-pub fn is_auth_error(error: &RocketMQError) -> bool {
+pub fn is_auth_error(error: &CanonicalError) -> bool {
     error.descriptor().component() == rocketmq_error::ComponentId::AUTH
 }
 
@@ -851,15 +864,13 @@ impl MetadataSubject {
     fn parse(subject: &str) -> ProxyResult<Self> {
         let subject = subject.trim();
         if subject.is_empty() {
-            return Err(ProxyError::from(RocketMQError::illegal_argument(
-                "authorization subject is blank",
-            )));
+            return Err(ProxyError::from(canonical::argument("authorization subject is blank")));
         }
 
         let (subject_type, subject_name) = match subject.split_once(':') {
             Some((subject_type, subject_name)) => (
                 SubjectType::get_by_name(subject_type).ok_or_else(|| {
-                    ProxyError::from(RocketMQError::illegal_argument(format!(
+                    ProxyError::from(canonical::argument(format!(
                         "unsupported authorization subject type '{subject_type}'",
                     )))
                 })?,
@@ -868,7 +879,7 @@ impl MetadataSubject {
             None => (SubjectType::User, subject),
         };
         if subject_name.is_empty() {
-            return Err(ProxyError::from(RocketMQError::illegal_argument(
+            return Err(ProxyError::from(canonical::argument(
                 "authorization subject name is blank",
             )));
         }
@@ -1264,7 +1275,7 @@ mod tests {
         .expect_err("deny must fail closed at the Proxy boundary");
         assert!(matches!(
             denied,
-            ProxyError::RocketMQ(RocketMQError::BrokerPermissionDenied { .. })
+            error if error.descriptor() == &rocketmq_error::AUTH_PERMISSION_DENIED
         ));
 
         let invalid = map_authorization_error(AuthServiceError::new(
@@ -1449,7 +1460,7 @@ accounts:
             .expect_err("authorization should deny");
         assert!(matches!(
             error,
-            ProxyError::RocketMQ(RocketMQError::BrokerPermissionDenied { .. })
+            error if error.descriptor() == &rocketmq_error::AUTH_PERMISSION_DENIED
         ));
 
         runtime.shutdown().await.expect("runtime should shut down");

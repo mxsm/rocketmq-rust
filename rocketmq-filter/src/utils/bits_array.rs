@@ -14,8 +14,11 @@
 
 use std::fmt;
 
-use rocketmq_error::FilterError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result;
+
+use super::invalid_filter;
+use super::invalid_filter_position;
+use super::uninitialized_filter;
 
 /// Wrapper of bytes arrays, in order to operate single bit easily.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,15 +39,15 @@ impl BitsArray {
     }
 
     /// Create a BitsArray from bytes with specified bit length
-    pub fn from_bytes_with_length(bytes: &[u8], bit_length: usize) -> RocketMQResult<Self> {
+    pub fn from_bytes_with_length(bytes: &[u8], bit_length: usize) -> Result<Self> {
         if bytes.is_empty() {
-            return Err(FilterError::empty_bytes().into());
+            return Err(invalid_filter("empty_bytes"));
         }
         if bit_length < 1 {
-            return Err(FilterError::invalid_bit_length().into());
+            return Err(invalid_filter("invalid_bit_length"));
         }
         if bit_length < bytes.len() * 8 {
-            return Err(FilterError::bit_length_too_small().into());
+            return Err(invalid_filter("bit_length_too_small"));
         }
         Ok(BitsArray {
             bytes: bytes.to_vec(),
@@ -53,9 +56,9 @@ impl BitsArray {
     }
 
     /// Create a BitsArray from bytes, using bytes.len() * 8 as bit length
-    pub fn from_bytes(bytes: &[u8]) -> RocketMQResult<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.is_empty() {
-            return Err(FilterError::empty_bytes().into());
+            return Err(invalid_filter("empty_bytes"));
         }
         let bit_length = bytes.len() * 8;
         Ok(BitsArray {
@@ -80,7 +83,7 @@ impl BitsArray {
     }
 
     /// XOR operation with another BitsArray
-    pub fn xor(&mut self, other: &BitsArray) -> RocketMQResult<()> {
+    pub fn xor(&mut self, other: &BitsArray) -> Result<()> {
         self.check_initialized()?;
         other.check_initialized()?;
         let min_len = self.byte_length().min(other.byte_length());
@@ -91,14 +94,14 @@ impl BitsArray {
     }
 
     /// XOR operation on a single bit
-    pub fn xor_bit(&mut self, bit_pos: usize, set: bool) -> RocketMQResult<()> {
+    pub fn xor_bit(&mut self, bit_pos: usize, set: bool) -> Result<()> {
         self.check_bit_position(bit_pos)?;
         let value = self.get_bit(bit_pos)?;
         self.set_bit(bit_pos, value ^ set)
     }
 
     /// OR operation with another BitsArray
-    pub fn or(&mut self, other: &BitsArray) -> RocketMQResult<()> {
+    pub fn or(&mut self, other: &BitsArray) -> Result<()> {
         self.check_initialized()?;
         other.check_initialized()?;
         let min_len = self.byte_length().min(other.byte_length());
@@ -109,7 +112,7 @@ impl BitsArray {
     }
 
     /// OR operation on a single bit
-    pub fn or_bit(&mut self, bit_pos: usize, set: bool) -> RocketMQResult<()> {
+    pub fn or_bit(&mut self, bit_pos: usize, set: bool) -> Result<()> {
         self.check_bit_position(bit_pos)?;
         if set {
             self.set_bit(bit_pos, true)?;
@@ -118,7 +121,7 @@ impl BitsArray {
     }
 
     /// AND operation with another BitsArray
-    pub fn and(&mut self, other: &BitsArray) -> RocketMQResult<()> {
+    pub fn and(&mut self, other: &BitsArray) -> Result<()> {
         self.check_initialized()?;
         other.check_initialized()?;
         let min_len = self.byte_length().min(other.byte_length());
@@ -129,7 +132,7 @@ impl BitsArray {
     }
 
     /// AND operation on a single bit
-    pub fn and_bit(&mut self, bit_pos: usize, set: bool) -> RocketMQResult<()> {
+    pub fn and_bit(&mut self, bit_pos: usize, set: bool) -> Result<()> {
         self.check_bit_position(bit_pos)?;
         if !set {
             self.set_bit(bit_pos, false)?;
@@ -138,14 +141,14 @@ impl BitsArray {
     }
 
     /// NOT operation on a single bit
-    pub fn not(&mut self, bit_pos: usize) -> RocketMQResult<()> {
+    pub fn not(&mut self, bit_pos: usize) -> Result<()> {
         self.check_bit_position(bit_pos)?;
         let value = self.get_bit(bit_pos)?;
         self.set_bit(bit_pos, !value)
     }
 
     /// Set a bit at the specified position
-    pub fn set_bit(&mut self, bit_pos: usize, set: bool) -> RocketMQResult<()> {
+    pub fn set_bit(&mut self, bit_pos: usize, set: bool) -> Result<()> {
         self.check_bit_position(bit_pos)?;
         let sub = self.subscript(bit_pos);
         let pos = self.position(bit_pos);
@@ -158,20 +161,20 @@ impl BitsArray {
     }
 
     /// Set a byte at the specified position
-    pub fn set_byte(&mut self, byte_pos: usize, set: u8) -> RocketMQResult<()> {
+    pub fn set_byte(&mut self, byte_pos: usize, set: u8) -> Result<()> {
         self.check_byte_position(byte_pos)?;
         self.bytes[byte_pos] = set;
         Ok(())
     }
 
     /// Get a bit at the specified position
-    pub fn get_bit(&self, bit_pos: usize) -> RocketMQResult<bool> {
+    pub fn get_bit(&self, bit_pos: usize) -> Result<bool> {
         self.check_bit_position(bit_pos)?;
         Ok((self.bytes[self.subscript(bit_pos)] & self.position(bit_pos)) != 0)
     }
 
     /// Get a byte at the specified position
-    pub fn get_byte(&self, byte_pos: usize) -> RocketMQResult<u8> {
+    pub fn get_byte(&self, byte_pos: usize) -> Result<u8> {
         self.check_byte_position(byte_pos)?;
         Ok(self.bytes[byte_pos])
     }
@@ -186,25 +189,33 @@ impl BitsArray {
         1 << (bit_pos % 8)
     }
 
-    fn check_byte_position(&self, byte_pos: usize) -> RocketMQResult<()> {
+    fn check_byte_position(&self, byte_pos: usize) -> Result<()> {
         self.check_initialized()?;
         if byte_pos >= self.byte_length() {
-            return Err(FilterError::byte_position_out_of_bounds(byte_pos, self.bytes.len()).into());
+            return Err(invalid_filter_position(
+                "byte_position_out_of_bounds",
+                byte_pos,
+                self.bytes.len(),
+            ));
         }
         Ok(())
     }
 
-    fn check_bit_position(&self, bit_pos: usize) -> RocketMQResult<()> {
+    fn check_bit_position(&self, bit_pos: usize) -> Result<()> {
         self.check_initialized()?;
         if bit_pos >= self.bit_length() {
-            return Err(FilterError::bit_position_out_of_bounds(bit_pos, self.bit_length).into());
+            return Err(invalid_filter_position(
+                "bit_position_out_of_bounds",
+                bit_pos,
+                self.bit_length,
+            ));
         }
         Ok(())
     }
 
-    fn check_initialized(&self) -> RocketMQResult<()> {
+    fn check_initialized(&self) -> Result<()> {
         if self.bytes.is_empty() {
-            return Err(FilterError::uninitialized().into());
+            return Err(uninitialized_filter());
         }
         Ok(())
     }

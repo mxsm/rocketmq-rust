@@ -37,8 +37,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::DefaultMQProducer;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_single::Message;
 
 pub const PRODUCER_GROUP: &str = "producer_advanced_selector";
@@ -48,11 +48,11 @@ pub const TOPIC: &str = "AdvancedSelectorTestTopic";
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
@@ -96,7 +96,7 @@ async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>
 ///
 /// The most common pattern - compiler infers all types automatically.
 /// This demonstrates the cleanest and most performant approach.
-async fn example_1_simple_closure(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn example_1_simple_closure(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("Example 1: Simple Inline Closure");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -140,7 +140,7 @@ async fn example_1_simple_closure(producer: &mut DefaultMQProducer) -> RocketMQR
 ///
 /// Most common real-world pattern for ordered messages.
 /// Ensures messages with the same order ID always go to the same queue.
-async fn example_2_order_hash_selection(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn example_2_order_hash_selection(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("Example 2: Order ID Hash-Based Selection");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -194,7 +194,7 @@ async fn example_2_order_hash_selection(producer: &mut DefaultMQProducer) -> Roc
 ///
 /// Selects queue based on message key (hash-based).
 /// Useful for routing based on business identifiers in message key.
-async fn example_3_property_based_selection(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn example_3_property_based_selection(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("Example 3: Message Key-Based Selection");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -253,7 +253,7 @@ async fn example_3_property_based_selection(producer: &mut DefaultMQProducer) ->
 ///
 /// Demonstrates stateful selector using atomic counter.
 /// Distributes messages evenly across all queues.
-async fn example_4_round_robin_selection(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn example_4_round_robin_selection(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("Example 4: Round-Robin Selection (Stateful)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -304,7 +304,7 @@ async fn example_4_round_robin_selection(producer: &mut DefaultMQProducer) -> Ro
 ///
 /// Randomly selects a queue for each message.
 /// Useful for load balancing when message order doesn't matter.
-async fn example_5_random_selection(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn example_5_random_selection(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("Example 5: Random Selection");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -350,7 +350,7 @@ async fn example_5_random_selection(producer: &mut DefaultMQProducer) -> RocketM
 ///
 /// Selects queues based on predefined weights.
 /// Useful for traffic shaping, A/B testing, or gradual rollouts.
-async fn example_6_weighted_selection(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn example_6_weighted_selection(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("Example 6: Weighted Selection");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

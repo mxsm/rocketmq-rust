@@ -67,20 +67,20 @@ impl DefaultMQAdminExtImpl {
         self.client_config.set_use_tls(use_tls);
     }
 
-    pub(in crate::admin) fn mq_client_api(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientAPIImpl>> {
+    pub(in crate::admin) fn mq_client_api(&self) -> crate::ClientResult<Arc<MQClientAPIImpl>> {
         self.client_instance
             .as_ref()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
+            .ok_or(crate::ClientError::not_started())?
             .get_mq_client_api_impl()
     }
 
-    pub(in crate::admin) fn remoting_timeout_millis(&self) -> rocketmq_error::RocketMQResult<u64> {
+    pub(in crate::admin) fn remoting_timeout_millis(&self) -> crate::ClientResult<u64> {
         u64::try_from(self.timeout_millis.as_millis()).map_err(|_| {
-            rocketmq_error::RocketMQError::illegal_argument("admin timeout exceeds the supported u64 millisecond range")
+            crate::ClientError::illegal_argument("admin timeout exceeds the supported u64 millisecond range")
         })
     }
 
-    pub(in crate::admin) async fn start_admin(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    pub(in crate::admin) async fn start_admin(&mut self) -> crate::ClientResult<()> {
         match self.service_state {
             ServiceState::CreateJust => {
                 self.service_state = ServiceState::StartFailed;
@@ -100,7 +100,7 @@ impl DefaultMQAdminExtImpl {
                 let register_ok = self
                     .client_instance
                     .as_mut()
-                    .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
+                    .ok_or(crate::ClientError::not_started())?
                     .register_admin_ext(&group)
                     .await;
                 if !register_ok {
@@ -108,7 +108,7 @@ impl DefaultMQAdminExtImpl {
                         self.client_pool.release(token).await;
                     }
                     self.service_state = ServiceState::StartFailed;
-                    return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+                    return Err(crate::ClientError::illegal_argument(format!(
                         "The adminExt group[{}] has created already, specified another name please.{}",
                         self.admin_ext_group,
                         FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
@@ -117,7 +117,7 @@ impl DefaultMQAdminExtImpl {
                 if let Err(error) = self
                     .client_instance
                     .as_mut()
-                    .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
+                    .ok_or(crate::ClientError::not_started())?
                     .start()
                     .await
                 {
@@ -131,7 +131,7 @@ impl DefaultMQAdminExtImpl {
                 Ok(())
             }
             ServiceState::Running | ServiceState::ShutdownAlready | ServiceState::StartFailed => {
-                Err(rocketmq_error::RocketMQError::ClientAlreadyStarted)
+                Err(crate::ClientError::already_started())
             }
         }
     }

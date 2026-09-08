@@ -20,8 +20,9 @@
 pub mod default_authentication_context_builder;
 
 pub use default_authentication_context_builder::DefaultAuthenticationContextBuilder;
-use rocketmq_error::AuthError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+
+use crate::AuthServiceResult;
 
 /// Authentication context builder trait.
 ///
@@ -57,7 +58,7 @@ pub trait AuthenticationContextBuilder<Context> {
     /// # Returns
     ///
     /// * `Ok(Context)` - Successfully built authentication context
-    /// * `Err(AuthError)` - Failed to parse or validate authentication data
+    /// * `Err(AuthServiceError)` - Failed to parse or validate authentication data
     ///
     /// # Errors
     ///
@@ -69,7 +70,7 @@ pub trait AuthenticationContextBuilder<Context> {
         &self,
         metadata: &tonic::metadata::MetadataMap,
         request: &dyn std::any::Any,
-    ) -> Result<Context, AuthError>;
+    ) -> AuthServiceResult<Context>;
 
     /// Build an authentication context from a Remoting command.
     ///
@@ -86,12 +87,12 @@ pub trait AuthenticationContextBuilder<Context> {
     /// # Returns
     ///
     /// * `Ok(Context)` - Successfully built authentication context
-    /// * `Err(AuthError)` - Failed to extract authentication data
+    /// * `Err(AuthServiceError)` - Failed to extract authentication data
     ///
     /// # Security Notes
     ///
     /// - Filters out UNIQUE_MSG_QUERY_FLAG for versions <= 4.9.3
     /// - Excludes Signature field from signed content
     /// - Sorts fields for consistent signature verification
-    fn build_from_remoting(&self, request: &RemotingCommand, channel_id: Option<&str>) -> Result<Context, AuthError>;
+    fn build_from_remoting(&self, request: &RemotingCommand, channel_id: Option<&str>) -> AuthServiceResult<Context>;
 }

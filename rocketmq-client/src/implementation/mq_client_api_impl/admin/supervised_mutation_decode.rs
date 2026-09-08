@@ -37,28 +37,28 @@ const MAX_SUPERVISED_CONSUME_STATS_ROWS: usize = 1_000;
 #[cfg(feature = "admin-mutation")]
 pub(super) fn bounded_consume_stats_from_response(
     response: &RemotingCommand,
-) -> RocketMQResult<rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats> {
+) -> ClientResult<rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats> {
     if ResponseCode::from(response.code()) != ResponseCode::Success {
-        return Err(RocketMQError::response_process_failed(
+        return Err(ClientError::response_process_failed(
             "supervised consume stats",
             "broker rejected the bounded consume-stats request",
         ));
     }
     let body = response.get_body().ok_or_else(|| {
-        RocketMQError::response_process_failed(
+        ClientError::response_process_failed(
             "supervised consume stats",
             "broker omitted the bounded consume-stats response body",
         )
     })?;
     if body.len() > MAX_SUPERVISED_CONSUME_STATS_BODY_BYTES {
-        return Err(RocketMQError::response_process_failed(
+        return Err(ClientError::response_process_failed(
             "supervised consume stats",
             "broker returned an oversized consume-stats response body",
         ));
     }
     let stats = rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats::decode_strict(body.as_ref())?;
     if stats.offset_table.len() > MAX_SUPERVISED_CONSUME_STATS_ROWS {
-        return Err(RocketMQError::response_process_failed(
+        return Err(ClientError::response_process_failed(
             "supervised consume stats",
             "broker returned more than 1000 consume-stats rows",
         ));
@@ -72,7 +72,7 @@ pub(super) fn supervised_consume_stats_from_response(
     topic: &CheetahString,
     broker_name: &CheetahString,
     read_queue_nums: u32,
-) -> RocketMQResult<rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats> {
+) -> ClientResult<rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats> {
     let stats = bounded_consume_stats_from_response(response)?;
     if stats.offset_table.iter().any(|(queue, wrapper)| {
         queue.topic() != topic
@@ -83,7 +83,7 @@ pub(super) fn supervised_consume_stats_from_response(
             || wrapper.get_broker_offset() < 0
             || wrapper.get_pull_offset() < -1
     }) {
-        return Err(RocketMQError::response_process_failed(
+        return Err(ClientError::response_process_failed(
             "supervised consume stats",
             "broker returned rows outside the exact Topic/Broker queue set",
         ));
@@ -100,7 +100,7 @@ pub(super) fn supervised_consume_stats_from_response(
             .enumerate()
             .any(|(expected, actual)| *actual != expected as i32)
     {
-        return Err(RocketMQError::response_process_failed(
+        return Err(ClientError::response_process_failed(
             "supervised consume stats",
             "broker returned an incomplete consume-stats queue set",
         ));
@@ -125,7 +125,7 @@ pub(super) fn wire_expected_state(state: MutationExpectedState) -> ExpectedState
 }
 
 #[cfg(feature = "admin-mutation")]
-pub(super) fn client_topic_config(config: &TopicConfig) -> RocketMQResult<MutationTopicConfig> {
+pub(super) fn client_topic_config(config: &TopicConfig) -> ClientResult<MutationTopicConfig> {
     use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 
     let message_type = match config.get_topic_message_type() {
@@ -135,7 +135,7 @@ pub(super) fn client_topic_config(config: &TopicConfig) -> RocketMQResult<Mutati
         TopicMessageType::Transaction => MutationTopicMessageType::Transaction,
         TopicMessageType::Unspecified => MutationTopicMessageType::Unspecified,
         TopicMessageType::Priority | TopicMessageType::Lite | TopicMessageType::Mixed => {
-            return Err(RocketMQError::response_process_failed(
+            return Err(ClientError::response_process_failed(
                 "mutation_topic_config_state",
                 "Topic message type is outside the supervised replacement contract",
             ));
@@ -171,7 +171,7 @@ pub(super) fn client_group_config(config: &SubscriptionGroupConfig) -> MutationS
 pub(super) fn state_cas_outcome_from_response(
     response: &RemotingCommand,
     expected: MutationExpectedState,
-) -> RocketMQResult<MutationStateCasOutcome> {
+) -> ClientResult<MutationStateCasOutcome> {
     let response_code = ResponseCode::from(response.code());
     if !matches!(
         response_code,
@@ -183,7 +183,7 @@ pub(super) fn state_cas_outcome_from_response(
         ));
     }
     let body = response.get_body().ok_or_else(|| {
-        RocketMQError::response_process_failed("replace_config_if_state", "state CAS response body is missing")
+        ClientError::response_process_failed("replace_config_if_state", "state CAS response body is missing")
     })?;
     let outcome = StateCasResultBody::decode(body.as_ref())?;
     let matrix_valid = match response_code {
@@ -243,7 +243,7 @@ pub(super) fn state_cas_outcome_from_response(
         _ => false,
     };
     if !matrix_valid || !state_valid {
-        return Err(RocketMQError::response_process_failed(
+        return Err(ClientError::response_process_failed(
             "replace_config_if_state",
             "state CAS response code and body disagree",
         ));
@@ -265,19 +265,19 @@ pub(super) fn request_mode_cas_outcome_from_response(
     response: &RemotingCommand,
     expected: MutationExpectedMessageRequestMode,
     replacement: MutationMessageRequestMode,
-) -> RocketMQResult<MutationMessageRequestModeOutcome> {
+) -> ClientResult<MutationMessageRequestModeOutcome> {
     let response_code = ResponseCode::from(response.code());
     if !matches!(
         response_code,
         ResponseCode::Success | ResponseCode::InvalidParameter | ResponseCode::SystemError
     ) {
-        return Err(RocketMQError::response_process_failed(
+        return Err(ClientError::response_process_failed(
             "replace_message_request_mode_if_current",
             "broker rejected the request-mode replacement",
         ));
     }
     let body = response.get_body().ok_or_else(|| {
-        RocketMQError::response_process_failed(
+        ClientError::response_process_failed(
             "replace_message_request_mode_if_current",
             "request-mode CAS response body is missing",
         )
@@ -313,7 +313,7 @@ pub(super) fn request_mode_cas_outcome_from_response(
         _ => false,
     };
     if !matrix_valid || !current_valid {
-        return Err(RocketMQError::response_process_failed(
+        return Err(ClientError::response_process_failed(
             "replace_message_request_mode_if_current",
             "request-mode CAS response code and body disagree",
         ));
@@ -335,15 +335,15 @@ pub(super) fn conditional_offset_outcome_from_response(
     response: &RemotingCommand,
     expected_offset: i64,
     new_offset: i64,
-) -> RocketMQResult<ConditionalConsumerOffsetOutcome> {
+) -> ClientResult<ConditionalConsumerOffsetOutcome> {
     if expected_offset < -1 || new_offset < 0 {
-        return Err(RocketMQError::illegal_argument(
+        return Err(ClientError::illegal_argument(
             "conditional consumer offset fields are outside the closed bounds",
         ));
     }
     let response_code = ResponseCode::from(response.code());
     if !matches!(response_code, ResponseCode::Success | ResponseCode::InvalidParameter) {
-        return Err(RocketMQError::response_process_failed(
+        return Err(ClientError::response_process_failed(
             "reset_consumer_offset_if_current",
             "conditional offset response code is invalid",
         ));
@@ -351,13 +351,13 @@ pub(super) fn conditional_offset_outcome_from_response(
     let header = response
         .decode_command_custom_header::<QueryConsumerOffsetResponseHeader>()
         .map_err(|_| {
-            RocketMQError::response_process_failed(
+            ClientError::response_process_failed(
                 "reset_consumer_offset_if_current",
                 "conditional offset response header is invalid",
             )
         })?;
     let actual_offset = header.offset.filter(|offset| *offset >= -1).ok_or_else(|| {
-        RocketMQError::response_process_failed(
+        ClientError::response_process_failed(
             "reset_consumer_offset_if_current",
             "conditional offset response omitted a valid actual offset",
         )
@@ -366,7 +366,7 @@ pub(super) fn conditional_offset_outcome_from_response(
         ResponseCode::Success if actual_offset == new_offset => true,
         ResponseCode::InvalidParameter if actual_offset != expected_offset => false,
         _ => {
-            return Err(RocketMQError::response_process_failed(
+            return Err(ClientError::response_process_failed(
                 "reset_consumer_offset_if_current",
                 "conditional offset response code and header disagree",
             ));
@@ -376,19 +376,19 @@ pub(super) fn conditional_offset_outcome_from_response(
 }
 
 #[cfg(feature = "admin-mutation")]
-pub(super) fn client_request_mode(value: SupervisedMessageRequestMode) -> RocketMQResult<MutationMessageRequestMode> {
+pub(super) fn client_request_mode(value: SupervisedMessageRequestMode) -> ClientResult<MutationMessageRequestMode> {
     let mode = match value.mode.as_str() {
         "PULL" => rocketmq_model::common::message::message_enum::MessageRequestMode::Pull,
         "POP" => rocketmq_model::common::message::message_enum::MessageRequestMode::Pop,
         _ => {
-            return Err(RocketMQError::response_process_failed(
+            return Err(ClientError::response_process_failed(
                 "mutation_message_request_mode",
                 "Broker returned an unknown message request mode",
             ));
         }
     };
     if value.pop_share_queue_num < 0 {
-        return Err(RocketMQError::response_process_failed(
+        return Err(ClientError::response_process_failed(
             "mutation_message_request_mode",
             "Broker returned a negative popShareQueueNum",
         ));
@@ -400,9 +400,9 @@ pub(super) fn client_request_mode(value: SupervisedMessageRequestMode) -> Rocket
 }
 
 #[cfg(feature = "admin-mutation")]
-pub(super) fn wire_request_mode(value: MutationMessageRequestMode) -> RocketMQResult<SupervisedMessageRequestMode> {
+pub(super) fn wire_request_mode(value: MutationMessageRequestMode) -> ClientResult<SupervisedMessageRequestMode> {
     if value.pop_share_queue_num < 0 {
-        return Err(RocketMQError::illegal_argument("popShareQueueNum must be non-negative"));
+        return Err(ClientError::illegal_argument("popShareQueueNum must be non-negative"));
     }
     Ok(SupervisedMessageRequestMode {
         mode: value.mode.get_name().to_owned(),

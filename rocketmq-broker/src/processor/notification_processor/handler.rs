@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader;
@@ -42,7 +41,7 @@ impl<MS> RequestProcessor for NotificationProcessor<MS>
 where
     MS: BrokerReadWriteStore + Send + Sync + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -54,7 +53,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         if RequestCode::from(request.original_identity().original_code()) != RequestCode::Notification {
             return command_outcome(remoting_error_response(
                 PublicErrorView::descriptor_only(&rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED),
@@ -145,7 +144,7 @@ where
     fn prepare_rejection_outcome(
         &self,
         rejection: NotificationDeferredPrepareRejection,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match rejection {
             NotificationDeferredPrepareRejection::Deadline(_) | NotificationDeferredPrepareRejection::OneWay => {
                 command_outcome(compose_notification_response(
@@ -178,7 +177,7 @@ where
     fn prepare_failure_outcome(
         &self,
         failure: NotificationDeferredPrepareFailure,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match failure {
             NotificationDeferredPrepareFailure::Header(_) => self.invalid_reply(0),
             NotificationDeferredPrepareFailure::WallTimeOverflow | NotificationDeferredPrepareFailure::Deadline(_) => {
@@ -199,7 +198,7 @@ where
     fn register_rejection_outcome(
         &self,
         rejection: NotificationDeferredRegisterRejection,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match rejection {
             NotificationDeferredRegisterRejection::ServiceClosedBeforeTake
             | NotificationDeferredRegisterRejection::ServiceClosedAfterTake => self.reply_with_code(
@@ -241,19 +240,20 @@ where
     fn register_failure_outcome(
         &self,
         failure: NotificationDeferredRegisterFailure,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         match failure {
             NotificationDeferredRegisterFailure::IdentityExhausted => self.internal_reply(0),
-            NotificationDeferredRegisterFailure::RegistryContract(violation) => Err(RocketMQError::internal(
+            NotificationDeferredRegisterFailure::RegistryContract(violation) => Err(crate::broker_error::internal(
                 "register deferred Notification request",
                 violation,
             )),
-            NotificationDeferredRegisterFailure::RegistryOperational(error) => {
-                Err(RocketMQError::internal("register deferred Notification request", error))
-            }
+            NotificationDeferredRegisterFailure::RegistryOperational(error) => Err(crate::broker_error::internal(
+                "register deferred Notification request",
+                error,
+            )),
             NotificationDeferredRegisterFailure::Contract { violation, parts } => {
                 drop(parts);
-                Err(RocketMQError::internal(
+                Err(crate::broker_error::internal(
                     "register deferred Notification request",
                     violation,
                 ))
@@ -265,7 +265,7 @@ where
         &self,
         code: ResponseCode,
         remark: &'static str,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         command_outcome(
             self.context
                 .command_factory
@@ -273,7 +273,7 @@ where
         )
     }
 
-    fn invalid_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    fn invalid_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         command_outcome(remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_ARGUMENT_INVALID),
             RemotingErrorTarget::Reply {
@@ -283,7 +283,7 @@ where
         ))
     }
 
-    fn internal_reply(&self, opaque: i32) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    fn internal_reply(&self, opaque: i32) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         command_outcome(remoting_error_response(
             PublicErrorView::descriptor_only(&rocketmq_error::CORE_INTERNAL_FAILURE),
             RemotingErrorTarget::Reply {
@@ -315,7 +315,7 @@ fn normalize_born_time(command: &mut rocketmq_protocol::protocol::remoting_comma
 
 fn command_outcome(
     command: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
-) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+) -> crate::broker_error::BrokerResult<HandlerOutcome> {
     BrokerResponseParts::command(command)?.into_handler_outcome()
 }
 
@@ -356,7 +356,10 @@ mod tests {
     }
 
     impl RequestProcessor for ArcHeldNotificationProcessor {
-        async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        async fn process(
+            &mut self,
+            request: &mut RemotingRequest,
+        ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
             self.inner.process_shared(request).await
         }
     }

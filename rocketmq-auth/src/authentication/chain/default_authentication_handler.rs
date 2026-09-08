@@ -20,7 +20,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use rocketmq_error::AuthError;
 use rocketmq_runtime::common::time_utils::current_millis;
 
 use crate::authentication::chain::acl_signer;
@@ -30,7 +29,11 @@ use crate::authentication::context::default_authentication_context::DefaultAuthe
 use crate::authentication::enums::user_status::UserStatus;
 use crate::authentication::model::user::User;
 use crate::authentication::provider::AuthenticationMetadataProvider;
+use crate::AuthFailureKind;
 use crate::AuthMetrics;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 /// Default authentication handler.
 ///
@@ -67,19 +70,20 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
     /// Returns error if:
     /// - Username is empty/missing
     /// - User lookup fails
-    async fn get_user(&self, context: &DefaultAuthenticationContext) -> Result<User, AuthError> {
-        let username = context
-            .username()
-            .ok_or_else(|| AuthError::AuthenticationFailed("username cannot be null".to_string()))?;
+    async fn get_user(&self, context: &DefaultAuthenticationContext) -> AuthServiceResult<User> {
+        let username = context.username().ok_or_else(authentication_failed)?;
 
         if username.is_empty() {
-            return Err(AuthError::AuthenticationFailed("username cannot be empty".to_string()));
+            return Err(authentication_failed());
         }
 
         self.authentication_metadata_provider
             .get_user(username.as_str())
             .await
-            .map_err(|source| AuthError::operation("load authentication user", source))
+            .map_err(|source| {
+                let kind = source.kind();
+                AuthServiceError::with_source(AuthOperation::Authenticate, kind, source)
+            })
     }
 
     /// Perform authentication logic.
@@ -89,78 +93,68 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
     /// Returns error if:
     /// - User is disabled
     /// - Signature verification fails
-    fn do_authenticate(&self, context: &DefaultAuthenticationContext, user: &User) -> Result<(), AuthError> {
+    fn do_authenticate(&self, context: &DefaultAuthenticationContext, user: &User) -> AuthServiceResult<()> {
         self.validate_request_timestamp(context)?;
 
         // Check user status
         if let Some(UserStatus::Disable) = user.user_status() {
-            return Err(AuthError::AuthenticationFailed(format!(
-                "User:{} is disabled",
-                user.username()
-            )));
+            return Err(authentication_failed());
         }
 
         // Get password for signature calculation
-        let password = user.password().ok_or_else(|| {
-            AuthError::AuthenticationFailed(format!("User:{} has no password configured", user.username()))
-        })?;
+        let password = user.password().ok_or_else(authentication_failed)?;
 
         // Get content for signing
-        let content = context
-            .content()
-            .ok_or_else(|| AuthError::AuthenticationFailed("Authentication content cannot be null".to_string()))?;
+        let content = context.content().ok_or_else(authentication_failed)?;
 
         // Calculate expected signature
         let expected_signature =
             acl_signer::cal_signature_with_algorithm(content, password.as_str(), self.signature_algorithm)?;
 
         // Get provided signature
-        let provided_signature = context
-            .signature()
-            .ok_or_else(|| AuthError::AuthenticationFailed("Signature cannot be null".to_string()))?;
+        let provided_signature = context.signature().ok_or_else(authentication_failed)?;
 
         // Constant-time comparison to prevent timing attacks
         let signatures_match = constant_time_eq(expected_signature.as_bytes(), provided_signature.as_bytes());
         self.metrics.record_signature_verification(signatures_match);
         if !signatures_match {
-            return Err(AuthError::AuthenticationFailed("check signature failed".to_string()));
+            return Err(authentication_failed());
         }
 
         Ok(())
     }
 
-    fn validate_request_timestamp(&self, context: &DefaultAuthenticationContext) -> Result<(), AuthError> {
+    fn validate_request_timestamp(&self, context: &DefaultAuthenticationContext) -> AuthServiceResult<()> {
         if self.request_timestamp_expired_millis == 0 {
             return Ok(());
         }
 
         let Some(request_timestamp_millis) = context.request_timestamp_millis() else {
             if context.request_timestamp().is_some() {
-                return Err(AuthError::AuthenticationFailed(
-                    "request timestamp is invalid".to_owned(),
-                ));
+                return Err(authentication_failed());
             }
             return Ok(());
         };
 
         if request_timestamp_millis < 0 {
-            return Err(AuthError::AuthenticationFailed(
-                "request timestamp is invalid".to_owned(),
-            ));
+            return Err(authentication_failed());
         }
 
         let now_millis = current_millis() as i64;
         let skew_millis = now_millis.abs_diff(request_timestamp_millis);
         if skew_millis > self.request_timestamp_expired_millis {
-            return Err(AuthError::RequestTimestampExpired {
-                request_timestamp_millis,
-                now_millis,
-                allowed_skew_millis: self.request_timestamp_expired_millis,
-            });
+            return Err(AuthServiceError::new(
+                AuthOperation::Authenticate,
+                AuthFailureKind::Expired,
+            ));
         }
 
         Ok(())
     }
+}
+
+fn authentication_failed() -> AuthServiceError {
+    AuthServiceError::new(AuthOperation::Authenticate, AuthFailureKind::Unauthenticated)
 }
 
 /// Constant-time equality check to prevent timing attacks.
@@ -181,7 +175,7 @@ impl<P: AuthenticationMetadataProvider> AuthenticationHandler for DefaultAuthent
     fn handle<'a>(
         &'a self,
         context: &'a DefaultAuthenticationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<(), AuthError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = AuthServiceResult<()>> + Send + 'a>> {
         Box::pin(async move {
             let user = self.get_user(context).await?;
             self.do_authenticate(context, &user)?;
@@ -192,12 +186,9 @@ impl<P: AuthenticationMetadataProvider> AuthenticationHandler for DefaultAuthent
 
 #[cfg(test)]
 mod tests {
-    use cheetah_string::CheetahString;
-    use rocketmq_error::RocketMQError;
-    use rocketmq_error::RocketMQResult;
-
     use super::*;
     use crate::authentication::enums::user_type::UserType;
+    use cheetah_string::CheetahString;
 
     struct MockMetadataProvider {
         users: Vec<User>,
@@ -209,32 +200,33 @@ mod tests {
             &'a mut self,
             _config: crate::config::AuthConfig,
             _metadata_service: Option<Arc<dyn std::any::Any + Send + Sync>>,
-        ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = AuthServiceResult<()>> + Send + 'a>> {
             Box::pin(async { Ok(()) })
         }
 
-        fn shutdown(&mut self) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + '_>> {
+        fn shutdown(&mut self) -> Pin<Box<dyn Future<Output = AuthServiceResult<()>> + Send + '_>> {
             Box::pin(async { Ok(()) })
         }
 
         fn get_user<'a>(
             &'a self,
             username: &'a str,
-        ) -> Pin<Box<dyn Future<Output = RocketMQResult<User>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = AuthServiceResult<User>> + Send + 'a>> {
             let result = self
                 .users
                 .iter()
                 .find(|u| u.username().as_str() == username)
                 .cloned()
-                .ok_or_else(|| rocketmq_error::RocketMQError::user_not_found(username));
+                .ok_or_else(|| AuthServiceError::new(AuthOperation::ReadMetadata, AuthFailureKind::NotFound));
 
             Box::pin(async move { result })
         }
 
-        fn create_user<'a>(&'a self, _user: User) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+        fn create_user<'a>(&'a self, _user: User) -> Pin<Box<dyn Future<Output = AuthServiceResult<()>> + Send + 'a>> {
             Box::pin(async {
-                Err(RocketMQError::illegal_argument(
-                    "MockMetadataProvider does not support create_user",
+                Err(AuthServiceError::new(
+                    AuthOperation::ManageMetadata,
+                    AuthFailureKind::Unsupported,
                 ))
             })
         }
@@ -242,18 +234,20 @@ mod tests {
         fn delete_user<'a>(
             &'a self,
             _username: &'a str,
-        ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = AuthServiceResult<()>> + Send + 'a>> {
             Box::pin(async {
-                Err(RocketMQError::illegal_argument(
-                    "MockMetadataProvider does not support delete_user",
+                Err(AuthServiceError::new(
+                    AuthOperation::ManageMetadata,
+                    AuthFailureKind::Unsupported,
                 ))
             })
         }
 
-        fn update_user<'a>(&'a self, _user: User) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+        fn update_user<'a>(&'a self, _user: User) -> Pin<Box<dyn Future<Output = AuthServiceResult<()>> + Send + 'a>> {
             Box::pin(async {
-                Err(RocketMQError::illegal_argument(
-                    "MockMetadataProvider does not support update_user",
+                Err(AuthServiceError::new(
+                    AuthOperation::ManageMetadata,
+                    AuthFailureKind::Unsupported,
                 ))
             })
         }
@@ -261,7 +255,7 @@ mod tests {
         fn list_user<'a>(
             &'a self,
             _filter: Option<&'a str>,
-        ) -> Pin<Box<dyn Future<Output = RocketMQResult<Vec<User>>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = AuthServiceResult<Vec<User>>> + Send + 'a>> {
             let users = self.users.clone();
             Box::pin(async move { Ok(users) })
         }
@@ -289,20 +283,13 @@ mod tests {
             .handle(&context)
             .await
             .expect_err("unknown user must be rejected");
-        let AuthError::Operation { operation, source } = &error else {
-            panic!("user lookup failure must preserve its typed operation source: {error:?}");
-        };
-        assert_eq!(*operation, "load authentication user");
-        let source = source
-            .downcast_ref::<RocketMQError>()
+        assert_eq!(error.operation(), AuthOperation::Authenticate);
+        assert_eq!(error.kind(), AuthFailureKind::NotFound);
+        let source = std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<AuthServiceError>())
             .expect("metadata-provider error must remain typed");
-        assert!(
-            matches!(
-                source,
-                RocketMQError::Authentication(AuthError::UserNotFound(username)) if username == "unknown"
-            ),
-            "unexpected user lookup source: {source:?}"
-        );
+        assert_eq!(source.operation(), AuthOperation::ReadMetadata);
+        assert_eq!(source.kind(), AuthFailureKind::NotFound);
         assert!(
             !error.to_string().contains("unknown"),
             "top-level error must remain redacted"
@@ -322,7 +309,7 @@ mod tests {
 
         let result = handler.handle(&context).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("User:test_user is disabled"));
+        assert_eq!(result.unwrap_err().kind(), AuthFailureKind::Unauthenticated);
     }
 
     #[tokio::test]
@@ -339,7 +326,7 @@ mod tests {
 
         let result = handler.handle(&context).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("check signature failed"));
+        assert_eq!(result.unwrap_err().kind(), AuthFailureKind::Unauthenticated);
     }
 
     #[tokio::test]
@@ -385,7 +372,10 @@ mod tests {
 
         let result = handler.handle(&context).await;
 
-        assert!(matches!(result, Err(AuthError::RequestTimestampExpired { .. })));
+        assert_eq!(
+            result.expect_err("timestamp must expire").kind(),
+            AuthFailureKind::Expired
+        );
     }
 
     #[tokio::test]
@@ -420,7 +410,7 @@ mod tests {
 
         let result = handler.handle(&context).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("username cannot be null"));
+        assert_eq!(result.unwrap_err().kind(), AuthFailureKind::Unauthenticated);
     }
 
     #[tokio::test]
@@ -435,10 +425,7 @@ mod tests {
 
         let result = handler.handle(&context).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Authentication content cannot be null"));
+        assert_eq!(result.unwrap_err().kind(), AuthFailureKind::Unauthenticated);
     }
 
     #[tokio::test]
@@ -453,7 +440,7 @@ mod tests {
 
         let result = handler.handle(&context).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Signature cannot be null"));
+        assert_eq!(result.unwrap_err().kind(), AuthFailureKind::Unauthenticated);
     }
 
     #[test]

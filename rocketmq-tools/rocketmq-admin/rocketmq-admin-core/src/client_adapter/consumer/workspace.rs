@@ -597,21 +597,19 @@ async fn observe_group_connection(
     admin: &rocketmq_client_rust::DefaultMQAdminExt,
     group: &str,
     forwarded_address: Option<CheetahString>,
-) -> rocketmq_error::RocketMQResult<ConsumerConnection> {
+) -> rocketmq_error::Result<ConsumerConnection> {
     match forwarded_address {
-        Some(address) => {
-            admin
-                .observe_consumer_connection_at(CheetahString::from(group), address)
-                .await
-        }
-        None => {
-            rocketmq_client_rust::MQAdminReadExt::examine_consumer_connection_info(
-                admin,
-                CheetahString::from(group),
-                None,
-            )
+        Some(address) => admin
+            .observe_consumer_connection_at(CheetahString::from(group), address)
             .await
-        }
+            .map_err(crate::IntoCanonicalError::into_canonical_error),
+        None => rocketmq_client_rust::MQAdminReadExt::examine_consumer_connection_info(
+            admin,
+            CheetahString::from(group),
+            None,
+        )
+        .await
+        .map_err(crate::IntoCanonicalError::into_canonical_error),
     }
 }
 
@@ -763,16 +761,12 @@ fn required(field: &'static str, value: &str) -> crate::core::AdminResult<String
     }
 }
 
-fn safe_failure(
-    target: String,
-    stage: WorkspaceFailureStage,
-    error: &rocketmq_error::RocketMQError,
-) -> WorkspaceTargetFailure {
+fn safe_failure(target: String, stage: WorkspaceFailureStage, error: &rocketmq_error::Error) -> WorkspaceTargetFailure {
     WorkspaceTargetFailure {
         target,
         stage,
         code: WorkspaceFailureCode::Unavailable,
-        retryable: error.boundary_view().is_retryable(),
+        retryable: crate::client_adapter::services::error_view::rocketmq_is_retryable(error),
     }
 }
 

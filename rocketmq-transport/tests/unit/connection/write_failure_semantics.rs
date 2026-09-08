@@ -26,7 +26,7 @@ use std::task::Poll;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_protocol::protocol::encoded_frame::EncodedFrameHead;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
@@ -111,7 +111,7 @@ fn assert_operational_failure(outcome: ResponseSendOutcome, expected: WriteProgr
             assert_eq!(error.write_progress(), expected);
             let source = Error::source(&error).expect("operational response failure source");
             match operation {
-                "encode" => assert!(source.downcast_ref::<RocketMQError>().is_some()),
+                "encode" => assert!(source.downcast_ref::<SharedError>().is_some()),
                 "transport" => assert!(source.downcast_ref::<rocketmq_error::Error>().is_some()),
                 other => panic!("unexpected response operation {other}"),
             }
@@ -690,9 +690,7 @@ async fn explicit_sendfile_tls_preflight_preserves_legacy_reason_without_poisoni
         .await
         .expect_err("TLS sendfile preflight must fail")
         .into_error();
-    let RocketMQError::Shared(source) = canonical else {
-        panic!("sendfile preflight must use the canonical Shared carrier")
-    };
+    let source = canonical;
     assert_eq!(source.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
     assert!(source.source().is_some());
     assert_eq!(legacy_connection.state(), ConnectionState::Healthy);
@@ -775,13 +773,12 @@ async fn direct_preflight_deadline_is_not_started_and_keeps_the_writer_healthy()
     tokio::task::yield_now().await;
     resume.notify_one();
     let (legacy_connection, result) = legacy_send.await.expect("legacy direct send task");
-    assert!(matches!(
-        result,
-        Err(RocketMQError::Timeout {
-            operation: "transport_before_send",
-            timeout_ms: 10,
-        })
-    ));
+    let error = result.expect_err("expired preflight deadline must fail");
+    assert_eq!(error.descriptor(), &rocketmq_error::CORE_OPERATION_TIMED_OUT);
+    assert_eq!(
+        error.context().to_string(),
+        "operation=transport_before_send, timeout_ms=10"
+    );
     assert_eq!(writes.load(Ordering::Acquire), 0);
     assert_eq!(flushes.load(Ordering::Acquire), 0);
     assert_eq!(legacy_connection.state(), ConnectionState::Healthy);
@@ -1250,9 +1247,7 @@ async fn direct_facade_preserves_the_canonical_writer_error_and_typed_source() {
         .await
         .expect_err("injected direct write failure");
 
-    let RocketMQError::Shared(source) = error else {
-        panic!("direct writer failure must use the canonical Shared carrier")
-    };
+    let source = error;
     assert_eq!(source.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
     assert!(source
         .source()
@@ -1363,9 +1358,7 @@ async fn queued_facade_preserves_the_shared_canonical_writer_source() {
         .expect_err("injected queued write failure");
     writer.await.expect("writer task must exit after poisoning");
 
-    let RocketMQError::Shared(source) = error else {
-        panic!("queued writer failure must use the canonical Shared carrier")
-    };
+    let source = error;
     assert_eq!(source.code(), rocketmq_error::TRANSPORT_CONNECTION_FAILED.code());
     assert!(source
         .source()

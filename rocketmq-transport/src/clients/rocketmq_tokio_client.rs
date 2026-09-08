@@ -20,7 +20,6 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
 #[cfg(test)]
@@ -151,7 +150,7 @@ impl EndpointCompletionTestHook {
 /// use crate::clients::TransportClient;
 /// use crate::runtime::config::client_config::TransportClientConfig;
 ///
-/// # async fn example() -> rocketmq_error::RocketMQResult<()> {
+/// # async fn example() -> Result<(), rocketmq_error::SharedError> {
 /// let config = Arc::new(TransportClientConfig::default());
 /// let processor = Default::default();
 /// let client = TransportClient::builder(config, processor, service_context).build()?;
@@ -278,7 +277,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> TransportClient<PR> {
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
         frame_limits: FrameLimits,
-    ) -> RocketMQResult<Self> {
+    ) -> Result<Self, rocketmq_error::SharedError> {
         frame_limits.validate()?;
         let process_budget = service_context.process_budget();
         let pending_requests = PendingRequestTable::try_with_limits_and_budget(
@@ -310,7 +309,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         service_context: ChildServiceContext,
         telemetry: TransportTelemetry,
         frame_limits: FrameLimits,
-    ) -> RocketMQResult<Self> {
+    ) -> Result<Self, rocketmq_error::SharedError> {
         Ok(Self {
             tokio_client_config,
             connection_registry: Arc::new(ConnectionRegistry::new()),

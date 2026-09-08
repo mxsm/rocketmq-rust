@@ -19,7 +19,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
@@ -45,7 +44,7 @@ impl SessionProcessor for EchoProcessor {
     fn process(
         &self,
         request: RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<RemotingCommand>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
         Box::pin(async move { Ok(RemotingCommand::create_response_command_with_code(0).set_opaque(request.opaque())) })
     }
 }

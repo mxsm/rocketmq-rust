@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::ShutdownDeadline;
@@ -80,7 +79,7 @@ where
     ///
     /// Returns an error when the frame limits are internally inconsistent or
     /// exceed the supported protocol envelope.
-    pub fn frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
+    pub fn frame_limits(mut self, frame_limits: FrameLimits) -> Result<Self, rocketmq_error::SharedError> {
         frame_limits.validate()?;
         self.frame_limits = frame_limits;
         Ok(self)
@@ -92,7 +91,7 @@ where
     ///
     /// Returns an error when the transport configuration, admission limits,
     /// frame limits, or owned runtime composition is invalid.
-    pub fn build(self) -> RocketMQResult<TransportClient<PR>> {
+    pub fn build(self) -> Result<TransportClient<PR>, rocketmq_error::SharedError> {
         let mut client = TransportClient::build_inner(
             self.config,
             self.processor,
@@ -146,7 +145,7 @@ where
     ///
     /// Returns an error when an owned background service cannot be started or
     /// the client lifecycle has already entered an incompatible terminal state.
-    pub async fn start(self: &Arc<Self>) -> RocketMQResult<ClientStartReport> {
+    pub async fn start(self: &Arc<Self>) -> Result<ClientStartReport, rocketmq_error::SharedError> {
         self.transport.start().await
     }
 
@@ -160,7 +159,10 @@ where
     /// Returns an error when the canonical transport cannot complete its
     /// lifecycle transition. Timeout and aborted work remain available in the
     /// returned report when shutdown itself completes successfully.
-    pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> RocketMQResult<ClientShutdownReport> {
+    pub async fn shutdown_until(
+        &self,
+        deadline: ShutdownDeadline,
+    ) -> Result<ClientShutdownReport, rocketmq_error::SharedError> {
         Ok(self.transport.shutdown_graceful(deadline).await)
     }
 }
@@ -203,7 +205,7 @@ where
     ///
     /// Returns an error when the frame limits are internally inconsistent or
     /// exceed the supported protocol envelope.
-    pub fn frame_limits(mut self, frame_limits: FrameLimits) -> RocketMQResult<Self> {
+    pub fn frame_limits(mut self, frame_limits: FrameLimits) -> Result<Self, rocketmq_error::SharedError> {
         self.transport = self.transport.frame_limits(frame_limits)?;
         Ok(self)
     }
@@ -214,7 +216,7 @@ where
     ///
     /// Returns an error when the underlying transport configuration,
     /// admission limits, frame limits, or owned runtime composition is invalid.
-    pub fn build(self) -> RocketMQResult<RemotingClient<PR>> {
+    pub fn build(self) -> Result<RemotingClient<PR>, rocketmq_error::SharedError> {
         Ok(RemotingClient {
             transport: Arc::new(self.transport.build()?),
         })
@@ -407,7 +409,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         target: RequestTarget,
         request: RemotingCommand,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<SendReceipt> {
+    ) -> Result<SendReceipt, rocketmq_error::SharedError> {
         self.send_oneway_inner(target, request, deadline).await
     }
 
@@ -485,7 +487,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         request: RemotingCommand,
         deadline: RequestDeadline,
         permit: ResourcePermit,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.invoke_oneway_until(addr, request, deadline, Some(permit)).await
     }
 
@@ -501,7 +503,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         addr: &CheetahString,
         request: RemotingCommand,
         deadline: RequestDeadline,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.invoke_oneway_until(addr, request, deadline, None).await
     }
 
@@ -517,7 +519,7 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
         addr: &CheetahString,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.invoke_oneway_until(
             addr,
             request,

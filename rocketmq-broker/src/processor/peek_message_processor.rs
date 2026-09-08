@@ -202,7 +202,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
 }
 
 impl<MS: BrokerReadWriteStore + 'static> RequestProcessor for PeekMessageProcessor<MS> {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 }
@@ -211,7 +211,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original_opaque = request.original_identity().original_opaque();
         let command_factory = self.context.command_factory;
         let request_source = request_origin_label(request.origin());
@@ -239,7 +239,7 @@ impl<MS: BrokerReadWriteStore> PeekMessageProcessor<MS> {
         &self,
         request: &mut RemotingCommand,
         request_source: &str,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let begin_time_mills = self.context.message_store.now();
 
         let mut response = self
@@ -639,7 +639,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use rocketmq_error::RocketMQResult;
+    use crate::broker_error::BrokerResult as Result;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -690,7 +690,7 @@ mod tests {
     where
         P: RequestProcessor + Send,
     {
-        async fn process(&mut self, request: &mut RemotingRequest) -> RocketMQResult<HandlerOutcome> {
+        async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome> {
             self.processor.lock().await.process(request).await
         }
     }
@@ -706,7 +706,7 @@ mod tests {
     async fn dispatch_embedded<P>(
         processor: P,
         command: RemotingCommand,
-    ) -> Result<EmbeddedDispatchOutcome, TransportError>
+    ) -> std::result::Result<EmbeddedDispatchOutcome, TransportError>
     where
         P: RequestProcessor + Send + 'static,
     {

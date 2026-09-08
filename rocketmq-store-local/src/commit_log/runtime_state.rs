@@ -20,8 +20,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crate::StoreResult;
 use parking_lot::Mutex;
-use rocketmq_error::RocketMQResult;
 
 use crate::base::memory_lock_manager::MemoryLockCategory;
 use crate::base::memory_lock_manager::MemoryLockHandle;
@@ -172,9 +172,9 @@ impl CommitLogActiveMemoryLock {
     ///
     /// Returns the platform adapter error without consuming the current handle.
     #[doc(hidden)]
-    pub fn unlock_current_with<U>(&mut self, mut unlock_region: U) -> RocketMQResult<bool>
+    pub fn unlock_current_with<U>(&mut self, mut unlock_region: U) -> StoreResult<bool>
     where
-        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> StoreResult<()>,
     {
         let Some(handle) = self.handle.as_mut() else {
             self.clear();

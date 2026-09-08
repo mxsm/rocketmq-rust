@@ -16,7 +16,9 @@
 
 use std::path::PathBuf;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::CliErrorView;
+use rocketmq_error::CliVerbosity;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::version::CURRENT_VERSION;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
 #[cfg(test)]
@@ -28,6 +30,7 @@ use rocketmq_proxy::ProxyResult;
 use rocketmq_proxy::ProxyRuntime;
 #[cfg(test)]
 use rocketmq_proxy::RemotingConfig;
+use rocketmq_proxy_core::error::canonical;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeConfig;
@@ -43,7 +46,6 @@ use rocketmq_security_api::SecurityBootstrapOutcome;
 use rocketmq_security_api::SecurityBootstrapProfile;
 use rocketmq_security_api::SecurityContractViolation;
 use rocketmq_security_api::SecurityProviderError;
-use rocketmq_security_api::SecurityProviderFailure;
 use tracing::info;
 
 fn print_release_version_if_requested(component: &str) -> bool {
@@ -74,7 +76,18 @@ fn print_release_version_if_requested(component: &str) -> bool {
     true
 }
 
-fn main() -> ProxyResult<()> {
+fn main() {
+    if let Err(source) = try_main() {
+        let descriptor = source.descriptor();
+        let context = source.context();
+        let error = CanonicalError::caused_by(descriptor, source).with_context(context);
+        let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
+        eprintln!("{}", output.stderr());
+        std::process::exit(output.exit_code().as_i32());
+    }
+}
+
+fn try_main() -> ProxyResult<()> {
     if print_release_version_if_requested("rocketmq-proxy-rust") {
         return Ok(());
     }
@@ -83,9 +96,8 @@ fn main() -> ProxyResult<()> {
         .build()
         .map_err(proxy_runtime_error("build proxy runtime"))?;
     let service_context = owner.root_context().component("proxy");
-    let lifecycle = ServiceLifecycle::from_env("rocketmq-proxy").map_err(|error| ProxyError::Transport {
-        message: format!("invalid Proxy lifecycle configuration: {error}"),
-    })?;
+    let lifecycle = ServiceLifecycle::from_env("rocketmq-proxy")
+        .map_err(proxy_runtime_error("load proxy lifecycle configuration"))?;
 
     let run_result = owner.block_on(run(service_context, lifecycle.clone()));
     if run_result.is_err() {
@@ -122,16 +134,18 @@ fn proxy_runtime_config() -> RuntimeConfig {
 }
 
 fn proxy_runtime_error(action: &'static str) -> impl FnOnce(rocketmq_runtime::RuntimeError) -> ProxyError {
-    move |error| ProxyError::Transport {
-        message: format!("failed to {action}: {error}"),
-    }
+    move |error| ProxyError::from(canonical::internal_with_source(action, error))
+}
+
+fn proxy_observability_error(error: rocketmq_observability::ObservabilityError) -> ProxyError {
+    let descriptor = error.descriptor();
+    let context = error.context().clone();
+    ProxyError::from(CanonicalError::caused_by(descriptor, error).with_context(context))
 }
 
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> ProxyResult<()> {
-    initialize_remoting_defaults(CURRENT_VERSION as i32).map_err(|error| RocketMQError::ConfigParseFailed {
-        key: "remoting.command.defaults",
-        reason: error.to_string(),
-    })?;
+    initialize_remoting_defaults(CURRENT_VERSION as i32)
+        .map_err(|error| canonical::configuration_parse_failed_with_source("remoting.command.defaults", error))?;
 
     let args = Args::parse()?;
     let mut config = match args.config_file {
@@ -159,9 +173,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         &config.observability,
         rocketmq_observability::TelemetryEnvironmentSpec::default(),
     )
-    .map_err(|error| ProxyError::Transport {
-        message: format!("failed to resolve Proxy telemetry configuration: {error}"),
-    })?;
+    .map_err(proxy_observability_error)?;
     let security_bootstrap = SecurityBootstrapConfig::from_env().map_err(proxy_security_contract_error)?;
     let validated_security = validate_proxy_security(
         &security_bootstrap,
@@ -170,22 +182,16 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         lifecycle.config().probe_bind_addr,
     )?;
 
-    let environment_filter = rocketmq_observability::read_rust_log().map_err(|error| ProxyError::Transport {
-        message: format!("failed to read RUST_LOG: {error}"),
-    })?;
+    let environment_filter = rocketmq_observability::read_rust_log().map_err(proxy_observability_error)?;
     let resolved_filter = resolve_startup_log_filter(&args, &logging_overrides, environment_filter.as_deref())
-        .map_err(|error| ProxyError::Transport {
-            message: format!("failed to resolve proxy log filter: {error}"),
-        })?;
+        .map_err(proxy_observability_error)?;
     let telemetry_guard = rocketmq_observability::install_global_with_filter_and_service_context(
         &bootstrap_config,
         resolved_filter.clone(),
         &service_context,
     )
     .await
-    .map_err(|error| ProxyError::Transport {
-        message: format!("failed to initialize proxy telemetry bootstrap: {error}"),
-    })?;
+    .map_err(proxy_observability_error)?;
     register_proxy_release_identity(&telemetry_guard, &process_telemetry)?;
     log_telemetry_bootstrap(
         &bootstrap_config,
@@ -197,9 +203,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     if let Err(error) = lifecycle.start(&service_context).await {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
-        let primary_error = ProxyError::Transport {
-            message: format!("failed to start Proxy lifecycle boundary: {error}"),
-        };
+        let primary_error = proxy_runtime_error("start Proxy lifecycle boundary")(error);
         return complete_proxy_process_shutdown(
             Err(primary_error),
             telemetry_guard,
@@ -224,9 +228,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         {
             tracing::warn!(error = %shutdown_error, "proxy telemetry cleanup after diagnostics startup failure was unhealthy");
         }
-        return Err(ProxyError::Transport {
-            message: format!("failed to start protected Proxy runtime diagnostics: {error}"),
-        });
+        return Err(proxy_observability_error(error));
     }
 
     info!(
@@ -275,16 +277,13 @@ async fn complete_proxy_process_shutdown(
         .shutdown_with_service_context(service_context, deadline.remaining())
         .await
         .into_result()
-        .map_err(|error| ProxyError::Transport {
-            message: format!("failed to shutdown proxy telemetry bootstrap: {error}"),
-        });
+        .map_err(proxy_observability_error);
 
     match (primary_result, telemetry_result) {
-        (Err(primary_error), Err(telemetry_error)) => Err(ProxyError::Transport {
-            message: format!(
-                "Proxy startup or serving failed: {primary_error}; telemetry shutdown also failed: {telemetry_error}"
-            ),
-        }),
+        (Err(primary_error), Err(telemetry_error)) => {
+            tracing::warn!(error = %telemetry_error, "proxy telemetry shutdown also failed");
+            Err(primary_error)
+        }
         (Err(error), Ok(_report)) => Err(error),
         (Ok(()), Err(error)) => Err(error),
         (Ok(()), Ok(_report)) => Ok(()),
@@ -306,38 +305,22 @@ async fn finish_proxy_process_shutdown(
                 service_report.to_json()
             ),
         }),
-        (Err(primary_error), false) => Err(ProxyError::Transport {
-            message: format!(
-                "Proxy startup or serving failed: {primary_error}; Proxy service task shutdown was unhealthy: {}",
-                service_report.to_json()
-            ),
-        }),
+        (Err(primary_error), false) => {
+            tracing::warn!(
+                report = %service_report.to_json(),
+                "proxy service task shutdown was unhealthy after a primary failure"
+            );
+            Err(primary_error)
+        }
     }
 }
 
 fn proxy_security_contract_error(error: SecurityContractViolation) -> ProxyError {
-    ProxyError::from(RocketMQError::from(rocketmq_auth::AuthServiceError::with_source(
-        rocketmq_auth::AuthOperation::Bootstrap,
-        rocketmq_auth::AuthFailureKind::InvalidConfiguration,
-        error,
-    )))
+    proxy_security_provider_error(error.into())
 }
 
 fn proxy_security_provider_error(error: SecurityProviderError) -> ProxyError {
-    let kind = match error.kind() {
-        SecurityProviderFailure::NotFound
-        | SecurityProviderFailure::Unsupported
-        | SecurityProviderFailure::InvalidData
-        | SecurityProviderFailure::ContractViolation => rocketmq_auth::AuthFailureKind::InvalidConfiguration,
-        SecurityProviderFailure::Conflict => rocketmq_auth::AuthFailureKind::Conflict,
-        SecurityProviderFailure::Unavailable => rocketmq_auth::AuthFailureKind::Unavailable,
-        SecurityProviderFailure::OperationFailed => rocketmq_auth::AuthFailureKind::Internal,
-    };
-    ProxyError::from(RocketMQError::from(rocketmq_auth::AuthServiceError::with_source(
-        rocketmq_auth::AuthOperation::Bootstrap,
-        kind,
-        error,
-    )))
+    ProxyError::from(error.into_shared_error())
 }
 
 fn validate_proxy_security(
@@ -413,8 +396,11 @@ fn register_proxy_release_identity(
         let telemetry = telemetry_guard.handle();
         telemetry
             .register_release_identity(process_telemetry.release_identity().clone())
-            .map_err(|error| ProxyError::Transport {
-                message: format!("failed to register Proxy release identity before readiness: {error}"),
+            .map_err(|error| {
+                ProxyError::from(canonical::internal_with_source(
+                    "register_proxy_release_identity",
+                    error,
+                ))
             })?;
         if !telemetry.release_identity_registered() {
             return Err(ProxyError::Transport {
@@ -459,23 +445,10 @@ fn load_logging_overrides(path: Option<&std::path::Path>) -> ProxyResult<rocketm
     let config = config::Config::builder()
         .add_source(config::File::from(path))
         .build()
-        .map_err(|error| RocketMQError::ConfigParseFailed {
-            key: "proxy.logging",
-            reason: format!(
-                "failed to build proxy logging configuration: {}",
-                rocketmq_runtime::common::parse_config_file::render_safe_config_error(&error)
-            ),
-        })?;
-    config.try_deserialize().map_err(|error| {
-        RocketMQError::ConfigParseFailed {
-            key: "proxy.logging",
-            reason: format!(
-                "failed to deserialize proxy logging configuration: {}",
-                rocketmq_runtime::common::parse_config_file::render_safe_config_error(&error)
-            ),
-        }
-        .into()
-    })
+        .map_err(|error| canonical::configuration_parse_failed_with_source("proxy.logging", error))?;
+    config
+        .try_deserialize()
+        .map_err(|error| canonical::configuration_parse_failed_with_source("proxy.logging", error).into())
 }
 
 fn resolve_startup_log_filter(
@@ -540,7 +513,7 @@ impl Args {
                     std::process::exit(0);
                 }
                 _ => {
-                    return Err(ProxyError::from(RocketMQError::illegal_argument(format!(
+                    return Err(ProxyError::from(canonical::argument(format!(
                         "unknown proxy argument '{arg}'. Use --help for usage."
                     ))));
                 }
@@ -553,7 +526,7 @@ impl Args {
 
 fn next_value(args: &mut impl Iterator<Item = String>, name: &str) -> ProxyResult<String> {
     args.next()
-        .ok_or_else(|| RocketMQError::illegal_argument(format!("missing value for {name}")))
+        .ok_or_else(|| canonical::argument(format!("missing value for {name}")))
         .map_err(Into::into)
 }
 
@@ -571,7 +544,7 @@ fn parse_mode(value: &str) -> ProxyResult<ProxyMode> {
         "local" | "Local" => Err(ProxyError::not_implemented(
             "Local mode is unavailable because the 'local-mode' feature is disabled",
         )),
-        _ => Err(ProxyError::from(RocketMQError::illegal_argument(format!(
+        _ => Err(ProxyError::from(canonical::argument(format!(
             "invalid proxy mode '{value}', expected cluster or local"
         )))),
     }
@@ -631,6 +604,36 @@ fn print_config(config: &ProxyConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_termination_errors_preserve_the_runtime_source() {
+        let error = proxy_runtime_error("shutdown-proxy-runtime")(rocketmq_runtime::RuntimeError::internal(
+            rocketmq_runtime::RuntimeOperation::DetectProcessMemoryLimit,
+            std::io::Error::other("injected runtime failure"),
+        ));
+
+        let ProxyError::Canonical(error) = error else {
+            panic!("runtime failure must use the canonical proxy boundary");
+        };
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<rocketmq_runtime::RuntimeError>())
+            .is_some());
+    }
+
+    #[test]
+    fn observability_failures_retain_the_facade_as_a_typed_source() {
+        let error = proxy_observability_error(rocketmq_observability::ObservabilityError::invalid_config(
+            "secret telemetry configuration",
+        ));
+
+        let ProxyError::Canonical(error) = error else {
+            panic!("observability failure must use the canonical proxy boundary");
+        };
+        assert_eq!(error.descriptor(), &rocketmq_error::OBSERVABILITY_CONFIGURATION_INVALID);
+        assert!(std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<rocketmq_observability::ObservabilityError>())
+            .is_some());
+    }
 
     #[test]
     fn disabled_security_bootstrap_allows_default_proxy_listeners() {
@@ -708,24 +711,18 @@ mod tests {
         let error = proxy_security_provider_error(provider);
         assert!(!error.to_string().contains("secret"));
         assert!(!error.to_string().contains("private/provider/path"));
-        let ProxyError::RocketMQ(source) = error else {
-            panic!("security bootstrap failure must retain a RocketMQ source")
+        let ProxyError::SharedCanonical(source) = error else {
+            panic!("security bootstrap failure must retain a shared canonical source")
         };
-        assert_eq!(source.descriptor(), &rocketmq_error::AUTH_OPERATION_FAILED);
-        let RocketMQError::Shared(canonical) = source else {
-            panic!("security bootstrap failure must use the shared canonical carrier")
-        };
-        let auth = std::error::Error::source(canonical.as_ref())
-            .and_then(|source| source.downcast_ref::<rocketmq_auth::AuthServiceError>())
-            .expect("auth facade must remain typed");
-        let provider = std::error::Error::source(auth)
-            .and_then(|source| source.downcast_ref::<rocketmq_security_api::SecurityProviderError>())
-            .expect("provider failure must remain typed");
-        let io = std::error::Error::source(provider).expect("I/O cause must remain available");
+        assert_eq!(source.descriptor(), &rocketmq_error::SECURITY_PROVIDER_UNAVAILABLE);
+        let io = std::error::Error::source(source.as_ref()).expect("I/O cause must remain available");
         assert!(io.downcast_ref::<std::io::Error>().is_some());
 
         let contract = proxy_security_contract_error(SecurityContractViolation::BootstrapProfileRequired);
-        assert_eq!(contract.descriptor(), &rocketmq_error::AUTH_CONFIGURATION_INVALID);
+        assert_eq!(
+            contract.descriptor(),
+            &rocketmq_error::SECURITY_PROVIDER_CONTRACT_VIOLATION
+        );
     }
 
     #[test]

@@ -207,13 +207,12 @@ impl TopicRouteInfoManager {
             let mut topic_route_data = match topic_route_data {
                 Ok(route) => route,
                 Err(e) => {
-                    if !NamespaceUtil::is_retry_topic(topic) {
-                        if let rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. } = e {
-                            if code == ResponseCode::TopicNotExist as i32 {
-                                self.clean_none_route_topic(topic);
-                                return;
-                            }
-                        }
+                    if !NamespaceUtil::is_retry_topic(topic)
+                        && crate::broker_error::broker_response_code(e.as_ref())
+                            == Some(ResponseCode::TopicNotExist as i32)
+                    {
+                        self.clean_none_route_topic(topic);
+                        return;
                     }
 
                     warn!(

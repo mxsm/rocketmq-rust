@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
 use crate::commands::CommandExecute;
@@ -27,7 +27,7 @@ pub struct GetConsumerConfigSubCommand {
 }
 
 impl GetConsumerConfigSubCommand {
-    fn request(&self) -> RocketMQResult<ConsumerConfigQueryRequest> {
+    fn request(&self) -> CanonicalResult<ConsumerConfigQueryRequest> {
         ConsumerConfigQueryRequest::try_new(self.group_name.clone())
     }
 }
@@ -37,7 +37,7 @@ impl CommandExecute for GetConsumerConfigSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = ConsumerService::query_consumer_config_by_request_with_credentials(
             self.request()?,
             credentials,

@@ -170,10 +170,7 @@ pub(super) fn map_consumer_mutation_result(result: AdminConsumerMutationResult) 
 }
 
 pub(super) fn map_admin_error(error: AdminError) -> ConsumerError {
-    match error {
-        AdminError::InvalidArgument { reason, .. } => ConsumerError::Validation(reason),
-        error => ConsumerError::Admin(error),
-    }
+    ConsumerError::Admin(error)
 }
 
 #[cfg(test)]
@@ -309,7 +306,13 @@ mod tests {
         let error = map_admin_error(AdminError::invalid_argument("consumer_group", "required"));
 
         assert!(result.updated);
-        assert!(matches!(error, ConsumerError::Validation(reason) if reason == "required"));
+        let ConsumerError::Admin(error) = error else {
+            panic!("invalid admin input must retain the canonical admin facade");
+        };
+        assert_eq!(
+            error.failure(),
+            rocketmq_admin_core::core::AdminFailure::InvalidArgument
+        );
     }
 
     fn group(name: &str, category: &str) -> DashboardConsumerGroupItem {

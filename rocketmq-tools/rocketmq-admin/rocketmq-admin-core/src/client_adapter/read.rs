@@ -29,7 +29,7 @@ use rocketmq_client_rust::MQAdminTopicInventoryReadExt;
 use rocketmq_client_rust::ReadFailureCode;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_client_rust::SigningAlgorithm;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::topic::DLQ_GROUP_TOPIC_PREFIX;
@@ -381,7 +381,7 @@ impl ReadAdminSession {
 
     fn ensure_open(&self) -> AdminResult<()> {
         if self.closed {
-            Err(AdminError::SessionClosed)
+            Err(AdminError::session_closed())
         } else {
             Ok(())
         }
@@ -602,54 +602,6 @@ impl BrokerQueryAdmin for ReadAdminSession {
     fn probe_broker_runtime<'a>(
         &'a mut self,
         request: &'a ProbeBrokerRuntimeRequest,
-    ) -> AdminFuture<'a, ProbeBrokerRuntimeResult> {
-        Box::pin(async move {
-            self.ensure_open()?;
-            let cluster_info = self
-                .inner
-                .examine_broker_cluster_info()
-                .await
-                .map_err(|error| backend_error("examine_broker_cluster_info", error))?;
-            let broker_names = cluster_info
-                .cluster_addr_table
-                .as_ref()
-                .and_then(|table| table.get(request.cluster.as_str()))
-                .cloned()
-                .unwrap_or_default();
-            let broker_table = cluster_info.broker_addr_table.unwrap_or_default();
-            let mut result = ProbeBrokerRuntimeResult::default();
-            let mut failure_counts = BTreeMap::<String, usize>::new();
-            for broker_name in broker_names {
-                let Some(broker_data) = broker_table.get(&broker_name) else {
-                    continue;
-                };
-                for broker_addr in broker_data.broker_addrs().values() {
-                    result.attempted += 1;
-                    if let Err(error) = self.inner.fetch_broker_runtime_stats(broker_addr.clone()).await {
-                        let code = error.boundary_view().code().as_str().to_string();
-                        *failure_counts.entry(code).or_default() += 1;
-                    }
-                }
-            }
-            const MAX_FAILURE_CODES: usize = 16;
-            let mut overflow = 0usize;
-            for (index, (code, count)) in failure_counts.into_iter().enumerate() {
-                if index < MAX_FAILURE_CODES - 1 {
-                    result.failures.push(format!("code={code};count={count}"));
-                } else {
-                    overflow += count;
-                }
-            }
-            if overflow > 0 {
-                result.failures.push(format!("code=other;count={overflow}"));
-            }
-            Ok(result)
-        })
-    }
-
-    fn probe_broker_runtime_with_evidence<'a>(
-        &'a mut self,
-        request: &'a ProbeBrokerRuntimeRequest,
     ) -> AdminFuture<'a, AdminQueryResult<ProbeBrokerRuntimeResult>> {
         Box::pin(async move {
             self.ensure_open()?;
@@ -701,7 +653,6 @@ impl BrokerQueryAdmin for ReadAdminSession {
                     }
                 }
             }
-            result.failures = stable_legacy_failures(&failures);
             AdminQueryResult::from_sources(result, successful_sources, failures)
         })
     }
@@ -2404,29 +2355,19 @@ fn runtime_f64(runtime: Option<&KVTable>, key: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
-    let view = error.boundary_view();
-    let context = (!view.context().is_empty()).then(|| view.context().to_string());
-    AdminError::backend_view(
-        operation,
-        view.code().as_str(),
-        view.message(),
-        context,
-        view.http().status.as_u16(),
-        view.is_retryable(),
-    )
+fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {
+    AdminError::from_error(operation, error.into_canonical_error())
 }
 
 fn source_failure_from_error(
     source: AdminQuerySource,
     logical_target: &str,
-    error: &RocketMQError,
+    error: &CanonicalError,
 ) -> AdminSourceFailure {
-    let view = error.boundary_view();
     AdminSourceFailure::new(
         source,
-        query_failure_code(view.http().status.as_u16()),
-        view.is_retryable(),
+        query_failure_code(crate::canonical_http_status(error)),
+        crate::canonical_is_retryable(error),
         logical_target,
     )
 }
@@ -2457,21 +2398,6 @@ fn query_failure_code(http_status: u16) -> AdminQueryFailureCode {
         400 | 413 | 422 => AdminQueryFailureCode::InvalidResponse,
         _ => AdminQueryFailureCode::SourceUnavailable,
     }
-}
-
-fn stable_legacy_failures(failures: &[AdminSourceFailure]) -> Vec<String> {
-    failures
-        .iter()
-        .map(|failure| {
-            format!(
-                "source={:?};code={:?};target={}",
-                failure.source(),
-                failure.code(),
-                failure.logical_target()
-            )
-            .to_ascii_lowercase()
-        })
-        .collect()
 }
 
 fn bounded_subscription_group_value(field: &'static str, value: i32, maximum: u32) -> AdminResult<u32> {

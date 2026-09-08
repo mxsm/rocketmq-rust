@@ -89,7 +89,7 @@ impl ExactConsumerGroupEnrichmentRequest {
             .map(|group| {
                 let group = required("consumerGroup", group)?;
                 validate_subscription_group_name(&group)
-                    .map_err(|error| crate::core::AdminError::invalid_argument("consumerGroup", error.to_string()))?;
+                    .map_err(|error| crate::core::AdminError::invalid_argument_source("consumerGroup", error))?;
                 Ok(group)
             })
             .collect::<AdminResult<Vec<_>>>()?;
@@ -829,7 +829,7 @@ fn validate_batch_consumer_group(value: impl Into<String>) -> AdminResult<String
         ));
     }
     validate_subscription_group_name(&value)
-        .map_err(|error| crate::core::AdminError::invalid_argument("consumerGroup", error.to_string()))?;
+        .map_err(|error| crate::core::AdminError::invalid_argument_source("consumerGroup", error))?;
     Ok(value)
 }
 
@@ -1404,7 +1404,7 @@ impl<T: ConsumerAdmin + ?Sized> ConsumerMutationAdmin for T {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "client-adapter"))]
 pub(crate) mod batch_test_support {
     use super::*;
 
@@ -1561,6 +1561,16 @@ mod tests {
     }
 
     #[test]
+    fn consumer_group_validation_retains_typed_sources() {
+        let error =
+            ExactConsumerGroupEnrichmentRequest::try_new(["group.with.dot"]).expect_err("illegal group name must fail");
+        let source = std::error::Error::source(&error).expect("protocol validation source");
+        assert!(source
+            .downcast_ref::<rocketmq_protocol::ProtocolContractViolation>()
+            .is_some());
+    }
+
+    #[test]
     fn existing_consumer_admin_implementation_does_not_require_diagnostics() {
         let mut admin = ExistingConsumerAdmin;
         let _: &mut dyn ConsumerAdmin = &mut admin;
@@ -1573,25 +1583,21 @@ mod tests {
             ConsumerAdmin::list_consumer_group_inventory_with_evidence(&mut admin, &ListConsumerGroupsRequest)
                 .await
                 .unwrap_err();
-        assert!(matches!(
-            inventory,
-            crate::core::AdminError::Backend {
-                operation: "list_consumer_group_inventory_with_evidence",
-                ..
-            }
-        ));
+        assert_eq!(inventory.failure(), crate::core::AdminFailure::Backend);
+        assert_eq!(
+            inventory.operation(),
+            Some("list_consumer_group_inventory_with_evidence")
+        );
 
         let exact = ExactConsumerGroupEnrichmentRequest::try_new(["orders"]).unwrap();
         let enrichment = ConsumerQueryAdmin::enrich_consumer_groups_exact_with_evidence(&mut admin, &exact)
             .await
             .unwrap_err();
-        assert!(matches!(
-            enrichment,
-            crate::core::AdminError::Backend {
-                operation: "enrich_consumer_groups_exact_with_evidence",
-                ..
-            }
-        ));
+        assert_eq!(enrichment.failure(), crate::core::AdminFailure::Backend);
+        assert_eq!(
+            enrichment.operation(),
+            Some("enrich_consumer_groups_exact_with_evidence")
+        );
     }
 
     #[test]

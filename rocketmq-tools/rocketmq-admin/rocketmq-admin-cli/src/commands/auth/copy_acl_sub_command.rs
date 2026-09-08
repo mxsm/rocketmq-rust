@@ -16,7 +16,7 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::auth::AuthService;
 use rocketmq_admin_core::client_adapter::services::auth::CopyAclRequest;
 use rocketmq_admin_core::client_adapter::services::auth::CopyAclResult;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 
@@ -52,7 +52,7 @@ impl CommandExecute for CopyAclSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = CopyAclRequest::try_new(self.from_broker.clone(), self.to_broker.clone(), self.subjects.clone())?;
         let from_broker = request.from_broker().clone();
         let to_broker = request.to_broker().clone();

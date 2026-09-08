@@ -52,7 +52,7 @@ impl OffsetRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header =
             request.decode_required_header::<GetMaxOffsetRequestHeader>("decode get-max-offset request header")?;
         let mapping_context = broker_runtime_inner
@@ -82,7 +82,7 @@ impl OffsetRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header =
             request.decode_required_header::<GetMinOffsetRequestHeader>("decode get-min-offset request header")?;
 
@@ -113,7 +113,7 @@ impl OffsetRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         mut request_header: GetMinOffsetRequestHeader,
         mapping_context: TopicQueueMappingContext,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let Some(mapping_detail) = mapping_context.mapping_detail.as_ref() else {
             return Ok(None);
         };
@@ -180,7 +180,7 @@ impl OffsetRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         mut request_header: GetMaxOffsetRequestHeader,
         mapping_context: TopicQueueMappingContext,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let Some(mapping_detail) = mapping_context.mapping_detail.as_ref() else {
             return Ok(None);
         };
@@ -247,7 +247,7 @@ impl OffsetRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response_command = RemotingCommand::create_java_default_error_response_command();
         let content = broker_runtime_inner.schedule_message_service().encode_pretty(false);
         if content.is_empty() {
@@ -267,7 +267,7 @@ impl OffsetRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetEarliestMsgStoretimeRequestHeader>()?;
         let mapping_context = broker_runtime_inner
             .topic_queue_mapping_manager()
@@ -295,7 +295,7 @@ impl OffsetRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         broker_runtime_inner
             .message_store()
             .unwrap()
@@ -308,7 +308,7 @@ impl OffsetRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         broker_runtime_inner
             .message_store()
             .unwrap()
@@ -320,7 +320,7 @@ impl OffsetRequestHandler {
         &self,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let _request_header = request.decode_command_custom_header::<CheckRocksdbCqWriteProgressRequestHeader>()?;
         let command_factory = application_remoting_command_factory();
         Ok(Some(error_response(
@@ -338,7 +338,7 @@ impl OffsetRequestHandler {
         metadata: &AdminRequestMetadata,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let response_command = RemotingCommand::create_java_default_error_response_command();
         let content = broker_runtime_inner.subscription_group_manager().encode_pretty(false);
         if content.is_empty() {
@@ -359,7 +359,7 @@ impl OffsetRequestHandler {
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         mut request_header: GetEarliestMsgStoretimeRequestHeader,
         mapping_context: TopicQueueMappingContext,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
         let Some(mapping_detail) = mapping_context.mapping_detail.as_ref() else {
             return Ok(None);
         };
@@ -430,15 +430,12 @@ impl OffsetRequestHandler {
     }
 }
 
-fn static_topic_offset_mapping_missing(operation: &'static str) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::RouteInconsistent {
-        topic: "static_topic_offset".to_string(),
-        reason: format!("Cannot find logic queue mapping item in {operation}"),
-    }
+fn static_topic_offset_mapping_missing(_operation: &'static str) -> rocketmq_error::SharedError {
+    crate::broker_error::route_inconsistent("static_topic_offset")
 }
 
-fn static_topic_offset_broker_name_missing(operation: &'static str) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::request_header_error(format!(
+fn static_topic_offset_broker_name_missing(operation: &'static str) -> rocketmq_error::SharedError {
+    crate::broker_error::request_header_error(format!(
         "Broker name is missing in logic queue mapping item for {operation}"
     ))
 }

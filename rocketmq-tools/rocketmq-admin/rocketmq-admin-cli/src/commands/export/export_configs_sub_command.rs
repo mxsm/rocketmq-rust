@@ -16,8 +16,7 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportConfigsRequest;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportConfigsResult;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 const DEFAULT_FILE_PATH: &str = "/tmp/rocketmq/export";
 
@@ -48,7 +47,7 @@ pub struct ExportConfigsSubCommand {
 }
 
 impl ExportConfigsSubCommand {
-    fn request(&self) -> RocketMQResult<ExportConfigsRequest> {
+    fn request(&self) -> CanonicalResult<ExportConfigsRequest> {
         ExportConfigsRequest::try_new(self.cluster_name.clone())
             .map(|request| request.with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
@@ -59,7 +58,7 @@ impl CommandExecute for ExportConfigsSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let file_path = self.file_path.trim();
         let result = ExportService::export_configs_by_request_with_credentials(
             self.request()?,
@@ -73,7 +72,7 @@ impl CommandExecute for ExportConfigsSubCommand {
 }
 
 impl ExportConfigsSubCommand {
-    fn write_result(export_result: &ExportConfigsResult, file_path: &str) -> RocketMQResult<()> {
+    fn write_result(export_result: &ExportConfigsResult, file_path: &str) -> CanonicalResult<()> {
         let mut result = serde_json::Map::new();
 
         let mut cluster_scale_map = serde_json::Map::new();
@@ -92,27 +91,16 @@ impl ExportConfigsSubCommand {
 
         result.insert(
             "brokerConfigs".to_string(),
-            serde_json::to_value(&export_result.broker_configs).map_err(|source| {
-                RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                    "encode exported broker configurations",
-                    "JSON",
-                    source,
-                ))
-            })?,
+            serde_json::to_value(&export_result.broker_configs)
+                .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?,
         );
         result.insert("clusterScale".to_string(), serde_json::Value::Object(cluster_scale_map));
 
         let path = format!("{}/configs.json", file_path);
-        let json_content = serde_json::to_string_pretty(&result).map_err(|source| {
-            RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                "encode configuration export",
-                "JSON",
-                source,
-            ))
-        })?;
+        let json_content = serde_json::to_string_pretty(&result)
+            .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?;
 
-        rocketmq_runtime::common::file_utils::string_to_file(&json_content, &path)
-            .map_err(crate::runtime_to_rocketmq_error)?;
+        rocketmq_runtime::common::file_utils::string_to_file(&json_content, &path).map_err(crate::runtime_error)?;
         println!("export {} success", path);
 
         Ok(())

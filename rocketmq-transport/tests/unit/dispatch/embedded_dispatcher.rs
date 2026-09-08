@@ -22,7 +22,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use bytes::Bytes;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
@@ -143,7 +142,7 @@ impl Clone for TestProcessor {
 }
 
 impl RequestProcessor for TestProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> Result<HandlerOutcome, rocketmq_error::SharedError> {
         self.state.processes.fetch_add(1, Ordering::SeqCst);
         *self.state.request_body_pointer.lock().expect("request pointer lock") =
             request.command().body().map(|body| body.as_ptr() as usize);
@@ -179,11 +178,11 @@ impl RequestProcessor for TestProcessor {
                     .expect("remoting response"),
                 ))
             }
-            Behavior::Error => Err(RocketMQError::illegal_argument("embedded processor failure")),
+            Behavior::Error => Err(crate::error_helpers::argument_invalid()),
             Behavior::NoReply => Ok(HandlerOutcome::NoReply(
                 request
                     .protocol_no_response(ProtocolNoResponseReason::CallbackHandled)
-                    .map_err(|_| RocketMQError::illegal_argument("protocol no-response contract failed"))?,
+                    .map_err(|_| crate::error_helpers::argument_invalid())?,
             )),
             Behavior::Deferred => {
                 assert!(matches!(

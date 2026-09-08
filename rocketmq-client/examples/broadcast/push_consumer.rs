@@ -17,12 +17,12 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
@@ -36,7 +36,7 @@ pub const TOPIC: &str = "TopicTest";
 pub const SUB_EXPRESSION: &str = "*";
 
 #[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+pub async fn main() -> ClientResult<()> {
     let example_runtime = support::ExampleClientRuntime::try_new("push-consumer")?;
     let client_runtime = example_runtime.client_runtime();
     // create a producer builder with default configuration
@@ -66,7 +66,7 @@ impl MessageListenerConcurrently for MyMessageListener {
         &self,
         msgs: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         for msg in msgs {
             info!("Receive message: {:?}", msg);
         }

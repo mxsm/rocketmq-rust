@@ -20,8 +20,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use rocketmq_error::AuthError;
-
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
 use crate::authentication::provider::AuthenticationProvider;
 use crate::authentication::strategy::abstract_authentication_strategy::AbstractAuthenticationStrategy;
@@ -30,6 +28,10 @@ use crate::authentication::strategy::authentication_strategy::AuthenticationStra
 use crate::authentication::strategy::AuthenticationFuture;
 use crate::authorization::context::authentication_context::AuthenticationContext;
 use crate::config::AuthConfig;
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 /// Stateless authentication strategy.
 ///
@@ -74,7 +76,7 @@ where
     }
 
     /// Perform authentication without caching.
-    async fn do_authenticate_internal(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
+    async fn do_authenticate_internal(&self, context: &dyn AuthenticationContext) -> AuthServiceResult<()> {
         if !self.auth_config.authentication_enabled {
             return Ok(());
         }
@@ -82,11 +84,7 @@ where
         let default_context = context
             .as_any()
             .downcast_ref::<DefaultAuthenticationContext>()
-            .ok_or_else(|| {
-                AuthError::AuthenticationFailed(
-                    "Stateless authentication requires DefaultAuthenticationContext".to_string(),
-                )
-            })?;
+            .ok_or_else(|| AuthServiceError::new(AuthOperation::Authenticate, AuthFailureKind::InvalidInput))?;
 
         if let Some(rpc_code) = default_context.base.rpc_code() {
             if self.is_whitelisted(rpc_code.as_str()) {
@@ -129,11 +127,9 @@ where
 mod tests {
     use std::any::Any;
 
-    use cheetah_string::CheetahString;
-    use rocketmq_error::RocketMQResult;
-
     use super::*;
     use crate::authentication::provider::DefaultAuthenticationProvider;
+    use cheetah_string::CheetahString;
 
     struct CountingAuthenticationProvider {
         calls: Arc<std::sync::atomic::AtomicUsize>,
@@ -146,11 +142,11 @@ mod tests {
             &mut self,
             _config: AuthConfig,
             _metadata_service: Option<Arc<dyn Any + Send + Sync>>,
-        ) -> RocketMQResult<()> {
+        ) -> AuthServiceResult<()> {
             Ok(())
         }
 
-        async fn authenticate(&self, _context: &Self::Context) -> RocketMQResult<()> {
+        async fn authenticate(&self, _context: &Self::Context) -> AuthServiceResult<()> {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }

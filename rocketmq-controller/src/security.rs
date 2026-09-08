@@ -18,15 +18,15 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQResult;
+use crate::ControllerResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::MaintenanceAuthorizer;
 
 /// Future returned by a Controller maintenance authenticator.
-pub type MaintenanceAuthenticationFuture<'a> = Pin<Box<dyn Future<Output = RocketMQResult<String>> + Send + 'a>>;
+pub type MaintenanceAuthenticationFuture<'a> = Pin<Box<dyn Future<Output = ControllerResult<String>> + Send + 'a>>;
 
 /// Future returned while stopping an injected Controller authenticator.
-pub type MaintenanceAuthenticationShutdownFuture<'a> = Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
+pub type MaintenanceAuthenticationShutdownFuture<'a> = Pin<Box<dyn Future<Output = ControllerResult<()>> + Send + 'a>>;
 
 /// Verifies one privileged Controller request without exposing an auth implementation.
 ///

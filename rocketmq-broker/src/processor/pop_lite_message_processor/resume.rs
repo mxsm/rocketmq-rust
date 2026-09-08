@@ -32,7 +32,7 @@ where
         resume: ResumePopLite,
         reason: DeferredWakeReason,
         events: LiteEventBatchExecution,
-    ) -> rocketmq_error::RocketMQResult<RemotingResponse> {
+    ) -> crate::broker_error::BrokerResult<RemotingResponse> {
         debug_assert_eq!(reason, DeferredWakeReason::MessageArrived);
         let request_header = resume.into_request().into_header();
         let result = self.execute_pop_lite_terminal_batch(&request_header, events).await;
@@ -48,7 +48,7 @@ where
         &self,
         resume: ResumePopLite,
         reason: DeferredWakeReason,
-    ) -> rocketmq_error::RocketMQResult<RemotingResponse> {
+    ) -> crate::broker_error::BrokerResult<RemotingResponse> {
         debug_assert_eq!(reason, DeferredWakeReason::Timeout);
         let request_header = resume.into_request().into_header();
         self.compose_pop_lite_response(

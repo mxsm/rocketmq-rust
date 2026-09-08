@@ -25,7 +25,6 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::command_custom_header::CommandCustomHeader;
@@ -220,7 +219,11 @@ impl CommandCustomHeader for RetryHeader {
 }
 
 impl RPCHook for CountingHook {
-    fn do_before_request(&self, _remote_addr: SocketAddr, request: &mut RemotingCommand) -> RocketMQResult<()> {
+    fn do_before_request(
+        &self,
+        _remote_addr: SocketAddr,
+        request: &mut RemotingCommand,
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.before.fetch_add(1, Ordering::SeqCst);
         request.ensure_ext_fields_initialized();
         request.add_ext_field("hooked", "true");
@@ -232,7 +235,7 @@ impl RPCHook for CountingHook {
         _remote_addr: SocketAddr,
         _request: &RemotingCommand,
         response: &mut RemotingCommand,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         self.after.fetch_add(1, Ordering::SeqCst);
         response.ensure_ext_fields_initialized();
         response.add_ext_field("afterHook", "true");

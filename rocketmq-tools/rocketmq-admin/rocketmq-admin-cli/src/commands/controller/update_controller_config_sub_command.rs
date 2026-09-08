@@ -16,7 +16,7 @@ use crate::commands::CommandExecute;
 use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::controller::ControllerConfigUpdateRequest;
 use rocketmq_admin_core::client_adapter::services::controller::ControllerService;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateControllerConfigSubCommand {
@@ -41,7 +41,7 @@ impl CommandExecute for UpdateControllerConfigSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         ControllerService::update_controller_config_by_request_with_credentials(
             self.request()?,
             credentials,
@@ -54,7 +54,7 @@ impl CommandExecute for UpdateControllerConfigSubCommand {
 }
 
 impl UpdateControllerConfigSubCommand {
-    fn request(&self) -> RocketMQResult<ControllerConfigUpdateRequest> {
+    fn request(&self) -> CanonicalResult<ControllerConfigUpdateRequest> {
         ControllerConfigUpdateRequest::try_new(self.controller_address.clone(), self.key.clone(), self.value.clone())
     }
 }

@@ -14,8 +14,7 @@
 
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_runtime::common::util_all::time_millis_to_human_string2;
 use serde_json::Value;
 
@@ -39,11 +38,11 @@ pub struct GetColdDataFlowCtrInfoSubCommand {
 }
 
 impl GetColdDataFlowCtrInfoSubCommand {
-    fn request(&self) -> RocketMQResult<ColdDataFlowCtrInfoQueryRequest> {
+    fn request(&self) -> CanonicalResult<ColdDataFlowCtrInfoQueryRequest> {
         ColdDataFlowCtrInfoQueryRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone())
     }
 
-    fn print_section(section: ColdDataFlowCtrInfoSection) -> RocketMQResult<()> {
+    fn print_section(section: ColdDataFlowCtrInfoSection) -> CanonicalResult<()> {
         print!(" {}", section_prefix(&section.target));
 
         if section.raw_info.is_empty() {
@@ -51,13 +50,8 @@ impl GetColdDataFlowCtrInfoSubCommand {
             return Ok(());
         }
 
-        let mut json_value: Value = serde_json::from_str(section.raw_info.as_str()).map_err(|source| {
-            RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                "decode cold-data flow response",
-                "JSON",
-                source,
-            ))
-        })?;
+        let mut json_value: Value = serde_json::from_str(section.raw_info.as_str())
+            .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?;
 
         if let Some(runtime_table) = json_value.get_mut("runtimeTable")
             && let Some(table_obj) = runtime_table.as_object_mut()
@@ -91,13 +85,8 @@ impl GetColdDataFlowCtrInfoSubCommand {
             }
         }
 
-        let format_str = serde_json::to_string_pretty(&json_value).map_err(|source| {
-            RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                "encode cold-data flow response",
-                "JSON",
-                source,
-            ))
-        })?;
+        let format_str = serde_json::to_string_pretty(&json_value)
+            .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?;
         println!("{format_str}");
         Ok(())
     }
@@ -108,7 +97,7 @@ impl CommandExecute for GetColdDataFlowCtrInfoSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = BrokerService::query_cold_data_flow_ctr_info_by_request_with_credentials(
             self.request()?,
             credentials,

@@ -20,8 +20,10 @@ use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
 use rocketmq_admin_core::client_adapter::TelemetryHandle;
 use rocketmq_error::CliVerbosity;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::ErrorContext;
+use rocketmq_error::Result as CanonicalResult;
+use rocketmq_error::fields;
 use rocketmq_model::common::mq_version::CURRENT_VERSION;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
 use rocketmq_runtime::RuntimeConfig;
@@ -71,7 +73,7 @@ fn main() {
     {
         Ok(handle) => handle,
         Err(error) => {
-            let error = RocketMQError::internal("spawn rocketmq-admin-cli main thread", error);
+            let error = internal_error("spawn_admin_cli_thread", error);
             std::process::exit(render_cli_error(&error, verbosity));
         }
     };
@@ -80,8 +82,8 @@ fn main() {
         Ok(Ok(exit_code)) => exit_code,
         Ok(Err(error)) => render_cli_error(&error, verbosity),
         Err(_) => {
-            let error = RocketMQError::internal(
-                "join rocketmq-admin-cli main thread",
+            let error = internal_error(
+                "join_admin_cli_thread",
                 std::io::Error::other("main thread terminated unexpectedly"),
             );
             render_cli_error(&error, verbosity)
@@ -100,21 +102,25 @@ fn verbosity_requested() -> CliVerbosity {
     }
 }
 
-fn run_cli_main_thread(verbosity: CliVerbosity) -> RocketMQResult<i32> {
-    initialize_remoting_defaults(CURRENT_VERSION as i32).map_err(|error| RocketMQError::ConfigParseFailed {
-        key: "remoting.command.defaults",
-        reason: error.to_string(),
+fn run_cli_main_thread(verbosity: CliVerbosity) -> CanonicalResult<i32> {
+    initialize_remoting_defaults(CURRENT_VERSION as i32).map_err(|error| {
+        CanonicalError::caused_by(&rocketmq_error::CORE_CONFIGURATION_PARSE_FAILED, error).with_context(
+            ErrorContext::new()
+                .with_text(fields::KEY, "remoting.command.defaults")
+                .with_secret_presence(fields::REASON_PRESENT),
+        )
     })?;
 
     let owner = RuntimeOwner::plan(admin_cli_runtime_config())
         .expect("admin CLI runtime profile is internally valid")
         .build()
-        .map_err(|source| RocketMQError::internal("build rocketmq-admin-cli runtime", source))?;
+        .map_err(|source| internal_error("build_admin_cli_runtime", source))?;
     let client_runtime = ClientRuntime::try_new(
         owner.root_context().component("rocketmq-admin-client"),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
-    )?;
+    )
+    .map_err(|error| error.into_error())?;
     let exit_code = owner.block_on(async_main(client_runtime.clone(), verbosity));
     let client_report = owner.block_on(client_runtime.shutdown());
     if !client_report.is_healthy() {
@@ -125,7 +131,7 @@ fn run_cli_main_thread(verbosity: CliVerbosity) -> RocketMQResult<i32> {
     }
     let report = owner
         .shutdown_runtime_blocking()
-        .map_err(|source| RocketMQError::internal("shut down rocketmq-admin-cli runtime", source))?;
+        .map_err(|source| internal_error("shutdown_admin_cli_runtime", source))?;
     if !report.is_healthy() {
         tracing::warn!(
             report = %report.to_json(),
@@ -157,10 +163,19 @@ async fn async_main(client_runtime: std::sync::Arc<ClientRuntime>, verbosity: Cl
         }
         Err(_) => {
             return render_cli_error(
-                &RocketMQError::validation_failed("command-line", "invalid command-line arguments"),
+                &CanonicalError::new(&rocketmq_error::CORE_ARGUMENT_INVALID)
+                    .with_context(ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT)),
                 verbosity,
             );
         }
     };
     cli.handle(client_runtime).await
+}
+
+fn internal_error(operation: &'static str, source: impl std::error::Error + Send + Sync + 'static) -> CanonicalError {
+    CanonicalError::caused_by(&rocketmq_error::CORE_INTERNAL_FAILURE, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    )
 }

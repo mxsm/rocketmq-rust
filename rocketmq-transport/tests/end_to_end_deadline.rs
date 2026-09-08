@@ -23,7 +23,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_transport::api::AdmissionController;
@@ -145,13 +144,11 @@ async fn expired_before_send_has_zero_remote_side_effects() {
         .await
         .expect_err("expired request must not enter the writer");
 
-    assert!(matches!(
-        error,
-        RocketMQError::Timeout {
-            operation: "transport_before_send",
-            timeout_ms: 10,
-        }
-    ));
+    assert_eq!(error.code(), rocketmq_error::CORE_OPERATION_TIMED_OUT.code());
+    assert_eq!(
+        error.context().to_string(),
+        "operation=transport_before_send, timeout_ms=10"
+    );
     tokio::task::yield_now().await;
     assert_eq!(side_effects.load(Ordering::SeqCst), 0);
 
@@ -182,9 +179,7 @@ async fn blocked_socket_write_uses_the_original_deadline() {
         .expect("send task")
         .expect_err("blocked socket write must time out");
 
-    let RocketMQError::Shared(source) = error else {
-        panic!("blocked write must use the canonical Shared carrier")
-    };
+    let source = error;
     assert_eq!(source.code(), rocketmq_error::TRANSPORT_WRITE_TIMEOUT.code());
     assert_eq!(
         source.context().to_string(),
@@ -239,9 +234,7 @@ async fn full_outbound_admission_returns_queue_full_without_extending_deadline()
         .await
         .expect_err("full admission must reject immediately");
 
-    let RocketMQError::Shared(source) = error else {
-        panic!("queue rejection must use the canonical Shared carrier")
-    };
+    let source = error;
     assert_eq!(
         source.code(),
         rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED.code()
@@ -290,13 +283,11 @@ async fn queued_request_expiry_is_reported_before_send() {
         .expect("queued send task")
         .expect_err("queued request must expire before socket write");
 
-    assert!(matches!(
-        error,
-        RocketMQError::Timeout {
-            operation: "transport_before_send",
-            timeout_ms: 50,
-        }
-    ));
+    assert_eq!(error.code(), rocketmq_error::CORE_OPERATION_TIMED_OUT.code());
+    assert_eq!(
+        error.context().to_string(),
+        "operation=transport_before_send, timeout_ms=50"
+    );
 
     session.task_group().cancel();
     assert!(first.await.expect("first send task").is_err());
@@ -352,9 +343,7 @@ async fn missing_response_uses_the_same_absolute_response_deadline() {
         Err(error) => error,
     };
 
-    let RocketMQError::Shared(source) = error else {
-        panic!("response timeout must use the canonical Shared carrier")
-    };
+    let source = error;
     assert_eq!(source.code(), rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code());
     assert_eq!(
         source.context().to_string(),

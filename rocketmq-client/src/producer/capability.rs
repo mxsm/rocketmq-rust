@@ -205,7 +205,7 @@ pub trait ProducerLifecycle {
     /// # Errors
     ///
     /// Returns the existing typed client error when startup fails.
-    async fn start_producer(&mut self) -> rocketmq_error::RocketMQResult<()>;
+    async fn start_producer(&mut self) -> crate::ClientResult<()>;
 
     /// Shuts down producer-owned work.
     async fn shutdown_producer(&mut self);
@@ -219,7 +219,7 @@ pub trait MessageSend {
     /// # Errors
     ///
     /// Preserves the error returned by the corresponding legacy operation.
-    async fn send_message<M>(&mut self, request: SendRequest<M>) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    async fn send_message<M>(&mut self, request: SendRequest<M>) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync;
 
@@ -228,10 +228,7 @@ pub trait MessageSend {
     /// # Errors
     ///
     /// Preserves the error returned by the corresponding legacy operation.
-    async fn send_message_batch<M>(
-        &mut self,
-        request: BatchSendRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send_message_batch<M>(&mut self, request: BatchSendRequest<M>) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync;
 
@@ -240,10 +237,7 @@ pub trait MessageSend {
     /// # Errors
     ///
     /// Preserves the corresponding legacy validation and submission errors.
-    async fn send_message_with_callback<M>(
-        &mut self,
-        request: SendCallbackRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    async fn send_message_with_callback<M>(&mut self, request: SendCallbackRequest<M>) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync;
 
@@ -255,7 +249,7 @@ pub trait MessageSend {
     async fn send_selected<M, S, T>(
         &mut self,
         request: SelectedSendRequest<M, S, T>,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -269,7 +263,7 @@ pub trait MessageSend {
     async fn send_selected_with_callback<M, S, T>(
         &mut self,
         request: SelectedSendCallbackRequest<M, S, T>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -283,7 +277,7 @@ pub trait MessageSend {
     async fn send_message_batch_with_callback<M>(
         &mut self,
         request: BatchSendCallbackRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync;
 }
@@ -296,7 +290,7 @@ pub trait MessageRecall {
     /// # Errors
     ///
     /// Preserves the existing recall validation or remoting error.
-    async fn recall(&mut self, request: RecallRequest) -> rocketmq_error::RocketMQResult<String>;
+    async fn recall(&mut self, request: RecallRequest) -> crate::ClientResult<String>;
 }
 
 /// Transactional send capability implemented only by transaction producers.
@@ -310,7 +304,7 @@ pub trait TransactionSend {
     async fn send_transaction<M, T>(
         &mut self,
         request: TransactionSendRequest<M, T>,
-    ) -> rocketmq_error::RocketMQResult<TransactionSendResult>
+    ) -> crate::ClientResult<TransactionSendResult>
     where
         M: MessageTrait + Send + Sync,
         T: Any + Send + Sync;
@@ -327,7 +321,7 @@ pub trait RequestReply {
     async fn request_reply<M>(
         &mut self,
         request: RequestReplyRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync;
 
@@ -339,7 +333,7 @@ pub trait RequestReply {
     async fn request_reply_with_callback<M>(
         &mut self,
         request: RequestReplyCallbackRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync;
 
@@ -351,7 +345,7 @@ pub trait RequestReply {
     async fn request_reply_selected<M, S, T>(
         &mut self,
         request: SelectedRequestReplyRequest<M, S, T>,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -365,7 +359,7 @@ pub trait RequestReply {
     async fn request_reply_selected_with_callback<M, S, T>(
         &mut self,
         request: SelectedRequestReplyCallbackRequest<M, S, T>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -380,7 +374,7 @@ pub trait MessageQuery {
     /// # Errors
     ///
     /// Preserves the error behavior of the mapped legacy query.
-    async fn query(&mut self, request: ProducerQueryRequest) -> rocketmq_error::RocketMQResult<ProducerQueryResponse>;
+    async fn query(&mut self, request: ProducerQueryRequest) -> crate::ClientResult<ProducerQueryResponse>;
 }
 
 /// Producer topic-administration capability.
@@ -391,11 +385,11 @@ pub trait ProducerTopicAdmin {
     /// # Errors
     ///
     /// Preserves validation and broker errors from the legacy operation.
-    async fn create_topic_request(&mut self, request: TopicCreateRequest) -> rocketmq_error::RocketMQResult<()>;
+    async fn create_topic_request(&mut self, request: TopicCreateRequest) -> crate::ClientResult<()>;
 }
 
 impl ProducerLifecycle for DefaultMQProducer {
-    async fn start_producer(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    async fn start_producer(&mut self) -> crate::ClientResult<()> {
         <Self as ProducerBackend>::start(self).await
     }
 
@@ -405,7 +399,7 @@ impl ProducerLifecycle for DefaultMQProducer {
 }
 
 impl MessageSend for DefaultMQProducer {
-    async fn send_message<M>(&mut self, request: SendRequest<M>) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    async fn send_message<M>(&mut self, request: SendRequest<M>) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -433,10 +427,7 @@ impl MessageSend for DefaultMQProducer {
         }
     }
 
-    async fn send_message_batch<M>(
-        &mut self,
-        request: BatchSendRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send_message_batch<M>(&mut self, request: BatchSendRequest<M>) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -455,15 +446,12 @@ impl MessageSend for DefaultMQProducer {
         }
     }
 
-    async fn send_message_with_callback<M>(
-        &mut self,
-        request: SendCallbackRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    async fn send_message_with_callback<M>(&mut self, request: SendCallbackRequest<M>) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
         let callback = request.callback;
-        let callback_fn = move |result: Option<&SendResult>, error: Option<&rocketmq_error::RocketMQError>| {
+        let callback_fn = move |result: Option<&SendResult>, error: Option<&crate::ClientError>| {
             if let Some(result) = result {
                 callback.on_success(result);
             } else if let Some(error) = error {
@@ -496,7 +484,7 @@ impl MessageSend for DefaultMQProducer {
     async fn send_selected<M, S, T>(
         &mut self,
         request: SelectedSendRequest<M, S, T>,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -533,7 +521,7 @@ impl MessageSend for DefaultMQProducer {
     async fn send_selected_with_callback<M, S, T>(
         &mut self,
         request: SelectedSendCallbackRequest<M, S, T>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -567,12 +555,12 @@ impl MessageSend for DefaultMQProducer {
     async fn send_message_batch_with_callback<M>(
         &mut self,
         request: BatchSendCallbackRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
         let callback = request.callback;
-        let callback_fn = move |result: Option<&SendResult>, error: Option<&rocketmq_error::RocketMQError>| {
+        let callback_fn = move |result: Option<&SendResult>, error: Option<&crate::ClientError>| {
             if let Some(result) = result {
                 callback.on_success(result);
             } else if let Some(error) = error {
@@ -611,7 +599,7 @@ impl MessageSend for DefaultMQProducer {
 }
 
 impl MessageRecall for DefaultMQProducer {
-    async fn recall(&mut self, request: RecallRequest) -> rocketmq_error::RocketMQResult<String> {
+    async fn recall(&mut self, request: RecallRequest) -> crate::ClientResult<String> {
         <Self as ProducerBackend>::recall_message(self, request.topic, request.recall_handle).await
     }
 }
@@ -620,7 +608,7 @@ impl RequestReply for DefaultMQProducer {
     async fn request_reply<M>(
         &mut self,
         request: RequestReplyRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -637,12 +625,12 @@ impl RequestReply for DefaultMQProducer {
     async fn request_reply_with_callback<M>(
         &mut self,
         request: RequestReplyCallbackRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
         let callback = request.callback;
-        let callback_fn = move |response: Option<&dyn MessageTrait>, error: Option<&rocketmq_error::RocketMQError>| {
+        let callback_fn = move |response: Option<&dyn MessageTrait>, error: Option<&crate::ClientError>| {
             callback(response, error);
         };
         match request.destination {
@@ -671,7 +659,7 @@ impl RequestReply for DefaultMQProducer {
     async fn request_reply_selected<M, S, T>(
         &mut self,
         request: SelectedRequestReplyRequest<M, S, T>,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -690,7 +678,7 @@ impl RequestReply for DefaultMQProducer {
     async fn request_reply_selected_with_callback<M, S, T>(
         &mut self,
         request: SelectedRequestReplyCallbackRequest<M, S, T>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -710,7 +698,7 @@ impl RequestReply for DefaultMQProducer {
 }
 
 impl MessageQuery for DefaultMQProducer {
-    async fn query(&mut self, request: ProducerQueryRequest) -> rocketmq_error::RocketMQResult<ProducerQueryResponse> {
+    async fn query(&mut self, request: ProducerQueryRequest) -> crate::ClientResult<ProducerQueryResponse> {
         let response = match request {
             ProducerQueryRequest::FetchPublishQueues { topic } => ProducerQueryResponse::Queues(
                 <Self as ProducerBackend>::fetch_publish_message_queues(self, &topic).await?,
@@ -746,7 +734,7 @@ impl MessageQuery for DefaultMQProducer {
 }
 
 impl ProducerTopicAdmin for DefaultMQProducer {
-    async fn create_topic_request(&mut self, request: TopicCreateRequest) -> rocketmq_error::RocketMQResult<()> {
+    async fn create_topic_request(&mut self, request: TopicCreateRequest) -> crate::ClientResult<()> {
         match request.system_flag {
             Some(system_flag) => {
                 <Self as ProducerBackend>::create_topic_with_flag(
@@ -774,7 +762,7 @@ impl ProducerTopicAdmin for DefaultMQProducer {
 }
 
 impl ProducerLifecycle for TransactionMQProducer {
-    async fn start_producer(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    async fn start_producer(&mut self) -> crate::ClientResult<()> {
         <Self as ProducerBackend>::start(self).await
     }
 
@@ -784,27 +772,21 @@ impl ProducerLifecycle for TransactionMQProducer {
 }
 
 impl MessageSend for TransactionMQProducer {
-    async fn send_message<M>(&mut self, request: SendRequest<M>) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    async fn send_message<M>(&mut self, request: SendRequest<M>) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
         self.default_producer_mut().send_message(request).await
     }
 
-    async fn send_message_batch<M>(
-        &mut self,
-        request: BatchSendRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send_message_batch<M>(&mut self, request: BatchSendRequest<M>) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
         self.default_producer_mut().send_message_batch(request).await
     }
 
-    async fn send_message_with_callback<M>(
-        &mut self,
-        request: SendCallbackRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    async fn send_message_with_callback<M>(&mut self, request: SendCallbackRequest<M>) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -814,7 +796,7 @@ impl MessageSend for TransactionMQProducer {
     async fn send_selected<M, S, T>(
         &mut self,
         request: SelectedSendRequest<M, S, T>,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -826,7 +808,7 @@ impl MessageSend for TransactionMQProducer {
     async fn send_selected_with_callback<M, S, T>(
         &mut self,
         request: SelectedSendCallbackRequest<M, S, T>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -838,7 +820,7 @@ impl MessageSend for TransactionMQProducer {
     async fn send_message_batch_with_callback<M>(
         &mut self,
         request: BatchSendCallbackRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -849,7 +831,7 @@ impl MessageSend for TransactionMQProducer {
 }
 
 impl MessageRecall for TransactionMQProducer {
-    async fn recall(&mut self, request: RecallRequest) -> rocketmq_error::RocketMQResult<String> {
+    async fn recall(&mut self, request: RecallRequest) -> crate::ClientResult<String> {
         MessageRecall::recall(self.default_producer_mut(), request).await
     }
 }
@@ -858,7 +840,7 @@ impl RequestReply for TransactionMQProducer {
     async fn request_reply<M>(
         &mut self,
         request: RequestReplyRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -868,7 +850,7 @@ impl RequestReply for TransactionMQProducer {
     async fn request_reply_with_callback<M>(
         &mut self,
         request: RequestReplyCallbackRequest<M>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -878,7 +860,7 @@ impl RequestReply for TransactionMQProducer {
     async fn request_reply_selected<M, S, T>(
         &mut self,
         request: SelectedRequestReplyRequest<M, S, T>,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -890,7 +872,7 @@ impl RequestReply for TransactionMQProducer {
     async fn request_reply_selected_with_callback<M, S, T>(
         &mut self,
         request: SelectedRequestReplyCallbackRequest<M, S, T>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -903,13 +885,13 @@ impl RequestReply for TransactionMQProducer {
 }
 
 impl MessageQuery for TransactionMQProducer {
-    async fn query(&mut self, request: ProducerQueryRequest) -> rocketmq_error::RocketMQResult<ProducerQueryResponse> {
+    async fn query(&mut self, request: ProducerQueryRequest) -> crate::ClientResult<ProducerQueryResponse> {
         MessageQuery::query(self.default_producer_mut(), request).await
     }
 }
 
 impl ProducerTopicAdmin for TransactionMQProducer {
-    async fn create_topic_request(&mut self, request: TopicCreateRequest) -> rocketmq_error::RocketMQResult<()> {
+    async fn create_topic_request(&mut self, request: TopicCreateRequest) -> crate::ClientResult<()> {
         ProducerTopicAdmin::create_topic_request(self.default_producer_mut(), request).await
     }
 }
@@ -918,7 +900,7 @@ impl TransactionSend for TransactionMQProducer {
     async fn send_transaction<M, T>(
         &mut self,
         request: TransactionSendRequest<M, T>,
-    ) -> rocketmq_error::RocketMQResult<TransactionSendResult>
+    ) -> crate::ClientResult<TransactionSendResult>
     where
         M: MessageTrait + Send + Sync,
         T: Any + Send + Sync,

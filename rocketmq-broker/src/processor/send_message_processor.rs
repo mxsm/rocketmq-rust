@@ -25,7 +25,7 @@ use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rand::RngExt;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::SharedError;
 use rocketmq_model::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
@@ -225,7 +225,7 @@ where
     MS: BrokerWriteStore + BrokerMasterAddressStore + 'static,
     TS: TransactionalMessageService + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         self.process_shared(request).await
     }
 
@@ -240,13 +240,13 @@ where
     }
 }
 
-fn send_request_peer(origin: &RequestOrigin) -> rocketmq_error::RocketMQResult<SocketAddr> {
+fn send_request_peer(origin: &RequestOrigin) -> crate::broker_error::BrokerResult<SocketAddr> {
     match origin {
         RequestOrigin::Network { peer } => Ok(peer.address()),
-        RequestOrigin::Embedded { .. } => Err(RocketMQError::illegal_argument(
+        RequestOrigin::Embedded { .. } => Err(crate::broker_error::invalid_argument(
             "SendMessage requires a trusted network origin for the persisted born host",
         )),
-        _ => Err(RocketMQError::invariant_violated(
+        _ => Err(crate::broker_error::invariant_violated(
             "SendMessage received an unrecognized request origin",
         )),
     }
@@ -260,7 +260,7 @@ where
     pub(crate) async fn process_shared(
         &self,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let original = request.original_identity();
         let origin = request.origin().clone();
         let control = request.control().clone();
@@ -282,7 +282,7 @@ where
             Ok(outcome) => Ok(outcome),
             Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
                 let context = error.context();
-                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                let view = PublicErrorView::try_new(error.descriptor(), context)
                     .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
                 BrokerResponseParts::from_command(remoting_error_response(
                     view,
@@ -307,7 +307,7 @@ where
         original_oneway: bool,
         request: &mut RemotingCommand,
         parsed_request: Option<ParsedSendRequest>,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let request_code = RequestCode::from(original_code);
         debug!("SendMessageProcessor received request code: {:?}", request_code);
         match request_code {
@@ -353,7 +353,7 @@ where
         request_code: RequestCode,
         request: &mut RemotingCommand,
         parsed_request: Option<ParsedSendRequest>,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let ParsedSendRequest {
             header: mut request_header,
             properties: parsed_properties,
@@ -500,7 +500,7 @@ where
         request_header: SendMessageRequestHeader,
         request_properties: HashMap<CheetahString, CheetahString>,
         mut mapping_context: TopicQueueMappingContext,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let mut response = self.pre_send_at(inbound_peer, request, &request_header).await;
         if response.code() != -1 {
             return BrokerResponseParts::from_command(response)?.into_handler_outcome();
@@ -511,9 +511,7 @@ where
             .context
             .topics
             .select_topic_config(request_header.topic())
-            .ok_or_else(|| RocketMQError::TopicNotExist {
-                topic: request_header.topic().to_string(),
-            })?;
+            .ok_or_else(|| crate::broker_error::topic_not_found(request_header.topic()))?;
         let mut queue_id = request_header.queue_id;
         if queue_id < 0 {
             queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
@@ -611,7 +609,7 @@ where
             let mut store = TransactionalMessageAppender::new(self.inner.transactional_message_service.as_ref());
             let result = match await_store(StoreAwaitControl::Request(control), store.append_message(message_ext))
                 .await
-                .map_err(|StoreAwaitStopped| RocketMQError::invariant_violated("message store await stopped"))?
+                .map_err(|StoreAwaitStopped| crate::broker_error::invariant_violated("message store await stopped"))?
             {
                 Ok(result) => result,
                 Err(error) => {
@@ -685,7 +683,7 @@ where
             }
         })
         .await
-        .map_err(|error| RocketMQError::internal("send-message-store", error))?;
+        .map_err(|error| crate::broker_error::internal("send-message-store", error))?;
         let (outcome, _) = reply.into_parts();
         Ok(outcome)
     }
@@ -705,7 +703,7 @@ where
         request_header: SendMessageRequestHeader,
         request_properties: HashMap<CheetahString, CheetahString>,
         mut mapping_context: TopicQueueMappingContext,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let mut response = self.pre_send_at(inbound_peer, request, &request_header).await;
         if response.code() != -1 {
             return BrokerResponseParts::from_command(response)?.into_handler_outcome();
@@ -715,9 +713,7 @@ where
             .context
             .topics
             .select_topic_config(request_header.topic())
-            .ok_or_else(|| RocketMQError::TopicNotExist {
-                topic: request_header.topic().to_string(),
-            })?;
+            .ok_or_else(|| crate::broker_error::topic_not_found(request_header.topic()))?;
         let mut queue_id = request_header.queue_id;
         if queue_id < 0 {
             queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
@@ -886,7 +882,7 @@ where
             })
             .await
         }
-        .map_err(|error| RocketMQError::internal("send-batch-message-store", error))?;
+        .map_err(|error| crate::broker_error::internal("send-batch-message-store", error))?;
         let (outcome, _) = reply.into_parts();
         Ok(outcome)
     }
@@ -898,7 +894,7 @@ where
         result: (Option<RemotingCommand>, bool),
         response: RemotingCommand,
         mut send_message_context: SendMessageContext,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let (mut response, after_canonical_write) = match result {
             (Some(response), _) => (response, false),
             (None, after_canonical_write) => (response, after_canonical_write),
@@ -1514,8 +1510,8 @@ where
     await_store(StoreAwaitControl::Legacy, store.append_message(message))
 }
 
-fn map_legacy_store_wait_stopped(_: StoreAwaitStopped) -> RocketMQError {
-    RocketMQError::invariant_violated("legacy message store await cannot observe request cancellation")
+fn map_legacy_store_wait_stopped(_: StoreAwaitStopped) -> SharedError {
+    crate::broker_error::invariant_violated("legacy message store await cannot observe request cancellation")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1712,7 +1708,7 @@ where
     pub(crate) async fn consumer_send_msg_back(
         &self,
         request: &RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>
+    ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>>
     where
         MS: BrokerMasterAddressStore,
     {
@@ -2190,8 +2186,8 @@ fn broker_send_permission_denied(broker_permission: u32) -> bool {
     !PermName::is_writeable(broker_permission)
 }
 
-fn message_store_not_initialized() -> RocketMQError {
-    RocketMQError::not_initialized("message_store")
+fn message_store_not_initialized() -> SharedError {
+    crate::broker_error::not_initialized("message_store")
 }
 
 fn no_retry_queue_response(command_factory: &RemotingCommandFactory) -> RemotingCommand {
@@ -2256,7 +2252,7 @@ mod tests {
         fn call_shared<'a>(
             leaf: &'a Arc<super::SendMessageProcessor<StorePorts, TransactionService>>,
             request: &'a mut super::RemotingRequest,
-        ) -> impl Future<Output = rocketmq_error::RocketMQResult<super::HandlerOutcome>> + 'a {
+        ) -> impl Future<Output = crate::broker_error::BrokerResult<super::HandlerOutcome>> + 'a {
             leaf.process_shared(request)
         }
 

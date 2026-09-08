@@ -23,7 +23,6 @@ use crate::consumer::types::ConsumerTopicDetailView;
 use crate::error::DashboardError as ConsumerError;
 use crate::nameserver::NameServerRuntimeState;
 use rocketmq_admin_core::client_adapter::AdminSession;
-use rocketmq_admin_core::core::AdminError;
 use rocketmq_admin_core::core::consumer::ConsumerAdmin;
 use rocketmq_admin_core::core::consumer::DashboardConsumerConfigRequest;
 use rocketmq_admin_core::core::consumer::DashboardConsumerConnectionRequest;
@@ -365,7 +364,7 @@ impl ConsumerManager {
 
     fn should_reset_session<T>(result: &ConsumerResult<T>) -> bool {
         match result {
-            Err(ConsumerError::Admin(error)) => error.is_retryable() || matches!(error, AdminError::SessionClosed),
+            Err(ConsumerError::Admin(error)) => error.is_retryable() || error.is_session_closed(),
             _ => false,
         }
     }

@@ -20,7 +20,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Weak;
 
-use rocketmq_error::RocketMQResult;
 use tokio::sync::Notify;
 
 use super::internal::RegistryInner;
@@ -243,7 +242,7 @@ where
     ) -> Result<DeferredResumeOutcome, crate::error::TransportError>
     where
         F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = Result<RemotingResponse, rocketmq_error::SharedError>> + Send + 'static,
     {
         crate::dispatch::deferred_resume::resume_claimed(self, handler_retained, handler).await
     }
@@ -269,7 +268,7 @@ where
     ) -> Result<DeferredResumeSubmitOutcome, crate::error::TransportError>
     where
         F: FnOnce(R, DeferredWakeReason) -> Fut + Send + 'static,
-        Fut: Future<Output = RocketMQResult<RemotingResponse>> + Send + 'static,
+        Fut: Future<Output = Result<RemotingResponse, rocketmq_error::SharedError>> + Send + 'static,
         O: FnOnce(&Result<DeferredResumeOutcome, crate::error::TransportError>) + Send + 'static,
     {
         crate::dispatch::deferred_resume::submit_claimed(self, handler_retained, handler, terminal_observer)

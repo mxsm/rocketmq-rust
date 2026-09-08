@@ -17,13 +17,12 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::client_adapter::services::ToolsError;
 use rocketmq_admin_core::client_adapter::services::topic::TopicRouteQueryRequest;
 use rocketmq_admin_core::client_adapter::services::topic::TopicService;
 
@@ -47,7 +46,7 @@ impl TopicRouteSubCommand {
         }
         std::cmp::Ordering::Equal
     }
-    fn print_data(&self, topic_route_data: &TopicRouteData, use_list_format: bool) -> RocketMQResult<()> {
+    fn print_data(&self, topic_route_data: &TopicRouteData, use_list_format: bool) -> CanonicalResult<()> {
         if !use_list_format {
             println!("{}", topic_route_data.serialize_json()?);
             return Ok(());
@@ -95,13 +94,13 @@ impl CommandExecute for TopicRouteSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> rocketmq_error::Result<()> {
         let request = TopicRouteQueryRequest::try_new(self.topic.clone())?
             .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone());
         let topic_route_data =
             TopicService::query_topic_route_by_request_with_credentials(request, credentials, client_runtime)
                 .await?
-                .ok_or_else(|| ToolsError::topic_not_found(self.topic.trim()))?;
+                .ok_or_else(|| crate::errors::topic_not_found(self.topic.trim()))?;
         self.print_data(&topic_route_data, self.list_format.is_some())?;
         Ok(())
     }

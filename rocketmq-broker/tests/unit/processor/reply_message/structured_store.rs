@@ -19,7 +19,6 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::RPC_RESPONSE_FAILED;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_model::common::message::MessageConst;
@@ -246,7 +245,7 @@ struct ReplyProbeProcessor {
 }
 
 impl RequestProcessor for ReplyProbeProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(&mut self, request: &mut RemotingRequest) -> crate::broker_error::BrokerResult<HandlerOutcome> {
         let control = request.control().clone();
         let identity = request.original_identity();
         let opaque = identity.original_opaque();
@@ -316,7 +315,7 @@ impl RequestProcessor for ReplyProbeProcessor {
             (response, StoreHookCompletion::BeforeReply)
         })
         .await
-        .map_err(|_| RocketMQError::invariant_violated("structured Reply conversion failed"))?;
+        .map_err(|_| crate::broker_error::invariant_violated("structured Reply conversion failed"))?;
         let (outcome, completion) = reply.into_parts();
         assert_eq!(completion, StoreHookCompletion::BeforeReply);
         self.state.events.lock().push("after_hook");

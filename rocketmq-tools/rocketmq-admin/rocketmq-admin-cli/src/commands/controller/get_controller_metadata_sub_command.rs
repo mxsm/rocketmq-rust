@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::controller::ControllerMetadataQueryRequest;
@@ -37,7 +37,7 @@ impl CommandExecute for GetControllerMetadataSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = ControllerService::query_controller_metadata_by_request_with_credentials(
             self.request()?,
             credentials,
@@ -50,7 +50,7 @@ impl CommandExecute for GetControllerMetadataSubCommand {
 }
 
 impl GetControllerMetadataSubCommand {
-    fn request(&self) -> RocketMQResult<ControllerMetadataQueryRequest> {
+    fn request(&self) -> CanonicalResult<ControllerMetadataQueryRequest> {
         ControllerMetadataQueryRequest::try_new(self.controller_address.clone())
     }
 

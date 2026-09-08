@@ -39,7 +39,7 @@ use crate::commands::auth::list_users_sub_command::ListUsersSubCommand;
 use crate::commands::auth::update_acl_sub_command::UpdateAclSubCommand;
 use crate::commands::auth::update_user_sub_command::UpdateUserSubCommand;
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 #[derive(Subcommand)]
 pub enum AuthCommands {
@@ -134,7 +134,7 @@ impl CommandExecute for AuthCommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             AuthCommands::CopyAcl(value) => value.execute(credentials, client_runtime.clone()).await,
             AuthCommands::CopyUsers(value) => value.execute(credentials, client_runtime.clone()).await,

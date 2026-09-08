@@ -1559,7 +1559,7 @@ async fn process_broker_request(processor: &DefaultServerProcessor, request: &mu
 async fn dispatch_broker_request(
     processor: &DefaultServerProcessor,
     request: &mut RemotingCommand,
-) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
     let mut processor = processor.clone();
     processor.set_auth_disabled_by_validated_config();
     let (mut client, server) = crate::processor::processor_test_support::start_processor_server(

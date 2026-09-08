@@ -12,10 +12,10 @@ RocketMQ-Rust producers are built with `DefaultMQProducer` and the `MQProducer` 
 ```rust
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 
 #[tokio::main]
-async fn main() -> RocketMQResult<()> {
+async fn main() -> ClientResult<()> {
     let mut producer = DefaultMQProducer::builder()
         .producer_group("my_producer_group")
         .name_server_addr("localhost:9876")

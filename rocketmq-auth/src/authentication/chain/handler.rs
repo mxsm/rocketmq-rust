@@ -21,7 +21,7 @@
 //! async handler optimized for the following requirements:
 //!
 //! - **Async operations**: Authentication requires async I/O (database, network)
-//! - **Error propagation**: Uses `Result<(), AuthError>` with fail-fast semantics
+//! - **Error propagation**: Uses `AuthServiceResult<()>` with fail-fast semantics
 //! - **Sequential execution**: Automatic chain progression without manual delegation
 //! - **Type safety**: Specialized for `DefaultAuthenticationContext`
 //!
@@ -31,9 +31,8 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use rocketmq_error::AuthError;
-
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
+use crate::AuthServiceResult;
 
 /// Authentication handler trait.
 ///
@@ -55,9 +54,9 @@ pub trait AuthenticationHandler: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(())` - Authentication succeeded
-    /// * `Err(AuthError)` - Authentication failed
+    /// * `Err(AuthServiceError)` - Authentication failed
     fn handle<'a>(
         &'a self,
         context: &'a DefaultAuthenticationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<(), AuthError>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = AuthServiceResult<()>> + Send + 'a>>;
 }

@@ -17,7 +17,7 @@ use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::{RouteAdmin as _, TopicAdmin as _};
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_protocol::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use rocketmq_protocol::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
@@ -34,8 +34,11 @@ impl MQAdminUtils {
     pub async fn get_all_brokers_in_same_cluster(
         brokers: Vec<CheetahString>,
         default_mq_admin_ext: &DefaultMQAdminExt,
-    ) -> RocketMQResult<HashSet<CheetahString>> {
-        let cluster_info = default_mq_admin_ext.examine_broker_cluster_info().await?;
+    ) -> CanonicalResult<HashSet<CheetahString>> {
+        let cluster_info = default_mq_admin_ext
+            .examine_broker_cluster_info()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         if cluster_info.cluster_addr_table.is_none() {
             return Err(errors::cluster_metadata_unavailable("cluster address table is empty"));
         } else if let Some(c_table) = &cluster_info.cluster_addr_table {
@@ -60,7 +63,7 @@ impl MQAdminUtils {
     pub async fn complete_no_target_brokers(
         mut broker_config_map: HashMap<CheetahString, TopicConfigAndQueueMapping>,
         default_mq_admin_ext: &DefaultMQAdminExt,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let config_mapping = broker_config_map.values_mut().next().cloned();
         if let Some(config_mapping) = config_mapping {
             if let Some(topic) = &config_mapping.topic_config.topic_name {
@@ -98,20 +101,22 @@ impl MQAdminUtils {
     pub async fn refresh_cluster_info(
         default_mq_admin_ext: &DefaultMQAdminExt,
         client_metadata: &ClientMetadata,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let cluster_info = default_mq_admin_ext
             .examine_broker_cluster_info()
             .await
-            .map_err(|error| errors::broker_operation_failed("examine_broker_cluster_info", error.to_string()))?;
+            .map_err(|error| errors::broker_operation_failed_by("examine_broker_cluster_info", error))?;
         client_metadata.refresh_cluster_info(Some(&cluster_info));
         Ok(())
     }
-    pub async fn get_broker_metadata(default_mq_admin_ext: &DefaultMQAdminExt) -> RocketMQResult<ClientMetadata> {
+    pub async fn get_broker_metadata(default_mq_admin_ext: &DefaultMQAdminExt) -> CanonicalResult<ClientMetadata> {
         let client_metadata = ClientMetadata::new();
-        MQAdminUtils::refresh_cluster_info(default_mq_admin_ext, &client_metadata).await?;
+        MQAdminUtils::refresh_cluster_info(default_mq_admin_ext, &client_metadata)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         Ok(client_metadata)
     }
-    pub fn check_if_master_alive(brokers: Vec<CheetahString>, client_metadata: &ClientMetadata) -> RocketMQResult<()> {
+    pub fn check_if_master_alive(brokers: Vec<CheetahString>, client_metadata: &ClientMetadata) -> CanonicalResult<()> {
         for broker in &brokers {
             let addr = client_metadata.find_master_broker_addr(broker);
             if addr.is_none() {
@@ -124,8 +129,10 @@ impl MQAdminUtils {
         broker_config_map: &HashMap<CheetahString, TopicConfigAndQueueMapping>,
         default_mq_admin_ext: &DefaultMQAdminExt,
         force: bool,
-    ) -> RocketMQResult<()> {
-        let client_meta_data = MQAdminUtils::get_broker_metadata(default_mq_admin_ext).await?;
+    ) -> CanonicalResult<()> {
+        let client_meta_data = MQAdminUtils::get_broker_metadata(default_mq_admin_ext)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         MQAdminUtils::check_if_master_alive(broker_config_map.keys().cloned().collect(), &client_meta_data)?;
         //If some succeed, and others fail, it will cause inconsistent data
         for entry in broker_config_map {
@@ -143,7 +150,8 @@ impl MQAdminUtils {
                                 mapping_detail.clone(),
                                 force,
                             )
-                            .await?;
+                            .await
+                            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                     }
                 }
             }
@@ -153,11 +161,14 @@ impl MQAdminUtils {
     pub async fn examine_topic_config_all(
         topic: &CheetahString,
         default_mq_admin_ext: &DefaultMQAdminExt,
-    ) -> RocketMQResult<HashMap<CheetahString, TopicConfigAndQueueMapping>> {
+    ) -> CanonicalResult<HashMap<CheetahString, TopicConfigAndQueueMapping>> {
         let mut broker_config_map = HashMap::new();
         let client_metadata = ClientMetadata::new();
         //check all the brokers
-        let cluster_info = default_mq_admin_ext.examine_broker_cluster_info().await?;
+        let cluster_info = default_mq_admin_ext
+            .examine_broker_cluster_info()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         if cluster_info.broker_addr_table.is_some() {
             client_metadata.refresh_cluster_info(Some(&cluster_info));
             let keys = client_metadata
@@ -170,7 +181,8 @@ impl MQAdminUtils {
                     let mapping = TopicConfigAndQueueMapping::new(
                         default_mq_admin_ext
                             .examine_topic_config(addr.clone(), topic.to_string().into())
-                            .await?,
+                            .await
+                            .map_err(crate::IntoCanonicalError::into_canonical_error)?,
                         None,
                     );
                     //allow the config is null
@@ -189,8 +201,10 @@ impl MQAdminUtils {
         block_seq_size: i64,
         force: bool,
         default_mq_admin_ext: &DefaultMQAdminExt,
-    ) -> RocketMQResult<()> {
-        let client_metadata = MQAdminUtils::get_broker_metadata(default_mq_admin_ext).await?;
+    ) -> CanonicalResult<()> {
+        let client_metadata = MQAdminUtils::get_broker_metadata(default_mq_admin_ext)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         MQAdminUtils::check_if_master_alive(broker_config_map.keys().cloned().collect(), &client_metadata)?;
 
         for broker in brokers_to_map_in {
@@ -206,7 +220,8 @@ impl MQAdminUtils {
                                 mapping_detail.clone(),
                                 force,
                             )
-                            .await?;
+                            .await
+                            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                     }
                 }
             }
@@ -225,7 +240,8 @@ impl MQAdminUtils {
                                 mapping_detail.clone(),
                                 force,
                             )
-                            .await?;
+                            .await
+                            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                     }
                 }
             }
@@ -238,7 +254,8 @@ impl MQAdminUtils {
             if let Some(addr) = addr {
                 let stats_table = default_mq_admin_ext
                     .examine_topic_stats(topic.clone(), Some(addr.clone()))
-                    .await?;
+                    .await
+                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 let offset_table = stats_table.get_offset_table();
 
                 if let Some(map_out_config) = broker_config_map.get_mut(broker) {
@@ -332,7 +349,8 @@ impl MQAdminUtils {
                                 mapping_detail.clone(),
                                 force,
                             )
-                            .await?;
+                            .await
+                            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                     }
                 }
             }
@@ -354,7 +372,8 @@ impl MQAdminUtils {
                             mapping_detail.clone(),
                             force,
                         )
-                        .await?;
+                        .await
+                        .map_err(crate::IntoCanonicalError::into_canonical_error)?;
                 }
             }
         }

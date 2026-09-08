@@ -613,10 +613,7 @@ impl ControllerManager {
         self.security.as_ref()
     }
 
-    pub(crate) async fn update_config(
-        &self,
-        properties: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    pub(crate) async fn update_config(&self, properties: HashMap<String, String>) -> crate::ControllerResult<()> {
         self.config.update(properties).await
     }
 

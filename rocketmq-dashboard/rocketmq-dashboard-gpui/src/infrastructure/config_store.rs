@@ -562,11 +562,15 @@ fn write_and_replace<T: Serialize>(temporary: &Path, target: &Path, value: &T) -
 
 enum AtomicReplaceFailure {
     Io(io::Error),
-    Recovery { replacement: io::Error, restore: io::Error },
+    #[cfg(windows)]
+    Recovery {
+        replacement: io::Error,
+        restore: io::Error,
+    },
 }
 
 impl AtomicReplaceFailure {
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     fn raw_os_error(&self) -> Option<i32> {
         match self {
             Self::Io(source) => source.raw_os_error(),
@@ -578,12 +582,17 @@ impl AtomicReplaceFailure {
 impl fmt::Debug for AtomicReplaceFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let restore_kind = match self {
+            #[cfg(windows)]
             Self::Recovery { restore, .. } => Some(restore.kind()),
             Self::Io(_) => None,
         };
+        #[cfg(windows)]
+        let recovery_failed = matches!(self, Self::Recovery { .. });
+        #[cfg(not(windows))]
+        let recovery_failed = false;
         formatter
             .debug_struct("AtomicReplaceFailure")
-            .field("recovery_failed", &matches!(self, Self::Recovery { .. }))
+            .field("recovery_failed", &recovery_failed)
             .field("restore_kind", &restore_kind)
             .finish()
     }
@@ -593,6 +602,7 @@ impl fmt::Display for AtomicReplaceFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Io(_) => "Atomic replacement failed.",
+            #[cfg(windows)]
             Self::Recovery { .. } => "Atomic replacement and recovery both failed.",
         })
     }
@@ -601,10 +611,9 @@ impl fmt::Display for AtomicReplaceFailure {
 impl StdError for AtomicReplaceFailure {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
-            Self::Io(source)
-            | Self::Recovery {
-                replacement: source, ..
-            } => Some(source),
+            Self::Io(source) => Some(source),
+            #[cfg(windows)]
+            Self::Recovery { replacement, .. } => Some(replacement),
         }
     }
 }

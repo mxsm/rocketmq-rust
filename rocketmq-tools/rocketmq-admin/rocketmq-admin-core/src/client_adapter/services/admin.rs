@@ -26,9 +26,9 @@ use rocketmq_transport::api::RPCHook;
 
 use crate::client_adapter::lifecycle::AdminSession;
 use crate::client_adapter::security::rpc_hook_from_credentials;
-use crate::client_adapter::services::RocketMQResult;
 use crate::core::clock::SystemClock;
 use crate::core::security::AdminCredentials;
+use rocketmq_error::Result as CanonicalResult;
 
 #[derive(Clone, Default)]
 pub(crate) struct AdminBuilder {
@@ -79,9 +79,12 @@ impl AdminBuilder {
         self.rpc_hook(rpc_hook_from_credentials(&credentials))
     }
 
-    pub(crate) async fn build_and_start(self) -> RocketMQResult<ServiceAdminSession> {
+    pub(crate) async fn build_and_start(self) -> CanonicalResult<ServiceAdminSession> {
         let client_runtime = self.client_runtime.ok_or_else(|| {
-            rocketmq_error::RocketMQError::illegal_argument("AdminBuilder requires an explicit ClientRuntime")
+            crate::client_adapter::services::errors::admin_validation_failed(
+                "clientRuntime",
+                "AdminBuilder requires an explicit ClientRuntime",
+            )
         })?;
         let timeout = self.timeout_millis.map(Duration::from_millis);
         let mut admin = match (self.rpc_hook, timeout) {
@@ -99,7 +102,10 @@ impl AdminBuilder {
         let client_config = admin.client_config_mut();
         client_config.set_instance_name(instance_name.into());
 
-        admin.start().await?;
+        admin
+            .start()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
         Ok(ServiceAdminSession {
             session: AdminSession::from_started(admin, Arc::new(SystemClock)),
         })

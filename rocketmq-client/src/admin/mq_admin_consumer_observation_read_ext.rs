@@ -14,8 +14,8 @@
 
 //! Exact-Broker, read-only Consumer observation capability.
 
+use crate::ClientError;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
@@ -48,19 +48,19 @@ pub trait MQAdminConsumerObservationReadExt: Send {
         &self,
         broker_addr: CheetahString,
         consumer_group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ConsumerGroupConfigRead>;
+    ) -> crate::ClientResult<ConsumerGroupConfigRead>;
 
     async fn consumer_connection_at(
         &self,
         broker_addr: CheetahString,
         consumer_group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ConsumerConnectionRead>;
+    ) -> crate::ClientResult<ConsumerConnectionRead>;
 
     async fn consumer_progress_at(
         &self,
         broker_addr: CheetahString,
         consumer_group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ConsumerProgressRead>;
+    ) -> crate::ClientResult<ConsumerProgressRead>;
 }
 
 impl MQAdminConsumerObservationReadExt for DefaultMQAdminExt {
@@ -68,7 +68,7 @@ impl MQAdminConsumerObservationReadExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         consumer_group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ConsumerGroupConfigRead> {
+    ) -> crate::ClientResult<ConsumerGroupConfigRead> {
         match MQAdminReadExt::subscription_group_config_with_version(self, broker_addr, consumer_group).await {
             Ok(config) => Ok(ConsumerGroupConfigRead::Present(Box::new(config))),
             Err(error) if broker_response_is(&error, ResponseCode::SubscriptionGroupNotExist) => {
@@ -82,7 +82,7 @@ impl MQAdminConsumerObservationReadExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         consumer_group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ConsumerConnectionRead> {
+    ) -> crate::ClientResult<ConsumerConnectionRead> {
         match MQAdminReadExt::observe_consumer_connection_at(self, consumer_group, broker_addr).await {
             Ok(connection) if connection.get_connection_set().is_empty() => Ok(ConsumerConnectionRead::Offline),
             Ok(connection) => Ok(ConsumerConnectionRead::Online(connection)),
@@ -97,7 +97,7 @@ impl MQAdminConsumerObservationReadExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         consumer_group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ConsumerProgressRead> {
+    ) -> crate::ClientResult<ConsumerProgressRead> {
         match MQAdminReadExt::examine_consume_stats(self, consumer_group, None, None, Some(broker_addr), None).await {
             Ok(stats) => Ok(ConsumerProgressRead::Observed(stats)),
             Err(error) if broker_response_is(&error, ResponseCode::SubscriptionGroupNotExist) => {
@@ -108,11 +108,8 @@ impl MQAdminConsumerObservationReadExt for DefaultMQAdminExt {
     }
 }
 
-fn broker_response_is(error: &RocketMQError, expected: ResponseCode) -> bool {
-    matches!(
-        error,
-        RocketMQError::BrokerOperationFailed { code, .. } if *code == expected.to_i32()
-    )
+fn broker_response_is(error: &ClientError, expected: ResponseCode) -> bool {
+    error.broker_response_code() == Some(expected.to_i32())
 }
 
 #[cfg(test)]
@@ -121,17 +118,17 @@ mod tests {
 
     #[test]
     fn only_exact_broker_response_codes_are_closed_states() {
-        let missing = RocketMQError::broker_operation_failed(
+        let missing = ClientError::broker_operation_failed(
             "BROKER_OPERATION",
             ResponseCode::SubscriptionGroupNotExist.to_i32(),
             "must not be inspected",
         );
-        let offline = RocketMQError::broker_operation_failed(
+        let offline = ClientError::broker_operation_failed(
             "BROKER_OPERATION",
             ResponseCode::ConsumerNotOnline.to_i32(),
             "must not be inspected",
         );
-        let unavailable = RocketMQError::broker_operation_failed(
+        let unavailable = ClientError::broker_operation_failed(
             "BROKER_OPERATION",
             ResponseCode::SystemError.to_i32(),
             "consumer not online",

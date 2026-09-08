@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -50,7 +50,7 @@ pub struct SkipAccumulatedMessageSubCommand {
 }
 
 impl SkipAccumulatedMessageSubCommand {
-    fn request(&self) -> RocketMQResult<SkipAccumulatedMessageRequest> {
+    fn request(&self) -> CanonicalResult<SkipAccumulatedMessageRequest> {
         SkipAccumulatedMessageRequest::try_new(
             self.group.clone(),
             self.topic.clone(),
@@ -66,7 +66,7 @@ impl CommandExecute for SkipAccumulatedMessageSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = OffsetService::skip_accumulated_message_by_request_with_credentials(
             self.request()?,
             credentials,

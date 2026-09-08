@@ -227,11 +227,11 @@ mod tests {
         let error = provider_topic_mutation_result(result).expect_err("partial mutation must not look successful");
         let rendered = error.to_string();
 
-        assert!(matches!(
-            error,
-            DashboardError::Admin(rocketmq_admin_core::core::AdminError::Backend { reason, .. })
-                if reason == "Topic mutation was not completed for every target"
-        ));
+        let DashboardError::Admin(error) = error else {
+            panic!("partial mutation must retain the admin facade");
+        };
+        assert_eq!(error.failure(), rocketmq_admin_core::core::AdminFailure::Backend);
+        assert_eq!(error.operation(), Some("topic_mutation_partial"));
         assert!(!rendered.contains("sensitive-broker-detail"));
     }
 

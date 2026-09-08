@@ -56,7 +56,7 @@ pub(super) async fn resolve_broker_address(
                 .or_else(|| broker.broker_addrs().values().next())
         })
         .map(|address| address.to_string())
-        .ok_or_else(|| AdminError::not_found("broker", broker_name))
+        .ok_or_else(|| AdminError::broker_not_found(broker_name))
 }
 
 pub(super) fn kv_table_to_map(table: &KVTable) -> BTreeMap<String, String> {

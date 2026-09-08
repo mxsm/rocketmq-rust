@@ -25,12 +25,12 @@ pub trait RpcClientLocal {
         &self,
         request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<RpcResponse>;
+    ) -> Result<RpcResponse, rocketmq_error::SharedError>;
 
     async fn invoke_mq<H: CommandCustomHeader + TopicRequestHeaderTrait>(
         &self,
         mq: MessageQueue,
         request: RpcRequest<H>,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<RpcResponse>;
+    ) -> Result<RpcResponse, rocketmq_error::SharedError>;
 }

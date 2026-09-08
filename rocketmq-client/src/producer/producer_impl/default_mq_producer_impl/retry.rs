@@ -25,7 +25,7 @@ impl DefaultMQProducerImpl {
         send_callback: Option<ArcSendCallback>,
         ctx: SendContext,
         runtime: &ProducerRuntimeSnapshot,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -39,10 +39,7 @@ impl DefaultMQProducerImpl {
             if ctx.deadline.is_expired() {
                 return Err(retry_state
                     .take_last_error()
-                    .unwrap_or_else(|| rocketmq_error::RocketMQError::Timeout {
-                        operation: "send_with_retry",
-                        timeout_ms: ctx.deadline.budget_millis(),
-                    }));
+                    .unwrap_or_else(|| crate::ClientError::timeout("send_with_retry", ctx.deadline.budget_millis())));
             }
 
             let attempt = attempt_index.saturating_add(1);
@@ -87,10 +84,7 @@ impl DefaultMQProducerImpl {
             if ctx.deadline.is_expired() {
                 return Err(retry_state
                     .take_last_error()
-                    .unwrap_or_else(|| rocketmq_error::RocketMQError::Timeout {
-                        operation: "send_with_retry",
-                        timeout_ms: ctx.deadline.budget_millis(),
-                    }));
+                    .unwrap_or_else(|| crate::ClientError::timeout("send_with_retry", ctx.deadline.budget_millis())));
             }
 
             // Send to broker

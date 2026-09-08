@@ -17,7 +17,7 @@ use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdOutco
 use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdRequest;
 use rocketmq_admin_core::client_adapter::services::message::DecodeMessageIdResult;
 use rocketmq_admin_core::client_adapter::services::message::MessageService;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 
@@ -34,7 +34,7 @@ pub struct DecodeMessageIdSubCommand {
 }
 
 impl DecodeMessageIdSubCommand {
-    fn request(&self) -> RocketMQResult<DecodeMessageIdRequest> {
+    fn request(&self) -> CanonicalResult<DecodeMessageIdRequest> {
         DecodeMessageIdRequest::try_new(self.message_id.clone())
     }
 
@@ -69,7 +69,7 @@ impl CommandExecute for DecodeMessageIdSubCommand {
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = MessageService::decode_message_ids(&self.request()?);
         Self::print_result(&result);
         Ok(())

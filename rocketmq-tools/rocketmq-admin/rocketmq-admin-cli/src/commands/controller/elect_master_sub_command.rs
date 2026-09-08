@@ -16,7 +16,7 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::controller::ControllerElectMasterRequest;
 use rocketmq_admin_core::client_adapter::services::controller::ControllerElectMasterResult;
 use rocketmq_admin_core::client_adapter::services::controller::ControllerService;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -65,7 +65,7 @@ impl CommandExecute for ElectMasterSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = ControllerService::elect_master_by_request_with_credentials(
             self.request()?,
             credentials,
@@ -78,7 +78,7 @@ impl CommandExecute for ElectMasterSubCommand {
 }
 
 impl ElectMasterSubCommand {
-    fn request(&self) -> RocketMQResult<ControllerElectMasterRequest> {
+    fn request(&self) -> CanonicalResult<ControllerElectMasterRequest> {
         ControllerElectMasterRequest::try_new(
             self.controller_address.clone(),
             self.cluster_name.clone(),

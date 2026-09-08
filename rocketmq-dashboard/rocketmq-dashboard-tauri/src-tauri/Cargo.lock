@@ -3816,6 +3816,7 @@ name = "rocketmq-dashboard-common"
 version = "1.0.0"
 dependencies = [
  "async-trait",
+ "rocketmq-error",
  "serde",
  "thiserror 2.0.20",
 ]
@@ -3833,6 +3834,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rocketmq-admin-core",
  "rocketmq-dashboard-common",
+ "rocketmq-error",
  "rocketmq-runtime",
  "rusqlite",
  "serde",
@@ -3972,6 +3974,7 @@ name = "rocketmq-security-api"
 version = "1.0.0"
 dependencies = [
  "cheetah-string",
+ "rocketmq-error",
  "serde",
  "thiserror 2.0.20",
  "zeroize",

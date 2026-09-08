@@ -63,7 +63,7 @@ impl TopicStatsTable {
         self.offset_table = offset_table;
     }
 
-    pub fn decode(body: &[u8]) -> rocketmq_error::RocketMQResult<Self> {
+    pub fn decode(body: &[u8]) -> rocketmq_error::Result<Self> {
         match <Self as RemotingDeserializable>::decode(body) {
             Ok(stats) => Ok(stats),
             Err(error) => {

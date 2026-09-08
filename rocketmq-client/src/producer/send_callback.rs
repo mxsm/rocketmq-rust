@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use crate::ClientError;
 
 use crate::producer::send_result::SendResult;
 
@@ -59,7 +59,7 @@ use crate::producer::send_result::SendResult;
 ///         log::info!("Message sent: {:?}", send_result.msg_id);
 ///     }
 ///
-///     fn on_exception(&self, error: &RocketMQError) {
+///     fn on_exception(&self, error: &ClientError) {
 ///         log::error!("Send failed: {}", error);
 ///     }
 /// }
@@ -77,22 +77,22 @@ pub trait SendCallback: Send + Sync {
     /// # Arguments
     ///
     /// * `error` - The error that caused the send failure.
-    fn on_exception(&self, error: &RocketMQError);
+    fn on_exception(&self, error: &ClientError);
 }
 
 // Blanket implementation allowing closures to act as callbacks.
 //
-// Closures receive `Option<&SendResult>` and `Option<&RocketMQError>` parameters,
+// Closures receive `Option<&SendResult>` and `Option<&ClientError>` parameters,
 // where exactly one is `Some` and the other is `None`.
 impl<F> SendCallback for F
 where
-    F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync,
+    F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync,
 {
     fn on_success(&self, send_result: &SendResult) {
         self(Some(send_result), None)
     }
 
-    fn on_exception(&self, error: &RocketMQError) {
+    fn on_exception(&self, error: &ClientError) {
         self(None, Some(error))
     }
 }
@@ -136,4 +136,4 @@ pub type ArcSendCallback = Arc<dyn SendCallback>;
 /// fn my_function<CB: SendCallback + 'static>(callback: CB) { /* ... */ }
 /// ```
 #[deprecated(since = "0.8.0", note = "Use ArcSendCallback or generic SendCallback bound instead")]
-pub type SendMessageCallback = Arc<dyn Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync>;
+pub type SendMessageCallback = Arc<dyn Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync>;

@@ -17,8 +17,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::ClientResult;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_transport::api::RPCHook;
 
@@ -135,7 +135,7 @@ impl DefaultMQPullConsumerBuilder {
     /// Returns an error when the consumer group is missing, a duration is zero or outside the
     /// supported millisecond range, the suspended-request timeout is not greater than the broker
     /// suspension limit, or the underlying consumer configuration is invalid.
-    pub fn build(self) -> RocketMQResult<DefaultMQPullConsumer> {
+    pub fn build(self) -> ClientResult<DefaultMQPullConsumer> {
         let consumer_group = self
             .consumer_group
             .ok_or_else(|| crate::mq_client_err!("consumer_group is required"))?;
@@ -190,6 +190,6 @@ impl DefaultMQPullConsumerBuilder {
     }
 }
 
-fn duration_millis(name: &str, duration: Duration) -> RocketMQResult<u64> {
-    u64::try_from(duration.as_millis()).map_err(|_| crate::mq_client_err!(format!("{name} is too large")))
+fn duration_millis(_name: &str, duration: Duration) -> ClientResult<u64> {
+    u64::try_from(duration.as_millis()).map_err(crate::ClientError::illegal_argument_source)
 }

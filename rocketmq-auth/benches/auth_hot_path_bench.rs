@@ -28,6 +28,7 @@ use rocketmq_auth::cal_signature_with_algorithm;
 use rocketmq_auth::Acl;
 use rocketmq_auth::AclAuthorizationHandler;
 use rocketmq_auth::AuthConfig;
+use rocketmq_auth::AuthServiceResult;
 use rocketmq_auth::AuthenticationProvider;
 use rocketmq_auth::AuthenticationStrategy;
 use rocketmq_auth::AuthorizationDecision;
@@ -46,7 +47,6 @@ use rocketmq_auth::SignatureAlgorithm;
 use rocketmq_auth::StatefulAuthenticationStrategy;
 use rocketmq_auth::StatefulAuthorizationStrategy;
 use rocketmq_auth::WhiteList;
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::ResourcePattern;
@@ -320,11 +320,11 @@ impl AuthenticationProvider for AllowAuthenticationProvider {
         &mut self,
         _config: AuthConfig,
         _metadata_service: Option<Arc<dyn Any + Send + Sync>>,
-    ) -> RocketMQResult<()> {
+    ) -> AuthServiceResult<()> {
         Ok(())
     }
 
-    async fn authenticate(&self, _context: &Self::Context) -> RocketMQResult<()> {
+    async fn authenticate(&self, _context: &Self::Context) -> AuthServiceResult<()> {
         Ok(())
     }
 

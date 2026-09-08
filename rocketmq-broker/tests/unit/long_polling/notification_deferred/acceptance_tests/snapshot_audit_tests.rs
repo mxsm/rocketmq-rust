@@ -90,7 +90,7 @@ async fn notification_deferred_snapshot_tracks_accepted_resume_count_and_bytes_u
                             },
                         );
                         RemotingResponse::command(head)
-                            .map_err(|error| RocketMQError::illegal_argument(error.to_string()))
+                            .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))
                     },
                 )
                 .await;

@@ -371,12 +371,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error as _;
     use std::sync::Arc;
     use std::sync::Barrier;
     use std::time::Duration;
 
-    use rocketmq_error::RocketMQError;
     use rocketmq_runtime::RuntimeContext;
     use tokio::net::TcpListener;
 
@@ -422,13 +420,7 @@ mod tests {
             Err(error) => error,
             Ok(_) => panic!("shutdown must complete retired flight waiters"),
         };
-        let RocketMQError::Shared(snapshot) = error else {
-            panic!("shutdown completion must preserve the typed shared error");
-        };
-        assert!(snapshot
-            .source()
-            .and_then(|source| source.downcast_ref::<RocketMQError>())
-            .is_some_and(|source| matches!(source, RocketMQError::ClientNotStarted)));
+        assert_eq!(error.descriptor(), &rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED);
         let (replacement, replacement_leader) = registry.acquire_flight(identity.clone(), None);
         assert!(replacement_leader);
         registry.remove_flight_if_matches(&identity, &retired);

@@ -43,11 +43,11 @@ impl ResetOffsetBody {
         self.encode_java_compatible().unwrap_or_default()
     }
 
-    pub fn encode_java_compatible(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
+    pub fn encode_java_compatible(&self) -> rocketmq_error::Result<Vec<u8>> {
         Ok(self.to_java_compatible_json()?.into_bytes())
     }
 
-    pub fn to_java_compatible_json(&self) -> rocketmq_error::RocketMQResult<String> {
+    pub fn to_java_compatible_json(&self) -> rocketmq_error::Result<String> {
         let mut body = String::new();
         body.push_str("{\"offsetTable\":{");
 
