@@ -22,10 +22,10 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use cheetah_string::CheetahString;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::LocalTransactionState;
 use rocketmq_client_rust::TransactionListener;
 use rocketmq_client_rust::TransactionMQProducer;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_single::Message;
@@ -38,11 +38,11 @@ pub const TAG: &str = "TransactionTag";
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let mut producer = TransactionMQProducer::builder(client_runtime.clone())
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)

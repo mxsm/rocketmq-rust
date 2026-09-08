@@ -24,10 +24,10 @@
 use std::sync::Arc;
 
 use rocketmq_client_rust::ArcSendCallback;
+use rocketmq_client_rust::ClientError;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::SendResult;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
 
@@ -40,11 +40,11 @@ pub const TIMEOUT_MS: u64 = 3000;
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
@@ -79,7 +79,7 @@ async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>
 ///
 /// Uses a custom selector function to choose which queue to send the message to.
 /// The selector receives all available queues and chooses one based on custom logic.
-async fn send_with_selector(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_with_selector(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("1. Send with Selector");
     println!("   Method: producer.send_with_selector(message, selector_fn, arg).await");
 
@@ -115,7 +115,7 @@ async fn send_with_selector(producer: &mut DefaultMQProducer) -> RocketMQResult<
 /// 2. Send with selector and timeout
 ///
 /// Combines custom queue selection with timeout protection.
-async fn send_with_selector_timeout(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_with_selector_timeout(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("2. Send with Selector and Timeout");
     println!("   Method: producer.send_with_selector_timeout(message, selector_fn, arg, timeout_ms).await");
     println!("   Timeout: {}ms", TIMEOUT_MS);
@@ -146,7 +146,7 @@ async fn send_with_selector_timeout(producer: &mut DefaultMQProducer) -> RocketM
 /// 3. Send with selector and callback
 ///
 /// Combines custom queue selection with asynchronous callback delivery.
-async fn send_with_selector_callback(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_with_selector_callback(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("3. Send with Selector and Callback");
     println!("   Method: producer.send_with_selector_callback(message, selector_fn, arg, callback_fn).await");
 
@@ -163,7 +163,7 @@ async fn send_with_selector_callback(producer: &mut DefaultMQProducer) -> Rocket
 
     let callback: ArcSendCallback =
         Arc::new(
-            |result: Option<&SendResult>, error: Option<&RocketMQError>| match (result, error) {
+            |result: Option<&SendResult>, error: Option<&ClientError>| match (result, error) {
                 (Some(r), None) => println!("   Callback: Success - {:?}", r),
                 (None, Some(e)) => println!("   Callback: Error - {}", e),
                 _ => println!("   Callback: Unknown state"),
@@ -181,7 +181,7 @@ async fn send_with_selector_callback(producer: &mut DefaultMQProducer) -> Rocket
 /// 4. Send with selector, callback, and timeout
 ///
 /// Full featured send with custom queue selection, callback delivery, and timeout protection.
-async fn send_with_selector_callback_timeout(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_with_selector_callback_timeout(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("4. Send with Selector, Callback, and Timeout");
     println!(
         "   Method: producer.send_with_selector_callback_timeout(message, selector_fn, arg, callback_fn, \
@@ -202,7 +202,7 @@ async fn send_with_selector_callback_timeout(producer: &mut DefaultMQProducer) -
 
     let callback: ArcSendCallback =
         Arc::new(
-            |result: Option<&SendResult>, error: Option<&RocketMQError>| match (result, error) {
+            |result: Option<&SendResult>, error: Option<&ClientError>| match (result, error) {
                 (Some(r), None) => println!("   Callback: Success - {:?}", r),
                 (None, Some(e)) => println!("   Callback: Error - {}", e),
                 _ => println!("   Callback: Unknown state"),
@@ -220,7 +220,7 @@ async fn send_with_selector_callback_timeout(producer: &mut DefaultMQProducer) -
 /// 5. One-way send with selector
 ///
 /// One-way send with custom queue selection, no response expected.
-async fn send_oneway_with_selector(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
+async fn send_oneway_with_selector(producer: &mut DefaultMQProducer) -> ClientResult<()> {
     println!("5. One-way Send with Selector");
     println!("   Method: producer.send_oneway_with_selector(message, selector_fn, arg).await");
 

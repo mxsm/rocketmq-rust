@@ -2134,7 +2134,6 @@ dependencies = [
  "rand 0.8.7",
  "rocketmq-admin-core",
  "rocketmq-client-rust",
- "rocketmq-error",
  "rocketmq-model",
  "rocketmq-observability",
  "rocketmq-protocol",
@@ -2263,6 +2262,7 @@ name = "rocketmq-security-api"
 version = "1.0.0"
 dependencies = [
  "cheetah-string",
+ "rocketmq-error",
  "serde",
  "thiserror",
  "zeroize",

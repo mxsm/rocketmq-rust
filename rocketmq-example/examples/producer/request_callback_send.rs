@@ -16,9 +16,9 @@
 
 use std::time::Duration;
 
+use rocketmq_client_rust::ClientError;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::DefaultMQProducer;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_single::Message;
 use tokio::sync::mpsc;
 
@@ -31,11 +31,11 @@ pub const REQUEST_TIMEOUT_MS: u64 = 3000;
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group(PRODUCER_GROUP)
         .name_server_addr(DEFAULT_NAMESRVADDR)
@@ -65,7 +65,7 @@ async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>
                 }
                 (_, Some(error)) => {
                     println!("request callback error: {error}");
-                    let _ = tx.send(Err(error.to_string()));
+                    let _ = tx.send(Err(error.clone()));
                 }
                 _ => {
                     println!("request callback send completed; waiting for reply");
@@ -78,19 +78,19 @@ async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>
     match tokio::time::timeout(Duration::from_millis(REQUEST_TIMEOUT_MS.saturating_mul(3)), rx.recv()).await {
         Ok(Some(Ok(()))) => {}
         Ok(Some(Err(error))) => {
-            return Err(RocketMQError::response_process_failed("request_callback_reply", error));
+            return Err(error);
         }
         Ok(None) => {
-            return Err(RocketMQError::response_process_failed(
+            return Err(ClientError::response_process_failed(
                 "request_callback_reply",
                 "request callback channel closed before receiving a reply",
             ));
         }
         Err(_) => {
-            return Err(RocketMQError::Timeout {
-                operation: "request_callback_reply",
-                timeout_ms: REQUEST_TIMEOUT_MS.saturating_mul(3),
-            });
+            return Err(ClientError::timeout(
+                "request_callback_reply",
+                REQUEST_TIMEOUT_MS.saturating_mul(3),
+            ));
         }
     }
 

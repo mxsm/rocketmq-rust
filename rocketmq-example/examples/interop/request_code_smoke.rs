@@ -21,14 +21,14 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use rocketmq_client_rust::ClientError;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -57,7 +57,7 @@ struct SmokeConfig {
 }
 
 impl SmokeConfig {
-    fn from_env() -> RocketMQResult<Self> {
+    fn from_env() -> ClientResult<Self> {
         let run_id = env::var("ROCKETMQ_SMOKE_RUN_ID").unwrap_or_else(|_| current_millis().to_string());
         let consumer_group =
             env::var("ROCKETMQ_CONSUMER_GROUP").unwrap_or_else(|_| format!("{DEFAULT_CONSUMER_GROUP_PREFIX}_{run_id}"));
@@ -79,19 +79,16 @@ impl SmokeConfig {
 #[path = "../support/mod.rs"]
 mod support;
 
-pub fn main() -> RocketMQResult<()> {
+pub fn main() -> ClientResult<()> {
     support::run(run)
 }
 
-async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>) -> ClientResult<()> {
     let config = SmokeConfig::from_env()?;
     run_smoke(client_runtime, config).await
 }
 
-async fn run_smoke(
-    client_runtime: Arc<rocketmq_client_rust::ClientRuntime>,
-    config: SmokeConfig,
-) -> RocketMQResult<()> {
+async fn run_smoke(client_runtime: Arc<rocketmq_client_rust::ClientRuntime>, config: SmokeConfig) -> ClientResult<()> {
     let mut producer = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group(config.producer_group.as_str())
         .name_server_addr(config.namesrv_addr.as_str())
@@ -112,7 +109,7 @@ async fn run_smoke(
         let result = producer.send_with_timeout(message, config.send_timeout_ms).await?;
         if result.is_none() {
             producer.shutdown().await;
-            return Err(RocketMQError::response_process_failed(
+            return Err(ClientError::response_process_failed(
                 "request_code_smoke_send",
                 "producer returned no send result for request-code smoke",
             ));
@@ -145,7 +142,7 @@ async fn run_smoke(
         let received_count = received_bodies
             .lock()
             .map_err(|err| {
-                RocketMQError::response_process_failed(
+                ClientError::response_process_failed(
                     "request_code_smoke_received_body_lock",
                     format!("received body lock poisoned: {err}"),
                 )
@@ -162,7 +159,7 @@ async fn run_smoke(
     let received_bodies = received_bodies
         .lock()
         .map_err(|err| {
-            RocketMQError::response_process_failed(
+            ClientError::response_process_failed(
                 "request_code_smoke_received_body_lock",
                 format!("received body lock poisoned: {err}"),
             )
@@ -178,7 +175,7 @@ async fn run_smoke(
         .collect::<Vec<_>>();
 
     if !missing.is_empty() {
-        return Err(RocketMQError::response_process_failed(
+        return Err(ClientError::response_process_failed(
             "request_code_smoke_receive",
             format!(
                 "request-code smoke did not receive expected messages: missing={missing:?}, \
@@ -208,9 +205,9 @@ impl MessageListenerConcurrently for SmokeListener {
         &self,
         msgs: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         let mut received_bodies = self.received_bodies.lock().map_err(|err| {
-            RocketMQError::response_process_failed(
+            ClientError::response_process_failed(
                 "request_code_smoke_received_body_lock",
                 format!("received body lock poisoned: {err}"),
             )
@@ -233,20 +230,16 @@ fn env_or(name: &str, default: &str) -> String {
     env::var(name).unwrap_or_else(|_| default.to_string())
 }
 
-fn env_usize(name: &str, default: usize) -> RocketMQResult<usize> {
+fn env_usize(name: &str, default: usize) -> ClientResult<usize> {
     match env::var(name) {
-        Ok(value) => value
-            .parse::<usize>()
-            .map_err(|err| RocketMQError::illegal_argument(format!("{name} must be usize: {err}"))),
+        Ok(value) => value.parse::<usize>().map_err(ClientError::illegal_argument_source),
         Err(_) => Ok(default),
     }
 }
 
-fn env_u64(name: &str, default: u64) -> RocketMQResult<u64> {
+fn env_u64(name: &str, default: u64) -> ClientResult<u64> {
     match env::var(name) {
-        Ok(value) => value
-            .parse::<u64>()
-            .map_err(|err| RocketMQError::illegal_argument(format!("{name} must be u64: {err}"))),
+        Ok(value) => value.parse::<u64>().map_err(ClientError::illegal_argument_source),
         Err(_) => Ok(default),
     }
 }
