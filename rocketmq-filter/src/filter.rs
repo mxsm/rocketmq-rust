@@ -71,12 +71,19 @@
 mod filter_factory;
 mod filter_spi;
 mod filter_sql_filter;
+mod registry;
 mod sql_runtime;
 
 pub use filter_factory::FilterFactory;
 pub use filter_spi::Filter;
 pub use filter_spi::FilterSpi;
 pub use filter_sql_filter::SqlFilter;
+pub use registry::CompiledFilter;
+pub use registry::FilterBindingError;
+pub use registry::FilterRegistryBuilder;
+pub use registry::FilterRegistryError;
+pub use registry::FilterRegistryId;
+pub use registry::FilterRegistrySnapshot;
 pub use rocketmq_error::FilterCompileError;
 pub use rocketmq_error::FilterCompileErrorKind;
 pub use rocketmq_error::FilterCompileSource;

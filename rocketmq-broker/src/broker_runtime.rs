@@ -129,6 +129,7 @@ use crate::failover::escape_bridge::EscapeBridge;
 use crate::failover::escape_bridge_capability::EscapeBridgePolicyState;
 use crate::filter::commit_log_dispatcher_calc_bit_map::CommitLogDispatcherCalcBitMap;
 use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
+
 use crate::hook::batch_check_before_put_message::BatchCheckBeforePutMessageHook;
 use crate::hook::check_before_put_message::CheckBeforePutMessageHook;
 use crate::hook::schedule_message_hook::ScheduleMessageHook;
@@ -674,6 +675,11 @@ fn prepare_rocksdb_config_path_for_json_migration(path: &Path) -> bool {
             false
         }
     }
+}
+
+pub(crate) struct BrokerRuntimeBindings {
+    pub(crate) command_factory: RemotingCommandFactory,
+    pub(crate) filter_registry: Arc<rocketmq_filter::filter::FilterRegistrySnapshot>,
 }
 
 pub(crate) struct BrokerRuntime {

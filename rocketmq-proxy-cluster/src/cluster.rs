@@ -1532,27 +1532,59 @@ async fn forward_remoting_inner(
 }
 
 async fn cluster_readiness_inner(config: &ClusterConfig, state: &mut ClusterWorkerState) -> ProxyResult<()> {
-    let client = state.client(config).await?;
-    let cluster_info = client.broker_cluster_info(config.mq_client_api_timeout_ms).await?;
-    if cluster_info_has_registered_broker(&cluster_info) {
-        Ok(())
-    } else {
-        Err(ProxyError::Transport {
-            message: "Proxy Cluster readiness found no registered Broker route".to_string(),
-        })
-    }
+    // Both reads share one deadline and bypass the route cache. This never sends a message.
+    let deadline = tokio::time::Instant::now()
+        .checked_add(Duration::from_millis(config.mq_client_api_timeout_ms.max(1)))
+        .ok_or_else(|| {
+            canonical::configuration_invalid("cluster.mqClientApiTimeoutMs", "timeout exceeds clock range")
+        })?;
+    tokio::time::timeout_at(deadline, cluster_readiness_reads(config, state, deadline))
+        .await
+        .map_err(|_| ProxyError::Transport {
+            message: "Proxy Cluster readiness timed out".into(),
+        })?
 }
 
-fn cluster_info_has_registered_broker(cluster_info: &ClusterInfo) -> bool {
-    let has_broker = cluster_info
-        .broker_addr_table
-        .as_ref()
-        .is_some_and(|brokers| !brokers.is_empty());
-    let has_cluster = cluster_info
-        .cluster_addr_table
-        .as_ref()
-        .is_some_and(|clusters| !clusters.is_empty());
-    has_broker && has_cluster
+async fn cluster_readiness_reads(
+    config: &ClusterConfig,
+    state: &mut ClusterWorkerState,
+    deadline: tokio::time::Instant,
+) -> ProxyResult<()> {
+    use rocketmq_protocol::code::request_code::RequestCode;
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    use rocketmq_protocol::protocol::body::kv_table::KVTable;
+    use rocketmq_protocol::protocol::header::empty_header::EmptyHeader;
+    use rocketmq_protocol::protocol::RemotingDeserializable;
+
+    let client = state.client(config).await?;
+    let cluster_info = client.broker_cluster_info(config.mq_client_api_timeout_ms).await?;
+    let broker_addr = select_auth_metadata_broker_addr(&cluster_info, &config.broker_cluster_name)
+        .ok_or_else(|| canonical::broker_not_found(&config.broker_cluster_name))?;
+    let remaining = deadline
+        .saturating_duration_since(tokio::time::Instant::now())
+        .as_millis() as u64;
+    if remaining == 0 {
+        return Err(ProxyError::Transport {
+            message: "Proxy Cluster readiness timed out".into(),
+        });
+    }
+    let request = RemotingCommand::create_request_command(RequestCode::GetBrokerRuntimeInfo, EmptyHeader {});
+    let response = proxy_client_result(client.invoke_remoting(&broker_addr, request, remaining).await)?;
+    if response.code() != ResponseCode::Success.to_i32() {
+        return Err(canonical::broker_response(
+            "proxy.readiness",
+            response.code(),
+            Some(broker_addr.as_str()),
+            "Broker metadata probe was rejected",
+        )
+        .into());
+    }
+    let body = response
+        .get_body()
+        .ok_or_else(|| CanonicalError::new(&rocketmq_error::PROTOCOL_BODY_INVALID))?;
+    KVTable::decode(body.as_ref())
+        .map_err(|error| CanonicalError::caused_by(&rocketmq_error::PROTOCOL_BODY_INVALID, error))?;
+    Ok(())
 }
 
 async fn lock_batch_mq_inner(
@@ -3166,7 +3198,6 @@ mod tests {
 
     use super::build_send_producer;
     use super::cluster_client_config;
-    use super::cluster_info_has_registered_broker;
     use super::compatible_batch_entries;
     use super::convert_subscription_group;
     use super::convert_topic_message_type;
@@ -3417,8 +3448,7 @@ mod tests {
             "127.0.0.1:10911"
         );
         assert!(select_auth_metadata_broker_addr(&cluster_info, "missing").is_none());
-        assert!(cluster_info_has_registered_broker(&cluster_info));
-        assert!(!cluster_info_has_registered_broker(&ClusterInfo::default()));
+        assert!(select_auth_metadata_broker_addr(&ClusterInfo::default(), "cluster-a").is_none());
     }
 
     #[test]

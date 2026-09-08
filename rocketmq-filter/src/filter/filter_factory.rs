@@ -220,14 +220,21 @@ impl FilterFactory {
     ///
     /// # Panics
     ///
-    /// This method will panic if the SQL-92 filter is not registered, which
-    /// should never happen under normal circumstances as it's registered
-    /// during static initialization.
+    /// Panics if the SQL92 compiler has been unregistered. This legacy facade
+    /// requires callers to preserve that registration; use
+    /// [`Self::try_get_sql_filter`] when another caller can unregister it.
     pub fn get_sql_filter() -> Arc<dyn Filter> {
-        FILTER_REGISTRY
+        Self::try_get_sql_filter().expect("SQL92 filter should be registered by default")
+    }
+
+    /// Returns the global SQL92 compiler if it remains registered.
+    ///
+    /// # Errors
+    /// Returns an error after SQL92 has been unregistered from the legacy factory.
+    pub fn try_get_sql_filter() -> Result<Arc<dyn Filter>, super::FilterRegistryError> {
+        Self::instance()
             .get("SQL92")
-            .map(|entry| Arc::clone(&*entry))
-            .expect("SQL92 filter should be registered by default")
+            .ok_or(super::FilterRegistryError::MissingSql92)
     }
 
     /// Returns a list of all registered filter type identifiers.

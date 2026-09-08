@@ -376,6 +376,7 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         ClientManageProcessor::new(ClientManageProcessorContext {
             command_factory: self.command_factory,
             broker_config: self.broker_config_arc(),
+            consumer_filter_manager: self.consumer_filter_manager().clone(),
             topic_config_manager: self.topic_config_manager_handle(),
             subscription_group_lookup: self.subscription_group_manager().config_lookup(),
             producer_registration: self.producer_manager().client_registration(),
@@ -1091,6 +1092,27 @@ impl BrokerRuntime {
         telemetry_handle: TelemetryHandle,
         command_factory: RemotingCommandFactory,
     ) -> Self {
+        Self::new_with_bindings(
+            validated_config,
+            service_context,
+            telemetry_handle,
+            BrokerRuntimeBindings {
+                command_factory,
+                filter_registry: rocketmq_filter::filter::FilterRegistrySnapshot::sql92(),
+            },
+        )
+    }
+
+    pub(crate) fn new_with_bindings(
+        validated_config: Arc<ValidatedBrokerConfig>,
+        service_context: ChildServiceContext,
+        telemetry_handle: TelemetryHandle,
+        bindings: BrokerRuntimeBindings,
+    ) -> Self {
+        let BrokerRuntimeBindings {
+            command_factory,
+            filter_registry,
+        } = bindings;
         let broker_config = validated_config.broker_arc();
         let message_store_config = validated_config.store_arc();
         #[cfg(feature = "otel-metrics")]
@@ -1172,7 +1194,8 @@ impl BrokerRuntime {
             Arc::new(crate::client::session_transition_locks::ClientSessionTransitionLocks::default());
         let producer_manager =
             ProducerManager::new_with_session_transition_locks(Arc::clone(&client_session_transition_locks));
-        let consumer_filter_manager = ConsumerFilterManager::new(broker_config.clone(), message_store_config.clone());
+        let consumer_filter_manager =
+            ConsumerFilterManager::with_registry(broker_config.clone(), message_store_config.clone(), filter_registry);
         let consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static> =
             Arc::new(DefaultConsumerIdsChangeListener::new(consumer_filter_manager.clone()));
         let consumer_manager = ConsumerManager::new_with_broker_stats_and_session_transition_locks(
@@ -1574,6 +1597,14 @@ impl BrokerRuntime {
 
     pub(crate) fn runtime_state_mut(&mut self) -> &mut BrokerRuntimeState<BrokerMessageStore> {
         self.composition.state.as_mut()
+    }
+
+    pub(crate) fn local_store_is_ready(&self) -> bool {
+        !self.composition.state.shutdown.load(Ordering::Acquire)
+            && self.composition.state.message_store().is_some_and(|store| {
+                let health = rocketmq_store::BrokerReadStore::health_snapshot(store);
+                health.writable && !health.shutdown
+            })
     }
 
     pub(super) fn admin_runtime(&self) -> BrokerAdminRuntime<BrokerMessageStore> {

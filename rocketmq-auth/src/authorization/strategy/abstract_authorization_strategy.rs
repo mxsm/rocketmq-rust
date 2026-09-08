@@ -107,9 +107,14 @@ pub struct AbstractAuthorizationStrategy {
 
     /// Provider used for concrete authorization checks.
     authorization_provider: Option<Arc<DefaultAuthorizationProvider>>,
+    admission: Option<Arc<crate::provider_owner::ProviderAdmission>>,
 }
 
 impl AbstractAuthorizationStrategy {
+    pub(crate) fn enter_operation(&self) -> AuthServiceResult<Option<crate::provider_owner::ProviderOperation>> {
+        self.admission.as_ref().map(|admission| admission.enter()).transpose()
+    }
+
     /// Creates a new `AbstractAuthorizationStrategy` instance.
     ///
     /// # Arguments
@@ -130,7 +135,7 @@ impl AbstractAuthorizationStrategy {
     /// ```
     pub fn new(
         auth_config: AuthConfig,
-        _metadata_service: Option<Box<dyn Any + Send + Sync>>,
+        metadata_service: Option<Box<dyn Any + Send + Sync>>,
     ) -> AuthServiceResult<Self> {
         // Parse and build whitelist from configuration
         let mut authorization_whitelist = HashSet::new();
@@ -151,12 +156,33 @@ impl AbstractAuthorizationStrategy {
             authorization_whitelist.len()
         );
 
-        let authorization_provider = Some(AuthorizationFactory::get_provider(&auth_config)?);
+        let admission = metadata_service
+            .as_ref()
+            .map(|service| {
+                service
+                    .downcast_ref::<crate::ProviderRegistry>()
+                    .map(crate::ProviderRegistry::admission)
+                    .ok_or_else(|| {
+                        AuthServiceError::new(
+                            crate::AuthOperation::InitializeProvider,
+                            crate::AuthFailureKind::Unsupported,
+                        )
+                    })
+            })
+            .transpose()?;
+        let authorization_provider = Some(if metadata_service.is_some() {
+            let mut provider = DefaultAuthorizationProvider::new();
+            provider.initialize_with_metadata(auth_config.clone(), metadata_service)?;
+            Arc::new(provider)
+        } else {
+            AuthorizationFactory::get_provider(&auth_config)?
+        });
 
         Ok(Self {
             auth_config,
             authorization_whitelist,
             authorization_provider,
+            admission,
         })
     }
 
@@ -196,6 +222,7 @@ impl AbstractAuthorizationStrategy {
     /// }
     /// ```
     pub async fn do_evaluate(&self, context: &DefaultAuthorizationContext) -> AuthServiceResult<AuthorizationDecision> {
+        let _operation = self.enter_operation()?;
         // Check if authorization is enabled
         if !self.auth_config.authorization_enabled {
             debug!("Authorization disabled in configuration, allowing access");

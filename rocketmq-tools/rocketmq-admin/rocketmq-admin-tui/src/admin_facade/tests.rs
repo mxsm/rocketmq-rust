@@ -87,6 +87,20 @@ fn facade_builds_additional_topic_requests_without_cli_types() {
 }
 
 #[test]
+fn facade_rejects_invalid_topic_deletion_before_execution() {
+    let facade = TuiAdminFacade::new(test_client_runtime());
+    for (topic, cluster) in [
+        ("invalid topic", Some("DefaultCluster".to_owned())),
+        ("TestTopic", None),
+    ] {
+        assert_eq!(
+            facade.delete_topic_request(topic, cluster).unwrap_err().descriptor(),
+            &rocketmq_error::CORE_ARGUMENT_INVALID,
+        );
+    }
+}
+
+#[test]
 fn facade_builds_update_topic_requests_without_cli_types() {
     let facade = TuiAdminFacade::with_namesrv_addr(test_client_runtime(), "127.0.0.1:9876");
 

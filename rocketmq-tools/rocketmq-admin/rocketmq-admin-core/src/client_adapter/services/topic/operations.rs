@@ -29,8 +29,6 @@ use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 
 use super::types::AllocateMqQueryRequest;
 use super::types::AllocatedMqQueryResult;
-use super::types::DeleteTopicRequest;
-use super::types::DeleteTopicResult;
 use super::types::OrderConfMethod;
 use super::types::OrderConfRequest;
 use super::types::OrderConfResult;
@@ -39,7 +37,6 @@ use super::types::TopicClusterQueryRequest;
 use super::types::TopicListItem;
 use super::types::TopicListQueryRequest;
 use super::types::TopicListResult;
-use super::types::TopicOperationFailure;
 use super::types::TopicRouteQueryRequest;
 use super::types::TopicStatusQueryRequest;
 use super::types::UpdateTopicListRequest;
@@ -50,8 +47,6 @@ use super::types::UpdateTopicRequest;
 use super::types::UpdateTopicResult;
 use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::resolver::BrokerAddressResolver;
-use crate::client_adapter::services::stable_error_code;
-use crate::client_adapter::services::stable_error_message;
 use rocketmq_client_rust::DefaultMQAdminExt;
 use rocketmq_error::Result as CanonicalResult;
 
@@ -186,91 +181,6 @@ impl TopicService {
         .await;
         admin.shutdown().await;
         result
-    }
-
-    /// Delete a topic through a complete core request lifecycle.
-    pub async fn delete_topic_by_request(request: DeleteTopicRequest) -> CanonicalResult<DeleteTopicResult> {
-        let mut admin = request
-            .admin_builder()
-            .build_and_start()
-            .await
-            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
-        let result = Self::delete_topic_with_admin(&mut admin, &request).await;
-        admin.shutdown().await;
-        result
-    }
-
-    /// Delete a topic using the caller-owned client runtime and optional credentials.
-    pub async fn delete_topic_by_request_with_credentials(
-        request: DeleteTopicRequest,
-        credentials: Option<crate::core::security::AdminCredentials>,
-        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> CanonicalResult<DeleteTopicResult> {
-        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
-            .build_and_start()
-            .await
-            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
-        let result = Self::delete_topic_with_admin(&mut admin, &request).await;
-        admin.shutdown().await;
-        result
-    }
-
-    pub(crate) async fn delete_topic_with_admin(
-        admin: &mut DefaultMQAdminExt,
-        request: &DeleteTopicRequest,
-    ) -> CanonicalResult<DeleteTopicResult> {
-        let cluster_info = admin
-            .examine_broker_cluster_info()
-            .await
-            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
-        let broker_targets =
-            BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, request.cluster_name())?;
-        if broker_targets.is_empty() {
-            return Err(crate::client_adapter::services::errors::cluster_not_found(
-                request.cluster_name().as_str(),
-            ));
-        }
-
-        let mut result = DeleteTopicResult {
-            topic: request.topic().clone(),
-            cluster_name: request.cluster_name().clone(),
-            broker_addrs: Vec::new(),
-            failures: Vec::new(),
-            name_server_deleted: false,
-        };
-
-        for broker_addr in broker_targets {
-            match admin
-                .delete_topic_in_broker_list(HashSet::from([broker_addr.clone()]), vec![request.topic().clone()])
-                .await
-            {
-                Ok(()) => result.broker_addrs.push(broker_addr),
-                Err(error) => result.failures.push(TopicOperationFailure {
-                    broker_addr,
-                    error_code: stable_error_code(&error),
-                    error: stable_error_message(&error),
-                }),
-            }
-        }
-
-        if result.failures.is_empty() {
-            let namesrv_addrs = admin
-                .get_name_server_address_list()
-                .await
-                .into_iter()
-                .collect::<HashSet<_>>();
-            admin
-                .delete_topic_in_name_server(
-                    namesrv_addrs,
-                    Some(request.cluster_name().clone()),
-                    request.topic().clone(),
-                )
-                .await
-                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
-            result.name_server_deleted = true;
-        }
-
-        Ok(result)
     }
 
     /// Apply order configuration through a complete core request lifecycle.

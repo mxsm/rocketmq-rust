@@ -247,7 +247,7 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
             }
         };
 
-        Ok(Some(
+        let mut response =
             RemotingCommand::create_success_response_command_with_header(UpdateBrokerConfigResponseHeader {
                 config_generation: generation.value(),
             })
@@ -255,8 +255,11 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
             .set_remark(format!(
                 "update broker config success, generation={}",
                 generation.value()
-            )),
-        ))
+            ));
+        // The runtime snapshot is committed; topic reconciliation does not persist broker configuration.
+        response.add_ext_field("applied", "true");
+        response.add_ext_field("persisted", "false");
+        Ok(Some(response))
     }
 
     async fn update_log_filter(
@@ -1618,6 +1621,22 @@ mod tests {
 
         assert_eq!(ResponseCode::from(response.code()), ResponseCode::Success);
         assert_eq!(response.opaque(), request_opaque);
+        assert_eq!(
+            response
+                .get_ext_fields()
+                .unwrap()
+                .get("applied")
+                .map(CheetahString::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            response
+                .get_ext_fields()
+                .unwrap()
+                .get("persisted")
+                .map(CheetahString::as_str),
+            Some("false")
+        );
         assert_eq!(
             response
                 .read_custom_header_ref::<UpdateBrokerConfigResponseHeader>()

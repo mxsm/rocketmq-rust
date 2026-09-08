@@ -14,13 +14,12 @@
 
 use clap::Parser;
 use rocketmq_error::Result as CanonicalResult;
-use rocketmq_model::common::topic::TopicValidator;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
-use rocketmq_admin_core::client_adapter::services::topic::DeleteTopicRequest;
-use rocketmq_admin_core::client_adapter::services::topic::DeleteTopicResult;
 use rocketmq_admin_core::client_adapter::services::topic::TopicService;
+use rocketmq_admin_core::core::topic::DeleteTopicRequest;
+use rocketmq_admin_core::core::topic::DeleteTopicResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct DeleteTopicSubCommand {
@@ -62,17 +61,7 @@ impl DeleteTopicSubCommand {
             eprintln!("NameServer deletion skipped because one or more broker mutations failed");
         }
 
-        if let Some(failure) = result.failures.first() {
-            if failure.error_code == "BROKER_PERMISSION_DENIED" {
-                return Err(crate::errors::broker_permission_denied(format!(
-                    "delete topic {}: {}",
-                    result.topic, failure.error
-                )));
-            }
-            return Err(crate::errors::broker_response_failed("DELETE_TOPIC_IN_BROKER_LIST", -1));
-        }
-
-        Ok(())
+        result.ensure_complete()
     }
 }
 impl CommandExecute for DeleteTopicSubCommand {
@@ -81,18 +70,6 @@ impl CommandExecute for DeleteTopicSubCommand {
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::Result<()> {
-        if self.cluster_name.is_none() {
-            return Err(crate::errors::argument_invalid(
-                "DeleteTopicSubCommand: clusterName (-c) must be provided",
-            ));
-        }
-        let validation_result = TopicValidator::validate_topic(&self.topic);
-        if !validation_result.valid() {
-            return Err(crate::errors::argument_invalid(format!(
-                "DeleteTopicSubCommand: Invalid topic name: {}",
-                validation_result.remark().as_str()
-            )));
-        }
         let result =
             TopicService::delete_topic_by_request_with_credentials(self.request()?, credentials, client_runtime)
                 .await?;
@@ -124,21 +101,37 @@ mod tests {
 
     #[test]
     fn delete_topic_partial_permission_failure_returns_permission_error() {
-        let result = DeleteTopicResult {
-            topic: "TestTopic".into(),
-            cluster_name: "DefaultCluster".into(),
-            broker_addrs: vec!["broker-a:10911".into()],
-            failures: vec![
-                rocketmq_admin_core::client_adapter::services::topic::TopicOperationFailure {
-                    broker_addr: "broker-b:10911".into(),
-                    error_code: "BROKER_PERMISSION_DENIED".to_string(),
-                    error: "permission denied".to_string(),
-                },
-            ],
-            name_server_deleted: false,
-        };
+        for code in ["BROKER_PERMISSION_DENIED", "auth.permission.denied"] {
+            let result = DeleteTopicResult {
+                topic: "TestTopic".into(),
+                cluster_name: "DefaultCluster".into(),
+                broker_addrs: vec!["broker-a:10911".into()],
+                failures: vec![
+                    rocketmq_admin_core::client_adapter::services::topic::TopicOperationFailure {
+                        broker_addr: "broker-b:10911".into(),
+                        error_code: code.to_string(),
+                        error: "permission denied".to_string(),
+                    },
+                ],
+                name_server_deleted: false,
+            };
 
-        let error = DeleteTopicSubCommand::print_result(result).unwrap_err();
-        assert_eq!(error.descriptor().code().as_str(), "auth.permission.denied");
+            let error = DeleteTopicSubCommand::print_result(result).unwrap_err();
+            assert_eq!(error.descriptor().code().as_str(), "auth.permission.denied");
+        }
+    }
+
+    #[test]
+    fn delete_topic_rejects_invalid_input_before_execution() {
+        for args in [
+            vec!["deleteTopic", "-t", "invalid topic", "-c", "DefaultCluster"],
+            vec!["deleteTopic", "-t", "TestTopic"],
+        ] {
+            let command = DeleteTopicSubCommand::try_parse_from(args).unwrap();
+            assert_eq!(
+                command.request().unwrap_err().descriptor(),
+                &rocketmq_error::CORE_ARGUMENT_INVALID
+            );
+        }
     }
 }

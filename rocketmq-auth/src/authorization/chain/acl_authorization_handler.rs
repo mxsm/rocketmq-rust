@@ -36,13 +36,16 @@ use super::handler::AuthorizationHandler;
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
 use crate::authorization::enums::decision::Decision;
 use crate::authorization::enums::policy_type::PolicyType;
+#[cfg(test)]
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::authorization::model::acl::Acl;
 use crate::authorization::model::environment::Environment;
 use crate::authorization::model::policy::Policy;
 use crate::authorization::model::policy_entry::PolicyEntry;
+use crate::AclMetadataRead;
 use crate::AuthServiceError;
 use crate::AuthServiceResult;
+use crate::SubjectKey;
 
 /// ACL Authorization Handler.
 ///
@@ -58,12 +61,12 @@ use crate::AuthServiceResult;
 /// 2. **Resource Pattern**: LITERAL > PREFIXED > ANY
 /// 3. **Resource Name Length**: Longer prefixes > shorter (for PREFIXED pattern)
 /// 4. **Decision**: DENY > ALLOW (deny takes precedence)
-pub struct AclAuthorizationHandler<P: AuthorizationMetadataProvider> {
+pub struct AclAuthorizationHandler<P: AclMetadataRead + ?Sized> {
     /// Provider for fetching ACL metadata
     metadata_provider: Arc<P>,
 }
 
-impl<P: AuthorizationMetadataProvider> AclAuthorizationHandler<P> {
+impl<P: AclMetadataRead + ?Sized> AclAuthorizationHandler<P> {
     /// Create a new ACL authorization handler.
     ///
     /// # Arguments
@@ -237,22 +240,7 @@ impl<P: AuthorizationMetadataProvider> AclAuthorizationHandler<P> {
     }
 }
 
-struct SubjectLookup {
-    key: String,
-    subject_type: crate::authentication::enums::subject_type::SubjectType,
-}
-
-impl crate::authentication::model::subject::Subject for SubjectLookup {
-    fn subject_key(&self) -> &str {
-        &self.key
-    }
-
-    fn subject_type(&self) -> crate::authentication::enums::subject_type::SubjectType {
-        self.subject_type
-    }
-}
-
-impl<P: AuthorizationMetadataProvider + 'static> AuthorizationHandler for AclAuthorizationHandler<P> {
+impl<P: AclMetadataRead + ?Sized + 'static> AuthorizationHandler for AclAuthorizationHandler<P> {
     fn handle<'a>(
         &'a self,
         context: &'a DefaultAuthorizationContext,
@@ -264,14 +252,10 @@ impl<P: AuthorizationMetadataProvider + 'static> AuthorizationHandler for AclAut
                 .as_ref()
                 .ok_or_else(|| AuthServiceError::invalid_context("subject is missing".to_owned()))?;
 
-            // Create a User subject for ACL lookup (required by metadata provider trait)
-            let subject = SubjectLookup {
-                key: subject_wrapper.subject_key().to_string(),
-                subject_type: subject_wrapper.subject_type(),
-            };
+            let subject = SubjectKey::new(subject_wrapper.subject_type(), subject_wrapper.subject_key());
 
             // Step 2: Fetch ACL from metadata provider
-            let acl = self.metadata_provider.get_acl(&subject).await?;
+            let acl = self.metadata_provider.lookup_acl(&subject).await?;
             let Some(acl) = acl else {
                 return Ok(AuthorizationDecision::Deny(AuthorizationDenial::SubjectUnknown));
             };

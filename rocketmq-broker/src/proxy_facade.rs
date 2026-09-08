@@ -44,6 +44,7 @@ use crate::lifecycle::BrokerStartupError;
 pub struct ProxyBrokerFacade {
     runtime: BrokerRuntime,
     local_request_tasks: TaskGroup,
+    started: bool,
 }
 
 impl ProxyBrokerFacade {
@@ -156,19 +157,30 @@ impl ProxyBrokerFacade {
                 command_factory,
             ),
             local_request_tasks,
+            started: false,
         }
     }
 
     pub async fn initialize(&mut self) -> Result<(), BrokerStartupError> {
+        self.started = false;
         self.runtime.initialize().await
     }
 
     pub async fn start(&mut self) -> Result<BrokerReadiness, BrokerStartupError> {
-        self.runtime.start().await
+        self.started = false;
+        let readiness = self.runtime.start().await?;
+        self.started = true;
+        Ok(readiness)
     }
 
     pub async fn shutdown(&mut self) {
+        self.started = false;
         self.runtime.shutdown().await;
+    }
+
+    /// Checks completed Broker startup and the current Store write state without issuing a mutation.
+    pub fn is_ready(&self) -> bool {
+        self.started && self.runtime.local_store_is_ready()
     }
 
     pub fn broker_config(&self) -> Arc<BrokerConfig> {

@@ -172,6 +172,9 @@ pub(crate) struct QueuedLocalBrokerCommand {
 }
 
 pub(crate) enum LocalBrokerCommand {
+    ReadinessCheck {
+        reply: oneshot::Sender<ProxyResult<()>>,
+    },
     QueryRoute {
         topic: ResourceIdentity,
         reply: oneshot::Sender<ProxyResult<TopicRouteData>>,
@@ -247,6 +250,7 @@ impl LocalBrokerCommand {
     fn estimated_bytes(&self) -> usize {
         let base = std::mem::size_of::<Self>();
         match self {
+            Self::ReadinessCheck { .. } => base,
             Self::QueryRoute { topic, .. } | Self::QueryTopicMessageType { topic, .. } => base
                 .saturating_add(topic.namespace().len())
                 .saturating_add(topic.name().len()),
@@ -350,6 +354,9 @@ impl LocalBrokerCommand {
 
     fn reject_with(self, error: ProxyError) {
         match self {
+            Self::ReadinessCheck { reply } => {
+                let _ = reply.send(Err(error));
+            }
             Self::QueryRoute { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
@@ -446,6 +453,9 @@ fn local_command_budget(config: &LocalConfig) -> ProxyResult<ResourceBudget> {
 }
 
 impl LocalBrokerFacadeClient {
+    pub async fn readiness_check(&self) -> ProxyResult<()> {
+        self.execute(|reply| LocalBrokerCommand::ReadinessCheck { reply }).await
+    }
     pub fn new(
         config: LocalConfig,
         service_context: &ChildServiceContext,
@@ -768,6 +778,9 @@ impl LocalMetadataService {
 }
 
 impl MetadataService for LocalMetadataService {
+    fn readiness_check(&self) -> ProxyServiceFuture<'_, ()> {
+        Box::pin(async move { self.client.readiness_check().await })
+    }
     fn topic_message_type<'a>(
         &'a self,
         context: &'a ProxyContext,
@@ -1195,6 +1208,18 @@ async fn handle_local_broker_command(
         return;
     }
     match command {
+        LocalBrokerCommand::ReadinessCheck { reply } => {
+            let result = if let Some(error) = startup_error {
+                Err(ProxyError::from(Arc::clone(error)))
+            } else if facade.is_ready() {
+                Ok(())
+            } else {
+                Err(ProxyError::Transport {
+                    message: "embedded Broker is not running with a writable Store".into(),
+                })
+            };
+            let _ = reply.send(result);
+        }
         LocalBrokerCommand::QueryRoute { topic, reply } => {
             let _ = reply.send(startup_error.map_or_else(
                 || facade.query_route(topic.name()).map_err(Into::into),
@@ -3400,7 +3425,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_local_worker_stops_with_its_task_group() {
+    async fn embedded_local_readiness_tracks_started_worker_and_shutdown() {
         let runtime =
             rocketmq_runtime::RuntimeContext::try_from_current("proxy-local-test").expect("test runtime context");
         let service = runtime.service_context("proxy-local-test.service");
@@ -3415,12 +3440,16 @@ mod tests {
         assert_eq!(service.task_group().task_count(), 0);
         assert_eq!(service.task_group().component_count(), 1);
 
-        drop(client);
+        tokio::time::timeout(Duration::from_secs(15), client.readiness_check())
+            .await
+            .expect("embedded startup must remain bounded")
+            .expect("started embedded Broker must have a writable Store");
         let deadline = ShutdownDeadline::after(Duration::from_secs(5));
         let report = service.task_group().shutdown_until(deadline).await;
         assert!(report.is_healthy(), "{}", report.to_json());
         assert!(report.to_json().contains("command-lanes"), "{}", report.to_json());
         assert_eq!(service.task_group().task_count(), 0);
+        assert!(client.readiness_check().await.is_err());
     }
     #[tokio::test]
     async fn caller_drop_cancels_envelope_but_keeps_queue_budget() {
@@ -3502,6 +3531,9 @@ mod tests {
         impl LocalCommandHandler for Handler {
             async fn handle(&self, command: LocalBrokerCommand, _control: RequestControl) {
                 match command {
+                    LocalBrokerCommand::ReadinessCheck { reply } => {
+                        let _ = reply.send(Ok(()));
+                    }
                     LocalBrokerCommand::QueryRoute { reply, .. } => {
                         let _ = reply.send(Ok(TopicRouteData::default()));
                     }
@@ -3610,6 +3642,7 @@ mod tests {
             );
             let observe = async {
                 route.as_mut().await.unwrap();
+                client.readiness_check().await.unwrap();
                 assert!(matches!(
                     client
                         .process_remoting(RemotingCommand::create_remoting_command(RequestCode::AckMessage))

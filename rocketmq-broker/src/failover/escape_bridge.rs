@@ -381,12 +381,7 @@ impl<MS: BrokerReadStore> EscapeBridge<MS> {
         queue_id: i32,
         queue_offset: i64,
     ) -> Result<bool, MessageStoreUnavailable> {
-        self.try_with_message_store(|store| {
-            store
-                .get_commit_log()
-                .get_cold_data_check_service()
-                .is_msg_in_cold_area(group, topic, queue_id, queue_offset)
-        })
+        self.try_with_message_store(|store| store.is_message_in_cold_area(group, topic, queue_id, queue_offset))
     }
 
     pub(crate) fn look_message_by_offset_from_local_store(

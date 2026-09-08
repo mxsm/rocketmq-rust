@@ -30,9 +30,7 @@ use rocketmq_auth::AuthRuntime;
 use rocketmq_auth::AuthRuntimeBuilder;
 use rocketmq_auth::AuthServiceError;
 use rocketmq_auth::AuthenticationContextBuilder;
-use rocketmq_auth::AuthenticationMetadataProvider;
 use rocketmq_auth::AuthenticationProvider;
-use rocketmq_auth::AuthorizationMetadataProvider;
 use rocketmq_auth::AuthorizationProvider;
 use rocketmq_auth::DefaultAuthenticationContext;
 use rocketmq_auth::DefaultAuthenticationContextBuilder;
@@ -301,6 +299,7 @@ impl ProxyAuthRuntime {
         rpc_name: &str,
         request: &Request<T>,
     ) -> ProxyResult<Option<AuthenticatedPrincipal>> {
+        let _operation = self.auth_runtime.enter_request().map_err(map_authorization_error)?;
         let requires_authentication = self.authentication_required(rpc_name);
         let requires_authorization = self.authorization_required(rpc_name);
         if !(requires_authentication || requires_authorization) {
@@ -354,6 +353,7 @@ impl ProxyAuthRuntime {
         principal: Option<&AuthenticatedPrincipal>,
         contexts: &[AuthorizationContextSpec],
     ) -> ProxyResult<()> {
+        let _operation = self.auth_runtime.enter_request().map_err(map_authorization_error)?;
         if !self.authorization_required(rpc_name) || contexts.is_empty() {
             return Ok(());
         }
@@ -401,6 +401,7 @@ impl ProxyAuthRuntime {
         command: &RemotingCommand,
         auth_context: &RemotingAuthContext,
     ) -> ProxyResult<Option<AuthenticatedPrincipal>> {
+        let _operation = self.auth_runtime.enter_request().map_err(map_authorization_error)?;
         auth_context.validate().map_err(map_authorization_error)?;
         let code = command.code().to_string();
         let requires_authentication = self.authentication_required(code.as_str());
@@ -462,6 +463,7 @@ impl ProxyAuthRuntime {
         auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
     ) -> ProxyResult<()> {
+        let _operation = self.auth_runtime.enter_request().map_err(map_authorization_error)?;
         auth_context.validate().map_err(map_authorization_error)?;
         let code = command.code().to_string();
         if !self.authorization_required(code.as_str()) {
@@ -1036,6 +1038,7 @@ mod tests {
     struct TestAuthMetadataService {
         users: HashMap<String, UserInfo>,
         acls: HashMap<String, AclInfo>,
+        release_user: Option<Arc<tokio::sync::Notify>>,
     }
 
     struct PanicOnAuthMetadataService;
@@ -1098,7 +1101,12 @@ mod tests {
             _context: &'a rocketmq_proxy_core::ProxyContext,
             username: &'a str,
         ) -> rocketmq_proxy_core::ProxyServiceFuture<'a, Option<UserInfo>> {
-            Box::pin(async move { Ok(self.users.get(username).cloned()) })
+            Box::pin(async move {
+                if let Some(release) = &self.release_user {
+                    release.notified().await;
+                }
+                Ok(self.users.get(username).cloned())
+            })
         }
 
         fn acl<'a>(
@@ -1141,6 +1149,7 @@ mod tests {
             ),
         );
         let metadata_service = TestAuthMetadataService {
+            release_user: None,
             users: HashMap::from([(
                 "alice".to_owned(),
                 UserInfo {
@@ -1206,6 +1215,50 @@ mod tests {
 
         runtime.shutdown().await.expect("runtime should shut down");
         let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[tokio::test]
+    async fn auth_shutdown_drains_remote_metadata_and_rejects_whitelist_paths() {
+        use std::future::Future;
+        use std::task::Poll;
+
+        let release = Arc::new(tokio::sync::Notify::new());
+        let test_dir = unique_test_dir("proxy-auth-shutdown");
+        let runtime = ProxyAuthRuntime::from_proxy_config_with_metadata_service(
+            &ProxyAuthConfig {
+                authentication_enabled: true,
+                authentication_whitelist: vec!["Whitelisted".to_owned()],
+                auth_config_path: test_dir.join("auth-store").to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+            Some(Arc::new(TestAuthMetadataService {
+                release_user: Some(release.clone()),
+                ..Default::default()
+            })),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let command = send_message_command("TopicA", "alice", "secret");
+        let context = remoting_auth_context("127.0.0.1", "channel");
+        let mut request = Box::pin(runtime.authenticate_remoting(&command, &context));
+        assert!(std::future::poll_fn(|cx| Poll::Ready(request.as_mut().poll(cx).is_pending())).await);
+        let mut stop = Box::pin(runtime.shutdown());
+        assert!(std::future::poll_fn(|cx| Poll::Ready(stop.as_mut().poll(cx).is_pending())).await);
+        assert!(runtime
+            .authenticate_request("Whitelisted", &Request::new(()))
+            .await
+            .is_err());
+        let principal = AuthenticatedPrincipal::white_listed(None, "127.0.0.1".to_owned(), None);
+        assert!(runtime
+            .authorize_request("Whitelisted", Some(&principal), &[])
+            .await
+            .is_err());
+        release.notify_one();
+        assert!(request.await.is_err());
+        stop.await.unwrap();
+        runtime.shutdown().await.unwrap();
+        fs::remove_dir_all(test_dir).unwrap();
     }
 
     #[tokio::test]

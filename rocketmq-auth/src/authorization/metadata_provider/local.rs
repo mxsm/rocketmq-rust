@@ -206,6 +206,23 @@ impl CacheConfig {
 }
 
 impl LocalAuthorizationMetadataProvider {
+    pub(crate) async fn flush_shared(&self) -> AuthServiceResult<()> {
+        let _writer = self.write_lock.lock().await;
+        let snapshot = self.storage_read()?.clone();
+        self.persist_storage_snapshot(&snapshot).await
+    }
+
+    pub(crate) async fn close_shared(&self) -> AuthServiceResult<()> {
+        let _writer = self.write_lock.lock().await;
+        let mut initialized = self.initialized_write()?;
+        if !*initialized {
+            return Ok(());
+        }
+        self.commit_storage_snapshot(HashMap::new(), CacheCommit::Clear)?;
+        *initialized = false;
+        Ok(())
+    }
+
     /// Create a new local authorization metadata provider.
     pub fn new() -> Self {
         Self {

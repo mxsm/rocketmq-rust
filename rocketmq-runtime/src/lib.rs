@@ -164,6 +164,7 @@ pub use scheduled::ScheduledTaskGroup;
 pub use scheduled::ScheduledTaskRegistrationOutcome;
 pub use scheduled::ScheduledTaskSnapshot;
 pub use service_context::ScopeId;
+pub use service_lifecycle::DependencyReadiness;
 pub use service_lifecycle::ServiceLifecycle;
 pub use service_lifecycle::ServiceLifecycleConfig;
 pub use service_lifecycle::ServiceLifecycleState;

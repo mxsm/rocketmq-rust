@@ -48,7 +48,6 @@ use crate::authentication::model::subject::Subject;
 use crate::authentication::provider::AuthenticationMetadataProvider;
 use crate::authorization::enums::policy_type::PolicyType;
 use crate::authorization::metadata_provider::local::LocalAuthorizationMetadataProvider;
-use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::authorization::model::acl::Acl;
 use crate::authorization::model::policy::Policy;
 use crate::authorization::model::policy_entry::PolicyEntry;
@@ -91,10 +90,11 @@ use crate::ProviderRegistry;
 /// ```
 pub struct AuthorizationMetadataManager {
     /// Authorization metadata provider for ACL persistence
-    authorization_provider: Arc<LocalAuthorizationMetadataProvider>,
+    authorization_provider: Arc<crate::AclMetadataHandle>,
 
     /// Authentication metadata provider for USER subject validation
-    authentication_provider: Option<Arc<dyn AuthenticationMetadataProvider>>,
+    authentication_provider: Option<Arc<dyn crate::UserMetadataRead>>,
+    owned_registry: Option<ProviderRegistry>,
 }
 
 impl AuthorizationMetadataManager {
@@ -119,8 +119,19 @@ impl AuthorizationMetadataManager {
         authentication_provider: Option<Arc<dyn AuthenticationMetadataProvider>>,
     ) -> Self {
         Self {
-            authorization_provider,
-            authentication_provider,
+            authorization_provider: crate::AclMetadataHandle::legacy(authorization_provider),
+            authentication_provider: authentication_provider.map(|port| {
+                Arc::new(crate::provider_ports::LegacyUserReader(port)) as Arc<dyn crate::UserMetadataRead>
+            }),
+            owned_registry: None,
+        }
+    }
+
+    pub fn with_registry(registry: &ProviderRegistry) -> Self {
+        Self {
+            authorization_provider: registry.authorization_metadata_provider(),
+            authentication_provider: Some(registry.authentication_metadata_provider()),
+            owned_registry: None,
         }
     }
 
@@ -143,21 +154,30 @@ impl AuthorizationMetadataManager {
                 error,
             )
         })?;
-        let authentication_provider: Arc<dyn AuthenticationMetadataProvider> =
-            registry.authentication_metadata_provider();
-        Ok(Self::with_providers(
-            registry.authorization_metadata_provider(),
-            Some(authentication_provider),
-        ))
+        let mut manager = Self::with_registry(&registry);
+        manager.owned_registry = Some(registry);
+        Ok(manager)
     }
 
     /// Shutdown the manager and release resources.
     ///
-    /// This will shutdown both authorization and authentication providers.
+    /// Managers created from configuration close their providers. Managers
+    /// borrowing a registry leave provider finalization to its runtime owner.
     pub async fn shutdown(&mut self) {
-        debug!("Shutting down AuthorizationMetadataManager");
-        if self.authentication_provider.is_some() {
-            debug!("Authentication provider is shared; owner is responsible for provider shutdown");
+        if let Err(error) = self
+            .shutdown_until(rocketmq_runtime::ShutdownDeadline::after(
+                std::time::Duration::from_secs(5),
+            ))
+            .await
+        {
+            tracing::warn!(?error, "authorization metadata manager shutdown incomplete");
+        }
+    }
+
+    pub async fn shutdown_until(&self, deadline: rocketmq_runtime::ShutdownDeadline) -> AuthServiceResult<()> {
+        match &self.owned_registry {
+            Some(registry) => registry.shutdown_until(deadline).await,
+            None => Ok(()),
         }
     }
 
@@ -557,7 +577,7 @@ impl AuthorizationMetadataManager {
             return Err(AuthServiceError::subject_not_found(subject_key));
         }
 
-        match provider.get_user(username).await {
+        match provider.lookup_user(username).await {
             Ok(_) => Ok(()),
             Err(error) if error.kind() == AuthFailureKind::NotFound => Err(AuthServiceError::subject_not_found(
                 format!("The subject of {subject_key} is not exist."),

@@ -20,7 +20,7 @@ use crate::config::broker_config::BrokerConfig;
 use cheetah_string::CheetahString;
 use rocketmq_error::PublicErrorView;
 use rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED;
-use rocketmq_filter::filter::FilterFactory;
+use rocketmq_filter::filter::FilterBindingError;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::common::mix_all::IS_SUB_CHANGE;
@@ -56,6 +56,7 @@ use crate::client::manager::consumer_manager::ConsumerSessionRegistration;
 use crate::client::manager::producer_manager::ProducerClientRegistration;
 use crate::client::session_transition_locks::ClientSessionTransitionGuard;
 use crate::client::session_transition_locks::ClientSessionTransitionLocks;
+use crate::filter::manager::consumer_filter_manager::ConsumerFilterManager;
 use crate::processor::response_assembly::immediate_outcome_from_command_result;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupConfigLookup;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
@@ -66,6 +67,7 @@ pub struct ClientManageProcessor<MS: BrokerStorePort> {
     consumer_group_heartbeat_table:
         Arc<parking_lot::RwLock<HashMap<CheetahString /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>>>,
     broker_config: Arc<BrokerConfig>,
+    consumer_filter_manager: ConsumerFilterManager,
     topic_config_manager: Arc<TopicConfigManager>,
     subscription_group_lookup: SubscriptionGroupConfigLookup,
     producer_registration: ProducerClientRegistration,
@@ -77,6 +79,7 @@ pub struct ClientManageProcessor<MS: BrokerStorePort> {
 pub(crate) struct ClientManageProcessorContext<MS: BrokerStorePort> {
     pub(crate) command_factory: RemotingCommandFactory,
     pub(crate) broker_config: Arc<BrokerConfig>,
+    pub(crate) consumer_filter_manager: ConsumerFilterManager,
     pub(crate) topic_config_manager: Arc<TopicConfigManager>,
     pub(crate) subscription_group_lookup: SubscriptionGroupConfigLookup,
     pub(crate) producer_registration: ProducerClientRegistration,
@@ -133,6 +136,7 @@ where
             command_factory: context.command_factory,
             consumer_group_heartbeat_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             broker_config: context.broker_config,
+            consumer_filter_manager: context.consumer_filter_manager,
             topic_config_manager: context.topic_config_manager,
             subscription_group_lookup: context.subscription_group_lookup,
             producer_registration: context.producer_registration,
@@ -223,16 +227,17 @@ where
             ))));
         }
 
-        match FilterFactory::instance().get(subscription_data.expression_type.as_str()) {
-            Some(filter) => match filter.try_compile(subscription_data.sub_string.as_str()) {
-                Ok(_) => Ok(Some(response)),
-                Err(error) => Ok(Some(
-                    response
-                        .set_code(ResponseCode::SubscriptionParseFailed)
-                        .set_remark(error.to_string()),
-                )),
-            },
-            None => Ok(Some(
+        match self.consumer_filter_manager.compile_with_cache(
+            subscription_data.expression_type.as_str(),
+            subscription_data.sub_string.as_str(),
+        ) {
+            Ok(_) => Ok(Some(response)),
+            Err(FilterBindingError::Compile(error)) => Ok(Some(
+                response
+                    .set_code(ResponseCode::SubscriptionParseFailed)
+                    .set_remark(error.to_string()),
+            )),
+            Err(FilterBindingError::UnsupportedType) => Ok(Some(
                 response
                     .set_code(ResponseCode::SubscriptionParseFailed)
                     .set_remark(format!("unsupported filter type {}", subscription_data.expression_type)),
@@ -583,6 +588,7 @@ impl<MS: BrokerStorePort> Clone for ClientManageProcessor<MS> {
             command_factory: self.command_factory,
             consumer_group_heartbeat_table: self.consumer_group_heartbeat_table.clone(),
             broker_config: Arc::clone(&self.broker_config),
+            consumer_filter_manager: self.consumer_filter_manager.clone(),
             topic_config_manager: Arc::clone(&self.topic_config_manager),
             subscription_group_lookup: self.subscription_group_lookup.clone(),
             producer_registration: self.producer_registration.clone(),
@@ -640,5 +646,123 @@ fn trusted_remote_address_from_facts(
         _ => Err(crate::broker_error::invariant_violated(
             "client manager request origin does not match its session view",
         )),
+    }
+}
+
+#[cfg(test)]
+mod filter_registry_tests {
+    use super::*;
+    use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
+    use rocketmq_filter::expression::AlwaysTrueExpression;
+    use rocketmq_filter::expression::Expression;
+    use rocketmq_filter::filter::Filter;
+    use rocketmq_filter::filter::FilterCompileError;
+    use rocketmq_filter::filter::FilterCompileErrorKind;
+    use rocketmq_filter::filter::FilterCompileStage;
+    use rocketmq_filter::filter::FilterRegistryBuilder;
+    use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_protocol::protocol::RemotingSerializable;
+
+    #[derive(Debug)]
+    struct Compiler(bool);
+
+    impl Filter for Compiler {
+        fn of_type(&self) -> &str {
+            "SQL92"
+        }
+
+        fn try_compile(&self, _: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
+            if self.0 {
+                Ok(Box::new(AlwaysTrueExpression))
+            } else {
+                Err(FilterCompileError::new(
+                    FilterCompileErrorKind::UnexpectedToken,
+                    FilterCompileStage::Parse,
+                    None,
+                ))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn client_validation_and_subscription_share_broker_registry() {
+        let context = rocketmq_runtime::RuntimeContext::from_current("filter-instance-test");
+        let root = tempfile::tempdir().unwrap();
+        let subscription = SubscriptionData {
+            topic: "InstanceTopic".into(),
+            sub_string: "compiler-owned syntax".into(),
+            expression_type: "SQL92".into(),
+            sub_version: 1,
+            ..Default::default()
+        };
+        for accepted in [true, false] {
+            let path = root.path().join(if accepted { "accepted" } else { "rejected" });
+            let config = crate::config::validated::ValidatedBrokerConfig::try_from_parts(
+                BrokerConfig {
+                    enable_property_filter: true,
+                    store_path_root_dir: path.to_string_lossy().into_owned().into(),
+                    auth_config_path: path.join("auth.json").to_string_lossy().into_owned().into(),
+                    ..Default::default()
+                },
+                rocketmq_store::MessageStoreConfig {
+                    store_path_root_dir: path.to_string_lossy().into_owned().into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut registry = FilterRegistryBuilder::default();
+            registry.register(Arc::new(Compiler(accepted))).unwrap();
+            let mut runtime = crate::broker_runtime::BrokerRuntime::new_with_bindings(
+                Arc::new(config),
+                context.service_context(if accepted { "accepted" } else { "rejected" }),
+                rocketmq_observability::TelemetryHandle::noop(),
+                crate::broker_runtime::BrokerRuntimeBindings {
+                    command_factory: RemotingCommandFactory::new(Default::default()),
+                    filter_registry: registry.build().unwrap(),
+                },
+            );
+            let state = runtime.runtime_state_mut();
+            let processor = state.build_client_manage_processor();
+            let request_body = CheckClientRequestBody::new("client".into(), "group".into(), subscription.clone());
+            let mut request = RemotingCommandFactory::new(Default::default())
+                .create_request(RequestCode::CheckClientConfig, request_body.encode().unwrap());
+            let response = processor.check_client_config(&mut request).unwrap().unwrap();
+            assert_eq!(
+                response.code(),
+                i32::from(if accepted {
+                    ResponseCode::Success
+                } else {
+                    ResponseCode::SubscriptionParseFailed
+                })
+            );
+            let filters = state.consumer_filter_manager().clone();
+            let listener = crate::client::default_consumer_ids_change_listener::DefaultConsumerIdsChangeListener::new(
+                filters.clone(),
+            );
+            let subscriptions = HashSet::from([subscription.clone()]);
+            listener.handle(
+                crate::client::consumer_group_event::ConsumerGroupEvent::Register,
+                "group",
+                &[&subscriptions],
+            );
+            assert_eq!(
+                filters
+                    .get_consumer_filter_data(&"InstanceTopic".into(), &"group".into())
+                    .is_some(),
+                accepted
+            );
+            let stats = filters.stats_snapshot();
+            assert_eq!(stats.compile_requests, 2);
+            assert_eq!(
+                if accepted {
+                    stats.compiled_cache_hits
+                } else {
+                    stats.failed_cache_hits
+                },
+                1
+            );
+        }
+        let report = context.shutdown_tasks(std::time::Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{report:?}");
     }
 }

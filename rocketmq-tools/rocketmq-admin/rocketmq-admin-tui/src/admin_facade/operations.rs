@@ -192,8 +192,6 @@ use rocketmq_admin_core::client_adapter::services::stats::StatsAllQueryResult;
 use rocketmq_admin_core::client_adapter::services::stats::StatsService;
 use rocketmq_admin_core::client_adapter::services::topic::AllocateMqQueryRequest;
 use rocketmq_admin_core::client_adapter::services::topic::AllocatedMqQueryResult;
-use rocketmq_admin_core::client_adapter::services::topic::DeleteTopicRequest;
-use rocketmq_admin_core::client_adapter::services::topic::DeleteTopicResult;
 use rocketmq_admin_core::client_adapter::services::topic::OrderConfRequest;
 use rocketmq_admin_core::client_adapter::services::topic::OrderConfResult;
 use rocketmq_admin_core::client_adapter::services::topic::TopicClusterList;
@@ -210,6 +208,8 @@ use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicPermRequest
 use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicPermResult;
 use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicRequest;
 use rocketmq_admin_core::client_adapter::services::topic::UpdateTopicResult;
+use rocketmq_admin_core::core::topic::DeleteTopicRequest;
+use rocketmq_admin_core::core::topic::DeleteTopicResult;
 use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_protocol::protocol::admin::rollback_stats::RollbackStats;
@@ -1444,7 +1444,12 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         cluster_name: Option<String>,
     ) -> CanonicalResult<DeleteTopicResult> {
-        TopicService::delete_topic_by_request(self.delete_topic_request(topic, cluster_name)?).await
+        TopicService::delete_topic_by_request_with_credentials(
+            self.delete_topic_request(topic, cluster_name)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn apply_order_conf(

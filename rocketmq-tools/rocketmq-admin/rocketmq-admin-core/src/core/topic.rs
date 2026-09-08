@@ -14,6 +14,15 @@
 
 //! Topic capability contracts.
 
+mod deletion;
+#[cfg(feature = "client-adapter")]
+pub(crate) use deletion::execute_deletion;
+pub use deletion::DeleteTopicRequest;
+pub use deletion::DeleteTopicResult;
+#[cfg(feature = "client-adapter")]
+pub(crate) use deletion::TopicDeletionBackend;
+pub use deletion::TopicOperationFailure;
+
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 

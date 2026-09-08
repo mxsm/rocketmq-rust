@@ -40,6 +40,83 @@ use super::*;
 type EventLog = Arc<Mutex<Vec<&'static str>>>;
 type SendScript = Arc<Mutex<VecDeque<Result<Option<SendResult>, CanonicalError>>>>;
 
+fn readiness_cluster() -> ClusterInfo {
+    let broker = rocketmq_protocol::protocol::route::route_data_view::BrokerData::new(
+        "DefaultCluster".into(),
+        "broker-a".into(),
+        HashMap::from([(MASTER_ID, "127.0.0.1:10911".into())]),
+        None,
+    );
+    ClusterInfo::new(
+        Some(HashMap::from([("broker-a".into(), broker)])),
+        Some(HashMap::from([(
+            "DefaultCluster".into(),
+            std::collections::HashSet::from(["broker-a".into()]),
+        )])),
+    )
+}
+
+#[tokio::test]
+async fn readiness_requires_fresh_configured_cluster_and_read_only_broker_metadata() {
+    use rocketmq_protocol::code::response_code::ResponseCode;
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let client = Arc::new(ScriptedClientIo::new(events.clone()));
+    let mut state = ClusterWorkerState::new();
+    state.client = Some(client.clone());
+    for (code, body, healthy) in [
+        (
+            ResponseCode::Success,
+            Some(br#"{"table":{"brokerVersion":"5.3"}}"#.to_vec()),
+            true,
+        ),
+        (ResponseCode::NoPermission, None, false),
+        (ResponseCode::Success, None, false),
+        (ResponseCode::Success, Some(b"invalid".to_vec()), false),
+    ] {
+        client.clusters.lock().unwrap().push_back(Ok(readiness_cluster()));
+        let mut response = RemotingCommand::create_response_command_with_code(code);
+        if let Some(body) = body {
+            response = response.set_body(body);
+        }
+        client.metadata_responses.lock().unwrap().push_back(Ok(response));
+        assert_eq!(
+            cluster_readiness_inner(&ClusterConfig::default(), &mut state)
+                .await
+                .is_ok(),
+            healthy
+        );
+    }
+    let config = ClusterConfig {
+        broker_cluster_name: "other-cluster".into(),
+        ..Default::default()
+    };
+    client.clusters.lock().unwrap().push_back(Ok(readiness_cluster()));
+    assert!(cluster_readiness_inner(&config, &mut state).await.is_err());
+    assert_eq!(client.readiness_calls.load(Ordering::Acquire), 5);
+    assert_eq!(client.metadata_calls.load(Ordering::Acquire), 4);
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "readiness must not start a producer or send messages"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn readiness_route_and_broker_reads_share_one_deadline() {
+    let mut client = ScriptedClientIo::new(Arc::new(Mutex::new(Vec::new())));
+    client.cluster_delay = Some(Duration::from_secs(2));
+    client.metadata_delay = Some(Duration::from_secs(2));
+    client.clusters.lock().unwrap().push_back(Ok(readiness_cluster()));
+    let client = Arc::new(client);
+    let mut state = ClusterWorkerState::new();
+    state.client = Some(client.clone());
+    let started = tokio::time::Instant::now();
+    assert!(cluster_readiness_inner(&ClusterConfig::default(), &mut state)
+        .await
+        .is_err());
+    assert_eq!(started.elapsed(), Duration::from_secs(3));
+    assert_eq!(client.metadata_calls.load(Ordering::Acquire), 1);
+}
+
 struct EmptySigner;
 
 impl OutboundSigner for EmptySigner {
@@ -66,6 +143,11 @@ struct ScriptedClientIo {
     ack_calls: AtomicUsize,
     pull_calls: AtomicUsize,
     readiness_calls: AtomicUsize,
+    clusters: Mutex<VecDeque<Result<ClusterInfo, CanonicalError>>>,
+    metadata_responses: Mutex<VecDeque<Result<RemotingCommand, CanonicalError>>>,
+    metadata_calls: AtomicUsize,
+    cluster_delay: Option<Duration>,
+    metadata_delay: Option<Duration>,
     start_entered: Mutex<Option<oneshot::Sender<()>>>,
     start_block: Option<Arc<Notify>>,
     pull_entered: Mutex<Option<oneshot::Sender<()>>>,
@@ -88,6 +170,11 @@ impl ScriptedClientIo {
             ack_calls: AtomicUsize::new(0),
             pull_calls: AtomicUsize::new(0),
             readiness_calls: AtomicUsize::new(0),
+            clusters: Mutex::new(VecDeque::new()),
+            metadata_responses: Mutex::new(VecDeque::new()),
+            metadata_calls: AtomicUsize::new(0),
+            cluster_delay: None,
+            metadata_delay: None,
             start_entered: Mutex::new(None),
             start_block: None,
             pull_entered: Mutex::new(None),
@@ -436,7 +523,38 @@ impl ClusterClientIo for ScriptedClientIo {
 
     async fn broker_cluster_info(&self, _timeout_millis: u64) -> Result<ClusterInfo, CanonicalError> {
         self.readiness_calls.fetch_add(1, Ordering::AcqRel);
-        Err(unexpected_client_call("broker_cluster_info"))
+        if let Some(delay) = self.cluster_delay {
+            tokio::time::sleep(delay).await;
+        }
+        self.clusters
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| Err(unexpected_client_call("broker_cluster_info")))
+    }
+
+    async fn invoke_remoting(
+        &self,
+        broker_addr: &CheetahString,
+        request: RemotingCommand,
+        timeout_millis: u64,
+    ) -> Result<RemotingCommand, CanonicalError> {
+        assert_eq!(broker_addr.as_str(), "127.0.0.1:10911");
+        assert_eq!(
+            request.code(),
+            rocketmq_protocol::code::request_code::RequestCode::GetBrokerRuntimeInfo as i32
+        );
+        assert!(request.get_body().is_none());
+        assert!((1..=3_000).contains(&timeout_millis));
+        self.metadata_calls.fetch_add(1, Ordering::AcqRel);
+        if let Some(delay) = self.metadata_delay {
+            tokio::time::sleep(delay).await;
+        }
+        self.metadata_responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| Err(unexpected_client_call("invoke_remoting")))
     }
 
     async fn user(

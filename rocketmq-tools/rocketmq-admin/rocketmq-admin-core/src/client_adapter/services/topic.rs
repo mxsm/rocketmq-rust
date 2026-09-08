@@ -25,6 +25,7 @@
 //! let clusters = TopicService::get_topic_cluster_list(&mut admin, "MyTopic").await?;
 //! ```
 
+mod deletion;
 pub mod operations;
 pub mod types;
 

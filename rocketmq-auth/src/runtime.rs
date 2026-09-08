@@ -49,6 +49,7 @@ use crate::authentication::enums::subject_type::SubjectType;
 use crate::authentication::enums::user_status::UserStatus;
 use crate::authentication::enums::user_type::UserType;
 use crate::authentication::model::user::User;
+#[cfg(test)]
 use crate::authentication::provider::authentication_metadata_provider::AuthenticationMetadataProvider;
 use crate::authentication::provider::AuthenticationProvider;
 use crate::authentication::provider::DefaultAuthenticationProvider;
@@ -78,10 +79,14 @@ use crate::RemotingAuthContext;
 
 const ACCESS_KEY: &str = "AccessKey";
 
+mod startup;
+pub use startup::AuthStartupFailure;
+#[cfg(test)]
+mod provider_tests;
+
 #[derive(Clone)]
 pub struct ProviderRegistry {
-    authentication_metadata_provider: Arc<LocalAuthenticationMetadataProvider>,
-    authorization_metadata_provider: Arc<LocalAuthorizationMetadataProvider>,
+    owner: Arc<crate::provider_owner::ProviderOwner>,
     acl_white_list_snapshot: Arc<RwLock<WhiteList>>,
     acl_managed_access_keys: Arc<RwLock<HashSet<String>>>,
     acl_generation: Arc<AtomicU64>,
@@ -128,15 +133,24 @@ impl ProviderRegistry {
         );
         authorization_metadata_provider.initialize(config.clone(), None)?;
 
-        Ok(Self {
-            authentication_metadata_provider,
-            authorization_metadata_provider: Arc::new(authorization_metadata_provider),
+        Ok(Self::from_bundle(
+            crate::provider_owner::local_bundle(
+                authentication_metadata_provider,
+                Arc::new(authorization_metadata_provider),
+            ),
+            true,
+        ))
+    }
+
+    fn from_bundle(bundle: crate::ProviderBundle, initialized: bool) -> Self {
+        Self {
+            owner: crate::provider_owner::ProviderOwner::new(bundle, initialized),
             acl_white_list_snapshot: Arc::new(RwLock::new(WhiteList::default())),
             acl_managed_access_keys: Arc::new(RwLock::new(HashSet::new())),
             acl_generation: Arc::new(AtomicU64::new(0)),
             acl_fingerprint: Arc::new(RwLock::new(None)),
             metrics: AuthMetrics::default(),
-        })
+        }
     }
 
     /// Loads persistent authentication and authorization snapshots on the
@@ -155,12 +169,20 @@ impl ProviderRegistry {
             .map_err(AuthServiceError::metadata_io)?
     }
 
-    pub fn authentication_metadata_provider(&self) -> Arc<LocalAuthenticationMetadataProvider> {
-        self.authentication_metadata_provider.clone()
+    pub fn authentication_metadata_provider(&self) -> Arc<crate::UserMetadataHandle> {
+        self.owner.users.clone()
     }
 
-    pub fn authorization_metadata_provider(&self) -> Arc<LocalAuthorizationMetadataProvider> {
-        self.authorization_metadata_provider.clone()
+    pub(crate) fn admission(&self) -> Arc<crate::provider_owner::ProviderAdmission> {
+        self.owner.admission.clone()
+    }
+
+    pub fn authorization_metadata_provider(&self) -> Arc<crate::AclMetadataHandle> {
+        self.owner.acls.clone()
+    }
+
+    pub async fn shutdown_until(&self, deadline: rocketmq_runtime::ShutdownDeadline) -> AuthServiceResult<()> {
+        self.owner.shutdown_until(deadline, true).await
     }
 
     fn set_acl_white_list_snapshot(&self, snapshot: WhiteList) -> AuthServiceResult<()> {
@@ -232,6 +254,7 @@ impl ProviderRegistry {
         access_key: Option<&str>,
         source_ip: Option<&str>,
     ) -> AuthServiceResult<bool> {
+        let _operation = self.owner.admission.enter()?;
         let guard = self
             .acl_white_list_snapshot
             .read()
@@ -246,6 +269,7 @@ impl ProviderRegistry {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        let _operation = self.owner.admission.enter()?;
         let updated_snapshot = {
             let guard = self
                 .acl_white_list_snapshot
@@ -294,34 +318,127 @@ impl AuthRuntimeBuilder {
         self
     }
 
+    pub fn with_provider_bundle(mut self, providers: crate::ProviderBundle) -> Self {
+        self.provider_registry = Some(ProviderRegistry::from_bundle(providers, false));
+        self
+    }
+
     pub fn with_metadata_io_actor(mut self, metadata_io: MetadataIoActor) -> Self {
         self.metadata_io = Some(metadata_io);
         self
     }
 
     pub async fn build(self) -> AuthServiceResult<AuthRuntime> {
-        let metadata_io = match self.metadata_io {
+        let owns_metadata_io = self.metadata_io.is_none();
+        let metadata_io = match self.metadata_io.clone() {
             Some(metadata_io) => metadata_io,
-            None => MetadataIoConfig::default()
+            None => match MetadataIoConfig::default()
                 .into_plan()
                 .expect("default metadata I/O config is valid")
                 .start(&self.service_context.component("auth.metadata-io"))
-                .map_err(|error| AuthServiceError::provider_failed(AuthOperation::Initialize, error))?,
+            {
+                Ok(metadata_io) => metadata_io,
+                Err(error) => {
+                    return Err(startup::rollback(
+                        AuthServiceError::provider_failed(AuthOperation::Initialize, error),
+                        self.provider_registry.as_ref().map(|registry| registry.owner.clone()),
+                        None,
+                        self.service_context,
+                    )
+                    .await);
+                }
+            },
         };
-        let provider_registry = match self.provider_registry {
-            Some(provider_registry) => provider_registry,
+        let registry_result = match self.provider_registry.clone() {
+            Some(provider_registry) => Ok(provider_registry),
             None => {
                 ProviderRegistry::load_with_metadata_io(
                     &self.config,
-                    metadata_io,
+                    metadata_io.clone(),
                     self.service_context.metadata_io().clone(),
                 )
-                .await?
+                .await
             }
         };
 
-        seed_initial_users(&provider_registry, &self.config).await?;
-        let migrated_acl_entries = migrate_auth_from_v1(&provider_registry, &self.config).await?;
+        let provider_registry = match registry_result {
+            Ok(registry) => registry,
+            Err(error) => {
+                return Err(startup::rollback(
+                    error,
+                    None,
+                    owns_metadata_io.then_some(metadata_io),
+                    self.service_context,
+                )
+                .await);
+            }
+        };
+        let prepared = self.prepare_services(&provider_registry).await;
+        let (authentication_service, authorization_service, acl_file_watch_handle) = match prepared {
+            Ok(services) => services,
+            Err(error) => {
+                return Err(startup::rollback(
+                    error,
+                    Some(provider_registry.owner.clone()),
+                    owns_metadata_io.then_some(metadata_io),
+                    self.service_context,
+                )
+                .await);
+            }
+        };
+
+        Ok(AuthRuntime {
+            config: self.config,
+            service_context: self.service_context,
+            provider_registry,
+            authentication_service,
+            authorization_service,
+            acl_file_watch_handle,
+            owned_metadata_io: owns_metadata_io.then_some(metadata_io),
+            shutdown_report: Arc::new(tokio::sync::Mutex::new(None)),
+        })
+    }
+
+    async fn prepare_services(
+        &self,
+        provider_registry: &ProviderRegistry,
+    ) -> AuthServiceResult<(AuthenticationService, AuthorizationService, Option<AclFileWatchHandle>)> {
+        validate_metadata_provider_name(
+            "authenticationProvider",
+            self.config
+                .authentication_provider
+                .as_str()
+                .rsplit('.')
+                .next()
+                .unwrap_or_default(),
+            &["DefaultAuthenticationProvider", "default"],
+        )?;
+        validate_metadata_provider_name(
+            "authorizationProvider",
+            self.config
+                .authorization_provider
+                .as_str()
+                .rsplit('.')
+                .next()
+                .unwrap_or_default(),
+            &["DefaultAuthorizationProvider", "default"],
+        )?;
+        // Reject unsupported imports before initializing or seeding a candidate.
+        if (!self.config.acl_file.trim().is_empty() || self.config.migrate_auth_from_v1_enabled)
+            && provider_registry.owner.importer.is_none()
+        {
+            return Err(AuthServiceError::new(
+                AuthOperation::InitializeProvider,
+                AuthFailureKind::Unsupported,
+            ));
+        }
+
+        provider_registry
+            .owner
+            .initialize(&self.config, &self.service_context)
+            .await?;
+        seed_initial_users(provider_registry, &self.config).await?;
+        let migrated_acl_entries = migrate_auth_from_v1(provider_registry, &self.config).await?;
         if migrated_acl_entries > 0 {
             info!(
                 "Migrated {} legacy ACL account(s) into auth metadata",
@@ -329,7 +446,7 @@ impl AuthRuntimeBuilder {
             );
         }
         let loaded_acl_entries = load_configured_acl_file(
-            &provider_registry,
+            provider_registry,
             &self.config,
             self.service_context.metadata_io().clone(),
             true,
@@ -350,23 +467,18 @@ impl AuthRuntimeBuilder {
             self.config.clone(),
             Arc::new(authentication_provider),
             provider_registry.metrics(),
+            provider_registry.owner.admission.clone(),
         );
         let authorization_service = AuthorizationService::new(
             self.config.clone(),
             Arc::new(authorization_provider),
             provider_registry.metrics(),
+            provider_registry.owner.admission.clone(),
         );
         let acl_file_watch_handle =
-            start_acl_file_watcher(&self.config, provider_registry.clone(), &self.service_context);
+            start_acl_file_watcher(&self.config, provider_registry.clone(), &self.service_context)?;
 
-        Ok(AuthRuntime {
-            config: self.config,
-            service_context: self.service_context,
-            provider_registry,
-            authentication_service,
-            authorization_service,
-            acl_file_watch_handle,
-        })
+        Ok((authentication_service, authorization_service, acl_file_watch_handle))
     }
 }
 
@@ -378,9 +490,19 @@ pub struct AuthRuntime {
     authentication_service: AuthenticationService,
     authorization_service: AuthorizationService,
     acl_file_watch_handle: Option<AclFileWatchHandle>,
+    owned_metadata_io: Option<MetadataIoActor>,
+    shutdown_report: Arc<tokio::sync::Mutex<Option<ShutdownReport>>>,
 }
 
 impl AuthRuntime {
+    /// Admits an entrypoint request and keeps its provider work in the drain set.
+    ///
+    /// # Errors
+    /// Returns `Unavailable` once shutdown starts, including for whitelist paths.
+    pub fn enter_request(&self) -> AuthServiceResult<crate::AuthRequestGuard> {
+        self.provider_registry.owner.admission.enter()
+    }
+
     pub fn config(&self) -> &AuthConfig {
         &self.config
     }
@@ -416,6 +538,7 @@ impl AuthRuntime {
     }
 
     pub async fn reload_acl_file(&self) -> AuthServiceResult<usize> {
+        let _operation = self.provider_registry.owner.admission.enter()?;
         Ok(load_configured_acl_file(
             &self.provider_registry,
             &self.config,
@@ -469,10 +592,43 @@ impl AuthRuntime {
     }
 
     pub async fn shutdown_with_report(&self) -> AuthServiceResult<Option<ShutdownReport>> {
-        let report = self.service_context.task_group().shutdown(Duration::from_secs(5)).await;
-        report
-            .assert_no_task_leak()
-            .map_err(|_error| AuthServiceError::new(AuthOperation::MaintainService, AuthFailureKind::Internal))?;
+        self.shutdown_until(rocketmq_runtime::ShutdownDeadline::after(Duration::from_secs(5)))
+            .await
+    }
+
+    pub async fn shutdown_until(
+        &self,
+        deadline: rocketmq_runtime::ShutdownDeadline,
+    ) -> AuthServiceResult<Option<ShutdownReport>> {
+        self.provider_registry.owner.admission.close();
+        let at = tokio::time::Instant::from_std(deadline.instant());
+        let timeout = || AuthServiceError::new(AuthOperation::MaintainService, AuthFailureKind::Timeout);
+        let mut completed = tokio::time::timeout_at(at, self.shutdown_report.lock())
+            .await
+            .map_err(|_| timeout())?;
+        if completed.is_some() {
+            return Ok(completed.clone());
+        }
+        if let Some(watcher) = &self.acl_file_watch_handle {
+            let report = watcher.scheduled_tasks.shutdown(deadline.remaining()).await;
+            if !report.is_healthy() {
+                return Err(timeout());
+            }
+        }
+        self.provider_registry.shutdown_until(deadline).await?;
+        if let Some(metadata_io) = &self.owned_metadata_io {
+            let report = metadata_io
+                .shutdown_until(rocketmq_runtime::MetadataDeadline::at(at))
+                .await;
+            if report.timed_out || report.pending_operations != 0 {
+                return Err(timeout());
+            }
+        }
+        let report = self.service_context.task_group().shutdown(deadline.remaining()).await;
+        if !report.is_healthy() {
+            return Err(timeout());
+        }
+        *completed = Some(report.clone());
         Ok(Some(report))
     }
 
@@ -518,6 +674,7 @@ impl AuthRuntime {
         source_ip: Option<&str>,
         channel_id: Option<&str>,
     ) -> AuthServiceResult<()> {
+        let _operation = self.provider_registry.owner.admission.enter()?;
         auth_context.validate()?;
         if source_ip != auth_context.source_ip() || channel_id != auth_context.channel_id() {
             return Err(AuthServiceError::new(
@@ -614,16 +771,23 @@ pub struct AuthenticationService {
     provider: Arc<DefaultAuthenticationProvider>,
     builder: DefaultAuthenticationContextBuilder,
     metrics: AuthMetrics,
+    admission: Arc<crate::provider_owner::ProviderAdmission>,
 }
 
 impl AuthenticationService {
-    fn new(config: AuthConfig, provider: Arc<DefaultAuthenticationProvider>, metrics: AuthMetrics) -> Self {
+    fn new(
+        config: AuthConfig,
+        provider: Arc<DefaultAuthenticationProvider>,
+        metrics: AuthMetrics,
+        admission: Arc<crate::provider_owner::ProviderAdmission>,
+    ) -> Self {
         Self {
             whitelist: parse_whitelist(config.authentication_whitelist.as_str()),
             config,
             provider,
             builder: DefaultAuthenticationContextBuilder::new(),
             metrics,
+            admission,
         }
     }
 
@@ -632,6 +796,7 @@ impl AuthenticationService {
         command: &RemotingCommand,
         channel_id: Option<&str>,
     ) -> AuthServiceResult<()> {
+        let _operation = self.admission.enter()?;
         if !self.config.authentication_enabled {
             return Ok(());
         }
@@ -658,6 +823,7 @@ impl AuthenticationService {
         command: &RemotingCommand,
         channel_id: Option<&str>,
     ) -> AuthServiceResult<CheetahString> {
+        let _operation = self.admission.enter()?;
         if !self.config.authentication_enabled {
             return Err(AuthServiceError::new(
                 AuthOperation::Authenticate,
@@ -683,15 +849,22 @@ pub struct AuthorizationService {
     whitelist: HashSet<String>,
     provider: Arc<DefaultAuthorizationProvider>,
     metrics: AuthMetrics,
+    admission: Arc<crate::provider_owner::ProviderAdmission>,
 }
 
 impl AuthorizationService {
-    fn new(config: AuthConfig, provider: Arc<DefaultAuthorizationProvider>, metrics: AuthMetrics) -> Self {
+    fn new(
+        config: AuthConfig,
+        provider: Arc<DefaultAuthorizationProvider>,
+        metrics: AuthMetrics,
+        admission: Arc<crate::provider_owner::ProviderAdmission>,
+    ) -> Self {
         Self {
             whitelist: parse_whitelist(config.authorization_whitelist.as_str()),
             config,
             provider,
             metrics,
+            admission,
         }
     }
 
@@ -700,6 +873,7 @@ impl AuthorizationService {
         auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
     ) -> AuthServiceResult<()> {
+        let _operation = self.admission.enter()?;
         auth_context.validate()?;
         if !self.config.authorization_enabled {
             return Ok(());
@@ -734,6 +908,7 @@ impl AuthorizationService {
         auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
     ) -> LayerEvaluation<DetailedDecision> {
+        let _operation = self.admission.enter().map_err(|_| LayerFailureKind::Error)?;
         auth_context.validate().map_err(|_| LayerFailureKind::Error)?;
         if !self.config.authorization_enabled {
             return Ok(DetailedDecision::Abstain);
@@ -846,10 +1021,10 @@ fn start_acl_file_watcher(
     config: &AuthConfig,
     provider_registry: ProviderRegistry,
     service_context: &ChildServiceContext,
-) -> Option<AclFileWatchHandle> {
+) -> AuthServiceResult<Option<AclFileWatchHandle>> {
     let acl_file = config.acl_file.as_str().trim();
     if acl_file.is_empty() || !config.acl_file_watch_enabled {
-        return None;
+        return Ok(None);
     }
 
     let watch_config = config.clone();
@@ -858,52 +1033,46 @@ fn start_acl_file_watcher(
     let task_group = watcher_context.task_group().clone();
     let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
     let blocking = service_context.metadata_io().clone();
-    if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(
-        ScheduledTaskConfig::fixed_rate_no_overlap("auth.acl-file-watcher.reload", interval),
-        move || {
-            let provider_registry = provider_registry.clone();
-            let watch_config = watch_config.clone();
-            let blocking = blocking.clone();
-            async move {
-                match load_configured_acl_file(&provider_registry, &watch_config, blocking, false).await {
-                    Ok(result) if result.changed => {
-                        debug!(
-                            "Reloaded {} ACL account(s) from configured ACL file",
-                            result.account_count
-                        )
+    scheduled_tasks
+        .schedule_fixed_rate_no_overlap(
+            ScheduledTaskConfig::fixed_rate_no_overlap("auth.acl-file-watcher.reload", interval),
+            move || {
+                let provider_registry = provider_registry.clone();
+                let watch_config = watch_config.clone();
+                let blocking = blocking.clone();
+                async move {
+                    match load_configured_acl_file(&provider_registry, &watch_config, blocking, false).await {
+                        Ok(result) if result.changed => {
+                            debug!(
+                                "Reloaded {} ACL account(s) from configured ACL file",
+                                result.account_count
+                            )
+                        }
+                        Ok(_) => debug!("ACL file unchanged; skipped reload"),
+                        Err(error) => warn!("Failed to reload ACL file: {error}"),
                     }
-                    Ok(_) => debug!("ACL file unchanged; skipped reload"),
-                    Err(error) => warn!("Failed to reload ACL file: {error}"),
                 }
-            }
-        },
-    ) {
-        warn!("Failed to spawn ACL file watcher: {error}");
-        return None;
-    }
+            },
+        )
+        .map_err(|error| AuthServiceError::provider_failed(AuthOperation::Initialize, error))?;
 
-    Some(AclFileWatchHandle { scheduled_tasks })
+    Ok(Some(AclFileWatchHandle { scheduled_tasks }))
 }
 
 async fn apply_acl_config(provider_registry: &ProviderRegistry, acl_config: &AclConfig) -> AuthServiceResult<usize> {
     let prepared_config = prepare_acl_config(acl_config)?;
     let previous_access_keys = provider_registry.acl_managed_access_keys()?;
-    let authn_provider = provider_registry.authentication_metadata_provider();
-    let authz_provider = provider_registry.authorization_metadata_provider();
-
-    for prepared_account in &prepared_config.accounts {
-        upsert_user(authn_provider.clone(), prepared_account.user.clone()).await?;
-        match &prepared_account.acl {
-            Some(acl) => upsert_acl(authz_provider.clone(), &prepared_account.user, acl.clone()).await?,
-            None => authz_provider.delete_acl(&prepared_account.user).await?,
-        }
-    }
-
-    for stale_access_key in previous_access_keys.difference(&prepared_config.access_keys) {
-        let user = User::of(stale_access_key.as_str());
-        authz_provider.delete_acl(&user).await?;
-        authn_provider.delete_user(stale_access_key).await?;
-    }
+    let importer = provider_registry
+        .owner
+        .importer
+        .as_ref()
+        .ok_or_else(|| AuthServiceError::new(AuthOperation::InitializeProvider, AuthFailureKind::Unsupported))?;
+    let removed: Vec<_> = previous_access_keys
+        .difference(&prepared_config.access_keys)
+        .map(|key| crate::SubjectKey::from_subject(&User::of(key.as_str())))
+        .collect();
+    let _operation = provider_registry.owner.admission.enter()?;
+    importer.import(&prepared_config.accounts, &removed).await?;
 
     provider_registry.set_acl_white_list_snapshot(prepared_config.white_list_snapshot)?;
     provider_registry.set_acl_managed_access_keys(prepared_config.access_keys)?;
@@ -915,13 +1084,8 @@ async fn apply_acl_config(provider_registry: &ProviderRegistry, acl_config: &Acl
 struct PreparedAclConfig {
     white_list_snapshot: WhiteList,
     access_keys: HashSet<String>,
-    accounts: Vec<PreparedAclAccount>,
+    accounts: Vec<crate::AclImportAccount>,
     accounts_len: usize,
-}
-
-struct PreparedAclAccount {
-    user: User,
-    acl: Option<Acl>,
 }
 
 fn prepare_acl_config(acl_config: &AclConfig) -> AuthServiceResult<PreparedAclConfig> {
@@ -934,7 +1098,7 @@ fn prepare_acl_config(acl_config: &AclConfig) -> AuthServiceResult<PreparedAclCo
             let user = user_from_plain_account(account)?;
             let acl = acl_from_plain_account(account)?;
             access_keys.insert(access_key);
-            accounts.push(PreparedAclAccount { user, acl });
+            accounts.push(crate::AclImportAccount { user, acl });
         }
     }
 
@@ -945,22 +1109,6 @@ fn prepare_acl_config(acl_config: &AclConfig) -> AuthServiceResult<PreparedAclCo
         accounts,
         accounts_len,
     })
-}
-
-async fn upsert_user(provider: Arc<LocalAuthenticationMetadataProvider>, user: User) -> AuthServiceResult<()> {
-    let username = user.username().to_string();
-    if provider.get_user(username.as_str()).await.is_ok() {
-        provider.update_user(user).await
-    } else {
-        provider.create_user(user).await
-    }
-}
-
-async fn upsert_acl(provider: Arc<LocalAuthorizationMetadataProvider>, user: &User, acl: Acl) -> AuthServiceResult<()> {
-    match provider.get_acl(user).await? {
-        Some(_) => provider.update_acl(acl).await,
-        None => provider.create_acl(acl).await,
-    }
 }
 
 fn user_from_plain_account(account: &PlainAccessConfig) -> AuthServiceResult<User> {
@@ -1100,7 +1248,7 @@ async fn seed_initial_users(provider_registry: &ProviderRegistry, config: &AuthC
 }
 
 async fn seed_init_authentication_user(
-    provider: Arc<LocalAuthenticationMetadataProvider>,
+    provider: Arc<crate::UserMetadataHandle>,
     config: &AuthConfig,
 ) -> AuthServiceResult<()> {
     let init_user = config.init_authentication_user.as_str().trim();
@@ -1133,7 +1281,7 @@ async fn seed_init_authentication_user(
 }
 
 async fn seed_inner_client_user(
-    provider: Arc<LocalAuthenticationMetadataProvider>,
+    provider: Arc<crate::UserMetadataHandle>,
     config: &AuthConfig,
 ) -> AuthServiceResult<()> {
     #[derive(serde::Deserialize)]
@@ -1158,14 +1306,12 @@ async fn seed_inner_client_user(
     create_user_if_absent(provider, user).await
 }
 
-async fn create_user_if_absent(
-    provider: Arc<LocalAuthenticationMetadataProvider>,
-    user: User,
-) -> AuthServiceResult<()> {
-    if provider.get_user(user.username().as_str()).await.is_ok() {
-        return Ok(());
+async fn create_user_if_absent(provider: Arc<crate::UserMetadataHandle>, user: User) -> AuthServiceResult<()> {
+    match provider.get_user(user.username().as_str()).await {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == AuthFailureKind::NotFound => provider.create_user(user).await,
+        Err(error) => Err(error),
     }
-    provider.create_user(user).await
 }
 
 fn require_authorization(decision: AuthorizationDecision) -> AuthServiceResult<()> {
@@ -1891,7 +2037,11 @@ accounts:
             .expect("canonical error must retain the auth facade source");
         assert_eq!(auth_error.operation(), crate::AuthOperation::DecodeMetadata);
         assert_eq!(auth_error.kind(), crate::AuthFailureKind::InvalidData);
-        assert!(std::error::Error::source(auth_error)
+        let startup = std::error::Error::source(auth_error)
+            .and_then(|source| source.downcast_ref::<AuthStartupFailure>())
+            .expect("startup error must retain its rollback owner and primary failure");
+        assert!(startup.cleanup_error().is_none());
+        assert!(std::error::Error::source(startup.primary())
             .and_then(|source| source.downcast_ref::<serde_json::Error>())
             .is_some());
     }

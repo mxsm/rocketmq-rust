@@ -44,6 +44,9 @@ const PROVIDER_PREFIX: &str = "PROVIDER_";
 const METADATA_PROVIDER_PREFIX: &str = "METADATA_PROVIDER_";
 const EVALUATOR_PREFIX: &str = "EVALUATOR_";
 
+/// Compatibility factory for standalone callers. Runtime composition uses an
+/// injected [`crate::ProviderRegistry`]; only legacy calls without one consult
+/// the process cache by config name.
 pub struct AuthorizationFactory;
 
 impl AuthorizationFactory {

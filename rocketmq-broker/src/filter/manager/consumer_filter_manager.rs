@@ -14,6 +14,7 @@
 
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::hash::Hash;
 use std::str;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -24,7 +25,9 @@ use crate::config::config_manager::ConfigManager;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_filter::expression::Expression;
-use rocketmq_filter::filter::FilterFactory;
+use rocketmq_filter::filter::FilterBindingError;
+use rocketmq_filter::filter::FilterRegistryId;
+use rocketmq_filter::filter::FilterRegistrySnapshot;
 use rocketmq_filter::utils::bloom_filter::BloomFilter;
 use rocketmq_filter::utils::bloom_filter_data::BloomFilterData;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
@@ -49,8 +52,15 @@ struct CachedExpressionEntry {
     sequence: u64,
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ExpressionCacheKey {
+    registry: FilterRegistryId,
+    expression_type: String,
+    expression: String,
+}
+
 struct CachedFailureEntry {
-    _error: String,
+    error: FilterBindingError,
     sequence: u64,
 }
 
@@ -111,15 +121,16 @@ pub struct ConsumerFilterManagerStatsSnapshot {
 
 #[derive(Clone)]
 pub(crate) struct ConsumerFilterManager {
+    registry: Arc<FilterRegistrySnapshot>,
     _broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
     consumer_filter_wrapper: Arc<parking_lot::RwLock<ConsumerFilterWrapper>>,
     bloom_filter: Option<BloomFilter>,
-    compiled_expression_cache: Arc<DashMap<String, CachedExpressionEntry>>,
-    failed_expression_cache: Arc<DashMap<String, CachedFailureEntry>>,
+    compiled_expression_cache: Arc<DashMap<ExpressionCacheKey, CachedExpressionEntry>>,
+    failed_expression_cache: Arc<DashMap<ExpressionCacheKey, CachedFailureEntry>>,
     bloom_filter_data_cache: Arc<DashMap<String, CachedBloomFilterDataEntry>>,
-    compiled_expression_cache_order: Arc<parking_lot::Mutex<VecDeque<(u64, String)>>>,
-    failed_expression_cache_order: Arc<parking_lot::Mutex<VecDeque<(u64, String)>>>,
+    compiled_expression_cache_order: Arc<parking_lot::Mutex<VecDeque<(u64, ExpressionCacheKey)>>>,
+    failed_expression_cache_order: Arc<parking_lot::Mutex<VecDeque<(u64, ExpressionCacheKey)>>>,
     bloom_filter_data_cache_order: Arc<parking_lot::Mutex<VecDeque<(u64, String)>>>,
     compiled_expression_cache_max_entries: usize,
     failed_expression_cache_max_entries: usize,
@@ -130,9 +141,18 @@ pub(crate) struct ConsumerFilterManager {
 
 impl ConsumerFilterManager {
     pub fn new(broker_config: Arc<BrokerConfig>, message_store_config: Arc<MessageStoreConfig>) -> Self {
+        Self::with_registry(broker_config, message_store_config, FilterRegistrySnapshot::sql92())
+    }
+
+    pub(crate) fn with_registry(
+        broker_config: Arc<BrokerConfig>,
+        message_store_config: Arc<MessageStoreConfig>,
+        registry: Arc<FilterRegistrySnapshot>,
+    ) -> Self {
         Self::new_with_cache_capacity(
             broker_config,
             message_store_config,
+            registry,
             DEFAULT_COMPILED_EXPRESSION_CACHE_MAX_ENTRIES,
             DEFAULT_FAILED_EXPRESSION_CACHE_MAX_ENTRIES,
             DEFAULT_BLOOM_FILTER_DATA_CACHE_MAX_ENTRIES,
@@ -142,6 +162,7 @@ impl ConsumerFilterManager {
     fn new_with_cache_capacity(
         mut broker_config: Arc<BrokerConfig>,
         message_store_config: Arc<MessageStoreConfig>,
+        registry: Arc<FilterRegistrySnapshot>,
         compiled_expression_cache_max_entries: usize,
         failed_expression_cache_max_entries: usize,
         bloom_filter_data_cache_max_entries: usize,
@@ -155,6 +176,7 @@ impl ConsumerFilterManager {
         let broker_config_mut = Arc::make_mut(&mut broker_config);
         broker_config_mut.bit_map_length_consume_queue_ext = bloom_filter.m();
         ConsumerFilterManager {
+            registry,
             _broker_config: broker_config,
             message_store_config,
             consumer_filter_wrapper,
@@ -171,52 +193,6 @@ impl ConsumerFilterManager {
             cache_sequence: Arc::new(AtomicU64::new(0)),
             stats: Arc::new(ConsumerFilterManagerStats::default()),
         }
-    }
-
-    #[cfg(test)]
-    fn new_with_cache_capacity_for_test(
-        broker_config: Arc<BrokerConfig>,
-        message_store_config: Arc<MessageStoreConfig>,
-        compiled_expression_cache_max_entries: usize,
-        failed_expression_cache_max_entries: usize,
-        bloom_filter_data_cache_max_entries: usize,
-    ) -> Self {
-        Self::new_with_cache_capacity(
-            broker_config,
-            message_store_config,
-            compiled_expression_cache_max_entries,
-            failed_expression_cache_max_entries,
-            bloom_filter_data_cache_max_entries,
-        )
-    }
-
-    pub fn build(
-        topic: CheetahString,
-        consumer_group: CheetahString,
-        expression: Option<CheetahString>,
-        type_: Option<CheetahString>,
-        client_version: u64,
-    ) -> Option<ConsumerFilterData> {
-        if ExpressionType::is_tag_type(type_.as_deref()) {
-            return None;
-        }
-
-        let expression_text = expression.as_ref().filter(|value| !value.is_empty())?;
-        let expression_type = type_.as_ref()?;
-        let filter = FilterFactory::instance().get(expression_type.as_str())?;
-        let compiled = filter.try_compile(expression_text.as_str()).ok()?;
-
-        let mut consumer_filter_data = ConsumerFilterData::default();
-        consumer_filter_data.set_topic(topic);
-        consumer_filter_data.set_consumer_group(consumer_group);
-        consumer_filter_data.set_born_time(current_millis());
-        consumer_filter_data.set_dead_time(0);
-        consumer_filter_data.set_expression(expression);
-        consumer_filter_data.set_expression_type(type_);
-        consumer_filter_data.set_client_version(client_version);
-        consumer_filter_data.set_compiled_expression(compiled);
-
-        Some(consumer_filter_data)
     }
 
     pub fn resolve(
@@ -451,8 +427,12 @@ impl ConsumerFilterManager {
         Some(bloom_filter_data)
     }
 
-    fn cache_key(expression_type: &str, expression: &str) -> String {
-        format!("{expression_type}\u{0}{expression}")
+    fn cache_key(&self, expression_type: &str, expression: &str) -> ExpressionCacheKey {
+        ExpressionCacheKey {
+            registry: self.registry.id(),
+            expression_type: expression_type.to_owned(),
+            expression: expression.to_owned(),
+        }
     }
 
     fn clear_compile_caches(&self) {
@@ -497,9 +477,9 @@ impl ConsumerFilterManager {
         }
     }
 
-    fn evict_if_needed<T>(
-        cache: &DashMap<String, T>,
-        order: &parking_lot::Mutex<VecDeque<(u64, String)>>,
+    fn evict_if_needed<K: Eq + Hash + Clone, T>(
+        cache: &DashMap<K, T>,
+        order: &parking_lot::Mutex<VecDeque<(u64, K)>>,
         max_entries: usize,
         entry_is_current: impl Fn(&T, u64) -> bool,
     ) -> u64 {
@@ -528,7 +508,7 @@ impl ConsumerFilterManager {
 
     fn cache_compiled_expression(
         &self,
-        cache_key: String,
+        cache_key: ExpressionCacheKey,
         compiled: Arc<dyn Expression + 'static>,
     ) -> Arc<dyn Expression + 'static> {
         if self.compiled_expression_cache_max_entries == 0 {
@@ -561,7 +541,7 @@ impl ConsumerFilterManager {
         compiled
     }
 
-    fn cache_compile_failure(&self, cache_key: String, error: String) {
+    fn cache_compile_failure(&self, cache_key: ExpressionCacheKey, error: FilterBindingError) {
         if self.failed_expression_cache_max_entries == 0 {
             return;
         }
@@ -570,13 +550,8 @@ impl ConsumerFilterManager {
         }
 
         let sequence = self.next_cache_sequence();
-        self.failed_expression_cache.insert(
-            cache_key.clone(),
-            CachedFailureEntry {
-                _error: error,
-                sequence,
-            },
-        );
+        self.failed_expression_cache
+            .insert(cache_key.clone(), CachedFailureEntry { error, sequence });
         self.failed_expression_cache_order
             .lock()
             .push_back((sequence, cache_key));
@@ -589,36 +564,35 @@ impl ConsumerFilterManager {
         self.stats.failed_cache_evictions.fetch_add(evicted, Ordering::Relaxed);
     }
 
-    fn compile_with_cache(&self, expression_type: &str, expression: &str) -> Option<Arc<dyn Expression + 'static>> {
-        let cache_key = Self::cache_key(expression_type, expression);
+    pub(crate) fn compile_with_cache(
+        &self,
+        expression_type: &str,
+        expression: &str,
+    ) -> Result<Arc<dyn Expression + 'static>, FilterBindingError> {
+        let cache_key = self.cache_key(expression_type, expression);
         self.stats.compile_requests.fetch_add(1, Ordering::Relaxed);
-        if self.failed_expression_cache.contains_key(&cache_key) {
+        if let Some(entry) = self.failed_expression_cache.get(&cache_key) {
             self.stats.failed_cache_hits.fetch_add(1, Ordering::Relaxed);
-            return None;
+            return Err(entry.error);
         }
         if let Some(entry) = self.compiled_expression_cache.get(&cache_key) {
             self.stats.compiled_cache_hits.fetch_add(1, Ordering::Relaxed);
-            return Some(entry.compiled.clone());
+            return Ok(entry.compiled.clone());
         }
         self.stats.compiled_cache_misses.fetch_add(1, Ordering::Relaxed);
 
-        let Some(filter) = FilterFactory::instance().get(expression_type) else {
-            self.stats.compile_failures.fetch_add(1, Ordering::Relaxed);
-            self.cache_compile_failure(cache_key, format!("unknown filter type: {expression_type}"));
-            return None;
-        };
-        let compiled = match filter.try_compile(expression) {
-            Ok(compiled) => Arc::<dyn Expression + 'static>::from(compiled),
+        let compiled = match self.registry.compile(expression_type, expression) {
+            Ok(compiled) => Arc::new(compiled) as Arc<dyn Expression>,
             Err(error) => {
                 self.stats.compile_failures.fetch_add(1, Ordering::Relaxed);
-                self.cache_compile_failure(cache_key, error.to_string());
-                return None;
+                self.cache_compile_failure(cache_key, error);
+                return Err(error);
             }
         };
 
         self.stats.compile_successes.fetch_add(1, Ordering::Relaxed);
         self.failed_expression_cache.remove(&cache_key);
-        Some(self.cache_compiled_expression(cache_key, compiled))
+        Ok(self.cache_compiled_expression(cache_key, compiled))
     }
 
     fn build_with_compiled_expression(
@@ -636,7 +610,9 @@ impl ConsumerFilterManager {
 
         let expression_text = expression.as_ref().filter(|value| !value.is_empty())?;
         let expression_type = type_.as_ref()?;
-        let compiled = self.compile_with_cache(expression_type.as_str(), expression_text.as_str())?;
+        let compiled = self
+            .compile_with_cache(expression_type.as_str(), expression_text.as_str())
+            .ok()?;
 
         let mut consumer_filter_data = ConsumerFilterData::default();
         consumer_filter_data.set_topic(topic);
@@ -659,7 +635,7 @@ impl ConsumerFilterManager {
         let Some(expression_type) = filter_data.expression_type() else {
             return false;
         };
-        let Some(compiled) = self.compile_with_cache(expression_type.as_str(), expression.as_str()) else {
+        let Ok(compiled) = self.compile_with_cache(expression_type.as_str(), expression.as_str()) else {
             return false;
         };
         filter_data.set_compiled_expression_arc(compiled);
@@ -767,11 +743,20 @@ mod tests {
     use rocketmq_filter::filter::FilterCompileError;
     use rocketmq_filter::filter::FilterCompileErrorKind;
     use rocketmq_filter::filter::FilterCompileStage;
+    use rocketmq_filter::filter::FilterRegistryBuilder;
 
     fn new_manager() -> ConsumerFilterManager {
         ConsumerFilterManager::new(
             Arc::new(BrokerConfig::default()),
             Arc::new(MessageStoreConfig::default()),
+        )
+    }
+
+    fn new_manager_with_registry(registry: Arc<FilterRegistrySnapshot>) -> ConsumerFilterManager {
+        ConsumerFilterManager::with_registry(
+            Arc::new(BrokerConfig::default()),
+            Arc::new(MessageStoreConfig::default()),
+            registry,
         )
     }
 
@@ -798,17 +783,18 @@ mod tests {
     }
 
     #[test]
-    fn build_compiles_sql_expression() {
-        let filter_data = ConsumerFilterManager::build(
-            CheetahString::from_slice("TopicTest"),
-            CheetahString::from_slice("GroupTest"),
-            Some(CheetahString::from_slice(
-                "region IN ('hz', 'sh') AND name CONTAINS 'rocket' AND score BETWEEN 0 AND 100",
-            )),
-            Some(CheetahString::from_static_str(ExpressionType::SQL92)),
-            7,
-        )
-        .expect("SQL filter should be built");
+    fn resolve_compiles_sql_expression() {
+        let filter_data = new_manager()
+            .resolve(
+                CheetahString::from_slice("TopicTest"),
+                CheetahString::from_slice("GroupTest"),
+                Some(CheetahString::from_slice(
+                    "region IN ('hz', 'sh') AND name CONTAINS 'rocket' AND score BETWEEN 0 AND 100",
+                )),
+                Some(CheetahString::from_static_str(ExpressionType::SQL92)),
+                7,
+            )
+            .expect("SQL filter should be built");
 
         let mut context = MessageEvaluationContext::default();
         context.put("region", "sh");
@@ -983,12 +969,15 @@ mod tests {
     fn resolve_negative_cache_avoids_recompiling_same_invalid_expression() {
         let filter_type = format!("COUNT_FAIL_{}", current_millis());
         let compile_count = Arc::new(AtomicUsize::new(0));
-        rocketmq_filter::filter::FilterFactory::instance().register(Arc::new(FailingFilter {
-            filter_type: filter_type.clone(),
-            compile_count: compile_count.clone(),
-        }));
+        let mut registry = FilterRegistryBuilder::with_sql92();
+        registry
+            .register(Arc::new(FailingFilter {
+                filter_type: filter_type.clone(),
+                compile_count: compile_count.clone(),
+            }))
+            .unwrap();
 
-        let manager = new_manager();
+        let manager = new_manager_with_registry(registry.build().unwrap());
         let first = manager.resolve(
             CheetahString::from_slice("TopicTest"),
             CheetahString::from_slice("GroupTest"),
@@ -1008,20 +997,100 @@ mod tests {
         assert!(second.is_none());
         assert_eq!(compile_count.load(Ordering::Relaxed), 1);
         assert_eq!(manager.cached_compile_failure_count(), 1);
+    }
 
-        let _ = rocketmq_filter::filter::FilterFactory::instance().unregister(filter_type.as_str());
+    #[test]
+    fn instance_compilations_and_negative_caches_are_isolated() {
+        let filter_type = "INSTANCE_FILTER";
+        let failures = Arc::new(AtomicUsize::new(0));
+        let mut rejected_registry = FilterRegistryBuilder::with_sql92();
+        rejected_registry
+            .register(Arc::new(FailingFilter {
+                filter_type: filter_type.into(),
+                compile_count: failures.clone(),
+            }))
+            .unwrap();
+        let rejected = new_manager_with_registry(rejected_registry.build().unwrap());
+        let mut accepted_registry = FilterRegistryBuilder::with_sql92();
+        accepted_registry
+            .register(Arc::new(PassingFilter {
+                filter_type: filter_type.into(),
+            }))
+            .unwrap();
+        let accepted_registry = accepted_registry.build().unwrap();
+        let retained_registry = Arc::downgrade(&accepted_registry);
+        let accepted = new_manager_with_registry(accepted_registry);
+        for _ in 0..2 {
+            assert!(matches!(
+                rejected.compile_with_cache(filter_type, "same input"),
+                Err(FilterBindingError::Compile(_))
+            ));
+        }
+        assert_eq!(failures.load(Ordering::Relaxed), 1);
+        let data = accepted
+            .resolve(
+                "TopicTest".into(),
+                "GroupTest".into(),
+                Some("same input".into()),
+                Some(filter_type.into()),
+                1,
+            )
+            .unwrap();
+        assert_eq!(accepted.cached_compile_failure_count(), 0);
+        assert_eq!(rejected.cached_expression_count(), 0);
+        let cloned = data.clone();
+        assert!(Arc::ptr_eq(
+            data.compiled_expression().as_ref().unwrap(),
+            cloned.compiled_expression().as_ref().unwrap()
+        ));
+        let serialized = serde_json::to_value(&data).unwrap();
+        let restored: ConsumerFilterData = serde_json::from_value(serialized.clone()).unwrap();
+        assert!(restored.compiled_expression().is_none());
+        assert_eq!(serde_json::to_value(restored).unwrap(), serialized);
+        let fields: std::collections::BTreeSet<_> =
+            serialized.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(
+            fields,
+            std::collections::BTreeSet::from([
+                "consumerGroup",
+                "topic",
+                "expression",
+                "expressionType",
+                "bornTime",
+                "deadTime",
+                "bloomFilterData",
+                "clientVersion",
+            ])
+        );
+        drop(data);
+        drop(accepted);
+        assert!(retained_registry.upgrade().is_some());
+        assert_eq!(
+            cloned
+                .compiled_expression()
+                .as_ref()
+                .unwrap()
+                .evaluate(&MessageEvaluationContext::default())
+                .unwrap(),
+            ExprValue::Boolean(true),
+        );
+        drop(cloned);
+        assert!(retained_registry.upgrade().is_none());
     }
 
     #[test]
     fn stats_snapshot_tracks_compiled_cache_hits_and_successes() {
         let filter_type = format!("COUNT_STATS_PASS_{}", current_millis());
         let compile_count = Arc::new(AtomicUsize::new(0));
-        rocketmq_filter::filter::FilterFactory::instance().register(Arc::new(CountingPassingFilter {
-            filter_type: filter_type.clone(),
-            compile_count: compile_count.clone(),
-        }));
+        let mut registry = FilterRegistryBuilder::with_sql92();
+        registry
+            .register(Arc::new(CountingPassingFilter {
+                filter_type: filter_type.clone(),
+                compile_count: compile_count.clone(),
+            }))
+            .unwrap();
 
-        let manager = new_manager();
+        let manager = new_manager_with_registry(registry.build().unwrap());
         let _ = manager.resolve(
             CheetahString::from_slice("TopicTest"),
             CheetahString::from_slice("GroupTest"),
@@ -1047,22 +1116,24 @@ mod tests {
         assert_eq!(stats.compile_failures, 0);
         assert_eq!(stats.compiled_cache_entries, 1);
         assert_eq!(stats.failed_cache_entries, 0);
-
-        let _ = rocketmq_filter::filter::FilterFactory::instance().unregister(filter_type.as_str());
     }
 
     #[test]
     fn stats_snapshot_tracks_failed_cache_hits_and_evictions() {
         let filter_type = format!("COUNT_STATS_FAIL_{}", current_millis());
         let compile_count = Arc::new(AtomicUsize::new(0));
-        rocketmq_filter::filter::FilterFactory::instance().register(Arc::new(FailingFilter {
-            filter_type: filter_type.clone(),
-            compile_count: compile_count.clone(),
-        }));
+        let mut registry = FilterRegistryBuilder::with_sql92();
+        registry
+            .register(Arc::new(FailingFilter {
+                filter_type: filter_type.clone(),
+                compile_count: compile_count.clone(),
+            }))
+            .unwrap();
 
-        let manager = ConsumerFilterManager::new_with_cache_capacity_for_test(
+        let manager = ConsumerFilterManager::new_with_cache_capacity(
             Arc::new(BrokerConfig::default()),
             Arc::new(MessageStoreConfig::default()),
+            registry.build().unwrap(),
             2,
             1,
             2,
@@ -1106,8 +1177,6 @@ mod tests {
         assert_eq!(stats.compile_failures, 3);
         assert_eq!(stats.failed_cache_evictions, 2);
         assert_eq!(stats.failed_cache_entries, 1);
-
-        let _ = rocketmq_filter::filter::FilterFactory::instance().unregister(filter_type.as_str());
     }
 
     #[test]
@@ -1136,9 +1205,10 @@ mod tests {
 
     #[test]
     fn bloom_filter_data_cache_evicts_oldest_entries_when_capacity_is_exceeded() {
-        let manager = ConsumerFilterManager::new_with_cache_capacity_for_test(
+        let manager = ConsumerFilterManager::new_with_cache_capacity(
             Arc::new(BrokerConfig::default()),
             Arc::new(MessageStoreConfig::default()),
+            FilterRegistrySnapshot::sql92(),
             2,
             2,
             1,
@@ -1175,11 +1245,14 @@ mod tests {
     #[test]
     fn stop_clears_compile_caches() {
         let passing_type = format!("COUNT_PASS_{}", current_millis());
-        rocketmq_filter::filter::FilterFactory::instance().register(Arc::new(PassingFilter {
-            filter_type: passing_type.clone(),
-        }));
+        let mut registry = FilterRegistryBuilder::with_sql92();
+        registry
+            .register(Arc::new(PassingFilter {
+                filter_type: passing_type.clone(),
+            }))
+            .unwrap();
 
-        let mut manager = new_manager();
+        let mut manager = new_manager_with_registry(registry.build().unwrap());
         let _ = manager.resolve(
             CheetahString::from_slice("TopicTest"),
             CheetahString::from_slice("GroupTest"),
@@ -1201,22 +1274,24 @@ mod tests {
         assert!(manager.stop());
         assert_eq!(manager.cached_expression_count(), 0);
         assert_eq!(manager.cached_compile_failure_count(), 0);
-
-        let _ = rocketmq_filter::filter::FilterFactory::instance().unregister(passing_type.as_str());
     }
 
     #[test]
     fn compiled_expression_cache_evicts_oldest_entries_when_capacity_is_exceeded() {
         let filter_type = format!("COUNT_BOUNDED_PASS_{}", current_millis());
         let compile_count = Arc::new(AtomicUsize::new(0));
-        rocketmq_filter::filter::FilterFactory::instance().register(Arc::new(CountingPassingFilter {
-            filter_type: filter_type.clone(),
-            compile_count: compile_count.clone(),
-        }));
+        let mut registry = FilterRegistryBuilder::with_sql92();
+        registry
+            .register(Arc::new(CountingPassingFilter {
+                filter_type: filter_type.clone(),
+                compile_count: compile_count.clone(),
+            }))
+            .unwrap();
 
-        let manager = ConsumerFilterManager::new_with_cache_capacity_for_test(
+        let manager = ConsumerFilterManager::new_with_cache_capacity(
             Arc::new(BrokerConfig::default()),
             Arc::new(MessageStoreConfig::default()),
+            registry.build().unwrap(),
             2,
             2,
             2,
@@ -1253,22 +1328,24 @@ mod tests {
 
         assert_eq!(manager.cached_expression_count(), 2);
         assert_eq!(compile_count.load(Ordering::Relaxed), 4);
-
-        let _ = rocketmq_filter::filter::FilterFactory::instance().unregister(filter_type.as_str());
     }
 
     #[test]
     fn failed_expression_cache_evicts_oldest_entries_when_capacity_is_exceeded() {
         let filter_type = format!("COUNT_BOUNDED_FAIL_{}", current_millis());
         let compile_count = Arc::new(AtomicUsize::new(0));
-        rocketmq_filter::filter::FilterFactory::instance().register(Arc::new(FailingFilter {
-            filter_type: filter_type.clone(),
-            compile_count: compile_count.clone(),
-        }));
+        let mut registry = FilterRegistryBuilder::with_sql92();
+        registry
+            .register(Arc::new(FailingFilter {
+                filter_type: filter_type.clone(),
+                compile_count: compile_count.clone(),
+            }))
+            .unwrap();
 
-        let manager = ConsumerFilterManager::new_with_cache_capacity_for_test(
+        let manager = ConsumerFilterManager::new_with_cache_capacity(
             Arc::new(BrokerConfig::default()),
             Arc::new(MessageStoreConfig::default()),
+            registry.build().unwrap(),
             2,
             1,
             2,
@@ -1298,8 +1375,6 @@ mod tests {
 
         assert_eq!(manager.cached_compile_failure_count(), 1);
         assert_eq!(compile_count.load(Ordering::Relaxed), 3);
-
-        let _ = rocketmq_filter::filter::FilterFactory::instance().unregister(filter_type.as_str());
     }
 
     #[test]
