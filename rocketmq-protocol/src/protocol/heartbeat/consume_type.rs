@@ -86,3 +86,73 @@ impl Display for ConsumeType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WIRE_PAIRS: [(ConsumeType, &str); 3] = [
+        (ConsumeType::ConsumeActively, "\"CONSUME_ACTIVELY\""),
+        (ConsumeType::ConsumePassively, "\"CONSUME_PASSIVELY\""),
+        (ConsumeType::ConsumePop, "\"CONSUME_POP\""),
+    ];
+
+    #[test]
+    fn serialize_consume_type_to_java_wire_string() {
+        for (consume_type, json) in WIRE_PAIRS {
+            assert_eq!(serde_json::to_string(&consume_type).unwrap(), json);
+        }
+    }
+
+    #[test]
+    fn deserialize_java_wire_string_to_consume_type() {
+        for (consume_type, json) in WIRE_PAIRS {
+            let deserialized: ConsumeType = serde_json::from_str(json).unwrap();
+            assert_eq!(deserialized, consume_type);
+
+            let round_tripped: ConsumeType =
+                serde_json::from_str(&serde_json::to_string(&consume_type).unwrap()).unwrap();
+            assert_eq!(round_tripped, consume_type);
+        }
+    }
+
+    #[test]
+    fn display_consume_type() {
+        assert_eq!(ConsumeType::ConsumeActively.to_string(), "PULL");
+        assert_eq!(ConsumeType::ConsumePassively.to_string(), "PUSH");
+        assert_eq!(ConsumeType::ConsumePop.to_string(), "POP");
+    }
+
+    #[test]
+    fn deserialize_consume_type_unknown_string_names_supported_variants() {
+        for json in ["\"CONSUME_UNKNOWN\"", "\"PULL\""] {
+            let message = serde_json::from_str::<ConsumeType>(json).unwrap_err().to_string();
+            assert!(message.contains("unknown variant"), "{message}");
+            for variant in ["ConsumeActively", "ConsumePassively", "ConsumePop"] {
+                assert!(message.contains(variant), "{message}");
+            }
+        }
+    }
+
+    #[test]
+    fn default_consume_type_is_consume_actively() {
+        assert_eq!(ConsumeType::default(), ConsumeType::ConsumeActively);
+    }
+
+    #[test]
+    fn consume_type_embedded_in_struct_uses_java_wire_string() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize)]
+        struct Wrapper {
+            consume_type: ConsumeType,
+        }
+
+        let wrapper = Wrapper {
+            consume_type: ConsumeType::ConsumePassively,
+        };
+        let json = serde_json::to_string(&wrapper).unwrap();
+        assert_eq!(json, r#"{"consume_type":"CONSUME_PASSIVELY"}"#);
+
+        let deserialized: Wrapper = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, wrapper);
+    }
+}
