@@ -33,13 +33,15 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
-use rocketmq_error::RocketMQError;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BudgetClass;
 use rocketmq_runtime::BudgetSnapshot;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tokio::sync::Notify;
 use tracing::error;
 use tracing::info;
@@ -695,7 +697,7 @@ impl AllocateMappedFileService {
         transient_store_pool: &Option<Arc<TransientStorePool>>,
         warm_mapped_file_config: MappedFileWarmupConfig,
         #[cfg(feature = "observability")] store_metrics: &rocketmq_observability::metrics::store::StoreMetricsRecorder,
-    ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
+    ) -> Result<Arc<DefaultMappedFile>, StoreError> {
         let start = std::time::Instant::now();
         let file_path = req.file_path().to_owned();
         let file_size = req.file_size() as u64;
@@ -712,9 +714,11 @@ impl AllocateMappedFileService {
             // Standard mmap
             DefaultMappedFile::try_new(CheetahString::from_string(file_path.clone()), file_size)
         }
-        .map_err(|error| RocketMQError::StorageWriteFailed {
-            path: req.file_path().to_owned(),
-            reason: error.to_string(),
+        .map_err(|error| {
+            StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Append)
+                .in_component(StoreComponent::MappedFile)
+                .with_detail(req.file_path())
+                .with_source(error)
         })?;
         #[cfg(feature = "observability")]
         let mapped_file = mapped_file.with_store_metrics(store_metrics.clone());
@@ -1191,7 +1195,7 @@ impl AllocateMappedFileService {
         next_file_path: String,
         next_next_file_path: String,
         file_size: i32,
-    ) -> Result<Option<Arc<DefaultMappedFile>>, RocketMQError> {
+    ) -> Result<Option<Arc<DefaultMappedFile>>, StoreError> {
         if file_size <= 0 {
             warn!(
                 file_path = next_file_path,
@@ -1276,7 +1280,7 @@ impl AllocateMappedFileService {
         &self,
         file_path: String,
         file_size: u64,
-    ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
+    ) -> Result<Arc<DefaultMappedFile>, StoreError> {
         let file_size = Self::checked_public_file_size(&file_path, file_size)?;
         // Use empty string for next-next file (won't be allocated)
         let result = self
@@ -1287,9 +1291,10 @@ impl AllocateMappedFileService {
             )
             .await?;
 
-        result.ok_or_else(|| RocketMQError::StorageWriteFailed {
-            path: file_path.clone(),
-            reason: "Allocation failed or timed out".to_string(),
+        result.ok_or_else(|| {
+            StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Append)
+                .in_component(StoreComponent::MappedFile)
+                .with_detail(file_path)
         })
     }
 
@@ -1298,7 +1303,7 @@ impl AllocateMappedFileService {
         &self,
         file_path: String,
         file_size: u64,
-    ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
+    ) -> Result<Arc<DefaultMappedFile>, StoreError> {
         self.submit_request(file_path, file_size).await
     }
 
@@ -1306,13 +1311,14 @@ impl AllocateMappedFileService {
         &self,
         file_path: String,
         file_size: u64,
-    ) -> Result<Arc<DefaultMappedFile>, RocketMQError> {
+    ) -> Result<Arc<DefaultMappedFile>, StoreError> {
         let file_size = Self::checked_public_file_size(&file_path, file_size)?;
         let result = self.put_request_and_return_mapped_file_blocking(file_path.clone(), String::new(), file_size)?;
 
-        result.ok_or_else(|| RocketMQError::StorageWriteFailed {
-            path: file_path,
-            reason: "Allocation failed or timed out".to_string(),
+        result.ok_or_else(|| {
+            StoreError::new(&rocketmq_error::STORAGE_OPERATION_TIMED_OUT, StoreOperation::Append)
+                .in_component(StoreComponent::MappedFile)
+                .with_detail(file_path)
         })
     }
 
@@ -1321,7 +1327,7 @@ impl AllocateMappedFileService {
         next_file_path: String,
         next_next_file_path: String,
         file_size: i32,
-    ) -> Result<Option<Arc<DefaultMappedFile>>, RocketMQError> {
+    ) -> Result<Option<Arc<DefaultMappedFile>>, StoreError> {
         let next_req = match self.admit_request(next_file_path.clone(), file_size) {
             AllocationAdmission::Inserted(request) | AllocationAdmission::Existing(request) => request,
             AllocationAdmission::Rejected => return Ok(None),
@@ -1487,13 +1493,17 @@ impl AllocateMappedFileService {
         request.wait(&self.worker_completed)
     }
 
-    fn checked_public_file_size(file_path: &str, file_size: u64) -> Result<i32, RocketMQError> {
+    fn checked_public_file_size(file_path: &str, file_size: u64) -> Result<i32, StoreError> {
         i32::try_from(file_size)
             .ok()
             .filter(|file_size| *file_size > 0)
-            .ok_or_else(|| RocketMQError::StorageWriteFailed {
-                path: file_path.to_owned(),
-                reason: format!("mapped-file size must be in 1..={} bytes, got {file_size}", i32::MAX),
+            .ok_or_else(|| {
+                StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, StoreOperation::Start)
+                    .in_component(StoreComponent::MappedFile)
+                    .with_detail(format!(
+                        "{file_path}: mapped-file size must be in 1..={} bytes, got {file_size}",
+                        i32::MAX
+                    ))
             })
     }
 

@@ -74,11 +74,11 @@ pub(crate) enum MappedFileFailure {
 
     /// Locking the mapped region in physical memory failed.
     #[error("Mapped-memory lock failed: {0}")]
-    MemoryLockFailed(#[source] rocketmq_error::RocketMQError),
+    MemoryLockFailed(#[source] rocketmq_store_api::StoreError),
 
     /// Unlocking the mapped region from physical memory failed.
     #[error("Mapped-memory unlock failed: {0}")]
-    MemoryUnlockFailed(#[source] rocketmq_error::RocketMQError),
+    MemoryUnlockFailed(#[source] rocketmq_store_api::StoreError),
 
     /// Transient store pool exhausted.
     ///
@@ -352,14 +352,16 @@ mod tests {
 
     #[test]
     fn memory_lock_errors_preserve_the_typed_source() {
-        let lock = MappedFileFailure::MemoryLockFailed(rocketmq_error::RocketMQError::internal(
-            "lock mapped memory",
-            io::Error::other("lock failed"),
-        ));
-        let unlock = MappedFileFailure::MemoryUnlockFailed(rocketmq_error::RocketMQError::internal(
-            "unlock mapped memory",
-            io::Error::other("unlock failed"),
-        ));
+        let lock = MappedFileFailure::MemoryLockFailed(
+            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Admin)
+                .in_component(StoreComponent::MappedFile)
+                .with_source(io::Error::other("lock failed")),
+        );
+        let unlock = MappedFileFailure::MemoryUnlockFailed(
+            StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Admin)
+                .in_component(StoreComponent::MappedFile)
+                .with_source(io::Error::other("unlock failed")),
+        );
 
         assert!(lock.source().is_some());
         assert!(unlock.source().is_some());

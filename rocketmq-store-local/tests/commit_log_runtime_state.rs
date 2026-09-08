@@ -15,13 +15,15 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQResult;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_local::base::memory_lock_manager::MemoryLockCategory;
 use rocketmq_store_local::commit_log::load::LoadStatistics;
 use rocketmq_store_local::commit_log::memory_lock::CommitLogMemoryLockTarget;
 use rocketmq_store_local::commit_log::runtime_state::CommitLogActiveMemoryLock;
 use rocketmq_store_local::commit_log::runtime_state::CommitLogPutMessageLockStats;
 use rocketmq_store_local::commit_log::runtime_state::CommitLogRuntimeState;
+use rocketmq_store_local::StoreResult;
 
 fn test_handle(
     state: &CommitLogActiveMemoryLock,
@@ -29,7 +31,7 @@ fn test_handle(
 ) -> rocketmq_store_local::base::memory_lock_manager::MemoryLockHandle {
     state
         .manager()
-        .lock_region_with(category, vec![0u8; 1], |_| Ok::<_, rocketmq_error::RocketMQError>(()))
+        .lock_region_with(category, vec![0u8; 1], |_| Ok::<_, rocketmq_store_api::StoreError>(()))
         .expect("test lock")
         .expect("non-empty test handle")
 }
@@ -69,7 +71,7 @@ fn active_window_reuses_only_offsets_inside_the_current_region() {
 }
 
 #[test]
-fn active_file_requires_exact_region_and_successful_unlock_removes_identity() -> RocketMQResult<()> {
+fn active_file_requires_exact_region_and_successful_unlock_removes_identity() -> StoreResult<()> {
     let mut state = CommitLogActiveMemoryLock::new(true, 1024);
     let target = CommitLogMemoryLockTarget {
         category: MemoryLockCategory::CommitLogActiveFile,
@@ -91,7 +93,7 @@ fn active_file_requires_exact_region_and_successful_unlock_removes_identity() ->
 }
 
 #[test]
-fn failed_active_unlock_preserves_identity_for_retry() -> RocketMQResult<()> {
+fn failed_active_unlock_preserves_identity_for_retry() -> StoreResult<()> {
     let mut state = CommitLogActiveMemoryLock::new(true, 1024);
     let target = CommitLogMemoryLockTarget {
         category: MemoryLockCategory::CommitLogActiveFile,
@@ -107,18 +109,17 @@ fn failed_active_unlock_preserves_identity_for_retry() -> RocketMQResult<()> {
     let error = state
         .unlock_current_with(|manager, handle| {
             manager.unlock_region_with(handle, |_| {
-                Err(rocketmq_error::RocketMQError::StorageLockFailed {
-                    path: "retry active unlock".to_string(),
-                })
+                Err(rocketmq_store_api::StoreError::new(
+                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                    StoreOperation::Admin,
+                )
+                .in_component(StoreComponent::MappedFile)
+                .with_detail("retry active unlock"))
             })
         })
         .expect_err("failed unlock must remain observable");
 
-    assert!(matches!(
-        error,
-        rocketmq_error::RocketMQError::StorageLockFailed { path }
-            if path == "retry active unlock"
-    ));
+    assert_eq!(error.code(), rocketmq_error::STORAGE_BACKEND_UNAVAILABLE.code());
     assert!(state.is_current(200, target));
     assert_eq!(state.manager().locked_bytes(), 1);
 

@@ -196,8 +196,6 @@ pub(crate) enum TimelineGcError {
     #[error("persisted Timer payload record is invalid")]
     InvalidPayloadRecord,
     #[error(transparent)]
-    Timeline(#[from] rocketmq_error::RocketMQError),
-    #[error(transparent)]
     Store(#[from] rocketmq_store_api::StoreError),
     #[error(transparent)]
     Completion(#[from] super::TimelineCompletionError),

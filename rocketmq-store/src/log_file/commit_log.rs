@@ -34,13 +34,13 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::config::store_runtime_config::StoreRuntimeConfig;
+use crate::StoreResult;
 use bytes::Buf;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use parking_lot::Mutex as ParkingMutex;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::attribute::cq_type::CQType;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::config::TopicConfig;
@@ -656,7 +656,7 @@ impl CommitLog {
         )
     }
 
-    fn ensure_active_mapped_file_locked(&self, mapped_file: &DefaultMappedFile) -> RocketMQResult<()> {
+    fn ensure_active_mapped_file_locked(&self, mapped_file: &DefaultMappedFile) -> StoreResult<()> {
         let target = self.active_memory_lock_target(mapped_file);
         let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
         Self::ensure_active_mapped_file_locked_parts(
@@ -674,10 +674,10 @@ impl CommitLog {
         mapped_file: &DefaultMappedFile,
         mut locker: F,
         mut unlocker: G,
-    ) -> RocketMQResult<()>
+    ) -> StoreResult<()>
     where
-        F: FnMut(&[u8]) -> RocketMQResult<()>,
-        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> StoreResult<()>,
+        G: FnMut(*const u8, usize) -> StoreResult<()>,
     {
         let target = self.active_memory_lock_target(mapped_file);
         let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
@@ -698,10 +698,10 @@ impl CommitLog {
         file_from_offset: u64,
         mut lock_region: L,
         mut unlock_region: U,
-    ) -> RocketMQResult<()>
+    ) -> StoreResult<()>
     where
-        L: FnMut(&MemoryLockManager, CommitLogMemoryLockTarget) -> RocketMQResult<Option<MemoryLockHandle>>,
-        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+        L: FnMut(&MemoryLockManager, CommitLogMemoryLockTarget) -> StoreResult<Option<MemoryLockHandle>>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> StoreResult<()>,
     {
         let Some(target) = target else {
             return Self::release_active_memory_lock_if_present_parts(
@@ -727,9 +727,9 @@ impl CommitLog {
         Ok(())
     }
 
-    fn release_active_memory_lock_if_present<G>(&self, unlocker: G) -> RocketMQResult<()>
+    fn release_active_memory_lock_if_present<G>(&self, unlocker: G) -> StoreResult<()>
     where
-        G: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        G: FnMut(*const u8, usize) -> StoreResult<()>,
     {
         let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
         let mut unlocker = unlocker;
@@ -740,13 +740,13 @@ impl CommitLog {
         )
     }
 
-    fn release_active_memory_lock(&self) -> RocketMQResult<()> {
+    fn release_active_memory_lock(&self) -> StoreResult<()> {
         self.release_active_memory_lock_with(MemoryLockManager::unlock_region)
     }
 
-    fn release_active_memory_lock_with<U>(&self, unlock_region: U) -> RocketMQResult<()>
+    fn release_active_memory_lock_with<U>(&self, unlock_region: U) -> StoreResult<()>
     where
-        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> StoreResult<()>,
     {
         let (active_memory_lock, active_memory_lock_present) = self.runtime_state.active_memory_lock_parts();
         Self::release_active_memory_lock_if_present_parts(active_memory_lock, active_memory_lock_present, unlock_region)
@@ -756,9 +756,9 @@ impl CommitLog {
         active_memory_lock: &ParkingMutex<CommitLogActiveMemoryLock>,
         active_memory_lock_present: &AtomicBool,
         unlock_region: U,
-    ) -> RocketMQResult<()>
+    ) -> StoreResult<()>
     where
-        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> StoreResult<()>,
     {
         if !active_memory_lock_present.load(Ordering::Acquire) {
             return Ok(());
@@ -771,9 +771,9 @@ impl CommitLog {
         active_memory_lock: &ParkingMutex<CommitLogActiveMemoryLock>,
         active_memory_lock_present: &AtomicBool,
         mut unlock_region: U,
-    ) -> RocketMQResult<()>
+    ) -> StoreResult<()>
     where
-        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> StoreResult<()>,
     {
         let mut active_memory_lock = active_memory_lock.lock();
         Self::release_active_memory_lock_locked(&mut active_memory_lock, &mut unlock_region)?;
@@ -784,9 +784,9 @@ impl CommitLog {
     fn release_active_memory_lock_locked<U>(
         active_memory_lock: &mut CommitLogActiveMemoryLock,
         mut unlock_region: U,
-    ) -> RocketMQResult<()>
+    ) -> StoreResult<()>
     where
-        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> StoreResult<()>,
     {
         active_memory_lock.unlock_current_with(&mut unlock_region)?;
         Ok(())
@@ -798,7 +798,7 @@ impl CommitLog {
 
     fn release_active_memory_lock_for_drop_with<U>(&self, unlock_region: U)
     where
-        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> StoreResult<()>,
     {
         if let Err(error) = self.release_active_memory_lock_with(unlock_region) {
             warn!(
@@ -946,7 +946,7 @@ impl CommitLog {
 
     fn shutdown_with<U>(&mut self, mut unlock_region: U)
     where
-        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> StoreResult<()>,
     {
         self.append_runtime.close();
         if let Err(error) = self.release_active_memory_lock_with(&mut unlock_region) {
@@ -982,7 +982,7 @@ impl CommitLog {
         mut unlock_region: U,
     ) -> Result<crate::consume_queue::mapped_file_queue::FlushProgress, StoreError>
     where
-        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> StoreResult<()>,
     {
         self.append_runtime.shutdown_gracefully().await;
         let unlock_result = self.release_active_memory_lock_with(&mut unlock_region);
@@ -1019,7 +1019,7 @@ impl CommitLog {
 
     fn destroy_with<U>(&mut self, mut unlock_region: U) -> bool
     where
-        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> RocketMQResult<()>,
+        U: FnMut(&MemoryLockManager, &mut MemoryLockHandle) -> StoreResult<()>,
     {
         self.shutdown_with(&mut unlock_region);
         if let Err(error) = self.release_active_memory_lock_with(&mut unlock_region) {
@@ -2917,6 +2917,9 @@ mod tests {
     use rocketmq_protocol::common::message::message_decoder::create_crc32;
     use rocketmq_runtime::common::time_utils::current_millis;
     use rocketmq_store_api::MasterEpoch;
+    use rocketmq_store_api::StoreComponent;
+    use rocketmq_store_api::StoreError;
+    use rocketmq_store_api::StoreOperation;
     use rocketmq_store_api::WriteAuthority;
 
     #[test]
@@ -3397,16 +3400,16 @@ mod tests {
 
         let error = commit_log
             .release_active_memory_lock_if_present(|_, _| {
-                Err(rocketmq_error::RocketMQError::StorageLockFailed {
-                    path: "retryable active unlock".to_string(),
-                })
+                Err(
+                    StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Admin)
+                        .in_component(StoreComponent::MappedFile)
+                        .with_detail("retryable active unlock"),
+                )
             })
             .expect_err("warn-only unlock failure must be returned");
-        assert!(matches!(
-            error,
-            rocketmq_error::RocketMQError::StorageLockFailed { path }
-                if path == "retryable active unlock"
-        ));
+        assert_eq!(error.code(), rocketmq_error::STORAGE_BACKEND_UNAVAILABLE.code());
+        assert_eq!(error.operation(), StoreOperation::Admin);
+        assert_eq!(error.component(), StoreComponent::MappedFile);
         let (active_memory_lock, active_memory_lock_present) = commit_log.runtime_state.active_memory_lock_parts();
         assert!(active_memory_lock_present.load(Ordering::Acquire));
         assert_eq!(active_memory_lock.lock().manager().locked_bytes(), 4096);
@@ -3497,9 +3500,11 @@ mod tests {
 
         commit_log.release_active_memory_lock_for_drop_with(|manager, handle| {
             manager.unlock_owned_region_with(handle, |_, _| {
-                Err(rocketmq_error::RocketMQError::StorageLockFailed {
-                    path: "drop retry".to_string(),
-                })
+                Err(
+                    StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Admin)
+                        .in_component(StoreComponent::MappedFile)
+                        .with_detail("drop retry"),
+                )
             })
         });
         assert!(commit_log

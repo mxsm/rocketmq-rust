@@ -14,17 +14,19 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use rocketmq_store_local::base::memory_lock_manager::MemoryLockCategory;
 use rocketmq_store_local::base::memory_lock_manager::MemoryLockHandle;
 use rocketmq_store_local::base::memory_lock_manager::MemoryLockManager;
+use rocketmq_store_local::StoreResult;
 
 fn successful_lock(
     manager: &MemoryLockManager,
     category: MemoryLockCategory,
     len: usize,
-) -> RocketMQResult<Option<MemoryLockHandle>> {
+) -> StoreResult<Option<MemoryLockHandle>> {
     manager.lock_region_with(category, vec![0u8; len], |_| Ok(()))
 }
 
@@ -52,16 +54,16 @@ fn strict_manager_preserves_lock_error_and_failure_counters() {
 
     let error = manager
         .lock_region_with(MemoryLockCategory::CommitLogActiveFile, vec![0u8; 4096], |_| {
-            Err(RocketMQError::StorageLockFailed {
-                path: "injected strict failure".to_string(),
-            })
+            Err(
+                StoreError::new(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, StoreOperation::Admin)
+                    .in_component(StoreComponent::MappedFile)
+                    .with_detail("injected strict failure"),
+            )
         })
         .expect_err("strict manager must return the injected error");
 
-    assert!(matches!(
-        error,
-        RocketMQError::StorageLockFailed { path } if path == "injected strict failure"
-    ));
+    assert_eq!(error.code(), rocketmq_error::STORAGE_BACKEND_UNAVAILABLE.code());
+    assert_eq!(error.component(), StoreComponent::MappedFile);
     assert_eq!(manager.lock_attempt_count(), 1);
     assert_eq!(manager.locked_buffer_count(), 0);
     assert_eq!(manager.lock_failed_buffer_count(), 1);
@@ -90,7 +92,7 @@ fn warn_only_manager_skips_exhausted_budget_without_calling_locker() {
 }
 
 #[test]
-fn strict_manager_reports_the_legacy_budget_error_text() {
+fn strict_manager_reports_canonical_capacity_exhaustion() {
     let manager = MemoryLockManager::new(false, 1024);
 
     let error = manager
@@ -99,11 +101,8 @@ fn strict_manager_reports_the_legacy_budget_error_text() {
         })
         .expect_err("strict budget exhaustion must fail");
 
-    assert!(matches!(
-        error,
-        RocketMQError::StorageLockFailed { path }
-            if path == "memory lock budget exhausted: requested=2048 budget=1024"
-    ));
+    assert_eq!(error.code(), rocketmq_error::STORAGE_CAPACITY_EXHAUSTED.code());
+    assert_eq!(error.operation(), StoreOperation::Admin);
 }
 
 #[test]

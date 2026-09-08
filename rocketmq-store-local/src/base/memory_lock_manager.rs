@@ -17,7 +17,10 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-use rocketmq_error::RocketMQResult;
+use crate::StoreResult;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tracing::warn;
 
 use crate::mapped_file::lifecycle::MappedFileLease;
@@ -32,6 +35,13 @@ const TRANSIENT_STORE_POOL_CATEGORY: &str = MemoryLockCategory::TransientStorePo
 const MEMORY_LOCK_BUDGET_EXHAUSTED_REASON: &str = "budget_exhausted";
 #[cfg(any(test, feature = "observability"))]
 const MEMORY_LOCK_UNKNOWN_ERRNO: i32 = 0;
+
+#[track_caller]
+fn memory_lock_failure(descriptor: &'static rocketmq_error::ErrorDescriptor, detail: impl Into<String>) -> StoreError {
+    StoreError::new(descriptor, StoreOperation::Admin)
+        .in_component(StoreComponent::MappedFile)
+        .with_detail(detail)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryLockCategory {
@@ -247,7 +257,7 @@ impl MemoryLockManager {
         Self::new(true, budget_bytes)
     }
 
-    pub fn lock_buffer(&self, memory: &[u8]) -> RocketMQResult<()> {
+    pub fn lock_buffer(&self, memory: &[u8]) -> StoreResult<()> {
         self.lock_buffer_with(memory, lock_memory_region)
     }
 
@@ -259,9 +269,9 @@ impl MemoryLockManager {
     /// # Errors
     ///
     /// Returns the injected lock error when strict locking is enabled or budget reservation fails.
-    pub(crate) fn lock_buffer_with<F>(&self, memory: &[u8], mut locker: F) -> RocketMQResult<()>
+    pub(crate) fn lock_buffer_with<F>(&self, memory: &[u8], mut locker: F) -> StoreResult<()>
     where
-        F: FnMut(&[u8]) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> StoreResult<()>,
     {
         let len = memory.len();
         self.lock_attempts.fetch_add(1, Ordering::Relaxed);
@@ -285,13 +295,14 @@ impl MemoryLockManager {
                 );
                 return Ok(());
             }
-            return Err(rocketmq_error::RocketMQError::StorageLockFailed {
-                path: format!(
+            return Err(memory_lock_failure(
+                &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+                format!(
                     "memory lock budget exhausted: requested={} budget={}",
                     len_bytes,
                     self.budget_bytes.load(Ordering::Relaxed)
                 ),
-            });
+            ));
         }
 
         match locker(memory) {
@@ -331,7 +342,7 @@ impl MemoryLockManager {
         }
     }
 
-    pub fn lock_region<R>(&self, category: MemoryLockCategory, region: R) -> RocketMQResult<Option<MemoryLockHandle>>
+    pub fn lock_region<R>(&self, category: MemoryLockCategory, region: R) -> StoreResult<Option<MemoryLockHandle>>
     where
         R: AsRef<[u8]> + Send + Sync + 'static,
     {
@@ -353,10 +364,10 @@ impl MemoryLockManager {
         category: MemoryLockCategory,
         region: R,
         mut locker: F,
-    ) -> RocketMQResult<Option<MemoryLockHandle>>
+    ) -> StoreResult<Option<MemoryLockHandle>>
     where
         R: AsRef<[u8]> + Send + Sync + 'static,
-        F: FnMut(&[u8]) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> StoreResult<()>,
     {
         // Pin inline owners in their final heap allocation before the lock callback observes an
         // address. Moving an array after mlock would make the later munlock target a different
@@ -380,13 +391,14 @@ impl MemoryLockManager {
                 );
                 return Ok(None);
             }
-            return Err(rocketmq_error::RocketMQError::StorageLockFailed {
-                path: format!(
+            return Err(memory_lock_failure(
+                &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+                format!(
                     "memory lock budget exhausted: requested={} budget={}",
                     len_bytes,
                     self.budget_bytes.load(Ordering::Relaxed)
                 ),
-            });
+            ));
         }
 
         match locker(region.as_slice()) {
@@ -426,7 +438,7 @@ impl MemoryLockManager {
         &self,
         category: MemoryLockCategory,
         region: R,
-    ) -> RocketMQResult<Option<MemoryLockHandle>>
+    ) -> StoreResult<Option<MemoryLockHandle>>
     where
         R: OwnedMemoryRegion,
     {
@@ -442,10 +454,10 @@ impl MemoryLockManager {
         category: MemoryLockCategory,
         region: R,
         mut locker: F,
-    ) -> RocketMQResult<Option<MemoryLockHandle>>
+    ) -> StoreResult<Option<MemoryLockHandle>>
     where
         R: OwnedMemoryRegion,
-        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        F: FnMut(*const u8, usize) -> StoreResult<()>,
     {
         let len = region.len();
         self.lock_attempts.fetch_add(1, Ordering::Relaxed);
@@ -465,13 +477,14 @@ impl MemoryLockManager {
                 );
                 return Ok(None);
             }
-            return Err(rocketmq_error::RocketMQError::StorageLockFailed {
-                path: format!(
+            return Err(memory_lock_failure(
+                &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+                format!(
                     "memory lock budget exhausted: requested={} budget={}",
                     len_bytes,
                     self.budget_bytes.load(Ordering::Relaxed)
                 ),
-            });
+            ));
         }
 
         match locker(region.address(), len) {
@@ -507,7 +520,7 @@ impl MemoryLockManager {
         }
     }
 
-    pub fn unlock_region(&self, handle: &mut MemoryLockHandle) -> RocketMQResult<()> {
+    pub fn unlock_region(&self, handle: &mut MemoryLockHandle) -> StoreResult<()> {
         if handle.slice_compatible {
             self.unlock_region_with(handle, unlock_memory_region)
         } else {
@@ -531,23 +544,25 @@ impl MemoryLockManager {
     /// would lose both the region owner and the lock-accounting identity. Repeating the operation
     /// after a successful unlock is an idempotent no-op.
     #[doc(hidden)]
-    pub fn unlock_region_with<F>(&self, handle: &mut MemoryLockHandle, mut unlocker: F) -> RocketMQResult<()>
+    pub fn unlock_region_with<F>(&self, handle: &mut MemoryLockHandle, mut unlocker: F) -> StoreResult<()>
     where
-        F: FnMut(&[u8]) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> StoreResult<()>,
     {
         if !handle.locked {
             return Ok(());
         }
         if !handle.slice_compatible {
-            return Err(rocketmq_error::RocketMQError::StorageLockFailed {
-                path: "mapped writable ranges require raw owner-backed unlock".to_string(),
-            });
+            return Err(memory_lock_failure(
+                &rocketmq_error::STORAGE_REQUEST_INVALID,
+                "mapped writable ranges require raw owner-backed unlock",
+            ));
         }
 
         let Some((address, len)) = handle.address() else {
-            return Err(rocketmq_error::RocketMQError::StorageLockFailed {
-                path: "memory-lock handle lost its region owner".to_string(),
-            });
+            return Err(memory_lock_failure(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                "memory-lock handle lost its region owner",
+            ));
         };
         // SAFETY: slice-compatible handles are constructed only from an owned `AsRef<[u8]>`
         // value, retained in `handle` for this complete callback.
@@ -591,22 +606,24 @@ impl MemoryLockManager {
     /// The callback must not dereference the address after it returns; the handle retains the
     /// owner for the complete call and remains armed on failure.
     #[doc(hidden)]
-    pub fn unlock_owned_region_with<F>(&self, handle: &mut MemoryLockHandle, mut unlocker: F) -> RocketMQResult<()>
+    pub fn unlock_owned_region_with<F>(&self, handle: &mut MemoryLockHandle, mut unlocker: F) -> StoreResult<()>
     where
-        F: FnMut(*const u8, usize) -> RocketMQResult<()>,
+        F: FnMut(*const u8, usize) -> StoreResult<()>,
     {
         if !handle.locked {
             return Ok(());
         }
         if handle.slice_compatible {
-            return Err(rocketmq_error::RocketMQError::StorageLockFailed {
-                path: "slice-backed ranges require slice-compatible unlock".to_string(),
-            });
+            return Err(memory_lock_failure(
+                &rocketmq_error::STORAGE_REQUEST_INVALID,
+                "slice-backed ranges require slice-compatible unlock",
+            ));
         }
         let Some((address, len)) = handle.address() else {
-            return Err(rocketmq_error::RocketMQError::StorageLockFailed {
-                path: "memory-lock handle lost its region owner".to_string(),
-            });
+            return Err(memory_lock_failure(
+                &rocketmq_error::STORAGE_INTERNAL_FAILURE,
+                "memory-lock handle lost its region owner",
+            ));
         };
 
         match unlocker(address, len) {
@@ -898,8 +915,6 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    use rocketmq_error::RocketMQError;
-
     use super::*;
     use crate::mapped_file::lifecycle::MappedFileOperation;
     use crate::mapped_file::lifecycle::PhysicalDetachHook;
@@ -959,9 +974,10 @@ mod tests {
 
         let memory = vec![0u8; 4096];
         let result = manager.lock_buffer_with(&memory, |_| {
-            Err(RocketMQError::StorageLockFailed {
-                path: "test mlock failure".to_string(),
-            })
+            Err(memory_lock_failure(
+                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                "test mlock failure",
+            ))
         });
 
         assert!(result.is_ok());
@@ -1099,17 +1115,14 @@ mod tests {
 
         let error = manager
             .unlock_region_with(&mut handle, |_| {
-                Err(rocketmq_error::RocketMQError::StorageLockFailed {
-                    path: "retryable unlock failure".to_string(),
-                })
+                Err(memory_lock_failure(
+                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                    "retryable unlock failure",
+                ))
             })
             .expect_err("warn-only unlock failure must remain observable");
 
-        assert!(matches!(
-            error,
-            rocketmq_error::RocketMQError::StorageLockFailed { path }
-                if path == "retryable unlock failure"
-        ));
+        assert_eq!(error.code(), rocketmq_error::STORAGE_BACKEND_UNAVAILABLE.code());
         assert_eq!(manager.locked_bytes(), 64);
         assert_eq!(drops.load(Ordering::Relaxed), 0);
 
@@ -1201,9 +1214,10 @@ mod tests {
 
         manager
             .unlock_owned_region_with(&mut handle, |_, _| {
-                Err(RocketMQError::StorageLockFailed {
-                    path: "retryable owned unlock failure".to_string(),
-                })
+                Err(memory_lock_failure(
+                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                    "retryable owned unlock failure",
+                ))
             })
             .expect_err("failed unlock remains observable");
 

@@ -24,11 +24,11 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use crate::StoreResult;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
 use parking_lot::MutexGuard;
-use rocketmq_error::RocketMQResult;
 use rocketmq_store_api::StoreError;
 use rocketmq_store_api::StoreOperation;
 use tracing::debug;
@@ -2417,7 +2417,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         category: MemoryLockCategory,
         offset: u64,
         len: usize,
-    ) -> RocketMQResult<Option<MemoryLockHandle>> {
+    ) -> StoreResult<Option<MemoryLockHandle>> {
         let Some((region, admission)) = self.lock_region_owner(offset, len) else {
             return Ok(None);
         };
@@ -2436,9 +2436,9 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         offset: u64,
         len: usize,
         mut locker: F,
-    ) -> RocketMQResult<Option<MemoryLockHandle>>
+    ) -> StoreResult<Option<MemoryLockHandle>>
     where
-        F: FnMut(&[u8]) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> StoreResult<()>,
     {
         let Some((region, admission)) = self.lock_region_owner(offset, len) else {
             return Ok(None);
@@ -2459,7 +2459,7 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         &self,
         memory_lock_manager: &MemoryLockManager,
         handle: &mut MemoryLockHandle,
-    ) -> RocketMQResult<()> {
+    ) -> StoreResult<()> {
         memory_lock_manager.unlock_region(handle)
     }
 
@@ -2468,9 +2468,9 @@ impl<M: MappedMemory> DefaultMappedFile<M> {
         memory_lock_manager: &MemoryLockManager,
         handle: &mut MemoryLockHandle,
         mut unlocker: F,
-    ) -> RocketMQResult<()>
+    ) -> StoreResult<()>
     where
-        F: FnMut(&[u8]) -> RocketMQResult<()>,
+        F: FnMut(&[u8]) -> StoreResult<()>,
     {
         let _writer = self.write_state.lock();
         memory_lock_manager.unlock_owned_region_with(handle, |address, len| {
@@ -3560,9 +3560,12 @@ mod tests {
 
         mapped_file
             .unlock_region_with(&manager, &mut handle, |_| {
-                Err(rocketmq_error::RocketMQError::StorageLockFailed {
-                    path: "retryable unlock failure".to_string(),
-                })
+                Err(rocketmq_store_api::StoreError::new(
+                    &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                    rocketmq_store_api::StoreOperation::Admin,
+                )
+                .in_component(rocketmq_store_api::StoreComponent::MappedFile)
+                .with_detail("retryable unlock failure"))
             })
             .expect_err("failed unlock must retain mapped-file admission");
         assert_eq!(mapped_file.lifecycle_snapshot().active_leases, 1);

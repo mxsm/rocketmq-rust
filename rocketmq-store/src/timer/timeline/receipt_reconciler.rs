@@ -347,8 +347,6 @@ pub(crate) struct CompletionReconcileResult {
 pub(crate) enum TimelineCompletionError {
     #[error(transparent)]
     Store(#[from] rocketmq_store_api::StoreError),
-    #[error("Timeline store failure: {0}")]
-    Timeline(#[from] rocketmq_error::RocketMQError),
     #[error("completion checkpoint decode failed: {0}")]
     Checkpoint(#[from] rocketmq_store_api::StoreContractViolation),
     #[error("completion replay budget must be non-zero")]

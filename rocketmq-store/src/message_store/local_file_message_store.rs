@@ -41,13 +41,13 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::config::store_runtime_config::StoreRuntimeConfig;
+use crate::StoreResult;
 use arc_swap::ArcSwap;
 use bytes::Buf;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::broker::broker_role::BrokerRole;

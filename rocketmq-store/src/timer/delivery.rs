@@ -661,9 +661,7 @@ fn copy_message(source: MessageExt) -> MessageExtBrokerInner {
 pub(crate) enum TimelineDeliveryError {
     #[error("invalid Extended delivery configuration")]
     InvalidConfiguration,
-    #[error("Timeline storage failure: {0}")]
-    Timeline(#[from] rocketmq_error::RocketMQError),
-    #[error("payload storage failure: {0}")]
+    #[error("storage failure: {0}")]
     Store(#[from] rocketmq_store_api::StoreError),
     #[error("completion replay failure: {0}")]
     Completion(#[from] crate::timer::timeline::TimelineCompletionError),

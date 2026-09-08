@@ -14,8 +14,20 @@
 
 use std::io;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use crate::StoreResult;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
+
+#[track_caller]
+fn mapped_memory_failure(
+    descriptor: &'static rocketmq_error::ErrorDescriptor,
+    detail: impl Into<String>,
+) -> StoreError {
+    StoreError::new(descriptor, StoreOperation::Admin)
+        .in_component(StoreComponent::MappedFile)
+        .with_detail(detail)
+}
 
 /// Operating-system access pattern for a live mapped-memory region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,9 +95,9 @@ pub(crate) fn advise_memory(memory: &[u8], advice: MemoryAdvice) -> io::Result<(
 ///
 /// # Errors
 ///
-/// Returns [`RocketMQError::StorageReadFailed`] when Windows rejects the request.
+/// Returns [`StoreError`] when Windows rejects the request.
 #[cfg(windows)]
-pub(crate) fn prefetch_memory(memory: &[u8]) -> RocketMQResult<bool> {
+pub(crate) fn prefetch_memory(memory: &[u8]) -> StoreResult<bool> {
     if memory.is_empty() {
         return Ok(false);
     }
@@ -146,7 +158,7 @@ fn residency_page_count(len: usize, page_size: usize) -> io::Result<usize> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "memory residency page count overflowed"))
 }
 
-type MemoryLocker = fn(&[u8]) -> RocketMQResult<()>;
+type MemoryLocker = fn(&[u8]) -> StoreResult<()>;
 
 /// A scoped physical-memory lock tied to the borrowed region's lifetime.
 ///
@@ -170,8 +182,8 @@ impl MemoryLockGuard<'_> {
     ///
     /// # Errors
     ///
-    /// Returns [`RocketMQError::StorageLockFailed`] when the operating system rejects the unlock.
-    pub fn unlock(mut self) -> RocketMQResult<()> {
+    /// Returns [`StoreError`] when the operating system rejects the unlock.
+    pub fn unlock(mut self) -> StoreResult<()> {
         if !self.locked {
             return Ok(());
         }
@@ -195,8 +207,8 @@ impl Drop for MemoryLockGuard<'_> {
 ///
 /// # Errors
 ///
-/// Returns [`RocketMQError::StorageLockFailed`] when the operating system rejects the lock.
-pub fn lock_memory(memory: &[u8]) -> RocketMQResult<MemoryLockGuard<'_>> {
+/// Returns [`StoreError`] when the operating system rejects the lock.
+pub fn lock_memory(memory: &[u8]) -> StoreResult<MemoryLockGuard<'_>> {
     lock_memory_with(memory, lock_memory_region, unlock_memory_region)
 }
 
@@ -204,7 +216,7 @@ fn lock_memory_with<'a>(
     memory: &'a [u8],
     locker: MemoryLocker,
     unlocker: MemoryLocker,
-) -> RocketMQResult<MemoryLockGuard<'a>> {
+) -> StoreResult<MemoryLockGuard<'a>> {
     if memory.is_empty() {
         return Ok(MemoryLockGuard {
             memory,
@@ -220,7 +232,7 @@ fn lock_memory_with<'a>(
     })
 }
 
-pub(crate) fn lock_memory_region(memory: &[u8]) -> RocketMQResult<()> {
+pub(crate) fn lock_memory_region(memory: &[u8]) -> StoreResult<()> {
     if memory.is_empty() {
         return Ok(());
     }
@@ -235,7 +247,7 @@ pub(crate) fn lock_memory_region(memory: &[u8]) -> RocketMQResult<()> {
 ///
 /// `addr..addr + len` must remain live and mapped for this call. The owner must prevent unmapping
 /// while the operating-system operation executes.
-pub(crate) unsafe fn lock_memory_address(addr: *const u8, len: usize) -> RocketMQResult<()> {
+pub(crate) unsafe fn lock_memory_address(addr: *const u8, len: usize) -> StoreResult<()> {
     if len == 0 {
         return Ok(());
     }
@@ -243,7 +255,7 @@ pub(crate) unsafe fn lock_memory_address(addr: *const u8, len: usize) -> RocketM
     unsafe { sys_mlock(addr, len) }
 }
 
-pub(crate) fn unlock_memory_region(memory: &[u8]) -> RocketMQResult<()> {
+pub(crate) fn unlock_memory_region(memory: &[u8]) -> StoreResult<()> {
     if memory.is_empty() {
         return Ok(());
     }
@@ -257,7 +269,7 @@ pub(crate) fn unlock_memory_region(memory: &[u8]) -> RocketMQResult<()> {
 /// # Safety
 ///
 /// `addr..addr + len` must remain live and identify the same range submitted to the lock call.
-pub(crate) unsafe fn unlock_memory_address(addr: *const u8, len: usize) -> RocketMQResult<()> {
+pub(crate) unsafe fn unlock_memory_address(addr: *const u8, len: usize) -> StoreResult<()> {
     if len == 0 {
         return Ok(());
     }
@@ -313,7 +325,7 @@ unsafe fn sys_mincore(addr: *const u8, len: usize, output: *mut u8, output_len: 
 ///
 /// `addr..addr + len` must identify a live process-local memory region for the duration of the
 /// call. No concurrent operation may unmap or replace that region during the call.
-unsafe fn sys_mlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
+unsafe fn sys_mlock(addr: *const u8, len: usize) -> StoreResult<()> {
     #[cfg(unix)]
     {
         use std::ffi::c_void;
@@ -321,9 +333,10 @@ unsafe fn sys_mlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
         // SAFETY: the caller upholds the live-range and concurrent-unmapping contract.
         let result = unsafe { libc::mlock(addr as *const c_void, len) };
         if result != 0 {
-            return Err(RocketMQError::StorageLockFailed {
-                path: "memory lock (mlock)".to_string(),
-            });
+            return Err(
+                mapped_memory_failure(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, "memory lock (mlock)")
+                    .with_source(io::Error::last_os_error()),
+            );
         }
         Ok(())
     }
@@ -334,8 +347,12 @@ unsafe fn sys_mlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
 
         // SAFETY: the caller upholds the live-range and concurrent-unmapping contract.
         let result = unsafe { VirtualLock(addr as _, len) };
-        result.map_err(|e| RocketMQError::StorageLockFailed {
-            path: format!("memory lock (VirtualLock): {}", e),
+        result.map_err(|error| {
+            mapped_memory_failure(
+                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                "memory lock (VirtualLock)",
+            )
+            .with_source(error)
         })?;
         Ok(())
     }
@@ -343,9 +360,10 @@ unsafe fn sys_mlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
     #[cfg(not(any(unix, windows)))]
     {
         let _ = (addr, len);
-        Err(RocketMQError::StorageLockFailed {
-            path: "memory lock is unsupported on this target".to_string(),
-        })
+        Err(mapped_memory_failure(
+            &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
+            "memory lock is unsupported on this target",
+        ))
     }
 }
 
@@ -355,7 +373,7 @@ unsafe fn sys_mlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
 ///
 /// `addr..addr + len` must identify the same live process-local region previously submitted for
 /// locking. No concurrent operation may unmap or replace that region during the call.
-unsafe fn sys_munlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
+unsafe fn sys_munlock(addr: *const u8, len: usize) -> StoreResult<()> {
     #[cfg(unix)]
     {
         use std::ffi::c_void;
@@ -363,9 +381,10 @@ unsafe fn sys_munlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
         // SAFETY: the caller upholds the live, previously locked range contract.
         let result = unsafe { libc::munlock(addr as *const c_void, len) };
         if result != 0 {
-            return Err(RocketMQError::StorageLockFailed {
-                path: "memory unlock (munlock)".to_string(),
-            });
+            return Err(
+                mapped_memory_failure(&rocketmq_error::STORAGE_BACKEND_UNAVAILABLE, "memory unlock (munlock)")
+                    .with_source(io::Error::last_os_error()),
+            );
         }
         Ok(())
     }
@@ -375,8 +394,12 @@ unsafe fn sys_munlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
 
         // SAFETY: the caller upholds the live, previously locked range contract.
         let result = unsafe { VirtualUnlock(addr as _, len) };
-        result.map_err(|e| RocketMQError::StorageLockFailed {
-            path: format!("memory unlock (VirtualUnlock): {}", e),
+        result.map_err(|error| {
+            mapped_memory_failure(
+                &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+                "memory unlock (VirtualUnlock)",
+            )
+            .with_source(error)
         })?;
         Ok(())
     }
@@ -384,9 +407,10 @@ unsafe fn sys_munlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
     #[cfg(not(any(unix, windows)))]
     {
         let _ = (addr, len);
-        Err(RocketMQError::StorageLockFailed {
-            path: "memory unlock is unsupported on this target".to_string(),
-        })
+        Err(mapped_memory_failure(
+            &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED,
+            "memory unlock is unsupported on this target",
+        ))
     }
 }
 
@@ -397,7 +421,7 @@ unsafe fn sys_munlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
 /// `addr..addr + len` must identify a live process-local memory region for the duration of the
 /// call. No concurrent operation may unmap or replace that region during the call.
 #[cfg(windows)]
-unsafe fn sys_prefetch_virtual_memory(addr: *const u8, len: usize) -> RocketMQResult<()> {
+unsafe fn sys_prefetch_virtual_memory(addr: *const u8, len: usize) -> StoreResult<()> {
     use std::ffi::c_void;
 
     use windows::Win32::System::Memory::PrefetchVirtualMemory;
@@ -410,10 +434,7 @@ unsafe fn sys_prefetch_virtual_memory(addr: *const u8, len: usize) -> RocketMQRe
     };
     // SAFETY: the caller upholds the live-range contract and Windows does not retain the entry.
     unsafe { PrefetchVirtualMemory(GetCurrentProcess(), &[range], 0) }.map_err(|error| {
-        RocketMQError::StorageReadFailed {
-            path: "PrefetchVirtualMemory".to_string(),
-            reason: error.to_string(),
-        }
+        mapped_memory_failure(&rocketmq_error::STORAGE_READ_FAILED, "PrefetchVirtualMemory").with_source(error)
     })
 }
 
@@ -426,11 +447,11 @@ mod tests {
 
     static UNLOCK_CALLS: AtomicUsize = AtomicUsize::new(0);
 
-    fn successful_test_lock(_memory: &[u8]) -> RocketMQResult<()> {
+    fn successful_test_lock(_memory: &[u8]) -> StoreResult<()> {
         Ok(())
     }
 
-    fn recording_test_unlock(_memory: &[u8]) -> RocketMQResult<()> {
+    fn recording_test_unlock(_memory: &[u8]) -> StoreResult<()> {
         UNLOCK_CALLS.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }

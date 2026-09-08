@@ -27,7 +27,9 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 
 #[cfg(windows)]
 use std::ffi::OsStr;
@@ -142,7 +144,7 @@ pub(crate) fn temporary_generation_path(root: &Path, generation: u64) -> PathBuf
 pub(crate) async fn read_current(
     runtime_scope: &crate::runtime::StoreRuntimeScope,
     root: PathBuf,
-) -> Result<Option<CurrentPointer>, RocketMQError> {
+) -> Result<Option<CurrentPointer>, StoreError> {
     crate::runtime::spawn_io(runtime_scope, "compaction-read-current", move || {
         let path = root.join("CURRENT");
         match std::fs::read(&path) {
@@ -158,7 +160,7 @@ pub(crate) async fn load_generation(
     runtime_scope: &crate::runtime::StoreRuntimeScope,
     root: PathBuf,
     generation: u64,
-) -> Result<LoadedGeneration, RocketMQError> {
+) -> Result<LoadedGeneration, StoreError> {
     if generation == 0 {
         return Ok(LoadedGeneration {
             metadata: empty_metadata(0),
@@ -194,7 +196,7 @@ pub(crate) async fn read_generation_payload(
     generation: u64,
     position: u64,
     size: i32,
-) -> Result<Bytes, RocketMQError> {
+) -> Result<Bytes, StoreError> {
     crate::runtime::spawn_io(runtime_scope, "compaction-read-generation-payload", move || {
         if generation == 0 || size <= 0 {
             return Err(corrupted(&generation_path(&root, generation).join("records")));
@@ -216,7 +218,7 @@ pub(crate) async fn write_temporary_generation(
     root: PathBuf,
     generation: u64,
     queues: CompactionQueues,
-) -> Result<GenerationMetadata, RocketMQError> {
+) -> Result<GenerationMetadata, StoreError> {
     crate::runtime::spawn_io(runtime_scope, "compaction-build-generation", move || {
         let directory = temporary_generation_path(&root, generation);
         remove_path_if_exists(&directory)?;
@@ -234,7 +236,7 @@ pub(crate) async fn sync_temporary_generation(
     runtime_scope: &crate::runtime::StoreRuntimeScope,
     root: PathBuf,
     generation: u64,
-) -> Result<(), RocketMQError> {
+) -> Result<(), StoreError> {
     crate::runtime::spawn_io(runtime_scope, "compaction-sync-generation", move || {
         let directory = temporary_generation_path(&root, generation);
         sync_file(&directory.join("records"))?;
@@ -249,7 +251,7 @@ pub(crate) async fn validate_temporary_generation(
     root: PathBuf,
     generation: u64,
     expected: GenerationMetadata,
-) -> Result<(), RocketMQError> {
+) -> Result<(), StoreError> {
     crate::runtime::spawn_io(runtime_scope, "compaction-validate-generation", move || {
         let directory = temporary_generation_path(&root, generation);
         let metadata_path = directory.join("GENERATION");
@@ -271,7 +273,7 @@ pub(crate) async fn rename_generation(
     runtime_scope: &crate::runtime::StoreRuntimeScope,
     root: PathBuf,
     generation: u64,
-) -> Result<(), RocketMQError> {
+) -> Result<(), StoreError> {
     crate::runtime::spawn_io(runtime_scope, "compaction-rename-generation", move || {
         let source = temporary_generation_path(&root, generation);
         let destination = generation_path(&root, generation);
@@ -285,7 +287,7 @@ pub(crate) async fn write_current(
     runtime_scope: &crate::runtime::StoreRuntimeScope,
     root: PathBuf,
     pointer: CurrentPointer,
-) -> Result<(), RocketMQError> {
+) -> Result<(), StoreError> {
     crate::runtime::spawn_io(runtime_scope, "compaction-write-current", move || {
         std::fs::create_dir_all(&root).map_err(|error| write_error(&root, error))?;
         let destination = root.join("CURRENT");
@@ -302,7 +304,7 @@ pub(crate) async fn delete_generation(
     runtime_scope: &crate::runtime::StoreRuntimeScope,
     root: PathBuf,
     generation: u64,
-) -> Result<(), RocketMQError> {
+) -> Result<(), StoreError> {
     crate::runtime::spawn_io(runtime_scope, "compaction-delete-generation", move || {
         let path = generation_path(&root, generation);
         remove_path_if_exists(&path)?;
@@ -316,7 +318,7 @@ pub(crate) async fn cleanup_orphans(
     root: PathBuf,
     current: u64,
     previous: Option<u64>,
-) -> Result<(), RocketMQError> {
+) -> Result<(), StoreError> {
     crate::runtime::spawn_io(runtime_scope, "compaction-cleanup-orphans", move || {
         let generations = root.join("generations");
         let entries = match std::fs::read_dir(&generations) {
@@ -370,26 +372,38 @@ fn metadata_for(generation: u64, queues: &CompactionQueues, records: &[u8]) -> G
     }
 }
 
-fn encode_records(queues: &CompactionQueues, path: &Path) -> Result<Vec<u8>, RocketMQError> {
+fn encode_records(queues: &CompactionQueues, path: &Path) -> Result<Vec<u8>, StoreError> {
     let record_count = queues.values().map(BTreeMap::len).sum::<usize>();
     let mut bytes = BytesMut::with_capacity(RECORDS_HEADER_SIZE + record_count.saturating_mul(RECORD_HEADER_SIZE));
     bytes.put_slice(&encode_records_header(record_count as u64));
     for (queue_key, queue) in queues {
         let topic = queue_key.topic.as_bytes();
         let topic_len = u16::try_from(topic.len()).map_err(|_| {
-            RocketMQError::storage_write_failed(path_to_string(path), "compaction topic exceeds u16 format limit")
+            generation_error(
+                &rocketmq_error::STORAGE_WRITE_FAILED,
+                StoreOperation::Flush,
+                path,
+                "compaction topic exceeds u16 format limit",
+            )
         })?;
         for record in queue.values() {
             let key_bytes = record.key.as_ref().map(CheetahString::as_bytes);
             let key_len = match key_bytes {
                 Some(key) => u16::try_from(key.len()).map_err(|_| {
-                    RocketMQError::storage_write_failed(path_to_string(path), "compaction key exceeds u16 format limit")
+                    generation_error(
+                        &rocketmq_error::STORAGE_WRITE_FAILED,
+                        StoreOperation::Flush,
+                        path,
+                        "compaction key exceeds u16 format limit",
+                    )
                 })?,
                 None => NO_KEY,
             };
             let CompactionPayload::Inline(payload) = &record.payload else {
-                return Err(RocketMQError::storage_write_failed(
-                    path_to_string(path),
+                return Err(generation_error(
+                    &rocketmq_error::STORAGE_WRITE_FAILED,
+                    StoreOperation::Flush,
+                    path,
                     "compaction generation must materialize payload before persistence",
                 ));
             };
@@ -398,8 +412,10 @@ fn encode_records(queues: &CompactionQueues, path: &Path) -> Result<Vec<u8>, Roc
                 || (!record.tombstone && record.source_size == 0)
                 || payload.len() != record.source_size as usize
             {
-                return Err(RocketMQError::storage_write_failed(
-                    path_to_string(path),
+                return Err(generation_error(
+                    &rocketmq_error::STORAGE_WRITE_FAILED,
+                    StoreOperation::Flush,
+                    path,
                     "compaction payload size does not match source record",
                 ));
             }
@@ -422,7 +438,7 @@ fn encode_records(queues: &CompactionQueues, path: &Path) -> Result<Vec<u8>, Roc
     Ok(bytes.to_vec())
 }
 
-fn decode_records(bytes: &[u8], path: &Path, generation: u64) -> Result<CompactionQueues, RocketMQError> {
+fn decode_records(bytes: &[u8], path: &Path, generation: u64) -> Result<CompactionQueues, StoreError> {
     if bytes.len() < RECORDS_HEADER_SIZE {
         return Err(corrupted(path));
     }
@@ -539,7 +555,7 @@ fn encode_generation_metadata(metadata: GenerationMetadata) -> [u8; GENERATION_M
     bytes.as_ref().try_into().unwrap_or([0; GENERATION_METADATA_SIZE])
 }
 
-fn decode_generation_metadata(bytes: &[u8], path: &Path) -> Result<GenerationMetadata, RocketMQError> {
+fn decode_generation_metadata(bytes: &[u8], path: &Path) -> Result<GenerationMetadata, StoreError> {
     if bytes.len() != GENERATION_METADATA_SIZE {
         return Err(corrupted(path));
     }
@@ -589,7 +605,7 @@ fn encode_current(pointer: CurrentPointer) -> [u8; CURRENT_SIZE] {
     bytes.as_ref().try_into().unwrap_or([0; CURRENT_SIZE])
 }
 
-fn decode_current(bytes: &[u8], path: &Path) -> Result<CurrentPointer, RocketMQError> {
+fn decode_current(bytes: &[u8], path: &Path) -> Result<CurrentPointer, StoreError> {
     if bytes.len() != CURRENT_SIZE {
         return Err(corrupted(path));
     }
@@ -630,13 +646,13 @@ fn parse_generation_id(path: &Path) -> Option<u64> {
     name.strip_prefix("gen-")?.parse().ok()
 }
 
-fn write_file(path: &Path, bytes: &[u8]) -> Result<(), RocketMQError> {
+fn write_file(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
     let mut file = File::create(path).map_err(|error| write_error(path, error))?;
     file.write_all(bytes).map_err(|error| write_error(path, error))?;
     file.flush().map_err(|error| write_error(path, error))
 }
 
-fn sync_file(path: &Path) -> Result<(), RocketMQError> {
+fn sync_file(path: &Path) -> Result<(), StoreError> {
     OpenOptions::new()
         .read(true)
         .write(true)
@@ -645,7 +661,7 @@ fn sync_file(path: &Path) -> Result<(), RocketMQError> {
         .map_err(|error| write_error(path, error))
 }
 
-fn remove_path_if_exists(path: &Path) -> Result<(), RocketMQError> {
+fn remove_path_if_exists(path: &Path) -> Result<(), StoreError> {
     let metadata = match std::fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -659,20 +675,20 @@ fn remove_path_if_exists(path: &Path) -> Result<(), RocketMQError> {
 }
 
 #[cfg(unix)]
-fn sync_directory(path: &Path) -> Result<(), RocketMQError> {
+fn sync_directory(path: &Path) -> Result<(), StoreError> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
         .map_err(|error| write_error(path, error))
 }
 
 #[cfg(windows)]
-fn sync_directory(_path: &Path) -> Result<(), RocketMQError> {
+fn sync_directory(_path: &Path) -> Result<(), StoreError> {
     // MoveFileExW/ReplaceFileW with WRITE_THROUGH are the durable Windows metadata boundaries.
     Ok(())
 }
 
 #[cfg(not(any(unix, windows)))]
-fn sync_directory(_path: &Path) -> Result<(), RocketMQError> {
+fn sync_directory(_path: &Path) -> Result<(), StoreError> {
     Ok(())
 }
 
@@ -740,22 +756,38 @@ fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn read_error(path: &Path, error: std::io::Error) -> RocketMQError {
-    RocketMQError::storage_read_failed(path_to_string(path), io_reason(&error))
+fn read_error(path: &Path, error: std::io::Error) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_READ_FAILED, StoreOperation::Read)
+        .in_component(StoreComponent::Store)
+        .with_detail(path_to_string(path))
+        .with_source(error)
 }
 
-fn write_error(path: &Path, error: std::io::Error) -> RocketMQError {
-    RocketMQError::storage_write_failed(path_to_string(path), io_reason(&error))
+fn write_error(path: &Path, error: std::io::Error) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_WRITE_FAILED, StoreOperation::Flush)
+        .in_component(StoreComponent::Store)
+        .with_detail(path_to_string(path))
+        .with_source(error)
 }
 
-fn io_reason(error: &std::io::Error) -> String {
-    format!("I/O error kind {:?}, OS code {:?}", error.kind(), error.raw_os_error())
+fn generation_error(
+    descriptor: &'static rocketmq_error::ErrorDescriptor,
+    operation: StoreOperation,
+    path: &Path,
+    detail: impl Into<String>,
+) -> StoreError {
+    StoreError::new(descriptor, operation)
+        .in_component(StoreComponent::Store)
+        .with_detail(format!("{}: {}", path.display(), detail.into()))
 }
 
-fn corrupted(path: &Path) -> RocketMQError {
-    RocketMQError::StorageCorrupted {
-        path: path_to_string(path),
-    }
+fn corrupted(path: &Path) -> StoreError {
+    generation_error(
+        &rocketmq_error::STORAGE_STATE_CORRUPTED,
+        StoreOperation::Read,
+        path,
+        "compaction generation is corrupted",
+    )
 }
 
 fn crc32(bytes: &[u8]) -> u32 {
