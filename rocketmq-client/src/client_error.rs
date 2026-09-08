@@ -100,6 +100,20 @@ impl ClientError {
         self.0
     }
 
+    /// Returns an owned canonical error while preserving the complete typed
+    /// source chain when the shared value has other owners.
+    #[must_use]
+    pub fn into_error(self) -> Error {
+        match Arc::try_unwrap(self.0) {
+            Ok(error) => error,
+            Err(shared) => {
+                let descriptor = shared.descriptor();
+                let context = shared.context().clone();
+                Error::caused_by(descriptor, ClientError(shared)).with_context(context)
+            }
+        }
+    }
+
     /// Creates an invalid-argument failure without retaining arbitrary text.
     #[must_use]
     pub fn illegal_argument(message: impl Into<String>) -> Self {
