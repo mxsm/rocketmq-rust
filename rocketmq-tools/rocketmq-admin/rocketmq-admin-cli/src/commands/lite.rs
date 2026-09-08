@@ -20,7 +20,7 @@ mod get_parent_topic_info_sub_command;
 mod trigger_lite_dispatch_sub_command;
 
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::lite::get_broker_lite_info_sub_command::GetBrokerLiteInfoSubCommand;
@@ -80,7 +80,7 @@ impl CommandExecute for LiteCommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             LiteCommands::GetBrokerLiteInfo(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
             LiteCommands::GetLiteClientInfo(cmd) => cmd.execute(credentials, client_runtime.clone()).await,

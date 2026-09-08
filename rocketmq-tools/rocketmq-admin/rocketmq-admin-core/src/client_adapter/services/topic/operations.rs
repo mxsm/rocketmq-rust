@@ -52,9 +52,8 @@ use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::resolver::BrokerAddressResolver;
 use crate::client_adapter::services::stable_error_code;
 use crate::client_adapter::services::stable_error_message;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Result as CanonicalResult;
 
 /// Topic operations service
 pub struct TopicService;
@@ -74,12 +73,12 @@ impl TopicService {
     pub async fn get_topic_cluster_list(
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<String>,
-    ) -> RocketMQResult<TopicClusterList> {
+    ) -> CanonicalResult<TopicClusterList> {
         let topic = topic.into();
         let clusters = admin
             .get_topic_cluster_list(topic.clone())
             .await
-            .map_err(|_| ToolsError::topic_not_found(topic.clone()))?;
+            .map_err(|_| crate::client_adapter::services::errors::topic_route_not_found(topic.clone()))?;
 
         Ok(TopicClusterList { clusters })
     }
@@ -88,7 +87,7 @@ impl TopicService {
     ///
     /// The caller supplies presentation-independent request data. The service
     /// owns the admin client lifecycle and returns a DTO that UI layers render.
-    pub async fn query_topic_clusters(request: TopicClusterQueryRequest) -> RocketMQResult<TopicClusterList> {
+    pub async fn query_topic_clusters(request: TopicClusterQueryRequest) -> CanonicalResult<TopicClusterList> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let result = Self::get_topic_cluster_list(&mut admin, request.topic().clone()).await;
         admin.shutdown().await;
@@ -96,7 +95,7 @@ impl TopicService {
     }
 
     /// Query all topics, optionally filtered by cluster, through a complete core request lifecycle.
-    pub async fn query_topic_list(request: TopicListQueryRequest) -> RocketMQResult<TopicListResult> {
+    pub async fn query_topic_list(request: TopicListQueryRequest) -> CanonicalResult<TopicListResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let result = Self::query_topic_list_with_admin(&mut admin, &request).await;
         admin.shutdown().await;
@@ -106,7 +105,7 @@ impl TopicService {
     /// Query topic route through a complete core request lifecycle.
     pub async fn query_topic_route(
         request: TopicRouteQueryRequest,
-    ) -> RocketMQResult<Option<rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData>> {
+    ) -> CanonicalResult<Option<rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData>> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let result = Self::get_topic_route(&mut admin, request.topic().clone()).await;
         admin.shutdown().await;
@@ -121,7 +120,7 @@ impl TopicService {
         request: TopicRouteQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<Option<rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData>> {
+    ) -> CanonicalResult<Option<rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData>> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
             .build_and_start()
             .await?;
@@ -133,7 +132,7 @@ impl TopicService {
     /// Query topic status through a complete core request lifecycle.
     pub async fn query_topic_status(
         request: TopicStatusQueryRequest,
-    ) -> RocketMQResult<rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable> {
+    ) -> CanonicalResult<rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let topic = request.topic().clone();
         let result = async {
@@ -164,7 +163,7 @@ impl TopicService {
     }
 
     /// Delete a topic through a complete core request lifecycle.
-    pub async fn delete_topic_by_request(request: DeleteTopicRequest) -> RocketMQResult<DeleteTopicResult> {
+    pub async fn delete_topic_by_request(request: DeleteTopicRequest) -> CanonicalResult<DeleteTopicResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let result = Self::delete_topic_with_admin(&mut admin, &request).await;
         admin.shutdown().await;
@@ -176,7 +175,7 @@ impl TopicService {
         request: DeleteTopicRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<DeleteTopicResult> {
+    ) -> CanonicalResult<DeleteTopicResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
             .build_and_start()
             .await?;
@@ -188,15 +187,14 @@ impl TopicService {
     pub(crate) async fn delete_topic_with_admin(
         admin: &mut DefaultMQAdminExt,
         request: &DeleteTopicRequest,
-    ) -> RocketMQResult<DeleteTopicResult> {
+    ) -> CanonicalResult<DeleteTopicResult> {
         let cluster_info = admin.examine_broker_cluster_info().await?;
         let broker_targets =
             BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, request.cluster_name())?;
         if broker_targets.is_empty() {
-            return Err(ToolsError::ClusterNotFound {
-                cluster: request.cluster_name().to_string(),
-            }
-            .into());
+            return Err(crate::client_adapter::services::errors::cluster_not_found(
+                request.cluster_name(),
+            ));
         }
 
         let mut result = DeleteTopicResult {
@@ -241,7 +239,7 @@ impl TopicService {
     }
 
     /// Apply order configuration through a complete core request lifecycle.
-    pub async fn apply_order_conf(request: OrderConfRequest) -> RocketMQResult<OrderConfResult> {
+    pub async fn apply_order_conf(request: OrderConfRequest) -> CanonicalResult<OrderConfResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let result = match request.method() {
             OrderConfMethod::Put => {
@@ -276,7 +274,7 @@ impl TopicService {
     /// Query message queue allocation through a complete core request lifecycle.
     pub async fn query_allocated_mq_by_request(
         request: AllocateMqQueryRequest,
-    ) -> RocketMQResult<AllocatedMqQueryResult> {
+    ) -> CanonicalResult<AllocatedMqQueryResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let result = Self::query_allocated_mq(&mut admin, request.topic().clone(), request.ip_list().clone()).await;
         admin.shutdown().await;
@@ -284,7 +282,7 @@ impl TopicService {
     }
 
     /// Create or update a topic through a complete core request lifecycle.
-    pub async fn create_or_update_topic_by_request(request: UpdateTopicRequest) -> RocketMQResult<UpdateTopicResult> {
+    pub async fn create_or_update_topic_by_request(request: UpdateTopicRequest) -> CanonicalResult<UpdateTopicResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let config = request.config().clone();
         let target = request.target().clone();
@@ -308,7 +306,7 @@ impl TopicService {
         request: UpdateTopicRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<UpdateTopicResult> {
+    ) -> CanonicalResult<UpdateTopicResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
             .build_and_start()
             .await?;
@@ -328,7 +326,7 @@ impl TopicService {
     /// Apply a batch of topic configs through a complete core request lifecycle.
     pub async fn update_topic_config_list_by_request(
         request: UpdateTopicListRequest,
-    ) -> RocketMQResult<UpdateTopicListResult> {
+    ) -> CanonicalResult<UpdateTopicListResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let target = request.target().clone();
         let topic_configs = request.topic_configs().to_vec();
@@ -340,7 +338,7 @@ impl TopicService {
     /// Update topic permission through a complete core request lifecycle.
     pub async fn update_topic_perm_by_request(
         request: UpdateTopicPermRequest,
-    ) -> RocketMQResult<UpdateTopicPermResult> {
+    ) -> CanonicalResult<UpdateTopicPermResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let result = Self::update_topic_perm(
             &mut admin,
@@ -369,12 +367,12 @@ impl TopicService {
     pub async fn get_topic_route(
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
-    ) -> RocketMQResult<Option<rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData>> {
+    ) -> CanonicalResult<Option<rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData>> {
         let topic = topic.into();
         Ok(admin
             .examine_topic_route_info(topic.clone())
             .await
-            .map_err(|_| ToolsError::topic_not_found(topic.to_string()))?)
+            .map_err(|_| crate::client_adapter::services::errors::topic_route_not_found(topic.to_string()))?)
     }
 
     /// Delete a topic from cluster
@@ -390,12 +388,12 @@ impl TopicService {
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
         cluster_name: impl Into<CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let topic = topic.into();
         let cluster = cluster_name.into();
 
         Ok(admin.delete_topic(topic.clone(), cluster.clone()).await.map_err(|e| {
-            ToolsError::internal(format!(
+            crate::client_adapter::services::errors::internal(format!(
                 "Failed to delete topic '{topic}' from cluster '{cluster}': {e}"
             ))
         })?)
@@ -414,7 +412,7 @@ impl TopicService {
         admin: &mut DefaultMQAdminExt,
         config: super::types::TopicConfig,
         target: super::types::TopicTarget,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         use rocketmq_model::common::TopicFilterType;
 
         let topic_name = config.topic_name.clone();
@@ -443,10 +441,9 @@ impl TopicService {
         let (target_addrs, target_broker_names, cluster_wide) = match target {
             super::types::TopicTarget::Broker(addr) => {
                 let broker_names = if order {
-                    let cluster_info = admin
-                        .examine_broker_cluster_info()
-                        .await
-                        .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
+                    let cluster_info = admin.examine_broker_cluster_info().await.map_err(|e| {
+                        crate::client_adapter::services::errors::internal(format!("Failed to get cluster info: {e}"))
+                    })?;
                     HashSet::from([BrokerAddressResolver::fetch_broker_name_by_addr(
                         &cluster_info,
                         addr.as_str(),
@@ -457,19 +454,15 @@ impl TopicService {
                 (vec![addr], broker_names, false)
             }
             super::types::TopicTarget::Cluster(cluster_name) => {
-                let cluster_info = admin
-                    .examine_broker_cluster_info()
-                    .await
-                    .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
+                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|e| {
+                    crate::client_adapter::services::errors::internal(format!("Failed to get cluster info: {e}"))
+                })?;
 
                 let master_addrs =
                     BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, &cluster_name)?;
 
                 if master_addrs.is_empty() {
-                    return Err(ToolsError::ClusterNotFound {
-                        cluster: cluster_name.to_string(),
-                    }
-                    .into());
+                    return Err(crate::client_adapter::services::errors::cluster_not_found(cluster_name));
                 }
 
                 let broker_names =
@@ -484,7 +477,9 @@ impl TopicService {
             admin
                 .create_and_update_topic_config(addr, internal_config.clone())
                 .await
-                .map_err(|e| ToolsError::internal(format!("Failed to create/update topic: {e}")))?;
+                .map_err(|e| {
+                    crate::client_adapter::services::errors::internal(format!("Failed to create/update topic: {e}"))
+                })?;
         }
 
         if order {
@@ -492,7 +487,11 @@ impl TopicService {
             admin
                 .create_or_update_order_conf(topic_name, order_conf.into(), cluster_wide)
                 .await
-                .map_err(|e| ToolsError::internal(format!("Failed to create/update order config: {e}")))?;
+                .map_err(|e| {
+                    crate::client_adapter::services::errors::internal(format!(
+                        "Failed to create/update order config: {e}"
+                    ))
+                })?;
         }
 
         Ok(())
@@ -503,25 +502,25 @@ impl TopicService {
         admin: &mut DefaultMQAdminExt,
         target: super::types::TopicTarget,
         topic_configs: Vec<RocketMQTopicConfig>,
-    ) -> RocketMQResult<UpdateTopicListResult> {
+    ) -> CanonicalResult<UpdateTopicListResult> {
         if topic_configs.is_empty() {
-            return Err(ToolsError::validation_error("topicConfigs", "topicConfigs must not be empty").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "topicConfigs",
+                "topicConfigs must not be empty",
+            )
+            .into());
         }
 
         let broker_addrs = match &target {
             super::types::TopicTarget::Broker(broker_addr) => vec![broker_addr.clone()],
             super::types::TopicTarget::Cluster(cluster_name) => {
-                let cluster_info = admin
-                    .examine_broker_cluster_info()
-                    .await
-                    .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
+                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|e| {
+                    crate::client_adapter::services::errors::internal(format!("Failed to get cluster info: {e}"))
+                })?;
                 let master_addrs =
                     BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name)?;
                 if master_addrs.is_empty() {
-                    return Err(ToolsError::ClusterNotFound {
-                        cluster: cluster_name.to_string(),
-                    }
-                    .into());
+                    return Err(crate::client_adapter::services::errors::cluster_not_found(cluster_name));
                 }
                 master_addrs
             }
@@ -532,7 +531,7 @@ impl TopicService {
                 .create_and_update_topic_config_list(broker_addr.clone(), topic_configs.clone())
                 .await
                 .map_err(|e| {
-                    ToolsError::internal(format!(
+                    crate::client_adapter::services::errors::internal(format!(
                         "Failed to submit topic config list to broker '{broker_addr}': {e}"
                     ))
                 })?;
@@ -552,7 +551,7 @@ impl TopicService {
     pub async fn batch_get_topic_clusters(
         admin: &mut DefaultMQAdminExt,
         topics: Vec<String>,
-    ) -> RocketMQResult<std::collections::HashMap<String, HashSet<CheetahString>>> {
+    ) -> CanonicalResult<std::collections::HashMap<String, HashSet<CheetahString>>> {
         use futures::future::join_all;
 
         let futures = topics.iter().map(|topic| admin.get_topic_cluster_list(topic.clone()));
@@ -581,11 +580,10 @@ impl TopicService {
     pub(crate) async fn query_topic_list_with_admin(
         admin: &mut DefaultMQAdminExt,
         request: &TopicListQueryRequest,
-    ) -> RocketMQResult<TopicListResult> {
-        let topic_list = admin
-            .fetch_all_topic_list()
-            .await
-            .map_err(|e| ToolsError::internal(format!("Failed to fetch topic list: {e}")))?;
+    ) -> CanonicalResult<TopicListResult> {
+        let topic_list = admin.fetch_all_topic_list().await.map_err(|e| {
+            crate::client_adapter::services::errors::internal(format!("Failed to fetch topic list: {e}"))
+        })?;
 
         let Some(cluster_name) = request.cluster_name() else {
             return Ok(TopicListResult {
@@ -601,10 +599,9 @@ impl TopicService {
             });
         };
 
-        let cluster_info = admin
-            .examine_broker_cluster_info()
-            .await
-            .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
+        let cluster_info = admin.examine_broker_cluster_info().await.map_err(|e| {
+            crate::client_adapter::services::errors::internal(format!("Failed to get cluster info: {e}"))
+        })?;
 
         let mut topics = Vec::new();
         for topic in topic_list.topic_list {
@@ -670,11 +667,10 @@ impl TopicService {
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
         broker_addr: Option<CheetahString>,
-    ) -> RocketMQResult<rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable> {
-        admin
-            .examine_topic_stats(topic.into(), broker_addr)
-            .await
-            .map_err(|e| ToolsError::internal(format!("Failed to get topic stats: {e}")).into())
+    ) -> CanonicalResult<rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable> {
+        admin.examine_topic_stats(topic.into(), broker_addr).await.map_err(|e| {
+            crate::client_adapter::services::errors::internal(format!("Failed to get topic stats: {e}")).into()
+        })
     }
 
     /// Update topic permission
@@ -692,7 +688,7 @@ impl TopicService {
         topic: impl Into<CheetahString>,
         perm: i32,
         target: super::types::TopicTarget,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         use rocketmq_model::common::config::TopicConfig as RocketMQTopicConfig;
 
         let topic = topic.into();
@@ -703,7 +699,9 @@ impl TopicService {
                 let topic_config = admin
                     .examine_topic_config(broker_addr.clone(), topic.clone())
                     .await
-                    .map_err(|e| ToolsError::internal(format!("Failed to get topic config: {e}")))?;
+                    .map_err(|e| {
+                        crate::client_adapter::services::errors::internal(format!("Failed to get topic config: {e}"))
+                    })?;
 
                 // Update permission
                 let updated_config = RocketMQTopicConfig {
@@ -720,26 +718,26 @@ impl TopicService {
                 admin
                     .create_and_update_topic_config(broker_addr, updated_config)
                     .await
-                    .map_err(|e| ToolsError::internal(format!("Failed to update topic permission: {e}")))?;
+                    .map_err(|e| {
+                        crate::client_adapter::services::errors::internal(format!(
+                            "Failed to update topic permission: {e}"
+                        ))
+                    })?;
 
                 Ok(())
             }
             super::types::TopicTarget::Cluster(cluster_name) => {
                 // Get cluster info
-                let cluster_info = admin
-                    .examine_broker_cluster_info()
-                    .await
-                    .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
+                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|e| {
+                    crate::client_adapter::services::errors::internal(format!("Failed to get cluster info: {e}"))
+                })?;
 
                 // Find master brokers
                 let master_addrs =
                     BrokerAddressResolver::fetch_master_addr_by_cluster_name(&cluster_info, &cluster_name)?;
 
                 if master_addrs.is_empty() {
-                    return Err(ToolsError::ClusterNotFound {
-                        cluster: cluster_name.to_string(),
-                    }
-                    .into());
+                    return Err(crate::client_adapter::services::errors::cluster_not_found(cluster_name));
                 }
 
                 // Update on all master brokers
@@ -747,7 +745,11 @@ impl TopicService {
                     let topic_config = admin
                         .examine_topic_config(broker_addr.clone(), topic.clone())
                         .await
-                        .map_err(|e| ToolsError::internal(format!("Failed to get topic config: {e}")))?;
+                        .map_err(|e| {
+                            crate::client_adapter::services::errors::internal(format!(
+                                "Failed to get topic config: {e}"
+                            ))
+                        })?;
 
                     let updated_config = RocketMQTopicConfig {
                         topic_name: Some(topic.clone()),
@@ -763,7 +765,11 @@ impl TopicService {
                     admin
                         .create_and_update_topic_config(broker_addr, updated_config)
                         .await
-                        .map_err(|e| ToolsError::internal(format!("Failed to update topic permission: {e}")))?;
+                        .map_err(|e| {
+                            crate::client_adapter::services::errors::internal(format!(
+                                "Failed to update topic permission: {e}"
+                            ))
+                        })?;
                 }
 
                 Ok(())
@@ -784,7 +790,7 @@ impl TopicService {
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
         ip_list: impl Into<CheetahString>,
-    ) -> RocketMQResult<AllocatedMqQueryResult> {
+    ) -> CanonicalResult<AllocatedMqQueryResult> {
         let topic = topic.into();
         let ip_list = ip_list.into();
 
@@ -831,7 +837,7 @@ impl TopicService {
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
         order_conf: impl Into<CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         const NAMESPACE: &str = "ORDER_TOPIC_CONFIG";
         admin
             .create_and_update_kv_config(
@@ -840,7 +846,9 @@ impl TopicService {
                 order_conf.into(),
             )
             .await
-            .map_err(|e| ToolsError::internal(format!("Failed to update order config: {e}")).into())
+            .map_err(|e| {
+                crate::client_adapter::services::errors::internal(format!("Failed to update order config: {e}")).into()
+            })
     }
 
     /// Get order configuration
@@ -854,12 +862,14 @@ impl TopicService {
     pub async fn get_order_conf(
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
-    ) -> RocketMQResult<CheetahString> {
+    ) -> CanonicalResult<CheetahString> {
         const NAMESPACE: &str = "ORDER_TOPIC_CONFIG";
         admin
             .get_kv_config(CheetahString::from_static_str(NAMESPACE), topic.into())
             .await
-            .map_err(|e| ToolsError::internal(format!("Failed to get order config: {e}")).into())
+            .map_err(|e| {
+                crate::client_adapter::services::errors::internal(format!("Failed to get order config: {e}")).into()
+            })
     }
 
     /// Delete order configuration
@@ -873,12 +883,14 @@ impl TopicService {
     pub async fn delete_order_conf(
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         const NAMESPACE: &str = "ORDER_TOPIC_CONFIG";
         admin
             .delete_kv_config(CheetahString::from_static_str(NAMESPACE), topic.into())
             .await
-            .map_err(|e| ToolsError::internal(format!("Failed to delete order config: {e}")).into())
+            .map_err(|e| {
+                crate::client_adapter::services::errors::internal(format!("Failed to delete order config: {e}")).into()
+            })
     }
 }
 

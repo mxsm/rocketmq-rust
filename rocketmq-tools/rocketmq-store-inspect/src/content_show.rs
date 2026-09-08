@@ -20,8 +20,7 @@ use std::path::PathBuf;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_store::inspect_commit_log_record;
 use rocketmq_store::CommitLogRecord;
 use rocketmq_store::CommitLogRecordBodyMode;
@@ -30,24 +29,20 @@ use rocketmq_store::CommitLogRecordOutcome;
 use tabled::Table;
 use tabled::Tabled;
 
-pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) -> RocketMQResult<()> {
-    let path =
-        path.ok_or_else(|| RocketMQError::validation_failed("config", "message log file path must be provided"))?;
+pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) -> CanonicalResult<()> {
+    let path = path.ok_or_else(|| crate::errors::argument_invalid("message log file path must be provided"))?;
     let from = from.unwrap_or_default();
     let to = to.unwrap_or(u32::MAX);
     if from > to {
-        return Err(RocketMQError::validation_failed(
-            "range",
-            format!("from ({from}) must be less than or equal to to ({to})"),
-        ));
+        return Err(crate::errors::argument_invalid(format!(
+            "from ({from}) must be less than or equal to to ({to})"
+        )));
     }
 
-    let path_display = path.to_string_lossy().to_string();
-    let file = File::open(&path)
-        .map_err(|error| RocketMQError::storage_read_failed(path_display.clone(), error.to_string()))?;
+    let file = File::open(&path).map_err(|error| crate::errors::storage_read_failed_by("commit-log", error))?;
     let file_metadata = file
         .metadata()
-        .map_err(|error| RocketMQError::storage_read_failed(path_display.clone(), error.to_string()))?;
+        .map_err(|error| crate::errors::storage_read_failed_by("commit-log", error))?;
     println!("file size: {}B", file_metadata.len());
     let mut reader = BufReader::new(file);
     // read message number

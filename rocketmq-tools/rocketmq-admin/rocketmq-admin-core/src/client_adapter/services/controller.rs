@@ -24,9 +24,8 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::client_adapter::services::admin::AdminBuilder;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Result as CanonicalResult;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControllerConfigQueryRequest {
@@ -35,10 +34,10 @@ pub struct ControllerConfigQueryRequest {
 }
 
 impl ControllerConfigQueryRequest {
-    pub fn try_new(controller_address: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(controller_address: impl Into<String>) -> CanonicalResult<Self> {
         let controller_servers = split_controller_addresses(controller_address);
         if controller_servers.is_empty() {
-            return Err(ToolsError::validation_error(
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "controllerAddress",
                 "controllerAddress must contain at least one address",
             )
@@ -85,10 +84,10 @@ impl ControllerConfigUpdateRequest {
         controller_address: impl Into<String>,
         key: impl Into<String>,
         value: impl Into<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let controller_servers = split_controller_addresses(controller_address);
         if controller_servers.is_empty() {
-            return Err(ToolsError::validation_error(
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "controllerAddress",
                 "controllerAddress must contain at least one address",
             )
@@ -136,7 +135,7 @@ pub struct ControllerMetadataQueryRequest {
 }
 
 impl ControllerMetadataQueryRequest {
-    pub fn try_new(controller_addr: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(controller_addr: impl Into<String>) -> CanonicalResult<Self> {
         Ok(Self {
             controller_addr: trim_required_cheetah("controllerAddress", controller_addr)?,
             namesrv_addr: None,
@@ -181,9 +180,13 @@ impl ControllerElectMasterRequest {
         cluster_name: impl Into<String>,
         broker_name: impl Into<String>,
         broker_id: i64,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         if broker_id < 0 {
-            return Err(ToolsError::validation_error("brokerId", "brokerId must be greater than or equal to 0").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "brokerId",
+                "brokerId must be greater than or equal to 0",
+            )
+            .into());
         }
 
         Ok(Self {
@@ -248,12 +251,12 @@ impl ControllerMetadataCleanRequest {
         broker_controller_ids_to_clean: Option<String>,
         cluster_name: Option<String>,
         clean_living_broker: bool,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let controller_addr = trim_required_cheetah("controllerAddress", controller_addr)?;
         let broker_name = trim_required_cheetah("brokerName", broker_name)?;
         let cluster_name = trim_optional_cheetah(cluster_name);
         if !clean_living_broker && cluster_name.is_none() {
-            return Err(ToolsError::validation_error(
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "clusterName",
                 "clusterName must not be empty when cleanLivingBroker is false",
             )
@@ -314,7 +317,7 @@ impl ControllerService {
         request: ControllerConfigQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ControllerConfigQueryResult> {
+    ) -> CanonicalResult<ControllerConfigQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -326,7 +329,7 @@ impl ControllerService {
     pub(crate) async fn query_controller_config_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ControllerConfigQueryRequest,
-    ) -> RocketMQResult<ControllerConfigQueryResult> {
+    ) -> CanonicalResult<ControllerConfigQueryResult> {
         let controller_configs = admin.get_controller_config(request.controller_servers.clone()).await?;
         Ok(ControllerConfigQueryResult { controller_configs })
     }
@@ -335,7 +338,7 @@ impl ControllerService {
         request: ControllerConfigUpdateRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -347,7 +350,7 @@ impl ControllerService {
     pub(crate) async fn update_controller_config_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ControllerConfigUpdateRequest,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         admin
             .update_controller_config(request.properties.clone(), request.controller_servers.clone())
             .await
@@ -357,7 +360,7 @@ impl ControllerService {
         request: ControllerMetadataQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ControllerMetadataQueryResult> {
+    ) -> CanonicalResult<ControllerMetadataQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -369,7 +372,7 @@ impl ControllerService {
     pub(crate) async fn query_controller_metadata_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ControllerMetadataQueryRequest,
-    ) -> RocketMQResult<ControllerMetadataQueryResult> {
+    ) -> CanonicalResult<ControllerMetadataQueryResult> {
         let meta_data = admin.get_controller_meta_data(request.controller_addr.clone()).await?;
         Ok(ControllerMetadataQueryResult { meta_data })
     }
@@ -378,7 +381,7 @@ impl ControllerService {
         request: ControllerElectMasterRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ControllerElectMasterResult> {
+    ) -> CanonicalResult<ControllerElectMasterResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -390,7 +393,7 @@ impl ControllerService {
     pub(crate) async fn elect_master_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ControllerElectMasterRequest,
-    ) -> RocketMQResult<ControllerElectMasterResult> {
+    ) -> CanonicalResult<ControllerElectMasterResult> {
         let (response_header, broker_member_group) = admin
             .elect_master(
                 request.controller_addr.clone(),
@@ -409,7 +412,7 @@ impl ControllerService {
         request: ControllerMetadataCleanRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -421,7 +424,7 @@ impl ControllerService {
     pub(crate) async fn clean_controller_metadata_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ControllerMetadataCleanRequest,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         admin
             .clean_controller_broker_data(
                 request.controller_addr.clone(),
@@ -454,16 +457,20 @@ fn trim_optional_cheetah(value: Option<String>) -> Option<CheetahString> {
     trim_optional_string(value).map(CheetahString::from)
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        )
+        .into());
     }
     Ok(CheetahString::from(value))
 }
 
-fn normalize_broker_controller_ids(value: Option<&str>) -> RocketMQResult<Option<CheetahString>> {
+fn normalize_broker_controller_ids(value: Option<&str>) -> CanonicalResult<Option<CheetahString>> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -471,7 +478,7 @@ fn normalize_broker_controller_ids(value: Option<&str>) -> RocketMQResult<Option
     let mut ids = Vec::new();
     for id in value.split(';').map(str::trim).filter(|id| !id.is_empty()) {
         id.parse::<i64>().map_err(|_| {
-            ToolsError::validation_error(
+            crate::client_adapter::services::errors::admin_validation_failed(
                 "brokerControllerIdsToClean",
                 format!("brokerControllerIdsToClean contains invalid id: {id}"),
             )

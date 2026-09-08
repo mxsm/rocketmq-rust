@@ -4218,6 +4218,7 @@ dependencies = [
  "crossterm",
  "ratatui",
  "rocketmq-admin-core",
+ "rocketmq-error",
  "rocketmq-model",
  "rocketmq-protocol",
  "rocketmq-runtime",

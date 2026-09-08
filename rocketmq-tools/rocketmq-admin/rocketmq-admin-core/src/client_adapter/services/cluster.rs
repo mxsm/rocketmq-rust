@@ -29,9 +29,8 @@ use std::collections::BTreeSet;
 
 use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::errors;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Result as CanonicalResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClusterListMode {
@@ -87,9 +86,13 @@ pub struct ClusterSendMessageRtRequest {
 }
 
 impl ClusterSendMessageRtRequest {
-    pub fn try_new(amount: u64, size: u64, cluster_name: Option<String>) -> RocketMQResult<Self> {
+    pub fn try_new(amount: u64, size: u64, cluster_name: Option<String>) -> CanonicalResult<Self> {
         if amount == 0 {
-            return Err(ToolsError::validation_error("amount", "amount must be greater than 0").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "amount",
+                "amount must be greater than 0",
+            )
+            .into());
         }
         Ok(Self {
             amount,
@@ -224,7 +227,7 @@ impl ClusterService {
         request: ClusterListQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ClusterListQueryResult> {
+    ) -> CanonicalResult<ClusterListQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -236,7 +239,7 @@ impl ClusterService {
     pub(crate) async fn query_cluster_list_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ClusterListQueryRequest,
-    ) -> RocketMQResult<ClusterListQueryResult> {
+    ) -> CanonicalResult<ClusterListQueryResult> {
         let cluster_info = admin.examine_broker_cluster_info().await?;
         let cluster_names = target_cluster_names(request.cluster_name(), &cluster_info);
 
@@ -262,7 +265,7 @@ impl ClusterService {
         request: ClusterBrokerNameQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ClusterBrokerNameQueryResult> {
+    ) -> CanonicalResult<ClusterBrokerNameQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -274,7 +277,7 @@ impl ClusterService {
     pub(crate) async fn query_cluster_broker_names_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ClusterBrokerNameQueryRequest,
-    ) -> RocketMQResult<ClusterBrokerNameQueryResult> {
+    ) -> CanonicalResult<ClusterBrokerNameQueryResult> {
         let cluster_info = admin.examine_broker_cluster_info().await?;
         Ok(collect_cluster_broker_names(request.cluster_name(), &cluster_info))
     }
@@ -283,7 +286,7 @@ impl ClusterService {
         request: ClusterSendMessageRtRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ClusterSendMessageRtResult> {
+    ) -> CanonicalResult<ClusterSendMessageRtResult> {
         let broker_names = Self::query_cluster_broker_names_by_request_with_credentials(
             request.broker_name_query_request(),
             credentials.clone(),
@@ -311,7 +314,7 @@ impl ClusterService {
         producer: &mut DefaultMQProducer,
         request: &ClusterSendMessageRtRequest,
         broker_names: &ClusterBrokerNameQueryResult,
-    ) -> RocketMQResult<ClusterSendMessageRtResult> {
+    ) -> CanonicalResult<ClusterSendMessageRtResult> {
         producer
             .start()
             .await

@@ -24,7 +24,7 @@ use rocketmq_client_rust::SendResult;
 use rocketmq_client_rust::TransactionListener;
 use rocketmq_client_rust::TransactionMQProducer;
 use rocketmq_client_rust::TransactionSendResult;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::message::MessageTrait;
@@ -54,12 +54,9 @@ impl TransactionListener for CommitTransactionListener {
     }
 }
 
-pub(crate) fn is_consumer_not_online_error(error: &RocketMQError) -> bool {
-    matches!(
-        error,
-        RocketMQError::BrokerOperationFailed { code, .. }
-            if ResponseCode::from(*code) == ResponseCode::ConsumerNotOnline
-    )
+pub(crate) fn is_consumer_not_online_error(error: &CanonicalError) -> bool {
+    crate::client_adapter::services::errors::broker_response_code(error)
+        .is_some_and(|code| ResponseCode::from(code) == ResponseCode::ConsumerNotOnline)
 }
 
 pub(crate) fn unique_producer_group(now_millis: u64, transactional: bool) -> String {
@@ -175,15 +172,6 @@ pub(crate) fn map_transaction_send_result(
     Ok(result)
 }
 
-fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
-    let view = error.boundary_view();
-    let context = (!view.context().is_empty()).then(|| view.context().to_string());
-    AdminError::backend_view(
-        operation,
-        view.code().as_str(),
-        view.message(),
-        context,
-        view.http().status.as_u16(),
-        view.is_retryable(),
-    )
+fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
+    AdminError::from_error(operation, error)
 }

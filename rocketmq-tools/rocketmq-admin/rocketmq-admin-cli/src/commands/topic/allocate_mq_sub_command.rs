@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -36,7 +36,7 @@ pub struct AllocateMQSubCommand {
 }
 
 impl AllocateMQSubCommand {
-    fn request(&self) -> RocketMQResult<AllocateMqQueryRequest> {
+    fn request(&self) -> CanonicalResult<AllocateMqQueryRequest> {
         Ok(
             AllocateMqQueryRequest::try_new(self.topic.clone(), self.ip_list.clone())?
                 .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()),
@@ -72,7 +72,7 @@ impl CommandExecute for AllocateMQSubCommand {
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = TopicService::query_allocated_mq_by_request(self.request()?).await?;
         Self::print_result(result);
         Ok(())

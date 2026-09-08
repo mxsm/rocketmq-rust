@@ -14,7 +14,7 @@
 
 use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::admin::offset_wrapper::OffsetWrapper;
 use rocketmq_protocol::protocol::body::lite_lag_info::LiteLagInfo;
 use rocketmq_runtime::common::time_utils::current_millis;
@@ -45,7 +45,7 @@ impl CommandExecute for GetLiteGroupInfoSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = LiteService::query_lite_group_info_by_request_with_credentials(
             self.request()?,
             credentials,
@@ -58,7 +58,7 @@ impl CommandExecute for GetLiteGroupInfoSubCommand {
 }
 
 impl GetLiteGroupInfoSubCommand {
-    fn request(&self) -> RocketMQResult<LiteGroupInfoQueryRequest> {
+    fn request(&self) -> CanonicalResult<LiteGroupInfoQueryRequest> {
         LiteGroupInfoQueryRequest::try_new(
             self.parent_topic.clone(),
             self.group.clone(),

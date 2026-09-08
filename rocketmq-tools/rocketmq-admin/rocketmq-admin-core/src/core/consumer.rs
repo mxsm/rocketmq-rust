@@ -1573,25 +1573,21 @@ mod tests {
             ConsumerAdmin::list_consumer_group_inventory_with_evidence(&mut admin, &ListConsumerGroupsRequest)
                 .await
                 .unwrap_err();
-        assert!(matches!(
-            inventory,
-            crate::core::AdminError::Backend {
-                operation: "list_consumer_group_inventory_with_evidence",
-                ..
-            }
-        ));
+        assert_eq!(inventory.failure(), crate::core::AdminFailure::Backend);
+        assert_eq!(
+            inventory.operation(),
+            Some("list_consumer_group_inventory_with_evidence")
+        );
 
         let exact = ExactConsumerGroupEnrichmentRequest::try_new(["orders"]).unwrap();
         let enrichment = ConsumerQueryAdmin::enrich_consumer_groups_exact_with_evidence(&mut admin, &exact)
             .await
             .unwrap_err();
-        assert!(matches!(
-            enrichment,
-            crate::core::AdminError::Backend {
-                operation: "enrich_consumer_groups_exact_with_evidence",
-                ..
-            }
-        ));
+        assert_eq!(enrichment.failure(), crate::core::AdminFailure::Backend);
+        assert_eq!(
+            enrichment.operation(),
+            Some("enrich_consumer_groups_exact_with_evidence")
+        );
     }
 
     #[test]

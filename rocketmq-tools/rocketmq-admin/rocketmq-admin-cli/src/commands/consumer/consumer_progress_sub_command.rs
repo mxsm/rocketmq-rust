@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::mq_version::RocketMqVersion;
 use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_runtime::common::util_all;
@@ -67,7 +67,7 @@ pub struct ConsumerProgressSubCommand {
 }
 
 impl ConsumerProgressSubCommand {
-    fn request(&self) -> RocketMQResult<ConsumerProgressRequest> {
+    fn request(&self) -> CanonicalResult<ConsumerProgressRequest> {
         ConsumerProgressRequest::try_new(
             self.consumer_group.clone(),
             self.topic_name.clone(),
@@ -164,7 +164,7 @@ impl CommandExecute for ConsumerProgressSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = ConsumerService::query_consumer_progress_by_request_with_credentials(
             self.request()?,
             credentials,

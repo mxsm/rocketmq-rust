@@ -25,10 +25,8 @@ use std::collections::HashMap;
 
 use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::errors;
-use crate::client_adapter::services::RocketMQError;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Result as CanonicalResult;
 
 pub const SKIP_TO_LATEST_TIMESTAMP: u64 = u64::MAX;
 
@@ -38,11 +36,15 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        )
+        .into());
     }
     Ok(CheetahString::from(value))
 }
@@ -62,7 +64,7 @@ impl CloneGroupOffsetRequest {
         dest_group: impl Into<String>,
         topic: impl Into<String>,
         offline: bool,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             src_group: trim_required_cheetah("srcGroup", src_group)?,
             dest_group: trim_required_cheetah("destGroup", dest_group)?,
@@ -115,7 +117,7 @@ impl ConsumerStatusQueryRequest {
         group: impl Into<String>,
         topic: impl Into<String>,
         origin_client_id: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             group: trim_required_cheetah("group", group)?,
             topic: trim_required_cheetah("topic", topic)?,
@@ -179,7 +181,7 @@ impl SkipAccumulatedMessageRequest {
         cluster: Option<String>,
         force: Option<bool>,
         namesrv_addr: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             group: trim_required_cheetah("group", group)?,
             topic: trim_required_cheetah("topic", topic)?,
@@ -231,7 +233,7 @@ pub struct ResetOffsetByTimeRequest {
 }
 
 impl ResetOffsetByTimeRequest {
-    pub fn try_new(group: impl Into<String>, topic: impl Into<String>, timestamp: u64) -> RocketMQResult<Self> {
+    pub fn try_new(group: impl Into<String>, topic: impl Into<String>, timestamp: u64) -> CanonicalResult<Self> {
         Ok(Self {
             group: trim_required_cheetah("group", group)?,
             topic: trim_required_cheetah("topic", topic)?,
@@ -288,7 +290,7 @@ impl ResetOffsetByTimeOldRequest {
         force: Option<bool>,
         cluster: Option<String>,
         namesrv_addr: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             group: trim_required_cheetah("group", group)?,
             topic: trim_required_cheetah("topic", topic)?,
@@ -350,7 +352,7 @@ impl OffsetService {
         request: CloneGroupOffsetRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -371,7 +373,7 @@ impl OffsetService {
         request: ConsumerStatusQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ConsumerStatusResult> {
+    ) -> CanonicalResult<ConsumerStatusResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -383,7 +385,7 @@ impl OffsetService {
     pub(crate) async fn query_consumer_status_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ConsumerStatusQueryRequest,
-    ) -> RocketMQResult<ConsumerStatusResult> {
+    ) -> CanonicalResult<ConsumerStatusResult> {
         let consumer_status_table = admin
             .get_consume_status(
                 request.topic().clone(),
@@ -416,7 +418,7 @@ impl OffsetService {
         request: SkipAccumulatedMessageRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<SkipAccumulatedMessageResult> {
+    ) -> CanonicalResult<SkipAccumulatedMessageResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -428,7 +430,7 @@ impl OffsetService {
     pub(crate) async fn skip_accumulated_message_with_admin(
         admin: &mut DefaultMQAdminExt,
         request: &SkipAccumulatedMessageRequest,
-    ) -> RocketMQResult<SkipAccumulatedMessageResult> {
+    ) -> CanonicalResult<SkipAccumulatedMessageResult> {
         match admin
             .reset_offset_by_timestamp(
                 request.cluster().cloned(),
@@ -441,11 +443,9 @@ impl OffsetService {
         {
             Ok(offset_table) => Ok(SkipAccumulatedMessageResult::Current(offset_table)),
             Err(err) => {
-                if matches!(
-                    err,
-                    RocketMQError::BrokerOperationFailed { code, .. }
-                        if ResponseCode::from(code) == ResponseCode::ConsumerNotOnline
-                ) {
+                if errors::broker_response_code(&err)
+                    .is_some_and(|code| ResponseCode::from(code) == ResponseCode::ConsumerNotOnline)
+                {
                     let rollback_stats = admin
                         .reset_offset_by_timestamp_old(
                             request.cluster().cloned(),
@@ -467,7 +467,7 @@ impl OffsetService {
         request: ResetOffsetByTimeRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ResetOffsetByTimeResult> {
+    ) -> CanonicalResult<ResetOffsetByTimeResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -479,7 +479,7 @@ impl OffsetService {
     pub(crate) async fn reset_offset_by_time_with_admin(
         admin: &mut DefaultMQAdminExt,
         request: &ResetOffsetByTimeRequest,
-    ) -> RocketMQResult<ResetOffsetByTimeResult> {
+    ) -> CanonicalResult<ResetOffsetByTimeResult> {
         match admin
             .reset_offset_by_timestamp(
                 None,
@@ -514,7 +514,7 @@ impl OffsetService {
         request: ResetOffsetByTimeOldRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<Vec<RollbackStats>> {
+    ) -> CanonicalResult<Vec<RollbackStats>> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -526,7 +526,7 @@ impl OffsetService {
     pub(crate) async fn reset_offset_by_time_old_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ResetOffsetByTimeOldRequest,
-    ) -> RocketMQResult<Vec<RollbackStats>> {
+    ) -> CanonicalResult<Vec<RollbackStats>> {
         admin
             .reset_offset_by_timestamp_old(
                 request.cluster().cloned(),

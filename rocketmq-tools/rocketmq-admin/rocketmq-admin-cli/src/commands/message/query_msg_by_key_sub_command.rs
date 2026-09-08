@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::message::MessageService;
@@ -75,7 +74,7 @@ pub struct QueryMsgByKeySubCommand {
 }
 
 impl QueryMsgByKeySubCommand {
-    fn request(&self) -> RocketMQResult<QueryMessageByKeyRequest> {
+    fn request(&self) -> CanonicalResult<QueryMessageByKeyRequest> {
         QueryMessageByKeyRequest::try_new(
             self.topic.clone(),
             self.msg_key.clone(),
@@ -111,14 +110,14 @@ impl CommandExecute for QueryMsgByKeySubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let query_result = MessageService::query_message_by_key_by_request_with_credentials(
             self.request()?,
             credentials,
             client_runtime.clone(),
         )
         .await
-        .map_err(|source| RocketMQError::internal("query message by key", source))?;
+        .map_err(|source| crate::errors::internal_failed_by("query_message_by_key", source))?;
 
         Self::print_result(query_result);
 

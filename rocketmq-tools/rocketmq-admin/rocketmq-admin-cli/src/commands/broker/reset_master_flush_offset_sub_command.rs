@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
@@ -29,7 +29,7 @@ pub struct ResetMasterFlushOffsetSubCommand {
 }
 
 impl ResetMasterFlushOffsetSubCommand {
-    fn request(&self) -> RocketMQResult<ResetMasterFlushOffsetRequest> {
+    fn request(&self) -> CanonicalResult<ResetMasterFlushOffsetRequest> {
         ResetMasterFlushOffsetRequest::try_new(self.broker_addr.clone(), self.offset)
     }
 }
@@ -39,7 +39,7 @@ impl CommandExecute for ResetMasterFlushOffsetSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         BrokerService::reset_master_flush_offset_by_request_with_credentials(
             request.clone(),

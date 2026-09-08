@@ -20,8 +20,7 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::auth::AuthService;
 use rocketmq_admin_core::client_adapter::services::auth::ListAclRequest;
 use rocketmq_admin_core::client_adapter::services::auth::ListAclResult;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 
 use crate::commands::CommandExecute;
@@ -60,7 +59,7 @@ impl CommandExecute for ListAclSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = ListAclRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
@@ -73,19 +72,12 @@ impl CommandExecute for ListAclSubCommand {
     }
 }
 
-fn render_list_acl_result(result: ListAclResult) -> RocketMQResult<()> {
+fn render_list_acl_result(result: ListAclResult) -> CanonicalResult<()> {
     print_acls(result.acl_infos);
     if result.failed_broker_addrs.is_empty() {
         Ok(())
     } else {
-        Err(RocketMQError::broker_operation_failed(
-            "LIST_ACL",
-            -1,
-            format!(
-                "ListAclSubCommand: Failed to list ACLs for brokers {}",
-                result.failed_broker_addrs.join(", ")
-            ),
-        ))
+        Err(crate::errors::broker_response_failed("LIST_ACL", -1))
     }
 }
 

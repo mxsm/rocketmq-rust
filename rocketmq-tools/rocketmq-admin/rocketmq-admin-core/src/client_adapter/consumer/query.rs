@@ -48,10 +48,10 @@ pub(super) async fn query_consumer_connection_at<Query, QueryFuture>(
     group: &str,
     address: Option<CheetahString>,
     query: Query,
-) -> rocketmq_error::RocketMQResult<ConsumerConnection>
+) -> rocketmq_error::Result<ConsumerConnection>
 where
     Query: FnOnce(CheetahString, Option<CheetahString>) -> QueryFuture,
-    QueryFuture: Future<Output = rocketmq_error::RocketMQResult<ConsumerConnection>>,
+    QueryFuture: Future<Output = rocketmq_error::Result<ConsumerConnection>>,
 {
     query(CheetahString::from(group), address).await
 }
@@ -61,10 +61,10 @@ pub(super) async fn query_consumer_progress_at<Query, QueryFuture>(
     address: Option<CheetahString>,
     timeout_millis: Option<u64>,
     query: Query,
-) -> rocketmq_error::RocketMQResult<ConsumeStats>
+) -> rocketmq_error::Result<ConsumeStats>
 where
     Query: FnOnce(CheetahString, Option<CheetahString>, Option<u64>) -> QueryFuture,
-    QueryFuture: Future<Output = rocketmq_error::RocketMQResult<ConsumeStats>>,
+    QueryFuture: Future<Output = rocketmq_error::Result<ConsumeStats>>,
 {
     query(CheetahString::from(group), address, timeout_millis).await
 }

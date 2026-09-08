@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckStatus;
 
 use crate::commands::CommandExecute;
@@ -37,7 +37,7 @@ pub struct CheckRocksdbCqWriteProgressSubCommand {
 }
 
 impl CheckRocksdbCqWriteProgressSubCommand {
-    fn request(&self) -> RocketMQResult<CheckRocksdbCqWriteProgressRequest> {
+    fn request(&self) -> CanonicalResult<CheckRocksdbCqWriteProgressRequest> {
         CheckRocksdbCqWriteProgressRequest::try_new(
             self.cluster_name.clone(),
             self.namesrv_addr.clone(),
@@ -52,7 +52,7 @@ impl CommandExecute for CheckRocksdbCqWriteProgressSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = QueueService::check_rocksdb_cq_write_progress_by_request_with_credentials(
             self.request()?,
             credentials,

@@ -16,7 +16,7 @@ mod get_sync_state_set_sub_command;
 mod ha_status_sub_command;
 
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::ha::get_sync_state_set_sub_command::GetSyncStateSetSubCommand;
@@ -44,7 +44,7 @@ impl CommandExecute for HACommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             HACommands::GetSyncStateSet(value) => value.execute(credentials, client_runtime.clone()).await,
             HACommands::HaStatus(value) => value.execute(credentials, client_runtime.clone()).await,

@@ -24,7 +24,7 @@ use rocketmq_client_rust::InfrastructureObservationReadError;
 use rocketmq_client_rust::InfrastructureObservationReadErrorCode;
 use rocketmq_client_rust::MQAdminInfrastructureObservationReadExt;
 use rocketmq_client_rust::MQAdminReadExt;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_protocol::protocol::body::broker_replicas_info::BrokerReplicasInfo;
@@ -97,7 +97,7 @@ impl QueryRowBudget {
 
 #[allow(async_fn_in_trait)]
 trait InfrastructureObservationSource: Send {
-    async fn cluster_info(&self) -> Result<ClusterInfo, RocketMQError>;
+    async fn cluster_info(&self) -> Result<ClusterInfo, CanonicalError>;
     async fn ha_runtime(&self, endpoint: CheetahString) -> ObservationResult<HARuntimeInfo>;
     async fn sync_state(
         &self,
@@ -112,7 +112,7 @@ trait InfrastructureObservationSource: Send {
 }
 
 impl InfrastructureObservationSource for DefaultMQAdminExt {
-    async fn cluster_info(&self) -> Result<ClusterInfo, RocketMQError> {
+    async fn cluster_info(&self) -> Result<ClusterInfo, CanonicalError> {
         MQAdminReadExt::examine_broker_cluster_info(self).await
     }
 
@@ -448,10 +448,10 @@ fn resolve_ha_topology(cluster_info: &ClusterInfo, cluster: &str, selectors: &[S
         .cluster_addr_table
         .as_ref()
         .and_then(|table| table.get(cluster))
-        .ok_or_else(|| AdminError::not_found("cluster", cluster))?;
+        .ok_or_else(|| AdminError::cluster_not_found(cluster))?;
     let selected_broker_names = if selectors.is_empty() {
         if membership.is_empty() {
-            return Err(AdminError::not_found("cluster", cluster));
+            return Err(AdminError::cluster_not_found(cluster));
         }
         if membership.len() > MAX_HA_BROKER_TARGETS {
             return Err(target_limit_error());
@@ -460,7 +460,7 @@ fn resolve_ha_topology(cluster_info: &ClusterInfo, cluster: &str, selectors: &[S
     } else {
         for selector in selectors {
             if !membership.contains(selector.as_str()) {
-                return Err(AdminError::not_found("broker", selector));
+                return Err(AdminError::broker_not_found(selector));
             }
         }
         selectors.iter().cloned().collect()
@@ -565,13 +565,9 @@ fn resolve_ha_topology(cluster_info: &ClusterInfo, cluster: &str, selectors: &[S
 }
 
 fn target_limit_error() -> AdminError {
-    AdminError::backend_view(
+    AdminError::target_limit(
         "resolve_ha_targets",
-        "HA_OBSERVATION_TARGET_LIMIT_EXCEEDED",
         "selected cluster has too many logical Broker masters",
-        None,
-        422,
-        false,
     )
 }
 
@@ -1050,16 +1046,8 @@ fn invalid_failure(source: AdminQuerySource, logical_target: &str) -> AdminSourc
     AdminSourceFailure::new(source, AdminQueryFailureCode::InvalidResponse, false, logical_target)
 }
 
-fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
-    let view = error.boundary_view();
-    AdminError::backend_view(
-        operation,
-        "INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE",
-        "infrastructure observation source is unavailable",
-        None,
-        view.http().status.as_u16(),
-        view.is_retryable(),
-    )
+fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
+    AdminError::from_error(operation, error)
 }
 
 fn safe_logical_identifier(value: &str) -> bool {

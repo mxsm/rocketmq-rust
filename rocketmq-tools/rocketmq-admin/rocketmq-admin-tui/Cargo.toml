@@ -29,6 +29,7 @@ rust-version.workspace = true
 
 [dependencies]
 rocketmq-admin-core = { version = "1.0.0", path = "../rocketmq-admin-core", features = ["client-adapter"] }
+rocketmq-error      = { workspace = true }
 rocketmq-model      = { workspace = true }
 rocketmq-protocol   = { workspace = true }
 rocketmq-runtime    = { workspace = true }

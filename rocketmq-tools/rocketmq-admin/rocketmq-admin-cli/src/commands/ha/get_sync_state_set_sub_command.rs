@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 
 use crate::commands::CommandExecute;
@@ -65,7 +65,7 @@ impl CommandExecute for GetSyncStateSetSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         if let Some(interval) = self.interval {
             let flush_second = if interval > 0 { interval } else { 3 };
             loop {
@@ -93,7 +93,7 @@ impl CommandExecute for GetSyncStateSetSubCommand {
 }
 
 impl GetSyncStateSetSubCommand {
-    fn request(&self) -> RocketMQResult<SyncStateSetQueryRequest> {
+    fn request(&self) -> CanonicalResult<SyncStateSetQueryRequest> {
         SyncStateSetQueryRequest::try_new(
             self.controller_address.clone(),
             self.broker_name.clone(),

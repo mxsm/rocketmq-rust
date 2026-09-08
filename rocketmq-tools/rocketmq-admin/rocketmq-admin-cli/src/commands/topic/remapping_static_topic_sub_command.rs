@@ -17,7 +17,7 @@ use rocketmq_admin_core::client_adapter::services::static_topic::RemappingStatic
 use rocketmq_admin_core::client_adapter::services::static_topic::StaticTopicMappingFileRequest;
 use rocketmq_admin_core::client_adapter::services::static_topic::StaticTopicMappingPlan;
 use rocketmq_admin_core::client_adapter::services::static_topic::StaticTopicService;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -60,7 +60,7 @@ pub struct RemappingStaticTopicSubCommand {
 }
 
 impl RemappingStaticTopicSubCommand {
-    fn remapping_request(&self) -> RocketMQResult<RemappingStaticTopicRequest> {
+    fn remapping_request(&self) -> CanonicalResult<RemappingStaticTopicRequest> {
         RemappingStaticTopicRequest::try_new(
             self.topic.clone(),
             self.brokers.clone(),
@@ -70,7 +70,7 @@ impl RemappingStaticTopicSubCommand {
         .map(|request| request.with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
 
-    fn mapping_file_request(&self) -> RocketMQResult<StaticTopicMappingFileRequest> {
+    fn mapping_file_request(&self) -> CanonicalResult<StaticTopicMappingFileRequest> {
         StaticTopicMappingFileRequest::try_new(self.topic.clone(), self.force_replace.unwrap_or(false))
             .map(|request| request.with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
@@ -80,7 +80,7 @@ impl RemappingStaticTopicSubCommand {
         map_file_name: &str,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let map_file_name = map_file_name.trim();
         if let Some(wrapper) = static_topic_file::read_mapping(map_file_name) {
             StaticTopicService::remapping_static_topic_from_mapping_by_request_with_credentials(
@@ -95,7 +95,7 @@ impl RemappingStaticTopicSubCommand {
         Ok(())
     }
 
-    fn write_mapping_plan(plan: &StaticTopicMappingPlan) -> RocketMQResult<()> {
+    fn write_mapping_plan(plan: &StaticTopicMappingPlan) -> CanonicalResult<()> {
         let old_mapping_data_file = static_topic_file::write_mapping(&plan.old_mapping, false)?;
         println!("The old mapping data is written to file {}", old_mapping_data_file);
 
@@ -111,7 +111,7 @@ impl CommandExecute for RemappingStaticTopicSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         if let Some(f_name) = &self.mapping_file {
             return self
                 .execute_from_file(f_name, credentials, client_runtime.clone())

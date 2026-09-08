@@ -12,49 +12,156 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::SerializationError;
-use rocketmq_error::ToolsError;
+use rocketmq_error::fields;
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::ErrorContext;
+use rocketmq_error::ViewValueRef;
 
-pub(crate) fn cluster_metadata_unavailable(reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::Tools(ToolsError::ClusterInvalid { reason: reason.into() })
+pub(crate) fn cluster_metadata_unavailable(reason: impl Into<String>) -> CanonicalError {
+    let _ = reason.into();
+    CanonicalError::new(&rocketmq_error::CORE_CONFIGURATION_INVALID)
+        .with_context(ErrorContext::new().with_secret_presence(fields::REASON_PRESENT))
 }
 
-pub(crate) fn cluster_not_found(cluster: impl Into<String>) -> RocketMQError {
-    RocketMQError::Tools(ToolsError::cluster_not_found(cluster))
+pub(crate) fn cluster_not_found(cluster: impl Into<String>) -> CanonicalError {
+    let _ = cluster.into();
+    CanonicalError::new(&rocketmq_error::ROUTE_CLUSTER_NOT_FOUND)
 }
 
-pub(crate) fn broker_metadata_unavailable(reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::Tools(ToolsError::BrokerNotFound { broker: reason.into() })
+pub(crate) fn broker_metadata_unavailable(reason: impl Into<String>) -> CanonicalError {
+    let _ = reason.into();
+    CanonicalError::new(&rocketmq_error::BROKER_LOOKUP_NOT_FOUND)
 }
 
-pub(crate) fn broker_not_found(broker: impl Into<String>) -> RocketMQError {
-    RocketMQError::Tools(ToolsError::broker_not_found(broker))
+pub(crate) fn broker_not_found(broker: impl Into<String>) -> CanonicalError {
+    let _ = broker.into();
+    CanonicalError::new(&rocketmq_error::BROKER_LOOKUP_NOT_FOUND)
 }
 
-pub(crate) fn broker_operation_failed(operation: &'static str, reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::broker_operation_failed(operation, 0, reason)
+pub(crate) fn broker_operation_failed(operation: &'static str, reason: impl Into<String>) -> CanonicalError {
+    let _ = reason.into();
+    CanonicalError::new(&rocketmq_error::BROKER_OPERATION_FAILED)
+        .with_context(ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation))
 }
 
-pub(crate) fn admin_operation_failed(operation: &'static str, reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::response_process_failed(operation, reason)
+pub(crate) fn broker_response_failed(operation: &'static str, code: i32) -> CanonicalError {
+    CanonicalError::new(&rocketmq_error::BROKER_OPERATION_FAILED).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_i64(fields::BROKER_CODE, i64::from(code)),
+    )
 }
 
-pub(crate) fn admin_validation_failed(field: impl Into<String>, reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::validation_error(field, reason)
+pub(crate) fn broker_response_code(error: &CanonicalError) -> Option<i32> {
+    error
+        .diagnostic_view()
+        .ok()?
+        .fields()
+        .find_map(|field| match (field.name(), field.value()) {
+            ("broker_code", ViewValueRef::I64(code)) => i32::try_from(code).ok(),
+            _ => None,
+        })
 }
 
-pub(crate) fn admin_serialization_failed(format: &'static str, reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::Serialization(SerializationError::encode_failed(format, reason))
+pub(crate) fn admin_operation_failed(operation: &'static str, reason: impl Into<String>) -> CanonicalError {
+    let _ = reason.into();
+    CanonicalError::new(&rocketmq_error::PROTOCOL_RESPONSE_FAILED).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_secret_presence(fields::REASON_PRESENT),
+    )
 }
 
-pub(crate) fn topic_route_not_found(topic: impl Into<String>) -> RocketMQError {
-    RocketMQError::RouteNotFound { topic: topic.into() }
+pub(crate) fn admin_operation_failed_by(
+    operation: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> CanonicalError {
+    CanonicalError::caused_by(&rocketmq_error::TOOLS_OPERATION_FAILED, source)
+        .with_context(ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation))
 }
 
-pub(crate) fn topic_route_inconsistent(topic: impl Into<String>, reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::RouteInconsistent {
-        topic: topic.into(),
-        reason: reason.into(),
-    }
+pub(crate) fn admin_validation_failed(field: impl Into<String>, reason: impl Into<String>) -> CanonicalError {
+    let _ = field.into();
+    let _ = reason.into();
+    CanonicalError::new(&rocketmq_error::CORE_ARGUMENT_INVALID)
+        .with_context(ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT))
+}
+
+pub(crate) fn admin_serialization_failed_by(
+    format: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> CanonicalError {
+    CanonicalError::caused_by(&rocketmq_error::CORE_SERIALIZATION_FAILED, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::FORMAT, format)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    )
+}
+
+pub(crate) fn io_failed_by(
+    operation: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> CanonicalError {
+    CanonicalError::caused_by(&rocketmq_error::CORE_IO_FAILED, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    )
+}
+
+pub(crate) fn storage_read_failed(component: &'static str) -> CanonicalError {
+    CanonicalError::new(&rocketmq_error::STORAGE_READ_FAILED).with_context(
+        ErrorContext::new()
+            .with_text(fields::STORE_OPERATION, "read")
+            .with_text(fields::STORE_COMPONENT, component),
+    )
+}
+
+pub(crate) fn storage_read_failed_by(
+    component: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> CanonicalError {
+    CanonicalError::caused_by(&rocketmq_error::STORAGE_READ_FAILED, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::STORE_OPERATION, "read")
+            .with_text(fields::STORE_COMPONENT, component)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    )
+}
+
+pub(crate) fn storage_write_failed(component: &'static str) -> CanonicalError {
+    CanonicalError::new(&rocketmq_error::STORAGE_WRITE_FAILED).with_context(
+        ErrorContext::new()
+            .with_text(fields::STORE_OPERATION, "write")
+            .with_text(fields::STORE_COMPONENT, component),
+    )
+}
+
+pub(crate) fn storage_write_failed_by(
+    component: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> CanonicalError {
+    CanonicalError::caused_by(&rocketmq_error::STORAGE_WRITE_FAILED, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::STORE_OPERATION, "write")
+            .with_text(fields::STORE_COMPONENT, component)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    )
+}
+
+pub(crate) fn topic_route_not_found(topic: impl Into<String>) -> CanonicalError {
+    let _ = topic.into();
+    CanonicalError::new(&rocketmq_error::ROUTE_TOPIC_NOT_FOUND)
+}
+
+pub(crate) fn topic_route_inconsistent(topic: impl Into<String>, reason: impl Into<String>) -> CanonicalError {
+    let _ = topic.into();
+    let _ = reason.into();
+    CanonicalError::new(&rocketmq_error::ROUTE_TOPIC_INCONSISTENT)
+        .with_context(ErrorContext::new().with_secret_presence(fields::REASON_PRESENT))
+}
+
+pub(crate) fn internal(reason: impl Into<String>) -> CanonicalError {
+    let _ = reason.into();
+    CanonicalError::new(&rocketmq_error::CORE_INTERNAL_FAILURE)
 }

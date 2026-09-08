@@ -21,7 +21,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_store::StoreError;
 use rocketmq_store_rocksdb::read_only::PopConsumerProfileState;
 use rocketmq_store_rocksdb::read_only::ReadOnlyRocksDb;
@@ -124,15 +124,15 @@ struct DeclaredFormat {
 }
 
 /// Inspects every Rust-owned format relevant to a downgrade and returns a fail-closed report.
-pub fn run_preflight(request: &DowngradePreflightRequest) -> Result<DowngradePreflightReport, RocketMQError> {
+pub fn run_preflight(request: &DowngradePreflightRequest) -> Result<DowngradePreflightReport, CanonicalError> {
     let target_major = parse_target_major(&request.target_version)?;
     let loaded = config::Config::builder()
         .add_source(config::File::from(request.config_path.clone()))
         .build()
-        .map_err(|error| read_error(&request.config_path, format!("load Broker config: {error}")))?;
+        .map_err(|error| read_error(&request.config_path, error))?;
     let broker: BrokerFile = loaded
         .try_deserialize()
-        .map_err(|error| read_error(&request.config_path, format!("decode Broker config: {error}")))?;
+        .map_err(|error| read_error(&request.config_path, error))?;
     let root = canonical_existing_root(&broker.store.store_path_root_dir)?;
     let _lock = OfflineLock::acquire(&root)?;
     let inventory = load_inventory(&root)?;
@@ -164,7 +164,7 @@ fn check_multipath(
     target_major: u64,
     checks: &mut Vec<PreflightCheck>,
     actions: &mut Vec<String>,
-) -> Result<(), RocketMQError> {
+) -> Result<(), CanonicalError> {
     let primary_default = store.store_path_root_dir.join("commitlog").display().to_string();
     let writable = split_paths(store.store_path_commit_log.as_deref().unwrap_or(&primary_default));
     let mut roots = writable.clone();
@@ -176,22 +176,19 @@ fn check_multipath(
     let primary = writable
         .into_iter()
         .next()
-        .ok_or_else(|| RocketMQError::illegal_argument("CommitLog has no primary path"))?;
-    let primary = fs::canonicalize(&primary).map_err(|error| read_error(&primary, error.to_string()))?;
+        .ok_or_else(|| crate::errors::argument_invalid("CommitLog has no primary path"))?;
+    let primary = fs::canonicalize(&primary).map_err(|error| read_error(&primary, error))?;
     let mut outside_primary = false;
     let mut offsets = Vec::new();
     for root in roots {
-        let canonical = fs::canonicalize(&root).map_err(|error| read_error(&root, error.to_string()))?;
-        for entry in fs::read_dir(&canonical).map_err(|error| read_error(&canonical, error.to_string()))? {
-            let path = entry.map_err(|error| read_error(&canonical, error.to_string()))?.path();
+        let canonical = fs::canonicalize(&root).map_err(|error| read_error(&root, error))?;
+        for entry in fs::read_dir(&canonical).map_err(|error| read_error(&canonical, error))? {
+            let path = entry.map_err(|error| read_error(&canonical, error))?.path();
             let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
             if name.len() != 20 || !name.bytes().all(|byte| byte.is_ascii_digit()) || !path.is_file() {
-                return Err(read_error(&path, "unknown or non-file CommitLog entry".to_owned()));
+                return Err(read_failure("commit-log"));
             }
-            offsets.push(
-                name.parse::<u64>()
-                    .map_err(|error| read_error(&path, error.to_string()))?,
-            );
+            offsets.push(name.parse::<u64>().map_err(|error| read_error(&path, error))?);
             outside_primary |= canonical != primary;
         }
     }
@@ -199,12 +196,9 @@ fn check_multipath(
     for pair in offsets.windows(2) {
         let expected = pair[0]
             .checked_add(store.mapped_file_size_commit_log)
-            .ok_or_else(|| RocketMQError::storage_read_failed("CommitLog", "segment offset overflow"))?;
+            .ok_or_else(|| read_failure("commit-log"))?;
         if pair[1] != expected {
-            return Err(RocketMQError::storage_read_failed(
-                "CommitLog",
-                format!("non-contiguous segments: expected {expected}, found {}", pair[1]),
-            ));
+            return Err(read_failure("commit-log"));
         }
     }
     let incompatible = target_major < 1 && outside_primary;
@@ -229,7 +223,7 @@ fn check_pop(
     target_major: u64,
     checks: &mut Vec<PreflightCheck>,
     actions: &mut Vec<String>,
-) -> Result<(), RocketMQError> {
+) -> Result<(), CanonicalError> {
     let declared = inventory.pop_consumer_profile.declared;
     let database = ReadOnlyRocksDb::open_existing(root.join("kvStore")).map_err(store_inspect_error)?;
     let state = match database {
@@ -289,8 +283,8 @@ fn check_pop(
     Ok(())
 }
 
-fn store_inspect_error(source: StoreError) -> RocketMQError {
-    RocketMQError::internal("Store inspection backend operation failed", source)
+fn store_inspect_error(source: StoreError) -> CanonicalError {
+    crate::errors::internal_failed_by("store_inspection_backend", source)
 }
 
 fn check_timer(
@@ -299,12 +293,12 @@ fn check_timer(
     target_major: u64,
     checks: &mut Vec<PreflightCheck>,
     actions: &mut Vec<String>,
-) -> Result<(), RocketMQError> {
+) -> Result<(), CanonicalError> {
     let path = root.join(EXTENDED_TIMER_OWNER_MARKER);
     let marker = match fs::read_to_string(&path) {
         Ok(value) => Some(value),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(read_error(&path, error.to_string())),
+        Err(error) => return Err(read_error(&path, error)),
     };
     let configured_extended =
         store.timer_store_mode == "extended_timeline" || store.timer_extended_activation_epoch > 0;
@@ -357,18 +351,18 @@ fn check_compaction(
     target_major: u64,
     checks: &mut Vec<PreflightCheck>,
     actions: &mut Vec<String>,
-) -> Result<(), RocketMQError> {
+) -> Result<(), CanonicalError> {
     let compaction = root.join("compaction");
     let current = compaction.join("CURRENT");
     let bytes = match fs::read(&current) {
         Ok(bytes) => Some(bytes),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(read_error(&current, error.to_string())),
+        Err(error) => return Err(read_error(&current, error)),
     };
     let generations = compaction.join("generations");
     let generations_present = generations.is_dir()
         && fs::read_dir(&generations)
-            .map_err(|error| read_error(&generations, error.to_string()))?
+            .map_err(|error| read_error(&generations, error))?
             .next()
             .is_some();
     let Some(bytes) = bytes else {
@@ -432,7 +426,7 @@ fn check_tiered(
     target_major: u64,
     checks: &mut Vec<PreflightCheck>,
     actions: &mut Vec<String>,
-) -> Result<(), RocketMQError> {
+) -> Result<(), CanonicalError> {
     let path = root.join("config/tieredStoreMetadata.json");
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
@@ -440,10 +434,9 @@ fn check_tiered(
             checks.push(check("tiered", "legacy-absent", "no Tiered metadata"));
             return Ok(());
         }
-        Err(error) => return Err(read_error(&path, error.to_string())),
+        Err(error) => return Err(read_error(&path, error)),
     };
-    let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|error| read_error(&path, format!("decode Tiered metadata: {error}")))?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| read_error(&path, error))?;
     let format = value.get("format").and_then(serde_json::Value::as_str);
     let version = value.get("version").and_then(serde_json::Value::as_u64);
     let status = if format != Some("rocketmq-tiered-metadata") || version != Some(1) {
@@ -464,23 +457,22 @@ fn check_tiered(
     Ok(())
 }
 
-fn load_inventory(root: &Path) -> Result<StorageFormatInventory, RocketMQError> {
+fn load_inventory(root: &Path) -> Result<StorageFormatInventory, CanonicalError> {
     let path = root.join(STORAGE_FORMAT_INVENTORY);
     match fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|error| read_error(&path, format!("decode storage format inventory: {error}"))),
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| read_error(&path, error)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(StorageFormatInventory::default()),
-        Err(error) => Err(read_error(&path, error.to_string())),
+        Err(error) => Err(read_error(&path, error)),
     }
 }
 
-fn parse_target_major(version: &str) -> Result<u64, RocketMQError> {
+fn parse_target_major(version: &str) -> Result<u64, CanonicalError> {
     let numeric = version.trim_start_matches('v');
     numeric
         .split('.')
         .next()
         .and_then(|major| major.parse().ok())
-        .ok_or_else(|| RocketMQError::illegal_argument(format!("invalid target version: {version}")))
+        .ok_or_else(|| crate::errors::argument_invalid(format!("invalid target version: {version}")))
 }
 
 fn split_paths(value: &str) -> Vec<PathBuf> {
@@ -492,8 +484,8 @@ fn split_paths(value: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-fn canonical_existing_root(path: &Path) -> Result<PathBuf, RocketMQError> {
-    let canonical = fs::canonicalize(path).map_err(|error| read_error(path, format!("open Store root: {error}")))?;
+fn canonical_existing_root(path: &Path) -> Result<PathBuf, CanonicalError> {
+    let canonical = fs::canonicalize(path).map_err(|error| read_error(path, error))?;
     Ok(platform_compatible_canonical_path(canonical))
 }
 
@@ -519,8 +511,12 @@ fn check(id: &str, status: &str, detail: impl Into<String>) -> PreflightCheck {
     }
 }
 
-fn read_error(path: &Path, reason: String) -> RocketMQError {
-    RocketMQError::storage_read_failed(path.display().to_string(), reason)
+fn read_error(_path: &Path, source: impl std::error::Error + Send + Sync + 'static) -> CanonicalError {
+    crate::errors::storage_read_failed_by("store-inspect", source)
+}
+
+fn read_failure(component: &'static str) -> CanonicalError {
+    crate::errors::storage_read_failed(component)
 }
 
 struct OfflineLock {
@@ -528,7 +524,7 @@ struct OfflineLock {
 }
 
 impl OfflineLock {
-    fn acquire(store_root: &Path) -> Result<Self, RocketMQError> {
+    fn acquire(store_root: &Path) -> Result<Self, CanonicalError> {
         let path = store_root.join("lock");
         let file = OpenOptions::new()
             .read(true)
@@ -536,13 +532,8 @@ impl OfflineLock {
             .create(true)
             .truncate(false)
             .open(&path)
-            .map_err(|error| read_error(&path, error.to_string()))?;
-        fs2::FileExt::try_lock_exclusive(&file).map_err(|error| {
-            RocketMQError::storage_read_failed(
-                path.display().to_string(),
-                format!("Broker must be stopped before downgrade preflight: {error}"),
-            )
-        })?;
+            .map_err(|error| read_error(&path, error))?;
+        fs2::FileExt::try_lock_exclusive(&file).map_err(|error| read_error(&path, error))?;
         Ok(Self { file })
     }
 }

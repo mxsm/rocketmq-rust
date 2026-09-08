@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn deleting_a_topic_requires_at_least_one_cluster_mapping() {
         let error = validate_delete_clusters("TopicA", &[]).expect_err("empty clusters must fail");
-        assert!(matches!(error, AdminError::InvalidArgument { .. }));
+        assert_eq!(error.failure(), crate::core::AdminFailure::InvalidArgument);
         assert!(validate_delete_clusters("TopicA", &["DefaultCluster".to_string()]).is_ok());
     }
 }

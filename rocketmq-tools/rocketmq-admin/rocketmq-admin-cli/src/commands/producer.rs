@@ -15,7 +15,7 @@
 mod producer_sub_command;
 
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::producer::producer_sub_command::ProducerSubCommand;
@@ -35,7 +35,7 @@ impl CommandExecute for ProducerCommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             ProducerCommands::Producer(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
         }

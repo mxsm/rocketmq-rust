@@ -29,10 +29,9 @@ use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::resolver::BrokerAddressResolver;
 use crate::client_adapter::services::stable_error_code;
 use crate::client_adapter::services::stable_error_message;
-use crate::client_adapter::services::RocketMQError;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::Result as CanonicalResult;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuthTarget {
@@ -69,7 +68,7 @@ impl CreateUserRequest {
         username: impl Into<String>,
         password: impl Into<String>,
         user_type: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             target: target_from_options(broker_addr, cluster_name)?,
             username: trim_required_cheetah("username", username)?,
@@ -143,12 +142,12 @@ impl UpdateUserRequest {
         password: Option<String>,
         user_type: Option<String>,
         user_status: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let password = trim_optional_string(password).map(CheetahString::from);
         let user_type = trim_optional_string(user_type).map(CheetahString::from);
         let user_status = trim_optional_string(user_status).map(CheetahString::from);
         if password.is_none() && user_type.is_none() && user_status.is_none() {
-            return Err(ToolsError::validation_error(
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "updateField",
                 "at least one of password, userType, or userStatus must be provided",
             )
@@ -207,7 +206,7 @@ impl DeleteUserRequest {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         username: impl Into<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             target: target_from_options(broker_addr, cluster_name)?,
             username: trim_required_cheetah("username", username)?,
@@ -245,7 +244,7 @@ impl GetUserRequest {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         username: impl Into<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             target: target_from_options(broker_addr, cluster_name)?,
             username: trim_required_cheetah("username", username)?,
@@ -283,7 +282,7 @@ impl ListUsersRequest {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         filter: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             target: target_from_options(broker_addr, cluster_name)?,
             filter: trim_optional_string(filter).map(CheetahString::from),
@@ -322,7 +321,7 @@ impl CopyUsersRequest {
         from_broker: impl Into<String>,
         to_broker: impl Into<String>,
         usernames: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let usernames = usernames
             .map(|usernames| {
                 usernames
@@ -384,7 +383,7 @@ impl CreateAclRequest {
         actions: impl Into<String>,
         decision: impl Into<String>,
         source_ip: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             target: target_from_options(broker_addr, cluster_name)?,
             subject: trim_required_cheetah("subject", subject)?,
@@ -464,7 +463,7 @@ impl UpdateAclRequest {
         actions: impl Into<String>,
         decision: impl Into<String>,
         source_ip: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             target: target_from_options(broker_addr, cluster_name)?,
             subject: trim_required_cheetah("subject", subject)?,
@@ -534,7 +533,7 @@ impl DeleteAclRequest {
         cluster_name: Option<String>,
         subject: impl Into<String>,
         resource: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             target: target_from_options(broker_addr, cluster_name)?,
             subject: trim_required_cheetah("subject", subject)?,
@@ -577,7 +576,7 @@ impl GetAclRequest {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         subject: impl Into<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             target: target_from_options(broker_addr, cluster_name)?,
             subject: trim_required_cheetah("subject", subject)?,
@@ -616,7 +615,7 @@ impl ListAclRequest {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         subject_filter: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             target: target_from_options(broker_addr, cluster_name)?,
             subject_filter: trim_optional_string(subject_filter).map(CheetahString::from),
@@ -665,7 +664,7 @@ impl CopyAclRequest {
         from_broker: impl Into<String>,
         to_broker: impl Into<String>,
         subjects: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let subjects = subjects.map(split_csv_values).filter(|subjects| !subjects.is_empty());
 
         Ok(Self {
@@ -711,7 +710,7 @@ pub struct AuthOperationFailure {
 }
 
 impl AuthOperationFailure {
-    pub fn from_error(broker_addr: CheetahString, error: &RocketMQError) -> Self {
+    pub fn from_error(broker_addr: CheetahString, error: &CanonicalError) -> Self {
         Self {
             broker_addr,
             error_code: stable_error_code(error),
@@ -722,7 +721,7 @@ impl AuthOperationFailure {
     pub fn from_operation_error(
         broker_addr: CheetahString,
         operation: impl Into<String>,
-        error: &RocketMQError,
+        error: &CanonicalError,
     ) -> Self {
         let operation = operation.into();
         Self {
@@ -778,7 +777,7 @@ impl AuthService {
         request: CreateUserRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -790,7 +789,7 @@ impl AuthService {
     pub(crate) async fn create_user_with_admin(
         admin: &DefaultMQAdminExt,
         request: &CreateUserRequest,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         let broker_addrs = resolve_master_and_slave_targets(admin, request.target()).await?;
         for broker_addr in &broker_addrs {
             admin
@@ -809,7 +808,7 @@ impl AuthService {
         request: UpdateUserRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -821,7 +820,7 @@ impl AuthService {
     pub(crate) async fn update_user_with_admin(
         admin: &DefaultMQAdminExt,
         request: &UpdateUserRequest,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         let broker_addrs = resolve_master_targets(admin, request.target()).await?;
         for broker_addr in &broker_addrs {
             admin
@@ -841,7 +840,7 @@ impl AuthService {
         request: DeleteUserRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -853,7 +852,7 @@ impl AuthService {
     pub(crate) async fn delete_user_with_admin(
         admin: &DefaultMQAdminExt,
         request: &DeleteUserRequest,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         let broker_addrs = resolve_master_and_slave_targets(admin, request.target()).await?;
         for broker_addr in &broker_addrs {
             admin
@@ -867,7 +866,7 @@ impl AuthService {
         request: GetUserRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<GetUserResult> {
+    ) -> CanonicalResult<GetUserResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -879,7 +878,7 @@ impl AuthService {
     pub(crate) async fn get_user_with_admin(
         admin: &DefaultMQAdminExt,
         request: &GetUserRequest,
-    ) -> RocketMQResult<GetUserResult> {
+    ) -> CanonicalResult<GetUserResult> {
         match request.target() {
             AuthTarget::BrokerAddr(broker_addr) => {
                 let user = admin.get_user(broker_addr.clone(), request.username().clone()).await?;
@@ -920,7 +919,7 @@ impl AuthService {
         request: ListUsersRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ListUsersResult> {
+    ) -> CanonicalResult<ListUsersResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -932,7 +931,7 @@ impl AuthService {
     pub(crate) async fn list_users_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ListUsersRequest,
-    ) -> RocketMQResult<ListUsersResult> {
+    ) -> CanonicalResult<ListUsersResult> {
         let filter = request.filter.clone().unwrap_or_default();
         match request.target() {
             AuthTarget::BrokerAddr(broker_addr) => {
@@ -976,7 +975,7 @@ impl AuthService {
         request: CopyUsersRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<CopyUsersResult> {
+    ) -> CanonicalResult<CopyUsersResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -988,7 +987,7 @@ impl AuthService {
     pub(crate) async fn copy_users_with_admin(
         admin: &DefaultMQAdminExt,
         request: &CopyUsersRequest,
-    ) -> RocketMQResult<CopyUsersResult> {
+    ) -> CanonicalResult<CopyUsersResult> {
         let mut skipped_usernames = Vec::new();
         let mut failures = Vec::new();
         let user_infos = if let Some(usernames) = request.usernames() {
@@ -1052,7 +1051,7 @@ impl AuthService {
         request: CreateAclRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1064,7 +1063,7 @@ impl AuthService {
     pub(crate) async fn create_acl_with_admin(
         admin: &DefaultMQAdminExt,
         request: &CreateAclRequest,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         let acl_info = request.build_acl_info();
         let broker_addrs = resolve_master_and_slave_targets(admin, request.target()).await?;
         for broker_addr in &broker_addrs {
@@ -1079,7 +1078,7 @@ impl AuthService {
         request: UpdateAclRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1091,7 +1090,7 @@ impl AuthService {
     pub(crate) async fn update_acl_with_admin(
         admin: &DefaultMQAdminExt,
         request: &UpdateAclRequest,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         let broker_addrs = resolve_master_targets(admin, request.target()).await?;
         for broker_addr in &broker_addrs {
             admin
@@ -1112,7 +1111,7 @@ impl AuthService {
         request: DeleteAclRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1124,7 +1123,7 @@ impl AuthService {
     pub(crate) async fn delete_acl_with_admin(
         admin: &DefaultMQAdminExt,
         request: &DeleteAclRequest,
-    ) -> RocketMQResult<AuthOperationResult> {
+    ) -> CanonicalResult<AuthOperationResult> {
         let broker_addrs = resolve_master_and_slave_targets(admin, request.target()).await?;
         let resource = request.resource.clone().unwrap_or_default();
         for broker_addr in &broker_addrs {
@@ -1139,7 +1138,7 @@ impl AuthService {
         request: GetAclRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<GetAclResult> {
+    ) -> CanonicalResult<GetAclResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1151,7 +1150,7 @@ impl AuthService {
     pub(crate) async fn get_acl_with_admin(
         admin: &DefaultMQAdminExt,
         request: &GetAclRequest,
-    ) -> RocketMQResult<GetAclResult> {
+    ) -> CanonicalResult<GetAclResult> {
         match request.target() {
             AuthTarget::BrokerAddr(broker_addr) => {
                 let acl_info = admin.get_acl(broker_addr.clone(), request.subject().clone()).await?;
@@ -1191,7 +1190,7 @@ impl AuthService {
         request: ListAclRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ListAclResult> {
+    ) -> CanonicalResult<ListAclResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1203,7 +1202,7 @@ impl AuthService {
     pub(crate) async fn list_acl_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ListAclRequest,
-    ) -> RocketMQResult<ListAclResult> {
+    ) -> CanonicalResult<ListAclResult> {
         let subject_filter = request.subject_filter.clone().unwrap_or_default();
         let resource_filter = request.resource_filter.clone().unwrap_or_default();
         match request.target() {
@@ -1251,7 +1250,7 @@ impl AuthService {
         request: CopyAclRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<CopyAclResult> {
+    ) -> CanonicalResult<CopyAclResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1263,7 +1262,7 @@ impl AuthService {
     pub(crate) async fn copy_acl_with_admin(
         admin: &DefaultMQAdminExt,
         request: &CopyAclRequest,
-    ) -> RocketMQResult<CopyAclResult> {
+    ) -> CanonicalResult<CopyAclResult> {
         let mut skipped_subjects = Vec::new();
         let mut failures = Vec::new();
         let acl_infos = if let Some(subjects) = request.subjects() {
@@ -1333,27 +1332,35 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        )
+        .into());
     }
     Ok(CheetahString::from(value))
 }
 
-fn target_from_options(broker_addr: Option<String>, cluster_name: Option<String>) -> RocketMQResult<AuthTarget> {
+fn target_from_options(broker_addr: Option<String>, cluster_name: Option<String>) -> CanonicalResult<AuthTarget> {
     let broker_addr = trim_optional_string(broker_addr);
     let cluster_name = trim_optional_string(cluster_name);
     match (broker_addr, cluster_name) {
         (Some(addr), None) => Ok(AuthTarget::BrokerAddr(trim_required_cheetah("brokerAddr", addr)?)),
         (None, Some(cluster)) => Ok(AuthTarget::ClusterName(trim_required_cheetah("clusterName", cluster)?)),
-        (None, None) => {
-            Err(ToolsError::validation_error("target", "either brokerAddr or clusterName must be provided").into())
-        }
-        (Some(_), Some(_)) => {
-            Err(ToolsError::validation_error("target", "brokerAddr and clusterName cannot be provided together").into())
-        }
+        (None, None) => Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "target",
+            "either brokerAddr or clusterName must be provided",
+        )
+        .into()),
+        (Some(_), Some(_)) => Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "target",
+            "brokerAddr and clusterName cannot be provided together",
+        )
+        .into()),
     }
 }
 
@@ -1367,10 +1374,14 @@ fn split_csv_values(value: impl Into<String>) -> Vec<CheetahString> {
         .collect()
 }
 
-fn split_required_csv(field: &'static str, value: impl Into<String>) -> RocketMQResult<Vec<CheetahString>> {
+fn split_required_csv(field: &'static str, value: impl Into<String>) -> CanonicalResult<Vec<CheetahString>> {
     let values = split_csv_values(value);
     if values.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        )
+        .into());
     }
     Ok(values)
 }
@@ -1435,7 +1446,7 @@ fn admin_builder_with_credentials(
     }
 }
 
-async fn resolve_master_targets(admin: &DefaultMQAdminExt, target: &AuthTarget) -> RocketMQResult<Vec<CheetahString>> {
+async fn resolve_master_targets(admin: &DefaultMQAdminExt, target: &AuthTarget) -> CanonicalResult<Vec<CheetahString>> {
     match target {
         AuthTarget::BrokerAddr(addr) => Ok(vec![addr.clone()]),
         AuthTarget::ClusterName(cluster_name) => {
@@ -1448,7 +1459,7 @@ async fn resolve_master_targets(admin: &DefaultMQAdminExt, target: &AuthTarget) 
 async fn resolve_master_and_slave_targets(
     admin: &DefaultMQAdminExt,
     target: &AuthTarget,
-) -> RocketMQResult<Vec<CheetahString>> {
+) -> CanonicalResult<Vec<CheetahString>> {
     match target {
         AuthTarget::BrokerAddr(addr) => Ok(vec![addr.clone()]),
         AuthTarget::ClusterName(cluster_name) => {

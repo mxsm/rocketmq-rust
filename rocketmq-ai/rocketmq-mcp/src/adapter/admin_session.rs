@@ -1336,9 +1336,10 @@ fn map_broker_summary(row: &rocketmq_admin_core::core::broker::BrokerSummary) ->
 }
 
 fn map_logical_admin_error(error: rocketmq_admin_core::core::AdminError) -> ToolFailure {
-    match error {
-        error @ (rocketmq_admin_core::core::AdminError::InvalidArgument { .. }
-        | rocketmq_admin_core::core::AdminError::NotFound { .. }) => ToolFailure::invalid_arguments(error),
-        error => ToolFailure::backend(error),
+    match error.failure() {
+        rocketmq_admin_core::core::AdminFailure::InvalidArgument
+        | rocketmq_admin_core::core::AdminFailure::NotFound => ToolFailure::invalid_arguments(error),
+        rocketmq_admin_core::core::AdminFailure::Backend
+        | rocketmq_admin_core::core::AdminFailure::SessionClosed => ToolFailure::backend(error),
     }
 }

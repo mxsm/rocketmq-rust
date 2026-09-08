@@ -29,7 +29,7 @@ use rocketmq_client_rust::MQAdminTopicInventoryReadExt;
 use rocketmq_client_rust::ReadFailureCode;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_client_rust::SigningAlgorithm;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::topic::DLQ_GROUP_TOPIC_PREFIX;
@@ -381,7 +381,7 @@ impl ReadAdminSession {
 
     fn ensure_open(&self) -> AdminResult<()> {
         if self.closed {
-            Err(AdminError::SessionClosed)
+            Err(AdminError::session_closed())
         } else {
             Ok(())
         }
@@ -626,7 +626,7 @@ impl BrokerQueryAdmin for ReadAdminSession {
                 for broker_addr in broker_data.broker_addrs().values() {
                     result.attempted += 1;
                     if let Err(error) = self.inner.fetch_broker_runtime_stats(broker_addr.clone()).await {
-                        let code = error.boundary_view().code().as_str().to_string();
+                        let code = error.descriptor().code().as_str().to_string();
                         *failure_counts.entry(code).or_default() += 1;
                     }
                 }
@@ -2404,29 +2404,19 @@ fn runtime_f64(runtime: Option<&KVTable>, key: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
-    let view = error.boundary_view();
-    let context = (!view.context().is_empty()).then(|| view.context().to_string());
-    AdminError::backend_view(
-        operation,
-        view.code().as_str(),
-        view.message(),
-        context,
-        view.http().status.as_u16(),
-        view.is_retryable(),
-    )
+fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
+    AdminError::from_error(operation, error)
 }
 
 fn source_failure_from_error(
     source: AdminQuerySource,
     logical_target: &str,
-    error: &RocketMQError,
+    error: &CanonicalError,
 ) -> AdminSourceFailure {
-    let view = error.boundary_view();
     AdminSourceFailure::new(
         source,
-        query_failure_code(view.http().status.as_u16()),
-        view.is_retryable(),
+        query_failure_code(crate::client_adapter::services::error_view::rocketmq_http_status(error)),
+        crate::client_adapter::services::error_view::rocketmq_is_retryable(error),
         logical_target,
     )
 }

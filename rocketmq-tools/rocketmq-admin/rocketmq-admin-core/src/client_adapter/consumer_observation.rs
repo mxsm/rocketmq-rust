@@ -25,7 +25,7 @@ use rocketmq_client_rust::DefaultMQAdminExt;
 use rocketmq_client_rust::MQAdminConsumerObservationReadExt;
 use rocketmq_client_rust::MQAdminReadExt;
 use rocketmq_client_rust::SubscriptionGroupConfigVersioned;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats;
@@ -49,31 +49,31 @@ const MAX_CONSUMER_PROGRESS_QUERY_ROWS: usize = 50_000;
 
 #[allow(async_fn_in_trait)]
 trait ConsumerObservationSource: Send {
-    async fn cluster_info(&self) -> Result<ClusterInfo, RocketMQError>;
-    async fn consumer_route(&self, consumer_group: &str) -> Result<Option<TopicRouteData>, RocketMQError>;
+    async fn cluster_info(&self) -> Result<ClusterInfo, CanonicalError>;
+    async fn consumer_route(&self, consumer_group: &str) -> Result<Option<TopicRouteData>, CanonicalError>;
     async fn group_config(
         &self,
         broker_addr: CheetahString,
         consumer_group: &str,
-    ) -> Result<ConsumerGroupConfigRead, RocketMQError>;
+    ) -> Result<ConsumerGroupConfigRead, CanonicalError>;
     async fn connection(
         &self,
         broker_addr: CheetahString,
         consumer_group: &str,
-    ) -> Result<ConsumerConnectionRead, RocketMQError>;
+    ) -> Result<ConsumerConnectionRead, CanonicalError>;
     async fn progress(
         &self,
         broker_addr: CheetahString,
         consumer_group: &str,
-    ) -> Result<ConsumerProgressRead, RocketMQError>;
+    ) -> Result<ConsumerProgressRead, CanonicalError>;
 }
 
 impl ConsumerObservationSource for DefaultMQAdminExt {
-    async fn cluster_info(&self) -> Result<ClusterInfo, RocketMQError> {
+    async fn cluster_info(&self) -> Result<ClusterInfo, CanonicalError> {
         MQAdminReadExt::examine_broker_cluster_info(self).await
     }
 
-    async fn consumer_route(&self, consumer_group: &str) -> Result<Option<TopicRouteData>, RocketMQError> {
+    async fn consumer_route(&self, consumer_group: &str) -> Result<Option<TopicRouteData>, CanonicalError> {
         MQAdminReadExt::examine_topic_route_info(self, CheetahString::from(mix_all::get_retry_topic(consumer_group)))
             .await
     }
@@ -82,7 +82,7 @@ impl ConsumerObservationSource for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         consumer_group: &str,
-    ) -> Result<ConsumerGroupConfigRead, RocketMQError> {
+    ) -> Result<ConsumerGroupConfigRead, CanonicalError> {
         MQAdminConsumerObservationReadExt::consumer_group_config_at(
             self,
             broker_addr,
@@ -95,7 +95,7 @@ impl ConsumerObservationSource for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         consumer_group: &str,
-    ) -> Result<ConsumerConnectionRead, RocketMQError> {
+    ) -> Result<ConsumerConnectionRead, CanonicalError> {
         MQAdminConsumerObservationReadExt::consumer_connection_at(
             self,
             broker_addr,
@@ -108,7 +108,7 @@ impl ConsumerObservationSource for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         consumer_group: &str,
-    ) -> Result<ConsumerProgressRead, RocketMQError> {
+    ) -> Result<ConsumerProgressRead, CanonicalError> {
         MQAdminConsumerObservationReadExt::consumer_progress_at(self, broker_addr, CheetahString::from(consumer_group))
             .await
     }
@@ -167,7 +167,7 @@ async fn query_consumer_group_details_from<S: ConsumerObservationSource>(
             return AdminQueryResult::from_sources(QueryConsumerGroupDetailsResult::default(), 0, failures);
         }
         if absent_count > 0 {
-            return Err(AdminError::not_found("consumer group", request.consumer_group));
+            return Err(AdminError::consumer_group_not_found(request.consumer_group));
         }
     }
 
@@ -248,7 +248,7 @@ async fn query_consumer_progress_from<S: ConsumerObservationSource>(
             return AdminQueryResult::from_sources(empty_progress_result(&request.consumer_group), 0, failures);
         }
         if absent_count > 0 {
-            return Err(AdminError::not_found("consumer group", request.consumer_group));
+            return Err(AdminError::consumer_group_not_found(request.consumer_group));
         }
     }
 
@@ -362,7 +362,7 @@ async fn resolve_consumer_targets<S: ConsumerObservationSource>(
         .consumer_route(consumer_group)
         .await
         .map_err(|error| backend_error("examine_consumer_route_info", error))?
-        .ok_or_else(|| AdminError::not_found("consumer group", consumer_group))?;
+        .ok_or_else(|| AdminError::consumer_group_not_found(consumer_group))?;
     selected_cluster_route_masters(&cluster_info, &route, cluster, failure_source)
 }
 
@@ -376,7 +376,7 @@ fn selected_cluster_route_masters(
         .cluster_addr_table
         .as_ref()
         .and_then(|table| table.get(cluster))
-        .ok_or_else(|| AdminError::not_found("cluster", cluster))?;
+        .ok_or_else(|| AdminError::cluster_not_found(cluster))?;
     let mut route_brokers = BTreeSet::new();
     let mut failures = Vec::new();
     for broker in &route.broker_datas {
@@ -401,13 +401,9 @@ fn selected_cluster_route_masters(
         return Err(AdminError::not_found("consumer route in selected cluster", cluster));
     }
     if route_brokers.len() > MAX_CONSUMER_OBSERVATION_TARGETS {
-        return Err(AdminError::backend_view(
+        return Err(AdminError::target_limit(
             "resolve_consumer_observation_targets",
-            "CONSUMER_OBSERVATION_TARGET_LIMIT_EXCEEDED",
             "Consumer route has too many selected-cluster Broker targets",
-            None,
-            422,
-            false,
         ));
     }
     let broker_table = cluster_info.broker_addr_table.as_ref();
@@ -733,9 +729,8 @@ fn invalid_response_failure(source: AdminQuerySource, broker_name: &str) -> Admi
     AdminSourceFailure::new(source, AdminQueryFailureCode::InvalidResponse, false, broker_name)
 }
 
-fn source_failure(source: AdminQuerySource, broker_name: &str, error: &RocketMQError) -> AdminSourceFailure {
-    let view = error.boundary_view();
-    let code = match view.http().status.as_u16() {
+fn source_failure(source: AdminQuerySource, broker_name: &str, error: &CanonicalError) -> AdminSourceFailure {
+    let code = match crate::client_adapter::services::error_view::rocketmq_http_status(error) {
         401 | 403 => AdminQueryFailureCode::PermissionDenied,
         404 => AdminQueryFailureCode::NotFound,
         408 | 504 => AdminQueryFailureCode::Timeout,
@@ -743,19 +738,16 @@ fn source_failure(source: AdminQuerySource, broker_name: &str, error: &RocketMQE
         400 | 413 | 422 => AdminQueryFailureCode::InvalidResponse,
         _ => AdminQueryFailureCode::SourceUnavailable,
     };
-    AdminSourceFailure::new(source, code, view.is_retryable(), broker_name)
+    AdminSourceFailure::new(
+        source,
+        code,
+        crate::client_adapter::services::error_view::rocketmq_is_retryable(error),
+        broker_name,
+    )
 }
 
-fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
-    let view = error.boundary_view();
-    AdminError::backend_view(
-        operation,
-        view.code().as_str(),
-        view.message(),
-        (!view.context().is_empty()).then(|| view.context().to_string()),
-        view.http().status.as_u16(),
-        view.is_retryable(),
-    )
+fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
+    AdminError::from_error(operation, error)
 }
 
 #[cfg(test)]

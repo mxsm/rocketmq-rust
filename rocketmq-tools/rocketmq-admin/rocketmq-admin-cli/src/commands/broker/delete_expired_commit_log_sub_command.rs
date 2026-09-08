@@ -14,7 +14,7 @@
 
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::broker::BrokerBooleanOperationResult;
@@ -35,7 +35,7 @@ pub struct DeleteExpiredCommitLogSubCommand {
 }
 
 impl DeleteExpiredCommitLogSubCommand {
-    fn request(&self) -> RocketMQResult<BrokerOptionalTarget> {
+    fn request(&self) -> CanonicalResult<BrokerOptionalTarget> {
         BrokerOptionalTarget::new(self.broker_addr.clone(), self.cluster_name.clone())
     }
 }
@@ -45,7 +45,7 @@ impl CommandExecute for DeleteExpiredCommitLogSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = BrokerService::delete_expired_commit_log_by_request_with_credentials(
             self.request()?,
             credentials,

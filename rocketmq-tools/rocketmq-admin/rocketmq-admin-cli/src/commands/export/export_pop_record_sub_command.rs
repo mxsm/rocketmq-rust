@@ -16,7 +16,7 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportPopRecordRequest;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportPopRecordResult;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -55,7 +55,7 @@ pub struct ExportPopRecordSubCommand {
 }
 
 impl ExportPopRecordSubCommand {
-    fn request(&self) -> RocketMQResult<ExportPopRecordRequest> {
+    fn request(&self) -> CanonicalResult<ExportPopRecordRequest> {
         ExportPopRecordRequest::try_new(self.cluster_name.clone(), self.broker_addr.clone(), self.dry_run)
             .map(|request| request.with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
@@ -82,7 +82,7 @@ impl CommandExecute for ExportPopRecordSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = ExportService::export_pop_records_by_request_with_credentials(
             self.request()?,
             credentials,

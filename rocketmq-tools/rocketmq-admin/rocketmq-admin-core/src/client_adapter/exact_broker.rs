@@ -40,7 +40,7 @@ pub(crate) fn resolve_exact_broker_targets(
     })?;
     let broker_names = cluster_table.get(cluster).cloned().unwrap_or_default();
     if !broker_names.iter().any(|candidate| candidate.as_str() == broker_name) {
-        return Err(AdminError::not_found("broker", broker_name));
+        return Err(AdminError::broker_not_found(broker_name));
     }
 
     let broker_table = cluster_info.broker_addr_table.ok_or_else(|| {
@@ -172,7 +172,7 @@ mod tests {
         let missing =
             resolve_exact_broker_targets(ClusterInfo::default(), CLUSTER, BROKER, AdminQuerySource::BrokerRuntime)
                 .unwrap_err();
-        assert!(matches!(missing, AdminError::Backend { .. }));
+        assert_eq!(missing.failure(), crate::core::AdminFailure::Backend);
 
         let not_found = resolve_exact_broker_targets(
             ClusterInfo::new(Some(HashMap::new()), Some(HashMap::new())),
@@ -181,7 +181,7 @@ mod tests {
             AdminQuerySource::BrokerRuntime,
         )
         .unwrap_err();
-        assert!(matches!(not_found, AdminError::NotFound { .. }));
+        assert_eq!(not_found.failure(), crate::core::AdminFailure::NotFound);
 
         let mut wrong_cluster = cluster_info([(0, "broker-a.internal:10911")]);
         wrong_cluster
@@ -247,7 +247,7 @@ mod tests {
             AdminQuerySource::BrokerRuntime,
         )
         .unwrap_err();
-        assert!(matches!(overflow, AdminError::Backend { .. }));
+        assert_eq!(overflow.failure(), crate::core::AdminFailure::Backend);
 
         let (targets, failures) = resolve_exact_broker_targets(
             cluster_info([(0, "duplicate.internal:10911"), (1, "duplicate.internal:10911")]),
@@ -298,7 +298,7 @@ mod tests {
         .unwrap();
         let error = crate::core::query::AdminQueryResult::from_sources(targets, 0, failures)
             .expect_err("all physical sources failed");
-        assert_eq!(error.code(), Some("ADMIN_QUERY_ALL_SOURCES_FAILED"));
+        assert_eq!(error.code().as_str(), "client.component.unavailable");
     }
 
     fn cluster_info<'a>(addresses: impl IntoIterator<Item = (u64, &'a str)>) -> ClusterInfo {

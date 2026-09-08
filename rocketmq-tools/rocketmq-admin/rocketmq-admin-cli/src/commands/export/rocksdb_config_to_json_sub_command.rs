@@ -21,9 +21,7 @@ use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataIn
 use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcRequest;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportRocksDbConfigRpcResult;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::ToolsError;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 
@@ -101,7 +99,7 @@ impl CommandExecute for RocksDBConfigToJsonSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self.mode()? {
             RocksDBConfigToJsonMode::Local { request, export_file } => {
                 println!("Use [local mode] load rocksdb to print or export file");
@@ -124,11 +122,10 @@ impl CommandExecute for RocksDBConfigToJsonSubCommand {
 }
 
 impl RocksDBConfigToJsonSubCommand {
-    fn mode(&self) -> RocketMQResult<RocksDBConfigToJsonMode> {
+    fn mode(&self) -> CanonicalResult<RocksDBConfigToJsonMode> {
         if let Some(nameserver_addr) = trim_optional(&self.nameserver_addr) {
-            let cluster = trim_optional(&self.cluster).ok_or_else(|| {
-                ToolsError::validation_error("cluster", "rpc mode with nameserverAddr requires cluster")
-            })?;
+            let cluster = trim_optional(&self.cluster)
+                .ok_or_else(|| crate::errors::argument_invalid("rpc mode with nameserverAddr requires cluster"))?;
             let request = ExportRocksDbConfigRpcRequest::try_new(Some(cluster), None, self.rpc_config_types(), None)?
                 .with_optional_namesrv_addr(Some(nameserver_addr));
             return Ok(RocksDBConfigToJsonMode::Rpc(request));
@@ -142,21 +139,23 @@ impl RocksDBConfigToJsonSubCommand {
 
         if let Some(config_path) = trim_optional(&self.config_path) {
             let config_type = trim_optional(&self.config_type)
-                .ok_or_else(|| ToolsError::validation_error("configType", "local mode requires configType"))?;
+                .ok_or_else(|| crate::errors::argument_invalid("local mode requires configType"))?;
             return Ok(RocksDBConfigToJsonMode::Local {
                 request: ExportMetadataInRocksDbRequest::new(config_path, config_type, self.json_enable),
                 export_file: trim_optional(&self.export_file),
             });
         }
 
-        Err(ToolsError::validation_error("mode", "provide nameserverAddr+cluster, brokerAddr, or configPath").into())
+        Err(crate::errors::argument_invalid(
+            "provide nameserverAddr+cluster, brokerAddr, or configPath",
+        ))
     }
 
     fn rpc_config_types(&self) -> String {
         trim_optional(&self.config_type).unwrap_or_else(|| ALL_ROCKSDB_CONFIG_TYPES.to_string())
     }
 
-    fn handle_local_result(result: &ExportMetadataInRocksDbResult, export_file: Option<&str>) -> RocketMQResult<()> {
+    fn handle_local_result(result: &ExportMetadataInRocksDbResult, export_file: Option<&str>) -> CanonicalResult<()> {
         if let Some(export_file) = export_file
             && let Some(json_value) = Self::local_result_json_value(result)?
         {
@@ -169,7 +168,7 @@ impl RocksDBConfigToJsonSubCommand {
         Self::print_local_result(result)
     }
 
-    fn print_local_result(result: &ExportMetadataInRocksDbResult) -> RocketMQResult<()> {
+    fn print_local_result(result: &ExportMetadataInRocksDbResult) -> CanonicalResult<()> {
         match result {
             ExportMetadataInRocksDbResult::InvalidPath => {
                 println!("Rocksdb path is invalid.");
@@ -186,13 +185,8 @@ impl RocksDBConfigToJsonSubCommand {
                 entries,
             } if *json_enable => {
                 let json_value = Self::entries_json_value(*config_type, entries)?;
-                let json = serde_json::to_string_pretty(&json_value).map_err(|source| {
-                    RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                        "encode RocksDB configuration",
-                        "JSON",
-                        source,
-                    ))
-                })?;
+                let json = serde_json::to_string_pretty(&json_value)
+                    .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?;
                 println!("{json}");
             }
             ExportMetadataInRocksDbResult::Data {
@@ -207,7 +201,7 @@ impl RocksDBConfigToJsonSubCommand {
         Ok(())
     }
 
-    fn local_result_json_value(result: &ExportMetadataInRocksDbResult) -> RocketMQResult<Option<serde_json::Value>> {
+    fn local_result_json_value(result: &ExportMetadataInRocksDbResult) -> CanonicalResult<Option<serde_json::Value>> {
         match result {
             ExportMetadataInRocksDbResult::Data {
                 config_type, entries, ..
@@ -222,7 +216,7 @@ impl RocksDBConfigToJsonSubCommand {
     fn entries_json_value(
         config_type: ExportMetadataInRocksDbConfigType,
         entries: &[rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbEntry],
-    ) -> RocketMQResult<serde_json::Value> {
+    ) -> CanonicalResult<serde_json::Value> {
         let mut config_table = serde_json::Map::new();
         for entry in entries {
             let value = serde_json::from_str::<serde_json::Value>(&entry.value)

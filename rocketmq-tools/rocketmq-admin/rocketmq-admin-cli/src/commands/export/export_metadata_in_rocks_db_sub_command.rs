@@ -16,8 +16,7 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbRequest;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportMetadataInRocksDbResult;
 use rocketmq_admin_core::client_adapter::services::export_data::ExportService;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 
@@ -53,7 +52,7 @@ impl ExportMetadataInRocksDBSubCommand {
         ExportMetadataInRocksDbRequest::new(self.path.clone(), self.config_type.clone(), self.json_enable)
     }
 
-    fn print_result(result: &ExportMetadataInRocksDbResult) -> RocketMQResult<()> {
+    fn print_result(result: &ExportMetadataInRocksDbResult) -> CanonicalResult<()> {
         match result {
             ExportMetadataInRocksDbResult::InvalidPath => {
                 println!("RocksDB path is invalid.");
@@ -88,13 +87,8 @@ impl ExportMetadataInRocksDBSubCommand {
                     serde_json::Value::Object(config_table),
                 );
 
-                let json_config_str = serde_json::to_string_pretty(&json_config).map_err(|source| {
-                    RocketMQError::Serialization(rocketmq_error::SerializationError::source(
-                        "encode RocksDB metadata",
-                        "JSON",
-                        source,
-                    ))
-                })?;
+                let json_config_str = serde_json::to_string_pretty(&json_config)
+                    .map_err(|source| crate::errors::serialization_failed_by("JSON", source))?;
                 println!("{}", json_config_str);
             }
             ExportMetadataInRocksDbResult::Data { entries, .. } => {
@@ -112,7 +106,7 @@ impl CommandExecute for ExportMetadataInRocksDBSubCommand {
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = ExportService::export_metadata_in_rocksdb_by_request(&self.request())?;
         Self::print_result(&result)
     }

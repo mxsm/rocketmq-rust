@@ -19,10 +19,8 @@ use std::collections::HashMap;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::{BrokerAdmin as _, RouteAdmin as _};
 
-use crate::client_adapter::services::RocketMQError;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Result as CanonicalResult;
 
 use super::types::KvConfigDeleteRequest;
 use super::types::KvConfigUpdateRequest;
@@ -39,7 +37,7 @@ use super::types::WritePermResultEntry;
 pub struct NameServerService;
 
 impl NameServerService {
-    pub async fn query_namesrv_config(request: NamesrvConfigQueryRequest) -> RocketMQResult<NamesrvConfigQueryResult> {
+    pub async fn query_namesrv_config(request: NamesrvConfigQueryRequest) -> CanonicalResult<NamesrvConfigQueryResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let result = Self::get_namesrv_config(&mut admin, request.namesrv_addrs())
             .await
@@ -50,7 +48,7 @@ impl NameServerService {
 
     pub async fn update_namesrv_config_by_request(
         request: NamesrvConfigUpdateRequest,
-    ) -> RocketMQResult<NamesrvConfigUpdateResult> {
+    ) -> CanonicalResult<NamesrvConfigUpdateResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let properties = request.properties().clone();
         let namesrv_addrs = request.namesrv_addrs();
@@ -64,7 +62,7 @@ impl NameServerService {
         result
     }
 
-    pub async fn update_kv_config_by_request(request: KvConfigUpdateRequest) -> RocketMQResult<KvConfigUpdateResult> {
+    pub async fn update_kv_config_by_request(request: KvConfigUpdateRequest) -> CanonicalResult<KvConfigUpdateResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let result = Self::create_or_update_kv_config(
             &mut admin,
@@ -82,7 +80,7 @@ impl NameServerService {
         result
     }
 
-    pub async fn delete_kv_config_by_request(request: KvConfigDeleteRequest) -> RocketMQResult<KvConfigUpdateResult> {
+    pub async fn delete_kv_config_by_request(request: KvConfigDeleteRequest) -> CanonicalResult<KvConfigUpdateResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let result = Self::delete_kv_config(&mut admin, request.namespace().clone(), request.key().clone())
             .await
@@ -95,15 +93,18 @@ impl NameServerService {
         result
     }
 
-    pub async fn add_write_perm_by_request(request: WritePermRequest) -> RocketMQResult<WritePermResult> {
+    pub async fn add_write_perm_by_request(request: WritePermRequest) -> CanonicalResult<WritePermResult> {
         Self::apply_write_perm_by_request(request, true).await
     }
 
-    pub async fn wipe_write_perm_by_request(request: WritePermRequest) -> RocketMQResult<WritePermResult> {
+    pub async fn wipe_write_perm_by_request(request: WritePermRequest) -> CanonicalResult<WritePermResult> {
         Self::apply_write_perm_by_request(request, false).await
     }
 
-    async fn apply_write_perm_by_request(request: WritePermRequest, add_perm: bool) -> RocketMQResult<WritePermResult> {
+    async fn apply_write_perm_by_request(
+        request: WritePermRequest,
+        add_perm: bool,
+    ) -> CanonicalResult<WritePermResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
         let mut namesrv_addrs = request.namesrv_addrs();
         if namesrv_addrs.is_empty() {
@@ -150,11 +151,10 @@ impl NameServerService {
     pub async fn get_namesrv_config(
         admin: &mut DefaultMQAdminExt,
         nameserver_addrs: Vec<CheetahString>,
-    ) -> RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
-        admin
-            .get_name_server_config(nameserver_addrs)
-            .await
-            .map_err(|e| RocketMQError::Tools(ToolsError::nameserver_config_invalid(e.to_string())))
+    ) -> CanonicalResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
+        admin.get_name_server_config(nameserver_addrs).await.map_err(|error| {
+            crate::client_adapter::services::errors::admin_operation_failed_by("get_namesrv_config", error)
+        })
     }
 
     /// Update NameServer configurations
@@ -170,11 +170,13 @@ impl NameServerService {
         admin: &mut DefaultMQAdminExt,
         properties: HashMap<CheetahString, CheetahString>,
         nameserver_addrs: Option<Vec<CheetahString>>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         admin
             .update_name_server_config(properties, nameserver_addrs)
             .await
-            .map_err(|e| RocketMQError::Tools(ToolsError::nameserver_config_invalid(e.to_string())))
+            .map_err(|error| {
+                crate::client_adapter::services::errors::admin_operation_failed_by("update_namesrv_config", error)
+            })
     }
 
     /// Create or update KV config in NameServer
@@ -192,7 +194,7 @@ impl NameServerService {
         namespace: impl Into<CheetahString>,
         key: impl Into<CheetahString>,
         value: impl Into<CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let namespace = namespace.into();
         let key = key.into();
         let value = value.into();
@@ -200,10 +202,8 @@ impl NameServerService {
         admin
             .create_and_update_kv_config(namespace.clone(), key.clone(), value)
             .await
-            .map_err(|e| {
-                RocketMQError::Tools(ToolsError::nameserver_config_invalid(format!(
-                    "Failed to create/update KV config [{namespace}:{key}]: {e}"
-                )))
+            .map_err(|error| {
+                crate::client_adapter::services::errors::admin_operation_failed_by("create_or_update_kv_config", error)
             })
     }
 
@@ -220,17 +220,15 @@ impl NameServerService {
         admin: &mut DefaultMQAdminExt,
         namespace: impl Into<CheetahString>,
         key: impl Into<CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let namespace = namespace.into();
         let key = key.into();
 
         admin
             .delete_kv_config(namespace.clone(), key.clone())
             .await
-            .map_err(|e| {
-                RocketMQError::Tools(ToolsError::nameserver_config_invalid(format!(
-                    "Failed to delete KV config [{namespace}:{key}]: {e}"
-                )))
+            .map_err(|error| {
+                crate::client_adapter::services::errors::admin_operation_failed_by("delete_kv_config", error)
             })
     }
 
@@ -247,17 +245,15 @@ impl NameServerService {
         admin: &mut DefaultMQAdminExt,
         namesrv_addr: impl Into<CheetahString>,
         broker_name: impl Into<CheetahString>,
-    ) -> RocketMQResult<i32> {
+    ) -> CanonicalResult<i32> {
         let namesrv = namesrv_addr.into();
         let broker = broker_name.into();
 
         admin
             .add_write_perm_of_broker(namesrv.clone(), broker.clone())
             .await
-            .map_err(|e| {
-                RocketMQError::Tools(ToolsError::broker_not_found(format!(
-                    "Failed to add write permission for broker '{broker}' on NameServer '{namesrv}': {e}"
-                )))
+            .map_err(|error| {
+                crate::client_adapter::services::errors::admin_operation_failed_by("add_write_perm_of_broker", error)
             })
     }
 
@@ -274,17 +270,15 @@ impl NameServerService {
         admin: &mut DefaultMQAdminExt,
         namesrv_addr: impl Into<CheetahString>,
         broker_name: impl Into<CheetahString>,
-    ) -> RocketMQResult<i32> {
+    ) -> CanonicalResult<i32> {
         let namesrv = namesrv_addr.into();
         let broker = broker_name.into();
 
         admin
             .wipe_write_perm_of_broker(namesrv.clone(), broker.clone())
             .await
-            .map_err(|e| {
-                RocketMQError::Tools(ToolsError::broker_not_found(format!(
-                    "Failed to wipe write permission for broker '{broker}' on NameServer '{namesrv}': {e}"
-                )))
+            .map_err(|error| {
+                crate::client_adapter::services::errors::admin_operation_failed_by("wipe_write_perm_of_broker", error)
             })
     }
 }

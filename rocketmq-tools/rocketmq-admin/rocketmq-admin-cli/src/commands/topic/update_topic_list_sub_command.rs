@@ -16,8 +16,7 @@ use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::config::TopicConfig;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -48,7 +47,7 @@ pub struct UpdateTopicListSubCommand {
 }
 
 impl UpdateTopicListSubCommand {
-    fn target(&self) -> RocketMQResult<TopicTarget> {
+    fn target(&self) -> CanonicalResult<TopicTarget> {
         if let Some(broker) = &self.broker_addr {
             return Ok(TopicTarget::Broker(CheetahString::from(broker.trim())));
         }
@@ -56,12 +55,12 @@ impl UpdateTopicListSubCommand {
             return Ok(TopicTarget::Cluster(CheetahString::from(cluster.trim())));
         }
 
-        Err(RocketMQError::illegal_argument(
+        Err(crate::errors::argument_invalid(
             "a broker or cluster is required for command UpdateTopicList",
         ))
     }
 
-    fn request(&self, topic_configs: Vec<TopicConfig>) -> RocketMQResult<UpdateTopicListRequest> {
+    fn request(&self, topic_configs: Vec<TopicConfig>) -> CanonicalResult<UpdateTopicListRequest> {
         UpdateTopicListRequest::try_new(self.target()?, topic_configs)
     }
 
@@ -80,9 +79,9 @@ impl CommandExecute for UpdateTopicListSubCommand {
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> rocketmq_error::Result<()> {
         if !self.file.is_file() {
-            return Err(RocketMQError::illegal_argument(
+            return Err(crate::errors::argument_invalid(
                 "the file path doesn't point to a valid file",
             ));
         }
@@ -90,16 +89,17 @@ impl CommandExecute for UpdateTopicListSubCommand {
         let mut topic_config_list_bytes = vec![];
         File::open(&self.file)
             .await
-            .map_err(RocketMQError::IO)?
+            .map_err(|source| crate::errors::io_failed_by("open_topic_config_list", source))?
             .read_to_end(&mut topic_config_list_bytes)
-            .await?;
+            .await
+            .map_err(|source| crate::errors::io_failed_by("read_topic_config_list", source))?;
         let topic_configs =
             if let Ok(topic_configs) = serde_json::from_slice::<Vec<TopicConfig>>(&topic_config_list_bytes) {
                 topic_configs
             } else if let Ok(topic_configs) = serde_yaml::from_slice::<Vec<TopicConfig>>(&topic_config_list_bytes) {
                 topic_configs
             } else {
-                return Err(RocketMQError::illegal_argument("the file isn't in json or yaml format"));
+                return Err(crate::errors::argument_invalid("the file isn't in json or yaml format"));
             };
 
         let result = TopicService::update_topic_config_list_by_request(self.request(topic_configs)?).await?;

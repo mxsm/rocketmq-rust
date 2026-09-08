@@ -26,9 +26,8 @@ use serde::Serialize;
 use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::stable_error_code;
 use crate::client_adapter::services::stable_error_message;
-use crate::client_adapter::services::RocketMQError;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::Result as CanonicalResult;
 
 fn trim_optional_string(value: Option<String>) -> Option<String> {
     value
@@ -36,26 +35,36 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        )
+        .into());
     }
     Ok(CheetahString::from(value))
 }
 
-pub(super) fn validate_config_key(key: &str) -> RocketMQResult<()> {
+pub(super) fn validate_config_key(key: &str) -> CanonicalResult<()> {
     if key.is_empty() {
-        return Err(ToolsError::validation_error("key", "config key must not be empty").into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "key",
+            "config key must not be empty",
+        )
+        .into());
     }
     if key.contains('=') {
-        return Err(
-            ToolsError::validation_error("key", format!("invalid config key '{key}', '=' is not allowed")).into(),
-        );
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "key",
+            format!("invalid config key '{key}', '=' is not allowed"),
+        )
+        .into());
     }
     if key.chars().any(char::is_whitespace) {
-        return Err(ToolsError::validation_error(
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
             "key",
             format!("invalid config key '{key}', whitespace is not allowed"),
         )
@@ -64,14 +73,16 @@ pub(super) fn validate_config_key(key: &str) -> RocketMQResult<()> {
     Ok(())
 }
 
-pub(super) fn validate_update_value(key: &str, new_value: &str, old_value: Option<&str>) -> RocketMQResult<()> {
+pub(super) fn validate_update_value(key: &str, new_value: &str, old_value: Option<&str>) -> CanonicalResult<()> {
     if new_value.trim().is_empty() {
-        return Err(
-            ToolsError::validation_error("value", format!("config value for key '{key}' must not be empty")).into(),
-        );
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "value",
+            format!("config value for key '{key}' must not be empty"),
+        )
+        .into());
     }
     if new_value.contains('\n') || new_value.contains('\r') {
-        return Err(ToolsError::validation_error(
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
             "value",
             format!("config value for key '{key}' must not contain line breaks"),
         )
@@ -80,21 +91,21 @@ pub(super) fn validate_update_value(key: &str, new_value: &str, old_value: Optio
 
     if let Some(old_value) = old_value {
         if parse_bool(old_value).is_some() && parse_bool(new_value).is_none() {
-            return Err(ToolsError::validation_error(
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "value",
                 format!("config key '{key}' expects boolean value, old='{old_value}', new='{new_value}'"),
             )
             .into());
         }
         if old_value.parse::<i64>().is_ok() && new_value.parse::<i64>().is_err() {
-            return Err(ToolsError::validation_error(
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "value",
                 format!("config key '{key}' expects integer, old='{old_value}', new='{new_value}'"),
             )
             .into());
         }
         if old_value.parse::<f64>().is_ok() && new_value.parse::<f64>().is_err() {
-            return Err(ToolsError::validation_error(
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "value",
                 format!("config key '{key}' expects numeric value, old='{old_value}', new='{new_value}'"),
             )
@@ -127,7 +138,7 @@ pub struct BrokerOptionalTarget {
 }
 
 impl BrokerOptionalTarget {
-    pub fn new(broker_addr: Option<String>, cluster_name: Option<String>) -> RocketMQResult<Self> {
+    pub fn new(broker_addr: Option<String>, cluster_name: Option<String>) -> CanonicalResult<Self> {
         let broker_addr = trim_optional_string(broker_addr)
             .map(|addr| trim_required_cheetah("brokerAddr", addr))
             .transpose()?;
@@ -185,14 +196,17 @@ impl BrokerConfigQueryRequest {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         key_pattern: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let broker_addr = trim_optional_string(broker_addr);
         let cluster_name = trim_optional_string(cluster_name);
         let key_pattern = trim_optional_string(key_pattern);
 
         if let Some(pattern) = &key_pattern {
             Regex::new(pattern).map_err(|error| {
-                ToolsError::validation_error("keyPattern", format!("invalid key regex pattern '{pattern}': {error}"))
+                crate::client_adapter::services::errors::admin_validation_failed(
+                    "keyPattern",
+                    format!("invalid key regex pattern '{pattern}': {error}"),
+                )
             })?;
         }
 
@@ -200,14 +214,14 @@ impl BrokerConfigQueryRequest {
             (Some(addr), None) => BrokerTarget::BrokerAddr(trim_required_cheetah("brokerAddr", addr)?),
             (None, Some(cluster)) => BrokerTarget::ClusterName(trim_required_cheetah("clusterName", cluster)?),
             (None, None) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerAddr or clusterName must be provided",
                 )
                 .into());
             }
             (Some(_), Some(_)) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerAddr and clusterName cannot be provided together",
                 )
@@ -235,11 +249,11 @@ impl BrokerConfigQueryRequest {
         self.key_pattern.as_deref()
     }
 
-    pub fn key_pattern_regex(&self) -> RocketMQResult<Option<Regex>> {
+    pub fn key_pattern_regex(&self) -> CanonicalResult<Option<Regex>> {
         self.key_pattern()
             .map(|pattern| {
                 Regex::new(pattern).map_err(|error| {
-                    ToolsError::validation_error(
+                    crate::client_adapter::services::errors::admin_validation_failed(
                         "keyPattern",
                         format!("invalid key regex pattern '{pattern}': {error}"),
                     )
@@ -304,9 +318,13 @@ impl BrokerConfigUpdateRequest {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         entries: BTreeMap<String, String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         if entries.is_empty() {
-            return Err(ToolsError::validation_error("entries", "at least one config entry must be provided").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "entries",
+                "at least one config entry must be provided",
+            )
+            .into());
         }
 
         let broker_addr = trim_optional_string(broker_addr);
@@ -315,14 +333,14 @@ impl BrokerConfigUpdateRequest {
             (Some(addr), None) => BrokerTarget::BrokerAddr(trim_required_cheetah("brokerAddr", addr)?),
             (None, Some(cluster)) => BrokerTarget::ClusterName(trim_required_cheetah("clusterName", cluster)?),
             (None, None) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerAddr or clusterName must be provided",
                 )
                 .into());
             }
             (Some(_), Some(_)) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerAddr and clusterName cannot be provided together",
                 )
@@ -455,21 +473,21 @@ pub struct BrokerRuntimeStatsQueryRequest {
 }
 
 impl BrokerRuntimeStatsQueryRequest {
-    pub fn try_new(broker_addr: Option<String>, cluster_name: Option<String>) -> RocketMQResult<Self> {
+    pub fn try_new(broker_addr: Option<String>, cluster_name: Option<String>) -> CanonicalResult<Self> {
         let broker_addr = trim_optional_string(broker_addr);
         let cluster_name = trim_optional_string(cluster_name);
         let target = match (broker_addr, cluster_name) {
             (Some(addr), None) => BrokerTarget::BrokerAddr(trim_required_cheetah("brokerAddr", addr)?),
             (None, Some(cluster)) => BrokerTarget::ClusterName(trim_required_cheetah("clusterName", cluster)?),
             (None, None) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerAddr or clusterName must be provided",
                 )
                 .into());
             }
             (Some(_), Some(_)) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerAddr and clusterName cannot be provided together",
                 )
@@ -525,7 +543,7 @@ pub struct BrokerRuntimeStatsFailure {
 }
 
 impl BrokerRuntimeStatsFailure {
-    pub fn from_error(broker_addr: CheetahString, error: &RocketMQError) -> Self {
+    pub fn from_error(broker_addr: CheetahString, error: &CanonicalError) -> Self {
         Self {
             broker_addr,
             error_code: stable_error_code(error),
@@ -555,7 +573,7 @@ impl BrokerConsumeStatsQueryRequest {
         timeout_millis: u64,
         diff_level: i64,
         is_order: bool,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             broker_addr: trim_required_cheetah("brokerAddr", broker_addr)?,
             timeout_millis,
@@ -627,12 +645,22 @@ pub struct ResetMasterFlushOffsetRequest {
 }
 
 impl ResetMasterFlushOffsetRequest {
-    pub fn try_new(broker_addr: Option<String>, offset: Option<i64>) -> RocketMQResult<Self> {
-        let broker_addr = trim_optional_string(broker_addr)
-            .ok_or_else(|| ToolsError::validation_error("brokerAddr", "brokerAddr must not be empty"))?;
-        let offset = offset.ok_or_else(|| ToolsError::validation_error("offset", "offset is required"))?;
+    pub fn try_new(broker_addr: Option<String>, offset: Option<i64>) -> CanonicalResult<Self> {
+        let broker_addr = trim_optional_string(broker_addr).ok_or_else(|| {
+            crate::client_adapter::services::errors::admin_validation_failed(
+                "brokerAddr",
+                "brokerAddr must not be empty",
+            )
+        })?;
+        let offset = offset.ok_or_else(|| {
+            crate::client_adapter::services::errors::admin_validation_failed("offset", "offset is required")
+        })?;
         if offset < 0 {
-            return Err(ToolsError::validation_error("offset", "offset must not be negative").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "offset",
+                "offset must not be negative",
+            )
+            .into());
         }
 
         Ok(Self {
@@ -681,21 +709,21 @@ impl SwitchTimerEngineRequest {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         engine_type: impl Into<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let broker_addr = trim_optional_string(broker_addr);
         let cluster_name = trim_optional_string(cluster_name);
         let target = match (broker_addr, cluster_name) {
             (Some(addr), None) => BrokerTarget::BrokerAddr(trim_required_cheetah("brokerAddr", addr)?),
             (None, Some(cluster)) => BrokerTarget::ClusterName(trim_required_cheetah("clusterName", cluster)?),
             (None, None) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerAddr or clusterName must be provided",
                 )
                 .into());
             }
             (Some(_), Some(_)) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerAddr and clusterName cannot be provided together",
                 )
@@ -709,7 +737,11 @@ impl SwitchTimerEngineRequest {
             MessageConst::TIMER_ENGINE_ROCKSDB_TIMELINE => "ROCKSDB_TIMELINE",
             MessageConst::TIMER_ENGINE_FILE_TIME_WHEEL => "FILE_TIME_WHEEL",
             _ => {
-                return Err(ToolsError::validation_error("engineType", "engineType must be R or F").into());
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                    "engineType",
+                    "engineType must be R or F",
+                )
+                .into());
             }
         };
 
@@ -759,7 +791,7 @@ pub struct BrokerOperationFailure {
 }
 
 impl BrokerOperationFailure {
-    pub fn from_error(broker_addr: CheetahString, error: &RocketMQError) -> Self {
+    pub fn from_error(broker_addr: CheetahString, error: &CanonicalError) -> Self {
         Self {
             broker_addr,
             error_code: stable_error_code(error),
@@ -788,7 +820,7 @@ impl ColdDataFlowCtrGroupConfigUpdateRequest {
         cluster_name: Option<String>,
         consumer_group: impl Into<String>,
         threshold: impl Into<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             target: broker_target_from_options(broker_addr, cluster_name)?,
             consumer_group: trim_required_cheetah("consumerGroup", consumer_group)?,
@@ -839,7 +871,7 @@ impl ColdDataFlowCtrGroupConfigRemoveRequest {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         consumer_group: impl Into<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             target: broker_target_from_options(broker_addr, cluster_name)?,
             consumer_group: trim_required_cheetah("consumerGroup", consumer_group)?,
@@ -880,7 +912,7 @@ pub struct ColdDataFlowCtrInfoQueryRequest {
 }
 
 impl ColdDataFlowCtrInfoQueryRequest {
-    pub fn try_new(broker_addr: Option<String>, cluster_name: Option<String>) -> RocketMQResult<Self> {
+    pub fn try_new(broker_addr: Option<String>, cluster_name: Option<String>) -> CanonicalResult<Self> {
         Ok(Self {
             target: broker_target_from_options(broker_addr, cluster_name)?,
             namesrv_addr: None,
@@ -934,7 +966,7 @@ pub struct BrokerEpochQueryRequest {
 }
 
 impl BrokerEpochQueryRequest {
-    pub fn try_new(broker_name: Option<String>, cluster_name: Option<String>) -> RocketMQResult<Self> {
+    pub fn try_new(broker_name: Option<String>, cluster_name: Option<String>) -> CanonicalResult<Self> {
         let broker_name = trim_optional_string(broker_name);
         let cluster_name = trim_optional_string(cluster_name);
         let target = match (broker_name, cluster_name) {
@@ -943,14 +975,14 @@ impl BrokerEpochQueryRequest {
                 BrokerEpochQueryTarget::ClusterName(trim_required_cheetah("clusterName", cluster)?)
             }
             (None, None) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerName or clusterName must be provided",
                 )
                 .into());
             }
             (Some(_), Some(_)) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerName and clusterName cannot be provided together",
                 )
@@ -1022,7 +1054,7 @@ impl CleanExpiredConsumeQueueRequest {
         cluster_name: Option<String>,
         topic: Option<String>,
         dry_run: bool,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             broker_addr: trim_optional_string(broker_addr)
                 .map(|addr| trim_required_cheetah("brokerAddr", addr))
@@ -1102,11 +1134,11 @@ pub enum CommitLogReadAheadMode {
 }
 
 impl CommitLogReadAheadMode {
-    pub fn try_from_config_value(value: &str) -> RocketMQResult<Self> {
+    pub fn try_from_config_value(value: &str) -> CanonicalResult<Self> {
         match value.trim() {
             "0" => Ok(Self::Normal),
             "1" => Ok(Self::Random),
-            other => Err(ToolsError::validation_error(
+            other => Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "commitLogReadAheadMode",
                 format!("invalid commitLogReadAheadMode '{other}', expected 0 or 1"),
             )
@@ -1146,7 +1178,7 @@ impl CommitLogReadAheadRequest {
         read_ahead_size: Option<String>,
         read_ahead_size_key: Option<String>,
         show_only: bool,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let mode = if enable {
             Some(CommitLogReadAheadMode::Normal)
         } else if disable {
@@ -1163,12 +1195,17 @@ impl CommitLogReadAheadRequest {
         {
             Some(value) => {
                 let parsed = value.parse::<u64>().map_err(|error| {
-                    ToolsError::validation_error("readAheadSize", format!("invalid readAheadSize '{value}': {error}"))
+                    crate::client_adapter::services::errors::admin_validation_failed(
+                        "readAheadSize",
+                        format!("invalid readAheadSize '{value}': {error}"),
+                    )
                 })?;
                 if parsed == 0 {
-                    return Err(
-                        ToolsError::validation_error("readAheadSize", "readAheadSize must be greater than 0").into(),
-                    );
+                    return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                        "readAheadSize",
+                        "readAheadSize must be greater than 0",
+                    )
+                    .into());
                 }
                 Some(parsed)
             }
@@ -1176,9 +1213,11 @@ impl CommitLogReadAheadRequest {
         };
 
         if show_only && (mode.is_some() || read_ahead_size.is_some()) {
-            return Err(
-                ToolsError::validation_error("showOnly", "--showOnly cannot be used with update options").into(),
-            );
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "showOnly",
+                "--showOnly cannot be used with update options",
+            )
+            .into());
         }
 
         Ok(Self {
@@ -1254,7 +1293,7 @@ pub struct CommitLogReadAheadResult {
 fn broker_target_from_options(
     broker_addr: Option<String>,
     cluster_name: Option<String>,
-) -> RocketMQResult<BrokerTarget> {
+) -> CanonicalResult<BrokerTarget> {
     let broker_addr = trim_optional_string(broker_addr);
     let cluster_name = trim_optional_string(cluster_name);
     match (broker_addr, cluster_name) {
@@ -1263,12 +1302,16 @@ fn broker_target_from_options(
             "clusterName",
             cluster,
         )?)),
-        (None, None) => {
-            Err(ToolsError::validation_error("target", "either brokerAddr or clusterName must be provided").into())
-        }
-        (Some(_), Some(_)) => {
-            Err(ToolsError::validation_error("target", "brokerAddr and clusterName cannot be provided together").into())
-        }
+        (None, None) => Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "target",
+            "either brokerAddr or clusterName must be provided",
+        )
+        .into()),
+        (Some(_), Some(_)) => Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "target",
+            "brokerAddr and clusterName cannot be provided together",
+        )
+        .into()),
     }
 }
 

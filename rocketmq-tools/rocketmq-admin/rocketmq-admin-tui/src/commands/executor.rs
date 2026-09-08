@@ -17,8 +17,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use rocketmq_admin_core::client_adapter::services::topic::TopicTarget;
-use rocketmq_admin_core::client_adapter::services::RocketMQError;
-use rocketmq_admin_core::client_adapter::services::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use serde::Serialize;
 
@@ -27,7 +26,7 @@ use crate::admin_facade::TuiAdminFacade;
 use crate::state::CommandFormState;
 use crate::view_model::CommandResultViewModel;
 
-type CommandExecutionFuture<'a> = Pin<Box<dyn Future<Output = RocketMQResult<CommandResultViewModel>> + 'a>>;
+type CommandExecutionFuture<'a> = Pin<Box<dyn Future<Output = CanonicalResult<CommandResultViewModel>> + 'a>>;
 
 pub fn execute_command_with_progress<'a, F>(
     facade: &'a TuiAdminFacade,
@@ -1397,26 +1396,26 @@ where
             Ok(result)
         }),
         unknown => Box::pin(async move {
-            Err(RocketMQError::illegal_argument(format!(
+            Err(crate::errors::argument_invalid(format!(
                 "unknown command id: {unknown}"
             )))
         }),
     }
 }
 
-fn topic_target(form: &CommandFormState) -> RocketMQResult<TopicTarget> {
+fn topic_target(form: &CommandFormState) -> CanonicalResult<TopicTarget> {
     let target = form.required_string("target")?;
     match form.enum_string("target_type")?.as_str() {
         "broker" => Ok(TopicTarget::Broker(target.into())),
         "cluster" => Ok(TopicTarget::Cluster(target.into())),
-        value => Err(RocketMQError::illegal_argument(format!("invalid target_type: {value}"))),
+        value => Err(crate::errors::argument_invalid(format!("invalid target_type: {value}"))),
     }
 }
 
 fn broker_config_update_request(
     facade: &TuiAdminFacade,
     form: &CommandFormState,
-) -> RocketMQResult<rocketmq_admin_core::client_adapter::services::broker::BrokerConfigUpdateRequest> {
+) -> CanonicalResult<rocketmq_admin_core::client_adapter::services::broker::BrokerConfigUpdateRequest> {
     let entries: BTreeMap<String, String> = form.key_value_map("entries")?.into_iter().collect();
     facade.broker_config_update_request(
         form.optional_string("broker_addr"),
@@ -1426,11 +1425,11 @@ fn broker_config_update_request(
     )
 }
 
-fn message_request_mode(mode: String) -> RocketMQResult<MessageRequestMode> {
+fn message_request_mode(mode: String) -> CanonicalResult<MessageRequestMode> {
     match mode.trim().to_ascii_lowercase().as_str() {
         "pull" => Ok(MessageRequestMode::Pull),
         "pop" => Ok(MessageRequestMode::Pop),
-        value => Err(RocketMQError::illegal_argument(format!(
+        value => Err(crate::errors::argument_invalid(format!(
             "invalid consume mode: {value}"
         ))),
     }
@@ -1443,20 +1442,20 @@ fn operation_target_label(broker_addr: Option<String>, cluster_name: Option<Stri
         .unwrap_or_else(|| fallback.to_string())
 }
 
-fn optional_u64_arg(form: &CommandFormState, name: &str) -> RocketMQResult<Option<u64>> {
+fn optional_u64_arg(form: &CommandFormState, name: &str) -> CanonicalResult<Option<u64>> {
     form.optional_string(name)
         .map(|value| {
             value.parse::<u64>().map_err(|error| {
-                RocketMQError::illegal_argument(format!("{name} must be an unsigned integer: {error}"))
+                crate::errors::argument_invalid(format!("{name} must be an unsigned integer: {error}"))
             })
         })
         .transpose()
 }
 
-fn number_usize_arg(form: &CommandFormState, name: &str) -> RocketMQResult<usize> {
+fn number_usize_arg(form: &CommandFormState, name: &str) -> CanonicalResult<usize> {
     let value = form.number_u64(name)?;
     usize::try_from(value)
-        .map_err(|error| RocketMQError::illegal_argument(format!("{name} is out of range for usize: {error}")))
+        .map_err(|error| crate::errors::argument_invalid(format!("{name} is out of range for usize: {error}")))
 }
 
 fn export_output_or_view<T>(
@@ -1465,7 +1464,7 @@ fn export_output_or_view<T>(
     form: &CommandFormState,
     value: &T,
     view: CommandResultViewModel,
-) -> RocketMQResult<CommandResultViewModel>
+) -> CanonicalResult<CommandResultViewModel>
 where
     T: Serialize + ?Sized,
 {

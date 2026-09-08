@@ -14,7 +14,7 @@
 
 use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
 
 use crate::commands::CommandExecute;
@@ -33,7 +33,7 @@ impl CommandExecute for GetParentTopicInfoSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = LiteService::query_parent_topic_info_by_request_with_credentials(
             self.request()?,
             credentials,
@@ -46,7 +46,7 @@ impl CommandExecute for GetParentTopicInfoSubCommand {
 }
 
 impl GetParentTopicInfoSubCommand {
-    fn request(&self) -> RocketMQResult<ParentTopicInfoQueryRequest> {
+    fn request(&self) -> CanonicalResult<ParentTopicInfoQueryRequest> {
         ParentTopicInfoQueryRequest::try_new(self.parent_topic.clone())
     }
 

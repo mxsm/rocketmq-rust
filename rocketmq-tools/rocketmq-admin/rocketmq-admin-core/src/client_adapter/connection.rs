@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_protocol::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
 
@@ -371,9 +371,8 @@ fn failure_targets(failures: &[AdminSourceFailure]) -> Vec<String> {
         .collect()
 }
 
-fn source_failure(source: AdminQuerySource, logical_target: &str, error: &RocketMQError) -> AdminSourceFailure {
-    let view = error.boundary_view();
-    let code = match view.http().status.as_u16() {
+fn source_failure(source: AdminQuerySource, logical_target: &str, error: &CanonicalError) -> AdminSourceFailure {
+    let code = match crate::client_adapter::services::error_view::rocketmq_http_status(error) {
         401 | 403 => AdminQueryFailureCode::PermissionDenied,
         404 => AdminQueryFailureCode::NotFound,
         408 | 504 => AdminQueryFailureCode::Timeout,
@@ -381,5 +380,10 @@ fn source_failure(source: AdminQuerySource, logical_target: &str, error: &Rocket
         400 | 413 | 422 => AdminQueryFailureCode::InvalidResponse,
         _ => AdminQueryFailureCode::SourceUnavailable,
     };
-    AdminSourceFailure::new(source, code, view.is_retryable(), logical_target)
+    AdminSourceFailure::new(
+        source,
+        code,
+        crate::client_adapter::services::error_view::rocketmq_is_retryable(error),
+        logical_target,
+    )
 }

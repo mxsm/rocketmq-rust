@@ -16,8 +16,7 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_protocol::protocol::subscription::group_retry_policy::GroupRetryPolicy;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -115,7 +114,7 @@ pub struct UpdateSubGroupSubCommand {
 }
 
 impl UpdateSubGroupSubCommand {
-    fn request(&self) -> RocketMQResult<UpdateSubscriptionGroupRequest> {
+    fn request(&self) -> CanonicalResult<UpdateSubscriptionGroupRequest> {
         let mut subscription_group_config = SubscriptionGroupConfig::new(self.group_name.as_str().into());
         subscription_group_config.set_consume_broadcast_enable(false);
         subscription_group_config.set_consume_from_min_enable(false);
@@ -143,13 +142,7 @@ impl UpdateSubGroupSubCommand {
             match serde_json::from_str::<GroupRetryPolicy>(group_retry_policy.as_str()) {
                 Ok(value) => subscription_group_config.set_group_retry_policy(value),
                 Err(source) => {
-                    return Err(RocketMQError::Serialization(
-                        rocketmq_error::SerializationError::source(
-                            "decode subscription group retry policy",
-                            "JSON",
-                            source,
-                        ),
-                    ));
+                    return Err(crate::errors::serialization_failed_by("JSON", source));
                 }
             }
         }
@@ -175,7 +168,7 @@ impl UpdateSubGroupSubCommand {
                     subscription_group_config.set_attributes(attributes_modification);
                 }
                 Err(reason) => {
-                    return Err(RocketMQError::illegal_argument(format!(
+                    return Err(crate::errors::argument_invalid(format!(
                         "invalid subscription group attributes {attributes}: {reason}"
                     )));
                 }
@@ -192,7 +185,7 @@ impl UpdateSubGroupSubCommand {
     fn print_result(
         subscription_group_config: &SubscriptionGroupConfig,
         result: ConsumerOperationResult,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         for broker_addr in &result.broker_addrs {
             println!("Create subscription group to {} success.", broker_addr);
             println!("{:#?}", subscription_group_config);
@@ -207,19 +200,7 @@ impl UpdateSubGroupSubCommand {
         if result.failures.is_empty() {
             Ok(())
         } else {
-            Err(RocketMQError::broker_operation_failed(
-                "UPDATE_SUBSCRIPTION_GROUP",
-                -1,
-                format!(
-                    "UpdateSubGroupSubCommand: Failed to create or update subscription group config for brokers {}",
-                    result
-                        .failures
-                        .iter()
-                        .map(|failure| failure.broker_addr.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            ))
+            Err(crate::errors::broker_response_failed("UPDATE_SUBSCRIPTION_GROUP", -1))
         }
     }
 }
@@ -229,7 +210,7 @@ impl CommandExecute for UpdateSubGroupSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         let config = request.config().clone();
         let result = ConsumerService::update_subscription_group_by_request_with_credentials(

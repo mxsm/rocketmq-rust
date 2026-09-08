@@ -49,10 +49,8 @@ use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::admin::ServiceAdminSession;
 use crate::client_adapter::services::errors;
 use crate::client_adapter::services::stable_error_message;
-use crate::client_adapter::services::RocketMQError;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Result as CanonicalResult;
 
 const PULL_BATCH_SIZE: i32 = 32;
 const PULL_TIMEOUT_MILLIS: u64 = 3000;
@@ -67,11 +65,15 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        )
+        .into());
     }
     Ok(CheetahString::from(value))
 }
@@ -202,7 +204,7 @@ async fn resolve_message_queues(
     admin: &DefaultMQAdminExt,
     topic: &str,
     route_topic: &str,
-) -> RocketMQResult<Vec<(MessageQueue, CheetahString)>> {
+) -> CanonicalResult<Vec<(MessageQueue, CheetahString)>> {
     let topic_route = admin
         .examine_topic_route_info(CheetahString::from(route_topic))
         .await
@@ -216,7 +218,7 @@ async fn resolve_broker_addr(
     admin: &DefaultMQAdminExt,
     route_topic: &str,
     broker_name: &str,
-) -> RocketMQResult<CheetahString> {
+) -> CanonicalResult<CheetahString> {
     let topic_route = admin
         .examine_topic_route_info(CheetahString::from(route_topic))
         .await
@@ -227,11 +229,7 @@ async fn resolve_broker_addr(
         .broker_datas
         .iter()
         .find(|broker_data| broker_data.broker_name().as_str() == broker_name)
-        .ok_or_else(|| {
-            RocketMQError::IllegalArgument(format!(
-                "Broker '{broker_name}' not found in topic route for '{route_topic}'"
-            ))
-        })?;
+        .ok_or_else(|| errors::admin_validation_failed("brokerName", "broker is absent from the topic route"))?;
 
     broker_data
         .select_broker_addr()
@@ -261,12 +259,14 @@ impl QueryMessageByKeyRequest {
         cluster: Option<String>,
         key_type: Option<String>,
         last_key: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let key_type = trim_optional_string(key_type).unwrap_or_else(|| MessageConst::INDEX_KEY_TYPE.to_string());
         if key_type != MessageConst::INDEX_KEY_TYPE && key_type != MessageConst::INDEX_TAG_TYPE {
-            return Err(
-                ToolsError::validation_error("keyType", "keyType only supports K for keys or T for tags").into(),
-            );
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "keyType",
+                "keyType only supports K for keys or T for tags",
+            )
+            .into());
         }
 
         Ok(Self {
@@ -326,14 +326,18 @@ pub struct QueryMessageByIdRequest {
 }
 
 impl QueryMessageByIdRequest {
-    pub fn try_new(message_ids: Vec<String>, topic: Option<String>, timeout_millis: u64) -> RocketMQResult<Self> {
+    pub fn try_new(message_ids: Vec<String>, topic: Option<String>, timeout_millis: u64) -> CanonicalResult<Self> {
         if message_ids.is_empty() {
-            return Err(ToolsError::validation_error("messageId", "At least one message ID is required").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "messageId",
+                "At least one message ID is required",
+            )
+            .into());
         }
 
         let mut normalized_ids = Vec::with_capacity(message_ids.len());
         for msg_id in message_ids {
-            validate_message_id(&msg_id).map_err(RocketMQError::IllegalArgument)?;
+            validate_message_id(&msg_id).map_err(|reason| errors::admin_validation_failed("messageId", reason))?;
             normalized_ids.push(trim_required_cheetah("messageId", msg_id)?);
         }
 
@@ -417,7 +421,7 @@ pub struct DecodeMessageIdRequest {
 }
 
 impl DecodeMessageIdRequest {
-    pub fn try_new(message_ids: Vec<String>) -> RocketMQResult<Self> {
+    pub fn try_new(message_ids: Vec<String>) -> CanonicalResult<Self> {
         let message_ids = message_ids
             .into_iter()
             .filter_map(|message_id| trim_optional_string(Some(message_id)))
@@ -425,7 +429,11 @@ impl DecodeMessageIdRequest {
             .collect::<Vec<_>>();
 
         if message_ids.is_empty() {
-            return Err(ToolsError::validation_error("messageId", "At least one message ID is required").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "messageId",
+                "At least one message ID is required",
+            )
+            .into());
         }
 
         Ok(Self { message_ids })
@@ -500,7 +508,7 @@ impl QueryMessageByOffsetRequest {
         queue_id: i32,
         offset: i64,
         route_topic: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             topic: trim_required_cheetah("topic", topic)?,
             broker_name: trim_required_cheetah("brokerName", broker_name)?,
@@ -553,7 +561,7 @@ impl QueryMessageByUniqueKeyRequest {
         cluster: Option<String>,
         start_time: Option<i64>,
         end_time: Option<i64>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             msg_id: trim_required_cheetah("msgId", msg_id)?,
             consumer_group: trim_optional_string(consumer_group)
@@ -603,7 +611,7 @@ pub struct QueryMessageByUniqueKeyEntry {
 
 impl QueryMessageByUniqueKeyEntry {
     #[allow(deprecated)]
-    fn from_track_result(message: MessageExt, result: RocketMQResult<Vec<MessageTrack>>) -> Self {
+    fn from_track_result(message: MessageExt, result: CanonicalResult<Vec<MessageTrack>>) -> Self {
         match result {
             Ok(tracks) => Self {
                 message,
@@ -642,7 +650,7 @@ impl DirectConsumeMessageRequest {
         consumer_group: impl Into<String>,
         client_id: impl Into<String>,
         cluster: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             topic: trim_required_cheetah("topic", topic)?,
             msg_id: trim_required_cheetah("msgId", msg_id)?,
@@ -718,14 +726,18 @@ impl MessageTrackRequest {
         topic: impl Into<String>,
         cluster: Option<String>,
         timeout_millis: u64,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         if message_ids.is_empty() {
-            return Err(ToolsError::validation_error("messageId", "At least one message ID is required").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "messageId",
+                "At least one message ID is required",
+            )
+            .into());
         }
 
         let mut normalized_ids = Vec::with_capacity(message_ids.len());
         for msg_id in message_ids {
-            validate_message_id(&msg_id).map_err(RocketMQError::IllegalArgument)?;
+            validate_message_id(&msg_id).map_err(|reason| errors::admin_validation_failed("messageId", reason))?;
             normalized_ids.push(trim_required_cheetah("messageId", msg_id)?);
         }
 
@@ -812,7 +824,7 @@ impl QueryMessageTraceByIdRequest {
         begin_timestamp: Option<i64>,
         end_timestamp: Option<i64>,
         max_num: i32,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let trace_topic =
             trim_optional_string(trace_topic).unwrap_or_else(|| TopicValidator::RMQ_SYS_TRACE_TOPIC.to_string());
         Ok(Self {
@@ -866,7 +878,7 @@ impl PrintMessagesRequest {
         begin_timestamp: Option<u64>,
         end_timestamp: Option<u64>,
         lmq_parent_topic: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             topic: trim_required_cheetah("topic", topic)?,
             sub_expression: trim_required_cheetah("subExpression", sub_expression)?,
@@ -921,7 +933,7 @@ impl PrintMessagesByQueueRequest {
         end_timestamp: Option<u64>,
         print_messages: bool,
         calculate_by_tag: bool,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             topic: trim_required_cheetah("topic", topic)?,
             broker_name: trim_required_cheetah("brokerName", broker_name)?,
@@ -985,23 +997,35 @@ impl ConsumeMessagesRequest {
         begin_timestamp: Option<i64>,
         end_timestamp: Option<i64>,
         message_number: i64,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         if message_number <= 0 {
-            return Err(ToolsError::validation_error("MessageNumber", "Please input a positive messageNumber!").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "MessageNumber",
+                "Please input a positive messageNumber!",
+            )
+            .into());
         }
 
         if queue_id.is_some() && trim_optional_string(broker_name.clone()).is_none() {
-            return Err(ToolsError::validation_error("brokerName", "Please set the brokerName before queueId!").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "brokerName",
+                "Please set the brokerName before queueId!",
+            )
+            .into());
         }
 
         if offset.is_some() && queue_id.is_none() {
-            return Err(ToolsError::validation_error("offset", "Please set queueId before offset!").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "offset",
+                "Please set queueId before offset!",
+            )
+            .into());
         }
 
         let now = current_millis() as i64;
         if let Some(begin_timestamp) = begin_timestamp {
             if begin_timestamp > now {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "beginTimestamp",
                     "Please set the beginTimestamp before now!",
                 )
@@ -1011,15 +1035,17 @@ impl ConsumeMessagesRequest {
 
         if let Some(end_timestamp) = end_timestamp {
             if end_timestamp > now {
-                return Err(
-                    ToolsError::validation_error("endTimestamp", "Please set the endTimestamp before now!").into(),
-                );
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                    "endTimestamp",
+                    "Please set the endTimestamp before now!",
+                )
+                .into());
             }
         }
 
         if let (Some(begin_timestamp), Some(end_timestamp)) = (begin_timestamp, end_timestamp) {
             if begin_timestamp > end_timestamp {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "timestamp",
                     "Please make sure that the beginTimestamp is less than or equal to the endTimestamp",
                 )
@@ -1124,7 +1150,7 @@ impl MessageService {
 
     pub fn dump_compaction_log_by_request(
         request: &DumpCompactionLogRequest,
-    ) -> RocketMQResult<DumpCompactionLogResult> {
+    ) -> CanonicalResult<DumpCompactionLogResult> {
         let Some(file_path) = request.file() else {
             return Ok(DumpCompactionLogResult {
                 messages: Vec::new(),
@@ -1133,21 +1159,14 @@ impl MessageService {
         };
 
         if !file_path.exists() {
-            return Err(RocketMQError::storage_read_failed(
-                file_path.display().to_string(),
-                "file does not exist",
-            ));
+            return Err(errors::storage_read_failed("compaction-log"));
         }
 
         if file_path.is_dir() {
-            return Err(RocketMQError::storage_read_failed(
-                file_path.display().to_string(),
-                "path is a directory",
-            ));
+            return Err(errors::storage_read_failed("compaction-log"));
         }
 
-        let data = fs::read(file_path)
-            .map_err(|error| RocketMQError::storage_read_failed(file_path.display().to_string(), error.to_string()))?;
+        let data = fs::read(file_path).map_err(|error| errors::storage_read_failed_by("compaction-log", error))?;
 
         Ok(DumpCompactionLogResult {
             messages: decode_compaction_log_messages(data),
@@ -1159,7 +1178,7 @@ impl MessageService {
         request: QueryMessageByKeyRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<QueryMessageByKeyResult> {
+    ) -> CanonicalResult<QueryMessageByKeyResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1171,7 +1190,7 @@ impl MessageService {
     pub(crate) async fn query_message_by_key_with_admin(
         admin: &DefaultMQAdminExt,
         request: &QueryMessageByKeyRequest,
-    ) -> RocketMQResult<QueryMessageByKeyResult> {
+    ) -> CanonicalResult<QueryMessageByKeyResult> {
         let query_result = admin
             .query_message_by_key(
                 request.cluster.clone(),
@@ -1221,7 +1240,7 @@ impl MessageService {
         request: QueryMessageByIdRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<QueryMessageByIdResult> {
+    ) -> CanonicalResult<QueryMessageByIdResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1233,7 +1252,7 @@ impl MessageService {
     pub(crate) async fn query_message_by_id_with_admin(
         admin: &DefaultMQAdminExt,
         request: &QueryMessageByIdRequest,
-    ) -> RocketMQResult<QueryMessageByIdResult> {
+    ) -> CanonicalResult<QueryMessageByIdResult> {
         let mut entries = Vec::with_capacity(request.message_ids.len());
         for message_id in &request.message_ids {
             let query_future = Self::query_single_message_by_id(admin, message_id, &request.topic, None);
@@ -1274,28 +1293,10 @@ impl MessageService {
                 message: Box::new(message),
                 query_time_ms,
             },
-            Err(RocketMQError::BrokerOperationFailed { message, .. })
-                if message.contains("not found")
-                    || message.contains("does not exist")
-                    || message.contains("No message") =>
-            {
+            Err(error) if error.condition() == rocketmq_error::CanonicalCondition::NotFound => {
                 QueryMessageByIdOutcome::NotFound {
-                    reason: message,
+                    reason: error.to_string(),
                     query_time_ms,
-                }
-            }
-            Err(RocketMQError::Rpc(rpc_error)) => {
-                let error = rpc_error.to_string();
-                if error.contains("not found") || error.contains("does not exist") || error.contains("No message") {
-                    QueryMessageByIdOutcome::NotFound {
-                        reason: error,
-                        query_time_ms,
-                    }
-                } else {
-                    QueryMessageByIdOutcome::Failed {
-                        error: format!("Failed to query message by ID '{message_id}': {error}"),
-                        query_time_ms,
-                    }
                 }
             }
             Err(error) => QueryMessageByIdOutcome::Failed {
@@ -1309,7 +1310,7 @@ impl MessageService {
         request: QueryMessageByOffsetRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<QueryMessageByOffsetResult> {
+    ) -> CanonicalResult<QueryMessageByOffsetResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1321,7 +1322,7 @@ impl MessageService {
     pub(crate) async fn query_message_by_offset_with_admin(
         admin: &DefaultMQAdminExt,
         request: &QueryMessageByOffsetRequest,
-    ) -> RocketMQResult<QueryMessageByOffsetResult> {
+    ) -> CanonicalResult<QueryMessageByOffsetResult> {
         let route_topic = request.route_topic.as_ref().unwrap_or(&request.topic);
         let broker_addr = resolve_broker_addr(admin, route_topic.as_str(), request.broker_name.as_str()).await?;
 
@@ -1355,7 +1356,7 @@ impl MessageService {
         request: QueryMessageByUniqueKeyRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<QueryMessageByUniqueKeyResult> {
+    ) -> CanonicalResult<QueryMessageByUniqueKeyResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1367,7 +1368,7 @@ impl MessageService {
     pub(crate) async fn query_message_by_unique_key_with_admin(
         admin: &DefaultMQAdminExt,
         request: &QueryMessageByUniqueKeyRequest,
-    ) -> RocketMQResult<QueryMessageByUniqueKeyResult> {
+    ) -> CanonicalResult<QueryMessageByUniqueKeyResult> {
         if let Some(direct_request) = request.direct_consume_request() {
             let result = Self::direct_consume_message_with_admin(admin, &direct_request).await?;
             return Ok(QueryMessageByUniqueKeyResult::Direct(result));
@@ -1413,7 +1414,7 @@ impl MessageService {
         request: DirectConsumeMessageRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<DirectConsumeMessageResult> {
+    ) -> CanonicalResult<DirectConsumeMessageResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1425,7 +1426,7 @@ impl MessageService {
     pub(crate) async fn direct_consume_message_with_admin(
         admin: &DefaultMQAdminExt,
         request: &DirectConsumeMessageRequest,
-    ) -> RocketMQResult<DirectConsumeMessageResult> {
+    ) -> CanonicalResult<DirectConsumeMessageResult> {
         let running_info = admin
             .get_consumer_running_info(
                 request.consumer_group.clone(),
@@ -1478,7 +1479,7 @@ impl MessageService {
         request: MessageTrackRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<MessageTrackResult> {
+    ) -> CanonicalResult<MessageTrackResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1490,7 +1491,7 @@ impl MessageService {
     pub(crate) async fn message_track_with_admin(
         admin: &DefaultMQAdminExt,
         request: &MessageTrackRequest,
-    ) -> RocketMQResult<MessageTrackResult> {
+    ) -> CanonicalResult<MessageTrackResult> {
         let mut entries = Vec::with_capacity(request.message_ids.len());
         for message_id in &request.message_ids {
             let track_future = Self::track_single_message_by_id(admin, request, message_id);
@@ -1543,7 +1544,7 @@ impl MessageService {
         request: QueryMessageTraceByIdRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<Vec<MessageTraceView>> {
+    ) -> CanonicalResult<Vec<MessageTraceView>> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1555,7 +1556,7 @@ impl MessageService {
     pub(crate) async fn query_message_trace_by_id_with_admin(
         admin: &DefaultMQAdminExt,
         request: &QueryMessageTraceByIdRequest,
-    ) -> RocketMQResult<Vec<MessageTraceView>> {
+    ) -> CanonicalResult<Vec<MessageTraceView>> {
         let query_result = admin
             .query_message_by_key(
                 None,
@@ -1628,9 +1629,9 @@ impl MessageService {
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
         sink: F,
-    ) -> RocketMQResult<()>
+    ) -> CanonicalResult<()>
     where
-        F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
+        F: FnMut(MessagePullEvent) -> CanonicalResult<()>,
     {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
@@ -1644,9 +1645,9 @@ impl MessageService {
         admin: &DefaultMQAdminExt,
         request: &PrintMessagesRequest,
         mut sink: F,
-    ) -> RocketMQResult<()>
+    ) -> CanonicalResult<()>
     where
-        F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
+        F: FnMut(MessagePullEvent) -> CanonicalResult<()>,
     {
         let route_topic = request.lmq_parent_topic.as_ref().unwrap_or(&request.topic);
         let message_queues = resolve_message_queues(admin, request.topic.as_str(), route_topic.as_str()).await?;
@@ -1761,9 +1762,9 @@ impl MessageService {
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
         sink: F,
-    ) -> RocketMQResult<()>
+    ) -> CanonicalResult<()>
     where
-        F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
+        F: FnMut(MessagePullEvent) -> CanonicalResult<()>,
     {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
@@ -1777,9 +1778,9 @@ impl MessageService {
         admin: &DefaultMQAdminExt,
         request: &PrintMessagesByQueueRequest,
         mut sink: F,
-    ) -> RocketMQResult<()>
+    ) -> CanonicalResult<()>
     where
-        F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
+        F: FnMut(MessagePullEvent) -> CanonicalResult<()>,
     {
         let broker_addr = resolve_broker_addr(admin, request.topic.as_str(), request.broker_name.as_str()).await?;
         let mq = MessageQueue::from_parts(request.topic.clone(), request.broker_name.clone(), request.queue_id);
@@ -1887,9 +1888,9 @@ impl MessageService {
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
         sink: F,
-    ) -> RocketMQResult<()>
+    ) -> CanonicalResult<()>
     where
-        F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
+        F: FnMut(MessagePullEvent) -> CanonicalResult<()>,
     {
         let mut client = build_consume_admin(
             credentials,
@@ -1908,9 +1909,9 @@ impl MessageService {
         admin: &DefaultMQAdminExt,
         request: &ConsumeMessagesRequest,
         sink: F,
-    ) -> RocketMQResult<()>
+    ) -> CanonicalResult<()>
     where
-        F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
+        F: FnMut(MessagePullEvent) -> CanonicalResult<()>,
     {
         match (request.broker_name.as_ref(), request.queue_id, request.offset) {
             (None, None, None) => Self::consume_messages_default(admin, request, sink).await,
@@ -1918,7 +1919,11 @@ impl MessageService {
                 Self::consume_messages_by_condition(admin, request, broker_name, queue_id, offset.unwrap_or(0), sink)
                     .await
             }
-            _ => Err(ToolsError::validation_error("target", "invalid consume message target").into()),
+            _ => Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "target",
+                "invalid consume message target",
+            )
+            .into()),
         }
     }
 
@@ -1926,9 +1931,9 @@ impl MessageService {
         admin: &DefaultMQAdminExt,
         request: &ConsumeMessagesRequest,
         mut sink: F,
-    ) -> RocketMQResult<()>
+    ) -> CanonicalResult<()>
     where
-        F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
+        F: FnMut(MessagePullEvent) -> CanonicalResult<()>,
     {
         let topic_route = admin
             .examine_topic_route_info(request.topic.clone())
@@ -2008,9 +2013,9 @@ impl MessageService {
         queue_id: i32,
         offset: i64,
         mut sink: F,
-    ) -> RocketMQResult<()>
+    ) -> CanonicalResult<()>
     where
-        F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
+        F: FnMut(MessagePullEvent) -> CanonicalResult<()>,
     {
         let broker_addr = resolve_broker_addr(admin, request.topic.as_str(), broker_name.as_str()).await?;
         let mq = MessageQueue::from_parts(request.topic.clone(), broker_name.clone(), queue_id);
@@ -2081,9 +2086,9 @@ impl MessageService {
         min_offset: i64,
         max_offset: i64,
         sink: &mut F,
-    ) -> RocketMQResult<()>
+    ) -> CanonicalResult<()>
     where
-        F: FnMut(MessagePullEvent) -> RocketMQResult<()>,
+        F: FnMut(MessagePullEvent) -> CanonicalResult<()>,
     {
         let mut offset = min_offset;
         'read_queue: while offset <= max_offset {
@@ -2235,11 +2240,7 @@ mod tests {
 
         let failed = QueryMessageByUniqueKeyEntry::from_track_result(
             message,
-            Err(RocketMQError::broker_operation_failed(
-                "MESSAGE_TRACK",
-                -1,
-                "broker-b unavailable",
-            )),
+            Err(errors::broker_response_failed("MESSAGE_TRACK", -1)),
         );
         assert_eq!(failed.message.msg_id().as_str(), "MSGID");
         assert!(failed.tracks.is_empty());

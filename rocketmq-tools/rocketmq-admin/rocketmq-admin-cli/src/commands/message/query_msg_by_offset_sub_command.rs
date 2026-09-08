@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 
 use crate::commands::CommandExecute;
@@ -57,7 +56,7 @@ impl CommandExecute for QueryMsgByOffsetSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = QueryMessageByOffsetRequest::try_new(
             self.topic.clone(),
             self.broker_name.clone(),
@@ -88,13 +87,13 @@ impl CommandExecute for QueryMsgByOffsetSubCommand {
                         if bytes.is_ascii() {
                             String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| "BINARY".to_string())
                         } else {
-                            return Err(RocketMQError::IllegalArgument(format!(
+                            return Err(crate::errors::argument_invalid(format!(
                                 "Unsupported body bytes for ASCII bodyFormat: {}",
                                 body_format
                             )));
                         }
                     } else {
-                        return Err(RocketMQError::IllegalArgument(format!(
+                        return Err(crate::errors::argument_invalid(format!(
                             "Unsupported bodyFormat: {}",
                             body_format
                         )));

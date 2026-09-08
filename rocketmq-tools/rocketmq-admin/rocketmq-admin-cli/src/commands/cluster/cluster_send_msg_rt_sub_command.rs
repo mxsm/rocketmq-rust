@@ -17,7 +17,7 @@ use chrono::Utc;
 use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::cluster::ClusterSendMessageRtRequest;
 use rocketmq_admin_core::client_adapter::services::cluster::ClusterSendMessageRtResult;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::cluster::ClusterService;
@@ -85,7 +85,7 @@ pub struct ClusterSendMsgRTSubCommand {
 }
 
 impl ClusterSendMsgRTSubCommand {
-    fn request(&self) -> RocketMQResult<ClusterSendMessageRtRequest> {
+    fn request(&self) -> CanonicalResult<ClusterSendMessageRtRequest> {
         ClusterSendMessageRtRequest::try_new(self.amount, self.size, self.cluster_name.clone())
     }
 }
@@ -95,7 +95,7 @@ impl CommandExecute for ClusterSendMsgRTSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         if !self.print_as_tlog {
             println!(
                 "{:<24}  {:<24}  {:<4}  {:<8}  {:<8}",

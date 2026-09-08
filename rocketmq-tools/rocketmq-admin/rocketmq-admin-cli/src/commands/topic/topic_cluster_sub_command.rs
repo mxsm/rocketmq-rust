@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -31,12 +31,12 @@ pub struct TopicClusterSubCommand {
 }
 
 impl TopicClusterSubCommand {
-    fn request(&self) -> RocketMQResult<TopicClusterQueryRequest> {
+    fn request(&self) -> CanonicalResult<TopicClusterQueryRequest> {
         Ok(TopicClusterQueryRequest::try_new(self.topic.clone())?
             .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
 
-    async fn get_topic_clusters(&self) -> RocketMQResult<TopicClusterList> {
+    async fn get_topic_clusters(&self) -> CanonicalResult<TopicClusterList> {
         TopicService::query_topic_clusters(self.request()?).await
     }
 
@@ -51,7 +51,7 @@ impl CommandExecute for TopicClusterSubCommand {
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> rocketmq_error::Result<()> {
         let clusters = self.get_topic_clusters().await?;
         self.print_clusters(&clusters);
         Ok(())

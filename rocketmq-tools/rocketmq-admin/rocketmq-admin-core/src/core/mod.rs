@@ -46,6 +46,8 @@ pub mod topic;
 pub mod topic_observation;
 
 pub use self::error::AdminError;
+pub use self::error::AdminFailure;
+pub use self::error::AdminOutcome;
 pub use self::error::AdminResult;
 pub use self::error_view::stable_error_code;
 pub use self::error_view::stable_error_message;

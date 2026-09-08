@@ -46,10 +46,8 @@ use std::path::PathBuf;
 use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::errors;
 use crate::client_adapter::services::resolver::BrokerAddressResolver;
-use crate::client_adapter::services::RocketMQError;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Result as CanonicalResult;
 
 const EXPORT_BROKER_PROPERTY_KEYS: &[&str] = &[
     "brokerClusterName",
@@ -82,7 +80,7 @@ pub struct ExportConfigsRequest {
 }
 
 impl ExportConfigsRequest {
-    pub fn try_new(cluster_name: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(cluster_name: impl Into<String>) -> CanonicalResult<Self> {
         Ok(Self {
             cluster_name: trim_required_cheetah("clusterName", cluster_name)?,
             namesrv_addr: None,
@@ -127,7 +125,7 @@ pub struct ExportMetricsRequest {
 }
 
 impl ExportMetricsRequest {
-    pub fn try_new(cluster_name: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(cluster_name: impl Into<String>) -> CanonicalResult<Self> {
         Ok(Self {
             cluster_name: trim_required_cheetah("clusterName", cluster_name)?,
             timeout_millis: DEFAULT_EXPORT_METRICS_TIMEOUT_MILLIS,
@@ -290,21 +288,21 @@ impl ExportMetadataRequest {
         topic_only: bool,
         subscription_group_only: bool,
         special_topic: bool,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let cluster_name = trim_optional_string(cluster_name);
         let broker_addr = trim_optional_string(broker_addr);
         let target = match (cluster_name, broker_addr) {
             (Some(cluster_name), None) => ExportMetadataTarget::Cluster(CheetahString::from(cluster_name)),
             (None, Some(broker_addr)) => ExportMetadataTarget::Broker(CheetahString::from(broker_addr)),
             (None, None) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerAddr or clusterName must be provided",
                 )
                 .into());
             }
             (Some(_), Some(_)) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerAddr and clusterName cannot be provided together",
                 )
@@ -321,7 +319,7 @@ impl ExportMetadataRequest {
         };
 
         if matches!(target, ExportMetadataTarget::Broker(_)) && matches!(scope, ExportMetadataScope::All) {
-            return Err(ToolsError::validation_error(
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "scope",
                 "broker target requires topic or subscriptionGroup scope",
             )
@@ -484,21 +482,21 @@ impl ExportRocksDbConfigRpcRequest {
         broker_addr: Option<String>,
         config_types: impl Into<String>,
         timeout_millis: Option<u64>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let cluster_name = trim_optional_string(cluster_name);
         let broker_addr = trim_optional_string(broker_addr);
         let target = match (cluster_name, broker_addr) {
             (Some(cluster_name), None) => ExportRocksDbConfigRpcTarget::Cluster(CheetahString::from(cluster_name)),
             (None, Some(broker_addr)) => ExportRocksDbConfigRpcTarget::Broker(CheetahString::from(broker_addr)),
             (None, None) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerAddr or clusterName must be provided",
                 )
                 .into());
             }
             (Some(_), Some(_)) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerAddr and clusterName cannot be provided together",
                 )
@@ -581,21 +579,21 @@ pub struct ExportPopRecordRequest {
 }
 
 impl ExportPopRecordRequest {
-    pub fn try_new(cluster_name: Option<String>, broker_addr: Option<String>, dry_run: bool) -> RocketMQResult<Self> {
+    pub fn try_new(cluster_name: Option<String>, broker_addr: Option<String>, dry_run: bool) -> CanonicalResult<Self> {
         let cluster_name = trim_optional_string(cluster_name);
         let broker_addr = trim_optional_string(broker_addr);
         let target = match (cluster_name, broker_addr) {
             (Some(cluster_name), None) => ExportPopRecordTarget::Cluster(CheetahString::from(cluster_name)),
             (None, Some(broker_addr)) => ExportPopRecordTarget::Broker(CheetahString::from(broker_addr)),
             (None, None) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerAddr or clusterName must be provided",
                 )
                 .into());
             }
             (Some(_), Some(_)) => {
-                return Err(ToolsError::validation_error(
+                return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerAddr and clusterName cannot be provided together",
                 )
@@ -692,11 +690,15 @@ impl ExportFileWriteRequest {
     pub fn try_new(
         output_path: impl Into<String>,
         overwrite_policy: ExportFileOverwritePolicy,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let output_path = output_path.into();
         let output_path = output_path.trim();
         if output_path.is_empty() {
-            return Err(ToolsError::validation_error("outputPath", "outputPath must not be empty").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "outputPath",
+                "outputPath must not be empty",
+            )
+            .into());
         }
 
         Ok(Self {
@@ -744,7 +746,7 @@ pub struct ExportService;
 impl ExportService {
     pub fn export_metadata_in_rocksdb_by_request(
         request: &ExportMetadataInRocksDbRequest,
-    ) -> RocketMQResult<ExportMetadataInRocksDbResult> {
+    ) -> CanonicalResult<ExportMetadataInRocksDbResult> {
         if request.path().as_os_str().is_empty() || !request.path().exists() {
             return Ok(ExportMetadataInRocksDbResult::InvalidPath);
         }
@@ -770,9 +772,8 @@ impl ExportService {
             let mut opts = Options::default();
             opts.create_if_missing(false);
 
-            let db = DB::open_for_read_only(&opts, &full_path, false).map_err(|error| {
-                RocketMQError::storage_read_failed(full_path.display().to_string(), error.to_string())
-            })?;
+            let db = DB::open_for_read_only(&opts, &full_path, false)
+                .map_err(|error| errors::storage_read_failed_by("rocksdb", error))?;
 
             let entries = Self::convert_rocksdb_metadata_entries(config_type, iterate_rocksdb_metadata(&db)?)?;
             drop(db);
@@ -788,7 +789,7 @@ impl ExportService {
     pub fn convert_rocksdb_metadata_entries(
         config_type: ExportMetadataInRocksDbConfigType,
         entries: Vec<ExportMetadataInRocksDbEntry>,
-    ) -> RocketMQResult<Vec<ExportMetadataInRocksDbEntry>> {
+    ) -> CanonicalResult<Vec<ExportMetadataInRocksDbEntry>> {
         match config_type {
             ExportMetadataInRocksDbConfigType::Topics | ExportMetadataInRocksDbConfigType::SubscriptionGroups => {
                 Ok(entries)
@@ -803,7 +804,7 @@ impl ExportService {
         request: ExportConfigsRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ExportConfigsResult> {
+    ) -> CanonicalResult<ExportConfigsResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -815,7 +816,7 @@ impl ExportService {
     pub(crate) async fn export_configs_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ExportConfigsRequest,
-    ) -> RocketMQResult<ExportConfigsResult> {
+    ) -> CanonicalResult<ExportConfigsResult> {
         let name_server_address_list = admin.get_name_server_address_list().await;
         let name_servers = name_server_address_list
             .iter()
@@ -865,7 +866,7 @@ impl ExportService {
         request: ExportMetricsRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ExportMetricsResult> {
+    ) -> CanonicalResult<ExportMetricsResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -877,7 +878,7 @@ impl ExportService {
     pub(crate) async fn export_metrics_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ExportMetricsRequest,
-    ) -> RocketMQResult<ExportMetricsResult> {
+    ) -> CanonicalResult<ExportMetricsResult> {
         let cluster_info = admin.examine_broker_cluster_info().await?;
         let broker_names = resolve_export_metrics_broker_names(&cluster_info, request.cluster_name().as_str())?;
         let broker_addr_table = cluster_info
@@ -1001,7 +1002,7 @@ impl ExportService {
         request: ExportMetadataRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ExportMetadataResult> {
+    ) -> CanonicalResult<ExportMetadataResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1013,7 +1014,7 @@ impl ExportService {
     pub(crate) async fn export_metadata_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ExportMetadataRequest,
-    ) -> RocketMQResult<ExportMetadataResult> {
+    ) -> CanonicalResult<ExportMetadataResult> {
         match request.target() {
             ExportMetadataTarget::Broker(broker_addr) => match request.scope() {
                 ExportMetadataScope::Topic => {
@@ -1028,7 +1029,7 @@ impl ExportService {
                         .await?;
                     Ok(ExportMetadataResult::BrokerSubscriptionGroup { wrapper })
                 }
-                ExportMetadataScope::All => Err(ToolsError::validation_error(
+                ExportMetadataScope::All => Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "scope",
                     "broker target requires topic or subscriptionGroup scope",
                 )
@@ -1070,7 +1071,7 @@ impl ExportService {
         request: ExportRocksDbConfigRpcRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ExportRocksDbConfigRpcResult> {
+    ) -> CanonicalResult<ExportRocksDbConfigRpcResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1082,7 +1083,7 @@ impl ExportService {
     pub(crate) async fn export_rocksdb_config_rpc_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ExportRocksDbConfigRpcRequest,
-    ) -> RocketMQResult<ExportRocksDbConfigRpcResult> {
+    ) -> CanonicalResult<ExportRocksDbConfigRpcResult> {
         let targets = match request.target() {
             ExportRocksDbConfigRpcTarget::Broker(broker_addr) => {
                 vec![Self::resolve_export_rocksdb_rpc_broker_target(admin, broker_addr).await]
@@ -1123,7 +1124,7 @@ impl ExportService {
         request: ExportPopRecordRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ExportPopRecordResult> {
+    ) -> CanonicalResult<ExportPopRecordResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -1135,7 +1136,7 @@ impl ExportService {
     pub(crate) async fn export_pop_records_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ExportPopRecordRequest,
-    ) -> RocketMQResult<ExportPopRecordResult> {
+    ) -> CanonicalResult<ExportPopRecordResult> {
         let targets = match request.target() {
             ExportPopRecordTarget::Broker(broker_addr) => {
                 vec![Self::resolve_export_pop_record_broker_target(admin, broker_addr).await]
@@ -1178,24 +1179,18 @@ impl ExportService {
     pub fn write_json_export_file<T>(
         request: &ExportFileWriteRequest,
         value: &T,
-    ) -> RocketMQResult<ExportFileWriteResult>
+    ) -> CanonicalResult<ExportFileWriteResult>
     where
         T: Serialize + ?Sized,
     {
         let output_path = request.output_path();
         if output_path.is_dir() {
-            return Err(RocketMQError::storage_write_failed(
-                output_path.display().to_string(),
-                "output path is a directory",
-            ));
+            return Err(errors::storage_write_failed("admin-export"));
         }
 
         if let Some(parent) = output_path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
             if !parent.exists() {
-                return Err(RocketMQError::storage_write_failed(
-                    parent.display().to_string(),
-                    "output directory does not exist",
-                ));
+                return Err(errors::storage_write_failed("admin-export"));
             }
         }
 
@@ -1210,20 +1205,17 @@ impl ExportService {
             ));
         }
 
-        let bytes = serde_json::to_vec_pretty(value)
-            .map_err(|error| errors::admin_serialization_failed("JSON", error.to_string()))?;
+        let bytes =
+            serde_json::to_vec_pretty(value).map_err(|error| errors::admin_serialization_failed_by("JSON", error))?;
         let mut file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(request.overwrite())
             .create_new(!request.overwrite())
             .open(output_path)
-            .map_err(|error| {
-                RocketMQError::storage_write_failed(output_path.display().to_string(), error.to_string())
-            })?;
-        file.write_all(&bytes).map_err(|error| {
-            RocketMQError::storage_write_failed(output_path.display().to_string(), error.to_string())
-        })?;
+            .map_err(|error| errors::storage_write_failed_by("admin-export", error))?;
+        file.write_all(&bytes)
+            .map_err(|error| errors::storage_write_failed_by("admin-export", error))?;
 
         Ok(ExportFileWriteResult {
             output_path: output_path.to_path_buf(),
@@ -1363,20 +1355,27 @@ fn resolve_export_rocksdb_rpc_targets_from_cluster_info(
 
 fn parse_rocksdb_config_types(
     config_types: impl Into<String>,
-) -> RocketMQResult<Vec<ExportMetadataInRocksDbConfigType>> {
+) -> CanonicalResult<Vec<ExportMetadataInRocksDbConfigType>> {
     let config_types = config_types.into();
     let config_types = config_types
         .split(';')
         .filter(|value| !value.trim().is_empty())
         .map(|value| {
             ExportMetadataInRocksDbConfigType::from_config_type(value.trim()).ok_or_else(|| {
-                ToolsError::validation_error("configType", format!("unknown RocksDB config type: {value}"))
+                crate::client_adapter::services::errors::admin_validation_failed(
+                    "configType",
+                    format!("unknown RocksDB config type: {value}"),
+                )
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
 
     if config_types.is_empty() {
-        return Err(ToolsError::validation_error("configType", "configType must not be empty").into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "configType",
+            "configType must not be empty",
+        )
+        .into());
     }
 
     Ok(config_types)
@@ -1385,7 +1384,7 @@ fn parse_rocksdb_config_types(
 fn resolve_export_metrics_broker_names(
     cluster_info: &ClusterInfo,
     cluster_name: &str,
-) -> RocketMQResult<Vec<CheetahString>> {
+) -> CanonicalResult<Vec<CheetahString>> {
     let broker_names = cluster_info
         .cluster_addr_table
         .as_ref()
@@ -1452,27 +1451,25 @@ fn normalize_client_info(client_info: Vec<String>) -> Vec<String> {
     client_info
 }
 
-fn convert_consumer_offset_entry(entry: ExportMetadataInRocksDbEntry) -> RocketMQResult<ExportMetadataInRocksDbEntry> {
-    let wrapper = serde_json::from_str::<serde_json::Value>(&entry.value).map_err(|error| {
-        errors::admin_serialization_failed("JSON", format!("consumerOffsets entry {}: {error}", entry.key))
-    })?;
+fn convert_consumer_offset_entry(entry: ExportMetadataInRocksDbEntry) -> CanonicalResult<ExportMetadataInRocksDbEntry> {
+    let wrapper = serde_json::from_str::<serde_json::Value>(&entry.value)
+        .map_err(|error| errors::admin_serialization_failed_by("JSON", error))?;
     let offset_table = wrapper
         .get("offsetTable")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
-    let value = serde_json::to_string(&offset_table).map_err(|error| {
-        errors::admin_serialization_failed("JSON", format!("consumerOffsets entry {}: {error}", entry.key))
-    })?;
+    let value =
+        serde_json::to_string(&offset_table).map_err(|error| errors::admin_serialization_failed_by("JSON", error))?;
 
     Ok(ExportMetadataInRocksDbEntry { key: entry.key, value })
 }
 
 #[cfg(feature = "rocksdb-export")]
-fn iterate_rocksdb_metadata(db: &DB) -> RocketMQResult<Vec<ExportMetadataInRocksDbEntry>> {
+fn iterate_rocksdb_metadata(db: &DB) -> CanonicalResult<Vec<ExportMetadataInRocksDbEntry>> {
     let mut entries = Vec::new();
     let iter = db.iterator(rocksdb::IteratorMode::Start);
     for item in iter {
-        let (key, value) = item.map_err(|error| RocketMQError::storage_read_failed("rocksdb", error.to_string()))?;
+        let (key, value) = item.map_err(|error| errors::storage_read_failed_by("rocksdb", error))?;
         entries.push(ExportMetadataInRocksDbEntry {
             key: String::from_utf8_lossy(&key).to_string(),
             value: String::from_utf8_lossy(&value).to_string(),
@@ -1497,11 +1494,15 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        )
+        .into());
     }
     Ok(CheetahString::from(value))
 }

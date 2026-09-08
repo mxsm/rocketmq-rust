@@ -24,9 +24,8 @@ use serde::Serialize;
 use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::errors;
 use crate::client_adapter::services::resolver::BrokerAddressResolver;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Result as CanonicalResult;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HaStatusTarget {
@@ -41,7 +40,7 @@ pub struct HaStatusQueryRequest {
 }
 
 impl HaStatusQueryRequest {
-    pub fn try_new(broker_addr: Option<String>, cluster_name: Option<String>) -> RocketMQResult<Self> {
+    pub fn try_new(broker_addr: Option<String>, cluster_name: Option<String>) -> CanonicalResult<Self> {
         Ok(Self {
             target: ha_status_target_from_options(broker_addr, cluster_name)?,
             namesrv_addr: None,
@@ -95,7 +94,7 @@ impl SyncStateSetQueryRequest {
         controller_address: impl Into<String>,
         broker_name: Option<String>,
         cluster_name: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             controller_address: trim_required_controller_address(controller_address)?,
             target: sync_state_set_target_from_options(broker_name, cluster_name)?,
@@ -137,7 +136,7 @@ impl HaService {
         request: HaStatusQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<HaStatusQueryResult> {
+    ) -> CanonicalResult<HaStatusQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -149,7 +148,7 @@ impl HaService {
     pub(crate) async fn query_ha_status_with_admin(
         admin: &DefaultMQAdminExt,
         request: &HaStatusQueryRequest,
-    ) -> RocketMQResult<HaStatusQueryResult> {
+    ) -> CanonicalResult<HaStatusQueryResult> {
         let broker_addrs = match request.target() {
             HaStatusTarget::BrokerAddr(broker_addr) => vec![broker_addr.clone()],
             HaStatusTarget::ClusterName(cluster_name) => {
@@ -181,7 +180,7 @@ impl HaService {
         request: SyncStateSetQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<SyncStateSetQueryResult> {
+    ) -> CanonicalResult<SyncStateSetQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -193,7 +192,7 @@ impl HaService {
     pub(crate) async fn query_sync_state_set_with_admin(
         admin: &DefaultMQAdminExt,
         request: &SyncStateSetQueryRequest,
-    ) -> RocketMQResult<SyncStateSetQueryResult> {
+    ) -> CanonicalResult<SyncStateSetQueryResult> {
         let brokers = match request.target() {
             SyncStateSetTarget::BrokerName(broker_name) => vec![broker_name.clone()],
             SyncStateSetTarget::ClusterName(cluster_name) => {
@@ -226,32 +225,40 @@ impl HaService {
 fn ha_status_target_from_options(
     broker_addr: Option<String>,
     cluster_name: Option<String>,
-) -> RocketMQResult<HaStatusTarget> {
+) -> CanonicalResult<HaStatusTarget> {
     match (trim_optional_string(broker_addr), trim_optional_string(cluster_name)) {
         (Some(broker_addr), None) => Ok(HaStatusTarget::BrokerAddr(CheetahString::from(broker_addr))),
         (None, Some(cluster_name)) => Ok(HaStatusTarget::ClusterName(CheetahString::from(cluster_name))),
-        (None, None) => {
-            Err(ToolsError::validation_error("target", "either brokerAddr or clusterName must be specified").into())
-        }
-        (Some(_), Some(_)) => {
-            Err(ToolsError::validation_error("target", "brokerAddr and clusterName cannot both be specified").into())
-        }
+        (None, None) => Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "target",
+            "either brokerAddr or clusterName must be specified",
+        )
+        .into()),
+        (Some(_), Some(_)) => Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "target",
+            "brokerAddr and clusterName cannot both be specified",
+        )
+        .into()),
     }
 }
 
 fn sync_state_set_target_from_options(
     broker_name: Option<String>,
     cluster_name: Option<String>,
-) -> RocketMQResult<SyncStateSetTarget> {
+) -> CanonicalResult<SyncStateSetTarget> {
     match (trim_optional_string(broker_name), trim_optional_string(cluster_name)) {
         (Some(broker_name), None) => Ok(SyncStateSetTarget::BrokerName(CheetahString::from(broker_name))),
         (None, Some(cluster_name)) => Ok(SyncStateSetTarget::ClusterName(CheetahString::from(cluster_name))),
-        (None, None) => {
-            Err(ToolsError::validation_error("target", "either brokerName or clusterName must be specified").into())
-        }
-        (Some(_), Some(_)) => {
-            Err(ToolsError::validation_error("target", "brokerName and clusterName cannot both be specified").into())
-        }
+        (None, None) => Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "target",
+            "either brokerName or clusterName must be specified",
+        )
+        .into()),
+        (Some(_), Some(_)) => Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "target",
+            "brokerName and clusterName cannot both be specified",
+        )
+        .into()),
     }
 }
 
@@ -261,11 +268,15 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn trim_required_controller_address(value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_controller_address(value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let controller_address = value.trim().split(';').next().unwrap_or("").trim();
     if controller_address.is_empty() {
-        return Err(ToolsError::validation_error("controllerAddress", "controllerAddress must not be empty").into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "controllerAddress",
+            "controllerAddress must not be empty",
+        )
+        .into());
     }
     Ok(CheetahString::from(controller_address))
 }

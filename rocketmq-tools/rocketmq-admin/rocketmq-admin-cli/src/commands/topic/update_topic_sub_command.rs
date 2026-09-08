@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::topic::TopicValidator;
 
 use crate::commands::CommandExecute;
@@ -108,13 +107,13 @@ pub struct UpdateTopicSubCommand {
 }
 
 impl UpdateTopicSubCommand {
-    fn request(&self) -> RocketMQResult<UpdateTopicRequest> {
+    fn request(&self) -> CanonicalResult<UpdateTopicRequest> {
         let target = if let Some(broker_addr) = &self.broker_addr {
             TopicTarget::Broker(broker_addr.trim().into())
         } else if let Some(cluster_name) = &self.cluster_name {
             TopicTarget::Cluster(cluster_name.trim().into())
         } else {
-            return Err(RocketMQError::IllegalArgument(
+            return Err(crate::errors::argument_invalid(
                 "UpdateTopicSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided".into(),
             ));
         };
@@ -155,10 +154,10 @@ impl CommandExecute for UpdateTopicSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let validation_result = TopicValidator::validate_topic(&self.topic);
         if !validation_result.valid() {
-            return Err(RocketMQError::IllegalArgument(format!(
+            return Err(crate::errors::argument_invalid(format!(
                 "UpdateTopicSubCommand: Invalid topic name: {}",
                 validation_result.remark().as_str()
             )));

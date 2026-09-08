@@ -16,7 +16,7 @@ mod cluster_list_sub_command;
 mod cluster_send_msg_rt_sub_command;
 
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::cluster::cluster_list_sub_command::ClusterListSubCommand;
@@ -44,7 +44,7 @@ impl CommandExecute for ClusterCommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             ClusterCommands::ClusterList(value) => value.execute(credentials, client_runtime.clone()).await,
             ClusterCommands::ClusterRT(value) => value.execute(credentials, client_runtime.clone()).await,

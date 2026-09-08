@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::broker::BrokerRuntimeStatsQueryRequest;
@@ -36,7 +36,7 @@ pub struct BrokerStatusSubCommand {
 }
 
 impl BrokerStatusSubCommand {
-    fn request(&self) -> RocketMQResult<BrokerRuntimeStatsQueryRequest> {
+    fn request(&self) -> CanonicalResult<BrokerRuntimeStatsQueryRequest> {
         BrokerRuntimeStatsQueryRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone())
     }
 }
@@ -46,7 +46,7 @@ impl CommandExecute for BrokerStatusSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         let print_broker = matches!(request.target(), BrokerTarget::ClusterName(_));
         let result = BrokerService::query_broker_runtime_stats_by_request_with_credentials(

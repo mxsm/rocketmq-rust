@@ -18,7 +18,7 @@ use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::{BrokerAdmin as _, ConsumerAdmin as _, OffsetAdmin as _, RouteAdmin as _, TopicAdmin as _};
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::topic::is_system_topic;
 use rocketmq_model::topic::TopicConfig;
 use rocketmq_model::topic::DLQ_GROUP_TOPIC_PREFIX;
@@ -668,17 +668,8 @@ impl AdminSession {
     }
 }
 
-fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
-    let view = error.boundary_view();
-    let context = (!view.context().is_empty()).then(|| view.context().to_string());
-    AdminError::backend_view(
-        operation,
-        view.code().as_str(),
-        view.message(),
-        context,
-        view.http().status.as_u16(),
-        view.is_retryable(),
-    )
+fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
+    AdminError::from_error(operation, error)
 }
 
 mod batch;

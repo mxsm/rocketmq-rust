@@ -18,7 +18,7 @@ use std::time::SystemTime;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::{ConsumerAdmin as _, ReadFailureCode, RouteAdmin as _, TopicAdmin as _};
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::key_builder::KeyBuilder;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
@@ -628,7 +628,7 @@ impl ConsumerAdmin for AdminSession {
                 .examine_topic_route_info(CheetahString::from(request.topic.as_str()))
                 .await
                 .map_err(|error| backend_error("examine_topic_route_info", error))?
-                .ok_or_else(|| AdminError::not_found("topic route", request.topic.clone()))?;
+                .ok_or_else(|| AdminError::topic_route_not_found(request.topic.clone()))?;
             let mode = match request.mode {
                 consumer::ConsumerRequestMode::Pull => MessageRequestMode::Pull,
                 consumer::ConsumerRequestMode::Pop => MessageRequestMode::Pop,
@@ -1058,9 +1058,8 @@ fn map_lag_result(stats: ConsumeStats, allocation: &HashMap<MessageQueue, String
     result
 }
 
-fn source_failure(source: AdminQuerySource, logical_target: &str, error: &RocketMQError) -> AdminSourceFailure {
-    let view = error.boundary_view();
-    let code = match view.http().status.as_u16() {
+fn source_failure(source: AdminQuerySource, logical_target: &str, error: &CanonicalError) -> AdminSourceFailure {
+    let code = match crate::client_adapter::services::error_view::rocketmq_http_status(error) {
         401 | 403 => AdminQueryFailureCode::PermissionDenied,
         404 => AdminQueryFailureCode::NotFound,
         408 | 504 => AdminQueryFailureCode::Timeout,
@@ -1068,7 +1067,12 @@ fn source_failure(source: AdminQuerySource, logical_target: &str, error: &Rocket
         400 | 413 | 422 => AdminQueryFailureCode::InvalidResponse,
         _ => AdminQueryFailureCode::SourceUnavailable,
     };
-    AdminSourceFailure::new(source, code, view.is_retryable(), logical_target)
+    AdminSourceFailure::new(
+        source,
+        code,
+        crate::client_adapter::services::error_view::rocketmq_is_retryable(error),
+        logical_target,
+    )
 }
 
 fn source_failure_from_client(
@@ -1088,17 +1092,8 @@ fn source_failure_from_client(
     AdminSourceFailure::new(source, code, retryable, logical_target)
 }
 
-fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
-    let view = error.boundary_view();
-    let context = (!view.context().is_empty()).then(|| view.context().to_string());
-    AdminError::backend_view(
-        operation,
-        view.code().as_str(),
-        view.message(),
-        context,
-        view.http().status.as_u16(),
-        view.is_retryable(),
-    )
+fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
+    AdminError::from_error(operation, error)
 }
 
 #[cfg(test)]

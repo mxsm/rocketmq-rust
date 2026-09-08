@@ -16,7 +16,7 @@ use clap::Parser;
 use rocketmq_admin_core::client_adapter::services::producer::ProducerService;
 use rocketmq_admin_core::client_adapter::services::producer::SendMessageRequest;
 use rocketmq_admin_core::client_adapter::services::producer::SendMessageResult;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 
@@ -61,7 +61,7 @@ pub struct SendMessageSubCommand {
 }
 
 impl SendMessageSubCommand {
-    fn request(&self) -> RocketMQResult<SendMessageRequest> {
+    fn request(&self) -> CanonicalResult<SendMessageRequest> {
         SendMessageRequest::try_new(
             self.topic.clone(),
             self.body.clone(),
@@ -90,7 +90,7 @@ impl CommandExecute for SendMessageSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         if self.queue_id.is_some() && self.broker_name.is_none() {
             println!("Broker name must be set if the queue is chosen!");
             return Ok(());

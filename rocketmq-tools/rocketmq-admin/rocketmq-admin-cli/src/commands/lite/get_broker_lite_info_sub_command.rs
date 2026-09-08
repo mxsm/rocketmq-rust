@@ -14,7 +14,7 @@
 
 use clap::ArgGroup;
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
 
 use crate::commands::CommandExecute;
@@ -44,7 +44,7 @@ impl CommandExecute for GetBrokerLiteInfoSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = LiteService::query_broker_lite_info_by_request_with_credentials(
             self.request()?,
             credentials,
@@ -57,7 +57,7 @@ impl CommandExecute for GetBrokerLiteInfoSubCommand {
 }
 
 impl GetBrokerLiteInfoSubCommand {
-    fn request(&self) -> RocketMQResult<BrokerLiteInfoQueryRequest> {
+    fn request(&self) -> CanonicalResult<BrokerLiteInfoQueryRequest> {
         BrokerLiteInfoQueryRequest::try_new(self.broker_addr.clone(), self.cluster_name.clone())
     }
 

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::body::producer_table_info::ProducerTableInfo;
 
 use crate::commands::CommandExecute;
@@ -28,7 +28,7 @@ pub struct ProducerSubCommand {
 }
 
 impl ProducerSubCommand {
-    fn request(&self) -> RocketMQResult<ProducerInfoQueryRequest> {
+    fn request(&self) -> CanonicalResult<ProducerInfoQueryRequest> {
         ProducerInfoQueryRequest::try_new(self.broker_addr.clone())
     }
 
@@ -60,7 +60,7 @@ impl CommandExecute for ProducerSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         let result = ProducerService::query_producer_info_by_request_with_credentials(
             request.clone(),

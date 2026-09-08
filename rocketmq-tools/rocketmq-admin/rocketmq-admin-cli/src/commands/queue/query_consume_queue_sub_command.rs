@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
 
 use crate::commands::CommandExecute;
@@ -48,7 +48,7 @@ pub struct QueryCqSubCommand {
 }
 
 impl QueryCqSubCommand {
-    fn request(&self) -> RocketMQResult<QueryConsumeQueueRequest> {
+    fn request(&self) -> CanonicalResult<QueryConsumeQueueRequest> {
         QueryConsumeQueueRequest::try_new(
             self.topic.clone(),
             self.queue_id,
@@ -65,7 +65,7 @@ impl CommandExecute for QueryCqSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         let index = request.index();
         let result =

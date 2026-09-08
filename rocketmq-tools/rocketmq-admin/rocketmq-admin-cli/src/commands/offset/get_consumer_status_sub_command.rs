@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::offset::ConsumerStatusQueryRequest;
@@ -38,7 +38,7 @@ pub struct GetConsumerStatusSubCommand {
 }
 
 impl GetConsumerStatusSubCommand {
-    fn request(&self) -> RocketMQResult<ConsumerStatusQueryRequest> {
+    fn request(&self) -> CanonicalResult<ConsumerStatusQueryRequest> {
         ConsumerStatusQueryRequest::try_new(self.group.clone(), self.topic.clone(), self.origin_client_id.clone())
     }
 }
@@ -48,7 +48,7 @@ impl CommandExecute for GetConsumerStatusSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let request = self.request()?;
         let result = OffsetService::query_consumer_status_by_request_with_credentials(
             request.clone(),

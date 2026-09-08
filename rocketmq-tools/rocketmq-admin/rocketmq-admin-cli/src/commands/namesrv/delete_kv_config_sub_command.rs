@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::namesrv::KvConfigDeleteRequest;
@@ -29,7 +29,7 @@ pub struct DeleteKvConfigSubCommand {
 }
 
 impl DeleteKvConfigSubCommand {
-    fn request(&self) -> RocketMQResult<KvConfigDeleteRequest> {
+    fn request(&self) -> CanonicalResult<KvConfigDeleteRequest> {
         KvConfigDeleteRequest::try_new(self.namespace.clone(), self.key.clone())
     }
 }
@@ -39,7 +39,7 @@ impl CommandExecute for DeleteKvConfigSubCommand {
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         NameServerService::delete_kv_config_by_request(self.request()?).await?;
         println!("delete kv config from namespace success.");
         Ok(())

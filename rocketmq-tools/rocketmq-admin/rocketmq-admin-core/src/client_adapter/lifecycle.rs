@@ -25,7 +25,7 @@ use rocketmq_client_rust::AclClientRPCHook;
 use rocketmq_client_rust::DefaultMQAdminExt;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_client_rust::SigningAlgorithm;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 
 pub use rocketmq_client_rust::ClientRuntime;
 #[cfg(feature = "client-adapter")]
@@ -169,7 +169,7 @@ impl AdminSession {
 
     pub(crate) fn ensure_open(&self) -> AdminResult<()> {
         if self.closed {
-            Err(AdminError::SessionClosed)
+            Err(AdminError::session_closed())
         } else {
             Ok(())
         }
@@ -306,15 +306,6 @@ fn admin_acl_rpc_hook(credentials: &AdminCredentials) -> AclClientRPCHook {
     AclClientRPCHook::with_signature_algorithm(credentials, SigningAlgorithm::HmacSha256)
 }
 
-fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
-    let view = error.boundary_view();
-    let context = (!view.context().is_empty()).then(|| view.context().to_string());
-    AdminError::backend_view(
-        operation,
-        view.code().as_str(),
-        view.message(),
-        context,
-        view.http().status.as_u16(),
-        view.is_retryable(),
-    )
+fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
+    AdminError::from_error(operation, error)
 }

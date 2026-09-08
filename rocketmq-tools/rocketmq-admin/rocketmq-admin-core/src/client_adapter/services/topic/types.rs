@@ -23,8 +23,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::client_adapter::services::admin::AdminBuilder;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
+use rocketmq_error::Result as CanonicalResult;
 
 fn trim_optional_string(value: Option<String>) -> Option<String> {
     value
@@ -32,11 +31,15 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        )
+        .into());
     }
     Ok(CheetahString::from(value))
 }
@@ -94,11 +97,15 @@ pub struct TopicClusterQueryRequest {
 }
 
 impl TopicClusterQueryRequest {
-    pub fn try_new(topic: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(topic: impl Into<String>) -> CanonicalResult<Self> {
         let topic = topic.into();
         let topic = topic.trim();
         if topic.is_empty() {
-            return Err(ToolsError::validation_error("topic", "topic name must not be empty").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "topic",
+                "topic name must not be empty",
+            )
+            .into());
         }
 
         Ok(Self {
@@ -139,11 +146,15 @@ pub struct TopicRouteQueryRequest {
 }
 
 impl TopicRouteQueryRequest {
-    pub fn try_new(topic: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(topic: impl Into<String>) -> CanonicalResult<Self> {
         let topic = topic.into();
         let topic = topic.trim();
         if topic.is_empty() {
-            return Err(ToolsError::validation_error("topic", "topic name must not be empty").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "topic",
+                "topic name must not be empty",
+            )
+            .into());
         }
 
         Ok(Self {
@@ -185,11 +196,15 @@ pub struct TopicStatusQueryRequest {
 }
 
 impl TopicStatusQueryRequest {
-    pub fn try_new(topic: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(topic: impl Into<String>) -> CanonicalResult<Self> {
         let topic = topic.into();
         let topic = topic.trim();
         if topic.is_empty() {
-            return Err(ToolsError::validation_error("topic", "topic name must not be empty").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "topic",
+                "topic name must not be empty",
+            )
+            .into());
         }
 
         Ok(Self {
@@ -295,11 +310,16 @@ pub struct DeleteTopicRequest {
 }
 
 impl DeleteTopicRequest {
-    pub fn try_new(topic: impl Into<String>, cluster_name: Option<String>) -> RocketMQResult<Self> {
+    pub fn try_new(topic: impl Into<String>, cluster_name: Option<String>) -> CanonicalResult<Self> {
         let topic = trim_required_cheetah("topic", topic)?;
         let cluster_name = trim_optional_string(cluster_name)
             .map(CheetahString::from)
-            .ok_or_else(|| ToolsError::validation_error("clusterName", "clusterName must be provided"))?;
+            .ok_or_else(|| {
+                crate::client_adapter::services::errors::admin_validation_failed(
+                    "clusterName",
+                    "clusterName must be provided",
+                )
+            })?;
 
         Ok(Self {
             topic,
@@ -368,12 +388,12 @@ pub enum OrderConfMethod {
 }
 
 impl OrderConfMethod {
-    pub fn parse(value: impl AsRef<str>) -> RocketMQResult<Self> {
+    pub fn parse(value: impl AsRef<str>) -> CanonicalResult<Self> {
         match value.as_ref().trim().to_ascii_lowercase().as_str() {
             "put" => Ok(Self::Put),
             "get" => Ok(Self::Get),
             "delete" => Ok(Self::Delete),
-            method => Err(ToolsError::validation_error(
+            method => Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "method",
                 format!("invalid method '{method}', allowed values: put, get, delete"),
             )
@@ -396,12 +416,16 @@ impl OrderConfRequest {
         topic: impl Into<String>,
         method: impl AsRef<str>,
         order_conf: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let topic = trim_required_cheetah("topic", topic)?;
         let method = OrderConfMethod::parse(method)?;
         let order_conf = trim_optional_string(order_conf).map(CheetahString::from);
         if matches!(method, OrderConfMethod::Put) && order_conf.is_none() {
-            return Err(ToolsError::validation_error("orderConf", "orderConf must be provided for put method").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "orderConf",
+                "orderConf must be provided for put method",
+            )
+            .into());
         }
 
         Ok(Self {
@@ -458,7 +482,7 @@ pub struct AllocateMqQueryRequest {
 }
 
 impl AllocateMqQueryRequest {
-    pub fn try_new(topic: impl Into<String>, ip_list: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(topic: impl Into<String>, ip_list: impl Into<String>) -> CanonicalResult<Self> {
         let topic = trim_required_cheetah("topic", topic)?;
         let ip_list = trim_required_cheetah("ipList", ip_list)?;
         Ok(Self {
@@ -533,9 +557,13 @@ impl UpdateTopicListRequest {
     pub fn try_new(
         target: TopicTarget,
         topic_configs: Vec<rocketmq_model::common::config::TopicConfig>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         if topic_configs.is_empty() {
-            return Err(ToolsError::validation_error("topicConfigs", "topicConfigs must not be empty").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "topicConfigs",
+                "topicConfigs must not be empty",
+            )
+            .into());
         }
 
         Ok(Self {
@@ -596,14 +624,22 @@ impl UpdateTopicRequest {
         order: Option<bool>,
         unit: Option<bool>,
         has_unit_sub: Option<bool>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let topic = trim_required_cheetah("topic", topic)?;
         let perm = perm.unwrap_or(6);
         if !matches!(perm, 2 | 4 | 6) {
-            return Err(ToolsError::validation_error("perm", "perm must be 2, 4, or 6").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "perm",
+                "perm must be 2, 4, or 6",
+            )
+            .into());
         }
         if read_queue_nums == 0 || write_queue_nums == 0 {
-            return Err(ToolsError::validation_error("queueNums", "queue nums must be greater than 0").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "queueNums",
+                "queue nums must be greater than 0",
+            )
+            .into());
         }
 
         let topic_sys_flag =
@@ -630,10 +666,10 @@ impl UpdateTopicRequest {
         self
     }
 
-    pub fn with_attribute_modification(mut self, attributes: Option<String>) -> RocketMQResult<Self> {
+    pub fn with_attribute_modification(mut self, attributes: Option<String>) -> CanonicalResult<Self> {
         let attributes = trim_optional_string(attributes).unwrap_or_default();
         self.config.attributes = AttributeParser::parse_to_map(attributes.as_str())
-            .map_err(|error| ToolsError::validation_error("attributes", error))?;
+            .map_err(|error| crate::client_adapter::services::errors::admin_validation_failed("attributes", error))?;
         Ok(self)
     }
 
@@ -675,10 +711,14 @@ pub struct UpdateTopicPermRequest {
 }
 
 impl UpdateTopicPermRequest {
-    pub fn try_new(topic: impl Into<String>, target: TopicTarget, perm: i32) -> RocketMQResult<Self> {
+    pub fn try_new(topic: impl Into<String>, target: TopicTarget, perm: i32) -> CanonicalResult<Self> {
         let topic = trim_required_cheetah("topic", topic)?;
         if !matches!(perm, 2 | 4 | 6) {
-            return Err(ToolsError::validation_error("perm", "perm must be 2, 4, or 6").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "perm",
+                "perm must be 2, 4, or 6",
+            )
+            .into());
         }
 
         Ok(Self {

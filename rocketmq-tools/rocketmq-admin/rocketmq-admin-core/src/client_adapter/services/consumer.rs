@@ -45,11 +45,10 @@ use crate::client_adapter::services::broker::BrokerTarget;
 use crate::client_adapter::services::resolver::BrokerAddressResolver;
 use crate::client_adapter::services::stable_error_code;
 use crate::client_adapter::services::stable_error_message;
-use crate::client_adapter::services::RocketMQError;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use crate::core::consumer::DashboardConsumerRunningInfoRequest;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Error as CanonicalError;
+use rocketmq_error::Result as CanonicalResult;
 
 fn trim_optional_string(value: Option<String>) -> Option<String> {
     value
@@ -64,16 +63,20 @@ fn current_time_millis() -> u64 {
         .unwrap_or_default()
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        )
+        .into());
     }
     Ok(CheetahString::from(value))
 }
 
-fn target_from_options(broker_addr: Option<String>, cluster_name: Option<String>) -> RocketMQResult<BrokerTarget> {
+fn target_from_options(broker_addr: Option<String>, cluster_name: Option<String>) -> CanonicalResult<BrokerTarget> {
     let broker_addr = trim_optional_string(broker_addr);
     let cluster_name = trim_optional_string(cluster_name);
     match (broker_addr, cluster_name) {
@@ -82,12 +85,16 @@ fn target_from_options(broker_addr: Option<String>, cluster_name: Option<String>
             "clusterName",
             cluster,
         )?)),
-        (None, None) => {
-            Err(ToolsError::validation_error("target", "either brokerAddr or clusterName must be provided").into())
-        }
-        (Some(_), Some(_)) => {
-            Err(ToolsError::validation_error("target", "brokerAddr and clusterName cannot be provided together").into())
-        }
+        (None, None) => Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "target",
+            "either brokerAddr or clusterName must be provided",
+        )
+        .into()),
+        (Some(_), Some(_)) => Err(crate::client_adapter::services::errors::admin_validation_failed(
+            "target",
+            "brokerAddr and clusterName cannot be provided together",
+        )
+        .into()),
     }
 }
 
@@ -99,7 +106,7 @@ pub struct ConsumerOperationFailure {
 }
 
 impl ConsumerOperationFailure {
-    pub fn from_error(broker_addr: CheetahString, error: &RocketMQError) -> Self {
+    pub fn from_error(broker_addr: CheetahString, error: &CanonicalError) -> Self {
         Self {
             broker_addr,
             error_code: stable_error_code(error),
@@ -147,7 +154,7 @@ impl DeleteSubscriptionGroupRequest {
         cluster_name: Option<String>,
         group_name: impl Into<String>,
         remove_offset: bool,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             target: target_from_options(broker_addr, cluster_name)?,
             group_name: trim_required_cheetah("groupName", group_name)?,
@@ -185,7 +192,7 @@ pub struct ConsumerConfigQueryRequest {
 }
 
 impl ConsumerConfigQueryRequest {
-    pub fn try_new(group_name: impl Into<String>) -> RocketMQResult<Self> {
+    pub fn try_new(group_name: impl Into<String>) -> CanonicalResult<Self> {
         Ok(Self {
             group_name: trim_required_cheetah("groupName", group_name)?,
             namesrv_addr: None,
@@ -236,7 +243,7 @@ impl SetConsumeModeRequest {
         group_name: impl Into<String>,
         mode: MessageRequestMode,
         pop_share_queue_num: Option<i32>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             target: target_from_options(broker_addr, cluster_name)?,
             topic_name: trim_required_cheetah("topicName", topic_name)?,
@@ -285,7 +292,7 @@ impl UpdateSubscriptionGroupRequest {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         config: SubscriptionGroupConfig,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let request = Self {
             target: target_from_options(broker_addr, cluster_name)?,
             config,
@@ -312,9 +319,10 @@ impl UpdateSubscriptionGroupRequest {
         builder_with_namesrv(self.namesrv_addr.as_deref())
     }
 
-    fn validate(&self) -> RocketMQResult<()> {
-        validate_subscription_group_name(self.config.group_name().as_str())
-            .map_err(|error| ToolsError::validation_error("groupName", error.to_string()).into())
+    fn validate(&self) -> CanonicalResult<()> {
+        validate_subscription_group_name(self.config.group_name().as_str()).map_err(|error| {
+            crate::client_adapter::services::errors::admin_validation_failed("groupName", error.to_string()).into()
+        })
     }
 }
 
@@ -341,7 +349,7 @@ impl ConsumerRunningInfoRequest {
         broker_addr: Option<String>,
         jstack: bool,
         namesrv_addr: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             group_name: trim_required_cheetah("groupName", group_name)?,
             client_id: trim_optional_string(client_id)
@@ -406,7 +414,7 @@ impl ConsumerProgressRequest {
         show_client_ip: bool,
         cluster: Option<String>,
         namesrv_addr: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         Ok(Self {
             consumer_group: trim_optional_string(consumer_group)
                 .map(|group| trim_required_cheetah("groupName", group))
@@ -467,19 +475,27 @@ impl StartMonitoringRequest {
         include_undone_msgs: bool,
         include_running_info: bool,
         max_events: Option<usize>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         if round_count == 0 {
-            return Err(ToolsError::validation_error("roundCount", "roundCount must be greater than zero").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "roundCount",
+                "roundCount must be greater than zero",
+            )
+            .into());
         }
         if round_interval_millis == 0 {
-            return Err(ToolsError::validation_error(
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "roundIntervalMillis",
                 "roundIntervalMillis must be greater than zero",
             )
             .into());
         }
         if max_events == Some(0) {
-            return Err(ToolsError::validation_error("maxEvents", "maxEvents must be greater than zero").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "maxEvents",
+                "maxEvents must be greater than zero",
+            )
+            .into());
         }
         Ok(Self {
             namesrv_addr: trim_optional_string(namesrv_addr),
@@ -608,7 +624,7 @@ impl UpdateSubscriptionGroupListRequest {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
         configs: Vec<SubscriptionGroupConfig>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let request = Self {
             target: target_from_options(broker_addr, cluster_name)?,
             configs,
@@ -631,9 +647,10 @@ impl UpdateSubscriptionGroupListRequest {
         builder_with_namesrv(self.namesrv_addr.as_deref())
     }
 
-    fn validate(&self) -> RocketMQResult<()> {
-        validate_subscription_group_configs(&self.configs)
-            .map_err(|error| ToolsError::validation_error("groupConfigs", error.to_string()).into())
+    fn validate(&self) -> CanonicalResult<()> {
+        validate_subscription_group_configs(&self.configs).map_err(|error| {
+            crate::client_adapter::services::errors::admin_validation_failed("groupConfigs", error.to_string()).into()
+        })
     }
 }
 
@@ -644,7 +661,7 @@ impl ConsumerService {
         request: DeleteSubscriptionGroupRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ConsumerOperationResult> {
+    ) -> CanonicalResult<ConsumerOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -656,7 +673,7 @@ impl ConsumerService {
     pub(crate) async fn delete_subscription_group_with_admin(
         admin: &mut DefaultMQAdminExt,
         request: &DeleteSubscriptionGroupRequest,
-    ) -> RocketMQResult<ConsumerOperationResult> {
+    ) -> CanonicalResult<ConsumerOperationResult> {
         let mut result = ConsumerOperationResult::empty();
         let broker_addrs = resolve_master_targets(admin, request.target()).await?;
 
@@ -700,7 +717,7 @@ impl ConsumerService {
         request: ConsumerConfigQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ConsumerConfigQueryResult> {
+    ) -> CanonicalResult<ConsumerConfigQueryResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -712,7 +729,7 @@ impl ConsumerService {
     pub(crate) async fn query_consumer_config_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ConsumerConfigQueryRequest,
-    ) -> RocketMQResult<ConsumerConfigQueryResult> {
+    ) -> CanonicalResult<ConsumerConfigQueryResult> {
         let mut entries = Vec::new();
         let cluster_info = admin.examine_broker_cluster_info().await?;
         let broker_addr_table = cluster_info.broker_addr_table.unwrap_or_default();
@@ -745,7 +762,7 @@ impl ConsumerService {
         request: SetConsumeModeRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ConsumerOperationResult> {
+    ) -> CanonicalResult<ConsumerOperationResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -757,7 +774,7 @@ impl ConsumerService {
     pub(crate) async fn set_consume_mode_with_admin(
         admin: &DefaultMQAdminExt,
         request: &SetConsumeModeRequest,
-    ) -> RocketMQResult<ConsumerOperationResult> {
+    ) -> CanonicalResult<ConsumerOperationResult> {
         let mut result = ConsumerOperationResult::empty();
         let broker_addrs = resolve_master_targets(admin, &request.target).await?;
         for broker_addr in broker_addrs {
@@ -785,7 +802,7 @@ impl ConsumerService {
         request: UpdateSubscriptionGroupRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ConsumerOperationResult> {
+    ) -> CanonicalResult<ConsumerOperationResult> {
         request.validate()?;
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
@@ -798,7 +815,7 @@ impl ConsumerService {
     pub(crate) async fn update_subscription_group_with_admin(
         admin: &DefaultMQAdminExt,
         request: &UpdateSubscriptionGroupRequest,
-    ) -> RocketMQResult<ConsumerOperationResult> {
+    ) -> CanonicalResult<ConsumerOperationResult> {
         request.validate()?;
         let mut result = ConsumerOperationResult::empty();
         let broker_addrs = resolve_master_targets(admin, request.target()).await?;
@@ -820,7 +837,7 @@ impl ConsumerService {
         request: UpdateSubscriptionGroupListRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ConsumerOperationResult> {
+    ) -> CanonicalResult<ConsumerOperationResult> {
         request.validate()?;
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
@@ -833,7 +850,7 @@ impl ConsumerService {
     pub(crate) async fn update_subscription_group_list_with_admin(
         admin: &DefaultMQAdminExt,
         request: &UpdateSubscriptionGroupListRequest,
-    ) -> RocketMQResult<ConsumerOperationResult> {
+    ) -> CanonicalResult<ConsumerOperationResult> {
         request.validate()?;
         let mut result = ConsumerOperationResult::empty();
         if request.configs().is_empty() {
@@ -858,7 +875,7 @@ impl ConsumerService {
         request: ConsumerRunningInfoRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ConsumerRunningInfoResult> {
+    ) -> CanonicalResult<ConsumerRunningInfoResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -870,7 +887,7 @@ impl ConsumerService {
     pub(crate) async fn query_dashboard_consumer_running_info_with_admin(
         admin: &DefaultMQAdminExt,
         request: &DashboardConsumerRunningInfoRequest,
-    ) -> RocketMQResult<ConsumerRunningInfo> {
+    ) -> CanonicalResult<ConsumerRunningInfo> {
         admin
             .get_consumer_running_info(
                 CheetahString::from(request.consumer_group()),
@@ -884,7 +901,7 @@ impl ConsumerService {
     pub(crate) async fn query_consumer_running_info_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ConsumerRunningInfoRequest,
-    ) -> RocketMQResult<ConsumerRunningInfoResult> {
+    ) -> CanonicalResult<ConsumerRunningInfoResult> {
         let consumer_connection = admin
             .examine_consumer_connection_info(request.group_name().clone(), request.broker_addr().cloned())
             .await?;
@@ -965,7 +982,7 @@ impl ConsumerService {
         request: ConsumerProgressRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<ConsumerProgressResult> {
+    ) -> CanonicalResult<ConsumerProgressResult> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -977,7 +994,7 @@ impl ConsumerService {
     pub(crate) async fn query_consumer_progress_with_admin(
         admin: &DefaultMQAdminExt,
         request: &ConsumerProgressRequest,
-    ) -> RocketMQResult<ConsumerProgressResult> {
+    ) -> CanonicalResult<ConsumerProgressResult> {
         if let Some(consumer_group) = request.consumer_group() {
             let consume_stats = admin
                 .examine_consume_stats(
@@ -1071,7 +1088,7 @@ impl ConsumerService {
         request: StartMonitoringRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<MonitoringResult> {
+    ) -> CanonicalResult<MonitoringResult> {
         Self::start_monitoring_with_event_sink_by_request_with_credentials(request, credentials, client_runtime, |_| {
             Ok(())
         })
@@ -1083,9 +1100,9 @@ impl ConsumerService {
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
         mut event_sink: F,
-    ) -> RocketMQResult<MonitoringResult>
+    ) -> CanonicalResult<MonitoringResult>
     where
-        F: FnMut(&MonitoringEvent) -> RocketMQResult<()>,
+        F: FnMut(&MonitoringEvent) -> CanonicalResult<()>,
     {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
@@ -1099,9 +1116,9 @@ impl ConsumerService {
         admin: &DefaultMQAdminExt,
         request: &StartMonitoringRequest,
         event_sink: &mut F,
-    ) -> RocketMQResult<MonitoringResult>
+    ) -> CanonicalResult<MonitoringResult>
     where
-        F: FnMut(&MonitoringEvent) -> RocketMQResult<()>,
+        F: FnMut(&MonitoringEvent) -> CanonicalResult<()>,
     {
         let mut events = Vec::new();
         let mut truncated = false;
@@ -1316,9 +1333,9 @@ impl ConsumerService {
         truncated: &mut bool,
         event_sink: &mut F,
         event: MonitoringEvent,
-    ) -> RocketMQResult<()>
+    ) -> CanonicalResult<()>
     where
-        F: FnMut(&MonitoringEvent) -> RocketMQResult<()>,
+        F: FnMut(&MonitoringEvent) -> CanonicalResult<()>,
     {
         if max_events.is_some_and(|max_events| events.len() >= max_events) {
             *truncated = true;
@@ -1354,7 +1371,7 @@ async fn get_message_queue_allocation_result_with_admin(
 async fn resolve_master_targets(
     admin: &DefaultMQAdminExt,
     target: &BrokerTarget,
-) -> RocketMQResult<Vec<CheetahString>> {
+) -> CanonicalResult<Vec<CheetahString>> {
     match target {
         BrokerTarget::BrokerAddr(addr) => Ok(vec![addr.clone()]),
         BrokerTarget::ClusterName(cluster_name) => {

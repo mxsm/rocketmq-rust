@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
@@ -36,7 +36,7 @@ pub struct UpdateKvConfigSubCommand {
 }
 
 impl UpdateKvConfigSubCommand {
-    fn request(&self) -> RocketMQResult<KvConfigUpdateRequest> {
+    fn request(&self) -> CanonicalResult<KvConfigUpdateRequest> {
         Ok(
             KvConfigUpdateRequest::try_new(self.namespace.clone(), self.key.clone(), self.value.clone())?
                 .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()),
@@ -49,7 +49,7 @@ impl CommandExecute for UpdateKvConfigSubCommand {
         &self,
         _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         NameServerService::update_kv_config_by_request(self.request()?).await?;
         println!("update kv config in namespace success.");
         Ok(())

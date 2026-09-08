@@ -14,7 +14,7 @@
 
 use clap::ArgAction;
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_runtime::common::util_all::YYYY_MM_DD_HH_MM_SS_SSS;
 use rocketmq_runtime::common::util_all::parse_date;
@@ -116,7 +116,7 @@ impl CommandExecute for PrintMessageSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let begin_timestamp = self.begin_timestamp.as_deref().map(str::trim).map(timestamp_format);
         let end_timestamp = self.end_timestamp.as_deref().map(str::trim).map(timestamp_format);
         let request = PrintMessagesRequest::try_new(

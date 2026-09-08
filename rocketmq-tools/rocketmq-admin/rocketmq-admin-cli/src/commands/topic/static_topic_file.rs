@@ -17,8 +17,7 @@
 use std::path::Path;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_protocol::protocol::static_topic::topic_remapping_detail_wrapper;
@@ -32,9 +31,9 @@ pub fn read_mapping(path: impl AsRef<Path>) -> Option<TopicRemappingDetailWrappe
         .and_then(|contents| serde_json::from_str(&contents).ok())
 }
 
-pub fn write_mapping(wrapper: &TopicRemappingDetailWrapper, after: bool) -> RocketMQResult<CheetahString> {
-    let temp_dir =
-        EnvUtils::get_property("java.io.tmpdir").ok_or(RocketMQError::ConfigMissing { key: "java.io.tmpdir" })?;
+pub fn write_mapping(wrapper: &TopicRemappingDetailWrapper, after: bool) -> CanonicalResult<CheetahString> {
+    let temp_dir = EnvUtils::get_property("java.io.tmpdir")
+        .ok_or_else(|| crate::errors::configuration_missing("java.io.tmpdir"))?;
     write_mapping_to_dir(wrapper, after, &temp_dir)
 }
 
@@ -42,7 +41,7 @@ fn write_mapping_to_dir(
     wrapper: &TopicRemappingDetailWrapper,
     after: bool,
     temp_dir: impl AsRef<Path>,
-) -> RocketMQResult<CheetahString> {
+) -> CanonicalResult<CheetahString> {
     let suffix = if after {
         topic_remapping_detail_wrapper::SUFFIX_AFTER
     } else {
@@ -51,7 +50,7 @@ fn write_mapping_to_dir(
     let file_name = temp_dir
         .as_ref()
         .join(format!("{}-{}{}", wrapper.topic(), wrapper.get_epoch(), suffix));
-    string_to_file(&wrapper.serialize_json()?, &file_name).map_err(crate::runtime_to_rocketmq_error)?;
+    string_to_file(&wrapper.serialize_json()?, &file_name).map_err(crate::runtime_error)?;
     Ok(file_name.to_string_lossy().into_owned().into())
 }
 

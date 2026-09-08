@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::lite;
 use rocketmq_protocol::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
 use rocketmq_runtime::common::util_all::time_millis_to_human_string2;
@@ -40,7 +40,7 @@ impl CommandExecute for GetLiteTopicInfoSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = LiteService::query_lite_topic_info_by_request_with_credentials(
             self.request()?,
             credentials,
@@ -53,7 +53,7 @@ impl CommandExecute for GetLiteTopicInfoSubCommand {
 }
 
 impl GetLiteTopicInfoSubCommand {
-    fn request(&self) -> RocketMQResult<LiteTopicInfoQueryRequest> {
+    fn request(&self) -> CanonicalResult<LiteTopicInfoQueryRequest> {
         LiteTopicInfoQueryRequest::try_new(self.parent_topic.clone(), self.lite_topic.clone())
     }
 

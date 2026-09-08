@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::topic::TopicValidator;
 
 use crate::commands::CommandExecute;
@@ -40,14 +39,14 @@ pub struct DeleteTopicSubCommand {
     topic: String,
 }
 impl DeleteTopicSubCommand {
-    fn request(&self) -> RocketMQResult<DeleteTopicRequest> {
+    fn request(&self) -> CanonicalResult<DeleteTopicRequest> {
         Ok(
             DeleteTopicRequest::try_new(self.topic.clone(), self.cluster_name.clone())?
                 .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()),
         )
     }
 
-    fn print_result(result: DeleteTopicResult) -> RocketMQResult<()> {
+    fn print_result(result: DeleteTopicResult) -> CanonicalResult<()> {
         for broker_addr in &result.broker_addrs {
             println!("delete topic {} from broker {} success", result.topic, broker_addr);
         }
@@ -65,21 +64,12 @@ impl DeleteTopicSubCommand {
 
         if let Some(failure) = result.failures.first() {
             if failure.error_code == "BROKER_PERMISSION_DENIED" {
-                return Err(RocketMQError::BrokerPermissionDenied {
-                    operation: format!("delete topic {}: {}", result.topic, failure.error),
-                });
+                return Err(crate::errors::broker_permission_denied(format!(
+                    "delete topic {}: {}",
+                    result.topic, failure.error
+                )));
             }
-            return Err(RocketMQError::broker_operation_failed(
-                "DELETE_TOPIC_IN_BROKER_LIST",
-                -1,
-                format!(
-                    "failed to delete topic {} from {} broker(s); first failure at {}: {}",
-                    result.topic,
-                    result.failures.len(),
-                    failure.broker_addr,
-                    failure.error
-                ),
-            ));
+            return Err(crate::errors::broker_response_failed("DELETE_TOPIC_IN_BROKER_LIST", -1));
         }
 
         Ok(())
@@ -90,15 +80,15 @@ impl CommandExecute for DeleteTopicSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> rocketmq_error::Result<()> {
         if self.cluster_name.is_none() {
-            return Err(RocketMQError::IllegalArgument(
+            return Err(crate::errors::argument_invalid(
                 "DeleteTopicSubCommand: clusterName (-c) must be provided".into(),
             ));
         }
         let validation_result = TopicValidator::validate_topic(&self.topic);
         if !validation_result.valid() {
-            return Err(RocketMQError::IllegalArgument(format!(
+            return Err(crate::errors::argument_invalid(format!(
                 "DeleteTopicSubCommand: Invalid topic name: {}",
                 validation_result.remark().as_str()
             )));

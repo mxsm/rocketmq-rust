@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::lite::LiteService;
@@ -40,7 +40,7 @@ impl CommandExecute for TriggerLiteDispatchSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = LiteService::trigger_lite_dispatch_by_request_with_credentials(
             self.request()?,
             credentials,
@@ -53,7 +53,7 @@ impl CommandExecute for TriggerLiteDispatchSubCommand {
 }
 
 impl TriggerLiteDispatchSubCommand {
-    fn request(&self) -> RocketMQResult<TriggerLiteDispatchRequest> {
+    fn request(&self) -> CanonicalResult<TriggerLiteDispatchRequest> {
         TriggerLiteDispatchRequest::try_new(
             self.parent_topic.clone(),
             self.group.clone(),

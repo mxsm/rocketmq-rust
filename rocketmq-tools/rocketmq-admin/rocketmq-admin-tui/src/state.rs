@@ -22,8 +22,7 @@ use crate::commands::CommandCategory;
 use crate::commands::CommandSpec;
 use crate::commands::RiskLevel;
 use crate::view_model::CommandResultViewModel;
-use rocketmq_admin_core::client_adapter::services::RocketMQError;
-use rocketmq_admin_core::client_adapter::services::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusArea {
@@ -278,12 +277,12 @@ impl CommandFormState {
         self.validation_errors.is_empty()
     }
 
-    pub fn required_string(&self, name: &str) -> RocketMQResult<String> {
+    pub fn required_string(&self, name: &str) -> CanonicalResult<String> {
         self.raw_value(name)
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
-            .ok_or_else(|| RocketMQError::illegal_argument(format!("{name} is required")))
+            .ok_or_else(|| crate::errors::argument_invalid(format!("{name} is required")))
     }
 
     pub fn optional_string(&self, name: &str) -> Option<String> {
@@ -293,84 +292,84 @@ impl CommandFormState {
             .map(ToOwned::to_owned)
     }
 
-    pub fn enum_string(&self, name: &str) -> RocketMQResult<String> {
+    pub fn enum_string(&self, name: &str) -> CanonicalResult<String> {
         self.required_string(name)
     }
 
-    pub fn bool_value(&self, name: &str) -> RocketMQResult<bool> {
+    pub fn bool_value(&self, name: &str) -> CanonicalResult<bool> {
         let value = self.required_string(name)?;
         value
             .parse::<bool>()
-            .map_err(|error| RocketMQError::illegal_argument(format!("{name} must be true or false: {error}")))
+            .map_err(|error| crate::errors::argument_invalid(format!("{name} must be true or false: {error}")))
     }
 
-    pub fn number_i64(&self, name: &str) -> RocketMQResult<i64> {
+    pub fn number_i64(&self, name: &str) -> CanonicalResult<i64> {
         let value = self.required_string(name)?;
         value
             .parse::<i64>()
-            .map_err(|error| RocketMQError::illegal_argument(format!("{name} must be a signed integer: {error}")))
+            .map_err(|error| crate::errors::argument_invalid(format!("{name} must be a signed integer: {error}")))
     }
 
-    pub fn optional_i64(&self, name: &str) -> RocketMQResult<Option<i64>> {
+    pub fn optional_i64(&self, name: &str) -> CanonicalResult<Option<i64>> {
         self.optional_string(name)
             .map(|value| {
                 value.parse::<i64>().map_err(|error| {
-                    RocketMQError::illegal_argument(format!("{name} must be a signed integer: {error}"))
+                    crate::errors::argument_invalid(format!("{name} must be a signed integer: {error}"))
                 })
             })
             .transpose()
     }
 
-    pub fn number_i32(&self, name: &str) -> RocketMQResult<i32> {
+    pub fn number_i32(&self, name: &str) -> CanonicalResult<i32> {
         let value = self.number_i64(name)?;
         i32::try_from(value)
-            .map_err(|error| RocketMQError::illegal_argument(format!("{name} is out of range for i32: {error}")))
+            .map_err(|error| crate::errors::argument_invalid(format!("{name} is out of range for i32: {error}")))
     }
 
-    pub fn optional_i32(&self, name: &str) -> RocketMQResult<Option<i32>> {
+    pub fn optional_i32(&self, name: &str) -> CanonicalResult<Option<i32>> {
         self.optional_i64(name)?
             .map(|value| {
                 i32::try_from(value).map_err(|error| {
-                    RocketMQError::illegal_argument(format!("{name} is out of range for i32: {error}"))
+                    crate::errors::argument_invalid(format!("{name} is out of range for i32: {error}"))
                 })
             })
             .transpose()
     }
 
-    pub fn number_u64(&self, name: &str) -> RocketMQResult<u64> {
+    pub fn number_u64(&self, name: &str) -> CanonicalResult<u64> {
         let value = self.required_string(name)?;
         value
             .parse::<u64>()
-            .map_err(|error| RocketMQError::illegal_argument(format!("{name} must be an unsigned integer: {error}")))
+            .map_err(|error| crate::errors::argument_invalid(format!("{name} must be an unsigned integer: {error}")))
     }
 
-    pub fn number_u32(&self, name: &str) -> RocketMQResult<u32> {
+    pub fn number_u32(&self, name: &str) -> CanonicalResult<u32> {
         let value = self.number_u64(name)?;
         u32::try_from(value)
-            .map_err(|error| RocketMQError::illegal_argument(format!("{name} is out of range for u32: {error}")))
+            .map_err(|error| crate::errors::argument_invalid(format!("{name} is out of range for u32: {error}")))
     }
 
-    pub fn optional_u32(&self, name: &str) -> RocketMQResult<Option<u32>> {
+    pub fn optional_u32(&self, name: &str) -> CanonicalResult<Option<u32>> {
         self.optional_string(name)
             .map(|value| {
                 let parsed = value.parse::<u64>().map_err(|error| {
-                    RocketMQError::illegal_argument(format!("{name} must be an unsigned integer: {error}"))
+                    crate::errors::argument_invalid(format!("{name} must be an unsigned integer: {error}"))
                 })?;
                 u32::try_from(parsed).map_err(|error| {
-                    RocketMQError::illegal_argument(format!("{name} is out of range for u32: {error}"))
+                    crate::errors::argument_invalid(format!("{name} is out of range for u32: {error}"))
                 })
             })
             .transpose()
     }
 
-    pub fn timestamp_millis(&self, name: &str) -> RocketMQResult<u64> {
+    pub fn timestamp_millis(&self, name: &str) -> CanonicalResult<u64> {
         self.number_u64(name)
     }
 
-    pub fn key_value_map(&self, name: &str) -> RocketMQResult<BTreeMap<String, String>> {
+    pub fn key_value_map(&self, name: &str) -> CanonicalResult<BTreeMap<String, String>> {
         let value = self.required_string(name)?;
         parse_key_value_map(&value)
-            .map_err(RocketMQError::illegal_argument)
+            .map_err(crate::errors::argument_invalid)
             .map(|entries| entries.into_iter().collect())
     }
 }

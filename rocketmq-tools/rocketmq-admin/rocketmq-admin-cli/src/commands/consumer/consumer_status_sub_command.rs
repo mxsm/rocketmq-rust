@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use clap::Parser;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_runtime::common::file_utils::string_to_file;
 use rocketmq_runtime::common::time_utils::current_millis;
 
@@ -51,7 +51,7 @@ pub struct ConsumerStatusSubCommand {
 }
 
 impl ConsumerStatusSubCommand {
-    fn request(&self) -> RocketMQResult<ConsumerRunningInfoRequest> {
+    fn request(&self) -> CanonicalResult<ConsumerRunningInfoRequest> {
         ConsumerRunningInfoRequest::try_new(
             self.consumer_group.clone(),
             self.client_id.clone(),
@@ -61,7 +61,7 @@ impl ConsumerStatusSubCommand {
         )
     }
 
-    fn print_result(&self, result: ConsumerRunningInfoResult) -> RocketMQResult<()> {
+    fn print_result(&self, result: ConsumerRunningInfoResult) -> CanonicalResult<()> {
         if self.client_id.is_some() {
             for item in result.items {
                 println!("{}", item.running_info);
@@ -73,8 +73,7 @@ impl ConsumerStatusSubCommand {
         println!("#Index #ClientId #Version #ConsumerRunningInfoFile");
         for (index, item) in result.items.iter().enumerate() {
             let file_path = format!("{}/{}", now, item.client_id);
-            string_to_file(&format!("{}", item.running_info), file_path.clone())
-                .map_err(crate::runtime_to_rocketmq_error)?;
+            string_to_file(&format!("{}", item.running_info), file_path.clone()).map_err(crate::runtime_error)?;
             println!(
                 "{} {} version:{} {}",
                 index + 1,
@@ -104,7 +103,7 @@ impl CommandExecute for ConsumerStatusSubCommand {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let result = ConsumerService::query_consumer_running_info_by_request_with_credentials(
             self.request()?,
             credentials,

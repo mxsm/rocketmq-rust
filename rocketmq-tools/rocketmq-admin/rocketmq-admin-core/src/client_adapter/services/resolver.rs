@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
 
 use crate::client_adapter::services::errors;
@@ -29,7 +29,7 @@ impl BrokerAddressResolver {
     pub fn fetch_master_addr_by_cluster_name(
         cluster_info: &ClusterInfo,
         cluster_name: &str,
-    ) -> RocketMQResult<Vec<CheetahString>> {
+    ) -> CanonicalResult<Vec<CheetahString>> {
         let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
             errors::cluster_metadata_unavailable("cluster address table is unavailable from nameserver")
         })?;
@@ -54,7 +54,7 @@ impl BrokerAddressResolver {
     pub fn fetch_master_addr_by_broker_name(
         cluster_info: &ClusterInfo,
         broker_name: &str,
-    ) -> RocketMQResult<CheetahString> {
+    ) -> CanonicalResult<CheetahString> {
         if let Some(broker_addr_table) = &cluster_info.broker_addr_table {
             if let Some(broker_data) = broker_addr_table.get(broker_name) {
                 if let Some(master_addr) = broker_data.broker_addrs().get(&Self::MASTER_ID) {
@@ -68,7 +68,7 @@ impl BrokerAddressResolver {
     pub fn fetch_master_and_slave_addr_by_broker_name(
         cluster_info: &ClusterInfo,
         broker_name: &str,
-    ) -> RocketMQResult<Vec<CheetahString>> {
+    ) -> CanonicalResult<Vec<CheetahString>> {
         let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
             errors::broker_metadata_unavailable("broker address table is unavailable from nameserver")
         })?;
@@ -84,7 +84,7 @@ impl BrokerAddressResolver {
     pub fn fetch_broker_name_by_cluster_name(
         cluster_info: &ClusterInfo,
         cluster_name: &str,
-    ) -> RocketMQResult<Vec<String>> {
+    ) -> CanonicalResult<Vec<String>> {
         if let Some(cluster_addr_table) = &cluster_info.cluster_addr_table {
             if let Some(broker_names) = cluster_addr_table.get(cluster_name) {
                 return Ok(broker_names.iter().map(ToString::to_string).collect());
@@ -93,7 +93,7 @@ impl BrokerAddressResolver {
         Err(errors::cluster_not_found(cluster_name))
     }
 
-    pub fn fetch_broker_name_by_addr(cluster_info: &ClusterInfo, broker_addr: &str) -> RocketMQResult<String> {
+    pub fn fetch_broker_name_by_addr(cluster_info: &ClusterInfo, broker_addr: &str) -> CanonicalResult<String> {
         if let Some(broker_addr_table) = &cluster_info.broker_addr_table {
             for (broker_name, broker_data) in broker_addr_table.iter() {
                 for addr in broker_data.broker_addrs().values() {
@@ -109,7 +109,7 @@ impl BrokerAddressResolver {
     pub fn fetch_master_and_slave_addr_by_cluster_name(
         cluster_info: &ClusterInfo,
         cluster_name: &str,
-    ) -> RocketMQResult<Vec<CheetahString>> {
+    ) -> CanonicalResult<Vec<CheetahString>> {
         let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
             errors::cluster_metadata_unavailable("cluster address table is unavailable from nameserver")
         })?;
@@ -132,7 +132,7 @@ impl BrokerAddressResolver {
     pub fn fetch_master_and_slave_distinguish(
         cluster_info: &ClusterInfo,
         cluster_name: &str,
-    ) -> RocketMQResult<HashMap<CheetahString, Vec<CheetahString>>> {
+    ) -> CanonicalResult<HashMap<CheetahString, Vec<CheetahString>>> {
         let mut master_and_slave_map = HashMap::new();
 
         let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {

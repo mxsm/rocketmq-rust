@@ -27,7 +27,7 @@ mod update_topic_perm_sub_command;
 mod update_topic_sub_command;
 
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
 use crate::commands::topic::allocate_mq_sub_command::AllocateMQSubCommand;
@@ -136,7 +136,7 @@ impl CommandExecute for TopicCommands {
         &self,
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         match self {
             TopicCommands::AllocateMQ(cmd) => cmd.execute(credentials, client_runtime.clone()).await,
             TopicCommands::DeleteTopic(cmd) => cmd.execute(credentials, client_runtime.clone()).await,

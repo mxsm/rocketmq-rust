@@ -28,9 +28,8 @@ use std::collections::HashSet;
 use crate::client_adapter::services::admin::AdminBuilder;
 use crate::client_adapter::services::errors;
 use crate::client_adapter::services::mq_admin_utils::MQAdminUtils;
-use crate::client_adapter::services::RocketMQResult;
-use crate::client_adapter::services::ToolsError;
 use rocketmq_client_rust::DefaultMQAdminExt;
+use rocketmq_error::Result as CanonicalResult;
 
 const DEFAULT_BLOCK_SEQ_SIZE: i64 = 10000;
 
@@ -49,13 +48,14 @@ impl UpdateStaticTopicRequest {
         broker_names: impl Into<String>,
         queue_num: impl AsRef<str>,
         cluster_names: Option<String>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let broker_names = split_csv_required("brokerAddr", broker_names.into())?;
-        let queue_num = queue_num
-            .as_ref()
-            .trim()
-            .parse::<i32>()
-            .map_err(|_| ToolsError::validation_error("totalQueueNum", "totalQueueNum must be a valid i32"))?;
+        let queue_num = queue_num.as_ref().trim().parse::<i32>().map_err(|_| {
+            crate::client_adapter::services::errors::admin_validation_failed(
+                "totalQueueNum",
+                "totalQueueNum must be a valid i32",
+            )
+        })?;
 
         Ok(Self {
             topic: trim_required_cheetah("topic", topic)?,
@@ -111,11 +111,15 @@ impl RemappingStaticTopicRequest {
         broker_names: Option<String>,
         cluster_names: Option<String>,
         force_replace: Option<bool>,
-    ) -> RocketMQResult<Self> {
+    ) -> CanonicalResult<Self> {
         let broker_names = split_csv_optional(broker_names);
         let cluster_names = split_csv_optional(cluster_names);
         if broker_names.is_empty() && cluster_names.is_empty() {
-            return Err(ToolsError::validation_error("target", "either brokers or clusters must be provided").into());
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "target",
+                "either brokers or clusters must be provided",
+            )
+            .into());
         }
 
         Ok(Self {
@@ -165,7 +169,7 @@ pub struct StaticTopicMappingFileRequest {
 }
 
 impl StaticTopicMappingFileRequest {
-    pub fn try_new(topic: impl Into<String>, force_replace: bool) -> RocketMQResult<Self> {
+    pub fn try_new(topic: impl Into<String>, force_replace: bool) -> CanonicalResult<Self> {
         Ok(Self {
             topic: trim_required_cheetah("topic", topic)?,
             force_replace,
@@ -208,7 +212,7 @@ impl StaticTopicService {
         request: UpdateStaticTopicRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<StaticTopicMappingPlan> {
+    ) -> CanonicalResult<StaticTopicMappingPlan> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -220,7 +224,7 @@ impl StaticTopicService {
     pub(crate) async fn update_static_topic_with_admin(
         admin: &DefaultMQAdminExt,
         request: &UpdateStaticTopicRequest,
-    ) -> RocketMQResult<StaticTopicMappingPlan> {
+    ) -> CanonicalResult<StaticTopicMappingPlan> {
         let cluster_info = admin.examine_broker_cluster_info().await?;
         let cluster_addr_table = cluster_info
             .cluster_addr_table
@@ -280,7 +284,7 @@ impl StaticTopicService {
         wrapper: TopicRemappingDetailWrapper,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -293,7 +297,7 @@ impl StaticTopicService {
         admin: &DefaultMQAdminExt,
         request: &StaticTopicMappingFileRequest,
         wrapper: TopicRemappingDetailWrapper,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         TopicQueueMappingUtils::check_name_epoch_num_consistence(request.topic(), wrapper.broker_config_map())?;
         let mapping_details = TopicQueueMappingUtils::get_mapping_detail_from_config(
             wrapper.broker_config_map().values().cloned().collect(),
@@ -308,7 +312,7 @@ impl StaticTopicService {
         request: RemappingStaticTopicRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<StaticTopicMappingPlan> {
+    ) -> CanonicalResult<StaticTopicMappingPlan> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -320,7 +324,7 @@ impl StaticTopicService {
     pub(crate) async fn remapping_static_topic_with_admin(
         admin: &DefaultMQAdminExt,
         request: &RemappingStaticTopicRequest,
-    ) -> RocketMQResult<StaticTopicMappingPlan> {
+    ) -> CanonicalResult<StaticTopicMappingPlan> {
         let cluster_info = admin.examine_broker_cluster_info().await?;
         let cluster_addr_table = cluster_info
             .cluster_addr_table
@@ -394,7 +398,7 @@ impl StaticTopicService {
         mut wrapper: TopicRemappingDetailWrapper,
         credentials: Option<crate::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
             .build_and_start()
             .await?;
@@ -407,7 +411,7 @@ impl StaticTopicService {
         admin: &DefaultMQAdminExt,
         request: &StaticTopicMappingFileRequest,
         wrapper: &mut TopicRemappingDetailWrapper,
-    ) -> RocketMQResult<()> {
+    ) -> CanonicalResult<()> {
         TopicQueueMappingUtils::check_name_epoch_num_consistence(request.topic(), wrapper.broker_config_map())?;
         let mapping_details = TopicQueueMappingUtils::get_mapping_detail_from_config(
             wrapper.broker_config_map().values().cloned().collect(),
@@ -430,10 +434,14 @@ impl StaticTopicService {
     }
 }
 
-fn split_csv_required(field: &'static str, value: impl Into<String>) -> RocketMQResult<Vec<CheetahString>> {
+fn split_csv_required(field: &'static str, value: impl Into<String>) -> CanonicalResult<Vec<CheetahString>> {
     let values = split_csv_optional(Some(value.into()));
     if values.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        )
+        .into());
     }
     Ok(values)
 }
@@ -458,11 +466,15 @@ fn trim_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> RocketMQResult<CheetahString> {
+fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> CanonicalResult<CheetahString> {
     let value = value.into();
     let value = value.trim();
     if value.is_empty() {
-        return Err(ToolsError::validation_error(field, format!("{field} must not be empty")).into());
+        return Err(crate::client_adapter::services::errors::admin_validation_failed(
+            field,
+            format!("{field} must not be empty"),
+        )
+        .into());
     }
     Ok(CheetahString::from(value))
 }

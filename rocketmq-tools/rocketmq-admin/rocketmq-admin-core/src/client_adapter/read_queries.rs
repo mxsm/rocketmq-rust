@@ -22,7 +22,7 @@ use cheetah_string::CheetahString;
 use rocketmq_client_rust::DefaultMQAdminExt;
 use rocketmq_client_rust::MQAdminMessageReadExt;
 use rocketmq_client_rust::MQAdminReadExt;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
 use rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -69,7 +69,7 @@ pub(crate) async fn query_topic_producer_connections(
         .examine_topic_route_info(CheetahString::from(request.topic.as_str()))
         .await
         .map_err(|error| backend_error("examine_topic_route_info", error))?
-        .ok_or_else(|| AdminError::not_found("topic", request.topic.clone()))?;
+        .ok_or_else(|| AdminError::topic_not_found(request.topic.clone()))?;
     let (targets, mut failures) = topic_producer_targets(
         &cluster_info,
         &route,
@@ -280,13 +280,9 @@ fn topic_producer_targets(
         return Err(AdminError::not_found("topic route in selected cluster", cluster));
     }
     if requested.len() > MAX_TOPIC_PRODUCER_BROKERS {
-        return Err(AdminError::backend_view(
+        return Err(AdminError::target_limit(
             "query_topic_producer_connections",
-            "TOPIC_PRODUCER_TARGET_LIMIT_EXCEEDED",
             "Topic route has too many selected-cluster Broker targets",
-            None,
-            422,
-            false,
         ));
     }
     cluster_master_targets(cluster_info, cluster, &requested, source)
@@ -358,7 +354,7 @@ fn cluster_broker_names(cluster_info: &ClusterInfo, cluster: &str) -> AdminResul
         .as_ref()
         .and_then(|table| table.get(cluster))
         .map(|names| names.iter().map(ToString::to_string).collect())
-        .ok_or_else(|| AdminError::not_found("cluster", cluster))
+        .ok_or_else(|| AdminError::cluster_not_found(cluster))
 }
 
 fn cluster_advertises_endpoint(cluster_info: &ClusterInfo, cluster: &str, endpoint: SocketAddr) -> AdminResult<bool> {
@@ -450,9 +446,8 @@ fn failure_targets(failures: &[AdminSourceFailure]) -> Vec<String> {
         .collect()
 }
 
-fn source_failure(source: AdminQuerySource, broker_name: &str, error: &RocketMQError) -> AdminSourceFailure {
-    let view = error.boundary_view();
-    let code = match view.http().status.as_u16() {
+fn source_failure(source: AdminQuerySource, broker_name: &str, error: &CanonicalError) -> AdminSourceFailure {
+    let code = match crate::client_adapter::services::error_view::rocketmq_http_status(error) {
         401 | 403 => AdminQueryFailureCode::PermissionDenied,
         404 => AdminQueryFailureCode::NotFound,
         408 | 504 => AdminQueryFailureCode::Timeout,
@@ -460,20 +455,16 @@ fn source_failure(source: AdminQuerySource, broker_name: &str, error: &RocketMQE
         400 | 413 | 422 => AdminQueryFailureCode::InvalidResponse,
         _ => AdminQueryFailureCode::SourceUnavailable,
     };
-    AdminSourceFailure::new(source, code, view.is_retryable(), broker_name)
+    AdminSourceFailure::new(
+        source,
+        code,
+        crate::client_adapter::services::error_view::rocketmq_is_retryable(error),
+        broker_name,
+    )
 }
 
-fn backend_error(operation: &'static str, error: RocketMQError) -> AdminError {
-    let view = error.boundary_view();
-    let context = (!view.context().is_empty()).then(|| view.context().to_string());
-    AdminError::backend_view(
-        operation,
-        view.code().as_str(),
-        view.message(),
-        context,
-        view.http().status.as_u16(),
-        view.is_retryable(),
-    )
+fn backend_error(operation: &'static str, error: CanonicalError) -> AdminError {
+    AdminError::from_error(operation, error)
 }
 
 #[cfg(test)]
@@ -556,7 +547,7 @@ mod tests {
             AdminQuerySource::ProducerConnection,
         )
         .unwrap_err();
-        assert!(matches!(error, AdminError::NotFound { .. }));
+        assert_eq!(error.failure(), crate::core::AdminFailure::NotFound);
     }
 
     #[test]
@@ -570,13 +561,8 @@ mod tests {
     #[test]
     fn invalid_message_identifier_fails_without_echoing_input() {
         let error = decode_message_endpoint("not-a-message-id").unwrap_err();
-        assert!(matches!(
-            error,
-            AdminError::InvalidArgument {
-                field: "message_id",
-                ..
-            }
-        ));
+        assert_eq!(error.failure(), crate::core::AdminFailure::InvalidArgument);
+        assert_eq!(error.field(), Some("message_id"));
         assert!(!error.to_string().contains("not-a-message-id"));
     }
 
