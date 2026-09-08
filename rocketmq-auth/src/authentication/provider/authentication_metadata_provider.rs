@@ -19,10 +19,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQResult;
-
 use crate::authentication::model::user::User;
 use crate::config::AuthConfig;
+use crate::AuthServiceResult;
 
 /// Authentication metadata provider for user management.
 pub trait AuthenticationMetadataProvider: Send + Sync {
@@ -31,26 +30,27 @@ pub trait AuthenticationMetadataProvider: Send + Sync {
         &'a mut self,
         config: AuthConfig,
         metadata_service: Option<Arc<dyn Any + Send + Sync>>,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = AuthServiceResult<()>> + Send + 'a>>;
 
     /// Shutdown the provider.
-    fn shutdown(&mut self) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + '_>>;
+    fn shutdown(&mut self) -> Pin<Box<dyn Future<Output = AuthServiceResult<()>> + Send + '_>>;
 
     /// Create a user.
-    fn create_user<'a>(&'a self, user: User) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
+    fn create_user<'a>(&'a self, user: User) -> Pin<Box<dyn Future<Output = AuthServiceResult<()>> + Send + 'a>>;
 
     /// Delete a user.
-    fn delete_user<'a>(&'a self, username: &'a str) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
+    fn delete_user<'a>(&'a self, username: &'a str)
+        -> Pin<Box<dyn Future<Output = AuthServiceResult<()>> + Send + 'a>>;
 
     /// Update a user.
-    fn update_user<'a>(&'a self, user: User) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
+    fn update_user<'a>(&'a self, user: User) -> Pin<Box<dyn Future<Output = AuthServiceResult<()>> + Send + 'a>>;
 
     /// Get a user by username.
-    fn get_user<'a>(&'a self, username: &'a str) -> Pin<Box<dyn Future<Output = RocketMQResult<User>> + Send + 'a>>;
+    fn get_user<'a>(&'a self, username: &'a str) -> Pin<Box<dyn Future<Output = AuthServiceResult<User>> + Send + 'a>>;
 
     /// List users with optional filter.
     fn list_user<'a>(
         &'a self,
         filter: Option<&'a str>,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<Vec<User>>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = AuthServiceResult<Vec<User>>> + Send + 'a>>;
 }

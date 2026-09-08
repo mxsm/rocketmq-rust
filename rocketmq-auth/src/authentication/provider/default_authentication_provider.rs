@@ -18,8 +18,6 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rocketmq_error::AuthError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use tracing::debug;
 use tracing::info;
@@ -33,7 +31,11 @@ use crate::authentication::provider::authentication_metadata_provider::Authentic
 use crate::authentication::provider::local_authentication_metadata_provider::LocalAuthenticationMetadataProvider;
 use crate::config::AuthConfig;
 use crate::runtime::ProviderRegistry;
+use crate::AuthFailureKind;
 use crate::AuthMetrics;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 use super::authentication_provider::AuthenticationProvider;
 
@@ -75,7 +77,7 @@ impl DefaultAuthenticationProvider {
         &mut self,
         config: AuthConfig,
         provider_registry: ProviderRegistry,
-    ) -> RocketMQResult<()> {
+    ) -> AuthServiceResult<()> {
         self.auth_config = Some(config);
         self.metadata_service = None;
         self.authentication_context_builder = DefaultAuthenticationContextBuilder::new();
@@ -103,10 +105,11 @@ impl DefaultAuthenticationProvider {
     }
 
     /// Internal authentication logic.
-    async fn authenticate_internal(&self, context: &DefaultAuthenticationContext) -> RocketMQResult<()> {
-        let metadata_provider = self.metadata_provider.as_ref().ok_or_else(|| {
-            rocketmq_error::RocketMQError::authentication_failed("authentication metadata provider is not configured")
-        })?;
+    async fn authenticate_internal(&self, context: &DefaultAuthenticationContext) -> AuthServiceResult<()> {
+        let metadata_provider = self
+            .metadata_provider
+            .as_ref()
+            .ok_or_else(|| AuthServiceError::new(AuthOperation::Authenticate, AuthFailureKind::Unavailable))?;
         let signature_algorithm = self
             .auth_config
             .as_ref()
@@ -123,7 +126,7 @@ impl DefaultAuthenticationProvider {
             request_timestamp_expired_millis,
             self.metrics.clone(),
         );
-        handler.handle(context).await.map_err(map_auth_error)
+        handler.handle(context).await
     }
 }
 
@@ -141,7 +144,7 @@ impl AuthenticationProvider for DefaultAuthenticationProvider {
         &mut self,
         config: AuthConfig,
         metadata_service: Option<Arc<dyn Any + Send + Sync>>,
-    ) -> RocketMQResult<()> {
+    ) -> AuthServiceResult<()> {
         self.auth_config = Some(config.clone());
         self.metadata_service = metadata_service;
         self.authentication_context_builder = DefaultAuthenticationContextBuilder::new();
@@ -153,7 +156,7 @@ impl AuthenticationProvider for DefaultAuthenticationProvider {
     }
 
     /// Authenticate a request.
-    async fn authenticate(&self, context: &Self::Context) -> RocketMQResult<()> {
+    async fn authenticate(&self, context: &Self::Context) -> AuthServiceResult<()> {
         // Note: This uses handler chain pattern. For full chain support,
         // you'd need to implement a handler chain.
 
@@ -186,10 +189,6 @@ impl AuthenticationProvider for DefaultAuthenticationProvider {
             .build_from_remoting(command, None)
             .unwrap_or_else(|_| DefaultAuthenticationContext::new())
     }
-}
-
-fn map_auth_error(error: AuthError) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::authentication_failed(error.to_string())
 }
 
 #[cfg(test)]
@@ -339,6 +338,8 @@ mod tests {
 
         let result = provider.authenticate(&context).await;
 
-        assert!(result.unwrap_err().to_string().contains("Request timestamp expired"));
+        let error = result.unwrap_err();
+        assert_eq!(error.operation(), AuthOperation::Authenticate);
+        assert_eq!(error.kind(), AuthFailureKind::Expired);
     }
 }

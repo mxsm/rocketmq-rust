@@ -23,10 +23,12 @@ pub mod authentication_strategy;
 pub mod stateful_authentication_strategy;
 pub mod stateless_authentication_strategy;
 
-use rocketmq_error::AuthError;
-
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
 use crate::authentication::provider::AuthenticationProvider;
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 // Re-export the main trait and implementations for convenience
 pub use allow_all::AllowAllAuthenticationStrategy;
 pub use authentication_strategy::AuthenticationFuture;
@@ -37,12 +39,11 @@ pub use stateless_authentication_strategy::StatelessAuthenticationStrategy;
 pub(super) async fn authenticate_with_provider<P>(
     provider: &P,
     context: &DefaultAuthenticationContext,
-) -> Result<(), AuthError>
+) -> AuthServiceResult<()>
 where
     P: AuthenticationProvider<Context = DefaultAuthenticationContext> + Send + Sync + 'static,
 {
-    provider
-        .authenticate(context)
-        .await
-        .map_err(|source| AuthError::operation("authenticate with provider", source))
+    provider.authenticate(context).await.map_err(|source| {
+        AuthServiceError::with_source(AuthOperation::Authenticate, AuthFailureKind::Unavailable, source)
+    })
 }

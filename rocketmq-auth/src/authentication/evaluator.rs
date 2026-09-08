@@ -17,10 +17,9 @@
 //! This module provides the `AuthenticationEvaluator` which acts as the main entry point
 //! for authentication evaluation, coordinating authentication strategies.
 
-use rocketmq_error::AuthError;
-
 use crate::authentication::strategy::AuthenticationStrategy;
 use crate::authorization::context::authentication_context::AuthenticationContext;
+use crate::AuthServiceResult;
 
 /// Authentication evaluator - main entry point for authentication.
 ///
@@ -79,7 +78,7 @@ where
     /// Evaluate authentication for the given context.
     ///
     /// This method delegates to the underlying authentication strategy.
-    /// Returns `Ok(())` if authentication succeeds, or an `AuthError` if it fails.
+    /// Returns `Ok(())` if authentication succeeds, or an `AuthServiceError` if it fails.
     ///
     /// # Arguments
     ///
@@ -88,7 +87,7 @@ where
     /// # Returns
     ///
     /// * `Ok(())` - Authentication succeeded
-    /// * `Err(AuthError)` - Authentication failed with a specific error
+    /// * `Err(AuthServiceError)` - Authentication failed with a specific error
     ///
     /// # Example
     ///
@@ -96,7 +95,7 @@ where
     /// let context = DefaultAuthenticationContext::new();
     /// evaluator.evaluate(&context)?;
     /// ```
-    pub async fn evaluate(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
+    pub async fn evaluate(&self, context: &dyn AuthenticationContext) -> AuthServiceResult<()> {
         self.authentication_strategy.authenticate(context).await
     }
 
@@ -125,8 +124,9 @@ mod tests {
                 if self.should_succeed {
                     Ok(())
                 } else {
-                    Err(AuthError::AuthenticationFailed(
-                        "Test authentication failed".to_string(),
+                    Err(crate::AuthServiceError::new(
+                        crate::AuthOperation::Authenticate,
+                        crate::AuthFailureKind::Unauthenticated,
                     ))
                 }
             })
@@ -160,11 +160,9 @@ mod tests {
         let result = evaluator.evaluate(&context).await;
         assert!(result.is_err());
 
-        if let Err(AuthError::AuthenticationFailed(msg)) = result {
-            assert_eq!(msg, "Test authentication failed");
-        } else {
-            panic!("Expected AuthenticationFailed error");
-        }
+        let error = result.expect_err("authentication must fail");
+        assert_eq!(error.operation(), crate::AuthOperation::Authenticate);
+        assert_eq!(error.kind(), crate::AuthFailureKind::Unauthenticated);
     }
 
     #[tokio::test]

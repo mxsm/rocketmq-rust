@@ -39,12 +39,12 @@
 //! ```rust,ignore
 //! use rocketmq_auth::AuthenticationStrategy;
 //! use rocketmq_auth::AuthenticationContext;
-//! use rocketmq_error::AuthError;
+//! use rocketmq_auth::AuthServiceResult;
 //!
 //! struct AkSkAuthenticationStrategy;
 //!
 //! impl AuthenticationStrategy for AkSkAuthenticationStrategy {
-//!     fn authenticate(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
+//!     fn authenticate(&self, context: &dyn AuthenticationContext) -> AuthServiceResult<()> {
 //!         // Validate access key and secret key
 //!         // ...
 //!         Ok(())
@@ -55,9 +55,8 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use rocketmq_error::AuthError;
-
 use crate::authorization::context::authentication_context::AuthenticationContext;
+use crate::AuthServiceResult;
 
 /// Authentication strategy trait.
 ///
@@ -77,8 +76,8 @@ use crate::authorization::context::authentication_context::AuthenticationContext
 ///
 /// # Error Handling
 ///
-/// Authentication failures should return an appropriate `AuthError` variant
-/// with clear context about the failure reason. Never use `panic!` or `unwrap()`
+/// Authentication failures should return an `AuthServiceError` with a bounded
+/// failure kind. Never use `panic!` or `unwrap()`
 /// in production implementations.
 ///
 /// # Examples
@@ -87,12 +86,12 @@ use crate::authorization::context::authentication_context::AuthenticationContext
 ///
 /// ```rust,ignore
 /// use rocketmq_auth::AuthenticationStrategy;
-/// use rocketmq_error::AuthError;
+/// use rocketmq_auth::AuthServiceResult;
 ///
 /// struct AllowAllAuthenticationStrategy;
 ///
 /// impl AuthenticationStrategy for AllowAllAuthenticationStrategy {
-///     fn authenticate(&self, _context: &dyn AuthenticationContext) -> Result<(), AuthError> {
+///     fn authenticate(&self, _context: &dyn AuthenticationContext) -> AuthServiceResult<()> {
 ///         // Allow all authentication attempts (for testing only!)
 ///         Ok(())
 ///     }
@@ -104,46 +103,46 @@ use crate::authorization::context::authentication_context::AuthenticationContext
 /// ```rust,ignore
 /// use rocketmq_auth::AuthenticationStrategy;
 /// use rocketmq_auth::DefaultAuthenticationContext;
-/// use rocketmq_error::AuthError;
+/// use rocketmq_auth::{AuthFailureKind, AuthOperation, AuthServiceError, AuthServiceResult};
 ///
 /// struct AkSkAuthenticationStrategy {
 ///     user_provider: Arc<dyn UserProvider>,
 /// }
 ///
 /// impl AuthenticationStrategy for AkSkAuthenticationStrategy {
-///     fn authenticate(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
+///     fn authenticate(&self, context: &dyn AuthenticationContext) -> AuthServiceResult<()> {
 ///         // Downcast to DefaultAuthenticationContext
 ///         let ctx = context.as_any()
 ///             .downcast_ref::<DefaultAuthenticationContext>()
-///             .ok_or_else(|| AuthError::ContextCreationError("Invalid context type".into()))?;
+///             .ok_or_else(|| AuthServiceError::new(AuthOperation::Authenticate, AuthFailureKind::InvalidInput))?;
 ///
 ///         // Extract username and signature
 ///         let username = ctx.username()
-///             .ok_or_else(|| AuthError::InvalidCredential("Missing username".into()))?;
+///             .ok_or_else(|| AuthServiceError::new(AuthOperation::Authenticate, AuthFailureKind::Unauthenticated))?;
 ///         let signature = ctx.signature()
-///             .ok_or_else(|| AuthError::InvalidCredential("Missing signature".into()))?;
+///             .ok_or_else(|| AuthServiceError::new(AuthOperation::Authenticate, AuthFailureKind::Unauthenticated))?;
 ///
 ///         // Retrieve user from provider
 ///         let user = self.user_provider.get_user(username.as_str())
-///             .map_err(|_| AuthError::UserNotFound(username.to_string()))?;
+///             .map_err(|source| AuthServiceError::with_source(AuthOperation::Authenticate, source.kind(), source))?;
 ///
 ///         // Validate signature
 ///         if !verify_signature(ctx.content(), user.password(), signature) {
-///             return Err(AuthError::InvalidSignature("Signature mismatch".into()));
+///             return Err(AuthServiceError::new(AuthOperation::Authenticate, AuthFailureKind::Unauthenticated));
 ///         }
 ///
 ///         Ok(())
 ///     }
 /// }
 /// ```
-pub type AuthenticationFuture<'a> = Pin<Box<dyn Future<Output = Result<(), AuthError>> + 'a>>;
+pub type AuthenticationFuture<'a> = Pin<Box<dyn Future<Output = AuthServiceResult<()>> + 'a>>;
 
 pub trait AuthenticationStrategy: Send + Sync {
     /// Authenticates a request based on the provided authentication context.
     ///
     /// This method performs authentication using credentials, metadata, and other
     /// information contained in the `AuthenticationContext`. Successful authentication
-    /// returns `Ok(())`, while failures return an appropriate `AuthError`.
+    /// returns `Ok(())`, while failures return an `AuthServiceError`.
     ///
     /// # Arguments
     ///
@@ -153,16 +152,11 @@ pub trait AuthenticationStrategy: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(())` - Authentication succeeded
-    /// * `Err(AuthError)` - Authentication failed with a specific error
+    /// * `Err(AuthServiceError)` - Authentication failed with a specific error
     ///
     /// # Error Semantics
     ///
-    /// Different error types indicate different failure modes:
-    /// - `AuthError::UserNotFound` - User does not exist in the system
-    /// - `AuthError::InvalidCredential` - Credentials are malformed or invalid
-    /// - `AuthError::InvalidSignature` - Signature verification failed
-    /// - `AuthError::InvalidUserStatus` - User account is disabled or invalid
-    /// - `AuthError::AuthenticationFailed` - Generic authentication failure
+    /// [`crate::AuthFailureKind`] provides the closed failure classification.
     ///
     /// # Thread Safety
     ///
@@ -180,12 +174,12 @@ pub trait AuthenticationStrategy: Send + Sync {
     /// ```rust,ignore
     /// use rocketmq_auth::AuthenticationStrategy;
     /// use rocketmq_auth::DefaultAuthenticationContext;
-    /// use rocketmq_error::AuthError;
+    /// use rocketmq_auth::AuthServiceResult;
     ///
     /// fn authenticate_request(
     ///     strategy: &dyn AuthenticationStrategy,
     ///     context: &dyn AuthenticationContext,
-    /// ) -> Result<(), AuthError> {
+    /// ) -> AuthServiceResult<()> {
     ///     strategy.authenticate(context)?;
     ///     println!("Authentication succeeded");
     ///     Ok(())
@@ -214,7 +208,12 @@ mod tests {
 
     impl AuthenticationStrategy for DenyAllAuthenticationStrategy {
         fn authenticate<'a>(&'a self, _context: &'a dyn AuthenticationContext) -> AuthenticationFuture<'a> {
-            Box::pin(async { Err(AuthError::AuthenticationFailed("Denied by policy".to_string())) })
+            Box::pin(async {
+                Err(crate::AuthServiceError::new(
+                    crate::AuthOperation::Authenticate,
+                    crate::AuthFailureKind::Unauthenticated,
+                ))
+            })
         }
     }
 
@@ -235,11 +234,9 @@ mod tests {
         let result = strategy.authenticate(&context).await;
         assert!(result.is_err());
 
-        if let Err(AuthError::AuthenticationFailed(msg)) = result {
-            assert_eq!(msg, "Denied by policy");
-        } else {
-            panic!("Expected AuthenticationFailed error");
-        }
+        let error = result.expect_err("deny strategy must reject authentication");
+        assert_eq!(error.operation(), crate::AuthOperation::Authenticate);
+        assert_eq!(error.kind(), crate::AuthFailureKind::Unauthenticated);
     }
 
     #[tokio::test]

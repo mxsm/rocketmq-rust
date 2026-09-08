@@ -16,9 +16,13 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use rocketmq_error::AuthError;
 use serde::Deserialize;
 use serde::Serialize;
+
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SignatureAlgorithm {
@@ -78,11 +82,11 @@ impl SignatureAlgorithm {
 /// # Returns
 ///
 /// Base64-encoded signature
-pub fn cal_signature(content: &[u8], secret_key: &str) -> Result<String, AuthError> {
+pub fn cal_signature(content: &[u8], secret_key: &str) -> AuthServiceResult<String> {
     cal_signature_with_algorithm(content, secret_key, SignatureAlgorithm::default())
 }
 
-pub fn cal_signature_segments<'a, I>(segments: I, secret_key: &str) -> Result<String, AuthError>
+pub fn cal_signature_segments<'a, I>(segments: I, secret_key: &str) -> AuthServiceResult<String>
 where
     I: IntoIterator<Item = &'a [u8]>,
 {
@@ -93,7 +97,7 @@ pub fn cal_signature_with_algorithm(
     content: &[u8],
     secret_key: &str,
     algorithm: SignatureAlgorithm,
-) -> Result<String, AuthError> {
+) -> AuthServiceResult<String> {
     cal_signature_segments_with_algorithm([content], secret_key, algorithm)
 }
 
@@ -101,7 +105,7 @@ pub fn cal_signature_segments_with_algorithm<'a, I>(
     segments: I,
     secret_key: &str,
     algorithm: SignatureAlgorithm,
-) -> Result<String, AuthError>
+) -> AuthServiceResult<String>
 where
     I: IntoIterator<Item = &'a [u8]>,
 {
@@ -112,8 +116,9 @@ where
     match algorithm {
         SignatureAlgorithm::HmacSha1 => {
             type HmacSha1 = Hmac<sha1::Sha1>;
-            let mut mac = HmacSha1::new_from_slice(secret_key.as_bytes())
-                .map_err(|source| AuthError::operation("initialize HMAC-SHA1 signer", source))?;
+            let mut mac = HmacSha1::new_from_slice(secret_key.as_bytes()).map_err(|source| {
+                AuthServiceError::with_source(AuthOperation::Authenticate, AuthFailureKind::Internal, source)
+            })?;
             for segment in segments {
                 mac.update(segment);
             }
@@ -121,8 +126,9 @@ where
         }
         SignatureAlgorithm::HmacSha256 => {
             type HmacSha256 = Hmac<sha2::Sha256>;
-            let mut mac = HmacSha256::new_from_slice(secret_key.as_bytes())
-                .map_err(|source| AuthError::operation("initialize HMAC-SHA256 signer", source))?;
+            let mut mac = HmacSha256::new_from_slice(secret_key.as_bytes()).map_err(|source| {
+                AuthServiceError::with_source(AuthOperation::Authenticate, AuthFailureKind::Internal, source)
+            })?;
             for segment in segments {
                 mac.update(segment);
             }
@@ -130,8 +136,9 @@ where
         }
         SignatureAlgorithm::HmacMd5 => {
             type HmacMd5 = Hmac<md5::Md5>;
-            let mut mac = HmacMd5::new_from_slice(secret_key.as_bytes())
-                .map_err(|source| AuthError::operation("initialize HMAC-MD5 signer", source))?;
+            let mut mac = HmacMd5::new_from_slice(secret_key.as_bytes()).map_err(|source| {
+                AuthServiceError::with_source(AuthOperation::Authenticate, AuthFailureKind::Internal, source)
+            })?;
             for segment in segments {
                 mac.update(segment);
             }

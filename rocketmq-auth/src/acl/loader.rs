@@ -20,8 +20,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::BlockingExecutor;
 use tokio::fs;
 
@@ -31,6 +29,10 @@ use crate::migration::alc::plain_access_config::PlainAccessConfig;
 use crate::migration::alc::plain_access_data::DataVersion;
 use crate::migration::alc::plain_access_data::PlainAccessData;
 use crate::runtime_bridge::AuthBlockingExecutor;
+use crate::AuthFailureKind;
+use crate::AuthOperation;
+use crate::AuthServiceError;
+use crate::AuthServiceResult;
 
 #[derive(Clone, Debug)]
 pub struct FileAclConfigLoader {
@@ -54,19 +56,21 @@ impl FileAclConfigLoader {
         }
     }
 
-    pub async fn load_with_fingerprint(&self) -> RocketMQResult<(AclConfig, AclConfigFingerprint)> {
+    pub async fn load_with_fingerprint(&self) -> AuthServiceResult<(AclConfig, AclConfigFingerprint)> {
         let files = self.discover_files().await?;
         let (config, fingerprint) = load_files(files).await?;
         validate_acl_config(&config)?;
         Ok((config, fingerprint))
     }
 
-    pub async fn discover_files(&self) -> RocketMQResult<Vec<PathBuf>> {
+    pub async fn discover_files(&self) -> AuthServiceResult<Vec<PathBuf>> {
         let roots = self.roots.clone();
         self.blocking
             .spawn_io("auth.acl.discover_files", move || discover_acl_files(&roots))
             .await
-            .map_err(|error| RocketMQError::storage_read_failed("auth.acl.discover_files", error.to_string()))?
+            .map_err(|source| {
+                AuthServiceError::with_source(AuthOperation::ReadMetadata, AuthFailureKind::Unavailable, source)
+            })?
     }
 }
 
@@ -75,7 +79,7 @@ impl FileAclConfigStore {
         Self { file: file.into() }
     }
 
-    pub async fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> RocketMQResult<()>
+    pub async fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> AuthServiceResult<()>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -87,7 +91,10 @@ impl FileAclConfigStore {
             .map(CheetahString::from)
             .collect();
         if addresses.is_empty() {
-            return Err(RocketMQError::illegal_argument("The globalWhiteAddrs is blank"));
+            return Err(AuthServiceError::new(
+                AuthOperation::ManageMetadata,
+                AuthFailureKind::InvalidInput,
+            ));
         }
 
         let mut data = self.load_plain_access_data().await?;
@@ -96,61 +103,51 @@ impl FileAclConfigStore {
         self.write_plain_access_data(&data).await
     }
 
-    async fn load_plain_access_data(&self) -> RocketMQResult<PlainAccessData> {
+    async fn load_plain_access_data(&self) -> AuthServiceResult<PlainAccessData> {
         let bytes = match fs::read(&self.file).await {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(PlainAccessData::default()),
-            Err(error) => {
-                return Err(RocketMQError::StorageReadFailed {
-                    path: self.file.display().to_string(),
-                    reason: error.to_string(),
-                });
-            }
+            Err(error) => return Err(AuthServiceError::storage_read_failed(error)),
         };
 
         if bytes.iter().all(u8::is_ascii_whitespace) {
             return Ok(PlainAccessData::default());
         }
 
-        serde_yaml::from_slice(&bytes)
-            .map_err(|error| RocketMQError::deserialization_failed("YAML", format!("{}: {error}", self.file.display())))
+        serde_yaml::from_slice(&bytes).map_err(|source| {
+            AuthServiceError::with_source(AuthOperation::DecodeMetadata, AuthFailureKind::InvalidData, source)
+        })
     }
 
-    async fn write_plain_access_data(&self, data: &PlainAccessData) -> RocketMQResult<()> {
-        let content = serde_yaml::to_string(data).map_err(|error| {
-            RocketMQError::Serialization(rocketmq_error::SerializationError::encode_failed(
-                "YAML",
-                error.to_string(),
-            ))
+    async fn write_plain_access_data(&self, data: &PlainAccessData) -> AuthServiceResult<()> {
+        let content = serde_yaml::to_string(data).map_err(|source| {
+            AuthServiceError::with_source(AuthOperation::EncodeMetadata, AuthFailureKind::InvalidData, source)
         })?;
 
         if let Some(parent) = self.file.parent() {
-            fs::create_dir_all(parent).await.map_err(|error| {
-                RocketMQError::storage_write_failed(parent.display().to_string(), error.to_string())
-            })?;
+            fs::create_dir_all(parent)
+                .await
+                .map_err(AuthServiceError::storage_write_failed)?;
         }
 
         if fs::metadata(&self.file).await.is_ok() {
             let backup = backup_file_path(&self.file);
-            fs::copy(&self.file, &backup).await.map_err(|error| {
-                RocketMQError::storage_write_failed(backup.display().to_string(), error.to_string())
-            })?;
+            fs::copy(&self.file, &backup)
+                .await
+                .map_err(AuthServiceError::storage_write_failed)?;
         }
 
         let temp_file = temp_file_path(&self.file);
         fs::write(&temp_file, content)
             .await
-            .map_err(|error| RocketMQError::storage_write_failed(temp_file.display().to_string(), error.to_string()))?;
+            .map_err(AuthServiceError::storage_write_failed)?;
 
         match fs::rename(&temp_file, &self.file).await {
             Ok(()) => Ok(()),
-            Err(rename_error) => {
-                fs::copy(&temp_file, &self.file).await.map_err(|error| {
-                    RocketMQError::storage_write_failed(
-                        self.file.display().to_string(),
-                        format!("{error}; rename failed first: {rename_error}"),
-                    )
-                })?;
+            Err(_rename_error) => {
+                fs::copy(&temp_file, &self.file)
+                    .await
+                    .map_err(AuthServiceError::storage_write_failed)?;
                 let _ = fs::remove_file(&temp_file).await;
                 Ok(())
             }
@@ -158,7 +155,7 @@ impl FileAclConfigStore {
     }
 }
 
-async fn load_files(files: Vec<PathBuf>) -> RocketMQResult<(AclConfig, AclConfigFingerprint)> {
+async fn load_files(files: Vec<PathBuf>) -> AuthServiceResult<(AclConfig, AclConfigFingerprint)> {
     let mut accounts = Vec::new();
     let mut global_white_addrs = Vec::new();
     let mut seen_access_keys = HashSet::new();
@@ -166,19 +163,15 @@ async fn load_files(files: Vec<PathBuf>) -> RocketMQResult<(AclConfig, AclConfig
 
     for file in files {
         file.hash(&mut hasher);
-        let bytes = fs::read(&file)
-            .await
-            .map_err(|error| RocketMQError::StorageReadFailed {
-                path: file.display().to_string(),
-                reason: error.to_string(),
-            })?;
+        let bytes = fs::read(&file).await.map_err(AuthServiceError::storage_read_failed)?;
         bytes.hash(&mut hasher);
         if bytes.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
 
-        let data: PlainAccessData = serde_yaml::from_slice(&bytes)
-            .map_err(|error| RocketMQError::deserialization_failed("YAML", format!("{}: {error}", file.display())))?;
+        let data: PlainAccessData = serde_yaml::from_slice(&bytes).map_err(|source| {
+            AuthServiceError::with_source(AuthOperation::DecodeMetadata, AuthFailureKind::InvalidData, source)
+        })?;
 
         global_white_addrs.extend(data.global_white_remote_addresses().iter().cloned());
         extend_accounts(&mut accounts, &mut seen_access_keys, data.accounts());
@@ -209,7 +202,7 @@ fn extend_accounts(
     }
 }
 
-fn discover_acl_files(roots: &[PathBuf]) -> RocketMQResult<Vec<PathBuf>> {
+fn discover_acl_files(roots: &[PathBuf]) -> AuthServiceResult<Vec<PathBuf>> {
     let mut files = Vec::new();
     for root in roots {
         collect_acl_files(root, &mut files)?;
@@ -217,11 +210,8 @@ fn discover_acl_files(roots: &[PathBuf]) -> RocketMQResult<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn collect_acl_files(path: &Path, files: &mut Vec<PathBuf>) -> RocketMQResult<()> {
-    let metadata = std::fs::metadata(path).map_err(|error| RocketMQError::StorageReadFailed {
-        path: path.display().to_string(),
-        reason: error.to_string(),
-    })?;
+fn collect_acl_files(path: &Path, files: &mut Vec<PathBuf>) -> AuthServiceResult<()> {
+    let metadata = std::fs::metadata(path).map_err(AuthServiceError::storage_read_failed)?;
 
     if metadata.is_file() {
         if is_acl_yaml(path) {
@@ -232,14 +222,8 @@ fn collect_acl_files(path: &Path, files: &mut Vec<PathBuf>) -> RocketMQResult<()
 
     if metadata.is_dir() {
         let mut entries = Vec::new();
-        for entry in std::fs::read_dir(path).map_err(|error| RocketMQError::StorageReadFailed {
-            path: path.display().to_string(),
-            reason: error.to_string(),
-        })? {
-            let entry = entry.map_err(|error| RocketMQError::StorageReadFailed {
-                path: path.display().to_string(),
-                reason: error.to_string(),
-            })?;
+        for entry in std::fs::read_dir(path).map_err(AuthServiceError::storage_read_failed)? {
+            let entry = entry.map_err(AuthServiceError::storage_read_failed)?;
             entries.push(entry.path());
         }
         entries.sort();
@@ -451,7 +435,7 @@ accounts:
             .await
             .unwrap_err();
 
-        assert!(error.to_string().contains("secretKey must not be blank"));
+        assert_eq!(error.kind(), AuthFailureKind::InvalidConfiguration);
         assert!(!error.to_string().contains("secret="));
     }
 

@@ -17,15 +17,14 @@
 //! This module defines the high-level interface for managing authentication metadata,
 //! including user creation, modification, deletion, and query operations.
 
-use rocketmq_error::RocketMQResult;
-
 use crate::authentication::model::user::User;
 use crate::config::AuthConfig;
+use crate::AuthServiceResult;
 
 /// Type alias for manager operation results.
 ///
 /// Following the same pattern as `AuthorizationMetadataManager::ManagerResult`.
-pub type ManagerResult<T> = RocketMQResult<T>;
+pub type ManagerResult<T> = AuthServiceResult<T>;
 
 /// Authentication metadata manager trait.
 ///
@@ -94,7 +93,7 @@ pub trait AuthenticationMetadataManager: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(())` - User created successfully
-    /// * `Err(RocketMQError)` - Validation failed or creation error
+    /// * `Err(AuthServiceError)` - Validation failed or creation error
     ///
     /// # Errors
     ///
@@ -112,7 +111,7 @@ pub trait AuthenticationMetadataManager: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(())` - User updated successfully
-    /// * `Err(RocketMQError)` - Validation failed or update error
+    /// * `Err(AuthServiceError)` - Validation failed or update error
     async fn update_user(&self, user: User) -> ManagerResult<()>;
 
     /// Delete a user by username.
@@ -124,7 +123,7 @@ pub trait AuthenticationMetadataManager: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(())` - User deleted successfully
-    /// * `Err(RocketMQError)` - Username is blank or deletion error
+    /// * `Err(AuthServiceError)` - Username is blank or deletion error
     async fn delete_user(&self, username: &str) -> ManagerResult<()>;
 
     /// Get a user by username.
@@ -136,7 +135,7 @@ pub trait AuthenticationMetadataManager: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(User)` - User found
-    /// * `Err(RocketMQError)` - Username is blank or user not found
+    /// * `Err(AuthServiceError)` - Username is blank or user not found
     async fn get_user(&self, username: &str) -> ManagerResult<User>;
 
     /// List users with optional filtering.
@@ -148,7 +147,7 @@ pub trait AuthenticationMetadataManager: Send + Sync {
     /// # Returns
     ///
     /// * `Ok(Vec<User>)` - List of matching users
-    /// * `Err(RocketMQError)` - Query error
+    /// * `Err(AuthServiceError)` - Query error
     async fn list_users(&self, filter: Option<&str>) -> ManagerResult<Vec<User>>;
 
     /// Check if a user is a super user.
@@ -161,6 +160,6 @@ pub trait AuthenticationMetadataManager: Send + Sync {
     ///
     /// * `Ok(true)` - User exists and is a super user
     /// * `Ok(false)` - User doesn't exist or is not a super user
-    /// * `Err(RocketMQError)` - Query error
+    /// * `Err(AuthServiceError)` - Query error
     async fn is_super_user(&self, username: &str) -> ManagerResult<bool>;
 }

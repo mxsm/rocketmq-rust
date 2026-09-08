@@ -167,7 +167,6 @@ pub mod bench_support {
     use std::time::Instant;
 
     use cheetah_string::CheetahString;
-    use rocketmq_error::RocketMQResult;
     use rocketmq_runtime::ChildServiceContext;
     use rocketmq_runtime::ShutdownReport;
     use serde::Serialize;
@@ -175,6 +174,9 @@ pub mod bench_support {
     use crate::authentication::provider::authentication_metadata_provider::AuthenticationMetadataProvider;
     use crate::config::AuthConfig;
     use crate::runtime::AuthRuntimeBuilder;
+    use crate::AuthFailureKind;
+    use crate::AuthServiceError;
+    use crate::AuthServiceResult;
 
     static NEXT_ACL_WATCHER_PROBE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -192,12 +194,10 @@ pub mod bench_support {
 
     pub async fn run_auth_acl_watcher_lifecycle_probe(
         service_context: ChildServiceContext,
-    ) -> RocketMQResult<AuthAclWatcherLifecycleProbe> {
+    ) -> AuthServiceResult<AuthAclWatcherLifecycleProbe> {
         let root = unique_acl_watcher_probe_root();
         let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).map_err(|error| {
-            rocketmq_error::RocketMQError::storage_write_failed(root.display().to_string(), error.to_string())
-        })?;
+        fs::create_dir_all(&root).map_err(AuthServiceError::storage_write_failed)?;
         let acl_file = root.join("plain_acl.yml");
         write_acl_file(&acl_file, "first")?;
 
@@ -222,9 +222,7 @@ pub mod bench_support {
                     break true;
                 }
                 Ok(_) => {}
-                Err(rocketmq_error::RocketMQError::Authentication(rocketmq_error::AuthError::UserNotFound(
-                    username,
-                ))) if username == "alice" => {}
+                Err(error) if error.kind() == AuthFailureKind::NotFound => {}
                 Err(error) => return Err(error),
             }
             if Instant::now() >= deadline {
@@ -280,7 +278,7 @@ pub mod bench_support {
         std::env::temp_dir().join(format!("rocketmq-auth-acl-watcher-{}-{id}", std::process::id()))
     }
 
-    fn write_acl_file(path: &std::path::Path, secret: &str) -> RocketMQResult<()> {
+    fn write_acl_file(path: &std::path::Path, secret: &str) -> AuthServiceResult<()> {
         let content = format!(
             r#"
 accounts:
@@ -289,9 +287,7 @@ accounts:
 "#
         );
         let temp_file = temp_acl_file_path(path);
-        fs::write(&temp_file, content).map_err(|error| {
-            rocketmq_error::RocketMQError::storage_write_failed(temp_file.display().to_string(), error.to_string())
-        })?;
+        fs::write(&temp_file, content).map_err(AuthServiceError::storage_write_failed)?;
 
         replace_acl_file(&temp_file, path)
     }
@@ -306,17 +302,13 @@ accounts:
     }
 
     #[cfg(not(windows))]
-    fn replace_acl_file(temp_file: &std::path::Path, path: &std::path::Path) -> RocketMQResult<()> {
-        fs::rename(temp_file, path).map_err(|error| {
-            rocketmq_error::RocketMQError::storage_write_failed(path.display().to_string(), error.to_string())
-        })
+    fn replace_acl_file(temp_file: &std::path::Path, path: &std::path::Path) -> AuthServiceResult<()> {
+        fs::rename(temp_file, path).map_err(AuthServiceError::storage_write_failed)
     }
 
     #[cfg(windows)]
-    fn replace_acl_file(temp_file: &std::path::Path, path: &std::path::Path) -> RocketMQResult<()> {
-        fs::copy(temp_file, path).map_err(|error| {
-            rocketmq_error::RocketMQError::storage_write_failed(path.display().to_string(), error.to_string())
-        })?;
+    fn replace_acl_file(temp_file: &std::path::Path, path: &std::path::Path) -> AuthServiceResult<()> {
+        fs::copy(temp_file, path).map_err(AuthServiceError::storage_write_failed)?;
         let _ = fs::remove_file(temp_file);
         Ok(())
     }

@@ -20,8 +20,6 @@ use std::sync::RwLock;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
@@ -70,9 +68,12 @@ use crate::migration::alc::plain_access_config::PlainAccessConfig;
 use crate::migration::alc::plain_permission_manager::PlainPermissionManager;
 use crate::permission::Permission;
 use crate::project_authorization_error;
+use crate::AuthFailureKind;
 use crate::AuthMetrics;
 use crate::AuthMetricsSnapshot;
+use crate::AuthOperation;
 use crate::AuthServiceError;
+use crate::AuthServiceResult;
 use crate::RemotingAuthContext;
 
 const ACCESS_KEY: &str = "AccessKey";
@@ -89,11 +90,14 @@ pub struct ProviderRegistry {
 }
 
 impl ProviderRegistry {
-    pub fn local(config: &AuthConfig) -> RocketMQResult<Self> {
+    pub fn local(config: &AuthConfig) -> AuthServiceResult<Self> {
         Self::local_with_metadata_io(config, None)
     }
 
-    pub fn local_with_metadata_io(config: &AuthConfig, metadata_io: Option<MetadataIoActor>) -> RocketMQResult<Self> {
+    pub fn local_with_metadata_io(
+        config: &AuthConfig,
+        metadata_io: Option<MetadataIoActor>,
+    ) -> AuthServiceResult<Self> {
         validate_metadata_provider_name(
             "authenticationMetadataProvider",
             config.authentication_metadata_provider.as_str(),
@@ -122,9 +126,7 @@ impl ProviderRegistry {
             LocalAuthorizationMetadataProvider::new,
             LocalAuthorizationMetadataProvider::with_metadata_io,
         );
-        authorization_metadata_provider
-            .initialize(config.clone(), None)
-            .map_err(map_authorization_error)?;
+        authorization_metadata_provider.initialize(config.clone(), None)?;
 
         Ok(Self {
             authentication_metadata_provider,
@@ -143,14 +145,14 @@ impl ProviderRegistry {
         config: &AuthConfig,
         metadata_io: MetadataIoActor,
         blocking: BlockingExecutor,
-    ) -> RocketMQResult<Self> {
+    ) -> AuthServiceResult<Self> {
         let config = config.clone();
         blocking
             .spawn_io("auth.provider-registry.load", move || {
                 Self::local_with_metadata_io(&config, Some(metadata_io))
             })
             .await
-            .map_err(|error| RocketMQError::auth_config_invalid("authMetadataBootstrap", error.to_string()))?
+            .map_err(AuthServiceError::metadata_io)?
     }
 
     pub fn authentication_metadata_provider(&self) -> Arc<LocalAuthenticationMetadataProvider> {
@@ -161,34 +163,28 @@ impl ProviderRegistry {
         self.authorization_metadata_provider.clone()
     }
 
-    fn set_acl_white_list_snapshot(&self, snapshot: WhiteList) -> RocketMQResult<()> {
+    fn set_acl_white_list_snapshot(&self, snapshot: WhiteList) -> AuthServiceResult<()> {
         let mut guard = self
             .acl_white_list_snapshot
             .write()
-            .map_err(|_| RocketMQError::StorageLockFailed {
-                path: "auth.acl.white_list_snapshot".to_owned(),
-            })?;
+            .map_err(|_| AuthServiceError::storage_lock_failed("auth.acl.white-list"))?;
         *guard = snapshot;
         Ok(())
     }
 
-    fn acl_managed_access_keys(&self) -> RocketMQResult<HashSet<String>> {
+    fn acl_managed_access_keys(&self) -> AuthServiceResult<HashSet<String>> {
         let guard = self
             .acl_managed_access_keys
             .read()
-            .map_err(|_| RocketMQError::StorageLockFailed {
-                path: "auth.acl.managed_access_keys".to_owned(),
-            })?;
+            .map_err(|_| AuthServiceError::storage_lock_failed("auth.acl.managed-keys"))?;
         Ok(guard.clone())
     }
 
-    fn set_acl_managed_access_keys(&self, access_keys: HashSet<String>) -> RocketMQResult<()> {
+    fn set_acl_managed_access_keys(&self, access_keys: HashSet<String>) -> AuthServiceResult<()> {
         let mut guard = self
             .acl_managed_access_keys
             .write()
-            .map_err(|_| RocketMQError::StorageLockFailed {
-                path: "auth.acl.managed_access_keys".to_owned(),
-            })?;
+            .map_err(|_| AuthServiceError::storage_lock_failed("auth.acl.managed-keys"))?;
         *guard = access_keys;
         Ok(())
     }
@@ -214,23 +210,19 @@ impl ProviderRegistry {
         self.metrics.snapshot()
     }
 
-    fn acl_fingerprint(&self) -> RocketMQResult<Option<AclConfigFingerprint>> {
+    fn acl_fingerprint(&self) -> AuthServiceResult<Option<AclConfigFingerprint>> {
         let guard = self
             .acl_fingerprint
             .read()
-            .map_err(|_| RocketMQError::StorageLockFailed {
-                path: "auth.acl.fingerprint".to_owned(),
-            })?;
+            .map_err(|_| AuthServiceError::storage_lock_failed("auth.acl.fingerprint"))?;
         Ok(*guard)
     }
 
-    fn set_acl_fingerprint(&self, fingerprint: Option<AclConfigFingerprint>) -> RocketMQResult<()> {
+    fn set_acl_fingerprint(&self, fingerprint: Option<AclConfigFingerprint>) -> AuthServiceResult<()> {
         let mut guard = self
             .acl_fingerprint
             .write()
-            .map_err(|_| RocketMQError::StorageLockFailed {
-                path: "auth.acl.fingerprint".to_owned(),
-            })?;
+            .map_err(|_| AuthServiceError::storage_lock_failed("auth.acl.fingerprint"))?;
         *guard = fingerprint;
         Ok(())
     }
@@ -239,19 +231,17 @@ impl ProviderRegistry {
         &self,
         access_key: Option<&str>,
         source_ip: Option<&str>,
-    ) -> RocketMQResult<bool> {
+    ) -> AuthServiceResult<bool> {
         let guard = self
             .acl_white_list_snapshot
             .read()
-            .map_err(|_| RocketMQError::StorageLockFailed {
-                path: "auth.acl.white_list_snapshot".to_owned(),
-            })?;
+            .map_err(|_| AuthServiceError::storage_lock_failed("auth.acl.white-list"))?;
         let matched = guard.matches(access_key, source_ip);
         self.metrics.record_whitelist_check(matched);
         Ok(matched)
     }
 
-    pub fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> RocketMQResult<u64>
+    pub fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> AuthServiceResult<u64>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -260,9 +250,7 @@ impl ProviderRegistry {
             let guard = self
                 .acl_white_list_snapshot
                 .read()
-                .map_err(|_| RocketMQError::StorageLockFailed {
-                    path: "auth.acl.white_list_snapshot".to_owned(),
-                })?;
+                .map_err(|_| AuthServiceError::storage_lock_failed("auth.acl.white-list"))?;
             guard.with_global_patterns(addresses)
         };
         self.set_acl_white_list_snapshot(updated_snapshot)?;
@@ -270,7 +258,7 @@ impl ProviderRegistry {
     }
 }
 
-fn validate_metadata_provider_name(key: &'static str, configured: &str, supported: &[&str]) -> RocketMQResult<()> {
+fn validate_metadata_provider_name(key: &'static str, configured: &str, supported: &[&str]) -> AuthServiceResult<()> {
     let configured = configured.trim();
     if configured.is_empty()
         || supported
@@ -280,14 +268,8 @@ fn validate_metadata_provider_name(key: &'static str, configured: &str, supporte
         return Ok(());
     }
 
-    Err(RocketMQError::auth_config_invalid(
-        key,
-        format!(
-            "unsupported metadata provider '{}'; supported providers: {}",
-            configured,
-            supported.join(", ")
-        ),
-    ))
+    let _ = (key, configured, supported);
+    Err(AuthServiceError::configuration_error("unsupported metadata provider"))
 }
 
 pub struct AuthRuntimeBuilder {
@@ -317,14 +299,14 @@ impl AuthRuntimeBuilder {
         self
     }
 
-    pub async fn build(self) -> RocketMQResult<AuthRuntime> {
+    pub async fn build(self) -> AuthServiceResult<AuthRuntime> {
         let metadata_io = match self.metadata_io {
             Some(metadata_io) => metadata_io,
             None => MetadataIoConfig::default()
                 .into_plan()
                 .expect("default metadata I/O config is valid")
                 .start(&self.service_context.component("auth.metadata-io"))
-                .map_err(|error| RocketMQError::auth_config_invalid("authRuntime", error.to_string()))?,
+                .map_err(|error| AuthServiceError::provider_failed(AuthOperation::Initialize, error))?,
         };
         let provider_registry = match self.provider_registry {
             Some(provider_registry) => provider_registry,
@@ -362,9 +344,7 @@ impl AuthRuntimeBuilder {
         authentication_provider.initialize_with_registry(self.config.clone(), provider_registry.clone())?;
 
         let mut authorization_provider = DefaultAuthorizationProvider::new();
-        authorization_provider
-            .initialize_with_registry(self.config.clone(), provider_registry.clone())
-            .map_err(map_authorization_error)?;
+        authorization_provider.initialize_with_registry(self.config.clone(), provider_registry.clone())?;
 
         let authentication_service = AuthenticationService::new(
             self.config.clone(),
@@ -435,7 +415,7 @@ impl AuthRuntime {
         }
     }
 
-    pub async fn reload_acl_file(&self) -> RocketMQResult<usize> {
+    pub async fn reload_acl_file(&self) -> AuthServiceResult<usize> {
         Ok(load_configured_acl_file(
             &self.provider_registry,
             &self.config,
@@ -450,7 +430,7 @@ impl AuthRuntime {
         &self,
         access_key: Option<&str>,
         source_ip: Option<&str>,
-    ) -> RocketMQResult<bool> {
+    ) -> AuthServiceResult<bool> {
         self.provider_registry
             .is_acl_white_remote_address(access_key, source_ip)
     }
@@ -475,7 +455,7 @@ impl AuthRuntime {
         self.provider_registry.metrics_snapshot()
     }
 
-    pub fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> RocketMQResult<u64>
+    pub fn update_global_white_remote_addresses<I, S>(&self, addresses: I) -> AuthServiceResult<u64>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -483,16 +463,16 @@ impl AuthRuntime {
         self.provider_registry.update_global_white_remote_addresses(addresses)
     }
 
-    pub async fn shutdown(&self) -> RocketMQResult<()> {
+    pub async fn shutdown(&self) -> AuthServiceResult<()> {
         let _ = self.shutdown_with_report().await?;
         Ok(())
     }
 
-    pub async fn shutdown_with_report(&self) -> RocketMQResult<Option<ShutdownReport>> {
+    pub async fn shutdown_with_report(&self) -> AuthServiceResult<Option<ShutdownReport>> {
         let report = self.service_context.task_group().shutdown(Duration::from_secs(5)).await;
         report
             .assert_no_task_leak()
-            .map_err(|error| RocketMQError::auth_hot_reload_failed("authRuntime", error))?;
+            .map_err(|_error| AuthServiceError::new(AuthOperation::MaintainService, AuthFailureKind::Internal))?;
         Ok(Some(report))
     }
 
@@ -507,7 +487,7 @@ impl AuthRuntime {
         &self,
         auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
-    ) -> RocketMQResult<()> {
+    ) -> AuthServiceResult<()> {
         self.check_remoting_for_code(auth_context, command, command.code())
             .await
     }
@@ -519,7 +499,7 @@ impl AuthRuntime {
         auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
         original_code: i32,
-    ) -> RocketMQResult<()> {
+    ) -> AuthServiceResult<()> {
         let mut authoritative_command = command.clone();
         authoritative_command.set_code_mut(original_code);
         self.check_remoting_with_source_ip(
@@ -537,11 +517,12 @@ impl AuthRuntime {
         command: &RemotingCommand,
         source_ip: Option<&str>,
         channel_id: Option<&str>,
-    ) -> RocketMQResult<()> {
+    ) -> AuthServiceResult<()> {
         auth_context.validate()?;
         if source_ip != auth_context.source_ip() || channel_id != auth_context.channel_id() {
-            return Err(RocketMQError::authentication_failed(
-                "remoting authentication metadata does not match its typed ingress context",
+            return Err(AuthServiceError::new(
+                AuthOperation::Authenticate,
+                AuthFailureKind::Unauthenticated,
             ));
         }
         if self.is_acl_white_remote_address(access_key_from_command(command), source_ip)? {
@@ -608,7 +589,7 @@ impl AuthRuntime {
         &self,
         command: &RemotingCommand,
         channel_id: Option<&str>,
-    ) -> RocketMQResult<CheetahString> {
+    ) -> AuthServiceResult<CheetahString> {
         self.authentication_service
             .authenticate_maintenance_principal(command, channel_id)
             .await
@@ -650,7 +631,7 @@ impl AuthenticationService {
         &self,
         command: &RemotingCommand,
         channel_id: Option<&str>,
-    ) -> RocketMQResult<()> {
+    ) -> AuthServiceResult<()> {
         if !self.config.authentication_enabled {
             return Ok(());
         }
@@ -661,7 +642,7 @@ impl AuthenticationService {
 
         let context = self.builder.build_from_remoting(command, channel_id).map_err(|error| {
             self.metrics.record_authentication_result(false);
-            RocketMQError::authentication_failed(error.to_string())
+            error
         })?;
         self.provider.authenticate(&context).await
     }
@@ -677,21 +658,22 @@ impl AuthenticationService {
         &self,
         command: &RemotingCommand,
         channel_id: Option<&str>,
-    ) -> RocketMQResult<CheetahString> {
+    ) -> AuthServiceResult<CheetahString> {
         if !self.config.authentication_enabled {
-            return Err(RocketMQError::authentication_failed(
-                "maintenance authentication is disabled",
+            return Err(AuthServiceError::new(
+                AuthOperation::Authenticate,
+                AuthFailureKind::Unauthenticated,
             ));
         }
         let context = self.builder.build_from_remoting(command, channel_id).map_err(|error| {
             self.metrics.record_authentication_result(false);
-            RocketMQError::authentication_failed(error.to_string())
+            error
         })?;
         let principal = context
             .username()
             .filter(|username| !username.trim().is_empty())
             .cloned()
-            .ok_or_else(|| RocketMQError::authentication_failed("maintenance request is anonymous"))?;
+            .ok_or_else(|| AuthServiceError::new(AuthOperation::Authenticate, AuthFailureKind::Unauthenticated))?;
         self.provider.authenticate(&context).await?;
         Ok(principal)
     }
@@ -719,7 +701,7 @@ impl AuthorizationService {
         &self,
         auth_context: &RemotingAuthContext,
         command: &RemotingCommand,
-    ) -> RocketMQResult<()> {
+    ) -> AuthServiceResult<()> {
         auth_context.validate()?;
         if !self.config.authorization_enabled {
             return Ok(());
@@ -734,15 +716,11 @@ impl AuthorizationService {
             .new_contexts_from_remoting_command(auth_context, command)
             .map_err(|error| {
                 self.metrics.record_authorization_result(false);
-                map_authorization_error(error)
+                error
             })?;
 
         for context in contexts {
-            let decision = self
-                .provider
-                .authorize(&context)
-                .await
-                .map_err(map_authorization_error)?;
+            let decision = self.provider.authorize(&context).await?;
             require_authorization(decision)?;
         }
 
@@ -812,7 +790,7 @@ async fn load_configured_acl_file(
     config: &AuthConfig,
     blocking: rocketmq_runtime::BlockingExecutor,
     force: bool,
-) -> RocketMQResult<AclReloadResult> {
+) -> AuthServiceResult<AclReloadResult> {
     let acl_file = config.acl_file.as_str().trim();
     if acl_file.is_empty() {
         return Ok(AclReloadResult {
@@ -851,7 +829,7 @@ async fn load_configured_acl_file(
     result
 }
 
-async fn migrate_auth_from_v1(provider_registry: &ProviderRegistry, config: &AuthConfig) -> RocketMQResult<usize> {
+async fn migrate_auth_from_v1(provider_registry: &ProviderRegistry, config: &AuthConfig) -> AuthServiceResult<usize> {
     if !config.migrate_auth_from_v1_enabled {
         return Ok(0);
     }
@@ -862,7 +840,7 @@ async fn migrate_auth_from_v1(provider_registry: &ProviderRegistry, config: &Aut
 async fn migrate_auth_from_v1_manager(
     provider_registry: &ProviderRegistry,
     plain_permission_manager: &PlainPermissionManager,
-) -> RocketMQResult<usize> {
+) -> AuthServiceResult<usize> {
     let acl_config = plain_permission_manager.get_all_acl_config()?;
     apply_acl_config(provider_registry, &acl_config).await
 }
@@ -910,7 +888,7 @@ fn start_acl_file_watcher(
     Some(AclFileWatchHandle { scheduled_tasks })
 }
 
-async fn apply_acl_config(provider_registry: &ProviderRegistry, acl_config: &AclConfig) -> RocketMQResult<usize> {
+async fn apply_acl_config(provider_registry: &ProviderRegistry, acl_config: &AclConfig) -> AuthServiceResult<usize> {
     let prepared_config = prepare_acl_config(acl_config)?;
     let previous_access_keys = provider_registry.acl_managed_access_keys()?;
     let authn_provider = provider_registry.authentication_metadata_provider();
@@ -920,19 +898,13 @@ async fn apply_acl_config(provider_registry: &ProviderRegistry, acl_config: &Acl
         upsert_user(authn_provider.clone(), prepared_account.user.clone()).await?;
         match &prepared_account.acl {
             Some(acl) => upsert_acl(authz_provider.clone(), &prepared_account.user, acl.clone()).await?,
-            None => authz_provider
-                .delete_acl(&prepared_account.user)
-                .await
-                .map_err(map_authorization_error)?,
+            None => authz_provider.delete_acl(&prepared_account.user).await?,
         }
     }
 
     for stale_access_key in previous_access_keys.difference(&prepared_config.access_keys) {
         let user = User::of(stale_access_key.as_str());
-        authz_provider
-            .delete_acl(&user)
-            .await
-            .map_err(map_authorization_error)?;
+        authz_provider.delete_acl(&user).await?;
         authn_provider.delete_user(stale_access_key).await?;
     }
 
@@ -955,7 +927,7 @@ struct PreparedAclAccount {
     acl: Option<Acl>,
 }
 
-fn prepare_acl_config(acl_config: &AclConfig) -> RocketMQResult<PreparedAclConfig> {
+fn prepare_acl_config(acl_config: &AclConfig) -> AuthServiceResult<PreparedAclConfig> {
     let mut access_keys = HashSet::new();
     let mut accounts = Vec::new();
 
@@ -978,7 +950,7 @@ fn prepare_acl_config(acl_config: &AclConfig) -> RocketMQResult<PreparedAclConfi
     })
 }
 
-async fn upsert_user(provider: Arc<LocalAuthenticationMetadataProvider>, user: User) -> RocketMQResult<()> {
+async fn upsert_user(provider: Arc<LocalAuthenticationMetadataProvider>, user: User) -> AuthServiceResult<()> {
     let username = user.username().to_string();
     if provider.get_user(username.as_str()).await.is_ok() {
         provider.update_user(user).await
@@ -987,14 +959,14 @@ async fn upsert_user(provider: Arc<LocalAuthenticationMetadataProvider>, user: U
     }
 }
 
-async fn upsert_acl(provider: Arc<LocalAuthorizationMetadataProvider>, user: &User, acl: Acl) -> RocketMQResult<()> {
-    match provider.get_acl(user).await.map_err(map_authorization_error)? {
-        Some(_) => provider.update_acl(acl).await.map_err(map_authorization_error),
-        None => provider.create_acl(acl).await.map_err(map_authorization_error),
+async fn upsert_acl(provider: Arc<LocalAuthorizationMetadataProvider>, user: &User, acl: Acl) -> AuthServiceResult<()> {
+    match provider.get_acl(user).await? {
+        Some(_) => provider.update_acl(acl).await,
+        None => provider.create_acl(acl).await,
     }
 }
 
-fn user_from_plain_account(account: &PlainAccessConfig) -> RocketMQResult<User> {
+fn user_from_plain_account(account: &PlainAccessConfig) -> AuthServiceResult<User> {
     let access_key = required_plain_field(account.access_key(), "accessKey", "<missing>")?;
     let secret_key = required_plain_field(account.secret_key(), "secretKey", access_key)?;
     let user_type = if account.is_admin() {
@@ -1007,7 +979,7 @@ fn user_from_plain_account(account: &PlainAccessConfig) -> RocketMQResult<User> 
     Ok(user)
 }
 
-fn acl_from_plain_account(account: &PlainAccessConfig) -> RocketMQResult<Option<Acl>> {
+fn acl_from_plain_account(account: &PlainAccessConfig) -> AuthServiceResult<Option<Acl>> {
     let access_key = required_plain_field(account.access_key(), "accessKey", "<missing>")?;
     let mut policies = Vec::new();
     let mut default_entries = Vec::new();
@@ -1047,7 +1019,7 @@ fn acl_from_plain_account(account: &PlainAccessConfig) -> RocketMQResult<Option<
     )))
 }
 
-fn push_cluster_entry(entries: &mut Vec<PolicyEntry>, permission: &str) -> RocketMQResult<()> {
+fn push_cluster_entry(entries: &mut Vec<PolicyEntry>, permission: &str) -> AuthServiceResult<()> {
     let permission = permission.trim();
     let (actions, decision) = match permission {
         "GET" => (
@@ -1059,11 +1031,7 @@ fn push_cluster_entry(entries: &mut Vec<PolicyEntry>, permission: &str) -> Rocke
             crate::authorization::enums::decision::Decision::Deny,
         ),
         _ => {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "aclConfig",
-                value: "clusterPerm=<redacted>".to_string(),
-                reason: "clusterPerm must be GET or DENY".to_string(),
-            });
+            return Err(AuthServiceError::configuration_error("invalid cluster permission"));
         }
     };
     entries.push(PolicyEntry::of(
@@ -1119,18 +1087,17 @@ fn required_plain_field<'a>(
     value: Option<&'a cheetah_string::CheetahString>,
     field_name: &'static str,
     access_key: &str,
-) -> RocketMQResult<&'a str> {
+) -> AuthServiceResult<&'a str> {
     value
         .map(|value| value.as_str().trim())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| RocketMQError::ConfigInvalidValue {
-            key: "aclConfig",
-            value: format!("account={access_key}"),
-            reason: format!("{field_name} must not be blank"),
+        .ok_or_else(|| {
+            let _ = (field_name, access_key);
+            AuthServiceError::configuration_error("required ACL field is blank")
         })
 }
 
-async fn seed_initial_users(provider_registry: &ProviderRegistry, config: &AuthConfig) -> RocketMQResult<()> {
+async fn seed_initial_users(provider_registry: &ProviderRegistry, config: &AuthConfig) -> AuthServiceResult<()> {
     seed_init_authentication_user(provider_registry.authentication_metadata_provider(), config).await?;
     seed_inner_client_user(provider_registry.authentication_metadata_provider(), config).await
 }
@@ -1138,7 +1105,7 @@ async fn seed_initial_users(provider_registry: &ProviderRegistry, config: &AuthC
 async fn seed_init_authentication_user(
     provider: Arc<LocalAuthenticationMetadataProvider>,
     config: &AuthConfig,
-) -> RocketMQResult<()> {
+) -> AuthServiceResult<()> {
     let init_user = config.init_authentication_user.as_str().trim();
     if init_user.is_empty() {
         return Ok(());
@@ -1171,7 +1138,7 @@ async fn seed_init_authentication_user(
 async fn seed_inner_client_user(
     provider: Arc<LocalAuthenticationMetadataProvider>,
     config: &AuthConfig,
-) -> RocketMQResult<()> {
+) -> AuthServiceResult<()> {
     #[derive(serde::Deserialize)]
     struct SessionCredentials {
         #[serde(rename = "accessKey")]
@@ -1194,23 +1161,23 @@ async fn seed_inner_client_user(
     create_user_if_absent(provider, user).await
 }
 
-async fn create_user_if_absent(provider: Arc<LocalAuthenticationMetadataProvider>, user: User) -> RocketMQResult<()> {
+async fn create_user_if_absent(
+    provider: Arc<LocalAuthenticationMetadataProvider>,
+    user: User,
+) -> AuthServiceResult<()> {
     if provider.get_user(user.username().as_str()).await.is_ok() {
         return Ok(());
     }
     provider.create_user(user).await
 }
 
-fn map_authorization_error(error: AuthServiceError) -> RocketMQError {
-    RocketMQError::from(error)
-}
-
-fn require_authorization(decision: AuthorizationDecision) -> RocketMQResult<()> {
+fn require_authorization(decision: AuthorizationDecision) -> AuthServiceResult<()> {
     match decision {
         AuthorizationDecision::Allow => Ok(()),
-        AuthorizationDecision::Deny(_) => Err(RocketMQError::BrokerPermissionDenied {
-            operation: "authorize".to_owned(),
-        }),
+        AuthorizationDecision::Deny(_) => Err(AuthServiceError::new(
+            AuthOperation::Authorize,
+            AuthFailureKind::PermissionDenied,
+        )),
     }
 }
 
@@ -1256,13 +1223,12 @@ mod tests {
             AuthorizationDenial::MaintenanceRestricted,
         ] {
             let error = require_authorization(AuthorizationDecision::Deny(denial)).unwrap_err();
-            assert_eq!(error.descriptor(), &rocketmq_error::AUTH_PERMISSION_DENIED);
-            assert_eq!(error.public_message(), "Permission was denied");
-            assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 16);
-            assert!(matches!(
-                error,
-                RocketMQError::BrokerPermissionDenied { ref operation } if operation == "authorize"
-            ));
+            assert_eq!(error.operation(), AuthOperation::Authorize);
+            assert_eq!(error.kind(), AuthFailureKind::PermissionDenied);
+            let canonical = rocketmq_error::Error::from(error);
+            assert_eq!(canonical.descriptor(), &rocketmq_error::AUTH_PERMISSION_DENIED);
+            assert_eq!(canonical.to_string(), "auth.permission.denied: Permission was denied");
+            assert_eq!(canonical.descriptor().projection().remoting().code.as_i32(), 16);
         }
     }
 
@@ -1337,10 +1303,8 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(
-            matches!(error, RocketMQError::AuthConfigInvalid { key, .. } if key == "authenticationMetadataProvider")
-        );
-        assert!(error.to_string().contains("unsupported metadata provider"));
+        assert_eq!(error.operation(), AuthOperation::Initialize);
+        assert_eq!(error.kind(), AuthFailureKind::InvalidConfiguration);
     }
 
     #[test]
@@ -1391,8 +1355,8 @@ mod tests {
 
         let error = acl_from_plain_account(&account).unwrap_err();
 
-        assert!(matches!(error, RocketMQError::ConfigInvalidValue { .. }));
-        assert!(error.to_string().contains("clusterPerm must be GET or DENY"));
+        assert_eq!(error.operation(), AuthOperation::Initialize);
+        assert_eq!(error.kind(), AuthFailureKind::InvalidConfiguration);
     }
 
     #[tokio::test]
@@ -1439,10 +1403,8 @@ accounts:
             .check_remoting(&RemotingAuthContext::embedded("test-session"), &topic_mutation)
             .await
             .unwrap_err();
-        assert!(
-            matches!(error, RocketMQError::BrokerPermissionDenied { .. }),
-            "unexpected mutation denial error: {error:?}"
-        );
+        assert_eq!(error.operation(), AuthOperation::Authorize);
+        assert_eq!(error.kind(), AuthFailureKind::PermissionDenied);
 
         runtime.shutdown().await.unwrap();
     }
@@ -1900,7 +1862,9 @@ accounts:
             Err(error) => error,
         };
 
-        assert!(error.to_string().contains("users.json"));
+        assert_eq!(error.operation(), AuthOperation::DecodeMetadata);
+        assert_eq!(error.kind(), AuthFailureKind::InvalidData);
+        assert!(!error.to_string().contains("users.json"));
     }
 
     #[tokio::test]
@@ -1920,12 +1884,12 @@ accounts:
             Err(error) => error,
         };
 
-        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
+        assert_eq!(error.operation(), AuthOperation::DecodeMetadata);
+        assert_eq!(error.kind(), AuthFailureKind::InvalidData);
         assert!(!error.to_string().contains("acls.json"));
-        let RocketMQError::Shared(canonical) = error else {
-            panic!("ACL snapshot decoding must use the canonical shared error");
-        };
-        let auth_error = std::error::Error::source(canonical.as_ref())
+        let canonical = rocketmq_error::Error::from(error);
+        assert_eq!(canonical.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
+        let auth_error = std::error::Error::source(&canonical)
             .and_then(|source| source.downcast_ref::<crate::AuthServiceError>())
             .expect("canonical error must retain the auth facade source");
         assert_eq!(auth_error.operation(), crate::AuthOperation::DecodeMetadata);
@@ -2066,7 +2030,8 @@ accounts:
         .unwrap();
 
         let error = runtime.reload_acl_file().await.unwrap_err();
-        assert!(error.to_string().contains("secretKey must not be blank"));
+        assert_eq!(error.operation(), AuthOperation::Initialize);
+        assert_eq!(error.kind(), AuthFailureKind::InvalidConfiguration);
         assert_eq!(runtime.acl_generation(), generation);
 
         let user = authn_provider.get_user("alice").await.unwrap();
