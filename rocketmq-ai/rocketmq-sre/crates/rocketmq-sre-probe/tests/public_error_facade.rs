@@ -14,6 +14,7 @@
 
 use std::error::Error;
 
+use rocketmq_client_rust::ClientError;
 use rocketmq_sre_probe::ProbeAclRejection;
 use rocketmq_sre_probe::ProbeConfigRejection;
 use rocketmq_sre_probe::ProbeIdentityRejection;
@@ -36,15 +37,13 @@ fn probe_keeps_only_the_driver_as_an_operational_error() {
 
 #[test]
 fn driver_error_redacts_and_retains_the_typed_rocketmq_source() {
-    let error = ProbeDriverError::producer_start_failed(rocketmq_error::RocketMQError::invariant_violated(
-        "sensitive internal detail",
-    ));
+    let error = ProbeDriverError::producer_start_failed(ClientError::invariant_violated("sensitive internal detail"));
 
     assert_eq!(error.to_string(), "probe driver operation failed");
     assert_eq!(format!("{error:?}"), "probe driver operation failed");
     assert!(
         error
             .source()
-            .is_some_and(|source| source.downcast_ref::<rocketmq_error::RocketMQError>().is_some())
+            .is_some_and(|source| source.downcast_ref::<ClientError>().is_some())
     );
 }

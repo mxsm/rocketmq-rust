@@ -19,6 +19,7 @@ use std::time::Instant;
 
 use chrono::DateTime;
 use chrono::Utc;
+use rocketmq_client_rust::ClientError;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -144,7 +145,7 @@ enum ProbeDriverFailure {
     },
     RocketMq {
         code: &'static str,
-        source: Box<rocketmq_error::RocketMQError>,
+        source: Box<ClientError>,
     },
     Evidence {
         source: Box<crate::evidence::ProbeEvidenceFailure>,
@@ -161,37 +162,37 @@ impl ProbeDriverError {
 
     /// Wraps a RocketMQ producer-start failure without exposing its details.
     #[must_use]
-    pub fn producer_start_failed(source: rocketmq_error::RocketMQError) -> Self {
+    pub fn producer_start_failed(source: ClientError) -> Self {
         Self::rocketmq("producer_start_failed", source)
     }
 
     /// Wraps a RocketMQ message-send failure without exposing its details.
     #[must_use]
-    pub fn message_send_failed(source: rocketmq_error::RocketMQError) -> Self {
+    pub fn message_send_failed(source: ClientError) -> Self {
         Self::rocketmq("message_send_failed", source)
     }
 
     /// Wraps a RocketMQ transaction-producer start failure without exposing its details.
     #[must_use]
-    pub fn transaction_producer_start_failed(source: rocketmq_error::RocketMQError) -> Self {
+    pub fn transaction_producer_start_failed(source: ClientError) -> Self {
         Self::rocketmq("transaction_producer_start_failed", source)
     }
 
     /// Wraps a RocketMQ transaction-send failure without exposing its details.
     #[must_use]
-    pub fn transaction_send_failed(source: rocketmq_error::RocketMQError) -> Self {
+    pub fn transaction_send_failed(source: ClientError) -> Self {
         Self::rocketmq("transaction_send_failed", source)
     }
 
     /// Wraps a RocketMQ subscription failure without exposing its details.
     #[must_use]
-    pub fn consumer_subscribe_failed(source: rocketmq_error::RocketMQError) -> Self {
+    pub fn consumer_subscribe_failed(source: ClientError) -> Self {
         Self::rocketmq("consumer_subscribe_failed", source)
     }
 
     /// Wraps a RocketMQ consumer-start failure without exposing its details.
     #[must_use]
-    pub fn consumer_start_failed(source: rocketmq_error::RocketMQError) -> Self {
+    pub fn consumer_start_failed(source: ClientError) -> Self {
         Self::rocketmq("consumer_start_failed", source)
     }
 
@@ -207,7 +208,7 @@ impl ProbeDriverError {
         }
     }
 
-    fn rocketmq(code: &'static str, source: rocketmq_error::RocketMQError) -> Self {
+    fn rocketmq(code: &'static str, source: ClientError) -> Self {
         Self {
             kind: ProbeDriverFailure::RocketMq {
                 code,

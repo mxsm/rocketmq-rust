@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::ConsumeConcurrentlyStatus;
@@ -28,7 +29,6 @@ use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
 use rocketmq_client_rust::TransactionListener;
 use rocketmq_client_rust::TransactionMQProducer;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_single::Message;
@@ -292,7 +292,7 @@ impl MessageListenerConcurrently for CountingListener {
         &self,
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         let matched = messages
             .iter()
             .filter(|message| {
