@@ -16,11 +16,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_client_rust::rpc_hook_from_outbound_signer;
+use rocketmq_client_rust::ClientError;
 use rocketmq_client_rust::ClientRpcHook;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_client_rust::TelemetryHandle;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
@@ -29,6 +29,7 @@ use rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchReq
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_proxy_core::error::canonical;
 use rocketmq_proxy_core::AckMessageRequest;
 use rocketmq_proxy_core::AckMessageResultEntry;
 use rocketmq_proxy_core::ChangeInvisibleDurationPlan;
@@ -226,7 +227,8 @@ impl ClusterTaskExecutor {
             worker_context.component("client-runtime"),
             ClientRuntimeConfig::default(),
             telemetry_handle,
-        )?;
+        )
+        .map_err(|error| ProxyError::from(ClientError::into_error(error)))?;
         let base_domain_id = worker_context.task_group().id().as_u64();
         let policy = ClusterExecutionPolicy::from_config(&config);
         Self::spawn_execution(
@@ -878,18 +880,18 @@ async fn run_cluster_execution_owner(
 }
 
 fn cluster_queue_timeout(deadline: Duration) -> ProxyError {
-    RocketMQError::Timeout {
-        operation: "proxy cluster command queue",
-        timeout_ms: deadline.as_millis().clamp(1, u128::from(u64::MAX)) as u64,
-    }
+    canonical::timed_out(
+        "proxy cluster command queue",
+        deadline.as_millis().clamp(1, u128::from(u64::MAX)) as u64,
+    )
     .into()
 }
 
 fn cluster_command_timeout(deadline: Duration) -> ProxyError {
-    RocketMQError::Timeout {
-        operation: "proxy cluster command",
-        timeout_ms: deadline.as_millis().clamp(1, u128::from(u64::MAX)) as u64,
-    }
+    canonical::timed_out(
+        "proxy cluster command",
+        deadline.as_millis().clamp(1, u128::from(u64::MAX)) as u64,
+    )
     .into()
 }
 

@@ -164,7 +164,7 @@ impl ReloadableGrpcTlsAcceptor {
     }
 }
 
-fn build_acceptor(config: &GrpcTlsConfig) -> rocketmq_error::RocketMQResult<TlsAcceptor> {
+fn build_acceptor(config: &GrpcTlsConfig) -> rocketmq_error::Result<TlsAcceptor> {
     rocketmq_transport::api::build_server_acceptor_exact_with_alpn(&transport_tls_config(config), &[b"h2".to_vec()])
 }
 

@@ -16,11 +16,11 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_transport::api::ProxyProtocolConfig;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::error::canonical;
 use crate::ProxyResult;
 use crate::DEFAULT_PROXY_GRPC_PORT;
 use crate::DEFAULT_PROXY_REMOTING_PORT;
@@ -76,7 +76,7 @@ impl GrpcConfig {
 
     pub fn socket_addr(&self) -> ProxyResult<SocketAddr> {
         self.listen_addr.parse().map_err(|error| {
-            RocketMQError::illegal_argument(format!(
+            canonical::argument(format!(
                 "invalid proxy gRPC listen address '{}': {error}",
                 self.listen_addr
             ))
@@ -184,12 +184,7 @@ impl GrpcTlsConfig {
 }
 
 fn grpc_tls_config_error(key: &'static str, reason: &'static str) -> crate::ProxyError {
-    RocketMQError::ConfigInvalidValue {
-        key,
-        value: "<configured>".to_owned(),
-        reason: reason.to_owned(),
-    }
-    .into()
+    canonical::configuration_invalid(key, reason).into()
 }
 
 /// Normalized RocketMQ remoting ingress configuration.
@@ -220,7 +215,7 @@ impl RemotingConfig {
 
     pub fn socket_addr(&self) -> ProxyResult<SocketAddr> {
         self.listen_addr.parse().map_err(|error| {
-            RocketMQError::illegal_argument(format!(
+            canonical::argument(format!(
                 "invalid proxy remoting listen address '{}': {error}",
                 self.listen_addr
             ))

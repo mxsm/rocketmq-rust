@@ -18,11 +18,11 @@ use std::path::Path;
 use cheetah_string::CheetahString;
 use rocketmq_auth::AuthConfig as RocketmqAuthConfig;
 use rocketmq_auth::SignatureAlgorithm;
-use rocketmq_error::RocketMQError;
 use rocketmq_observability::ObservabilityOverrides;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::error::canonical;
 use crate::error::ProxyResult;
 #[cfg(feature = "cluster-mode")]
 pub use rocketmq_proxy_cluster::ClusterConfig;
@@ -303,14 +303,8 @@ impl ProxyConfig {
     }
 }
 
-fn proxy_config_parse_failed(stage: &'static str, error: config::ConfigError) -> RocketMQError {
-    RocketMQError::ConfigParseFailed {
-        key: "proxy.config",
-        reason: format!(
-            "failed to {stage} proxy configuration: {}",
-            rocketmq_runtime::common::parse_config_file::render_safe_config_error(&error)
-        ),
-    }
+fn proxy_config_parse_failed(_stage: &'static str, error: config::ConfigError) -> rocketmq_error::Error {
+    canonical::configuration_parse_failed_with_source("proxy.config", error)
 }
 
 #[cfg(test)]
@@ -588,17 +582,11 @@ observability:
 
     fn assert_proxy_config_parse_error(error: crate::error::ProxyError, expected_stage: &str) {
         match error {
-            crate::error::ProxyError::RocketMQ(error) => {
+            crate::error::ProxyError::Canonical(error) => {
                 assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_PARSE_FAILED);
-                match error {
-                    RocketMQError::ConfigParseFailed { key, reason } => {
-                        assert_eq!(key, "proxy.config");
-                        assert!(reason.contains(expected_stage), "{reason}");
-                    }
-                    other => panic!("expected ConfigParseFailed, got {other:?}"),
-                }
+                assert!(std::error::Error::source(&error).is_some(), "{expected_stage}");
             }
-            other => panic!("expected RocketMQ proxy error, got {other:?}"),
+            other => panic!("expected canonical proxy error, got {other:?}"),
         }
     }
 }

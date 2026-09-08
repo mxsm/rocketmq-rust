@@ -28,7 +28,6 @@ use rocketmq_error::ErrorContext;
 use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::PublicErrorView;
 use rocketmq_error::RemotingResponseCode;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::CORE_INTERNAL_FAILURE;
 use rocketmq_error::CORE_SERIALIZATION_FAILED;
 use rocketmq_error::PROTOCOL_BODY_INVALID;
@@ -131,9 +130,11 @@ use tracing::debug;
 use tracing::warn;
 
 use crate::auth::is_auth_error;
+use crate::auth::map_auth_service_error;
 use crate::auth::ProxyAuthRuntime;
 use crate::config::ProxyConfig;
 use crate::context::ProxyContext;
+use crate::error::canonical;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::message::message_ext_from_core;
@@ -289,7 +290,10 @@ impl<P> RequestProcessor for ProxyRequestProcessor<P>
 where
     P: MessagingProcessor + 'static,
 {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(
+        &mut self,
+        request: &mut RemotingRequest,
+    ) -> std::result::Result<HandlerOutcome, rocketmq_error::SharedError> {
         let original_code = request.original_identity().original_code();
         let mut auth_command = request.command().clone();
         auth_command.set_code_ref(original_code);
@@ -310,7 +314,7 @@ where
                         &self.dispatcher.command_factory,
                         request.original_identity().original_opaque(),
                         "parse remoting authentication context",
-                        ProxyError::from(error),
+                        map_auth_service_error(error),
                     ));
                 }
             };
@@ -448,27 +452,27 @@ where
     }
 }
 
-fn protocol_no_response_contract_error(error: TransportContractViolation) -> RocketMQError {
+fn protocol_no_response_contract_error(error: TransportContractViolation) -> Error {
     match error {
         TransportContractViolation::ProtocolNoResponseOneWayRequest => {
-            RocketMQError::illegal_argument("protocol no-response is unavailable for one-way requests")
+            canonical::argument("protocol no-response is unavailable for one-way requests")
         }
         TransportContractViolation::ProtocolNoResponseUnsupported { .. } => {
-            RocketMQError::illegal_argument("protocol no-response reason is unsupported")
+            canonical::argument("protocol no-response reason is unsupported")
         }
-        _ => RocketMQError::illegal_argument("protocol no-response contract is invalid"),
+        _ => canonical::argument("protocol no-response contract is invalid"),
     }
 }
 
-fn remoting_response(response: RemotingCommand) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+fn remoting_response(response: RemotingCommand) -> std::result::Result<HandlerOutcome, rocketmq_error::SharedError> {
     RemotingResponse::from_command(response)
         .map(HandlerOutcome::Reply)
         .map_err(|error| {
-            RocketMQError::Shared(Arc::new(owner_error_with_source(
+            Arc::new(owner_error_with_source(
                 &CORE_INTERNAL_FAILURE,
                 "build Proxy remoting response",
                 error,
-            )))
+            ))
         })
 }
 
@@ -947,7 +951,7 @@ where
         &self,
         context: &ProxyContext,
         request: &mut RemotingRequest,
-    ) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    ) -> std::result::Result<HandlerOutcome, rocketmq_error::SharedError> {
         let route =
             rocketmq_proxy_core::remoting::classify_remoting_request(request.original_identity().original_code());
         if matches!(route, RemotingIngressRoute::UnregisterClient) {
@@ -985,19 +989,21 @@ where
                 Ok(EmbeddedDispatchOutcome::NoReply { reason, .. }) => request
                     .protocol_no_response(reason)
                     .map(HandlerOutcome::NoReply)
-                    .map_err(protocol_no_response_contract_error),
-                Ok(EmbeddedDispatchOutcome::Deferred { .. }) => Err(RocketMQError::invariant_violated(
+                    .map_err(|error| Arc::new(protocol_no_response_contract_error(error))),
+                Ok(EmbeddedDispatchOutcome::Deferred { .. }) => Err(Arc::new(canonical::internal(
+                    "dispatch_remoting_backend",
                     "terminal Proxy backend route returned an unresolved deferred outcome",
-                )),
+                ))),
                 Err(error) => remoting_response(proxy_operation_error_response(
                     &self.command_factory,
                     request.original_identity().original_opaque(),
                     "dispatch remoting backend request",
                     error,
                 )),
-                Ok(_) => Err(RocketMQError::invariant_violated(
+                Ok(_) => Err(Arc::new(canonical::internal(
+                    "dispatch_remoting_backend",
                     "Proxy backend returned an unsupported embedded dispatch outcome",
-                )),
+                ))),
             };
         }
 
@@ -2024,7 +2030,7 @@ fn authentication_required_response(command_factory: &RemotingCommandFactory, op
 
 enum ProxyDrainRequestError {
     MissingBody,
-    InvalidBody(RocketMQError),
+    InvalidBody(Error),
     UnsupportedSchema,
 }
 
@@ -2208,7 +2214,7 @@ fn build_send_message_request(
 ) -> crate::error::ProxyResult<SendMessageRequest> {
     let topic = topic_identity(header);
     let body = request.body().cloned().ok_or_else(|| {
-        RocketMQError::request_body_invalid(
+        canonical::request_body_invalid(
             "sendMessage",
             format!("sendMessage request body is missing for topic '{}'", header.topic),
         )
@@ -2219,7 +2225,7 @@ fn build_send_message_request(
         let mut batch_body = body;
         let messages = MessageDecoder::decode_messages(&mut batch_body);
         if messages.is_empty() {
-            return Err(RocketMQError::request_body_invalid(
+            return Err(canonical::request_body_invalid(
                 "sendBatchMessage",
                 format!("sendBatchMessage request body is empty for topic '{}'", header.topic),
             )
@@ -2561,11 +2567,7 @@ fn proxy_operation_error_response(
 ) -> RemotingCommand {
     match error {
         ProxyError::BrokerResponse(error) => descriptor_error_response(command_factory, opaque, &error),
-        ProxyError::RocketMQ(error @ RocketMQError::TopicNotExist { .. })
-        | ProxyError::RocketMQ(error @ RocketMQError::RouteNotFound { .. })
-        | ProxyError::RocketMQ(error @ RocketMQError::SubscriptionGroupNotExist { .. })
-        | ProxyError::RocketMQ(error @ RocketMQError::BrokerPermissionDenied { .. })
-        | ProxyError::RocketMQ(error @ RocketMQError::TopicSendingForbidden { .. }) => {
+        ProxyError::Canonical(error) if canonical_error_replies_directly(&error) => {
             let context = error.context();
             let view = PublicErrorView::try_new(error.descriptor(), &context)
                 .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
@@ -2577,9 +2579,8 @@ fn proxy_operation_error_response(
                 },
             )
         }
-        ProxyError::RocketMQ(error) if is_auth_error(&error) => {
-            let context = error.context();
-            let view = PublicErrorView::try_new(error.descriptor(), &context)
+        ProxyError::SharedCanonical(error) if canonical_error_replies_directly(error.as_ref()) => {
+            let view = PublicErrorView::try_new(error.descriptor(), error.context())
                 .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
             error_response(
                 view,
@@ -2589,21 +2590,9 @@ fn proxy_operation_error_response(
                 },
             )
         }
-        ProxyError::RocketMQ(error)
-            if error.descriptor().projection().remoting().code == RemotingResponseCode::SystemError =>
-        {
-            let context = error.context();
-            let view = PublicErrorView::try_new(error.descriptor(), &context)
-                .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
-            error_response(
-                view,
-                RemotingErrorTarget::Reply {
-                    factory: command_factory,
-                    opaque,
-                },
-            )
+        source @ ProxyError::Canonical(_) | source @ ProxyError::SharedCanonical(_) => {
+            upstream_failure_response(command_factory, opaque, operation, source)
         }
-        source @ ProxyError::RocketMQ(_) => upstream_failure_response(command_factory, opaque, operation, source),
         local => {
             let context = local.context();
             let view = PublicErrorView::try_new(local.descriptor(), &context)
@@ -2617,6 +2606,15 @@ fn proxy_operation_error_response(
             )
         }
     }
+}
+
+fn canonical_error_replies_directly(error: &Error) -> bool {
+    let descriptor = error.descriptor();
+    is_auth_error(error)
+        || descriptor == &rocketmq_error::BROKER_TOPIC_NOT_FOUND
+        || descriptor == &rocketmq_error::ROUTE_TOPIC_NOT_FOUND
+        || descriptor == &rocketmq_error::BROKER_SUBSCRIPTION_GROUP_NOT_FOUND
+        || descriptor.projection().remoting().code == RemotingResponseCode::SystemError
 }
 
 #[cfg(test)]
@@ -2640,8 +2638,6 @@ mod tests {
     use rocketmq_auth::User;
     use rocketmq_auth::UserStatus;
     use rocketmq_auth::UserType;
-    use rocketmq_error::AuthError;
-    use rocketmq_error::RocketMQError;
     use rocketmq_model::common::boundary_type::BoundaryType;
     use rocketmq_model::common::entity::ClientGroup;
     use rocketmq_model::common::message::message_enum::MessageRequestMode;
@@ -2730,6 +2726,7 @@ mod tests {
     use crate::config::ProxyMode;
     use crate::config::RemotingConfig;
     use crate::context::ProxyContext;
+    use crate::error::canonical;
     use crate::processor::AckMessageRequest;
     use crate::processor::AckMessageResultEntry;
     use crate::processor::ChangeInvisibleDurationPlan;
@@ -2776,14 +2773,12 @@ mod tests {
 
     #[test]
     fn shared_transport_error_preserves_proxy_system_error_response_code() {
-        let error = RocketMQError::Shared(Arc::new(rocketmq_error::Error::new(
-            &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
-        )));
+        let error = Arc::new(rocketmq_error::Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED));
         let response = super::proxy_operation_error_response(
             &super::application_remoting_command_factory(),
             17,
             "dispatch upstream request",
-            ProxyError::RocketMQ(error),
+            ProxyError::SharedCanonical(error),
         );
 
         assert_eq!(response.code(), 1);
@@ -2800,9 +2795,7 @@ mod tests {
             &super::application_remoting_command_factory(),
             19,
             "dispatch upstream request",
-            ProxyError::RocketMQ(RocketMQError::Shared(Arc::new(rocketmq_error::Error::new(
-                &rocketmq_error::CORE_INTERNAL_FAILURE,
-            )))),
+            ProxyError::Canonical(rocketmq_error::Error::new(&rocketmq_error::CORE_INTERNAL_FAILURE)),
         );
 
         assert_eq!(response.code(), 1);
@@ -2818,7 +2811,7 @@ mod tests {
         let owner = super::owner_error_with_source(
             &rocketmq_error::PROXY_UPSTREAM_REQUEST_FAILED,
             "dispatch upstream request",
-            ProxyError::RocketMQ(RocketMQError::Shared(Arc::clone(&physical))),
+            ProxyError::SharedCanonical(Arc::clone(&physical)),
         );
 
         assert_eq!(owner.descriptor(), &rocketmq_error::PROXY_UPSTREAM_REQUEST_FAILED);
@@ -2826,7 +2819,7 @@ mod tests {
             .source()
             .and_then(|source| source.downcast_ref::<ProxyError>())
             .expect("typed Proxy cause");
-        let ProxyError::RocketMQ(RocketMQError::Shared(retained)) = stored else {
+        let ProxyError::SharedCanonical(retained) = stored else {
             panic!("expected retained shared transport cause");
         };
         assert!(Arc::ptr_eq(retained, &physical));
@@ -2840,9 +2833,7 @@ mod tests {
     fn remoting_response_retains_typed_contract_violation() {
         let malformed = RemotingCommand::create_remoting_command(RequestCode::CheckClientConfig);
         let error = super::remoting_response(malformed).expect_err("request command must be rejected as a response");
-        let RocketMQError::Shared(owner) = error else {
-            panic!("expected canonical response-processing owner");
-        };
+        let owner = error;
 
         assert_eq!(owner.descriptor(), &rocketmq_error::CORE_INTERNAL_FAILURE);
         assert!(owner.public_view().is_ok());
@@ -2860,7 +2851,7 @@ mod tests {
         let owner = super::owner_error_with_source(
             &rocketmq_error::PROXY_REMOTING_REQUEST_INVALID,
             "build sendMessage request",
-            ProxyError::RocketMQ(RocketMQError::request_body_invalid("sendMessage", "secret body detail")),
+            ProxyError::Canonical(canonical::request_body_invalid("sendMessage", "secret body detail")),
         );
         let response = super::descriptor_error_response(&super::application_remoting_command_factory(), 29, &owner);
 
@@ -2873,8 +2864,8 @@ mod tests {
             .source()
             .and_then(|source| source.downcast_ref::<ProxyError>())
             .expect("typed Proxy cause");
-        let ProxyError::RocketMQ(cause) = stored else {
-            panic!("expected typed RocketMQ request cause");
+        let ProxyError::Canonical(cause) = stored else {
+            panic!("expected typed canonical request cause");
         };
         assert_eq!(cause.descriptor().projection().remoting().code.as_i32(), 29);
     }
@@ -2915,7 +2906,7 @@ mod tests {
         let response = super::proxy_drain_request_error_response(
             &super::application_remoting_command_factory(),
             29,
-            super::ProxyDrainRequestError::InvalidBody(RocketMQError::request_body_invalid(
+            super::ProxyDrainRequestError::InvalidBody(canonical::request_body_invalid(
                 "beginProxyDrain",
                 "password=plain-text",
             )),
@@ -3097,24 +3088,14 @@ mod tests {
     #[test]
     fn canonical_proxy_mappings_keep_frozen_codes_and_catalog_messages() {
         let cases = [
+            (canonical::topic_not_found("secret topic"), 17, "Topic does not exist"),
             (
-                RocketMQError::TopicNotExist {
-                    topic: "secret topic".to_owned(),
-                },
-                17,
-                "Topic does not exist",
-            ),
-            (
-                RocketMQError::SubscriptionGroupNotExist {
-                    group: "secret group".to_owned(),
-                },
+                canonical::subscription_group_not_found("secret group"),
                 26,
                 "Subscription group does not exist",
             ),
             (
-                RocketMQError::BrokerPermissionDenied {
-                    operation: "secret operation".to_owned(),
-                },
+                canonical::authorization_denied("secret operation"),
                 16,
                 "Permission was denied",
             ),
@@ -3125,7 +3106,7 @@ mod tests {
                 &super::application_remoting_command_factory(),
                 8,
                 "execute Proxy operation",
-                ProxyError::RocketMQ(error),
+                ProxyError::Canonical(error),
             );
             assert_eq!(response.code(), code);
             assert_eq!(response.remark().map(CheetahString::as_str), Some(message));
@@ -3137,8 +3118,8 @@ mod tests {
     fn local_authorization_operational_failures_keep_r16_and_fixed_output() {
         let sentinel = "password=plain-text\r\nlocal-path=C:\\private\\authorization-policy";
         let errors = [
-            RocketMQError::Authentication(AuthError::ContextCreationError(sentinel.to_owned())),
-            RocketMQError::authentication_source("evaluate authorization provider", std::io::Error::other(sentinel)),
+            canonical::authentication_operation_failed("create_context", sentinel),
+            canonical::authentication_operation_failed("evaluate_authorization_provider", sentinel),
         ];
 
         for error in errors {
@@ -3146,7 +3127,7 @@ mod tests {
                 &super::application_remoting_command_factory(),
                 83,
                 "authorize local request",
-                ProxyError::RocketMQ(error),
+                ProxyError::Canonical(error),
             );
 
             assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
@@ -3184,16 +3165,17 @@ mod tests {
         ];
 
         for (origin, expected_message) in cases {
-            let error = RocketMQError::broker_operation_failed(
+            let error = canonical::broker_operation(
                 "broker ingress",
                 origin.to_i32(),
+                None,
                 "password=plain-text\r\nlocal-path=C:\\private\\data",
             );
             let response = super::proxy_operation_error_response(
                 &super::application_remoting_command_factory(),
                 73,
                 "execute Proxy operation",
-                ProxyError::from(error),
+                ProxyError::from_client_error(error),
             );
 
             assert_eq!(ResponseCode::from(response.code()), ResponseCode::SystemError);
@@ -3381,7 +3363,10 @@ mod tests {
     where
         P: RequestProcessor + Clone + Sync,
     {
-        async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+        async fn process(
+            &mut self,
+            request: &mut RemotingRequest,
+        ) -> std::result::Result<HandlerOutcome, rocketmq_error::SharedError> {
             request.command_mut().set_code_ref(RequestCode::BeginProxyDrain);
             request.command_mut().set_opaque_mut(-9_852);
             self.inner.process(request).await
@@ -4664,7 +4649,7 @@ mod tests {
             .expect_err("authorization should fail without matching acl");
         assert!(matches!(
             error,
-            crate::error::ProxyError::RocketMQ(RocketMQError::BrokerPermissionDenied { .. })
+            error if error.descriptor() == &rocketmq_error::AUTH_PERMISSION_DENIED
         ));
     }
 

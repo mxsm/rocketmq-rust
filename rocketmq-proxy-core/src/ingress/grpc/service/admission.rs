@@ -19,7 +19,6 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQError;
 use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetSnapshot;
@@ -32,6 +31,7 @@ use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::RuntimeError;
 
+use crate::error::canonical;
 use crate::proto::v2;
 use crate::ProxyError;
 use crate::ProxyResult;
@@ -265,11 +265,7 @@ fn execution_budget(
 }
 
 fn runtime_memory_detection_error(source: RuntimeError) -> ProxyError {
-    RocketMQError::Internal {
-        operation: "detect-process-memory-limit",
-        source: Box::new(source),
-    }
-    .into()
+    ProxyError::from(canonical::internal_with_source("detect-process-memory-limit", source))
 }
 
 #[cfg(test)]

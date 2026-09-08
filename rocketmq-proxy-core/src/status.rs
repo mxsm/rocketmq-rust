@@ -178,10 +178,10 @@ impl ProxyStatusMapper {
 mod tests {
     use rocketmq_error::GrpcStatusCode;
     use rocketmq_error::PublicErrorView;
-    use rocketmq_error::RocketMQError;
     use rocketmq_protocol::code::response_code::ResponseCode;
 
     use super::ProxyStatusMapper;
+    use crate::error::canonical;
     use crate::error::ProxyError;
     use crate::proto::v2;
 
@@ -193,19 +193,19 @@ mod tests {
 
     #[test]
     fn route_not_found_maps_to_topic_not_found() {
-        let status = ProxyStatusMapper::from_error(&ProxyError::RocketMQ(RocketMQError::route_not_found("TestTopic")));
+        let status = ProxyStatusMapper::from_error(&ProxyError::Canonical(canonical::route_not_found("TestTopic")));
         assert_eq!(status.code, v2::Code::TopicNotFound as i32);
     }
 
     #[test]
     fn route_not_found_requires_typed_error_instead_of_display_text() {
-        let status = ProxyStatusMapper::from_error(&ProxyError::RocketMQ(RocketMQError::illegal_argument(
+        let status = ProxyStatusMapper::from_error(&ProxyError::Canonical(canonical::argument(
             "CODE: 17  DESC: No topic route info in name server for the topic: TestTopic",
         )));
 
         assert_eq!(status.code, v2::Code::BadRequest as i32);
         assert_eq!(
-            ProxyStatusMapper::to_tonic_status(&ProxyError::RocketMQ(RocketMQError::illegal_argument(
+            ProxyStatusMapper::to_tonic_status(&ProxyError::Canonical(canonical::argument(
                 "CODE: 17  DESC: No topic route info in name server for the topic: TestTopic",
             )))
             .code(),
@@ -242,25 +242,28 @@ mod tests {
             (ResponseCode::UserNotExist, v2::Code::NotFound),
             (ResponseCode::PolicyNotExist, v2::Code::NotFound),
         ] {
-            let error = ProxyError::from(RocketMQError::broker_operation_failed(
+            let error = ProxyError::BrokerResponse(canonical::broker_response(
                 "AUTH_ADMIN",
                 response_code.to_i32(),
+                None,
                 "auth failed",
             ));
             let status = ProxyStatusMapper::from_error(&error);
             assert_eq!(status.code, expected_grpc_code as i32);
         }
 
-        let authentication_error = ProxyError::RocketMQ(RocketMQError::authentication_failed("bad credentials"));
+        let authentication_error =
+            ProxyError::Canonical(canonical::authentication_failed("authenticate", "bad credentials"));
         let status = ProxyStatusMapper::from_error(&authentication_error);
         assert_eq!(status.code, v2::Code::Unauthorized as i32);
     }
 
     #[test]
     fn phase7_request_code_not_supported_maps_to_unsupported_and_unimplemented_transport() {
-        let error = ProxyError::from(RocketMQError::broker_operation_failed(
+        let error = ProxyError::BrokerResponse(canonical::broker_response(
             "REMOTING",
             ResponseCode::RequestCodeNotSupported.to_i32(),
+            None,
             "request code not supported",
         ));
 
@@ -309,9 +312,10 @@ mod tests {
             ),
             (ResponseCode::SystemBusy, v2::Code::InternalError, tonic::Code::Internal),
         ] {
-            let error = ProxyError::from(RocketMQError::broker_operation_failed(
+            let error = ProxyError::BrokerResponse(canonical::broker_response(
                 "BROKER",
                 response_code.to_i32(),
+                None,
                 "secret broker response\r\nC:\\private\\broker.conf",
             ));
             let payload_status = ProxyStatusMapper::from_error(&error);
@@ -324,17 +328,10 @@ mod tests {
 
     #[test]
     fn auth_config_errors_map_to_bad_request_payload_and_transport_status() {
-        for error in [
-            ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue {
-                key: "auth.authorization",
-                value: "local".to_owned(),
-                reason: "provider not ready".to_owned(),
-            }),
-            ProxyError::RocketMQ(RocketMQError::auth_config_invalid(
-                "auth.authorization",
-                "provider not ready",
-            )),
-        ] {
+        for error in [ProxyError::Canonical(canonical::configuration_invalid(
+            "auth.authorization",
+            "provider not ready",
+        ))] {
             let payload_status = ProxyStatusMapper::from_error(&error);
             assert_eq!(payload_status.code, v2::Code::BadRequest as i32);
             assert_eq!(
@@ -345,12 +342,8 @@ mod tests {
     }
 
     #[test]
-    fn rocketmq_errors_use_central_grpc_boundary_spec() {
-        let retry_exhausted = ProxyError::RocketMQ(RocketMQError::RetryLimitExceeded {
-            group: "GID_test".to_owned(),
-            current: 3,
-            max: 3,
-        });
+    fn canonical_errors_use_catalog_grpc_boundary_spec() {
+        let retry_exhausted = ProxyError::Canonical(canonical::retry_budget_exhausted("GID_test", 3, 3));
         let retry_payload = ProxyStatusMapper::from_error(&retry_exhausted);
         assert_eq!(retry_payload.code, v2::Code::TooManyRequests as i32);
         assert_eq!(
@@ -358,9 +351,7 @@ mod tests {
             tonic::Code::ResourceExhausted
         );
 
-        let not_master = ProxyError::RocketMQ(RocketMQError::NotMasterBroker {
-            master_address: "127.0.0.1:10911".to_owned(),
-        });
+        let not_master = ProxyError::Canonical(canonical::not_master("127.0.0.1:10911"));
         let not_master_payload = ProxyStatusMapper::from_error(&not_master);
         assert_eq!(not_master_payload.code, v2::Code::InternalError as i32);
         assert_eq!(
@@ -388,14 +379,12 @@ mod tests {
     }
 
     #[test]
-    fn rocketmq_error_payload_message_uses_public_message() {
-        let inner = RocketMQError::ConfigInvalidValue {
-            key: "auth.authorization",
-            value: "local".to_owned(),
-            reason: "provider not ready".to_owned(),
-        };
-        let expected_message = inner.public_message().to_owned();
-        let error = ProxyError::RocketMQ(inner);
+    fn canonical_error_payload_message_uses_public_message() {
+        let error = ProxyError::Canonical(canonical::configuration_invalid(
+            "auth.authorization",
+            "provider not ready",
+        ));
+        let expected_message = error.descriptor().public_message().to_owned();
 
         let status = ProxyStatusMapper::from_error(&error);
 

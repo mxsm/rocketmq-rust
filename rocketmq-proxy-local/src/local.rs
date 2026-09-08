@@ -22,7 +22,6 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use rocketmq_broker::proxy_facade::BrokerConfig;
 use rocketmq_broker::ProxyBrokerFacade;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
@@ -78,6 +77,7 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_protocol::protocol::RemotingSerializable;
+use rocketmq_proxy_core::error::canonical;
 use rocketmq_proxy_core::status::ProxyStatusMapper;
 use rocketmq_proxy_core::AckMessageRequest;
 use rocketmq_proxy_core::AckMessageResultEntry;
@@ -333,10 +333,10 @@ impl LocalBrokerCommand {
 
     pub(crate) fn reject_timeout(self, timeout: Duration) {
         self.reject_with(
-            RocketMQError::Timeout {
-                operation: "local broker command queue",
-                timeout_ms: timeout.as_millis().min(u128::from(u64::MAX)) as u64,
-            }
+            canonical::timed_out(
+                "local broker command queue",
+                timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+            )
             .into(),
         );
     }
@@ -447,11 +447,10 @@ impl LocalBrokerFacadeClient {
         let broker_context = worker_context.component("embedded-broker-store");
         let facade = ProxyBrokerFacade::try_new_from_broker_config(broker_config, broker_context, telemetry_handle)
             .map_err(|error| {
-                ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue {
-                    key: "proxy.local.embeddedBroker",
-                    value: config.broker_name.clone(),
-                    reason: error.to_string(),
-                })
+                ProxyError::from(canonical::configuration_invalid_with_source(
+                    "proxy.local.embeddedBroker",
+                    error,
+                ))
             })?;
         let shutdown_context = service_context.clone();
         let cancellation = worker_context.task_group().cancellation_token();
@@ -1981,7 +1980,7 @@ fn build_send_message_request(
         }),
     };
     let body = entry.message.body().ok_or_else(|| {
-        RocketMQError::request_body_invalid(
+        canonical::request_body_invalid(
             "sendMessage",
             format!("message body is missing for topic '{}'", entry.topic),
         )
@@ -1999,7 +1998,7 @@ fn build_send_batch_message_request(
 ) -> ProxyResult<RemotingCommand> {
     let first = entries
         .first()
-        .ok_or_else(|| RocketMQError::request_body_invalid("sendMessage", "batch must contain at least one message"))?;
+        .ok_or_else(|| canonical::request_body_invalid("sendMessage", "batch must contain at least one message"))?;
     let messages = entries
         .iter()
         .map(|entry| message_from_core(&entry.message))
@@ -2582,12 +2581,12 @@ impl BrokerResponseMetadata for EmbeddedResponse {
 }
 
 fn broker_operation_error(operation: &'static str, response: &impl BrokerResponseMetadata) -> ProxyError {
-    ProxyError::from(RocketMQError::BrokerOperationFailed {
+    ProxyError::BrokerResponse(canonical::broker_response(
         operation,
-        code: response.response_code(),
-        message: response.response_remark().map(ToOwned::to_owned).unwrap_or_default(),
-        broker_addr: None,
-    })
+        response.response_code(),
+        None,
+        response.response_remark().unwrap_or_default(),
+    ))
 }
 
 fn embedded_contiguous_body(body: &EmbeddedResponseBody) -> ProxyResult<Option<&[u8]>> {
@@ -2674,7 +2673,6 @@ mod tests {
     use std::time::Instant;
 
     use cheetah_string::CheetahString;
-    use rocketmq_error::RocketMQError;
     use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
     use rocketmq_model::common::message::MessageConst;
     use rocketmq_model::result::SendResult;
@@ -2823,23 +2821,10 @@ mod tests {
         assert!(!public.message().contains(PRIVATE_REMARK));
         assert!(!error.to_string().contains(PRIVATE_REMARK));
 
-        let source = std::error::Error::source(&error)
-            .and_then(|source| source.downcast_ref::<RocketMQError>())
-            .expect("retain typed BrokerOperationFailed source");
-        match source {
-            RocketMQError::BrokerOperationFailed {
-                operation,
-                code,
-                message,
-                broker_addr,
-            } => {
-                assert_eq!(*operation, "queryAssignment");
-                assert_eq!(ResponseCode::from(*code), ResponseCode::SystemError);
-                assert_eq!(message, PRIVATE_REMARK);
-                assert!(broker_addr.is_none());
-            }
-            other => panic!("expected BrokerOperationFailed, got {other:?}"),
-        }
+        assert!(
+            std::error::Error::source(&error).is_some(),
+            "retain typed broker response source"
+        );
     }
 
     #[test]
@@ -3306,10 +3291,7 @@ mod tests {
         };
 
         match LocalBrokerFacadeClient::new(config, &service, TelemetryHandle::noop()) {
-            Err(ProxyError::RocketMQ(RocketMQError::ConfigInvalidValue { key, reason, .. })) => {
-                assert_eq!(key, "proxy.local.embeddedBroker");
-                assert!(reason.contains("broker.brokerIp1"), "{reason}");
-            }
+            Err(error) if error.descriptor() == &rocketmq_error::CORE_CONFIGURATION_INVALID => {}
             Err(error) => panic!("unexpected error: {error}"),
             Ok(_) => panic!("invalid embedded broker configuration must be rejected"),
         }

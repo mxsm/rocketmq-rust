@@ -15,10 +15,11 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::message::MessageTrait;
+use rocketmq_proxy_core::error::canonical;
 use rocketmq_proxy_core::ProxyMessage;
 use rocketmq_proxy_core::ProxyMessageExt;
 
@@ -65,9 +66,9 @@ pub(crate) fn message_properties_from_core(message: &ProxyMessage) -> HashMap<Ch
         .collect()
 }
 
-pub(crate) fn message_from_core(message: &ProxyMessage) -> Result<Message, RocketMQError> {
+pub(crate) fn message_from_core(message: &ProxyMessage) -> Result<Message, CanonicalError> {
     let body = message.body_bytes().cloned().ok_or_else(|| {
-        RocketMQError::request_body_invalid(
+        canonical::request_body_invalid(
             "sendMessage",
             format!("message body is missing for topic '{}'", message.topic()),
         )

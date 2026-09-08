@@ -24,13 +24,14 @@ use rocketmq_auth::SubjectType;
 use rocketmq_auth::User;
 use rocketmq_auth::UserStatus;
 use rocketmq_auth::UserType;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_protocol::protocol::body::acl_info::AclInfo;
 use rocketmq_protocol::protocol::body::acl_info::PolicyEntryInfo;
 use rocketmq_protocol::protocol::body::acl_info::PolicyInfo;
 use rocketmq_protocol::protocol::body::user_info::UserInfo;
 use rocketmq_security_api::Action;
+
+use crate::error::canonical;
 
 pub(crate) fn user_from_info(user_info: &UserInfo) -> Option<User> {
     let username = user_info.username.as_ref()?.trim();
@@ -60,7 +61,7 @@ pub(crate) fn user_from_info(user_info: &UserInfo) -> Option<User> {
     Some(user)
 }
 
-pub(crate) fn acl_from_info(acl_info: &AclInfo, fallback_subject: &str) -> RocketMQResult<Option<Acl>> {
+pub(crate) fn acl_from_info(acl_info: &AclInfo, fallback_subject: &str) -> Result<Option<Acl>, CanonicalError> {
     let subject = acl_info
         .subject
         .as_ref()
@@ -71,12 +72,7 @@ pub(crate) fn acl_from_info(acl_info: &AclInfo, fallback_subject: &str) -> Rocke
     let policies = acl_info
         .policies
         .as_ref()
-        .map(|policies| {
-            policies
-                .iter()
-                .map(convert_policy_info)
-                .collect::<RocketMQResult<Vec<_>>>()
-        })
+        .map(|policies| policies.iter().map(convert_policy_info).collect::<Result<Vec<_>, _>>())
         .transpose()?
         .unwrap_or_default();
     if policies.is_empty() {
@@ -86,13 +82,13 @@ pub(crate) fn acl_from_info(acl_info: &AclInfo, fallback_subject: &str) -> Rocke
     Ok(Some(Acl::of_with_policies(subject_key, subject_type, policies)))
 }
 
-fn convert_policy_info(policy: &PolicyInfo) -> RocketMQResult<Policy> {
+fn convert_policy_info(policy: &PolicyInfo) -> Result<Policy, CanonicalError> {
     let policy_type = policy
         .policy_type
         .as_ref()
         .map(|policy_type| {
             PolicyType::get_by_name(policy_type.as_str())
-                .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid policy type '{}'", policy_type)))
+                .ok_or_else(|| canonical::argument(format!("Invalid policy type '{}'", policy_type)))
         })
         .transpose()?
         .unwrap_or(PolicyType::Custom);
@@ -103,39 +99,38 @@ fn convert_policy_info(policy: &PolicyInfo) -> RocketMQResult<Policy> {
             entries
                 .iter()
                 .map(convert_policy_entry_info)
-                .collect::<RocketMQResult<Vec<_>>>()
+                .collect::<Result<Vec<_>, _>>()
         })
         .transpose()?
         .unwrap_or_default();
     if entries.is_empty() {
-        return Err(RocketMQError::illegal_argument("The policy entries is empty."));
+        return Err(canonical::argument("The policy entries is empty."));
     }
     Ok(Policy::of_entries(policy_type, entries))
 }
 
-fn convert_policy_entry_info(entry: &PolicyEntryInfo) -> RocketMQResult<PolicyEntry> {
+fn convert_policy_entry_info(entry: &PolicyEntryInfo) -> Result<PolicyEntry, CanonicalError> {
     let resource_key = entry
         .resource
         .as_ref()
-        .ok_or_else(|| RocketMQError::illegal_argument("The resource is null."))?;
+        .ok_or_else(|| canonical::argument("The resource is null."))?;
     let resource = PolicyResource::of_str(resource_key.as_str())
-        .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid resource '{}'", resource_key)))?;
+        .ok_or_else(|| canonical::argument(format!("Invalid resource '{}'", resource_key)))?;
 
     let actions = entry
         .actions
         .as_ref()
-        .ok_or_else(|| RocketMQError::illegal_argument("The actions is empty."))?
+        .ok_or_else(|| canonical::argument("The actions is empty."))?
         .iter()
         .flat_map(|action| action.as_str().split(','))
         .map(str::trim)
         .filter(|action| !action.is_empty())
         .map(|action| {
-            Action::get_by_name(action)
-                .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid action '{action}'")))
+            Action::get_by_name(action).ok_or_else(|| canonical::argument(format!("Invalid action '{action}'")))
         })
-        .collect::<RocketMQResult<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     if actions.is_empty() {
-        return Err(RocketMQError::illegal_argument("The actions is empty."));
+        return Err(canonical::argument("The actions is empty."));
     }
 
     let environment = entry.source_ips.as_ref().and_then(|source_ips| {
@@ -154,29 +149,29 @@ fn convert_policy_entry_info(entry: &PolicyEntryInfo) -> RocketMQResult<PolicyEn
     let decision_name = entry
         .decision
         .as_ref()
-        .ok_or_else(|| RocketMQError::illegal_argument("The decision is null."))?;
+        .ok_or_else(|| canonical::argument("The decision is null."))?;
     let decision = PolicyDecision::get_by_name(decision_name.as_str())
-        .ok_or_else(|| RocketMQError::illegal_argument(format!("Invalid decision '{}'", decision_name)))?;
+        .ok_or_else(|| canonical::argument(format!("Invalid decision '{}'", decision_name)))?;
 
     Ok(PolicyEntry::of(resource, actions, environment, decision))
 }
 
-fn parse_subject(subject: &str) -> RocketMQResult<(String, SubjectType)> {
+fn parse_subject(subject: &str) -> Result<(String, SubjectType), CanonicalError> {
     let trimmed = subject.trim();
     if trimmed.is_empty() {
-        return Err(RocketMQError::illegal_argument("The subject is blank"));
+        return Err(canonical::argument("The subject is blank"));
     }
 
     let (subject_type, subject_name) = match trimmed.split_once(':') {
         Some((subject_type, subject_name)) => (
             SubjectType::get_by_name(subject_type)
-                .ok_or_else(|| RocketMQError::illegal_argument(format!("Unsupported subject type '{subject_type}'")))?,
+                .ok_or_else(|| canonical::argument(format!("Unsupported subject type '{subject_type}'")))?,
             subject_name.trim(),
         ),
         None => (SubjectType::User, trimmed),
     };
     if subject_name.is_empty() {
-        return Err(RocketMQError::illegal_argument("The subject name is blank"));
+        return Err(canonical::argument("The subject name is blank"));
     }
 
     Ok((format!("{}:{}", subject_type.name(), subject_name), subject_type))

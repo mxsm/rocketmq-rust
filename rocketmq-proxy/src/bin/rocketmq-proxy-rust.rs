@@ -19,7 +19,6 @@ use std::path::PathBuf;
 use rocketmq_error::CliErrorView;
 use rocketmq_error::CliVerbosity;
 use rocketmq_error::Error as CanonicalError;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::version::CURRENT_VERSION;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
 #[cfg(test)]
@@ -31,6 +30,7 @@ use rocketmq_proxy::ProxyResult;
 use rocketmq_proxy::ProxyRuntime;
 #[cfg(test)]
 use rocketmq_proxy::RemotingConfig;
+use rocketmq_proxy_core::error::canonical;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeConfig;
@@ -141,10 +141,8 @@ fn proxy_runtime_error(action: &'static str) -> impl FnOnce(rocketmq_runtime::Ru
 }
 
 async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) -> ProxyResult<()> {
-    initialize_remoting_defaults(CURRENT_VERSION as i32).map_err(|error| RocketMQError::ConfigParseFailed {
-        key: "remoting.command.defaults",
-        reason: error.to_string(),
-    })?;
+    initialize_remoting_defaults(CURRENT_VERSION as i32)
+        .map_err(|error| canonical::configuration_parse_failed_with_source("remoting.command.defaults", error))?;
 
     let args = Args::parse()?;
     let mut config = match args.config_file {
@@ -333,7 +331,7 @@ fn proxy_security_contract_error(error: SecurityContractViolation) -> ProxyError
 }
 
 fn proxy_security_provider_error(error: SecurityProviderError) -> ProxyError {
-    ProxyError::from(RocketMQError::Shared(error.into_shared_error()))
+    ProxyError::from(error.into_shared_error())
 }
 
 fn validate_proxy_security(
@@ -455,23 +453,10 @@ fn load_logging_overrides(path: Option<&std::path::Path>) -> ProxyResult<rocketm
     let config = config::Config::builder()
         .add_source(config::File::from(path))
         .build()
-        .map_err(|error| RocketMQError::ConfigParseFailed {
-            key: "proxy.logging",
-            reason: format!(
-                "failed to build proxy logging configuration: {}",
-                rocketmq_runtime::common::parse_config_file::render_safe_config_error(&error)
-            ),
-        })?;
-    config.try_deserialize().map_err(|error| {
-        RocketMQError::ConfigParseFailed {
-            key: "proxy.logging",
-            reason: format!(
-                "failed to deserialize proxy logging configuration: {}",
-                rocketmq_runtime::common::parse_config_file::render_safe_config_error(&error)
-            ),
-        }
-        .into()
-    })
+        .map_err(|error| canonical::configuration_parse_failed_with_source("proxy.logging", error))?;
+    config
+        .try_deserialize()
+        .map_err(|error| canonical::configuration_parse_failed_with_source("proxy.logging", error).into())
 }
 
 fn resolve_startup_log_filter(
@@ -536,7 +521,7 @@ impl Args {
                     std::process::exit(0);
                 }
                 _ => {
-                    return Err(ProxyError::from(RocketMQError::illegal_argument(format!(
+                    return Err(ProxyError::from(canonical::argument(format!(
                         "unknown proxy argument '{arg}'. Use --help for usage."
                     ))));
                 }
@@ -549,7 +534,7 @@ impl Args {
 
 fn next_value(args: &mut impl Iterator<Item = String>, name: &str) -> ProxyResult<String> {
     args.next()
-        .ok_or_else(|| RocketMQError::illegal_argument(format!("missing value for {name}")))
+        .ok_or_else(|| canonical::argument(format!("missing value for {name}")))
         .map_err(Into::into)
 }
 
@@ -567,7 +552,7 @@ fn parse_mode(value: &str) -> ProxyResult<ProxyMode> {
         "local" | "Local" => Err(ProxyError::not_implemented(
             "Local mode is unavailable because the 'local-mode' feature is disabled",
         )),
-        _ => Err(ProxyError::from(RocketMQError::illegal_argument(format!(
+        _ => Err(ProxyError::from(canonical::argument(format!(
             "invalid proxy mode '{value}', expected cluster or local"
         )))),
     }
@@ -704,14 +689,11 @@ mod tests {
         let error = proxy_security_provider_error(provider);
         assert!(!error.to_string().contains("secret"));
         assert!(!error.to_string().contains("private/provider/path"));
-        let ProxyError::RocketMQ(source) = error else {
-            panic!("security bootstrap failure must retain a RocketMQ source")
+        let ProxyError::SharedCanonical(source) = error else {
+            panic!("security bootstrap failure must retain a shared canonical source")
         };
         assert_eq!(source.descriptor(), &rocketmq_error::SECURITY_PROVIDER_UNAVAILABLE);
-        let RocketMQError::Shared(canonical) = source else {
-            panic!("security bootstrap failure must use the shared canonical carrier")
-        };
-        let io = std::error::Error::source(canonical.as_ref()).expect("I/O cause must remain available");
+        let io = std::error::Error::source(source.as_ref()).expect("I/O cause must remain available");
         assert!(io.downcast_ref::<std::io::Error>().is_some());
 
         let contract = proxy_security_contract_error(SecurityContractViolation::BootstrapProfileRequired);
