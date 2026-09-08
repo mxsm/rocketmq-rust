@@ -17,12 +17,20 @@ use std::error::Error as StdError;
 use rocketmq_error::fields;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
+use rocketmq_error::AUTH_CREDENTIALS_INVALID;
+use rocketmq_error::AUTH_OPERATION_FAILED;
+use rocketmq_error::AUTH_PERMISSION_DENIED;
+use rocketmq_error::BROKER_MESSAGE_TOO_LARGE;
 use rocketmq_error::CONTROLLER_CONFIGURATION_INVALID;
 use rocketmq_error::CONTROLLER_CONSENSUS_FAILED;
 use rocketmq_error::CONTROLLER_CONSENSUS_TIMED_OUT;
 use rocketmq_error::CONTROLLER_INTERNAL_FAILURE;
 use rocketmq_error::CONTROLLER_LIFECYCLE_NOT_INITIALIZED;
 use rocketmq_error::CONTROLLER_REQUEST_INVALID;
+use rocketmq_error::CORE_IO_FAILED;
+use rocketmq_error::CORE_SERIALIZATION_FAILED;
+use rocketmq_error::PROTOCOL_BODY_INVALID;
+use rocketmq_error::PROTOCOL_HEADER_INVALID;
 
 pub(crate) fn consensus_failed(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Error {
     Error::caused_by(&CONTROLLER_CONSENSUS_FAILED, source).with_context(
@@ -95,15 +103,99 @@ pub(crate) fn controller_internal_by(operation: &'static str, source: impl StdEr
     )
 }
 
+pub(crate) fn request_header_invalid(operation: &'static str) -> Error {
+    Error::new(&PROTOCOL_HEADER_INVALID).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_secret_presence(fields::INVALID_VALUE_PRESENT),
+    )
+}
+
+pub(crate) fn request_header_invalid_by(
+    operation: &'static str,
+    source: impl StdError + Send + Sync + 'static,
+) -> Error {
+    Error::caused_by(&PROTOCOL_HEADER_INVALID, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    )
+}
+
+pub(crate) fn request_body_invalid(operation: &'static str) -> Error {
+    Error::new(&PROTOCOL_BODY_INVALID).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_secret_presence(fields::INVALID_VALUE_PRESENT),
+    )
+}
+
+pub(crate) fn request_body_invalid_by(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Error {
+    Error::caused_by(&PROTOCOL_BODY_INVALID, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_secret_presence(fields::INVALID_VALUE_PRESENT)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    )
+}
+
+pub(crate) fn authentication_failed() -> Error {
+    Error::new(&AUTH_CREDENTIALS_INVALID)
+        .with_context(ErrorContext::new().with_secret_presence(fields::CREDENTIALS_PRESENT))
+}
+
+pub(crate) fn permission_denied(operation: &'static str) -> Error {
+    Error::new(&AUTH_PERMISSION_DENIED).with_context(ErrorContext::new().with_text(fields::OPERATION, operation))
+}
+
+pub(crate) fn auth_operation_failed(operation: &'static str) -> Error {
+    Error::new(&AUTH_OPERATION_FAILED)
+        .with_context(ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation))
+}
+
+pub(crate) fn message_too_large(actual: usize, limit: usize) -> Error {
+    Error::new(&BROKER_MESSAGE_TOO_LARGE).with_context(
+        ErrorContext::new()
+            .with_u64(fields::ACTUAL_BYTES, actual as u64)
+            .with_u64(fields::LIMIT_BYTES, limit as u64),
+    )
+}
+
+pub(crate) fn serialization_failed(
+    operation: &'static str,
+    format: &'static str,
+    source: impl StdError + Send + Sync + 'static,
+) -> Error {
+    Error::caused_by(&CORE_SERIALIZATION_FAILED, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_text(fields::FORMAT, format)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    )
+}
+
+pub(crate) fn serialization_invalid(operation: &'static str, format: &'static str) -> Error {
+    Error::new(&CORE_SERIALIZATION_FAILED).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_text(fields::FORMAT, format)
+            .with_secret_presence(fields::INVALID_VALUE_PRESENT),
+    )
+}
+
+pub(crate) fn io_failed(operation: &'static str, source: impl StdError + Send + Sync + 'static) -> Error {
+    Error::caused_by(&CORE_IO_FAILED, source).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::error::Error as _;
     use std::io;
-    use std::sync::Arc;
-
-    use rocketmq_error::RocketMQError;
-
-    use super::*;
 
     #[test]
     fn canonical_controller_error_preserves_descriptor_and_typed_leaf() {
@@ -121,16 +213,12 @@ mod tests {
     }
 
     #[test]
-    fn explicit_shared_carrier_keeps_the_same_canonical_allocation() {
-        let canonical = Arc::new(controller_internal("cross legacy owner boundary"));
-        let expected = Arc::clone(&canonical);
-        let facade = RocketMQError::Shared(canonical);
-        let RocketMQError::Shared(actual) = facade else {
-            panic!("explicit controller carrier must remain shared");
-        };
+    fn canonical_error_is_shared_only_at_multi_owner_boundaries() {
+        let canonical = std::sync::Arc::new(controller_internal("cross owner boundary"));
+        let shared = std::sync::Arc::clone(&canonical);
 
-        assert!(Arc::ptr_eq(&expected, &actual));
-        assert_eq!(actual.descriptor(), &CONTROLLER_INTERNAL_FAILURE);
+        assert!(std::sync::Arc::ptr_eq(&canonical, &shared));
+        assert_eq!(shared.descriptor(), &CONTROLLER_INTERNAL_FAILURE);
     }
 
     #[test]

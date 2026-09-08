@@ -19,9 +19,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::ControllerResult;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotRequest;
@@ -188,7 +187,7 @@ impl RaftController {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: MembershipChangeRequest,
-    ) -> RocketMQResult<MembershipChangeOutcome> {
+    ) -> ControllerResult<MembershipChangeOutcome> {
         self.inner.apply_membership_change(authorization, request).await
     }
 
@@ -202,7 +201,7 @@ impl RaftController {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: ControllerReleaseSnapshotRequest,
-    ) -> RocketMQResult<ControllerReleaseSnapshot> {
+    ) -> ControllerResult<ControllerReleaseSnapshot> {
         self.inner.create_release_snapshot(authorization, request).await
     }
 
@@ -211,7 +210,7 @@ impl RaftController {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         manifest: &ControllerReleaseSnapshotManifest,
-    ) -> RocketMQResult<ReleaseCheckpointRestoreVerification> {
+    ) -> ControllerResult<ReleaseCheckpointRestoreVerification> {
         self.inner.verify_release_snapshot(authorization, manifest).await
     }
 
@@ -253,7 +252,7 @@ impl RaftController {
     pub async fn record_broker_heartbeat(
         &self,
         request: &BrokerHeartbeatRequestHeader,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         self.inner.record_broker_heartbeat(request).await
     }
 
@@ -262,7 +261,7 @@ impl RaftController {
         cluster_name: Option<&str>,
         broker_name: &str,
         broker_id: Option<i64>,
-    ) -> RocketMQResult<()> {
+    ) -> ControllerResult<()> {
         self.inner
             .remove_broker_live_info(cluster_name, broker_name, broker_id)
             .await
@@ -270,23 +269,19 @@ impl RaftController {
 }
 
 impl Controller for RaftController {
-    async fn startup(&mut self) -> RocketMQResult<()> {
-        self.startup_shared()
-            .await
-            .map_err(|error| RocketMQError::Shared(Arc::new(error)))
+    async fn startup(&mut self) -> ControllerResult<()> {
+        self.startup_shared().await
     }
 
-    async fn shutdown(&mut self) -> RocketMQResult<()> {
-        self.shutdown_shared()
-            .await
-            .map_err(|error| RocketMQError::Shared(Arc::new(error)))
+    async fn shutdown(&mut self) -> ControllerResult<()> {
+        self.shutdown_shared().await
     }
 
-    async fn start_scheduling(&self) -> RocketMQResult<()> {
+    async fn start_scheduling(&self) -> ControllerResult<()> {
         self.inner.start_scheduling().await
     }
 
-    async fn stop_scheduling(&self) -> RocketMQResult<()> {
+    async fn stop_scheduling(&self) -> ControllerResult<()> {
         self.inner.stop_scheduling().await
     }
 
@@ -297,29 +292,29 @@ impl Controller for RaftController {
     async fn register_broker(
         &self,
         request: &RegisterBrokerToControllerRequestHeader,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         self.inner.register_broker(request).await
     }
 
     async fn get_next_broker_id(
         &self,
         request: &GetNextBrokerIdRequestHeader,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         self.inner.get_next_broker_id(request).await
     }
 
-    async fn apply_broker_id(&self, request: &ApplyBrokerIdRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn apply_broker_id(&self, request: &ApplyBrokerIdRequestHeader) -> ControllerResult<Option<RemotingCommand>> {
         self.inner.apply_broker_id(request).await
     }
 
     async fn clean_broker_data(
         &self,
         request: &CleanBrokerDataRequestHeader,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         self.inner.clean_broker_data(request).await
     }
 
-    async fn elect_master(&self, request: &ElectMasterRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn elect_master(&self, request: &ElectMasterRequestHeader) -> ControllerResult<Option<RemotingCommand>> {
         let started_at = Instant::now();
         let span = rocketmq_observability::trace::controller::election_span();
         let result = self.inner.elect_master(request).instrument(span.clone()).await;
@@ -342,19 +337,22 @@ impl Controller for RaftController {
         &self,
         request: &AlterSyncStateSetRequestHeader,
         sync_state_set: SyncStateSet,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         self.inner.alter_sync_state_set(request, sync_state_set).await
     }
 
-    async fn get_replica_info(&self, request: &GetReplicaInfoRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn get_replica_info(
+        &self,
+        request: &GetReplicaInfoRequestHeader,
+    ) -> ControllerResult<Option<RemotingCommand>> {
         self.inner.get_replica_info(request).await
     }
 
-    async fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn get_controller_metadata(&self) -> ControllerResult<Option<RemotingCommand>> {
         self.inner.get_controller_metadata().await
     }
 
-    async fn get_sync_state_data(&self, broker_names: &[CheetahString]) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn get_sync_state_data(&self, broker_names: &[CheetahString]) -> ControllerResult<Option<RemotingCommand>> {
         self.inner.get_sync_state_data(broker_names).await
     }
 
@@ -363,7 +361,7 @@ impl Controller for RaftController {
     }
 }
 
-fn election_outcome(result: &RocketMQResult<Option<RemotingCommand>>) -> &'static str {
+fn election_outcome(result: &ControllerResult<Option<RemotingCommand>>) -> &'static str {
     match result {
         Err(_) => "error",
         Ok(None) => "unavailable",

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use crate::ControllerResult;
+use rocketmq_error::Error;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotRequest;
 use rocketmq_protocol::protocol::body::release_checkpoint::MaintenanceCapabilitiesResponse;
@@ -31,7 +31,7 @@ impl ControllerRequestProcessor {
         &self,
         channel_identity: &str,
         request: &RemotingCommand,
-    ) -> RocketMQResult<(MaintenanceRequestHeader, MaintenanceAuthorizationGrant)> {
+    ) -> ControllerResult<(MaintenanceRequestHeader, MaintenanceAuthorizationGrant)> {
         let controller_manager = self.controller_manager()?;
         let config = controller_manager.controller_config();
         if !config.maintenance_enabled {
@@ -46,10 +46,10 @@ impl ControllerRequestProcessor {
             .await?;
         let header = request
             .decode_command_custom_header::<MaintenanceRequestHeader>()
-            .map_err(|error| RocketMQError::request_header_source("decode privileged maintenance header", error))?;
+            .map_err(|error| crate::error::request_header_invalid_by("decode privileged maintenance header", error))?;
         header
             .validate()
-            .map_err(|reason| RocketMQError::request_header_error(reason.to_string()))?;
+            .map_err(|_reason| crate::error::request_header_invalid("validate privileged maintenance header"))?;
         let authorizer = security
             .maintenance_authorizer()
             .ok_or_else(maintenance_authorizer_unavailable)?;
@@ -77,7 +77,7 @@ impl ControllerRequestProcessor {
         &self,
         channel_identity: &str,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let (_header, grant) = self.authorize_maintenance_request(channel_identity, request).await?;
         let controller_manager = self.controller_manager()?;
         let policy = controller_manager
@@ -101,7 +101,7 @@ impl ControllerRequestProcessor {
             store: None,
         };
         let body = serde_json::to_vec(&response)
-            .map_err(|error| RocketMQError::internal("encode maintenance capabilities", error))?;
+            .map_err(|error| crate::error::serialization_failed("encode maintenance capabilities", "json", error))?;
         Ok(Some(
             self.command_factory.create_success_response_command().set_body(body),
         ))
@@ -111,20 +111,21 @@ impl ControllerRequestProcessor {
         &self,
         channel_identity: &str,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let (_header, grant) = self.authorize_maintenance_request(channel_identity, request).await?;
-        let request_body = request.body().ok_or_else(|| {
-            RocketMQError::request_body_invalid("MAINTENANCE_CREATE_CONTROLLER_SNAPSHOT", "request body is empty")
-        })?;
+        let request_body = request
+            .body()
+            .ok_or_else(|| crate::error::request_body_invalid("MAINTENANCE_CREATE_CONTROLLER_SNAPSHOT"))?;
         let snapshot_request: ControllerReleaseSnapshotRequest = serde_json::from_slice(request_body)
-            .map_err(|error| RocketMQError::request_body_source("MAINTENANCE_CREATE_CONTROLLER_SNAPSHOT", error))?;
+            .map_err(|error| crate::error::request_body_invalid_by("MAINTENANCE_CREATE_CONTROLLER_SNAPSHOT", error))?;
         let snapshot = self
             .controller_manager()?
             .controller()
             .create_release_snapshot(&grant, snapshot_request)
             .await?;
-        let body = serde_json::to_vec(&snapshot.manifest)
-            .map_err(|error| RocketMQError::internal("encode Controller release snapshot manifest", error))?;
+        let body = serde_json::to_vec(&snapshot.manifest).map_err(|error| {
+            crate::error::serialization_failed("encode Controller release snapshot manifest", "json", error)
+        })?;
         Ok(Some(
             self.command_factory.create_success_response_command().set_body(body),
         ))
@@ -134,15 +135,16 @@ impl ControllerRequestProcessor {
         &self,
         channel_identity: &str,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let (_header, grant) = self.authorize_maintenance_request(channel_identity, request).await?;
         let manifest = decode_controller_release_snapshot_manifest(request, "MAINTENANCE_VERIFY_CHECKPOINT")?;
         self.controller_manager()?
             .controller()
             .verify_release_snapshot(&grant, &manifest)
             .await?;
-        let body = serde_json::to_vec(&manifest)
-            .map_err(|error| RocketMQError::internal("encode verified Controller snapshot manifest", error))?;
+        let body = serde_json::to_vec(&manifest).map_err(|error| {
+            crate::error::serialization_failed("encode verified Controller snapshot manifest", "json", error)
+        })?;
         Ok(Some(
             self.command_factory.create_success_response_command().set_body(body),
         ))
@@ -152,7 +154,7 @@ impl ControllerRequestProcessor {
         &self,
         channel_identity: &str,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let (_header, grant) = self.authorize_maintenance_request(channel_identity, request).await?;
         let manifest = decode_controller_release_snapshot_manifest(request, "MAINTENANCE_RESTORE_VERIFY")?;
         let verification = self
@@ -160,39 +162,31 @@ impl ControllerRequestProcessor {
             .controller()
             .verify_release_snapshot(&grant, &manifest)
             .await?;
-        let body = serde_json::to_vec(&verification)
-            .map_err(|error| RocketMQError::internal("encode Controller restore-verification proof", error))?;
+        let body = serde_json::to_vec(&verification).map_err(|error| {
+            crate::error::serialization_failed("encode Controller restore-verification proof", "json", error)
+        })?;
         Ok(Some(
             self.command_factory.create_success_response_command().set_body(body),
         ))
     }
 }
 
-fn maintenance_permission_denied() -> RocketMQError {
-    RocketMQError::BrokerPermissionDenied {
-        operation: "privileged maintenance".to_owned(),
-    }
+fn maintenance_permission_denied() -> Error {
+    crate::error::permission_denied("privileged maintenance")
 }
 
-fn maintenance_authorizer_unavailable() -> RocketMQError {
-    RocketMQError::Shared(std::sync::Arc::new(
-        rocketmq_error::Error::new(&rocketmq_error::AUTH_OPERATION_FAILED).with_context(
-            rocketmq_error::ErrorContext::new().with_text(
-                rocketmq_error::fields::OPERATION_DIAGNOSTIC,
-                "load-maintenance-authorizer",
-            ),
-        ),
-    ))
+fn maintenance_authorizer_unavailable() -> Error {
+    crate::error::auth_operation_failed("load-maintenance-authorizer")
 }
 
 fn decode_controller_release_snapshot_manifest(
     request: &RemotingCommand,
     operation: &'static str,
-) -> RocketMQResult<ControllerReleaseSnapshotManifest> {
+) -> ControllerResult<ControllerReleaseSnapshotManifest> {
     let body = request
         .body()
-        .ok_or_else(|| RocketMQError::request_body_invalid(operation, "request body is empty"))?;
-    serde_json::from_slice(body).map_err(|error| RocketMQError::request_body_source(operation, error))
+        .ok_or_else(|| crate::error::request_body_invalid(operation))?;
+    serde_json::from_slice(body).map_err(|error| crate::error::request_body_invalid_by(operation, error))
 }
 
 #[cfg(test)]
@@ -231,6 +225,8 @@ mod tests {
         assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_BODY_INVALID);
         let source = std::error::Error::source(&error).expect("serde source must be retained");
         assert!(source.downcast_ref::<serde_json::Error>().is_some());
-        assert!(!error.boundary_view().context().to_string().contains("expected ident"));
+        let context = error.context();
+        let public = rocketmq_error::PublicErrorView::try_new(error.descriptor(), &context).expect("valid public view");
+        assert!(!format!("{public:?}").contains("expected ident"));
     }
 }

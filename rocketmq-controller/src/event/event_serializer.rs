@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::ControllerResult;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::SerializationError;
+use rocketmq_error::Error;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -80,7 +80,7 @@ impl EventSerializer {
     /// # Returns
     /// * `Ok(Some(Bytes))` - The serialized bytes
     /// * `Ok(None)` - If serialization produces empty data (matches Java behavior)
-    /// * `Err(RocketMQError)` - If serialization fails
+    /// * `Err(Error)` - If serialization fails
     ///
     /// # Example
     /// ```ignore
@@ -88,10 +88,10 @@ impl EventSerializer {
     /// let event = Event::ElectMaster(elect_master_event);
     /// let bytes = serializer.serialize(&event)?;
     /// ```
-    pub fn serialize(&self, event: &Event) -> RocketMQResult<Option<Bytes>> {
+    pub fn serialize(&self, event: &Event) -> ControllerResult<Option<Bytes>> {
         // Serialize the event data to JSON
         let json_data = serde_json::to_vec(event)
-            .map_err(|e| SerializationError::event_serialization_failed(format!("JSON serialization failed: {}", e)))?;
+            .map_err(|error| crate::error::serialization_failed("serialize Controller event", "json", error))?;
 
         // If data is empty, return None (matches Java behavior: return null)
         if json_data.is_empty() {
@@ -127,8 +127,8 @@ impl EventSerializer {
     /// # Returns
     /// * `Ok(Some(Bytes))` - The serialized bytes
     /// * `Ok(None)` - If serialization produces empty data
-    /// * `Err(RocketMQError)` - If serialization fails
-    pub fn serialize_event<T>(&self, event: T) -> RocketMQResult<Option<Bytes>>
+    /// * `Err(Error)` - If serialization fails
+    pub fn serialize_event<T>(&self, event: T) -> ControllerResult<Option<Bytes>>
     where
         T: Into<Event>,
     {
@@ -145,14 +145,14 @@ impl EventSerializer {
     /// # Returns
     /// * `Ok(Some(Event))` - The deserialized event
     /// * `Ok(None)` - If data is invalid but not an error (matches Java null behavior)
-    /// * `Err(RocketMQError)` - If deserialization fails with a critical error
+    /// * `Err(Error)` - If deserialization fails with a critical error
     ///
     /// # Example
     /// ```ignore
     /// let serializer = EventSerializer::new();
     /// let event = serializer.deserialize(&bytes)?;
     /// ```
-    pub fn deserialize(&self, bytes: &[u8]) -> RocketMQResult<Option<Event>> {
+    pub fn deserialize(&self, bytes: &[u8]) -> ControllerResult<Option<Event>> {
         // Check minimum length (at least 2 bytes for event type)
         // Java: if (bytes.length < 2) return null;
         if bytes.len() < 2 {
@@ -189,47 +189,28 @@ impl EventSerializer {
         // Java: switch (eventType) with individual deserialize calls
         let event = match event_type {
             EventType::AlterSyncStateSet => {
-                let alter_event: AlterSyncStateSetEvent = serde_json::from_slice(json_data).map_err(|e| {
-                    SerializationError::event_deserialization_failed(format!(
-                        "Failed to deserialize AlterSyncStateSetEvent: {}",
-                        e
-                    ))
-                })?;
+                let alter_event: AlterSyncStateSetEvent = serde_json::from_slice(json_data)
+                    .map_err(|e| crate::error::serialization_failed("deserialize AlterSyncStateSetEvent", "json", e))?;
                 Event::AlterSyncStateSet(alter_event)
             }
             EventType::ApplyBrokerId => {
-                let apply_event: ApplyBrokerIdEvent = serde_json::from_slice(json_data).map_err(|e| {
-                    SerializationError::event_deserialization_failed(format!(
-                        "Failed to deserialize ApplyBrokerIdEvent: {}",
-                        e
-                    ))
-                })?;
+                let apply_event: ApplyBrokerIdEvent = serde_json::from_slice(json_data)
+                    .map_err(|e| crate::error::serialization_failed("deserialize ApplyBrokerIdEvent", "json", e))?;
                 Event::ApplyBrokerId(apply_event)
             }
             EventType::ElectMaster => {
-                let elect_event: ElectMasterEvent = serde_json::from_slice(json_data).map_err(|e| {
-                    SerializationError::event_deserialization_failed(format!(
-                        "Failed to deserialize ElectMasterEvent: {}",
-                        e
-                    ))
-                })?;
+                let elect_event: ElectMasterEvent = serde_json::from_slice(json_data)
+                    .map_err(|e| crate::error::serialization_failed("deserialize ElectMasterEvent", "json", e))?;
                 Event::ElectMaster(elect_event)
             }
             EventType::CleanBrokerData => {
-                let clean_event: CleanBrokerDataEvent = serde_json::from_slice(json_data).map_err(|e| {
-                    SerializationError::event_deserialization_failed(format!(
-                        "Failed to deserialize CleanBrokerDataEvent: {}",
-                        e
-                    ))
-                })?;
+                let clean_event: CleanBrokerDataEvent = serde_json::from_slice(json_data)
+                    .map_err(|e| crate::error::serialization_failed("deserialize CleanBrokerDataEvent", "json", e))?;
                 Event::CleanBrokerData(clean_event)
             }
             EventType::UpdateBrokerAddress => {
                 let update_event: UpdateBrokerAddressEvent = serde_json::from_slice(json_data).map_err(|e| {
-                    SerializationError::event_deserialization_failed(format!(
-                        "Failed to deserialize UpdateBrokerAddressEvent: {}",
-                        e
-                    ))
+                    crate::error::serialization_failed("deserialize UpdateBrokerAddressEvent", "json", e)
                 })?;
                 Event::UpdateBrokerAddress(update_event)
             }
@@ -256,8 +237,8 @@ impl EventSerializer {
     /// # Returns
     /// * `Ok(Some(T))` - The deserialized event of the expected type
     /// * `Ok(None)` - If deserialization returns None or type mismatch
-    /// * `Err(RocketMQError)` - If deserialization fails
-    pub fn deserialize_typed<T>(&self, bytes: &[u8]) -> RocketMQResult<Option<T>>
+    /// * `Err(Error)` - If deserialization fails
+    pub fn deserialize_typed<T>(&self, bytes: &[u8]) -> ControllerResult<Option<T>>
     where
         T: TryFrom<Event>,
     {
@@ -310,70 +291,70 @@ impl From<UpdateBrokerAddressEvent> for Event {
 
 // TryFrom implementations for extracting specific types
 impl TryFrom<Event> for AlterSyncStateSetEvent {
-    type Error = SerializationError;
+    type Error = Error;
 
     fn try_from(event: Event) -> std::result::Result<Self, Self::Error> {
         match event {
             Event::AlterSyncStateSet(e) => Ok(e),
-            _ => Err(SerializationError::invalid_format(
-                "AlterSyncStateSetEvent",
-                "other event type",
+            _ => Err(crate::error::serialization_invalid(
+                "extract AlterSyncStateSetEvent",
+                "controller-event",
             )),
         }
     }
 }
 
 impl TryFrom<Event> for ApplyBrokerIdEvent {
-    type Error = SerializationError;
+    type Error = Error;
 
     fn try_from(event: Event) -> std::result::Result<Self, Self::Error> {
         match event {
             Event::ApplyBrokerId(e) => Ok(e),
-            _ => Err(SerializationError::invalid_format(
-                "ApplyBrokerIdEvent",
-                "other event type",
+            _ => Err(crate::error::serialization_invalid(
+                "extract ApplyBrokerIdEvent",
+                "controller-event",
             )),
         }
     }
 }
 
 impl TryFrom<Event> for ElectMasterEvent {
-    type Error = SerializationError;
+    type Error = Error;
 
     fn try_from(event: Event) -> std::result::Result<Self, Self::Error> {
         match event {
             Event::ElectMaster(e) => Ok(e),
-            _ => Err(SerializationError::invalid_format(
-                "ElectMasterEvent",
-                "other event type",
+            _ => Err(crate::error::serialization_invalid(
+                "extract ElectMasterEvent",
+                "controller-event",
             )),
         }
     }
 }
 
 impl TryFrom<Event> for CleanBrokerDataEvent {
-    type Error = SerializationError;
+    type Error = Error;
 
     fn try_from(event: Event) -> std::result::Result<Self, Self::Error> {
         match event {
             Event::CleanBrokerData(e) => Ok(e),
-            _ => Err(SerializationError::invalid_format(
-                "CleanBrokerDataEvent",
-                "other event type",
+            _ => Err(crate::error::serialization_invalid(
+                "extract CleanBrokerDataEvent",
+                "controller-event",
             )),
         }
     }
 }
 
 impl TryFrom<Event> for UpdateBrokerAddressEvent {
-    type Error = SerializationError;
+    type Error = Error;
 
     fn try_from(event: Event) -> std::result::Result<Self, Self::Error> {
         match event {
             Event::UpdateBrokerAddress(e) => Ok(e),
-            _ => Err(SerializationError::invalid_format(
-                "UpdateBrokerAddressEvent",
-                "other event type",
+            _ => Err(crate::error::serialization_invalid(
+                "extract UpdateBrokerAddressEvent",
+                "controller-event",
             )),
         }
     }

@@ -64,6 +64,7 @@ use crate::typ::ControllerRequest;
 use crate::typ::ControllerResponse;
 use crate::typ::Node;
 use crate::typ::NodeId;
+use crate::ControllerResult;
 use crate::ReplicasInfoManager;
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
@@ -72,8 +73,6 @@ use rocketmq_error::fields;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::Result;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_error::TRANSPORT_CONNECTION_FAILED;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::body::release_checkpoint::ControllerReleaseSnapshotManifest;
@@ -124,11 +123,8 @@ fn openraft_startup_failed(operation: &'static str, error: impl std::error::Erro
     controller_internal_by(operation, error)
 }
 
-fn openraft_response_decode_failed(error: serde_json::Error) -> RocketMQError {
-    RocketMQError::Shared(Arc::new(controller_internal_by(
-        "decode inactive broker scan response",
-        error,
-    )))
+fn openraft_response_decode_failed(error: serde_json::Error) -> Error {
+    controller_internal_by("decode inactive broker scan response", error)
 }
 
 #[derive(Default)]
@@ -275,7 +271,7 @@ impl OpenRaftController {
         Ok(task_group)
     }
 
-    async fn start_scan_task_group(&self) -> RocketMQResult<ScheduledTaskGroup> {
+    async fn start_scan_task_group(&self) -> ControllerResult<ScheduledTaskGroup> {
         self.scan_scheduled_tasks.lock().take();
         let previous_task_group = {
             let mut guard = self.scan_task_group.lock();
@@ -452,13 +448,11 @@ impl OpenRaftController {
             .map(|node| node.store().state_machine.replicas_info_manager())
     }
 
-    async fn linearizable_replicas_info_manager(&self) -> RocketMQResult<Option<Arc<ReplicasInfoManager>>> {
+    async fn linearizable_replicas_info_manager(&self) -> ControllerResult<Option<Arc<ReplicasInfoManager>>> {
         let Some(node) = self.node() else {
             return Ok(None);
         };
-        node.ensure_linearizable_read()
-            .await
-            .map_err(|error| RocketMQError::Shared(Arc::new(error)))?;
+        node.ensure_linearizable_read().await?;
         Ok(Some(node.store().state_machine.replicas_info_manager()))
     }
 
@@ -487,7 +481,7 @@ impl OpenRaftController {
             .collect()
     }
 
-    async fn write_request(&self, request: ControllerRequest) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn write_request(&self, request: ControllerRequest) -> ControllerResult<Option<RemotingCommand>> {
         if !self.is_current_leader() {
             return Ok(self.not_leader_response());
         }
@@ -496,16 +490,13 @@ impl OpenRaftController {
             return Ok(self.not_started_response());
         };
 
-        let response = node
-            .client_write(request)
-            .await
-            .map_err(|error| RocketMQError::Shared(Arc::new(error)))?;
+        let response = node.client_write(request).await?;
         Ok(Some(
             response.data.into_remoting_command_with_factory(&self.command_factory),
         ))
     }
 
-    async fn write_internal_request(&self, request: ControllerRequest) -> RocketMQResult<Option<ControllerResponse>> {
+    async fn write_internal_request(&self, request: ControllerRequest) -> ControllerResult<Option<ControllerResponse>> {
         if !self.is_current_leader() {
             return Ok(None);
         }
@@ -514,17 +505,14 @@ impl OpenRaftController {
             return Ok(None);
         };
 
-        let response = node
-            .client_write(request)
-            .await
-            .map_err(|error| RocketMQError::Shared(Arc::new(error)))?;
+        let response = node.client_write(request).await?;
         Ok(Some(response.data))
     }
 
     pub async fn record_broker_heartbeat(
         &self,
         request: &BrokerHeartbeatRequestHeader,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let Some(broker_id) = request.broker_id else {
             return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,
@@ -611,7 +599,7 @@ impl OpenRaftController {
         cluster_name: Option<&str>,
         broker_name: &str,
         broker_id: Option<i64>,
-    ) -> RocketMQResult<()> {
+    ) -> ControllerResult<()> {
         let Some(broker_id) = broker_id else {
             return Ok(());
         };
@@ -633,11 +621,10 @@ impl OpenRaftController {
     async fn scan_not_active_broker_once(
         node: Arc<RaftNodeManager>,
         check_time_millis: u64,
-    ) -> RocketMQResult<Vec<BrokerIdentityInfoSnapshot>> {
+    ) -> ControllerResult<Vec<BrokerIdentityInfoSnapshot>> {
         let response = node
             .client_write(ControllerRequest::CheckNotActiveBroker { check_time_millis })
-            .await
-            .map_err(|error| RocketMQError::Shared(Arc::new(error)))?;
+            .await?;
         let Some(body) = response.data.body else {
             return Ok(Vec::new());
         };
@@ -668,11 +655,9 @@ impl OpenRaftController {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: ControllerReleaseSnapshotRequest,
-    ) -> RocketMQResult<ControllerReleaseSnapshot> {
+    ) -> ControllerResult<ControllerReleaseSnapshot> {
         if authorization.capability() != MaintenanceCapability::ReleaseCheckpoint {
-            return Err(RocketMQError::authentication_failed(
-                "maintenance grant does not authorize release checkpoints",
-            ));
+            return Err(crate::error::authentication_failed());
         }
         request.validate().map_err(controller_snapshot_error_by)?;
 
@@ -681,42 +666,25 @@ impl OpenRaftController {
             .deadline_unix_millis()
             .checked_sub(now_unix_millis)
             .filter(|remaining| *remaining > 0)
-            .ok_or_else(|| RocketMQError::Shared(Arc::new(consensus_timed_out("create release snapshot", 0))))?;
+            .ok_or_else(|| consensus_timed_out("create release snapshot", 0))?;
         let deadline = ShutdownDeadline::after(Duration::from_millis(timeout_millis));
-        let node = self
-            .node()
-            .ok_or_else(|| RocketMQError::not_initialized("OpenRaft node is not started"))?;
+        let node = self.node().ok_or_else(|| not_initialized("controller.openraft"))?;
 
         let read_barrier = tokio::time::timeout(deadline.remaining(), node.ensure_linearizable_read())
             .await
-            .map_err(|_| {
-                RocketMQError::Shared(Arc::new(consensus_timed_out(
-                    "release snapshot ReadIndex",
-                    timeout_millis,
-                )))
-            })?
-            .map_err(|error| RocketMQError::Shared(Arc::new(error)))?
+            .map_err(|_| consensus_timed_out("release snapshot ReadIndex", timeout_millis))??
             .ok_or_else(controller_snapshot_error)?;
 
         tokio::time::timeout(deadline.remaining(), node.raft().trigger().snapshot())
             .await
-            .map_err(|_| {
-                RocketMQError::Shared(Arc::new(consensus_timed_out(
-                    "trigger release snapshot",
-                    timeout_millis,
-                )))
-            })?
-            .map_err(|error| RocketMQError::Shared(Arc::new(consensus_failed("trigger release snapshot", error))))?;
+            .map_err(|_| consensus_timed_out("trigger release snapshot", timeout_millis))?
+            .map_err(|error| consensus_failed("trigger release snapshot", error))?;
 
         let snapshot = loop {
             let current = tokio::time::timeout(deadline.remaining(), node.raft().get_snapshot())
                 .await
-                .map_err(|_| {
-                    RocketMQError::Shared(Arc::new(consensus_timed_out("await release snapshot", timeout_millis)))
-                })?
-                .map_err(|error| {
-                    RocketMQError::Shared(Arc::new(consensus_failed("read current release snapshot", error)))
-                })?;
+                .map_err(|_| consensus_timed_out("await release snapshot", timeout_millis))?
+                .map_err(|error| consensus_failed("read current release snapshot", error))?;
             if let Some(snapshot) = current {
                 if snapshot
                     .meta
@@ -727,10 +695,7 @@ impl OpenRaftController {
                 }
             }
             if deadline.is_expired() {
-                return Err(RocketMQError::Shared(Arc::new(consensus_timed_out(
-                    "await release snapshot",
-                    timeout_millis,
-                ))));
+                return Err(consensus_timed_out("await release snapshot", timeout_millis));
             }
             tokio::task::yield_now().await;
         };
@@ -743,10 +708,10 @@ impl OpenRaftController {
         let max_snapshot_bytes =
             (crate::openraft::SNAPSHOT_MAX_BYTES as u64).min(authorization.resource_budget().max_checkpoint_bytes);
         if payload.len() as u64 > max_snapshot_bytes {
-            return Err(RocketMQError::MessageTooLarge {
-                actual: payload.len(),
-                limit: usize::try_from(max_snapshot_bytes).unwrap_or(usize::MAX),
-            });
+            return Err(crate::error::message_too_large(
+                payload.len(),
+                usize::try_from(max_snapshot_bytes).unwrap_or(usize::MAX),
+            ));
         }
 
         let (payload, sha256) = self
@@ -762,7 +727,7 @@ impl OpenRaftController {
                 },
             )
             .await
-            .map_err(|error| RocketMQError::internal("hash controller release snapshot", error))?;
+            .map_err(|error| controller_internal_by("hash controller release snapshot", error))?;
         let node_id = self.config.snapshot().node_id;
         let manifest = ControllerReleaseSnapshotManifest {
             artifact: ReleaseCheckpointArtifact {
@@ -800,18 +765,16 @@ impl OpenRaftController {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         manifest: &ControllerReleaseSnapshotManifest,
-    ) -> RocketMQResult<ReleaseCheckpointRestoreVerification> {
+    ) -> ControllerResult<ReleaseCheckpointRestoreVerification> {
         self.release_snapshot_repository()?
             .verify(authorization, manifest)
             .await
     }
 
-    fn release_snapshot_repository(&self) -> RocketMQResult<ControllerReleaseSnapshotRepository> {
+    fn release_snapshot_repository(&self) -> ControllerResult<ControllerReleaseSnapshotRepository> {
         let config = self.config.snapshot();
         if config.maintenance_checkpoint_root.trim().is_empty() {
-            return Err(RocketMQError::not_initialized(
-                "Controller maintenance checkpoint root is not configured",
-            ));
+            return Err(not_initialized("controller.maintenance-checkpoint-root"));
         }
         Ok(ControllerReleaseSnapshotRepository::new(
             PathBuf::from(&config.maintenance_checkpoint_root),
@@ -845,10 +808,8 @@ impl OpenRaftController {
         &self,
         authorization: &MaintenanceAuthorizationGrant,
         request: MembershipChangeRequest,
-    ) -> RocketMQResult<MembershipChangeOutcome> {
-        let node = self
-            .node()
-            .ok_or_else(|| RocketMQError::not_initialized("OpenRaft node is not started"))?;
+    ) -> ControllerResult<MembershipChangeOutcome> {
+        let node = self.node().ok_or_else(|| not_initialized("controller.openraft"))?;
         node.apply_membership_change(authorization, request).await
     }
 
@@ -1028,19 +989,15 @@ fn controller_bind_error(addr: SocketAddr, node_id: NodeId, source: std::io::Err
 }
 
 impl Controller for OpenRaftController {
-    async fn startup(&mut self) -> RocketMQResult<()> {
-        self.startup_shared()
-            .await
-            .map_err(|error| RocketMQError::Shared(Arc::new(error)))
+    async fn startup(&mut self) -> ControllerResult<()> {
+        self.startup_shared().await
     }
 
-    async fn shutdown(&mut self) -> RocketMQResult<()> {
-        self.shutdown_shared()
-            .await
-            .map_err(|error| RocketMQError::Shared(Arc::new(error)))
+    async fn shutdown(&mut self) -> ControllerResult<()> {
+        self.shutdown_shared().await
     }
 
-    async fn start_scheduling(&self) -> RocketMQResult<()> {
+    async fn start_scheduling(&self) -> ControllerResult<()> {
         if self.scheduling.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
@@ -1141,15 +1098,12 @@ impl Controller for OpenRaftController {
         }) {
             self.scheduling.store(false, Ordering::Release);
             self.stop_scan_task_group().await;
-            return Err(RocketMQError::Shared(Arc::new(openraft_startup_failed(
-                "schedule active broker scan task",
-                error,
-            ))));
+            return Err(openraft_startup_failed("schedule active broker scan task", error));
         }
         Ok(())
     }
 
-    async fn stop_scheduling(&self) -> RocketMQResult<()> {
+    async fn stop_scheduling(&self) -> ControllerResult<()> {
         self.scheduling.store(false, Ordering::Release);
         self.stop_scan_task_group().await;
         Ok(())
@@ -1162,7 +1116,7 @@ impl Controller for OpenRaftController {
     async fn register_broker(
         &self,
         request: &RegisterBrokerToControllerRequestHeader,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let cluster_name = request.cluster_name.clone().unwrap_or_default();
         let broker_name = request.broker_name.clone().unwrap_or_default();
         let broker_address = request.broker_address.clone().unwrap_or_default();
@@ -1234,7 +1188,7 @@ impl Controller for OpenRaftController {
     async fn get_next_broker_id(
         &self,
         request: &GetNextBrokerIdRequestHeader,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let Some(replicas_info_manager) = self.linearizable_replicas_info_manager().await? else {
             return Ok(self.not_started_response());
         };
@@ -1244,7 +1198,7 @@ impl Controller for OpenRaftController {
         Ok(Some(self.command_from_result(result)))
     }
 
-    async fn apply_broker_id(&self, request: &ApplyBrokerIdRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn apply_broker_id(&self, request: &ApplyBrokerIdRequestHeader) -> ControllerResult<Option<RemotingCommand>> {
         if request.applied_broker_id < 0 {
             return Ok(Some(self.command_factory.create_response_command_with_code_remark(
                 ResponseCode::ControllerBrokerIdInvalid,
@@ -1273,7 +1227,7 @@ impl Controller for OpenRaftController {
     async fn clean_broker_data(
         &self,
         request: &CleanBrokerDataRequestHeader,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let cluster_name = request.cluster_name.clone().unwrap_or_default();
         let Some(read_state) = self.linearizable_replicas_info_manager().await? else {
             return Ok(self.not_started_response());
@@ -1293,7 +1247,7 @@ impl Controller for OpenRaftController {
         .await
     }
 
-    async fn elect_master(&self, request: &ElectMasterRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn elect_master(&self, request: &ElectMasterRequestHeader) -> ControllerResult<Option<RemotingCommand>> {
         let Some(read_state) = self.linearizable_replicas_info_manager().await? else {
             return Ok(self.not_started_response());
         };
@@ -1321,7 +1275,7 @@ impl Controller for OpenRaftController {
         &self,
         request: &AlterSyncStateSetRequestHeader,
         sync_state_set: SyncStateSet,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let Some(replicas_info_manager) = self.linearizable_replicas_info_manager().await? else {
             return Ok(self.not_started_response());
         };
@@ -1348,7 +1302,10 @@ impl Controller for OpenRaftController {
         .await
     }
 
-    async fn get_replica_info(&self, request: &GetReplicaInfoRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn get_replica_info(
+        &self,
+        request: &GetReplicaInfoRequestHeader,
+    ) -> ControllerResult<Option<RemotingCommand>> {
         let Some(replicas_info_manager) = self.linearizable_replicas_info_manager().await? else {
             return Ok(self.not_started_response());
         };
@@ -1357,7 +1314,7 @@ impl Controller for OpenRaftController {
         Ok(Some(self.command_from_result(result)))
     }
 
-    async fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn get_controller_metadata(&self) -> ControllerResult<Option<RemotingCommand>> {
         let controller_metadata_info: GetMetaDataResponseHeader = {
             let config = self.config.snapshot();
             let peers: Option<CheetahString> = {
@@ -1411,7 +1368,7 @@ impl Controller for OpenRaftController {
         ))
     }
 
-    async fn get_sync_state_data(&self, broker_names: &[CheetahString]) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn get_sync_state_data(&self, broker_names: &[CheetahString]) -> ControllerResult<Option<RemotingCommand>> {
         let Some(replicas_info_manager) = self.linearizable_replicas_info_manager().await? else {
             return Ok(self.not_started_response());
         };
@@ -1433,8 +1390,8 @@ impl Controller for OpenRaftController {
 ///
 /// Returns a typed configuration error when `ROCKETMQ_CONTROLLER_RAFT_BIND_ADDR`
 /// is non-UTF-8 or not a socket address.
-pub fn resolve_controller_raft_bind_addr(fallback: SocketAddr) -> RocketMQResult<SocketAddr> {
-    resolve_controller_raft_bind_addr_canonical(fallback).map_err(|error| RocketMQError::Shared(Arc::new(error)))
+pub fn resolve_controller_raft_bind_addr(fallback: SocketAddr) -> ControllerResult<SocketAddr> {
+    resolve_controller_raft_bind_addr_canonical(fallback)
 }
 
 fn resolve_controller_raft_bind_addr_canonical(fallback: SocketAddr) -> Result<SocketAddr> {

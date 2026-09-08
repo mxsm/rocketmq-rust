@@ -12,22 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::ControllerResult;
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
-
-use rocketmq_error::fields;
-use rocketmq_error::Error;
-use rocketmq_error::ErrorContext;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::CORE_CONFIGURATION_INVALID;
-use serde::de::DeserializeOwned;
-use serde::Deserialize;
-use serde::Serialize;
 use tokio::sync::RwLock;
 
 use rocketmq_model::common::mix_all::ROCKETMQ_HOME_ENV;
@@ -285,31 +278,15 @@ impl Clone for ControllerConfig {
     }
 }
 
-fn parse_update_value<T>(key: &'static str, value: &str) -> RocketMQResult<T>
+fn parse_update_value<T>(key: &'static str, value: &str) -> ControllerResult<T>
 where
     T: DeserializeOwned,
 {
-    serde_json::from_str(value).map_err(|error| {
-        RocketMQError::Shared(Arc::new(
-            Error::caused_by(&CORE_CONFIGURATION_INVALID, error).with_context(
-                ErrorContext::new()
-                    .with_text(fields::KEY, key)
-                    .with_secret_presence(fields::VALUE_PRESENT)
-                    .with_secret_presence(fields::REASON_PRESENT),
-            ),
-        ))
-    })
+    serde_json::from_str(value).map_err(|error| crate::error::configuration_invalid_by(key, error))
 }
 
-fn unknown_update_key(_key: &str) -> RocketMQError {
-    RocketMQError::Shared(Arc::new(
-        Error::new(&CORE_CONFIGURATION_INVALID).with_context(
-            ErrorContext::new()
-                .with_text(fields::KEY, "property")
-                .with_secret_presence(fields::VALUE_PRESENT)
-                .with_secret_presence(fields::REASON_PRESENT),
-        ),
-    ))
+fn unknown_update_key(_key: &str) -> rocketmq_error::Error {
+    crate::error::configuration_invalid("property")
 }
 
 impl Default for ControllerConfig {
@@ -760,7 +737,7 @@ impl ControllerConfig {
 
         result
     }
-    pub async fn update(&mut self, properties: HashMap<String, String>) -> RocketMQResult<()> {
+    pub async fn update(&mut self, properties: HashMap<String, String>) -> ControllerResult<()> {
         let _lock = self.rw_lock.write().await;
         for (key, value) in &properties {
             match key.as_str() {
@@ -1197,10 +1174,7 @@ path = "/rocketmq"
 
         assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
         assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 29);
-        let RocketMQError::Shared(error) = error else {
-            panic!("configuration parse errors must use the canonical carrier");
-        };
-        assert!(std::error::Error::source(error.as_ref())
+        assert!(std::error::Error::source(&error)
             .and_then(|source| source.downcast_ref::<serde_json::Error>())
             .is_some());
     }
@@ -1215,6 +1189,6 @@ path = "/rocketmq"
 
         assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
         assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 29);
-        assert!(matches!(error, RocketMQError::Shared(_)));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
     }
 }

@@ -90,6 +90,9 @@ pub mod protobuf {
     }
 }
 
+/// Canonical result returned by Controller operations.
+pub type ControllerResult<T> = rocketmq_error::Result<T>;
+
 pub use cli::parse_command_line;
 pub use cli::ControllerCli;
 pub use config::ControllerConfig;
