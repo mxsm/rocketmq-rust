@@ -159,15 +159,24 @@ def build_plan(
         if entry.get("classification") == "registry-publish"
     }
     dependencies: dict[str, set[str]] = {}
+    dev_dependencies: dict[str, set[str]] = {}
     for name in publishable:
         package_dependencies = workspace[name].get("dependencies", [])
         if not isinstance(package_dependencies, list):
             raise PlannerError(f"metadata dependencies are invalid for {name}")
         internal: set[str] = set()
+        development: set[str] = set()
         for dependency in package_dependencies:
             if not isinstance(dependency, dict) or not isinstance(dependency.get("name"), str):
                 raise PlannerError(f"metadata dependency is invalid for {name}")
             dependency_name = dependency["name"]
+            kind = dependency.get("kind")
+            if kind not in (None, "normal", "build", "dev"):
+                raise PlannerError(f"unknown dependency kind {kind!r} for {name}")
+            if kind == "dev":
+                if dependency_name in workspace:
+                    development.add(dependency_name)
+                continue
             if dependency_name not in scoped:
                 if dependency.get("path") is not None:
                     raise PlannerError(
@@ -184,6 +193,7 @@ def build_plan(
             if dependency_name != name:
                 internal.add(dependency_name)
         dependencies[name] = internal
+        dev_dependencies[name] = development
 
     if selector is None:
         selected = set(publishable)
@@ -224,6 +234,7 @@ def build_plan(
                 "version": package.get("version"),
                 "order": index,
                 "internal_dependencies": sorted(selected_dependencies[name]),
+                "internal_dev_dependencies": sorted(dev_dependencies[name]),
                 "operation_type": "registry-package",
                 "target_registry": "crates.io",
             }
