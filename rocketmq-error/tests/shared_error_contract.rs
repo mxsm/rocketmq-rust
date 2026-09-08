@@ -15,7 +15,6 @@
 use std::error::Error as _;
 use std::io;
 
-use rocketmq_error::DomainError;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::RocketMQError;
@@ -29,14 +28,10 @@ fn assert_shared_contract(canonical: Error, expected_cause: Option<&str>) {
 
     assert_eq!(wrapped.descriptor(), shared.descriptor());
     assert_eq!(wrapped.context(), shared.context().clone());
-    let boundary = wrapped.boundary_view();
-    assert_eq!(boundary.code(), shared.code());
-    assert_eq!(boundary.recovery_hint(), shared.recovery_hint());
-    assert_eq!(boundary.severity(), shared.severity());
-    assert_eq!(boundary.exposure(), shared.exposure());
-    assert_eq!(wrapped.recovery_hint(), shared.recovery_hint());
-    assert_eq!(wrapped.severity(), shared.severity());
-    assert_eq!(wrapped.exposure(), shared.exposure());
+    assert_eq!(wrapped.descriptor().code(), shared.code());
+    assert_eq!(wrapped.descriptor().recovery_hint(), shared.recovery_hint());
+    assert_eq!(wrapped.descriptor().severity(), shared.severity());
+    assert_eq!(wrapped.descriptor().exposure(), shared.exposure());
     assert_eq!(wrapped.to_string(), shared.to_string());
 
     assert_eq!(wrapped.source().map(ToString::to_string).as_deref(), expected_cause);

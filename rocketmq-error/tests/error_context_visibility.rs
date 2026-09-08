@@ -16,6 +16,7 @@ use rocketmq_error::fields;
 use rocketmq_error::CliErrorView;
 use rocketmq_error::CliVerbosity;
 use rocketmq_error::ContextVisibility;
+use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::FieldValueKind;
 use rocketmq_error::FieldValueRef;
@@ -173,10 +174,12 @@ fn sentinel_never_enters_context_or_safe_boundary_output() {
     }
 
     let error = RocketMQError::internal("sentinel operation", std::io::Error::other(SENTINEL));
-    let boundary = error.boundary_view();
-    let cli = CliErrorView::from_error(&error);
-    assert!(!boundary.context().to_string().contains(SENTINEL));
-    assert!(!format!("{boundary:?}").contains(SENTINEL));
+    let descriptor = error.descriptor();
+    let context = error.context();
+    let canonical = Error::caused_by(descriptor, error).with_context(context);
+    let public = canonical.public_view().expect("valid public view");
+    let cli = CliErrorView::from_error(&canonical);
+    assert!(!format!("{public:?}").contains(SENTINEL));
     assert!(!cli.output(CliVerbosity::Default).stderr().contains(SENTINEL));
     assert!(!cli.output(CliVerbosity::Verbose).stderr().contains(SENTINEL));
 }

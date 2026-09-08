@@ -15,3 +15,26 @@
 pub mod bits_array;
 pub mod bloom_filter;
 pub mod bloom_filter_data;
+
+use rocketmq_error::fields;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
+
+pub(crate) fn invalid_filter(kind: &'static str) -> Error {
+    Error::new(&rocketmq_error::PROTOCOL_FILTER_INVALID)
+        .with_context(ErrorContext::new().with_text(fields::FILTER_KIND, kind))
+}
+
+pub(crate) fn invalid_filter_position(kind: &'static str, position: usize, limit: usize) -> Error {
+    Error::new(&rocketmq_error::PROTOCOL_FILTER_INVALID).with_context(
+        ErrorContext::new()
+            .with_text(fields::FILTER_KIND, kind)
+            .with_u64(fields::POSITION, position as u64)
+            .with_u64(fields::LIMIT, limit as u64),
+    )
+}
+
+pub(crate) fn uninitialized_filter() -> Error {
+    Error::new(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED)
+        .with_context(ErrorContext::new().with_text(fields::COMPONENT_NAME, "filter.bits_array"))
+}

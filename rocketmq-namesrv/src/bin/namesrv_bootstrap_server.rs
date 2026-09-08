@@ -33,6 +33,12 @@ use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::RaftPeer;
 #[cfg(feature = "embedded-controller")]
 use rocketmq_controller::StorageBackendType;
+use rocketmq_error::fields;
+use rocketmq_error::CliErrorView;
+use rocketmq_error::CliVerbosity;
+use rocketmq_error::Error;
+use rocketmq_error::ErrorContext;
+use rocketmq_error::CORE_SERVICE_FAILED;
 use rocketmq_model::common::mix_all::string_to_properties;
 use rocketmq_model::utils::env_utils::EnvUtils;
 use rocketmq_model::version::CURRENT_VERSION;
@@ -104,7 +110,22 @@ fn print_release_version_if_requested(component: &str) -> bool {
     true
 }
 
-fn main() -> Result<()> {
+fn main() {
+    if let Err(source) = try_main() {
+        let error = Error::new(&CORE_SERVICE_FAILED)
+            .with_boxed_source(source.into_boxed_dyn_error())
+            .with_context(
+                ErrorContext::new()
+                    .with_text(fields::OPERATION_DIAGNOSTIC, "run-nameserver-service")
+                    .with_secret_presence(fields::SOURCE_PRESENT),
+            );
+        let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
+        eprintln!("{}", output.stderr());
+        std::process::exit(output.exit_code().as_i32());
+    }
+}
+
+fn try_main() -> Result<()> {
     if print_release_version_if_requested("rocketmq-namesrv-rust") {
         return Ok(());
     }

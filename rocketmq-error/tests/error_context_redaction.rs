@@ -17,6 +17,8 @@ use rocketmq_error::ErrorContext;
 use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::FieldValueRef;
 use rocketmq_error::ObservabilityError;
+use rocketmq_error::PublicErrorView;
+use rocketmq_error::RecoveryHint;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::Sensitive;
 use rocketmq_error::AUTH_OPERATION_FAILED;
@@ -79,15 +81,16 @@ fn rocketmq_error_exposes_public_message_and_redacted_context() {
 }
 
 #[test]
-fn boundary_view_exposes_public_message_and_redacted_context() {
+fn public_view_exposes_public_message_and_redacted_context() {
     let error = RocketMQError::internal("run internal operation", std::io::Error::other("password=plain-text"));
-    let view = error.boundary_view();
+    let context = error.context();
+    let view = PublicErrorView::try_new(error.descriptor(), &context).expect("valid public view");
 
     assert_eq!(view.code().as_str(), "core.internal.failure");
     assert_eq!(view.message(), "Internal error");
-    assert!(view.context().is_empty());
-    assert!(!view.context().to_string().contains("plain-text"));
-    assert!(!view.is_retryable());
+    assert_eq!(view.fields().count(), 0);
+    assert!(!format!("{view:?}").contains("plain-text"));
+    assert_eq!(error.descriptor().recovery_hint(), RecoveryHint::OperatorAction);
 }
 
 #[test]
@@ -142,7 +145,9 @@ fn request_boundary_errors_preserve_typed_source_chains() {
         let source = error.source().expect("typed source must be retained");
         assert!(source.downcast_ref::<std::io::Error>().is_some());
         assert!(source.to_string().contains(secret));
-        assert!(!error.boundary_view().context().to_string().contains(secret));
+        let context = error.context();
+        let public = PublicErrorView::try_new(error.descriptor(), &context).expect("valid public view");
+        assert!(!format!("{public:?}").contains(secret));
     }
 }
 use std::error::Error;

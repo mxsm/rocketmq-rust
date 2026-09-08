@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_error::DomainError;
 use rocketmq_error::FilterCompileError;
 use rocketmq_error::FilterCompileErrorKind;
 use rocketmq_error::FilterCompileSource;
 use rocketmq_error::FilterCompileStage;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error;
 use rocketmq_error::PROTOCOL_FILTER_INVALID;
 
 #[test]
@@ -33,22 +32,22 @@ fn compile_error_contract_is_typed_and_redaction_safe() {
     assert_eq!(error.stage(), FilterCompileStage::Parse);
     assert_eq!(error.position(), Some(7));
     assert_eq!(error.source(), Some(FilterCompileSource::Sql92));
-    assert_eq!(DomainError::descriptor(&error), &PROTOCOL_FILTER_INVALID);
+    assert_eq!(error.descriptor(), &PROTOCOL_FILTER_INVALID);
 
     let display = error.to_string();
     let debug = format!("{error:?}");
-    let context = DomainError::context(&error).to_string();
+    let context = error.context().to_string();
     for rendered in [display, debug, context] {
         assert!(rendered.contains("UnexpectedToken") || rendered.contains("filter_compile_kind"));
         assert!(!rendered.contains("secret_expression"));
     }
 
-    let unified: RocketMQError = error.into();
-    assert_eq!(unified.descriptor(), &PROTOCOL_FILTER_INVALID);
-    let unified_context = unified.context().to_string();
-    assert!(unified_context.contains("filter_compile_kind=<redacted>"));
-    assert!(unified_context.contains("filter_compile_source=<redacted>"));
-    assert!(!unified_context.contains("UnexpectedToken"));
-    assert!(!unified_context.contains("Sql92"));
-    assert!(!unified_context.contains("secret_expression"));
+    let canonical: Error = error.into();
+    assert_eq!(canonical.descriptor(), &PROTOCOL_FILTER_INVALID);
+    let canonical_context = canonical.context().to_string();
+    assert!(canonical_context.contains("filter_compile_kind=<redacted>"));
+    assert!(canonical_context.contains("filter_compile_source=<redacted>"));
+    assert!(!canonical_context.contains("UnexpectedToken"));
+    assert!(!canonical_context.contains("Sql92"));
+    assert!(!canonical_context.contains("secret_expression"));
 }

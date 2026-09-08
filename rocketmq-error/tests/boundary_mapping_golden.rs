@@ -71,14 +71,15 @@ fn four_boundary_mappings_match_the_golden_contract() {
     ];
 
     for (error, expected) in cases {
-        let view = error.boundary_view();
+        let descriptor = error.descriptor();
+        let projection = descriptor.projection();
         let actual = (
-            view.code().as_str(),
-            view.remoting().code,
-            view.grpc().payload,
-            view.grpc().status,
-            view.http().status,
-            view.cli().exit_code,
+            descriptor.code().as_str(),
+            projection.remoting().code,
+            projection.grpc().payload,
+            projection.grpc().status,
+            projection.http().status,
+            projection.cli().exit_code,
         );
         assert_eq!(
             expected,

@@ -754,10 +754,10 @@ def check_required_mapping_adapters() -> list[Finding]:
         / "client_adapter"
         / "services"
         / "error_view.rs": [
-            "error.boundary_view()",
-            "boundary.code().as_str()",
-            "boundary.message()",
-            "boundary.context()",
+            "PublicErrorView::try_new(error.descriptor(), &context)",
+            "public.code().as_str()",
+            "public.message()",
+            "public.fields()",
         ],
         ROOT
         / "rocketmq-tools"
@@ -1116,18 +1116,19 @@ def check_error_descriptor_contract() -> list[Finding]:
             "pub(crate) const fn try_new(",
             "pub const fn recovery_hint(&self) -> RecoveryHint",
         ],
-        ROOT / "rocketmq-error" / "src" / "context.rs": [
-            "pub(crate) fn public_projection(&self, descriptor: &'static ErrorDescriptor) -> Self",
-            "if matches!(descriptor.exposure(), Exposure::Generic)",
-        ],
+        ROOT / "rocketmq-error" / "src" / "context.rs": ["pub(crate) fn fields(&self) -> &[ErrorContextField]"],
         ROOT / "rocketmq-error" / "src" / "catalog.rs": [
             "macro_rules! define_error_catalog",
             "pub const ALL_DESCRIPTORS: &[ErrorDescriptor]",
             "pub fn descriptor_by_code(code: &str)",
         ],
-        ROOT / "rocketmq-error" / "src" / "domain.rs": [
-            "fn descriptor(&self) -> &'static ErrorDescriptor",
-            "BoundaryErrorView::new(self.descriptor(), self.context())",
+        ROOT / "rocketmq-error" / "src" / "error.rs": [
+            "pub fn public_view(&self) -> std::result::Result<PublicErrorView<'_>, ViewContextViolation>",
+            "pub fn diagnostic_view(&self) -> std::result::Result<DiagnosticView<'_>, ViewContextViolation>",
+        ],
+        ROOT / "rocketmq-error" / "src" / "view.rs": [
+            "pub struct PublicErrorView<'a>",
+            "pub struct DiagnosticView<'a>",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_descriptor_catalog.rs": [
             "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 128",
@@ -1136,7 +1137,7 @@ def check_error_descriptor_contract() -> list[Finding]:
         ROOT / "rocketmq-error" / "tests" / "error_context_redaction.rs": [
             "rocketmq_error_exposes_public_message_and_redacted_context",
             "source_present=<redacted>",
-            "view.context().is_empty()",
+            "view.fields().count()",
         ],
     }
     findings: list[Finding] = []

@@ -19,8 +19,7 @@ projections, bounded context, and redaction-safe boundary views.
 - Stable descriptor metadata: code, class, condition, fault attribution,
   component, fixed public message, severity, recovery hint, backtrace policy,
   exposure, four explicit boundary projections, and ordered field schemas.
-- `ErrorContext`, `PublicErrorView`, `DiagnosticView`,
-  `BoundaryErrorView`, and `CliErrorView`.
+- `ErrorContext`, `PublicErrorView`, `DiagnosticView`, and `CliErrorView`.
 
 The crate intentionally does not depend on transport implementations or
 generated protobuf bindings. Its remoting, gRPC, HTTP, and CLI projection types
@@ -88,22 +87,25 @@ A descriptor explicitly owns all four projections:
 
 ## Boundary Views and Redaction
 
-Use `boundary_view()` for remoting, gRPC, HTTP, CLI, dashboard, or other public
-adapters. The view reads identity and projections from the descriptor and
-enforces its exposure policy.
+Use `PublicErrorView` for approved public context fields at remoting, gRPC,
+HTTP, dashboard, or other public adapters. Read protocol mappings directly
+from the descriptor-owned projection. `CliErrorView` provides the corresponding
+CLI projection.
 
 ```rust
 use rocketmq_error::RocketMQError;
+use rocketmq_error::PublicErrorView;
 
 let error = RocketMQError::storage_read_failed(
     "/var/lib/rocketmq/commitlog/00000000000000000000",
     "permission denied",
 );
-let view = error.boundary_view();
+let context = error.context();
+let view = PublicErrorView::try_new(error.descriptor(), &context).unwrap();
 
 assert_eq!(view.code().as_str(), "storage.read.failed");
 assert_eq!(view.message(), "Storage read failed");
-assert!(view.context().is_empty());
+assert_eq!(view.fields().count(), 0);
 ```
 
 For `Exposure::Generic`, a boundary view exposes the fixed message and no
@@ -153,11 +155,12 @@ assert_eq!(error.descriptor().severity(), ErrorSeverity::Warn);
 ## Typed Sources
 
 Use source-preserving constructors when a lower-level operation failed.
-`std::error::Error::source()` retains the original typed cause; boundary views
+`std::error::Error::source()` retains the original typed cause; safe views
 never stringify it.
 
 ```rust
 use std::error::Error as _;
+use rocketmq_error::PublicErrorView;
 use rocketmq_error::RocketMQError;
 
 let error = RocketMQError::request_header_source(
@@ -169,7 +172,9 @@ assert!(error
     .source()
     .and_then(|source| source.downcast_ref::<std::io::Error>())
     .is_some());
-assert!(error.boundary_view().context().is_empty());
+let context = error.context();
+let public = PublicErrorView::try_new(error.descriptor(), &context).unwrap();
+assert_eq!(public.fields().count(), 0);
 ```
 
 ## Public API Notes

@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error;
 use rocketmq_filter::expression::MessageEvaluationContext;
 use rocketmq_filter::expression::Value;
 use rocketmq_filter::filter::Filter;
@@ -43,7 +43,7 @@ fn factory_trait_object_compiles_and_evaluates_through_the_typed_api() {
 }
 
 #[test]
-fn factory_trait_object_typed_failures_preserve_safe_metadata_and_unified_kind() {
+fn factory_trait_object_typed_failures_preserve_safe_canonical_metadata() {
     let filter = sql92_filter_from_factory();
     let submitted = "  name = '秘密' @";
     let error = match filter.try_compile(submitted) {
@@ -56,15 +56,15 @@ fn factory_trait_object_typed_failures_preserve_safe_metadata_and_unified_kind()
     assert_eq!(error.position(), submitted.find('@'));
     assert_eq!(error.source(), Some(FilterCompileSource::Sql92));
 
-    let unified: RocketMQError = error.into();
-    assert_eq!(unified.descriptor(), &rocketmq_error::PROTOCOL_FILTER_INVALID);
+    let canonical: Error = error.into();
+    assert_eq!(canonical.descriptor(), &rocketmq_error::PROTOCOL_FILTER_INVALID);
     for rendered in [
         error.to_string(),
         format!("{error:?}"),
         error.context().to_string(),
-        unified.to_string(),
-        format!("{unified:?}"),
-        unified.context().to_string(),
+        canonical.to_string(),
+        format!("{canonical:?}"),
+        canonical.context().to_string(),
     ] {
         assert!(!rendered.contains(submitted));
         assert!(!rendered.contains("秘密"));

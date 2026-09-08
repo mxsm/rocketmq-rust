@@ -17,8 +17,7 @@
 - 稳定 descriptor 元数据：code、class、condition、fault attribution、component、
   固定公开消息、severity、recovery hint、backtrace policy、exposure、四个显式边界投影，
   以及有序字段 schema。
-- `ErrorContext`、`PublicErrorView`、`DiagnosticView`、
-  `BoundaryErrorView` 和 `CliErrorView`。
+- `ErrorContext`、`PublicErrorView`、`DiagnosticView` 和 `CliErrorView`。
 
 该 crate 有意不依赖 transport 实现或生成的 protobuf 绑定。remoting、gRPC、HTTP
 和 CLI 投影类型是由边界适配器消费的轻量值。
@@ -82,21 +81,24 @@ assert_eq!(
 
 ## 边界视图与脱敏
 
-向 remoting、gRPC、HTTP、CLI、dashboard 或其他公开边界适配错误时，使用
-`boundary_view()`。边界视图从 descriptor 读取标识和投影，并强制执行 exposure policy。
+向 remoting、gRPC、HTTP、dashboard 或其他公开边界适配错误时，使用
+`PublicErrorView` 读取获准公开的上下文字段，并直接读取 descriptor-owned projection
+中的协议映射。CLI 边界使用 `CliErrorView`。
 
 ```rust
 use rocketmq_error::RocketMQError;
+use rocketmq_error::PublicErrorView;
 
 let error = RocketMQError::storage_read_failed(
     "/var/lib/rocketmq/commitlog/00000000000000000000",
     "permission denied",
 );
-let view = error.boundary_view();
+let context = error.context();
+let view = PublicErrorView::try_new(error.descriptor(), &context).unwrap();
 
 assert_eq!(view.code().as_str(), "storage.read.failed");
 assert_eq!(view.message(), "Storage read failed");
-assert!(view.context().is_empty());
+assert_eq!(view.fields().count(), 0);
 ```
 
 `Exposure::Generic` 只暴露固定消息，不暴露任何动态公开字段。
@@ -148,6 +150,7 @@ assert_eq!(error.descriptor().severity(), ErrorSeverity::Warn);
 
 ```rust
 use std::error::Error as _;
+use rocketmq_error::PublicErrorView;
 use rocketmq_error::RocketMQError;
 
 let error = RocketMQError::request_header_source(
@@ -159,7 +162,9 @@ assert!(error
     .source()
     .and_then(|source| source.downcast_ref::<std::io::Error>())
     .is_some());
-assert!(error.boundary_view().context().is_empty());
+let context = error.context();
+let public = PublicErrorView::try_new(error.descriptor(), &context).unwrap();
+assert_eq!(public.fields().count(), 0);
 ```
 
 ## 公共 API 说明

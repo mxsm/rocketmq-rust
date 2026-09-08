@@ -32,6 +32,8 @@ use rocketmq_controller::ControllerConfig;
 use rocketmq_controller::ControllerManager;
 use rocketmq_controller::Node;
 use rocketmq_error::fields;
+use rocketmq_error::CliErrorView;
+use rocketmq_error::CliVerbosity;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::CONTROLLER_CONFIGURATION_INVALID;
@@ -193,7 +195,22 @@ fn print_release_version_if_requested(component: &str) -> bool {
     true
 }
 
-pub fn main() -> Result<()> {
+pub fn main() {
+    if let Err(source) = try_main() {
+        let error = Error::new(&CONTROLLER_INTERNAL_FAILURE)
+            .with_boxed_source(source.into_boxed_dyn_error())
+            .with_context(
+                ErrorContext::new()
+                    .with_text(fields::OPERATION_DIAGNOSTIC, "run-controller-service")
+                    .with_secret_presence(fields::SOURCE_PRESENT),
+            );
+        let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
+        eprintln!("{}", output.stderr());
+        std::process::exit(output.exit_code().as_i32());
+    }
+}
+
+fn try_main() -> Result<()> {
     if print_release_version_if_requested("rocketmq-controller-rust") {
         return Ok(());
     }

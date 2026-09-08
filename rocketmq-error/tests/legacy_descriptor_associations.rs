@@ -15,18 +15,11 @@
 use std::io;
 
 use rocketmq_error::AuthError;
-use rocketmq_error::BoundaryErrorView;
 use rocketmq_error::CliExitCode;
-use rocketmq_error::DomainError;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::Exposure;
-use rocketmq_error::FilterCompileError;
-use rocketmq_error::FilterCompileErrorKind;
-use rocketmq_error::FilterCompileSource;
-use rocketmq_error::FilterCompileStage;
-use rocketmq_error::FilterError;
 use rocketmq_error::GrpcPayloadCode;
 use rocketmq_error::GrpcStatusCode;
 use rocketmq_error::HttpStatusCode;
@@ -98,13 +91,7 @@ fn assert_descriptor(label: &str, descriptor: &'static ErrorDescriptor, expected
     assert_eq!(projection.cli().exit_code, expected.cli, "CLI exit for {label}");
 }
 
-fn assert_views(
-    label: &str,
-    descriptor: &'static ErrorDescriptor,
-    context: &ErrorContext,
-    boundary: &BoundaryErrorView,
-    expected: Expected,
-) {
+fn assert_views(label: &str, descriptor: &'static ErrorDescriptor, context: &ErrorContext, expected: Expected) {
     let public = PublicErrorView::try_new(descriptor, context)
         .unwrap_or_else(|violation| panic!("schema-valid context for {label}: {violation}"));
     assert_eq!(public.code().as_str(), expected.code, "safe-view code for {label}");
@@ -116,43 +103,12 @@ fn assert_views(
     if descriptor.exposure() == Exposure::Generic {
         assert_eq!(public.fields().count(), 0, "generic public fields for {label}");
     }
-
-    assert_eq!(boundary.code().as_str(), expected.code, "boundary code for {label}");
-    assert_eq!(
-        boundary.remoting().code.as_i32(),
-        expected.remoting,
-        "boundary remoting code for {label}"
-    );
-    assert_eq!(
-        boundary.grpc().payload,
-        expected.grpc_payload,
-        "boundary payload for {label}"
-    );
-    assert_eq!(
-        boundary.grpc().status,
-        expected.grpc_status,
-        "boundary status for {label}"
-    );
-    assert_eq!(boundary.http().status, expected.http, "boundary HTTP for {label}");
-    assert_eq!(boundary.cli().exit_code, expected.cli, "boundary CLI for {label}");
 }
 
 fn assert_case(case: Case) {
     let descriptor = case.error.descriptor();
     assert_descriptor(case.label, descriptor, case.expected);
-    assert_views(
-        case.label,
-        descriptor,
-        &case.error.context(),
-        &case.error.boundary_view(),
-        case.expected,
-    );
-}
-
-fn assert_domain_error(error: &impl DomainError, label: &str, expected: Expected) {
-    let descriptor = error.descriptor();
-    assert_descriptor(label, descriptor, expected);
-    assert_views(label, descriptor, &error.context(), &error.boundary_view(), expected);
+    assert_views(case.label, descriptor, &case.error.context(), case.expected);
 }
 
 fn internal(code: &'static str, remoting: i32) -> Expected {
@@ -748,122 +704,10 @@ fn direct_cases() -> Vec<Case> {
 #[test]
 fn retained_direct_legacy_rows_have_final_descriptor_projections() {
     let cases = direct_cases();
-    assert_eq!(
-        cases.len(),
-        65,
-        "rows 7-72 except Filter, which is covered by leaf cases"
-    );
+    assert_eq!(cases.len(), 61, "retained direct facade rows, excluding Filter leaves");
     for case in cases {
         assert_case(case);
     }
-}
-
-fn assert_filter(label: &'static str, error: FilterError, expected: Expected) {
-    assert_domain_error(&error, label, expected);
-    assert_case(Case {
-        label,
-        error: RocketMQError::Filter(error),
-        expected,
-    });
-}
-
-#[test]
-fn filter_compile_and_bits_array_leaves_use_their_final_conditions() {
-    let deterministic_compile_cases = [
-        (
-            "EmptyExpression",
-            FilterCompileErrorKind::EmptyExpression,
-            FilterCompileStage::Lex,
-            None,
-        ),
-        (
-            "ExpressionTooLarge",
-            FilterCompileErrorKind::ExpressionTooLarge,
-            FilterCompileStage::Lex,
-            None,
-        ),
-        (
-            "TooManyTokens",
-            FilterCompileErrorKind::TooManyTokens,
-            FilterCompileStage::Lex,
-            None,
-        ),
-        (
-            "NestingLimitExceeded",
-            FilterCompileErrorKind::NestingLimitExceeded,
-            FilterCompileStage::Parse,
-            Some(12),
-        ),
-        (
-            "UnexpectedToken",
-            FilterCompileErrorKind::UnexpectedToken,
-            FilterCompileStage::Parse,
-            Some(7),
-        ),
-        (
-            "InvalidNumber",
-            FilterCompileErrorKind::InvalidNumber,
-            FilterCompileStage::Parse,
-            Some(3),
-        ),
-        (
-            "InvalidBetweenBounds",
-            FilterCompileErrorKind::InvalidBetweenBounds,
-            FilterCompileStage::Semantic,
-            Some(5),
-        ),
-        (
-            "UnsupportedOperand",
-            FilterCompileErrorKind::UnsupportedOperand,
-            FilterCompileStage::Semantic,
-            Some(9),
-        ),
-    ];
-    assert_eq!(deterministic_compile_cases.len(), 8);
-    for (label, kind, stage, position) in deterministic_compile_cases {
-        let compile = FilterCompileError::new_with_source(kind, stage, position, FilterCompileSource::Sql92);
-        let expected = invalid("protocol.filter.invalid", 1);
-        assert_domain_error(&compile, label, expected);
-        assert_filter(label, FilterError::Compile(compile), expected);
-    }
-
-    let bits_array_cases = [
-        ("EmptyBytes", FilterError::EmptyBytes),
-        ("InvalidBitLength", FilterError::InvalidBitLength),
-        ("BitLengthTooSmall", FilterError::BitLengthTooSmall),
-        ("BitPositionOutOfBounds", FilterError::BitPositionOutOfBounds(8, 4)),
-        ("BytePositionOutOfBounds", FilterError::BytePositionOutOfBounds(8, 4)),
-    ];
-    assert_eq!(bits_array_cases.len(), 5);
-    for (label, error) in bits_array_cases {
-        assert_filter(label, error, invalid("protocol.filter.invalid", 1));
-    }
-
-    assert_filter(
-        "Uninitialized",
-        FilterError::Uninitialized,
-        precondition("core.lifecycle.not_initialized", 1),
-    );
-}
-
-#[test]
-fn shared_filter_view_keeps_the_same_descriptor_and_projection() {
-    let compile = FilterCompileError::new_with_source(
-        FilterCompileErrorKind::UnexpectedToken,
-        FilterCompileStage::Parse,
-        Some(7),
-        FilterCompileSource::Sql92,
-    );
-    let legacy = RocketMQError::Filter(FilterError::Compile(compile));
-    let context = legacy.context();
-    let shared = RocketMQError::Shared(std::sync::Arc::new(
-        Error::caused_by(legacy.descriptor(), legacy).with_context(context),
-    ));
-    assert_domain_error(
-        &shared,
-        "shared Filter UnexpectedToken",
-        invalid("protocol.filter.invalid", 1),
-    );
 }
 
 #[test]
@@ -901,12 +745,15 @@ fn the_two_retained_corrected_legacy_backoff_associations_publish_never() {
             code,
             "shared descriptor for {label}"
         );
-        assert_eq!(shared.recovery_hint(), RecoveryHint::Never, "shared hint for {label}");
+        assert_eq!(
+            shared.descriptor().recovery_hint(),
+            RecoveryHint::Never,
+            "shared hint for {label}"
+        );
     }
 }
 
 fn assert_protocol(label: &'static str, error: ProtocolError, expected: Expected) {
-    assert_domain_error(&error, label, expected);
     assert_case(Case {
         label,
         error: RocketMQError::Protocol(error),
@@ -929,7 +776,6 @@ fn retained_protocol_leaves_keep_remoting_three() {
 }
 
 fn assert_rpc(label: &'static str, error: RpcClientError, expected: Expected) {
-    assert_domain_error(&error, label, expected);
     assert_case(Case {
         label,
         error: RocketMQError::Rpc(error),
@@ -994,7 +840,6 @@ fn credential() -> Expected {
 }
 
 fn assert_auth(label: &'static str, error: AuthError, expected: Expected) {
-    assert_domain_error(&error, label, expected);
     assert_case(Case {
         label,
         error: RocketMQError::Authentication(error),
@@ -1083,7 +928,6 @@ fn auth_leaves_keep_remoting_sixteen_and_split_failure_semantics() {
 fn serialization_row_associates_its_concrete_facade() {
     let error = SerializationError::encode_failed("json", "invalid value");
     let expected = internal("core.serialization.failed", 1);
-    assert_domain_error(&error, "SerializationError", expected);
     assert_case(Case {
         label: "SerializationError",
         error: RocketMQError::Serialization(error),

@@ -26,11 +26,8 @@ mod tools;
 use std::io;
 
 // Re-export filter error
-pub use crate::filter_error::FilterCompileError;
-pub use crate::filter_error::FilterError;
 pub use crate::observability_error::ObservabilityError;
 
-use crate::boundary::BoundaryErrorView;
 use crate::catalog::*;
 use crate::context::ErrorContext;
 use crate::fields;
@@ -416,13 +413,6 @@ pub enum RocketMQError {
     Tools(#[from] ToolsError),
 
     // ============================================================================
-    // Filter Errors
-    // ============================================================================
-    /// Bloom filter and bit array operation errors
-    #[error(transparent)]
-    Filter(#[from] FilterError),
-
-    // ============================================================================
     // Observability Errors
     // ============================================================================
     /// Telemetry, logging, exporter, and provider lifecycle errors.
@@ -626,7 +616,6 @@ impl RocketMQError {
             Self::ClientInvalidState { .. } => &CLIENT_LIFECYCLE_INVALID_STATE,
             Self::ProducerNotAvailable | Self::ConsumerNotAvailable => &CLIENT_COMPONENT_UNAVAILABLE,
             Self::Tools(error) => error.descriptor(),
-            Self::Filter(error) => error.descriptor(),
             Self::Observability(error) => error.descriptor(),
             Self::StorageReadFailed { .. } => &STORAGE_READ_FAILED,
             Self::StorageWriteFailed { .. } => &STORAGE_WRITE_FAILED,
@@ -652,7 +641,7 @@ impl RocketMQError {
     ///
     /// `Display` and `Debug` remain diagnostic surfaces and may include local
     /// details. API, CLI, and protocol adapters should consume
-    /// [`Self::boundary_view`] so exposure and field visibility are applied.
+    /// [`crate::PublicErrorView`] so exposure and field visibility are applied.
     #[inline]
     pub fn public_message(&self) -> &'static str {
         self.descriptor().public_message()
@@ -755,7 +744,6 @@ impl RocketMQError {
                 .with_text(fields::EXPECTED_STATE, *expected)
                 .with_text(fields::ACTUAL_STATE, actual),
             Self::Tools(error) => error.context(),
-            Self::Filter(error) => error.context(),
             Self::Observability(error) => error.context(),
             Self::StorageReadFailed { .. } => ErrorContext::new()
                 .with_text(fields::STORE_OPERATION, "read")
@@ -805,13 +793,6 @@ impl RocketMQError {
                 .with_text(fields::COMPONENT_NAME, "rocketmq")
                 .with_secret_presence(fields::REASON_PRESENT),
         }
-    }
-
-    /// Return a public, redaction-aware snapshot for protocol and UI
-    /// boundaries.
-    #[inline]
-    pub fn boundary_view(&self) -> BoundaryErrorView {
-        BoundaryErrorView::new(self.descriptor(), self.context())
     }
 
     /// Create a deserialization failed error
@@ -1065,52 +1046,6 @@ impl RocketMQError {
             path: path.into(),
             reason: reason.into(),
         }
-    }
-
-    // ============================================================================
-    // Filter Error Constructors
-    // ============================================================================
-
-    /// Create an empty bytes error
-    #[inline]
-    pub fn filter_empty_bytes() -> Self {
-        Self::Filter(FilterError::empty_bytes())
-    }
-
-    /// Create an invalid bit length error
-    #[inline]
-    pub fn filter_invalid_bit_length() -> Self {
-        Self::Filter(FilterError::invalid_bit_length())
-    }
-
-    /// Create a bit length too small error
-    #[inline]
-    pub fn filter_bit_length_too_small() -> Self {
-        Self::Filter(FilterError::bit_length_too_small())
-    }
-
-    /// Create a bit position out of bounds error
-    #[inline]
-    pub fn filter_bit_position_out_of_bounds(pos: usize, max: usize) -> Self {
-        Self::Filter(FilterError::bit_position_out_of_bounds(pos, max))
-    }
-
-    /// Create a byte position out of bounds error
-    #[inline]
-    pub fn filter_byte_position_out_of_bounds(pos: usize, max: usize) -> Self {
-        Self::Filter(FilterError::byte_position_out_of_bounds(pos, max))
-    }
-
-    /// Create an uninitialized error
-    #[inline]
-    pub fn filter_uninitialized() -> Self {
-        Self::Filter(FilterError::uninitialized())
-    }
-}
-
-impl From<FilterCompileError> for RocketMQError {
-    fn from(error: FilterCompileError) -> Self {
-        Self::Filter(FilterError::compile(error))
     }
 }
 

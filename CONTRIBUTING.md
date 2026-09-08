@@ -120,7 +120,7 @@ boundaries:
 - Do not add legacy aliases such as `RocketmqError`, `LegacyRocketMQResult`, or `LegacyResult`.
 - Do not expose `anyhow::Result` from library or public business APIs.
 - Add or reuse one canonical `ErrorDescriptor` entry and associate every retained typed leaf before exposing a new public error.
-- Use `BoundaryErrorView` and descriptor-owned projection primitives for remoting, gRPC, HTTP, and CLI responses.
+- Use `PublicErrorView` or `DiagnosticView` for approved context fields and descriptor-owned projection primitives for remoting, gRPC, HTTP, and CLI responses.
 - Keep sensitive values in `Sensitive<T>` or redacted `ErrorContext` fields.
 - Preserve source chains with typed wrappers and `#[source]` instead of early stringification.
 - Keep `RocketMQError::Internal` for audited internal invariants, not ordinary business failures.

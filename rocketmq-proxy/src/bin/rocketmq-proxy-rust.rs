@@ -16,6 +16,9 @@
 
 use std::path::PathBuf;
 
+use rocketmq_error::CliErrorView;
+use rocketmq_error::CliVerbosity;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::RocketMQError;
 use rocketmq_model::version::CURRENT_VERSION;
 use rocketmq_protocol::protocol::remoting_command_facade::initialize_remoting_defaults;
@@ -73,7 +76,18 @@ fn print_release_version_if_requested(component: &str) -> bool {
     true
 }
 
-fn main() -> ProxyResult<()> {
+fn main() {
+    if let Err(source) = try_main() {
+        let descriptor = source.descriptor();
+        let context = source.context();
+        let error = CanonicalError::caused_by(descriptor, source).with_context(context);
+        let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
+        eprintln!("{}", output.stderr());
+        std::process::exit(output.exit_code().as_i32());
+    }
+}
+
+fn try_main() -> ProxyResult<()> {
     if print_release_version_if_requested("rocketmq-proxy-rust") {
         return Ok(());
     }
