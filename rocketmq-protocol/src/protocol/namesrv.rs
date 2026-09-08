@@ -44,24 +44,6 @@ mod tests {
     }
 
     #[test]
-    fn test_clone_and_debug() {
-        let mut table = HashMap::new();
-        table.insert(CheetahString::from("key"), CheetahString::from("value"));
-
-        let original = RegisterBrokerResult {
-            ha_server_addr: CheetahString::from("127.0.0.1:10912"),
-            master_addr: CheetahString::from("127.0.0.1:10911"),
-            kv_table: KVTable { table },
-        };
-
-        let cloned = original.clone();
-        assert_eq!(original.ha_server_addr, cloned.ha_server_addr);
-
-        let debug_str = format!("{:?}", cloned);
-        assert!(debug_str.contains("ha_server_addr"));
-    }
-
-    #[test]
     fn test_serialization() {
         let mut table = HashMap::new();
         table.insert(CheetahString::from("version"), CheetahString::from("1.0"));

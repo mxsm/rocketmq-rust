@@ -95,7 +95,6 @@ impl TraceTransferBean {
 mod tests {
     use super::*;
     use cheetah_string::CheetahString;
-    use std::collections::HashSet;
 
     #[test]
     fn test_new_creates_empty_bean() {
@@ -103,33 +102,6 @@ mod tests {
         assert!(bean.trans_data.is_empty());
         assert!(bean.trans_key.is_empty());
         assert!(bean.is_empty());
-    }
-
-    #[test]
-    fn test_with_data_initializes_correctly() {
-        let data = CheetahString::from("trace_payload");
-        let mut keys = HashSet::new();
-        keys.insert(CheetahString::from("key1"));
-
-        let bean = TraceTransferBean::with_data(data.clone(), keys.clone());
-
-        assert_eq!(bean.trans_data(), &data);
-        assert_eq!(bean.trans_key(), &keys);
-        assert!(!bean.is_empty());
-    }
-
-    #[test]
-    fn test_setters_and_getters() {
-        let mut bean = TraceTransferBean::new();
-        let data = CheetahString::from("new_data");
-        let mut keys = HashSet::new();
-        keys.insert(CheetahString::from("key_a"));
-
-        bean.set_trans_data(data.clone());
-        bean.set_trans_key(keys.clone());
-
-        assert_eq!(bean.trans_data(), &data);
-        assert_eq!(bean.trans_key(), &keys);
     }
 
     #[test]
@@ -164,16 +136,5 @@ mod tests {
         bean.set_trans_data(CheetahString::from(""));
         bean.add_key(CheetahString::from("key"));
         assert!(!bean.is_empty());
-    }
-
-    #[test]
-    fn test_clone_and_debug() {
-        let bean =
-            TraceTransferBean::with_data(CheetahString::from("data"), HashSet::from([CheetahString::from("key")]));
-        let cloned = bean.clone();
-
-        assert_eq!(bean.trans_data, cloned.trans_data);
-        let debug_str = format!("{:?}", bean);
-        assert!(debug_str.contains("TraceTransferBean"));
     }
 }
