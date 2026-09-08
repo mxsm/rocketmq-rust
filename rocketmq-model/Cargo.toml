@@ -47,5 +47,5 @@ strum.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-zstd = "0.13"
+zstd = "0.14"
 md-5 = "0.11"
