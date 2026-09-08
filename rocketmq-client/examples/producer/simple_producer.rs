@@ -17,9 +17,9 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+use rocketmq_client::ClientResult;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::DefaultMQProducer;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_single::Message;
 use std::sync::Arc;
 
@@ -42,7 +42,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn run(client_runtime: Arc<ClientRuntime>) -> RocketMQResult<()> {
+async fn run(client_runtime: Arc<ClientRuntime>) -> ClientResult<()> {
     // create a producer builder with default configuration
     let builder = DefaultMQProducer::builder(client_runtime.clone());
 

@@ -17,10 +17,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use crate::ClientError;
+use crate::ClientResult;
 use cheetah_string::CheetahString;
 use rand::RngExt;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use serde::Serialize;
 use tokio::sync::Notify;
 use tokio::time::Duration;
@@ -101,10 +101,10 @@ impl MQClientAPIFactory {
         nameserver_access_config: NameserverAccessConfig,
         name_prefix: impl Into<CheetahString>,
         clients: Vec<Arc<MQClientAPIImpl>>,
-    ) -> RocketMQResult<Self> {
+    ) -> ClientResult<Self> {
         validate_nameserver_access_config(&nameserver_access_config)?;
         if clients.is_empty() {
-            return Err(RocketMQError::illegal_argument(
+            return Err(ClientError::illegal_argument(
                 "MQClientAPIFactory requires at least one MQClientAPIImpl",
             ));
         }
@@ -138,9 +138,9 @@ impl MQClientAPIFactory {
         &self.clients
     }
 
-    pub fn get_client(&self) -> RocketMQResult<Arc<MQClientAPIImpl>> {
+    pub fn get_client(&self) -> ClientResult<Arc<MQClientAPIImpl>> {
         match self.clients.len() {
-            0 => Err(RocketMQError::not_initialized("MQClientAPIFactory clients")),
+            0 => Err(ClientError::not_initialized("MQClientAPIFactory clients")),
             1 => Ok(self.clients[0].clone()),
             len => {
                 let index = rand::rng().random_range(0..len);
@@ -154,13 +154,13 @@ impl MQClientAPIFactory {
         nameserver_access_config: NameserverAccessConfig,
         name_prefix: impl Into<CheetahString>,
         clients: Vec<Arc<MQClientAPIImpl>>,
-    ) -> RocketMQResult<Self> {
+    ) -> ClientResult<Self> {
         let mut factory = Self::new(service_context, nameserver_access_config, name_prefix, clients)?;
         factory.start().await?;
         Ok(factory)
     }
 
-    pub async fn start(&mut self) -> RocketMQResult<()> {
+    pub async fn start(&mut self) -> ClientResult<()> {
         self.apply_nameserver_access_config().await?;
         self.start_nameserver_domain_refresh();
         for client in &self.clients {
@@ -185,7 +185,7 @@ impl MQClientAPIFactory {
         }
     }
 
-    pub async fn apply_nameserver_access_config(&mut self) -> RocketMQResult<()> {
+    pub async fn apply_nameserver_access_config(&mut self) -> ClientResult<()> {
         validate_nameserver_access_config(&self.nameserver_access_config)?;
         if self.nameserver_access_config.has_namesrv_domain() {
             for client in &self.clients {
@@ -255,9 +255,9 @@ impl MQClientAPIFactory {
     }
 }
 
-fn validate_nameserver_access_config(config: &NameserverAccessConfig) -> RocketMQResult<()> {
+fn validate_nameserver_access_config(config: &NameserverAccessConfig) -> ClientResult<()> {
     if config.namesrv_domain().is_empty() && config.namesrv_addr().is_empty() {
-        return Err(RocketMQError::illegal_argument(
+        return Err(ClientError::illegal_argument(
             "The configuration item NamesrvAddr is not configured",
         ));
     }

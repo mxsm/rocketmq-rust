@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::MQClientException;
 pub(super) fn get_system_group_set() -> &'static HashSet<CheetahString> {
     SYSTEM_GROUP_SET.get_or_init(|| {
         let mut set = HashSet::new();
@@ -34,36 +35,32 @@ pub(super) fn get_system_group_set() -> &'static HashSet<CheetahString> {
     })
 }
 
-pub(super) fn sync_pull_result_missing(operation: &'static str) -> RocketMQError {
-    RocketMQError::ClientInvalidState {
-        expected: "PullResultExt returned by sync pull_message",
-        actual: format!("{operation} returned None"),
-    }
+pub(super) fn sync_pull_result_missing(operation: &'static str) -> ClientError {
+    ClientError::invalid_state(
+        "PullResultExt returned by sync pull_message",
+        format!("{operation} returned None"),
+    )
 }
 
-pub(super) fn offset_to_java_long(operation: &'static str, offset: u64) -> rocketmq_error::RocketMQResult<i64> {
+pub(super) fn offset_to_java_long(operation: &'static str, offset: u64) -> crate::ClientResult<i64> {
     i64::try_from(offset)
-        .map_err(|_| RocketMQError::illegal_argument(format!("{operation} offset exceeds Java long range")))
+        .map_err(|_| ClientError::illegal_argument(format!("{operation} offset exceeds Java long range")))
 }
 
-pub(super) fn timestamp_to_java_long(operation: &'static str, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+pub(super) fn timestamp_to_java_long(operation: &'static str, timestamp: u64) -> crate::ClientResult<i64> {
     i64::try_from(timestamp)
-        .map_err(|_| RocketMQError::illegal_argument(format!("{operation} timestamp exceeds Java long range")))
+        .map_err(|_| ClientError::illegal_argument(format!("{operation} timestamp exceeds Java long range")))
 }
 
-pub(super) fn timeout_millis_to_u64(timeout_millis: Duration) -> rocketmq_error::RocketMQResult<u64> {
+pub(super) fn timeout_millis_to_u64(timeout_millis: Duration) -> crate::ClientResult<u64> {
     u64::try_from(timeout_millis.as_millis()).map_err(|_| {
-        RocketMQError::illegal_argument("DefaultMQAdminExt timeoutMillis exceeds Rust u64 millisecond range")
+        ClientError::illegal_argument("DefaultMQAdminExt timeoutMillis exceeds Rust u64 millisecond range")
     })
 }
 
-pub(super) fn java_long_to_u64(
-    operation: &'static str,
-    field: &'static str,
-    value: i64,
-) -> rocketmq_error::RocketMQResult<u64> {
+pub(super) fn java_long_to_u64(operation: &'static str, field: &'static str, value: i64) -> crate::ClientResult<u64> {
     u64::try_from(value).map_err(|_| {
-        RocketMQError::illegal_argument(format!(
+        ClientError::illegal_argument(format!(
             "{operation} {field} is negative and cannot be represented as Rust u64"
         ))
     })
@@ -72,7 +69,7 @@ pub(super) fn java_long_to_u64(
 pub(super) fn merge_consume_status_result(
     target: &mut HashMap<CheetahString, HashMap<MessageQueue, u64>>,
     source: HashMap<CheetahString, HashMap<MessageQueue, i64>>,
-) -> rocketmq_error::RocketMQResult<()> {
+) -> crate::ClientResult<()> {
     for (client_id, offsets) in source {
         let target_offsets = target.entry(client_id).or_default();
         for (mq, offset) in offsets {
@@ -86,7 +83,7 @@ pub(super) fn update_consume_offset_request_header(
     consume_group: CheetahString,
     mq: &MessageQueue,
     offset: u64,
-) -> rocketmq_error::RocketMQResult<UpdateConsumerOffsetRequestHeader> {
+) -> crate::ClientResult<UpdateConsumerOffsetRequestHeader> {
     let commit_offset = offset_to_java_long("updateConsumeOffset", offset)?;
 
     Ok(UpdateConsumerOffsetRequestHeader {
@@ -111,7 +108,7 @@ pub(super) fn reset_offset_by_queue_id_request_headers(
     topic_name: CheetahString,
     queue_id: i32,
     reset_offset: u64,
-) -> rocketmq_error::RocketMQResult<(UpdateConsumerOffsetRequestHeader, ResetOffsetRequestHeader)> {
+) -> crate::ClientResult<(UpdateConsumerOffsetRequestHeader, ResetOffsetRequestHeader)> {
     let reset_offset = offset_to_java_long("resetOffsetByQueueId", reset_offset)?;
 
     let update_header = UpdateConsumerOffsetRequestHeader {
@@ -140,7 +137,7 @@ pub(super) fn lite_pull_update_consumer_offset_request_header(
     group: CheetahString,
     queue_id: i32,
     offset: u64,
-) -> rocketmq_error::RocketMQResult<UpdateConsumerOffsetRequestHeader> {
+) -> crate::ClientResult<UpdateConsumerOffsetRequestHeader> {
     let commit_offset = offset_to_java_long("updateLitePullConsumerOffset", offset)?;
 
     Ok(UpdateConsumerOffsetRequestHeader {
@@ -174,7 +171,7 @@ impl DefaultMQAdminExtImpl {
         topic: CheetahString,
         timestamp: i64,
         force: bool,
-    ) -> rocketmq_error::RocketMQResult<Vec<RollbackStats>> {
+    ) -> crate::ClientResult<Vec<RollbackStats>> {
         let consume_stats = self
             .mq_client_api()?
             .get_consume_stats(
@@ -257,7 +254,7 @@ impl DefaultMQAdminExtImpl {
         offset_wrapper: &OffsetWrapper,
         timestamp: i64,
         force: bool,
-    ) -> rocketmq_error::RocketMQResult<RollbackStats> {
+    ) -> crate::ClientResult<RollbackStats> {
         let reset_offset = if timestamp == -1 {
             self.mq_client_api()?
                 .get_max_offset(broker_addr.as_str(), &queue, self.remoting_timeout_millis()?)
@@ -307,7 +304,7 @@ impl DefaultMQAdminExtImpl {
         &self,
         msg: &MessageExt,
         group: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<bool> {
+    ) -> crate::ClientResult<bool> {
         let consume_stats = self
             .examine_consume_stats(group.clone(), None, None, None, None)
             .await?;
@@ -321,7 +318,7 @@ pub(super) fn select_consumer_direct_connection(
     consumer_group: &CheetahString,
     consumer_connection: &ConsumerConnection,
     requested_client_id: Option<&CheetahString>,
-) -> rocketmq_error::RocketMQResult<(CheetahString, CheetahString)> {
+) -> crate::ClientResult<(CheetahString, CheetahString)> {
     let requested = requested_client_id.filter(|client_id| !client_id.is_empty());
     let connection = consumer_connection
         .get_connection_set()
@@ -340,7 +337,7 @@ pub(super) fn select_consumer_direct_connection(
                     )
                 })
                 .unwrap_or_else(|| format!("NO CONSUMER for consumer group `{}`", consumer_group));
-            rocketmq_error::RocketMQError::IllegalArgument(message)
+            crate::ClientError::illegal_argument(message)
         })?;
 
     Ok((connection.get_client_id(), connection.get_client_addr()))
@@ -410,7 +407,7 @@ pub(super) fn broker_addr_matches_store_host(broker_addr: &CheetahString, store_
 }
 
 #[allow(deprecated)]
-pub(super) fn apply_track_error(track: &mut MessageTrack, error: &RocketMQError) {
+pub(super) fn apply_track_error(track: &mut MessageTrack, error: &ClientError) {
     if let Some(code) = response_code_from_error(error) {
         match code {
             ResponseCode::ConsumerNotOnline => track.set_track_type(TrackType::NotOnline),
@@ -422,21 +419,22 @@ pub(super) fn apply_track_error(track: &mut MessageTrack, error: &RocketMQError)
     track.set_exception_desc(track_exception_desc(error));
 }
 
-pub(super) fn response_code_from_error(error: &RocketMQError) -> Option<ResponseCode> {
-    match error {
-        RocketMQError::BrokerOperationFailed { code, .. } => Some(ResponseCode::from(*code)),
-        RocketMQError::IllegalArgument(message) => parse_response_code_from_message(message),
-        _ => None,
-    }
+pub(super) fn response_code_from_error(error: &ClientError) -> Option<ResponseCode> {
+    error
+        .broker_response_code()
+        .or_else(|| {
+            error
+                .source_ref::<MQClientException>()
+                .map(MQClientException::response_code)
+        })
+        .map(ResponseCode::from)
 }
 
-pub(super) fn is_consumer_not_online_error(error: &RocketMQError) -> bool {
+pub(super) fn is_consumer_not_online_error(error: &ClientError) -> bool {
     response_code_from_error(error) == Some(ResponseCode::ConsumerNotOnline)
 }
 
-pub(super) fn map_topic_config_lookup_result<T>(
-    result: rocketmq_error::RocketMQResult<T>,
-) -> rocketmq_error::RocketMQResult<bool> {
+pub(super) fn map_topic_config_lookup_result<T>(result: crate::ClientResult<T>) -> crate::ClientResult<bool> {
     match result {
         Ok(_) => Ok(true),
         Err(error) if response_code_from_error(&error) == Some(ResponseCode::TopicNotExist) => Ok(false),
@@ -459,14 +457,15 @@ pub(super) fn parse_response_code_from_message(message: &str) -> Option<Response
     digits.parse::<i32>().ok().map(ResponseCode::from)
 }
 
-pub(super) fn track_exception_desc(error: &RocketMQError) -> String {
-    match error {
-        RocketMQError::BrokerOperationFailed { code, message, .. } => format!("CODE:{code} DESC:{message}"),
-        _ => error.to_string(),
+pub(super) fn track_exception_desc(error: &ClientError) -> String {
+    if let Some(code) = response_code_from_error(error) {
+        format!("CODE:{} DESC:{}", code.to_i32(), error.descriptor().public_message())
+    } else {
+        error.to_string()
     }
 }
 
-pub(super) fn admin_result_code_for_error(error: &RocketMQError) -> AdminToolsResultCodeEnum {
+pub(super) fn admin_result_code_for_error(error: &ClientError) -> AdminToolsResultCodeEnum {
     match response_code_from_error(error) {
         Some(ResponseCode::ConsumerNotOnline) => AdminToolsResultCodeEnum::ConsumerNotOnline,
         Some(ResponseCode::BroadcastConsumption) => AdminToolsResultCodeEnum::BroadcastConsumption,

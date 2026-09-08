@@ -20,23 +20,23 @@ use rocketmq_transport::api::OutboundRequestContractReason;
 use rocketmq_transport::api::OutboundRequestRejectionReason;
 use rocketmq_transport::api::OutboundRequestStage;
 
-pub(super) fn route_lookup_error(input: RetryInput) -> RocketMQError {
+pub(super) fn route_lookup_error(input: RetryInput) -> ClientError {
     match input {
-        RetryInput::Transport(error) => RocketMQError::Shared(error.into_shared_error()),
+        RetryInput::Transport(error) => ClientError::from_shared(error.into_shared_error()),
         RetryInput::Rejected(rejection) => match rejection.reason() {
             OutboundRequestRejectionReason::DeadlineExpired => {
                 let mut context = ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "topic_route_lookup");
                 if let Some(timeout_millis) = rejection.timeout_millis() {
                     context = context.with_u64(fields::TIMEOUT_MS, timeout_millis);
                 }
-                RocketMQError::Shared(Arc::new(
+                ClientError::from_shared(Arc::new(
                     Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT).with_context(context),
                 ))
             }
             OutboundRequestRejectionReason::ClientStopping => {
-                RocketMQError::Shared(Arc::new(Error::new(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED)))
+                ClientError::from_shared(Arc::new(Error::new(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED)))
             }
-            OutboundRequestRejectionReason::QueueSaturated => RocketMQError::Shared(Arc::new(Error::new(
+            OutboundRequestRejectionReason::QueueSaturated => ClientError::from_shared(Arc::new(Error::new(
                 &rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED,
             ))),
             OutboundRequestRejectionReason::Cancelled => {
@@ -60,12 +60,12 @@ pub(super) fn route_lookup_error(input: RetryInput) -> RocketMQError {
     }
 }
 
-fn route_connection_error(phase: &'static str, remote_addr_present: bool) -> RocketMQError {
+fn route_connection_error(phase: &'static str, remote_addr_present: bool) -> ClientError {
     let mut context = ErrorContext::new().with_text(fields::PHASE, phase);
     if remote_addr_present {
         context = context.with_secret_presence(fields::REMOTE_ADDR_PRESENT);
     }
-    RocketMQError::Shared(Arc::new(
+    ClientError::from_shared(Arc::new(
         Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED).with_context(context),
     ))
 }

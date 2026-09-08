@@ -38,9 +38,9 @@ use criterion::BatchSize;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
+use rocketmq_client::ClientError;
 use rocketmq_client_rust::ArcSendCallback;
 use rocketmq_client_rust::SendResult;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_accessor::MessageAccessor;
 use rocketmq_model::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_model::common::message::message_single::Message;
@@ -355,7 +355,7 @@ fn bench_async_backpressure_envelope(c: &mut Criterion) {
 fn bench_callback_dispatch(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().expect("benchmark runtime should start");
     let send_result = SendResult::default();
-    let callback: ArcSendCallback = Arc::new(|result: Option<&SendResult>, error: Option<&RocketMQError>| {
+    let callback: ArcSendCallback = Arc::new(|result: Option<&SendResult>, error: Option<&ClientError>| {
         black_box(result.is_some());
         black_box(error.is_some());
     });

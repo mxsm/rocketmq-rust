@@ -20,11 +20,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "nameserver-dns-discovery")]
+use crate::ClientError;
+#[cfg(feature = "nameserver-dns-discovery")]
+use crate::ClientResult;
+#[cfg(feature = "nameserver-dns-discovery")]
 use arc_swap::ArcSwap;
-#[cfg(feature = "nameserver-dns-discovery")]
-use rocketmq_error::RocketMQError;
-#[cfg(feature = "nameserver-dns-discovery")]
-use rocketmq_error::RocketMQResult;
 #[cfg(feature = "nameserver-dns-discovery")]
 use rocketmq_observability::metrics::client::ClientMetrics;
 #[cfg(feature = "nameserver-dns-discovery")]
@@ -94,7 +94,7 @@ impl NameServerDiscoverySupervisor {
         client_id: &str,
         metrics: ClientMetrics,
         publish: EndpointPublisher,
-    ) -> RocketMQResult<Arc<Self>> {
+    ) -> ClientResult<Arc<Self>> {
         let resolver = Arc::new(HickoryDnsLookup::new().map_err(initial_resolution_error)?);
         Self::start_with_resolver(config, parent, client_id, resolver, metrics, publish).await
     }
@@ -107,7 +107,7 @@ impl NameServerDiscoverySupervisor {
         resolver: Arc<dyn DnsLookup>,
         metrics: ClientMetrics,
         publish: EndpointPublisher,
-    ) -> RocketMQResult<Arc<Self>> {
+    ) -> ClientResult<Arc<Self>> {
         let initial = match resolve_dns(resolver.as_ref(), &config).await {
             Ok(initial) => {
                 metrics.record_nameserver_discovery_refresh(NameServerDiscoveryRefreshResult::Success);
@@ -202,7 +202,7 @@ impl NameServerDiscoverySupervisor {
                     }
                 }
             })
-            .map_err(|error| RocketMQError::internal("spawn NameServer discovery refresh task", error))?;
+            .map_err(|error| ClientError::internal("spawn NameServer discovery refresh task", error))?;
         let supervisor = Arc::new(Self {
             state,
             loop_status,
@@ -317,12 +317,8 @@ fn record_snapshot_metrics(metrics: &ClientMetrics, snapshot: &EndpointSnapshot,
 }
 
 #[cfg(feature = "nameserver-dns-discovery")]
-fn initial_resolution_error(error: super::dns::DnsResolutionError) -> RocketMQError {
-    RocketMQError::ConfigInvalidValue {
-        key: "nameserver_discovery.dns",
-        value: "initial lookup".to_string(),
-        reason: error.to_string(),
-    }
+fn initial_resolution_error(error: super::dns::DnsResolutionError) -> ClientError {
+    error.into_client_error()
 }
 
 #[cfg(feature = "nameserver-dns-discovery")]
@@ -725,7 +721,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, Err(RocketMQError::ConfigInvalidValue { .. })));
+        assert!(matches!($1, Err(error) if error.is(&rocketmq_error::CORE_CONFIGURATION_INVALID)));
         assert_eq!(parent.task_group().component_count(), initial_components);
     }
 }

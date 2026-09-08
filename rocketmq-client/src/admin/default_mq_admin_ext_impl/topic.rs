@@ -37,11 +37,11 @@ pub(super) fn encode_topic_attributes(attributes: &HashMap<CheetahString, Cheeta
     }
 }
 
-pub(super) fn master_flush_offset_to_java_long(master_flush_offset: u64) -> rocketmq_error::RocketMQResult<i64> {
+pub(super) fn master_flush_offset_to_java_long(master_flush_offset: u64) -> crate::ClientResult<i64> {
     offset_to_java_long("resetMasterFlushOffset", master_flush_offset)
 }
 
-pub(super) fn query_consume_queue_index_to_java_long(index: u64) -> rocketmq_error::RocketMQResult<i64> {
+pub(super) fn query_consume_queue_index_to_java_long(index: u64) -> crate::ClientResult<i64> {
     offset_to_java_long("queryConsumeQueue", index)
 }
 
@@ -67,7 +67,7 @@ pub(super) fn query_message_request_header(
     }
 }
 
-pub(super) fn search_offset_timestamp_to_java_long(timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+pub(super) fn search_offset_timestamp_to_java_long(timestamp: u64) -> crate::ClientResult<i64> {
     timestamp_to_java_long("searchOffset", timestamp)
 }
 
@@ -103,7 +103,7 @@ pub(super) fn resolve_lite_pull_queue_num(
     value: i32,
     fallback_queue_num: i32,
     allow_fallback: bool,
-) -> rocketmq_error::RocketMQResult<u32> {
+) -> crate::ClientResult<u32> {
     let resolved = if value > 0 {
         value
     } else if allow_fallback && fallback_queue_num > 0 {
@@ -111,7 +111,7 @@ pub(super) fn resolve_lite_pull_queue_num(
     } else {
         return Err(mq_client_err!(format!("{field_name} must be positive")));
     };
-    u32::try_from(resolved).map_err(|error| mq_client_err!(format!("{field_name} is out of range: {error}")))
+    u32::try_from(resolved).map_err(ClientError::illegal_argument_source)
 }
 
 pub(super) fn lite_pull_topic_config(
@@ -121,7 +121,7 @@ pub(super) fn lite_pull_topic_config(
     read_queue_nums: i32,
     write_queue_nums: i32,
     update_existing: bool,
-) -> rocketmq_error::RocketMQResult<TopicConfig> {
+) -> crate::ClientResult<TopicConfig> {
     if topic.is_empty() {
         return Err(mq_client_err!("Lite pull topic cannot be empty"));
     }
@@ -132,8 +132,7 @@ pub(super) fn lite_pull_topic_config(
     let read_queue_nums = resolve_lite_pull_queue_num("readQueueNums", read_queue_nums, queue_num, !update_existing)?;
     let write_queue_nums =
         resolve_lite_pull_queue_num("writeQueueNums", write_queue_nums, queue_num, !update_existing)?;
-    let topic_sys_flag = u32::try_from(topic_sys_flag)
-        .map_err(|error| mq_client_err!(format!("topicSysFlag is out of range: {error}")))?;
+    let topic_sys_flag = u32::try_from(topic_sys_flag).map_err(ClientError::illegal_argument_source)?;
 
     let mut config = TopicConfig::with_sys_flag(
         topic,
@@ -153,7 +152,7 @@ impl DefaultMQAdminExtImpl {
     pub(super) async fn query_topics_by_consumer_from_route(
         &self,
         group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicList> {
+    ) -> crate::ClientResult<TopicList> {
         let timeout = self.remoting_timeout_millis()?;
         let retry_topic: CheetahString = mix_all::get_retry_topic(&group).into();
         let topic_route = self
@@ -191,7 +190,7 @@ impl DefaultMQAdminExtImpl {
         offset: i64,
         max_nums: i32,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<crate::consumer::pull_result::PullResult> {
+    ) -> crate::ClientResult<crate::consumer::pull_result::PullResult> {
         let sys_flag = PullSysFlag::build_sys_flag(false, false, true, false);
 
         let request_header = PullMessageRequestHeader {
@@ -216,7 +215,7 @@ impl DefaultMQAdminExtImpl {
         struct NoopPullCallback;
         impl PullCallback for NoopPullCallback {
             async fn on_success(&mut self, _pull_result: PullResultExt) {}
-            fn on_exception(&mut self, _e: rocketmq_error::RocketMQError) {}
+            fn on_exception(&mut self, _e: crate::ClientError) {}
         }
 
         let api_impl = self.mq_client_api()?;
@@ -252,7 +251,7 @@ impl DefaultMQAdminExtImpl {
         end_timestamp: i64,
         key_type: CheetahString,
         last_key: Option<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<crate::base::query_result::QueryResult> {
+    ) -> crate::ClientResult<crate::base::query_result::QueryResult> {
         self.query_message_by_key_internal(
             cluster_name,
             topic,
@@ -275,7 +274,7 @@ impl DefaultMQAdminExtImpl {
         max_num: i32,
         begin_timestamp: i64,
         end_timestamp: i64,
-    ) -> rocketmq_error::RocketMQResult<crate::base::query_result::QueryResult> {
+    ) -> crate::ClientResult<crate::base::query_result::QueryResult> {
         self.query_message_by_key_internal(
             cluster_name,
             topic,
@@ -301,7 +300,7 @@ impl DefaultMQAdminExtImpl {
         key_type: CheetahString,
         last_key: Option<CheetahString>,
         unique_key_flag: bool,
-    ) -> rocketmq_error::RocketMQResult<crate::base::query_result::QueryResult> {
+    ) -> crate::ClientResult<crate::base::query_result::QueryResult> {
         let route_topic = cluster_name.unwrap_or_else(|| topic.clone());
         let topic_route_data = self
             .examine_topic_route_info(route_topic.clone())
@@ -411,6 +410,6 @@ pub(super) fn retain_java_user_topic_config(
     });
 }
 
-pub(super) fn admin_route_not_found(route_topic: &CheetahString) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::route_not_found(route_topic.to_string())
+pub(super) fn admin_route_not_found(route_topic: &CheetahString) -> crate::ClientError {
+    crate::ClientError::route_not_found(route_topic.to_string())
 }

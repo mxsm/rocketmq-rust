@@ -14,7 +14,8 @@
 
 use std::fmt;
 
-use rocketmq_error::RocketMQError;
+use crate::ClientError;
+use rocketmq_error::CORE_OPERATION_TIMED_OUT;
 use rocketmq_error::TRANSPORT_CONNECTION_TIMEOUT;
 use rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT;
 use rocketmq_error::TRANSPORT_WRITE_TIMEOUT;
@@ -77,7 +78,7 @@ impl MQClientException {
         self.error_message = Some(error_message.into());
     }
 
-    pub fn from_rocketmq_error(error: &RocketMQError) -> Self {
+    pub fn from_client_error(error: &ClientError) -> Self {
         Self::new(error.to_string())
     }
 }
@@ -90,9 +91,9 @@ impl fmt::Display for MQClientException {
 
 impl std::error::Error for MQClientException {}
 
-impl From<MQClientException> for RocketMQError {
+impl From<MQClientException> for ClientError {
     fn from(exception: MQClientException) -> Self {
-        RocketMQError::illegal_argument(exception.to_string())
+        ClientError::illegal_argument_source(exception)
     }
 }
 
@@ -173,22 +174,18 @@ impl MQBrokerException {
         self.broker_addr()
     }
 
-    pub fn from_rocketmq_error(error: &RocketMQError) -> Option<Self> {
-        if let RocketMQError::BrokerOperationFailed {
-            code,
-            message,
-            broker_addr,
-            ..
-        } = error
-        {
-            Some(Self::new_with_optional_broker(
-                *code,
-                message.as_str(),
-                broker_addr.clone(),
-            ))
-        } else {
-            None
+    pub fn from_client_error(error: &ClientError) -> Option<Self> {
+        if !error.is(&rocketmq_error::BROKER_OPERATION_FAILED) {
+            return None;
         }
+        if let Some(source) = error.source_ref::<MQBrokerException>() {
+            return Some(source.clone());
+        }
+        Some(Self::new_with_optional_broker(
+            error.broker_response_code()?,
+            error.descriptor().public_message(),
+            error.broker_addr().map(ToOwned::to_owned),
+        ))
     }
 }
 
@@ -200,18 +197,11 @@ impl fmt::Display for MQBrokerException {
 
 impl std::error::Error for MQBrokerException {}
 
-impl From<MQBrokerException> for RocketMQError {
+impl From<MQBrokerException> for ClientError {
     fn from(exception: MQBrokerException) -> Self {
-        let message = exception
-            .error_message
-            .clone()
-            .unwrap_or_else(|| exception.message.clone());
-        let error = RocketMQError::broker_operation_failed("BROKER_OPERATION", exception.response_code, message);
-        if let Some(broker_addr) = exception.broker_addr {
-            error.with_broker_addr(broker_addr)
-        } else {
-            error
-        }
+        let code = exception.response_code;
+        let broker_addr = exception.broker_addr.clone();
+        ClientError::broker_operation_source("BROKER_OPERATION", code, broker_addr, exception)
     }
 }
 
@@ -280,7 +270,7 @@ impl From<OffsetNotFoundException> for MQBrokerException {
     }
 }
 
-impl From<OffsetNotFoundException> for RocketMQError {
+impl From<OffsetNotFoundException> for ClientError {
     fn from(exception: OffsetNotFoundException) -> Self {
         let broker_exception: MQBrokerException = exception.into();
         broker_exception.into()
@@ -339,16 +329,17 @@ impl RequestTimeoutException {
         self.error_message = Some(error_message.into());
     }
 
-    pub fn from_rocketmq_error(error: &RocketMQError) -> Option<Self> {
-        match error {
-            RocketMQError::Timeout { .. } => Some(Self::new(error.to_string())),
-            _ if [
-                &TRANSPORT_CONNECTION_TIMEOUT,
-                &TRANSPORT_WRITE_TIMEOUT,
-                &TRANSPORT_RESPONSE_TIMEOUT,
-            ]
-            .into_iter()
-            .any(|descriptor| error.descriptor().code() == descriptor.code()) =>
+    pub fn from_client_error(error: &ClientError) -> Option<Self> {
+        match error.descriptor() {
+            descriptor if descriptor.code() == CORE_OPERATION_TIMED_OUT.code() => Some(Self::new(error.to_string())),
+            descriptor
+                if [
+                    &TRANSPORT_CONNECTION_TIMEOUT,
+                    &TRANSPORT_WRITE_TIMEOUT,
+                    &TRANSPORT_RESPONSE_TIMEOUT,
+                ]
+                .into_iter()
+                .any(|candidate| descriptor.code() == candidate.code()) =>
             {
                 Some(Self::new(error.to_string()))
             }
@@ -365,12 +356,9 @@ impl fmt::Display for RequestTimeoutException {
 
 impl std::error::Error for RequestTimeoutException {}
 
-impl From<RequestTimeoutException> for RocketMQError {
+impl From<RequestTimeoutException> for ClientError {
     fn from(_exception: RequestTimeoutException) -> Self {
-        RocketMQError::Timeout {
-            operation: "REQUEST",
-            timeout_ms: 0,
-        }
+        ClientError::timeout("REQUEST", 0)
     }
 }
 
@@ -408,26 +396,19 @@ mod tests {
         assert_eq!(exception.get_broker_addr(), Some("127.0.0.1:10911"));
         assert!(exception.to_string().contains("BROKER: 127.0.0.1:10911"));
 
-        let error: RocketMQError = exception.into();
-        match error {
-            RocketMQError::BrokerOperationFailed {
-                code,
-                message,
-                broker_addr,
-                ..
-            } => {
-                assert_eq!(code, 25);
-                assert_eq!(message, "broker failed");
-                assert_eq!(broker_addr.as_deref(), Some("127.0.0.1:10911"));
-            }
-            other => panic!("expected broker operation error, got {other:?}"),
-        }
+        let error: ClientError = exception.into();
+        assert!(error.is(&rocketmq_error::BROKER_OPERATION_FAILED));
+        assert_eq!(error.broker_response_code(), Some(25));
+        assert_eq!(error.broker_addr(), Some("127.0.0.1:10911"));
+        let canonical = std::error::Error::source(&error).expect("canonical source");
+        assert!(canonical.downcast_ref::<rocketmq_error::Error>().is_some());
+        assert!(error.source_ref::<MQBrokerException>().is_some());
     }
 
     #[test]
-    fn mq_broker_exception_can_be_extracted_from_rocketmq_error() {
-        let error = RocketMQError::broker_operation_failed("SEND", 31, "send failed").with_broker_addr("broker-a");
-        let exception = MQBrokerException::from_rocketmq_error(&error).expect("broker exception");
+    fn mq_broker_exception_can_be_extracted_from_client_error() {
+        let error: ClientError = MQBrokerException::new_with_broker(31, "send failed", "broker-a").into();
+        let exception = MQBrokerException::from_client_error(&error).expect("broker exception");
 
         assert_eq!(exception.get_response_code(), 31);
         assert_eq!(exception.get_error_message(), Some("send failed"));
@@ -463,15 +444,9 @@ mod tests {
 
     #[test]
     fn request_timeout_exception_converts_to_timeout_error() {
-        let error: RocketMQError = RequestTimeoutException::new("request timeout").into();
+        let error: ClientError = RequestTimeoutException::new("request timeout").into();
 
-        match error {
-            RocketMQError::Timeout { operation, timeout_ms } => {
-                assert_eq!(operation, "REQUEST");
-                assert_eq!(timeout_ms, 0);
-            }
-            other => panic!("expected timeout error, got {other:?}"),
-        }
+        assert!(error.is(&rocketmq_error::CORE_OPERATION_TIMED_OUT));
     }
 
     #[test]
@@ -482,13 +457,10 @@ mod tests {
             &TRANSPORT_RESPONSE_TIMEOUT,
         ] {
             let canonical = Arc::new(Error::new(descriptor));
-            let shared = RocketMQError::Shared(Arc::clone(&canonical));
+            let shared = ClientError::from_shared(Arc::clone(&canonical));
 
-            assert!(RequestTimeoutException::from_rocketmq_error(&shared).is_some());
-            let RocketMQError::Shared(retained) = shared else {
-                panic!("expected canonical Shared carrier")
-            };
-            assert!(Arc::ptr_eq(&canonical, &retained));
+            assert!(RequestTimeoutException::from_client_error(&shared).is_some());
+            assert!(Arc::ptr_eq(&canonical, shared.shared_error()));
         }
     }
 
@@ -498,12 +470,9 @@ mod tests {
             &TRANSPORT_CONNECTION_FAILED,
             std::io::Error::other("rendered source contains timeout"),
         ));
-        let shared = RocketMQError::Shared(Arc::clone(&canonical));
+        let shared = ClientError::from_shared(Arc::clone(&canonical));
 
-        assert!(RequestTimeoutException::from_rocketmq_error(&shared).is_none());
-        let RocketMQError::Shared(retained) = shared else {
-            panic!("expected canonical Shared carrier")
-        };
-        assert!(Arc::ptr_eq(&canonical, &retained));
+        assert!(RequestTimeoutException::from_client_error(&shared).is_none());
+        assert!(Arc::ptr_eq(&canonical, shared.shared_error()));
     }
 }

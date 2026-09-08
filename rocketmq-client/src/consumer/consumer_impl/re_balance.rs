@@ -32,7 +32,7 @@ pub(crate) mod rebalance_service;
 pub(crate) fn parse_consume_timestamp_millis(
     consume_timestamp: Option<&str>,
     mq: &MessageQueue,
-) -> rocketmq_error::RocketMQResult<u64> {
+) -> crate::ClientResult<u64> {
     let Some(consume_timestamp) = consume_timestamp else {
         return Err(crate::mq_client_err!(
             ResponseCode::SystemError as i32,
@@ -118,7 +118,7 @@ pub trait RebalanceLocal {
     /// # Returns
     ///
     /// A result containing the pull offset or an error.
-    async fn compute_pull_from_where_with_exception(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64>;
+    async fn compute_pull_from_where_with_exception(&self, mq: &MessageQueue) -> crate::ClientResult<i64>;
 
     /// Computes the pull offset.
     ///

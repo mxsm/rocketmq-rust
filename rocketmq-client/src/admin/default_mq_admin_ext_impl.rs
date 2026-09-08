@@ -44,11 +44,11 @@ use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 use crate::implementation::mq_client_manager::ClientPool;
 use crate::implementation::mq_client_manager::ClientPoolToken;
 use crate::runtime::ClientRuntime;
+#[cfg(feature = "admin-full")]
+use crate::ClientError;
 use cheetah_string::CheetahString;
 #[cfg(feature = "admin-full")]
 use rand::seq::IndexedRandom;
-#[cfg(feature = "admin-full")]
-use rocketmq_error::RocketMQError;
 #[cfg(feature = "admin-full")]
 use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
 #[cfg(feature = "admin-full")]

@@ -1037,7 +1037,7 @@ impl ConsumeRequest {
                 .await
                 .unwrap_or_else(|e| {
                     (
-                        Err(rocketmq_error::RocketMQError::InvalidProperty(format!(
+                        Err(crate::ClientError::invalid_property(format!(
                             "orderly consume task panicked: {e}"
                         ))),
                         ConsumeOrderlyContext::new(self.message_queue.clone()),

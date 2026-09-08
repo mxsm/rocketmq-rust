@@ -30,9 +30,9 @@ use std::sync::MutexGuard as StdMutexGuard;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::ClientError;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_batch::MessageBatch;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
@@ -225,7 +225,7 @@ impl ProduceAccumulator {
         self.hold_ms.load(Ordering::Acquire)
     }
 
-    pub fn set_batch_max_delay_ms(&self, hold_ms: u32) -> rocketmq_error::RocketMQResult<()> {
+    pub fn set_batch_max_delay_ms(&self, hold_ms: u32) -> crate::ClientResult<()> {
         if hold_ms == 0 || hold_ms > 30_000 {
             return Err(crate::mq_client_err!(format!(
                 "batchMaxDelayMs expect between 1ms and 30s, but get {hold_ms}!"
@@ -239,7 +239,7 @@ impl ProduceAccumulator {
         self.hold_size.load(Ordering::Acquire)
     }
 
-    pub fn set_batch_max_bytes(&self, hold_size: u64) -> rocketmq_error::RocketMQResult<()> {
+    pub fn set_batch_max_bytes(&self, hold_size: u64) -> crate::ClientResult<()> {
         if hold_size == 0 || hold_size > 2 * 1024 * 1024 {
             return Err(crate::mq_client_err!(format!(
                 "batchMaxBytes expect between 1B and 2MB, but get {hold_size}!"
@@ -253,7 +253,7 @@ impl ProduceAccumulator {
         self.total_hold_size.load(Ordering::Acquire)
     }
 
-    pub fn set_total_batch_max_bytes(&self, total_hold_size: u64) -> rocketmq_error::RocketMQResult<()> {
+    pub fn set_total_batch_max_bytes(&self, total_hold_size: u64) -> crate::ClientResult<()> {
         if total_hold_size == 0 {
             return Err(crate::mq_client_err!(format!(
                 "totalBatchMaxBytes must bigger then 0, but get {total_hold_size}!"
@@ -263,7 +263,7 @@ impl ProduceAccumulator {
         Ok(())
     }
 
-    pub fn start(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub fn start(&self) -> crate::ClientResult<()> {
         let mut lifecycle = self.lifecycle();
         if lifecycle.stopping {
             tracing::warn!("ProduceAccumulator is stopping");
@@ -423,7 +423,7 @@ impl ProduceAccumulator {
         message: M,
         mq: Option<MessageQueue>,
         default_mq_producer: DefaultMQProducer,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
+    ) -> crate::ClientResult<Option<SendResult>> {
         let partition_key = AggregateKey::new_from_message_queue(&message, mq);
         let hold_size = self.batch_max_bytes();
         let hold_ms = self.batch_max_delay_ms();
@@ -532,7 +532,7 @@ impl ProduceAccumulator {
         mq: Option<MessageQueue>,
         send_callback: Option<ArcSendCallback>,
         default_mq_producer: DefaultMQProducer,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync + 'static,
     {
@@ -604,7 +604,7 @@ impl ProduceAccumulator {
         aggregate_key: AggregateKey,
         default_mq_producer: &DefaultMQProducer,
         hold_ms: u32,
-    ) -> rocketmq_error::RocketMQResult<Arc<Mutex<MessageAccumulation>>> {
+    ) -> crate::ClientResult<Arc<Mutex<MessageAccumulation>>> {
         match self.sync_send_batchs.entry(aggregate_key.clone()) {
             dashmap::mapref::entry::Entry::Occupied(entry) => Ok(entry.get().clone()),
             dashmap::mapref::entry::Entry::Vacant(entry) => {
@@ -643,7 +643,7 @@ impl ProduceAccumulator {
         aggregate_key: AggregateKey,
         default_mq_producer: &DefaultMQProducer,
         hold_ms: u32,
-    ) -> rocketmq_error::RocketMQResult<Arc<Mutex<MessageAccumulation>>> {
+    ) -> crate::ClientResult<Arc<Mutex<MessageAccumulation>>> {
         match self.async_send_batchs.entry(aggregate_key.clone()) {
             dashmap::mapref::entry::Entry::Occupied(entry) => Ok(entry.get().clone()),
             dashmap::mapref::entry::Entry::Vacant(entry) => {
@@ -678,7 +678,7 @@ impl ProduceAccumulator {
     }
 
     /// Send a batch synchronously (extracted to avoid holding lock across await)
-    async fn send_batch_sync(&self, batch: Arc<Mutex<MessageAccumulation>>) -> rocketmq_error::RocketMQResult<()> {
+    async fn send_batch_sync(&self, batch: Arc<Mutex<MessageAccumulation>>) -> crate::ClientResult<()> {
         // Extract all data from the batch without holding the lock across await
         let (messages, resource_permits, mq, mut producer, total_size, count, notify, aggregate_key, keys) = {
             let mut batch_guard = batch.lock().await;
@@ -773,7 +773,7 @@ impl ProduceAccumulator {
     }
 
     /// Send a batch asynchronously (extracted to avoid holding lock across await)
-    async fn send_batch_async(&self, batch: Arc<Mutex<MessageAccumulation>>) -> rocketmq_error::RocketMQResult<()> {
+    async fn send_batch_async(&self, batch: Arc<Mutex<MessageAccumulation>>) -> crate::ClientResult<()> {
         // Extract all data from the batch without holding the lock across await
         let (messages, resource_permits, mq, mut producer, total_size, callbacks, aggregate_key, keys, notify) = {
             let mut batch_guard = batch.lock().await;
@@ -835,7 +835,7 @@ impl ProduceAccumulator {
         let callback_permit_owner = Arc::clone(&permit_owner);
 
         // Create combined callback
-        let combined_callback = move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
+        let combined_callback = move |result: Option<&SendResult>, error: Option<&ClientError>| {
             release_resource_permits(&callback_permit_owner);
             release_hold_size(&callback_currently_hold_size, total_size);
             // Invoke all registered callbacks
@@ -944,7 +944,7 @@ fn close_pending_batch(
     }
 }
 
-fn split_send_results(send_result: &SendResult, count: usize) -> rocketmq_error::RocketMQResult<Vec<SendResult>> {
+fn split_send_results(send_result: &SendResult, count: usize) -> crate::ClientResult<Vec<SendResult>> {
     let Some(msg_id) = send_result.msg_id.as_ref() else {
         return Err(crate::mq_client_err!("sendResult is illegal"));
     };
@@ -978,7 +978,7 @@ fn build_message_batch(
     messages: Vec<Message>,
     aggregate_key: &AggregateKey,
     keys: &HashSet<String>,
-) -> rocketmq_error::RocketMQResult<MessageBatch> {
+) -> crate::ClientResult<MessageBatch> {
     let mut batch = MessageBatch::generate_from_messages(messages)?;
     batch.set_topic(aggregate_key.topic.clone());
     batch.set_wait_store_msg_ok(aggregate_key.wait_store_msg_ok);
@@ -1360,7 +1360,7 @@ mod tests {
         let mut accumulation = MessageAccumulation::new(aggregate_key.clone(), DefaultMQProducer::unbound());
         let callback_invoked = Arc::new(AtomicBool::new(false));
         let callback_invoked_for_callback = callback_invoked.clone();
-        let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
+        let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&ClientError>| {
             assert!(error.is_some());
             callback_invoked_for_callback.store(true, Ordering::Release);
         });
@@ -1845,7 +1845,7 @@ impl MessageAccumulation {
         send_callback: Option<ArcSendCallback>,
         hold_size: usize,
         hold_ms: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<AddOutcome>> {
+    ) -> crate::ClientResult<Option<AddOutcome>> {
         self.add_inner(msg, send_callback, hold_size, hold_ms, None)
     }
 
@@ -1856,7 +1856,7 @@ impl MessageAccumulation {
         hold_size: usize,
         hold_ms: u64,
         resource_permit: ResourcePermit,
-    ) -> rocketmq_error::RocketMQResult<Option<AddOutcome>> {
+    ) -> crate::ClientResult<Option<AddOutcome>> {
         self.add_inner(msg, send_callback, hold_size, hold_ms, Some(resource_permit))
     }
 
@@ -1867,7 +1867,7 @@ impl MessageAccumulation {
         hold_size: usize,
         hold_ms: u64,
         resource_permit: Option<ResourcePermit>,
-    ) -> rocketmq_error::RocketMQResult<Option<AddOutcome>> {
+    ) -> crate::ClientResult<Option<AddOutcome>> {
         // Check if batch is already closed
         if self.state() != BatchState::Open {
             return Ok(None);
@@ -2072,7 +2072,7 @@ async fn wait_guard_deadline_or_schedule(
 fn build_guard_schedule_queue(
     parent_budget: &ResourceBudget,
     queue_name: &'static str,
-) -> rocketmq_error::RocketMQResult<BudgetedQueue<GuardScheduleCommand>> {
+) -> crate::ClientResult<BudgetedQueue<GuardScheduleCommand>> {
     const SCHEDULE_CAPACITY: usize = 65_536;
     let queue_bytes = (parent_budget.limit().capacity.bytes / 64).max(1);
     let budget = parent_budget
@@ -2082,11 +2082,7 @@ fn build_guard_schedule_queue(
                 .with_rate(RateLimit::new(SCHEDULE_CAPACITY as u64, SCHEDULE_CAPACITY as u64))
                 .with_max_age(Duration::from_secs(300)),
         )
-        .map_err(|error| RocketMQError::ConfigInvalidValue {
-            key: "client.producer.accumulatorScheduleQueue",
-            value: SCHEDULE_CAPACITY.to_string(),
-            reason: error.to_string(),
-        })?;
+        .map_err(|error| ClientError::config_invalid_source("client.producer.accumulatorScheduleQueue", true, error))?;
     Ok(BudgetedQueue::new(budget))
 }
 
@@ -2241,7 +2237,7 @@ impl GuardForSyncSendService {
         }
     }
 
-    pub fn start(&self, batches: BatchMap, hold_ms: u32) -> rocketmq_error::RocketMQResult<()> {
+    pub fn start(&self, batches: BatchMap, hold_ms: u32) -> crate::ClientResult<()> {
         let mut state = self.state();
         if state.stopping {
             return Err(crate::mq_client_err!("sync batch guard is stopping"));
@@ -2303,7 +2299,7 @@ impl GuardForSyncSendService {
         aggregate_key: AggregateKey,
         create_time: u64,
         deadline_ms: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let schedule_queue = self.state().schedule_queue.clone();
         let Some(schedule_queue) = schedule_queue else {
             return Err(crate::mq_client_err!("sync batch deadline scheduler is not running"));
@@ -2428,7 +2424,7 @@ impl GuardForAsyncSendService {
         currently_hold_size: Arc<AtomicU64>,
         hold_size: usize,
         hold_ms: u32,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let mut state = self.state();
         if state.stopping {
             return Err(crate::mq_client_err!("async batch guard is stopping"));
@@ -2498,7 +2494,7 @@ impl GuardForAsyncSendService {
         aggregate_key: AggregateKey,
         create_time: u64,
         deadline_ms: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let schedule_queue = self.state().schedule_queue.clone();
         let Some(schedule_queue) = schedule_queue else {
             return Err(crate::mq_client_err!("async batch deadline scheduler is not running"));
@@ -2527,7 +2523,7 @@ impl GuardForAsyncSendService {
     async fn send_batch_async_internal(
         batch: Arc<Mutex<MessageAccumulation>>,
         currently_hold_size: Arc<AtomicU64>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         // Extract all data from the batch without holding the lock across await
         let (messages, resource_permits, mq, mut producer, total_size, callbacks, aggregate_key, keys, notify) = {
             let mut batch_guard = batch.lock().await;
@@ -2588,7 +2584,7 @@ impl GuardForAsyncSendService {
         let callback_permit_owner = Arc::clone(&permit_owner);
 
         // Create combined callback
-        let combined_callback = move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
+        let combined_callback = move |result: Option<&SendResult>, error: Option<&ClientError>| {
             release_resource_permits(&callback_permit_owner);
             release_hold_size(&callback_currently_hold_size, total_size);
             if let Some(result) = result {

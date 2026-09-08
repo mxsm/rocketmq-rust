@@ -547,7 +547,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         .await
         .unwrap_or_else(|join_err| {
             error!("consume_message_directly task panicked: {:?}", join_err);
-            Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+            Err(crate::ClientError::illegal_argument(format!(
                 "consume_message_directly task panicked: {join_err:?}"
             )))
         });

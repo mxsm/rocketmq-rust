@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 
 /// Java-compatible ACL exception type.
-pub type AclException = rocketmq_error::AuthError;
+pub type AclException = rocketmq_auth::AuthServiceError;
 
 /// Java-compatible ACL signing algorithm type.
 pub type SigningAlgorithm = rocketmq_auth::SignatureAlgorithm;
@@ -78,9 +78,11 @@ pub struct AclUtils;
 
 impl AclUtils {
     fn net_address_scope_error(net_address: &str) -> AclException {
-        AclException::InvalidCredential(format!(
-            "NetAddress examine scope Exception netAddress is {net_address}"
-        ))
+        let _ = net_address;
+        AclException::new(
+            rocketmq_auth::AuthOperation::BuildContext,
+            rocketmq_auth::AuthFailureKind::InvalidInput,
+        )
     }
 
     pub fn combine_request_content(request: &RemotingCommand, fields: &BTreeMap<String, String>) -> Vec<u8> {

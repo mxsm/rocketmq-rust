@@ -18,9 +18,9 @@ use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 
+use crate::ClientError;
+use crate::ClientResult;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use tokio::sync::Mutex;
@@ -107,7 +107,7 @@ impl crate::consumer::message_queue_listener::MessageQueueListener for ClassicPu
 }
 
 impl ClassicPullCore {
-    async fn start(self: &Arc<Self>) -> RocketMQResult<()> {
+    async fn start(self: &Arc<Self>) -> ClientResult<()> {
         let mut state = self.state.lock().await;
         match *state {
             ClassicPullServiceState::Created => {}
@@ -146,7 +146,7 @@ impl ClassicPullCore {
             .clone()
     }
 
-    async fn shutdown(&self) -> RocketMQResult<()> {
+    async fn shutdown(&self) -> ClientResult<()> {
         let mut state = self.state.lock().await;
         match *state {
             ClassicPullServiceState::Shutdown => return Ok(()),
@@ -161,9 +161,9 @@ impl ClassicPullCore {
         Ok(())
     }
 
-    async fn ensure_running(&self) -> RocketMQResult<()> {
+    async fn ensure_running(&self) -> ClientResult<()> {
         if *self.state.lock().await != ClassicPullServiceState::Running {
-            return Err(RocketMQError::not_initialized(
+            return Err(ClientError::not_initialized(
                 "DefaultMQPullConsumer not started. Call start() first.",
             ));
         }
@@ -184,7 +184,7 @@ pub struct DefaultMQPullConsumerImpl {
 #[allow(deprecated)]
 impl DefaultMQPullConsumerImpl {
     /// Creates a detached implementation marker for source compatibility.
-    pub fn new() -> RocketMQResult<Self> {
+    pub fn new() -> ClientResult<Self> {
         Ok(Self::default())
     }
 
@@ -193,7 +193,7 @@ impl DefaultMQPullConsumerImpl {
         consumer_pull_timeout: Duration,
         broker_suspend_timeout: Duration,
         consumer_timeout_when_suspend: Duration,
-    ) -> RocketMQResult<Self> {
+    ) -> ClientResult<Self> {
         let listeners = Arc::new(StdRwLock::new(HashMap::new()));
         let namespace = lite_consumer.client_config().resolved_namespace();
         lite_consumer.set_classic_pull_message_queue_listener(Some(Arc::new(
@@ -211,9 +211,9 @@ impl DefaultMQPullConsumerImpl {
         })
     }
 
-    fn core(&self) -> RocketMQResult<&Arc<ClassicPullCore>> {
+    fn core(&self) -> ClientResult<&Arc<ClassicPullCore>> {
         self.core.as_ref().ok_or_else(|| {
-            RocketMQError::not_initialized(
+            ClientError::not_initialized(
                 "DefaultMQPullConsumerImpl is detached; create a consumer with DefaultMQPullConsumer::builder",
             )
         })
@@ -224,7 +224,7 @@ impl DefaultMQPullConsumerImpl {
     /// # Errors
     ///
     /// Returns an initialization, lifecycle, or underlying client startup error.
-    pub async fn start(&self) -> RocketMQResult<()> {
+    pub async fn start(&self) -> ClientResult<()> {
         self.core()?.start().await
     }
 
@@ -233,7 +233,7 @@ impl DefaultMQPullConsumerImpl {
     /// # Errors
     ///
     /// Returns an initialization or underlying client shutdown error.
-    pub async fn shutdown(&self) -> RocketMQResult<()> {
+    pub async fn shutdown(&self) -> ClientResult<()> {
         self.core()?.shutdown().await
     }
 
@@ -255,7 +255,7 @@ impl DefaultMQPullConsumerImpl {
             .map_or(Duration::from_secs(10), |core| core.consumer_pull_timeout)
     }
 
-    pub(crate) fn client_config(&self) -> RocketMQResult<Arc<ClientConfig>> {
+    pub(crate) fn client_config(&self) -> ClientResult<Arc<ClientConfig>> {
         Ok(self.core()?.lite_consumer.client_config())
     }
 
@@ -271,7 +271,7 @@ impl DefaultMQPullConsumerImpl {
             .map_or(Duration::from_secs(30), |core| core.consumer_timeout_when_suspend)
     }
 
-    pub(crate) async fn pull_with_options(&self, options: PullOptions) -> RocketMQResult<PullResult> {
+    pub(crate) async fn pull_with_options(&self, options: PullOptions) -> ClientResult<PullResult> {
         let core = self.core()?;
         core.ensure_running().await?;
         let message_queue = core.lite_consumer.queue_with_namespace(options.message_queue());
@@ -279,7 +279,7 @@ impl DefaultMQPullConsumerImpl {
         core.lite_consumer.try_impl_()?.classic_pull(&options).await
     }
 
-    pub(crate) async fn pull_async_with_options<C>(&self, options: PullOptions, callback: C) -> RocketMQResult<()>
+    pub(crate) async fn pull_async_with_options<C>(&self, options: PullOptions, callback: C) -> ClientResult<()>
     where
         C: ClassicPullCallback,
     {
@@ -293,7 +293,7 @@ impl DefaultMQPullConsumerImpl {
             .await
     }
 
-    pub(crate) async fn fetch_subscribe_message_queues(&self, topic: &str) -> RocketMQResult<Vec<MessageQueue>> {
+    pub(crate) async fn fetch_subscribe_message_queues(&self, topic: &str) -> ClientResult<Vec<MessageQueue>> {
         let core = self.core()?;
         core.ensure_running().await?;
         core.lite_consumer.fetch_message_queues(topic).await
@@ -303,7 +303,7 @@ impl DefaultMQPullConsumerImpl {
         &self,
         topic: &str,
         listener: ArcMessageQueueListener,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         if topic.trim().is_empty() {
             return Err(crate::mq_client_err!("topic is blank"));
         }
@@ -322,7 +322,7 @@ impl DefaultMQPullConsumerImpl {
         Ok(())
     }
 
-    pub(crate) async fn update_consume_offset(&self, message_queue: &MessageQueue, offset: i64) -> RocketMQResult<()> {
+    pub(crate) async fn update_consume_offset(&self, message_queue: &MessageQueue, offset: i64) -> ClientResult<()> {
         let core = self.core()?;
         core.ensure_running().await?;
         let queue = core.lite_consumer.queue_with_namespace(message_queue);
@@ -336,7 +336,7 @@ impl DefaultMQPullConsumerImpl {
         &self,
         message_queue: &MessageQueue,
         from_store: bool,
-    ) -> RocketMQResult<i64> {
+    ) -> ClientResult<i64> {
         let core = self.core()?;
         core.ensure_running().await?;
         let queue = core.lite_consumer.queue_with_namespace(message_queue);
@@ -346,19 +346,19 @@ impl DefaultMQPullConsumerImpl {
             .await
     }
 
-    pub(crate) async fn search_offset(&self, message_queue: &MessageQueue, timestamp: u64) -> RocketMQResult<i64> {
+    pub(crate) async fn search_offset(&self, message_queue: &MessageQueue, timestamp: u64) -> ClientResult<i64> {
         let core = self.core()?;
         core.ensure_running().await?;
         core.lite_consumer.offset_for_timestamp(message_queue, timestamp).await
     }
 
-    pub(crate) async fn max_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    pub(crate) async fn max_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         let core = self.core()?;
         core.ensure_running().await?;
         core.lite_consumer.max_offset(message_queue).await
     }
 
-    pub(crate) async fn min_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    pub(crate) async fn min_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         let core = self.core()?;
         core.ensure_running().await?;
         core.lite_consumer.min_offset(message_queue).await
@@ -369,7 +369,7 @@ impl DefaultMQPullConsumerImpl {
     /// # Errors
     ///
     /// Returns an initialization error for a detached implementation marker.
-    pub fn rebalance_impl(&self) -> RocketMQResult<crate::legacy::RebalancePullImpl> {
+    pub fn rebalance_impl(&self) -> ClientResult<crate::legacy::RebalancePullImpl> {
         self.core()?;
         Ok(crate::legacy::RebalancePullImpl)
     }

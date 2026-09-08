@@ -24,7 +24,7 @@ impl ProducerClient<'_> {
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<(i32, Option<RemotingCommand>)> {
+    ) -> crate::ClientResult<(i32, Option<RemotingCommand>)> {
         self.api.send_heartbeat(addr, heartbeat_data, timeout_millis).await
     }
 }
@@ -40,7 +40,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i32> {
+    ) -> crate::ClientResult<i32> {
         self.send_heartbeat(addr, heartbeat_data, timeout_millis)
             .await
             .map(|(version, _)| version)

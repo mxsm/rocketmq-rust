@@ -25,7 +25,7 @@ impl TransactionClient<'_> {
         request_header: EndTransactionRequestHeader,
         remark: CheetahString,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         self.api
             .end_transaction_oneway(addr, request_header, remark, timeout_millis)
             .await
@@ -46,7 +46,7 @@ impl MQClientAPIImpl {
         request_header: EndTransactionRequestHeader,
         remark: CheetahString,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let request = self
             .create_request_command(RequestCode::EndTransaction, request_header)
             .set_remark(remark);
@@ -54,5 +54,6 @@ impl MQClientAPIImpl {
         self.remoting_client
             .invoke_request_oneway(addr, request, timeout_millis)
             .await
+            .map_err(crate::ClientError::from)
     }
 }

@@ -20,7 +20,7 @@ impl DefaultMQProducerImpl {
         &self,
         mut msg: M,
         arg: Option<Box<dyn Any + Send + Sync>>,
-    ) -> rocketmq_error::RocketMQResult<TransactionSendResult>
+    ) -> crate::ClientResult<TransactionSendResult>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -54,8 +54,7 @@ impl DefaultMQProducerImpl {
         );
         let send_result = self
             .send_default_impl_with_runtime(&mut msg, CommunicationMode::Sync, None, deadline, &runtime)
-            .await
-            .map_err(|e| mq_client_err!(format!("send message in transaction error, {}", e)))?
+            .await?
             .ok_or_else(|| mq_client_err!("send result is none"))?;
 
         if send_result.send_status == SendStatus::SendOk {
@@ -64,7 +63,7 @@ impl DefaultMQProducerImpl {
                     CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_ID),
                     CheetahString::from_string(transaction_id.to_owned()),
                 )
-                .map_err(|e| mq_client_err!(e.to_string()))?;
+                .map_err(ClientError::from)?;
             }
             let transaction_id = msg.property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
@@ -176,10 +175,9 @@ impl DefaultMQProducerImpl {
         operation: &'static str,
         field: &'static str,
         value: u64,
-    ) -> rocketmq_error::RocketMQResult<i64> {
-        i64::try_from(value).map_err(|_| {
-            rocketmq_error::RocketMQError::IllegalArgument(format!("{operation} {field} exceeds Java long range"))
-        })
+    ) -> crate::ClientResult<i64> {
+        i64::try_from(value)
+            .map_err(|_| crate::ClientError::illegal_argument(format!("{operation} {field} exceeds Java long range")))
     }
 
     pub async fn end_transaction(
@@ -188,7 +186,7 @@ impl DefaultMQProducerImpl {
         send_result: &SendResult,
         local_transaction_state: LocalTransactionState,
         local_exception: Option<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let topic = msg.topic().clone();
         let message = msg.as_any().downcast_ref::<Message>().cloned();
         self.end_transaction_owned(topic, message, send_result, local_transaction_state, local_exception)
@@ -202,19 +200,15 @@ impl DefaultMQProducerImpl {
         send_result: &SendResult,
         local_transaction_state: LocalTransactionState,
         local_exception: Option<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let id = if let Some(ref offset_msg_id) = send_result.offset_msg_id {
-            MessageDecoder::decode_message_id(offset_msg_id).map_err(|e| {
-                rocketmq_error::RocketMQError::IllegalArgument(format!("Failed to decode message ID: {}", e))
-            })?
+            MessageDecoder::decode_message_id(offset_msg_id).map_err(crate::ClientError::illegal_argument)?
         } else {
             let msg_id = send_result
                 .msg_id
                 .as_ref()
                 .ok_or_else(|| mq_client_err!("send result missing msg_id for end transaction"))?;
-            MessageDecoder::decode_message_id(msg_id).map_err(|e| {
-                rocketmq_error::RocketMQError::IllegalArgument(format!("Failed to decode message ID: {}", e))
-            })?
+            MessageDecoder::decode_message_id(msg_id).map_err(crate::ClientError::illegal_argument)?
         };
         let transaction_id = send_result.transaction_id.clone();
         let message_queue = send_result
@@ -262,7 +256,7 @@ impl DefaultMQProducerImpl {
         client_instance
             .mq_client_api_impl
             .load_full()
-            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("MQClientAPIImpl"))?
+            .ok_or_else(|| crate::ClientError::not_initialized("MQClientAPIImpl"))?
             .end_transaction_oneway(
                 &broker_addr,
                 request_header,
@@ -346,7 +340,7 @@ impl DefaultMQProducerImpl {
 #[allow(unused_assignments)]
 impl DefaultMQProducerImpl {
     /// Ensure transactional messages do not support delayed delivery
-    pub(super) fn ensure_not_delayed_for_transactional<M>(&self, msg: &M) -> rocketmq_error::RocketMQResult<()>
+    pub(super) fn ensure_not_delayed_for_transactional<M>(&self, msg: &M) -> crate::ClientResult<()>
     where
         M: MessageTrait,
     {
@@ -373,7 +367,7 @@ impl DefaultMQProducerImpl {
         check_thread_pool_min_size: u32,
         check_thread_pool_max_size: u32,
         check_request_hold_max: u32,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         if check_thread_pool_min_size == 0 || check_thread_pool_max_size == 0 {
             return Err(mq_client_err!(
                 "transaction check thread pool min and max size must be greater than 0"

@@ -16,10 +16,6 @@
     dead_code,
     reason = "legacy private Client items remain under the non-growth lint debt registry"
 )]
-#![allow(
-    clippy::result_large_err,
-    reason = "Client error payload migration remains under the non-growth lint debt registry"
-)]
 #![recursion_limit = "256"]
 
 extern crate core;
@@ -31,22 +27,22 @@ macro_rules! mq_client_err {
     // Handle errors with a custom ResponseCode and formatted string
     ($response_code:expr, $fmt:expr, $($arg:expr),*) => {{
         let formatted_msg = format!($fmt, $($arg),*);
-        let error_message = format!("CODE: {}  DESC: {}", $response_code as i32, formatted_msg);
-        let faq_msg = rocketmq_model::common::FAQUrl::attach_default_url(Some(error_message.as_str()));
-        rocketmq_error::RocketMQError::illegal_argument(faq_msg)
+        $crate::ClientError::from($crate::MQClientException::new_with_code(
+            $response_code as i32,
+            formatted_msg,
+        ))
     }};
 
     ($response_code:expr, $error_message:expr) => {{
-        let error_message = format!("CODE: {}  DESC: {}", $response_code as i32, $error_message);
-        let faq_msg = rocketmq_model::common::FAQUrl::attach_default_url(Some(error_message.as_str()));
-        rocketmq_error::RocketMQError::illegal_argument(faq_msg)
+        $crate::ClientError::from($crate::MQClientException::new_with_code(
+            $response_code as i32,
+            $error_message,
+        ))
     }};
 
     // Handle errors without a ResponseCode, using only the error message (accepts both &str and String)
     ($error_message:expr) => {{
-        let error_msg = format!("{}", $error_message);
-        let faq_msg = rocketmq_model::common::FAQUrl::attach_default_url(Some(error_msg.as_str()));
-        rocketmq_error::RocketMQError::illegal_argument(faq_msg)
+        $crate::ClientError::from($crate::MQClientException::new($error_message))
     }};
 }
 
@@ -55,25 +51,18 @@ macro_rules! mq_client_err {
 macro_rules! client_broker_err {
     // Handle errors with a custom ResponseCode and formatted string
     ($response_code:expr, $error_message:expr, $broker_addr:expr) => {{
-        rocketmq_error::RocketMQError::broker_operation_failed(
-            "BROKER_OPERATION",
-            $response_code as i32,
-            $error_message,
-        )
-        .with_broker_addr($broker_addr)
+        $crate::ClientError::broker_operation_failed("BROKER_OPERATION", $response_code as i32, $error_message)
+            .with_broker_addr($broker_addr)
     }};
     // Handle errors without a ResponseCode, using only the error message
     ($response_code:expr, $error_message:expr) => {{
-        rocketmq_error::RocketMQError::broker_operation_failed(
-            "BROKER_OPERATION",
-            $response_code as i32,
-            $error_message,
-        )
+        $crate::ClientError::broker_operation_failed("BROKER_OPERATION", $response_code as i32, $error_message)
     }};
 }
 
 mod admin;
 mod base;
+mod client_error;
 mod common;
 mod config_support;
 mod consumer;
@@ -101,6 +90,8 @@ pub use crate::base::query_result::QueryResult;
 pub use crate::base::MQAdmin;
 pub use crate::base::MqClientAdmin;
 pub use crate::base::MqClientAdminInner;
+pub use crate::client_error::ClientError;
+pub use crate::client_error::ClientResult;
 pub use crate::common::acl::AclConstants;
 pub use crate::common::acl::AclException;
 pub use crate::common::acl::AclSigner;
@@ -166,7 +157,7 @@ mod cluster_session {
             domain_id: u64,
             client_config: crate::base::client_config::ClientConfig,
             rpc_hook: Option<Arc<ClientRpcHook>>,
-        ) -> rocketmq_error::RocketMQResult<Self> {
+        ) -> crate::ClientResult<Self> {
             let client_config = client_config_for_managed_domain(domain_id, client_config);
             let pool = client_runtime.pool().clone();
             let (inner, token) = pool.get_or_create(client_config, rpc_hook)?.into_parts();
@@ -178,7 +169,7 @@ mod cluster_session {
             })
         }
 
-        pub async fn start(&self) -> rocketmq_error::RocketMQResult<()> {
+        pub async fn start(&self) -> crate::ClientResult<()> {
             let _operation = self.operation().await;
             self.inner.start().await
         }
@@ -189,7 +180,7 @@ mod cluster_session {
             broker_addr: &CheetahString,
             request: RemotingCommand,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        ) -> crate::ClientResult<RemotingCommand> {
             let _operation = self.operation().await;
             self.inner
                 .get_mq_client_api_impl()?
@@ -207,8 +198,7 @@ mod cluster_session {
             &self,
             topic: &str,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<Option<rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData>>
-        {
+        ) -> crate::ClientResult<Option<rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData>> {
             let _operation = self.operation().await;
             self.inner
                 .get_mq_client_api_impl()?
@@ -221,7 +211,7 @@ mod cluster_session {
             broker_addr: &str,
             request: rocketmq_protocol::protocol::body::request::lock_batch_request_body::LockBatchRequestBody,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<std::collections::HashSet<MessageQueue>> {
+        ) -> crate::ClientResult<std::collections::HashSet<MessageQueue>> {
             let _operation = self.operation().await;
             self.inner
                 .get_mq_client_api_impl()?
@@ -234,7 +224,7 @@ mod cluster_session {
             broker_addr: &CheetahString,
             request: rocketmq_protocol::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<()> {
+        ) -> crate::ClientResult<()> {
             let _operation = self.operation().await;
             self.inner
                 .get_mq_client_api_impl()?
@@ -255,7 +245,7 @@ mod cluster_session {
             strategy_name: CheetahString,
             message_model: rocketmq_protocol::protocol::heartbeat::message_model::MessageModel,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<Option<Vec<MessageQueueAssignment>>> {
+        ) -> crate::ClientResult<Option<Vec<MessageQueueAssignment>>> {
             let _operation = self.operation().await;
             self.inner
                 .get_mq_client_api_impl()?
@@ -279,7 +269,7 @@ mod cluster_session {
             broker_addr: &CheetahString,
             request: rocketmq_protocol::protocol::header::pop_message_request_header::PopMessageRequestHeader,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<crate::consumer::pop_result::PopResult> {
+        ) -> crate::ClientResult<crate::consumer::pop_result::PopResult> {
             let _operation = self.operation().await;
             let (sender, receiver) = tokio::sync::oneshot::channel();
             self.inner
@@ -293,7 +283,7 @@ mod cluster_session {
                 )
                 .await?;
             receiver.await.unwrap_or_else(|source| {
-                Err(rocketmq_error::RocketMQError::internal(
+                Err(crate::ClientError::internal(
                     "receive client pop callback result",
                     source,
                 ))
@@ -305,7 +295,7 @@ mod cluster_session {
             broker_addr: &CheetahString,
             request: rocketmq_protocol::protocol::header::ack_message_request_header::AckMessageRequestHeader,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<crate::consumer::ack_result::AckResult> {
+        ) -> crate::ClientResult<crate::consumer::ack_result::AckResult> {
             let _operation = self.operation().await;
             self.inner
                 .get_mq_client_api_impl()?
@@ -318,7 +308,7 @@ mod cluster_session {
             broker_addr: &CheetahString,
             request: rocketmq_protocol::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<crate::consumer::ack_result::AckResult> {
+        ) -> crate::ClientResult<crate::consumer::ack_result::AckResult> {
             let _operation = self.operation().await;
             self.inner
                 .get_mq_client_api_impl()?
@@ -332,7 +322,7 @@ mod cluster_session {
             broker_addr: &CheetahString,
             request: rocketmq_model::common::lite::LiteSubscriptionDTO,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<()> {
+        ) -> crate::ClientResult<()> {
             let _operation = self.operation().await;
             self.inner
                 .get_mq_client_api_impl()?
@@ -346,7 +336,7 @@ mod cluster_session {
             broker_addr: &CheetahString,
             request: rocketmq_protocol::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<crate::consumer::ack_result::AckResult> {
+        ) -> crate::ClientResult<crate::consumer::ack_result::AckResult> {
             let _operation = self.operation().await;
             let (sender, receiver) = tokio::sync::oneshot::channel();
             self.inner
@@ -360,7 +350,7 @@ mod cluster_session {
                 )
                 .await?;
             receiver.await.unwrap_or_else(|source| {
-                Err(rocketmq_error::RocketMQError::internal(
+                Err(crate::ClientError::internal(
                     "receive client change-invisible callback result",
                     source,
                 ))
@@ -373,7 +363,7 @@ mod cluster_session {
             request: rocketmq_protocol::protocol::header::end_transaction_request_header::EndTransactionRequestHeader,
             remark: CheetahString,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<()> {
+        ) -> crate::ClientResult<()> {
             let _operation = self.operation().await;
             self.inner
                 .get_mq_client_api_impl()?
@@ -411,7 +401,7 @@ mod cluster_session {
             broker_addr: &str,
             request: rocketmq_protocol::protocol::header::pull_message_request_header::PullMessageRequestHeader,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<rocketmq_model::result::PullOutcome<MessageExt>> {
+        ) -> crate::ClientResult<rocketmq_model::result::PullOutcome<MessageExt>> {
             let _operation = self.operation().await;
             let result = self
                 .inner
@@ -430,7 +420,7 @@ mod cluster_session {
             delay_level: i32,
             timeout_millis: u64,
             max_consume_retry_times: i32,
-        ) -> rocketmq_error::RocketMQResult<()> {
+        ) -> crate::ClientResult<()> {
             let _operation = self.operation().await;
             self.inner
                 .consumer_send_message_back(
@@ -450,7 +440,7 @@ mod cluster_session {
             broker_addr: &CheetahString,
             request: rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<()> {
+        ) -> crate::ClientResult<()> {
             let _operation = self.operation().await;
             self.inner
                 .update_consumer_offset(broker_addr, request, timeout_millis)
@@ -462,7 +452,7 @@ mod cluster_session {
             broker_addr: &str,
             request: rocketmq_protocol::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<i64> {
+        ) -> crate::ClientResult<i64> {
             let _operation = self.operation().await;
             self.inner
                 .query_consumer_offset(broker_addr, request, timeout_millis)
@@ -474,7 +464,7 @@ mod cluster_session {
             broker_addr: &str,
             queue: &MessageQueue,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<i64> {
+        ) -> crate::ClientResult<i64> {
             let _operation = self.operation().await;
             self.inner.get_min_offset(broker_addr, queue, timeout_millis).await
         }
@@ -484,7 +474,7 @@ mod cluster_session {
             broker_addr: &str,
             queue: &MessageQueue,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<i64> {
+        ) -> crate::ClientResult<i64> {
             let _operation = self.operation().await;
             self.inner.get_max_offset(broker_addr, queue, timeout_millis).await
         }
@@ -496,7 +486,7 @@ mod cluster_session {
             timestamp: i64,
             boundary_type: BoundaryType,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<i64> {
+        ) -> crate::ClientResult<i64> {
             let _operation = self.operation().await;
             self.inner
                 .search_offset_by_timestamp(broker_addr, queue, timestamp, boundary_type, timeout_millis)
@@ -508,7 +498,7 @@ mod cluster_session {
             broker_addr: &CheetahString,
             topic: CheetahString,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<rocketmq_model::common::config::TopicConfig> {
+        ) -> crate::ClientResult<rocketmq_model::common::config::TopicConfig> {
             let _operation = self.operation().await;
             self.inner.get_topic_config(broker_addr, topic, timeout_millis).await
         }
@@ -518,7 +508,7 @@ mod cluster_session {
             broker_addr: &CheetahString,
             group: CheetahString,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<
+        ) -> crate::ClientResult<
             rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig,
         > {
             let _operation = self.operation().await;
@@ -530,8 +520,7 @@ mod cluster_session {
         pub async fn broker_cluster_info(
             &self,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo>
-        {
+        ) -> crate::ClientResult<rocketmq_protocol::protocol::body::broker_body::cluster_info::ClusterInfo> {
             let _operation = self.operation().await;
             self.inner.get_broker_cluster_info(timeout_millis).await
         }
@@ -541,7 +530,7 @@ mod cluster_session {
             broker_addr: CheetahString,
             username: CheetahString,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<Option<rocketmq_protocol::protocol::body::user_info::UserInfo>> {
+        ) -> crate::ClientResult<Option<rocketmq_protocol::protocol::body::user_info::UserInfo>> {
             let _operation = self.operation().await;
             self.inner.get_user(broker_addr, username, timeout_millis).await
         }
@@ -551,7 +540,7 @@ mod cluster_session {
             broker_addr: CheetahString,
             subject: CheetahString,
             timeout_millis: u64,
-        ) -> rocketmq_error::RocketMQResult<Option<rocketmq_protocol::protocol::body::acl_info::AclInfo>> {
+        ) -> crate::ClientResult<Option<rocketmq_protocol::protocol::body::acl_info::AclInfo>> {
             let _operation = self.operation().await;
             self.inner.get_acl(broker_addr, subject, timeout_millis).await
         }
@@ -574,40 +563,40 @@ mod cluster_session {
         }
     }
 
-    fn assignment_query_error(input: crate::common::retry_policy::RetryInput) -> rocketmq_error::RocketMQError {
+    fn assignment_query_error(input: crate::common::retry_policy::RetryInput) -> crate::ClientError {
         use crate::common::retry_policy::RetryInput;
+        use crate::ClientError;
         use rocketmq_error::fields;
         use rocketmq_error::Error;
         use rocketmq_error::ErrorContext;
-        use rocketmq_error::RocketMQError;
         use rocketmq_transport::api::OutboundRequestContractReason;
         use rocketmq_transport::api::OutboundRequestRejectionReason;
 
         match input {
-            RetryInput::Transport(error) => RocketMQError::Shared(error.into_shared_error()),
+            RetryInput::Transport(error) => ClientError::from_shared(error.into_shared_error()),
             RetryInput::Rejected(rejection) => match rejection.reason() {
                 OutboundRequestRejectionReason::DeadlineExpired => {
                     let mut context = ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "query_assignment");
                     if let Some(timeout_millis) = rejection.timeout_millis() {
                         context = context.with_u64(fields::TIMEOUT_MS, timeout_millis);
                     }
-                    RocketMQError::Shared(Arc::new(
+                    ClientError::from_shared(Arc::new(
                         Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT).with_context(context),
                     ))
                 }
-                OutboundRequestRejectionReason::ClientStopping => RocketMQError::ClientNotStarted,
-                OutboundRequestRejectionReason::QueueSaturated => RocketMQError::Shared(Arc::new(Error::new(
+                OutboundRequestRejectionReason::ClientStopping => ClientError::not_started(),
+                OutboundRequestRejectionReason::QueueSaturated => ClientError::from_shared(Arc::new(Error::new(
                     &rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED,
                 ))),
                 OutboundRequestRejectionReason::Cancelled
                 | OutboundRequestRejectionReason::SessionClosed
                 | OutboundRequestRejectionReason::EndpointUnavailable => {
-                    RocketMQError::Shared(Arc::new(Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED)))
+                    ClientError::from_shared(Arc::new(Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED)))
                 }
             },
             RetryInput::Contract(contract) => match contract.reason() {
                 OutboundRequestContractReason::NameServerEndpointMissing => {
-                    RocketMQError::Shared(Arc::new(Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED)))
+                    ClientError::from_shared(Arc::new(Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED)))
                 }
             },
             RetryInput::Response { terminal_error, .. } | RetryInput::BusinessError(terminal_error) => terminal_error,
@@ -636,9 +625,7 @@ mod cluster_session {
     }
 
     struct OwnedPopCallback {
-        sender: Option<
-            tokio::sync::oneshot::Sender<rocketmq_error::RocketMQResult<crate::consumer::pop_result::PopResult>>,
-        >,
+        sender: Option<tokio::sync::oneshot::Sender<crate::ClientResult<crate::consumer::pop_result::PopResult>>>,
     }
 
     impl crate::consumer::pop_callback::PopCallback for OwnedPopCallback {
@@ -648,7 +635,7 @@ mod cluster_session {
             }
         }
 
-        fn on_error(&mut self, error: rocketmq_error::RocketMQError) {
+        fn on_error(&mut self, error: crate::ClientError) {
             if let Some(sender) = self.sender.take() {
                 let _ = sender.send(Err(error));
             }
@@ -656,25 +643,20 @@ mod cluster_session {
     }
 
     struct OwnedAckCallback {
-        sender: Mutex<
-            Option<
-                tokio::sync::oneshot::Sender<rocketmq_error::RocketMQResult<crate::consumer::ack_result::AckResult>>,
-            >,
-        >,
+        sender:
+            Mutex<Option<tokio::sync::oneshot::Sender<crate::ClientResult<crate::consumer::ack_result::AckResult>>>>,
     }
 
     impl OwnedAckCallback {
         fn new(
-            sender: tokio::sync::oneshot::Sender<
-                rocketmq_error::RocketMQResult<crate::consumer::ack_result::AckResult>,
-            >,
+            sender: tokio::sync::oneshot::Sender<crate::ClientResult<crate::consumer::ack_result::AckResult>>,
         ) -> Self {
             Self {
                 sender: Mutex::new(Some(sender)),
             }
         }
 
-        fn send(&self, result: rocketmq_error::RocketMQResult<crate::consumer::ack_result::AckResult>) {
+        fn send(&self, result: crate::ClientResult<crate::consumer::ack_result::AckResult>) {
             let mut sender = match self.sender.lock() {
                 Ok(sender) => sender,
                 Err(poisoned) => poisoned.into_inner(),
@@ -690,7 +672,7 @@ mod cluster_session {
             self.send(Ok(ack_result));
         }
 
-        fn on_exception(&self, error: rocketmq_error::RocketMQError) {
+        fn on_exception(&self, error: crate::ClientError) {
             self.send(Err(error));
         }
     }
@@ -708,7 +690,7 @@ mod cluster_session {
             &self,
             _remote_addr: SocketAddr,
             request: &mut RemotingCommand,
-        ) -> rocketmq_error::RocketMQResult<()> {
+        ) -> Result<(), rocketmq_error::SharedError> {
             // RPCHook callers normally serialize the custom header first, but
             // keep the adapter correct when invoked directly or by another
             // Client transport path.
@@ -724,7 +706,7 @@ mod cluster_session {
                     request.body().map(AsRef::as_ref),
                     None,
                 ))
-                .map_err(|source| rocketmq_error::RocketMQError::Shared(source.into_shared_error()))?;
+                .map_err(|source| source.into_shared_error())?;
 
             request.ensure_ext_fields_initialized();
             for (key, value) in signature.fields() {
@@ -738,7 +720,7 @@ mod cluster_session {
             _remote_addr: SocketAddr,
             _request: &RemotingCommand,
             _response: &mut RemotingCommand,
-        ) -> rocketmq_error::RocketMQResult<()> {
+        ) -> Result<(), rocketmq_error::SharedError> {
             Ok(())
         }
     }
@@ -824,10 +806,7 @@ mod cluster_session {
             assert!(message.contains("auth.security_provider.operation_failed"));
             assert!(!message.contains("secret signing diagnostic"));
             assert_eq!(error.descriptor(), &rocketmq_error::SECURITY_PROVIDER_OPERATION_FAILED);
-            let rocketmq_error::RocketMQError::Shared(canonical) = error else {
-                panic!("signer failure must use the shared canonical carrier")
-            };
-            let io = std::error::Error::source(canonical.as_ref()).expect("I/O cause must remain available");
+            let io = std::error::Error::source(error.shared_error().as_ref()).expect("I/O cause must remain available");
             assert!(io.downcast_ref::<std::io::Error>().is_some());
         }
 
@@ -866,7 +845,7 @@ mod cluster_session {
                 .err()
                 .expect("conflicting managed configuration must fail closed");
 
-            assert!(matches!(error, rocketmq_error::RocketMQError::IllegalArgument(_)));
+            assert!($1.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
             first.shutdown_owned().await;
         }
 
@@ -1065,12 +1044,7 @@ mod tests {
     fn mq_client_err_without_response_code_preserves_message() {
         let err = crate::mq_client_err!("simple client error");
 
-        match err {
-            rocketmq_error::RocketMQError::IllegalArgument(message) => {
-                assert!(message.contains("simple client error"));
-                assert!(!message.contains("Body is empty"));
-            }
-            other => panic!("expected illegal argument error, got {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
+        assert!(!err.to_string().contains("simple client error"));
     }
 }

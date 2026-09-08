@@ -15,10 +15,10 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use crate::ClientError;
 use rand::RngExt;
 use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::RecoveryHint;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::result::SendStatus;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_transport::api::OutboundRequestContract;
@@ -85,16 +85,28 @@ pub(crate) enum RetryInput {
     Response {
         code: i32,
         retry_after: Option<Duration>,
-        terminal_error: RocketMQError,
+        terminal_error: ClientError,
     },
     SendStatus(SendStatus),
     RouteUnavailable,
-    BusinessError(RocketMQError),
+    BusinessError(ClientError),
 }
 
-impl From<RocketMQError> for RetryInput {
-    fn from(error: RocketMQError) -> Self {
+impl From<ClientError> for RetryInput {
+    fn from(error: ClientError) -> Self {
         Self::BusinessError(error)
+    }
+}
+
+impl From<rocketmq_error::Error> for RetryInput {
+    fn from(error: rocketmq_error::Error) -> Self {
+        Self::BusinessError(ClientError::from_error(error))
+    }
+}
+
+impl From<rocketmq_error::SharedError> for RetryInput {
+    fn from(error: rocketmq_error::SharedError) -> Self {
+        Self::BusinessError(ClientError::from_shared(error))
     }
 }
 
@@ -116,7 +128,7 @@ enum RetryFacts<'a> {
     SendStatus(SendStatus),
     RouteUnavailable,
     Business {
-        error: &'a RocketMQError,
+        error: &'a ClientError,
     },
 }
 
@@ -327,16 +339,20 @@ pub(crate) fn producer_send_fault_decision(
     detector_enabled: bool,
 ) -> Option<ProducerSendFaultDecision> {
     match input {
-        RetryInput::BusinessError(RocketMQError::IllegalArgument(_)) => Some(ProducerSendFaultDecision {
-            isolation: false,
-            reachable: true,
-            log_resend_immediately: true,
-        }),
-        RetryInput::BusinessError(RocketMQError::BrokerOperationFailed { .. }) => Some(ProducerSendFaultDecision {
-            isolation: true,
-            reachable: false,
-            log_resend_immediately: false,
-        }),
+        RetryInput::BusinessError(error) if error.is(&rocketmq_error::CORE_ARGUMENT_INVALID) => {
+            Some(ProducerSendFaultDecision {
+                isolation: false,
+                reachable: true,
+                log_resend_immediately: true,
+            })
+        }
+        RetryInput::BusinessError(error) if error.is(&rocketmq_error::BROKER_OPERATION_FAILED) => {
+            Some(ProducerSendFaultDecision {
+                isolation: true,
+                reachable: false,
+                log_resend_immediately: false,
+            })
+        }
         RetryInput::Response { .. } => Some(ProducerSendFaultDecision {
             isolation: true,
             reachable: false,
@@ -711,7 +727,7 @@ mod tests {
         let input = RetryInput::Response {
             code: ResponseCode::SystemBusy.to_i32(),
             retry_after: None,
-            terminal_error: RocketMQError::broker_operation_failed(
+            terminal_error: ClientError::broker_operation_failed(
                 "SEND_MESSAGE",
                 ResponseCode::SystemBusy.to_i32(),
                 "busy",
@@ -825,7 +841,7 @@ mod tests {
 
     #[test]
     fn misleading_business_text_does_not_change_never_policy() {
-        let error = RocketMQError::illegal_argument("timeout PHASE=before_write LIMIT=1");
+        let error = ClientError::illegal_argument("timeout PHASE=before_write LIMIT=1");
         let action = RetryPolicy::decide_with_jitter(
             context(RetryOperation::AssignmentQuery, RetryIdempotency::Idempotent, 1, 3),
             RetryFacts::Business { error: &error },

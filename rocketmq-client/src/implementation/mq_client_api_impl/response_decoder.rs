@@ -14,7 +14,7 @@
 
 use super::*;
 
-pub(super) fn consumer_offset_json_from_response(response: &RemotingCommand) -> RocketMQResult<CheetahString> {
+pub(super) fn consumer_offset_json_from_response(response: &RemotingCommand) -> ClientResult<CheetahString> {
     if ResponseCode::from(response.code()) != ResponseCode::Success {
         return Err(mq_client_err!(
             response.code(),
@@ -26,18 +26,16 @@ pub(super) fn consumer_offset_json_from_response(response: &RemotingCommand) -> 
         .body()
         .ok_or_else(|| mq_client_err!("get_all_consumer_offset response body is empty"))?;
     let json = std::str::from_utf8(body.as_ref())
-        .map_err(|error| mq_client_err!(format!("decode get_all_consumer_offset response body failed: {error}")))?;
+        .map_err(|error| ClientError::response_process_source("decode get_all_consumer_offset", error))?;
     Ok(CheetahString::from_string(json.to_owned()))
 }
 
-pub(super) fn notify_result_from_response(response: &RemotingCommand) -> RocketMQResult<NotifyResult> {
+pub(super) fn notify_result_from_response(response: &RemotingCommand) -> ClientResult<NotifyResult> {
     let response_header = response.decode_command_custom_header::<NotificationResponseHeader>()?;
     Ok(NotifyResult::new(response_header.has_msg, response_header.polling_full))
 }
 
-pub(super) fn reset_offset_table_from_response(
-    response: &RemotingCommand,
-) -> RocketMQResult<HashMap<MessageQueue, i64>> {
+pub(super) fn reset_offset_table_from_response(response: &RemotingCommand) -> ClientResult<HashMap<MessageQueue, i64>> {
     if ResponseCode::from(response.code()) == ResponseCode::Success {
         let Some(body) = response.get_body() else {
             return Err(mq_client_err!(

@@ -17,8 +17,8 @@
 //! This module provides a fluent builder API for constructing ClientConfig instances,
 //! making configuration more readable and allowing for validation before building.
 
+use crate::ClientResult;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQResult;
 use rocketmq_protocol::protocol::LanguageCode;
 use rocketmq_transport::api::TlsConfig;
 
@@ -39,7 +39,7 @@ use super::client_config_validation::ClientConfigValidator;
 ///     .enable_tls(true)
 ///     .poll_name_server_interval(60_000)
 ///     .build()?;
-/// # Ok::<(), rocketmq_error::RocketMQError>(())
+/// # Ok::<(), crate::ClientError>(())
 /// ```
 pub struct ClientConfigBuilder {
     config: ClientConfig,
@@ -344,7 +344,7 @@ impl ClientConfigBuilder {
     /// # Errors
     ///
     /// Returns an error if any configuration value is invalid.
-    pub fn build(self) -> RocketMQResult<ClientConfig> {
+    pub fn build(self) -> ClientResult<ClientConfig> {
         // Validate configuration before returning
         self.validate()?;
         Ok(self.config)
@@ -362,7 +362,7 @@ impl ClientConfigBuilder {
     }
 
     /// Validates the current configuration
-    fn validate(&self) -> RocketMQResult<()> {
+    fn validate(&self) -> ClientResult<()> {
         ClientConfigValidator::validate_config(&self.config)
     }
 }

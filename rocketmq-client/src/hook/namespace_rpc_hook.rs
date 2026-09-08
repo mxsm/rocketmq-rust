@@ -14,7 +14,6 @@
 
 use std::net::SocketAddr;
 
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_transport::api::RPCHook;
@@ -68,7 +67,11 @@ impl RPCHook for NamespaceRpcHook {
     /// If the client configuration contains a `namespace_v2` value, this method
     /// initializes the request's extension fields map (if not already present)
     /// and adds the namespace marker and identifier fields.
-    fn do_before_request(&self, _remote_addr: SocketAddr, request: &mut RemotingCommand) -> RocketMQResult<()> {
+    fn do_before_request(
+        &self,
+        _remote_addr: SocketAddr,
+        request: &mut RemotingCommand,
+    ) -> Result<(), rocketmq_error::SharedError> {
         if let Some(namespace_v2) = self.client_config.get_namespace_v2() {
             request.ensure_ext_fields_initialized();
 
@@ -86,7 +89,7 @@ impl RPCHook for NamespaceRpcHook {
         _remote_addr: SocketAddr,
         _request: &RemotingCommand,
         _response: &mut RemotingCommand,
-    ) -> RocketMQResult<()> {
+    ) -> Result<(), rocketmq_error::SharedError> {
         Ok(())
     }
 }

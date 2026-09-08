@@ -50,7 +50,7 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 /// // Closures automatically implement MessageListenerConcurrently
 /// let listener = |msgs: &[&MessageExt],
 ///                 _context: &ConsumeConcurrentlyContext|
-///  -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus> {
+///  -> crate::ClientResult<ConsumeConcurrentlyStatus> {
 ///     for msg in msgs {
 ///         println!("Processing message: {:?}", msg.msg_id());
 ///     }
@@ -65,7 +65,7 @@ use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyS
 ///         &self,
 ///         msgs: &[&MessageExt],
 ///         context: &ConsumeConcurrentlyContext,
-///     ) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus> {
+///     ) -> crate::ClientResult<ConsumeConcurrentlyStatus> {
 ///         // Process messages
 ///         Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
 ///     }
@@ -95,7 +95,7 @@ pub trait MessageListenerConcurrently: Send + Sync {
         &self,
         msgs: &[&MessageExt],
         context: &ConsumeConcurrentlyContext,
-    ) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus>;
+    ) -> crate::ClientResult<ConsumeConcurrentlyStatus>;
 }
 
 /// Implement MessageListenerConcurrently for all compatible closures and functions.
@@ -104,15 +104,13 @@ pub trait MessageListenerConcurrently: Send + Sync {
 /// without explicit trait implementation, providing a convenient and zero-cost API.
 impl<F> MessageListenerConcurrently for F
 where
-    F: Fn(&[&MessageExt], &ConsumeConcurrentlyContext) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus>
-        + Send
-        + Sync,
+    F: Fn(&[&MessageExt], &ConsumeConcurrentlyContext) -> crate::ClientResult<ConsumeConcurrentlyStatus> + Send + Sync,
 {
     fn consume_message(
         &self,
         msgs: &[&MessageExt],
         context: &ConsumeConcurrentlyContext,
-    ) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> crate::ClientResult<ConsumeConcurrentlyStatus> {
         self(msgs, context)
     }
 }

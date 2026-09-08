@@ -73,15 +73,16 @@ impl ClientRemotingProcessor {
         }
     }
 
-    fn client_instance(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientInstance>> {
-        self.client_instance
-            .upgrade()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)
+    fn client_instance(&self) -> crate::ClientResult<Arc<MQClientInstance>> {
+        self.client_instance.upgrade().ok_or(crate::ClientError::not_started())
     }
 }
 
 impl RequestProcessor for ClientRemotingProcessor {
-    async fn process(&mut self, request: &mut RemotingRequest) -> rocketmq_error::RocketMQResult<HandlerOutcome> {
+    async fn process(
+        &mut self,
+        request: &mut RemotingRequest,
+    ) -> std::result::Result<HandlerOutcome, rocketmq_error::SharedError> {
         let remote_address = match request.session() {
             SessionView::Network { remote_addr, .. } => *remote_addr,
             SessionView::Embedded { .. } => SocketAddr::from(([127, 0, 0, 1], 0)),
@@ -106,10 +107,11 @@ impl RequestProcessor for ClientRemotingProcessor {
                 ProtocolNoResponseReason::NotificationHandled
             }
             _ => {
-                return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+                return Err(crate::ClientError::illegal_argument(format!(
                     "client inbound request code {} did not produce a terminal outcome",
                     request.command().code()
-                )));
+                ))
+                .into());
             }
         };
         let no_response = request
@@ -119,25 +121,22 @@ impl RequestProcessor for ClientRemotingProcessor {
     }
 }
 
-fn protocol_no_response_contract_error(error: TransportContractViolation) -> rocketmq_error::RocketMQError {
+fn protocol_no_response_contract_error(error: TransportContractViolation) -> crate::ClientError {
     match error {
         TransportContractViolation::ProtocolNoResponseOneWayRequest => {
-            rocketmq_error::RocketMQError::illegal_argument("protocol no-response is unavailable for one-way requests")
+            crate::ClientError::illegal_argument("protocol no-response is unavailable for one-way requests")
         }
         TransportContractViolation::ProtocolNoResponseUnsupported { .. } => {
-            rocketmq_error::RocketMQError::illegal_argument("protocol no-response reason is unsupported")
+            crate::ClientError::illegal_argument("protocol no-response reason is unsupported")
         }
-        _ => rocketmq_error::RocketMQError::illegal_argument("protocol no-response contract is invalid"),
+        _ => crate::ClientError::illegal_argument("protocol no-response contract is invalid"),
     }
 }
 
 impl ClientRemotingProcessor {
-    fn remoting_response(response: RemotingCommand) -> rocketmq_error::RocketMQResult<RemotingResponse> {
+    fn remoting_response(response: RemotingCommand) -> crate::ClientResult<RemotingResponse> {
         RemotingResponse::from_command(response).map_err(|error| {
-            rocketmq_error::RocketMQError::response_process_failed(
-                "client_remoting_processor.remoting_response",
-                error.to_string(),
-            )
+            crate::ClientError::response_process_source("client_remoting_processor.remoting_response", error)
         })
     }
 
@@ -145,7 +144,7 @@ impl ClientRemotingProcessor {
         &mut self,
         remote_address: SocketAddr,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::ClientResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         match request_code {
             RequestCode::CheckTransactionState => self.check_transaction_state(remote_address, request).await,
@@ -158,7 +157,7 @@ impl ClientRemotingProcessor {
             RequestCode::NotifyConsumerIdsChanged => self.notify_consumer_ids_changed(remote_address, request),
             _ => {
                 info!("Unknown request code: {:?}", request_code);
-                Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+                Err(crate::ClientError::illegal_argument(format!(
                     "unsupported client inbound request code {}",
                     request.code()
                 )))
@@ -190,7 +189,7 @@ impl ClientRemotingProcessor {
         &mut self,
         remote_address: SocketAddr,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::ClientResult<Option<RemotingCommand>> {
         match request.decode_command_custom_header::<NotifyUnsubscribeLiteRequestHeader>() {
             Ok(header) => {
                 info!(
@@ -211,7 +210,7 @@ impl ClientRemotingProcessor {
     async fn receive_reply_message(
         &mut self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::ClientResult<Option<RemotingCommand>> {
         let receive_time = current_millis();
         let response = self
             .remoting_command_factory
@@ -331,7 +330,7 @@ impl ClientRemotingProcessor {
         &mut self,
         remote_address: SocketAddr,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::ClientResult<Option<RemotingCommand>> {
         let request_header = match request.decode_command_custom_header::<NotifyConsumerIdsChangedRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
@@ -357,7 +356,7 @@ impl ClientRemotingProcessor {
         &mut self,
         remote_address: SocketAddr,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::ClientResult<Option<RemotingCommand>> {
         let request_header = match request.decode_command_custom_header::<ResetOffsetRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
@@ -398,7 +397,7 @@ impl ClientRemotingProcessor {
     async fn get_consumer_status_from_client(
         &mut self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::ClientResult<Option<RemotingCommand>> {
         let response = self
             .remoting_command_factory
             .create_java_default_error_response_command()
@@ -447,7 +446,7 @@ impl ClientRemotingProcessor {
     async fn get_consumer_running_info(
         &mut self,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::ClientResult<Option<RemotingCommand>> {
         let response = self
             .remoting_command_factory
             .create_java_default_error_response_command()
@@ -490,7 +489,7 @@ impl ClientRemotingProcessor {
         &mut self,
         remote_address: SocketAddr,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::ClientResult<Option<RemotingCommand>> {
         let request_header = match request.decode_command_custom_header::<CheckTransactionStateRequestHeader>() {
             Ok(header) => header,
             Err(error) => {
@@ -549,7 +548,7 @@ impl ClientRemotingProcessor {
         &mut self,
         remote_address: SocketAddr,
         request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> crate::ClientResult<Option<RemotingCommand>> {
         let response = self
             .remoting_command_factory
             .create_java_default_error_response_command()
@@ -726,7 +725,7 @@ mod tests {
         assert!(weak.upgrade().is_none());
         assert!(matches!(
             processor.client_instance(),
-            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+            Err(crate::ClientError::not_started())
         ));
     }
 

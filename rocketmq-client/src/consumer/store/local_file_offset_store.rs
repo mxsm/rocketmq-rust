@@ -251,7 +251,7 @@ impl LocalFileOffsetStore {
         service_context: ChildServiceContext,
         client_instance: Arc<MQClientInstance>,
         group_name: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Self> {
+    ) -> crate::ClientResult<Self> {
         let store_path = LOCAL_OFFSET_STORE_DIR
             .clone()
             .join(client_instance.client_id.as_str())
@@ -289,13 +289,13 @@ impl LocalFileOffsetStore {
         })
     }
 
-    fn build_persist_command_queue() -> rocketmq_error::RocketMQResult<BudgetedQueue<PersistCommand>> {
+    fn build_persist_command_queue() -> crate::ClientResult<BudgetedQueue<PersistCommand>> {
         Self::build_persist_command_queue_with_parent(&crate::runtime::standalone_client_resource_budget()?)
     }
 
     fn build_persist_command_queue_with_parent(
         parent_budget: &ResourceBudget,
-    ) -> rocketmq_error::RocketMQResult<BudgetedQueue<PersistCommand>> {
+    ) -> crate::ClientResult<BudgetedQueue<PersistCommand>> {
         let queue_bytes = (parent_budget.limit().capacity.bytes / 64).max(1);
         let control_bytes = std::mem::size_of::<PersistCommand>().min(queue_bytes);
         let budget = parent_budget
@@ -306,10 +306,8 @@ impl LocalFileOffsetStore {
                     .with_rate(RateLimit::new(1_024, 1_024))
                     .with_max_age(Duration::from_secs(30)),
             )
-            .map_err(|error| rocketmq_error::RocketMQError::ConfigInvalidValue {
-                key: "client.localOffsetStore.commandQueue",
-                value: queue_bytes.to_string(),
-                reason: error.to_string(),
+            .map_err(|error| {
+                crate::ClientError::config_invalid_source("client.localOffsetStore.commandQueue", true, error)
             })?;
         Ok(BudgetedQueue::new(budget))
     }
@@ -425,7 +423,7 @@ impl LocalFileOffsetStore {
         self.persist_handle.lock().schedule_snapshot()
     }
 
-    async fn read_local_offset(&self) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
+    async fn read_local_offset(&self) -> crate::ClientResult<Option<OffsetSerializeWrapper>> {
         let content = fs::read_to_string(self.store_path.as_str()).await.unwrap_or_default();
 
         if content.is_empty() {
@@ -445,7 +443,7 @@ impl LocalFileOffsetStore {
         }
     }
 
-    async fn read_local_offset_bak(&self) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
+    async fn read_local_offset_bak(&self) -> crate::ClientResult<Option<OffsetSerializeWrapper>> {
         let bak_path = format!("{}.bak", self.store_path);
         let content = fs::read_to_string(&bak_path).await.unwrap_or_default();
 
@@ -642,7 +640,7 @@ impl LocalFileOffsetStore {
 }
 
 impl OffsetStoreTrait for LocalFileOffsetStore {
-    async fn load(&self) -> rocketmq_error::RocketMQResult<()> {
+    async fn load(&self) -> crate::ClientResult<()> {
         let offset_serialize_wrapper = self.read_local_offset().await?;
         if let Some(offset_serialize_wrapper) = offset_serialize_wrapper {
             let offset_table = offset_serialize_wrapper.offset_table;
@@ -772,7 +770,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
         _mq: &MessageQueue,
         _offset: i64,
         _is_oneway: bool,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         Ok(())
     }
 }

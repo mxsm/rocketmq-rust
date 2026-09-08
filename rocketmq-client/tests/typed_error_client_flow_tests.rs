@@ -47,26 +47,26 @@ fn client_callback_error_paths_use_typed_rocketmq_error() {
     let request_future = include_str!("../src/producer/request_response_future.rs");
     let send_callback = include_str!("../src/producer/send_callback.rs");
 
-    assert!(ack_callback.contains("fn on_exception(&self, e: RocketMQError)"));
-    assert!(ack_callback.contains("Result<(), RocketMQError>"));
+    assert!(ack_callback.contains("fn on_exception(&self, e: ClientError)"));
+    assert!(ack_callback.contains("Result<(), ClientError>"));
     assert!(!ack_callback.contains("Box<dyn std::error::Error"));
 
-    assert!(pull_callback.contains("fn on_exception(&mut self, e: RocketMQError)"));
-    assert!(pull_callback.contains("fn broker_response_code(error: &RocketMQError)"));
-    assert!(!pull_callback.contains("downcast_ref::<RocketMQError>"));
+    assert!(pull_callback.contains("fn on_exception(&mut self, e: ClientError)"));
+    assert!(pull_callback.contains("fn broker_response_code(error: &ClientError)"));
+    assert!(!pull_callback.contains("downcast_ref::<ClientError>"));
     assert!(!pull_callback.contains("Box<dyn std::error::Error + Send>"));
 
-    assert!(pop_callback.contains("fn on_error(&mut self, e: RocketMQError)"));
-    assert!(pop_callback.contains("fn broker_response_code(error: &RocketMQError)"));
-    assert!(!pop_callback.contains("downcast_ref::<RocketMQError>"));
+    assert!(pop_callback.contains("fn on_error(&mut self, e: ClientError)"));
+    assert!(pop_callback.contains("fn broker_response_code(error: &ClientError)"));
+    assert!(!pop_callback.contains("downcast_ref::<ClientError>"));
     assert!(!pop_callback.contains("Box<dyn std::error::Error + Send>"));
 
-    assert!(request_callback.contains("Option<&RocketMQError>"));
-    assert!(request_future.contains("type RequestCause = Arc<RocketMQError>"));
+    assert!(request_callback.contains("Option<&ClientError>"));
+    assert!(request_future.contains("type RequestCause = Arc<ClientError>"));
     assert!(!request_future.contains("type RequestCause = Arc<dyn"));
 
-    assert!(send_callback.contains("fn on_exception(&self, error: &RocketMQError)"));
-    assert!(send_callback.contains("Option<&RocketMQError>"));
+    assert!(send_callback.contains("fn on_exception(&self, error: &ClientError)"));
+    assert!(send_callback.contains("Option<&ClientError>"));
     assert!(!send_callback.contains("Option<&dyn std::error::Error>"));
 }
 
@@ -75,8 +75,8 @@ fn client_hook_contexts_store_typed_errors() {
     let send_message_context = include_str!("../src/hook/send_message_context.rs");
     let check_forbidden_context = include_str!("../src/hook/check_forbidden_context.rs");
 
-    assert!(send_message_context.contains("pub exception: Option<Arc<RocketMQError>>"));
-    assert!(check_forbidden_context.contains("pub exception: Option<RocketMQError>"));
+    assert!(send_message_context.contains("pub exception: Option<Arc<ClientError>>"));
+    assert!(check_forbidden_context.contains("pub exception: Option<ClientError>"));
     assert!(!send_message_context.contains("Box<dyn Error + Send + Sync>"));
     assert!(!check_forbidden_context.contains("Box<dyn std::error::Error + Send + Sync>"));
 }
@@ -86,11 +86,11 @@ fn client_rebalance_service_uses_typed_errors() {
     let mq_client_instance = include_str!("../src/factory/mq_client_instance.rs");
     let rebalance_service = include_str!("../src/consumer/consumer_impl/re_balance/rebalance_service.rs");
 
-    assert!(mq_client_instance.contains("pub async fn do_rebalance(&self) -> RocketMQResult<bool>"));
+    assert!(mq_client_instance.contains("pub async fn do_rebalance(&self) -> ClientResult<bool>"));
     assert!(
-        rebalance_service.contains("pub async fn start(&self, instance: Arc<MQClientInstance>) -> RocketMQResult<()>")
+        rebalance_service.contains("pub async fn start(&self, instance: Arc<MQClientInstance>) -> ClientResult<()>")
     );
-    assert!(rebalance_service.contains("pub async fn shutdown(&self, timeout_ms: u64) -> RocketMQResult<()>"));
+    assert!(rebalance_service.contains("pub async fn shutdown(&self, timeout_ms: u64) -> ClientResult<()>"));
     assert!(!mq_client_instance.contains("do_rebalance(&mut self) -> Result<bool, Box<dyn std::error::Error"));
     assert!(!rebalance_service.contains("Box<dyn std::error::Error + Send + Sync>"));
 }

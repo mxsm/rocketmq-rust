@@ -28,7 +28,7 @@ use crate::hook::check_forbidden_context::CheckForbiddenContext;
 /// ```ignore
 /// use rocketmq_client::CheckForbiddenContext;
 /// use rocketmq_client::CheckForbiddenHook;
-/// use rocketmq_error::RocketMQResult;
+/// use crate::ClientResult;
 ///
 /// struct RegionValidator;
 ///
@@ -37,7 +37,7 @@ use crate::hook::check_forbidden_context::CheckForbiddenContext;
 ///         "RegionValidator"
 ///     }
 ///
-///     fn check_forbidden(&self, context: &CheckForbiddenContext) -> RocketMQResult<()> {
+///     fn check_forbidden(&self, context: &CheckForbiddenContext) -> ClientResult<()> {
 ///         if let Some(broker_addr) = &context.broker_addr {
 ///             if broker_addr.contains("forbidden-region") {
 ///                 return Err("Cannot send to forbidden region".into());
@@ -58,5 +58,5 @@ pub trait CheckForbiddenHook: Send + Sync {
     /// # Errors
     ///
     /// Returns an error if the operation should be rejected based on the context.
-    fn check_forbidden(&self, context: &CheckForbiddenContext<'_>) -> rocketmq_error::RocketMQResult<()>;
+    fn check_forbidden(&self, context: &CheckForbiddenContext<'_>) -> crate::ClientResult<()>;
 }

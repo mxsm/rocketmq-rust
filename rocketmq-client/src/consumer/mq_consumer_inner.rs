@@ -57,7 +57,7 @@ pub trait MQConsumerInnerLocal: MQConsumerInnerAny + Sync + 'static {
 
     /// Attempts to perform rebalancing asynchronously and returns a `Result` indicating success or
     /// failure.
-    async fn try_rebalance(&self) -> rocketmq_error::RocketMQResult<bool>;
+    async fn try_rebalance(&self) -> crate::ClientResult<bool>;
 
     /// Persists the consumer offset asynchronously.
     async fn persist_consumer_offset(&self);
@@ -230,7 +230,7 @@ impl MQConsumerInner for MQConsumerInnerImpl {
     }
 
     #[inline]
-    async fn try_rebalance(&self) -> rocketmq_error::RocketMQResult<bool> {
+    async fn try_rebalance(&self) -> crate::ClientResult<bool> {
         match &self.inner {
             MQConsumerInnerImplKind::Push(consumer) => MQConsumerInner::try_rebalance(consumer.as_ref()).await,
             MQConsumerInnerImplKind::LitePull(consumer) => MQConsumerInner::try_rebalance(consumer.as_ref()).await,

@@ -14,10 +14,10 @@
 
 #![recursion_limit = "256"]
 
+use rocketmq_client::ClientError;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_client_rust::TelemetryHandle;
-use rocketmq_error::RocketMQError;
 use rocketmq_protocol::protocol::remoting_command::SERIALIZE_TYPE_PROPERTY;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
@@ -45,13 +45,7 @@ fn client_runtime_rejects_invalid_remoting_serialization_before_pool_admission()
         Ok(_) => panic!("invalid remoting serialization must reject client runtime construction"),
         Err(error) => error,
     };
-    assert!(matches!(
-        error,
-        RocketMQError::ConfigParseFailed {
-            key: "remoting.command.defaults",
-            ..
-        }
-    ));
+    assert!($1.is(&rocketmq_error::CORE_CONFIGURATION_PARSE_FAILED));
     owner
         .shutdown_runtime_blocking()
         .expect("test runtime should shut down cleanly");

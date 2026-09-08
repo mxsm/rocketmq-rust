@@ -17,9 +17,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::ClientError;
+use crate::ClientResult;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 
 use crate::base::client_config::ClientConfig;
@@ -56,7 +56,7 @@ impl PullOptions {
         selector: MessageSelector,
         offset: i64,
         max_messages: i32,
-    ) -> RocketMQResult<Self> {
+    ) -> ClientResult<Self> {
         let options = Self {
             message_queue,
             selector,
@@ -101,7 +101,7 @@ impl PullOptions {
     ///
     /// Returns an error for an incomplete queue, negative offset, non-positive count or size,
     /// zero timeout, or a block-if-not-found timeout that cannot outlive broker suspension.
-    pub fn validate(&self) -> RocketMQResult<()> {
+    pub fn validate(&self) -> ClientResult<()> {
         if self.message_queue.topic().is_empty() {
             return Err(crate::mq_client_err!("message queue topic is empty"));
         }
@@ -183,19 +183,19 @@ pub trait ClassicPullCallback: Send + Sync + 'static {
     fn on_success(&self, pull_result: PullResult);
 
     /// Receives a transport, broker, timeout, or validation error.
-    fn on_exception(&self, error: RocketMQError);
+    fn on_exception(&self, error: ClientError);
 }
 
 /// Function callback accepted by [`DefaultMQPullConsumer::pull_async_with_options`].
 impl<F> ClassicPullCallback for F
 where
-    F: Fn(Result<PullResult, RocketMQError>) + Send + Sync + 'static,
+    F: Fn(Result<PullResult, ClientError>) + Send + Sync + 'static,
 {
     fn on_success(&self, pull_result: PullResult) {
         self(Ok(pull_result));
     }
 
-    fn on_exception(&self, error: RocketMQError) {
+    fn on_exception(&self, error: ClientError) {
         self(Err(error));
     }
 }
@@ -240,7 +240,7 @@ impl DefaultMQPullConsumer {
         consumer_pull_timeout: Duration,
         broker_suspend_timeout: Duration,
         consumer_timeout_when_suspend: Duration,
-    ) -> RocketMQResult<Self> {
+    ) -> ClientResult<Self> {
         Ok(Self {
             consumer_group: Some(consumer_group),
             implementation: Some(DefaultMQPullConsumerImpl::from_lite_consumer(
@@ -252,9 +252,9 @@ impl DefaultMQPullConsumer {
         })
     }
 
-    fn implementation(&self) -> RocketMQResult<&DefaultMQPullConsumerImpl> {
+    fn implementation(&self) -> ClientResult<&DefaultMQPullConsumerImpl> {
         self.implementation.as_ref().ok_or_else(|| {
-            RocketMQError::not_initialized(
+            ClientError::not_initialized(
                 "DefaultMQPullConsumer has no ClientRuntime; create it with DefaultMQPullConsumer::builder",
             )
         })
@@ -270,7 +270,7 @@ impl DefaultMQPullConsumer {
     /// # Errors
     ///
     /// Returns an initialization error for a detached compatibility value.
-    pub fn client_config(&self) -> RocketMQResult<Arc<ClientConfig>> {
+    pub fn client_config(&self) -> ClientResult<Arc<ClientConfig>> {
         self.implementation()?.client_config()
     }
 
@@ -280,7 +280,7 @@ impl DefaultMQPullConsumer {
     ///
     /// Returns an initialization error for a detached value, a stable lifecycle error when the
     /// consumer was already started or shut down, or the underlying client startup error.
-    pub async fn start(&self) -> RocketMQResult<()> {
+    pub async fn start(&self) -> ClientResult<()> {
         self.implementation()?.start().await
     }
 
@@ -290,7 +290,7 @@ impl DefaultMQPullConsumer {
     ///
     /// Returns an initialization error for a detached value or an underlying client shutdown
     /// error. Repeated shutdown is idempotent.
-    pub async fn shutdown(&self) -> RocketMQResult<()> {
+    pub async fn shutdown(&self) -> ClientResult<()> {
         self.implementation()?.shutdown().await
     }
 
@@ -314,7 +314,7 @@ impl DefaultMQPullConsumer {
         sub_expression: &str,
         offset: i64,
         max_messages: i32,
-    ) -> RocketMQResult<PullResult> {
+    ) -> ClientResult<PullResult> {
         let implementation = self.implementation()?;
         let options = PullOptions::new(
             message_queue.clone(),
@@ -339,7 +339,7 @@ impl DefaultMQPullConsumer {
         selector: MessageSelector,
         offset: i64,
         max_messages: i32,
-    ) -> RocketMQResult<PullResult> {
+    ) -> ClientResult<PullResult> {
         let implementation = self.implementation()?;
         implementation
             .pull_with_options(
@@ -363,7 +363,7 @@ impl DefaultMQPullConsumer {
         offset: i64,
         max_messages: i32,
         callback: C,
-    ) -> RocketMQResult<()>
+    ) -> ClientResult<()>
     where
         C: ClassicPullCallback,
     {
@@ -392,7 +392,7 @@ impl DefaultMQPullConsumer {
         offset: i64,
         max_messages: i32,
         callback: C,
-    ) -> RocketMQResult<()>
+    ) -> ClientResult<()>
     where
         C: ClassicPullCallback,
     {
@@ -408,7 +408,7 @@ impl DefaultMQPullConsumer {
     /// # Errors
     ///
     /// Returns a validation, lifecycle, route, transport, broker, or timeout error.
-    pub async fn pull_with_options(&self, options: PullOptions) -> RocketMQResult<PullResult> {
+    pub async fn pull_with_options(&self, options: PullOptions) -> ClientResult<PullResult> {
         self.implementation()?.pull_with_options(options).await
     }
 
@@ -423,7 +423,7 @@ impl DefaultMQPullConsumer {
         sub_expression: &str,
         offset: i64,
         max_messages: i32,
-    ) -> RocketMQResult<PullResult> {
+    ) -> ClientResult<PullResult> {
         let implementation = self.implementation()?;
         let options = PullOptions::new(
             message_queue.clone(),
@@ -443,7 +443,7 @@ impl DefaultMQPullConsumer {
     ///
     /// Returns an error before scheduling when validation, lifecycle, route resolution, or the
     /// initial transport request fails. Later failures are delivered to the callback.
-    pub async fn pull_async_with_options<C>(&self, options: PullOptions, callback: C) -> RocketMQResult<()>
+    pub async fn pull_async_with_options<C>(&self, options: PullOptions, callback: C) -> ClientResult<()>
     where
         C: ClassicPullCallback,
     {
@@ -463,7 +463,7 @@ impl DefaultMQPullConsumer {
         offset: i64,
         max_messages: i32,
         callback: C,
-    ) -> RocketMQResult<()>
+    ) -> ClientResult<()>
     where
         C: ClassicPullCallback,
     {
@@ -485,7 +485,7 @@ impl DefaultMQPullConsumer {
     /// # Errors
     ///
     /// Returns an error when the consumer is not running or topic route lookup fails.
-    pub async fn fetch_subscribe_message_queues(&self, topic: &str) -> RocketMQResult<Vec<MessageQueue>> {
+    pub async fn fetch_subscribe_message_queues(&self, topic: &str) -> ClientResult<Vec<MessageQueue>> {
         self.implementation()?.fetch_subscribe_message_queues(topic).await
     }
 
@@ -495,7 +495,7 @@ impl DefaultMQPullConsumer {
     ///
     /// Returns an error for a blank topic, a detached consumer, or a failed running-consumer
     /// subscription update.
-    pub async fn register_message_queue_listener<L>(&self, topic: &str, listener: L) -> RocketMQResult<()>
+    pub async fn register_message_queue_listener<L>(&self, topic: &str, listener: L) -> ClientResult<()>
     where
         L: MessageQueueListener + 'static,
     {
@@ -510,7 +510,7 @@ impl DefaultMQPullConsumer {
     ///
     /// Returns an error when the consumer is not running, the offset is negative, or the offset
     /// store is unavailable.
-    pub async fn update_consume_offset(&self, message_queue: &MessageQueue, offset: i64) -> RocketMQResult<()> {
+    pub async fn update_consume_offset(&self, message_queue: &MessageQueue, offset: i64) -> ClientResult<()> {
         self.implementation()?
             .update_consume_offset(message_queue, offset)
             .await
@@ -522,7 +522,7 @@ impl DefaultMQPullConsumer {
     ///
     /// Returns an error when the consumer is not running, the offset store is unavailable, or a
     /// broker-backed read fails.
-    pub async fn fetch_consume_offset(&self, message_queue: &MessageQueue, from_store: bool) -> RocketMQResult<i64> {
+    pub async fn fetch_consume_offset(&self, message_queue: &MessageQueue, from_store: bool) -> ClientResult<i64> {
         self.implementation()?
             .fetch_consume_offset(message_queue, from_store)
             .await
@@ -533,7 +533,7 @@ impl DefaultMQPullConsumer {
     /// # Errors
     ///
     /// Returns an error when the consumer is not running or the broker query fails.
-    pub async fn search_offset(&self, message_queue: &MessageQueue, timestamp: u64) -> RocketMQResult<i64> {
+    pub async fn search_offset(&self, message_queue: &MessageQueue, timestamp: u64) -> ClientResult<i64> {
         self.implementation()?.search_offset(message_queue, timestamp).await
     }
 
@@ -542,7 +542,7 @@ impl DefaultMQPullConsumer {
     /// # Errors
     ///
     /// Returns an error when the consumer is not running or the broker query fails.
-    pub async fn max_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    pub async fn max_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         self.implementation()?.max_offset(message_queue).await
     }
 
@@ -551,7 +551,7 @@ impl DefaultMQPullConsumer {
     /// # Errors
     ///
     /// Returns an error when the consumer is not running or the broker query fails.
-    pub async fn min_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    pub async fn min_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         self.implementation()?.min_offset(message_queue).await
     }
 
@@ -560,7 +560,7 @@ impl DefaultMQPullConsumer {
     /// # Errors
     ///
     /// Returns an initialization error for a detached compatibility value.
-    pub fn default_mq_pull_consumer_impl(&self) -> RocketMQResult<DefaultMQPullConsumerImpl> {
+    pub fn default_mq_pull_consumer_impl(&self) -> ClientResult<DefaultMQPullConsumerImpl> {
         self.implementation().cloned()
     }
 }
@@ -573,10 +573,10 @@ impl DefaultMQPullConsumer {
 )]
 pub trait MQPullConsumer: Send + Sync {
     /// Starts the consumer.
-    async fn start(&self) -> RocketMQResult<()>;
+    async fn start(&self) -> ClientResult<()>;
 
     /// Shuts the consumer down.
-    async fn shutdown(&self) -> RocketMQResult<()>;
+    async fn shutdown(&self) -> ClientResult<()>;
 
     /// Pulls one queue by tag expression.
     async fn pull(
@@ -585,16 +585,16 @@ pub trait MQPullConsumer: Send + Sync {
         sub_expression: &str,
         offset: i64,
         max_messages: i32,
-    ) -> RocketMQResult<PullResult>;
+    ) -> ClientResult<PullResult>;
 }
 
 #[allow(deprecated)]
 impl MQPullConsumer for DefaultMQPullConsumer {
-    async fn start(&self) -> RocketMQResult<()> {
+    async fn start(&self) -> ClientResult<()> {
         DefaultMQPullConsumer::start(self).await
     }
 
-    async fn shutdown(&self) -> RocketMQResult<()> {
+    async fn shutdown(&self) -> ClientResult<()> {
         DefaultMQPullConsumer::shutdown(self).await
     }
 
@@ -604,7 +604,7 @@ impl MQPullConsumer for DefaultMQPullConsumer {
         sub_expression: &str,
         offset: i64,
         max_messages: i32,
-    ) -> RocketMQResult<PullResult> {
+    ) -> ClientResult<PullResult> {
         DefaultMQPullConsumer::pull(self, message_queue, sub_expression, offset, max_messages).await
     }
 }

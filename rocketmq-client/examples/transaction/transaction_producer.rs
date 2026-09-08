@@ -24,10 +24,10 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
+use rocketmq_client::ClientResult;
 use rocketmq_client_rust::LocalTransactionState;
 use rocketmq_client_rust::TransactionListener;
 use rocketmq_client_rust::TransactionMQProducer;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_model::common::message::MessageTrait;
@@ -39,7 +39,7 @@ pub const TOPIC: &str = "TopicTest";
 pub const TAG: &str = "TagA";
 
 #[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+pub async fn main() -> ClientResult<()> {
     let example_runtime = support::ExampleClientRuntime::try_new("transaction-producer")?;
     let client_runtime = example_runtime.client_runtime();
     // create a producer builder with default configuration

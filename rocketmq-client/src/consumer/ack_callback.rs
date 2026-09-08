@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::consumer::ack_result::AckResult;
-use rocketmq_error::RocketMQError;
+use crate::ClientError;
 
 /// Trait representing an acknowledgment callback.
 /// This trait defines two methods: `on_success` and `on_exception`.
@@ -30,7 +30,7 @@ pub trait AckCallback {
     /// # Arguments
     ///
     /// * `e` - The error that occurred.
-    fn on_exception(&self, e: RocketMQError);
+    fn on_exception(&self, e: ClientError);
 }
 
 /// Type alias for a function that acts as an acknowledgment callback.
@@ -41,4 +41,4 @@ pub trait AckCallback {
 ///
 /// The function must be `Send` and `Sync` to ensure it can be safely used
 /// across threads.
-pub type AckCallbackFn = Box<dyn Fn(AckResult) -> Result<(), RocketMQError> + Send + Sync>;
+pub type AckCallbackFn = Box<dyn Fn(AckResult) -> Result<(), ClientError> + Send + Sync>;

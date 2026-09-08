@@ -30,7 +30,7 @@ pub trait MQAdminTopicStatsReadExt: Send {
         &self,
         broker_addr: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicStatsTable>;
+    ) -> crate::ClientResult<TopicStatsTable>;
 }
 
 impl MQAdminTopicStatsReadExt for DefaultMQAdminExt {
@@ -38,7 +38,7 @@ impl MQAdminTopicStatsReadExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicStatsTable> {
+    ) -> crate::ClientResult<TopicStatsTable> {
         self.inner()
             .mq_client_api()?
             .get_topic_stats_info(

@@ -70,11 +70,11 @@ impl AssignmentProcessor {
         }
     }
 
-    fn route(&self) -> rocketmq_error::RocketMQResult<TopicRouteData> {
+    fn route(&self) -> crate::ClientResult<TopicRouteData> {
         let broker_addr = self
             .broker_addr
             .get()
-            .ok_or_else(|| rocketmq_error::RocketMQError::invariant_violated("test broker address is unset"))?;
+            .ok_or_else(|| crate::ClientError::invariant_violated("test broker address is unset"))?;
         Ok(TopicRouteData {
             queue_datas: vec![QueueData::new(
                 CheetahString::from_static_str("broker-a"),
@@ -115,7 +115,7 @@ impl SessionProcessor for AssignmentProcessor {
     fn process(
         &self,
         request: RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = rocketmq_error::RocketMQResult<RemotingCommand>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = crate::ClientResult<RemotingCommand>> + Send + '_>> {
         Box::pin(async move {
             use std::sync::atomic::Ordering;
 
@@ -125,12 +125,12 @@ impl SessionProcessor for AssignmentProcessor {
                     .lock()
                     .expect("assignment response queue")
                     .pop_front()
-                    .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("unexpected assignment request"))?
+                    .ok_or_else(|| crate::ClientError::illegal_argument("unexpected assignment request"))?
             } else if request.code() == RequestCode::GetRouteinfoByTopic.to_i32() {
                 self.route_requests.fetch_add(1, Ordering::SeqCst);
                 RemotingCommand::create_success_response_command().set_body(self.route()?.encode()?)
             } else {
-                return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+                return Err(crate::ClientError::illegal_argument(format!(
                     "unexpected request code {}",
                     request.code()
                 )));
@@ -171,7 +171,7 @@ impl Rebalance for BlockingRemovalRebalance {
         self.release_offset.notified().await;
     }
 
-    async fn compute_pull_from_where_with_exception(&self, _mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn compute_pull_from_where_with_exception(&self, _mq: &MessageQueue) -> crate::ClientResult<i64> {
         Ok(0)
     }
 

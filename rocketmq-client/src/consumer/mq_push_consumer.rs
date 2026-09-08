@@ -33,7 +33,7 @@ pub trait MQPushConsumer: MQConsumer {
     ///
     /// Returns `Ok(())` when startup succeeds, or an error when initialization
     /// fails.
-    async fn start(&mut self) -> rocketmq_error::RocketMQResult<()>;
+    async fn start(&mut self) -> crate::ClientResult<()>;
 
     /// Asynchronously shuts down the consumer instance.
     ///
@@ -99,7 +99,7 @@ pub trait MQPushConsumer: MQConsumer {
         &mut self,
         topic: impl Into<CheetahString>,
         sub_expression: impl Into<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    ) -> crate::ClientResult<()>;
 
     /// Asynchronously subscribes to a topic with an optional selector.
     ///
@@ -118,7 +118,7 @@ pub trait MQPushConsumer: MQConsumer {
         &mut self,
         topic: &str,
         selector: Option<MessageSelector>,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    ) -> crate::ClientResult<()>;
 
     /// Asynchronously unsubscribes from a topic.
     ///
@@ -143,7 +143,7 @@ pub trait MQPushConsumer: MQConsumer {
     ///
     /// Orderly consumers and implementations without a resizable worker pool may
     /// ignore this request.
-    fn update_core_pool_size(&self, _core_pool_size: usize) -> rocketmq_error::RocketMQResult<()> {
+    fn update_core_pool_size(&self, _core_pool_size: usize) -> crate::ClientResult<()> {
         Err(crate::mq_client_err!(
             "updateCorePoolSize is not supported by this MQPushConsumer implementation"
         ))

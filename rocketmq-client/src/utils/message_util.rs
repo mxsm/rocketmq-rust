@@ -40,7 +40,7 @@ static PROPERTY_MESSAGE_TTL: LazyLock<CheetahString> =
 pub struct MessageUtil;
 
 impl MessageUtil {
-    pub fn create_reply_message(request_message: &Message, body: &[u8]) -> rocketmq_error::RocketMQResult<Message> {
+    pub fn create_reply_message(request_message: &Message, body: &[u8]) -> crate::ClientResult<Message> {
         // Early return: check required cluster property
         let Some(cluster) = request_message.property(&PROPERTY_CLUSTER) else {
             return Err(mq_client_err!(

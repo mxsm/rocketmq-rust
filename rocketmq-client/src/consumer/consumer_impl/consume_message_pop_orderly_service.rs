@@ -125,7 +125,7 @@ struct DefaultAckCallback;
 impl crate::consumer::ack_callback::AckCallback for DefaultAckCallback {
     fn on_success(&self, _ack_result: AckResult) {}
 
-    fn on_exception(&self, e: rocketmq_error::RocketMQError) {
+    fn on_exception(&self, e: crate::ClientError) {
         error!("change_invisible_time callback exception: {}", e);
     }
 }
@@ -472,7 +472,7 @@ impl ConsumeMessagePopOrderlyService {
     async fn process_consume_result(
         &self,
         msgs: &[Arc<MessageExt>],
-        status: Result<ConsumeOrderlyStatus, rocketmq_error::RocketMQError>,
+        status: Result<ConsumeOrderlyStatus, crate::ClientError>,
         context: &ConsumeOrderlyContext,
     ) -> bool {
         let status = match status {

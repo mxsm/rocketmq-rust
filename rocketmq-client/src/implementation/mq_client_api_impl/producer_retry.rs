@@ -38,7 +38,7 @@ impl MQClientAPIImpl {
         current_addr: &mut CheetahString,
         retry_request: &mut AsyncRetryRequest,
         retry_count: &mut u32,
-        last_error: &mut Option<RocketMQError>,
+        last_error: &mut Option<ClientError>,
         refresh_route_before_send: &mut bool,
         max_attempts: u32,
         attempt: u32,
@@ -179,7 +179,7 @@ impl MQClientAPIImpl {
         deadline: RequestDeadline,
         msg_topic: &CheetahString,
     ) -> Result<(), RetryInput> {
-        let instance = instance.ok_or(RetryInput::BusinessError(RocketMQError::ClientNotStarted))?;
+        let instance = instance.ok_or(RetryInput::BusinessError(ClientError::not_started()))?;
         let Some(refreshed) = instance.refresh_topic_route_info_once(msg_topic, deadline).await? else {
             return Err(RetryInput::RouteUnavailable);
         };
@@ -206,7 +206,7 @@ impl MQClientAPIImpl {
         max_attempts: u32,
         attempt: u32,
         deadline: RequestDeadline,
-        last_error: &mut Option<RocketMQError>,
+        last_error: &mut Option<ClientError>,
         refresh_route_before_send: &mut bool,
         current_addr: &CheetahString,
         callback_executor: &ClientCallbackExecutor,
@@ -253,7 +253,7 @@ impl MQClientAPIImpl {
     }
 
     pub(super) async fn finish_async_retry_failure(
-        error: RocketMQError,
+        error: ClientError,
         callback_executor: &ClientCallbackExecutor,
         send_callback: &Option<ArcSendCallback>,
         context_data: &Option<AsyncSendHookContext>,
@@ -279,7 +279,7 @@ impl MQClientAPIImpl {
     pub(super) fn execute_async_send_hook_after(
         context_data: &Option<AsyncSendHookContext>,
         send_result: Option<&SendResult>,
-        exception: Option<Arc<RocketMQError>>,
+        exception: Option<Arc<ClientError>>,
     ) {
         let Some(context_data) = context_data.as_ref() else {
             return;
@@ -349,7 +349,7 @@ impl MQClientAPIImpl {
     pub(super) async fn notify_send_callback_exception(
         callback_executor: &ClientCallbackExecutor,
         send_callback: &Option<ArcSendCallback>,
-        error: &RocketMQError,
+        error: &ClientError,
     ) {
         let Some(callback) = send_callback.as_ref().cloned() else {
             return;
@@ -364,7 +364,7 @@ impl MQClientAPIImpl {
         msg: &T,
         response: &RemotingCommand,
         addr: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    ) -> crate::ClientResult<SendResult>
     where
         T: MessageTrait,
     {

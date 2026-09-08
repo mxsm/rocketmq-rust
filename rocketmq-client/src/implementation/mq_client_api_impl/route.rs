@@ -24,7 +24,7 @@ impl RouteClient<'_> {
         &self,
         topic: &CheetahString,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
+    ) -> crate::ClientResult<Option<TopicRouteData>> {
         self.api
             .get_topic_route_info_from_name_server(topic, timeout_millis)
             .await
@@ -43,7 +43,7 @@ impl MQClientAPIImpl {
     pub async fn get_default_topic_route_info_from_name_server(
         &self,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
+    ) -> crate::ClientResult<Option<TopicRouteData>> {
         self.get_topic_route_info_from_name_server_detail(
             TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
             timeout_millis,
@@ -57,7 +57,7 @@ impl MQClientAPIImpl {
         &self,
         topic: &str,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
+    ) -> crate::ClientResult<Option<TopicRouteData>> {
         self.get_topic_route_info_from_name_server_detail(topic, timeout_millis, true)
             .await
     }
@@ -68,7 +68,7 @@ impl MQClientAPIImpl {
         topic: &str,
         timeout_millis: u64,
         allow_topic_not_exist: bool,
-    ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
+    ) -> crate::ClientResult<Option<TopicRouteData>> {
         let deadline = RequestDeadline::from_timeout_millis(timeout_millis);
         self.get_topic_route_info_once(topic, deadline, allow_topic_not_exist)
             .await
@@ -100,8 +100,7 @@ impl MQClientAPIImpl {
                     ResponseCode::Success => {
                         let body = result.take_body();
                         if let Some(body_inner) = body {
-                            let route_data =
-                                TopicRouteData::decode(body_inner.as_ref()).map_err(RetryInput::BusinessError)?;
+                            let route_data = TopicRouteData::decode(body_inner.as_ref()).map_err(RetryInput::from)?;
                             return Ok(Some(route_data));
                         }
                     }

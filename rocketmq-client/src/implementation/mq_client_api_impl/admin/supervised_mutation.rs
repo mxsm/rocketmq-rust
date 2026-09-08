@@ -48,7 +48,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         request_header: GetConsumeStatsRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats> {
+    ) -> ClientResult<rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats> {
         let request = self.create_request_command(RequestCode::GetConsumeStats, request_header);
         let outcome = self
             .remoting_client
@@ -68,7 +68,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         bounded_consume_stats_from_response(&response)
     }
@@ -81,7 +81,7 @@ impl MQClientAPIImpl {
         read_queue_nums: u32,
         request_header: GetConsumeStatsRequestHeader,
         timeout_millis: u64,
-    ) -> RocketMQResult<rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats> {
+    ) -> ClientResult<rocketmq_protocol::protocol::admin::consume_stats::ConsumeStats> {
         let topic = request_header.topic.clone();
         let request = self.create_request_command(RequestCode::GetConsumeStats, request_header);
         let outcome = self
@@ -102,7 +102,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         supervised_consume_stats_from_response(&response, &topic, broker_name, read_queue_nums)
     }
@@ -113,7 +113,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         topic: CheetahString,
         timeout_millis: u64,
-    ) -> RocketMQResult<MutationTopicConfigState> {
+    ) -> ClientResult<MutationTopicConfigState> {
         let request = self.create_request_command(
             RequestCode::GetTopicConfig,
             GetTopicConfigRequestHeader {
@@ -140,7 +140,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
@@ -169,13 +169,13 @@ impl MQClientAPIImpl {
         expected_state: MutationExpectedState,
         replacement: MutationTopicConfig,
         timeout_millis: u64,
-    ) -> RocketMQResult<MutationStateCasOutcome> {
+    ) -> ClientResult<MutationStateCasOutcome> {
         if !(1..=128).contains(&replacement.read_queue_nums)
             || !(1..=128).contains(&replacement.write_queue_nums)
             || !(1..=7).contains(&replacement.perm)
             || replacement.perm & 0b110 == 0
         {
-            return Err(RocketMQError::illegal_argument(
+            return Err(ClientError::illegal_argument(
                 "supervised Topic replacement is outside the closed queue/permission bounds",
             ));
         }
@@ -217,7 +217,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         state_cas_outcome_from_response(&response, expected_state)
     }
@@ -228,7 +228,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         group: CheetahString,
         timeout_millis: u64,
-    ) -> RocketMQResult<MutationSubscriptionGroupConfigState> {
+    ) -> ClientResult<MutationSubscriptionGroupConfigState> {
         let request = self.create_request_command(
             RequestCode::GetSubscriptionGroupConfig,
             GetSubscriptionGroupConfigRequestHeader {
@@ -255,12 +255,12 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
                 let body = response.get_body().ok_or_else(|| {
-                    RocketMQError::response_process_failed(
+                    ClientError::response_process_failed(
                         "mutation_subscription_group_config_state",
                         "Subscription Group response body is missing",
                     )
@@ -269,7 +269,7 @@ impl MQClientAPIImpl {
                 let header = response
                     .decode_command_custom_header::<UpdateSubscriptionGroupConfigCasResponseHeader>()
                     .map_err(|error| {
-                        RocketMQError::response_process_failed(
+                        ClientError::response_process_failed(
                             "mutation_subscription_group_config_state",
                             format!("Subscription Group response version is missing: {error}"),
                         )
@@ -300,12 +300,12 @@ impl MQClientAPIImpl {
         expected_state: MutationExpectedState,
         replacement: MutationSubscriptionGroupConfig,
         timeout_millis: u64,
-    ) -> RocketMQResult<MutationStateCasOutcome> {
+    ) -> ClientResult<MutationStateCasOutcome> {
         if replacement.retry_queue_nums < 0
             || replacement.retry_max_times < -1
             || replacement.consume_timeout_minute <= 0
         {
-            return Err(RocketMQError::illegal_argument(
+            return Err(ClientError::illegal_argument(
                 "supervised Subscription Group replacement is outside the closed bounds",
             ));
         }
@@ -355,7 +355,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         state_cas_outcome_from_response(&response, expected_state)
     }
@@ -365,7 +365,7 @@ impl MQClientAPIImpl {
         &self,
         addr: &CheetahString,
         timeout_millis: u64,
-    ) -> RocketMQResult<ClientBrokerMutationConfigState> {
+    ) -> ClientResult<ClientBrokerMutationConfigState> {
         let request = self.create_remoting_command(RequestCode::GetBrokerMutationConfig);
         let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
         let outcome = self
@@ -386,7 +386,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             return Err(mq_client_err!(
@@ -395,7 +395,7 @@ impl MQClientAPIImpl {
             ));
         }
         let body = response.get_body().ok_or_else(|| {
-            RocketMQError::response_process_failed(
+            ClientError::response_process_failed(
                 "broker_mutation_config_state",
                 "Broker mutation config response body is missing",
             )
@@ -423,9 +423,9 @@ impl MQClientAPIImpl {
         expected_offset: i64,
         new_offset: i64,
         timeout_millis: u64,
-    ) -> RocketMQResult<ConditionalConsumerOffsetOutcome> {
+    ) -> ClientResult<ConditionalConsumerOffsetOutcome> {
         if queue_id < 0 || expected_offset < -1 || new_offset < 0 {
-            return Err(RocketMQError::illegal_argument(
+            return Err(ClientError::illegal_argument(
                 "conditional consumer offset fields are outside the closed bounds",
             ));
         }
@@ -458,7 +458,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         conditional_offset_outcome_from_response(&response, expected_offset, new_offset)
     }
@@ -470,7 +470,7 @@ impl MQClientAPIImpl {
         topic: CheetahString,
         consumer_group: CheetahString,
         timeout_millis: u64,
-    ) -> RocketMQResult<Option<MutationMessageRequestMode>> {
+    ) -> ClientResult<Option<MutationMessageRequestMode>> {
         let request = self
             .create_remoting_command(RequestCode::GetMessageRequestMode)
             .set_body(
@@ -499,7 +499,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             return Err(mq_client_err!(
@@ -508,7 +508,7 @@ impl MQClientAPIImpl {
             ));
         }
         let body = response.get_body().ok_or_else(|| {
-            RocketMQError::response_process_failed(
+            ClientError::response_process_failed(
                 "mutation_message_request_mode",
                 "request-mode response body is missing",
             )
@@ -532,7 +532,7 @@ impl MQClientAPIImpl {
         expected: MutationExpectedMessageRequestMode,
         replacement: MutationMessageRequestMode,
         timeout_millis: u64,
-    ) -> RocketMQResult<MutationMessageRequestModeOutcome> {
+    ) -> ClientResult<MutationMessageRequestModeOutcome> {
         let expected_state = match expected {
             MutationExpectedMessageRequestMode::Absent => ExpectedMessageRequestMode::Absent,
             MutationExpectedMessageRequestMode::Present(value) => {
@@ -573,7 +573,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         request_mode_cas_outcome_from_response(&response, expected, replacement)
     }

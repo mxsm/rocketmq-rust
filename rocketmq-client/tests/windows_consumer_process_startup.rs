@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use rocketmq_client::ClientResult;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
@@ -34,7 +35,6 @@ use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerConcurrently;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_single::Message;
 use rocketmq_namesrv::bootstrap::Builder as NameServerBuilder;
@@ -106,7 +106,7 @@ impl MessageListenerConcurrently for NoopMessageListener {
         &self,
         _messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
     }
 }

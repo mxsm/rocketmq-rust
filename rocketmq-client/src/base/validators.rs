@@ -31,7 +31,7 @@ impl Validators {
     pub const TOPIC_MAX_LENGTH: usize = 127;
     pub const GROUP_MAX_LENGTH: usize = 120;
 
-    pub fn check_group(group: &str) -> rocketmq_error::RocketMQResult<()> {
+    pub fn check_group(group: &str) -> crate::ClientResult<()> {
         if group.trim().is_empty() {
             return Err(mq_client_err!("the specified group is blank"));
         }
@@ -53,7 +53,7 @@ impl Validators {
         Ok(())
     }
 
-    pub fn check_message<M>(msg: Option<&M>, producer_config: &ProducerConfig) -> rocketmq_error::RocketMQResult<()>
+    pub fn check_message<M>(msg: Option<&M>, producer_config: &ProducerConfig) -> crate::ClientResult<()>
     where
         M: MessageTrait,
     {
@@ -110,7 +110,7 @@ impl Validators {
         Ok(())
     }
 
-    pub fn check_topic(topic: &str) -> rocketmq_error::RocketMQResult<()> {
+    pub fn check_topic(topic: &str) -> crate::ClientResult<()> {
         if topic.trim().is_empty() {
             return Err(mq_client_err!("The specified topic is blank"));
         }
@@ -132,7 +132,7 @@ impl Validators {
         Ok(())
     }
 
-    pub fn is_system_topic(topic: &str) -> rocketmq_error::RocketMQResult<()> {
+    pub fn is_system_topic(topic: &str) -> crate::ClientResult<()> {
         if TopicValidator::is_system_topic(topic) {
             return Err(mq_client_err!(format!(
                 "The topic[{}] is conflict with system topic.",
@@ -142,7 +142,7 @@ impl Validators {
         Ok(())
     }
 
-    pub fn is_not_allowed_send_topic(topic: &str) -> rocketmq_error::RocketMQResult<()> {
+    pub fn is_not_allowed_send_topic(topic: &str) -> crate::ClientResult<()> {
         if TopicValidator::is_not_allowed_send_topic(topic) {
             return Err(mq_client_err!(format!(
                 "Sending message to topic[{}] is forbidden.",
@@ -153,7 +153,7 @@ impl Validators {
         Ok(())
     }
 
-    pub fn check_topic_config(topic_config: &TopicConfig) -> rocketmq_error::RocketMQResult<()> {
+    pub fn check_topic_config(topic_config: &TopicConfig) -> crate::ClientResult<()> {
         if !PermName::is_valid(topic_config.perm) {
             return Err(mq_client_err!(
                 ResponseCode::NoPermission as i32,
@@ -164,7 +164,7 @@ impl Validators {
         Ok(())
     }
 
-    pub fn check_broker_config(broker_config: &HashMap<String, String>) -> rocketmq_error::RocketMQResult<()> {
+    pub fn check_broker_config(broker_config: &HashMap<String, String>) -> crate::ClientResult<()> {
         if let Some(broker_permission) = broker_config.get("brokerPermission") {
             if !PermName::is_valid_str(broker_permission) {
                 return Err(mq_client_err!(format!(

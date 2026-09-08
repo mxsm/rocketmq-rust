@@ -92,7 +92,7 @@ impl OffsetStore {
     ///
     /// Returns an error if the underlying storage backend fails to read or deserialize
     /// the persisted offset data.
-    pub async fn load(&self) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn load(&self) -> crate::ClientResult<()> {
         match self {
             Self::Remote(store) => store.load().await,
             Self::Local(store) => store.load().await,
@@ -192,7 +192,7 @@ impl OffsetStore {
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         match self {
             Self::Remote(store) => store.update_consume_offset_to_broker(mq, offset, is_oneway).await,
             Self::Local(store) => store.update_consume_offset_to_broker(mq, offset, is_oneway).await,
@@ -292,7 +292,7 @@ pub(crate) trait OffsetStoreTrait {
     ///
     /// Returns an error if the underlying storage backend fails to read or deserialize
     /// the persisted offset data.
-    async fn load(&self) -> rocketmq_error::RocketMQResult<()>;
+    async fn load(&self) -> crate::ClientResult<()>;
 
     /// Asynchronously updates the stored offset for the given queue.
     ///
@@ -334,5 +334,5 @@ pub(crate) trait OffsetStoreTrait {
         mq: &MessageQueue,
         offset: i64,
         is_oneway: bool,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    ) -> crate::ClientResult<()>;
 }

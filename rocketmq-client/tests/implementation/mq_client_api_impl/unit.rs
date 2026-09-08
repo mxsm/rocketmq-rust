@@ -77,14 +77,14 @@ impl CommandCustomHeader for AsyncRetryTestHeader {
 }
 
 impl FromMap for AsyncRetryTestHeader {
-    type Error = rocketmq_error::RocketMQError;
+    type Error = rocketmq_client::ClientError;
     type Target = Self;
 
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self, Self::Error> {
         let retry_marker = map
             .get(&CheetahString::from_static_str("retryMarker"))
             .cloned()
-            .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("missing retryMarker test header"))?;
+            .ok_or_else(|| rocketmq_client::ClientError::illegal_argument("missing retryMarker test header"))?;
         Ok(Self { retry_marker })
     }
 }
@@ -111,7 +111,7 @@ impl PopCallback for RecordingPopCallback {
         }
     }
 
-    fn on_error(&mut self, _error: RocketMQError) {
+    fn on_error(&mut self, _error: ClientError) {
         self.calls.fetch_add(1, AtomicOrdering::AcqRel);
         self.errors.fetch_add(1, AtomicOrdering::AcqRel);
         if let Some(completed) = self.completed.take() {
@@ -152,11 +152,10 @@ impl SendMessageHook for CapturingFailureHook {
     fn send_message_before(&self, _context: &Option<SendMessageContext<'_>>) {}
 
     fn send_message_after(&self, context: &Option<SendMessageContext<'_>>) {
-        let Some(RocketMQError::Shared(canonical)) = context.as_ref().and_then(|context| context.exception.as_deref())
-        else {
+        let Some(error) = context.as_ref().and_then(|context| context.exception.as_deref()) else {
             panic!("failure hook should receive the canonical shared carrier")
         };
-        *self.observed.lock().expect("hook observation lock") = Some(Arc::clone(canonical));
+        *self.observed.lock().expect("hook observation lock") = Some(Arc::clone(error.shared_error()));
     }
 }
 
@@ -190,17 +189,17 @@ async fn async_failure_hook_and_callback_share_the_original_canonical_source() {
         ..Default::default()
     });
     let (callback_tx, callback_rx) = std::sync::mpsc::channel();
-    let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&RocketMQError>| {
-        let Some(RocketMQError::Shared(canonical)) = error else {
+    let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&ClientError>| {
+        let Some(error) = error else {
             panic!("failure callback should receive the canonical shared carrier")
         };
         callback_tx
-            .send(Arc::clone(canonical))
+            .send(Arc::clone(error.shared_error()))
             .expect("callback receiver remains open");
     });
 
     MQClientAPIImpl::finish_async_retry_failure(
-        RocketMQError::Shared(Arc::clone(&canonical)),
+        ClientError::from_shared(Arc::clone(&canonical)),
         &ClientCallbackExecutor::new(1),
         &Some(callback),
         &context_data,
@@ -758,7 +757,7 @@ fn async_retry_queue_without_topic_publish_info_returns_none() {
 #[tokio::test]
 async fn async_send_callback_success_runs_in_owned_send_task() {
     let (tx, rx) = std::sync::mpsc::channel();
-    let callback: ArcSendCallback = Arc::new(move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
+    let callback: ArcSendCallback = Arc::new(move |result: Option<&SendResult>, error: Option<&ClientError>| {
         tx.send((result.is_some(), error.is_some()))
             .expect("test receiver should be alive");
     });
@@ -780,11 +779,11 @@ async fn async_send_callback_success_runs_in_owned_send_task() {
 #[tokio::test]
 async fn async_send_callback_exception_runs_in_owned_send_task() {
     let (tx, rx) = std::sync::mpsc::channel();
-    let callback: ArcSendCallback = Arc::new(move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
+    let callback: ArcSendCallback = Arc::new(move |result: Option<&SendResult>, error: Option<&ClientError>| {
         tx.send((result.is_some(), error.map(ToString::to_string)))
             .expect("test receiver should be alive");
     });
-    let error = RocketMQError::Shared(std::sync::Arc::new(rocketmq_error::Error::caused_by(
+    let error = ClientError::from_shared(std::sync::Arc::new(rocketmq_error::Error::caused_by(
         &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
         std::io::Error::other("callback failure"),
     )));
@@ -940,7 +939,7 @@ async fn pop_callback_task_completes_once_when_shutdown_cancels_the_request() {
         &tracker,
         &token,
         ClientCallbackExecutor::new(1),
-        pending::<rocketmq_error::RocketMQResult<PopResult>>(),
+        pending::<rocketmq_client::ClientResult<PopResult>>(),
         RecordingPopCallback {
             calls: calls.clone(),
             errors: errors.clone(),

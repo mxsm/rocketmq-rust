@@ -34,7 +34,6 @@ impl MQClientAPIImpl {
                 remoting_config.socks_proxy = socks_proxy;
                 None
             }
-            Err(RocketMQError::ConfigInvalidValue { reason, .. }) => Some(Arc::<str>::from(reason)),
             Err(_) => Some(Arc::<str>::from("invalid SOCKS proxy configuration")),
         };
         #[cfg(any(feature = "observability", feature = "observability-metrics"))]
@@ -77,16 +76,20 @@ impl MQClientAPIImpl {
         }
     }
 
-    pub async fn start(&self) -> RocketMQResult<()> {
+    pub async fn start(&self) -> ClientResult<()> {
         crate::base::client_config_validation::ClientConfigValidator::validate_config(&self.client_config)?;
         if let Some(reason) = self.startup_config_error.as_ref() {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: ClientConfig::SOCKS_PROXY_CONFIG,
-                value: "<redacted>".to_string(),
-                reason: reason.to_string(),
-            });
+            return Err(ClientError::config_invalid(
+                ClientConfig::SOCKS_PROXY_CONFIG,
+                "<redacted>".to_string(),
+                reason.to_string(),
+            ));
         }
-        self.remoting_client.start().await.map(|_| ())
+        self.remoting_client
+            .start()
+            .await
+            .map(|_| ())
+            .map_err(ClientError::from)
     }
 
     pub fn shutdown(&self) {
@@ -181,7 +184,7 @@ impl MQClientAPIImpl {
         broker_addr: &CheetahString,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> ClientResult<RemotingCommand> {
         super::transport_error::direct_invoke_result(
             self.remoting_client
                 .invoke_request(Some(broker_addr), request, timeout_millis)
@@ -193,9 +196,10 @@ impl MQClientAPIImpl {
         broker_addr: &CheetahString,
         request: RemotingCommand,
         timeout_millis: u64,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         self.remoting_client
             .invoke_request_oneway(broker_addr, request, timeout_millis)
             .await
+            .map_err(ClientError::from)
     }
 }

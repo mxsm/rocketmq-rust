@@ -21,8 +21,9 @@ use std::time::Duration;
 use crate::config_support::name_server_address_utils::NameServerAddressUtils;
 use crate::config_support::name_server_target::parse_legacy_namesrv_addr;
 use crate::config_support::name_server_target::NormalizedNameServerTargets;
+use crate::ClientError;
+use crate::ClientResult;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
 use rocketmq_protocol::protocol::request_type::RequestType;
@@ -305,11 +306,11 @@ impl ClientConfig {
         }
     }
 
-    pub(crate) fn normalized_namesrv_targets(&self) -> RocketMQResult<Option<NormalizedNameServerTargets>> {
+    pub(crate) fn normalized_namesrv_targets(&self) -> ClientResult<Option<NormalizedNameServerTargets>> {
         self.namesrv_addr.as_deref().map(parse_legacy_namesrv_addr).transpose()
     }
 
-    pub(crate) fn normalize_namesrv_addr(&mut self) -> RocketMQResult<()> {
+    pub(crate) fn normalize_namesrv_addr(&mut self) -> ClientResult<()> {
         if let Some(targets) = self.normalized_namesrv_targets()? {
             self.namesrv_addr = Some(CheetahString::from_slice(targets.canonical()));
         }
@@ -537,8 +538,8 @@ impl ClientConfig {
     }
 
     /// Parses the Java-compatible SOCKS proxy JSON into the transport-owned typed model.
-    pub fn parse_socks_proxy_config(&self) -> RocketMQResult<SocksProxyConfig> {
-        SocksProxyConfig::parse_java_json(&self.socks_proxy_config)
+    pub fn parse_socks_proxy_config(&self) -> ClientResult<SocksProxyConfig> {
+        SocksProxyConfig::parse_java_json(&self.socks_proxy_config).map_err(ClientError::from)
     }
 
     #[inline]
@@ -761,7 +762,7 @@ impl ClientConfig {
     ///     .instance_name("my_producer")
     ///     .enable_tls(true)
     ///     .build()?;
-    /// # Ok::<(), rocketmq_error::RocketMQError>(())
+    /// # Ok::<(), crate::ClientError>(())
     /// ```
     #[inline]
     pub fn builder() -> crate::base::client_config_builder::ClientConfigBuilder {

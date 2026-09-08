@@ -20,6 +20,7 @@ mod support;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
+use rocketmq_client::ClientResult;
 #[allow(unused_imports)]
 use rocketmq_client_rust::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::ConsumeOrderlyContext;
@@ -27,7 +28,6 @@ use rocketmq_client_rust::ConsumeOrderlyStatus;
 use rocketmq_client_rust::DefaultMQPushConsumer;
 use rocketmq_client_rust::MQPushConsumer;
 use rocketmq_client_rust::MessageListenerOrderly;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
@@ -40,7 +40,7 @@ pub const TOPIC: &str = "TopicTest";
 pub const TAG: &str = "*";
 
 #[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+pub async fn main() -> ClientResult<()> {
     let example_runtime = support::ExampleClientRuntime::try_new("ordermessage-consumer")?;
     let client_runtime = example_runtime.client_runtime();
     // create a producer builder with default configuration
@@ -86,7 +86,7 @@ impl MessageListenerOrderly for MyMessageListener {
         &self,
         msgs: &[&MessageExt],
         context: &mut ConsumeOrderlyContext,
-    ) -> RocketMQResult<ConsumeOrderlyStatus> {
+    ) -> ClientResult<ConsumeOrderlyStatus> {
         context.set_auto_commit(true);
         for msg in msgs {
             println!("Receive message: {:?}", msg);

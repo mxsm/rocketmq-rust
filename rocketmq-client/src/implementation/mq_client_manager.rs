@@ -155,7 +155,7 @@ impl ClientPool {
         &self,
         client_config: ClientConfig,
         rpc_hook: Option<Arc<dyn RPCHook>>,
-    ) -> rocketmq_error::RocketMQResult<PooledClient> {
+    ) -> crate::ClientResult<PooledClient> {
         self.get_or_create_with_options(ClientOptions::legacy(client_config), rpc_hook)
     }
 
@@ -163,7 +163,7 @@ impl ClientPool {
         &self,
         options: ClientOptions,
         rpc_hook: Option<Arc<dyn RPCHook>>,
-    ) -> rocketmq_error::RocketMQResult<PooledClient> {
+    ) -> crate::ClientResult<PooledClient> {
         let _admission = self.inner.admission.read();
         if self.inner.closed.load(Ordering::Acquire) {
             return Err(mq_client_err!("ClientRuntime is shutting down"));
@@ -312,8 +312,8 @@ impl ClientPool {
 
 #[cfg(test)]
 mod tests {
+    use crate::ClientError;
     use cheetah_string::CheetahString;
-    use rocketmq_error::RocketMQError;
     use rocketmq_protocol::protocol::SerializeType;
 
     use super::*;
@@ -331,13 +331,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(matches!(
-            error,
-            RocketMQError::ConfigInvalidValue {
-                key: "namesrv_addr",
-                ..
-            }
-        ));
+        assert!(error.is(&rocketmq_error::CORE_CONFIGURATION_INVALID));
         assert_eq!(runtime.pool().instance_count(), 0);
     }
 

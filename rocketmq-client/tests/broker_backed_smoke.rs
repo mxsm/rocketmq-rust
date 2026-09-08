@@ -47,6 +47,8 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
 
+use rocketmq_client::ClientError;
+use rocketmq_client::ClientResult;
 use rocketmq_client_rust::AclClientRPCHook;
 use rocketmq_client_rust::ClientConfig;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
@@ -65,8 +67,6 @@ use rocketmq_client_rust::MessageUtil;
 use rocketmq_client_rust::SessionCredentials;
 use rocketmq_client_rust::TransactionListener;
 use rocketmq_client_rust::TransactionMQProducer;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
@@ -101,7 +101,7 @@ struct BrokerEnv {
     producer_group: String,
 }
 
-fn broker_env() -> RocketMQResult<Option<BrokerEnv>> {
+fn broker_env() -> ClientResult<Option<BrokerEnv>> {
     let namesrv_addr = match std::env::var("ROCKETMQ_NAMESRV_ADDR") {
         Ok(value) if !value.trim().is_empty() => value,
         _ => {
@@ -148,12 +148,12 @@ fn trace_smoke_step(step: &str) {
     }
 }
 
-fn env_optional_bool(name: &str) -> RocketMQResult<Option<bool>> {
+fn env_optional_bool(name: &str) -> ClientResult<Option<bool>> {
     let value = match std::env::var(name) {
         Ok(value) => value,
         Err(std::env::VarError::NotPresent) => return Ok(None),
         Err(error) => {
-            return Err(RocketMQError::illegal_argument(format!(
+            return Err(ClientError::illegal_argument(format!(
                 "failed to read {name} for TLS smoke test: {error}"
             )));
         }
@@ -163,13 +163,13 @@ fn env_optional_bool(name: &str) -> RocketMQResult<Option<bool>> {
         "" => Ok(None),
         "1" | "true" | "yes" | "on" => Ok(Some(true)),
         "0" | "false" | "no" | "off" => Ok(Some(false)),
-        _ => Err(RocketMQError::illegal_argument(format!(
+        _ => Err(ClientError::illegal_argument(format!(
             "{name} must be one of true/false/1/0/yes/no/on/off"
         ))),
     }
 }
 
-fn env_optional_string(name: &str) -> RocketMQResult<Option<String>> {
+fn env_optional_string(name: &str) -> ClientResult<Option<String>> {
     match std::env::var(name) {
         Ok(value) => {
             let value = value.trim();
@@ -180,13 +180,13 @@ fn env_optional_string(name: &str) -> RocketMQResult<Option<String>> {
             }
         }
         Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(error) => Err(RocketMQError::illegal_argument(format!(
+        Err(error) => Err(ClientError::illegal_argument(format!(
             "failed to read {name} for TLS smoke test: {error}"
         ))),
     }
 }
 
-fn tls_smoke_client_config(env: &BrokerEnv) -> RocketMQResult<ClientConfig> {
+fn tls_smoke_client_config(env: &BrokerEnv) -> ClientResult<ClientConfig> {
     let mut builder = ClientConfig::builder()
         .namesrv_addr(env.namesrv_addr.clone())
         .enable_tls(true);
@@ -210,23 +210,23 @@ fn tls_smoke_client_config(env: &BrokerEnv) -> RocketMQResult<ClientConfig> {
     builder.build()
 }
 
-fn strict_skip_error(reason: &str, strict: bool) -> RocketMQResult<()> {
+fn strict_skip_error(reason: &str, strict: bool) -> ClientResult<()> {
     if strict {
-        return Err(RocketMQError::illegal_argument(format!(
+        return Err(ClientError::illegal_argument(format!(
             "{reason}; set the required smoke-test environment or disable {REQUIRE_BROKER_BACKED_SMOKE}"
         )));
     }
     Ok(())
 }
 
-fn skip_or_fail(reason: impl Into<String>) -> RocketMQResult<()> {
+fn skip_or_fail(reason: impl Into<String>) -> ClientResult<()> {
     let reason = reason.into();
     strict_skip_error(&reason, env_flag_enabled(REQUIRE_BROKER_BACKED_SMOKE))?;
     eprintln!("{reason}");
     Ok(())
 }
 
-fn optional_smoke_enabled_or_skip(flag_name: &str, scenario: &str) -> RocketMQResult<bool> {
+fn optional_smoke_enabled_or_skip(flag_name: &str, scenario: &str) -> ClientResult<bool> {
     if env_flag_enabled(flag_name) {
         return Ok(true);
     }
@@ -246,19 +246,16 @@ fn trace_body_matches(body: &[u8], topic: &str, message_key: &str) -> bool {
     trace_data.contains("Pub") && trace_data.contains(topic) && trace_data.contains(message_key)
 }
 
-async fn smoke_timeout<T, F>(operation: &'static str, timeout: Duration, future: F) -> RocketMQResult<T>
+async fn smoke_timeout<T, F>(operation: &'static str, timeout: Duration, future: F) -> ClientResult<T>
 where
-    F: Future<Output = RocketMQResult<T>>,
+    F: Future<Output = ClientResult<T>>,
 {
     tokio::time::timeout(timeout, future)
         .await
-        .map_err(|_| RocketMQError::Timeout {
-            operation,
-            timeout_ms: timeout.as_millis().try_into().unwrap_or(u64::MAX),
-        })?
+        .map_err(|_| ClientError::timeout(operation, timeout.as_millis().try_into().unwrap_or(u64::MAX)))?
 }
 
-fn optional_acl_rpc_hook_from_env() -> RocketMQResult<Option<Arc<dyn RPCHook>>> {
+fn optional_acl_rpc_hook_from_env() -> ClientResult<Option<Arc<dyn RPCHook>>> {
     let (access_key, secret_key) = match (
         env_non_empty("ROCKETMQ_ACL_ACCESS_KEY"),
         env_non_empty("ROCKETMQ_ACL_SECRET_KEY"),
@@ -266,7 +263,7 @@ fn optional_acl_rpc_hook_from_env() -> RocketMQResult<Option<Arc<dyn RPCHook>>> 
         (Some(access_key), Some(secret_key)) => (access_key, secret_key),
         (None, None) => return Ok(None),
         _ => {
-            return Err(RocketMQError::illegal_argument(
+            return Err(ClientError::illegal_argument(
                 "ROCKETMQ_ACL_ACCESS_KEY and ROCKETMQ_ACL_SECRET_KEY must be set together",
             ))
         }
@@ -279,7 +276,7 @@ fn optional_acl_rpc_hook_from_env() -> RocketMQResult<Option<Arc<dyn RPCHook>>> 
     Ok(Some(Arc::new(AclClientRPCHook::new(credentials))))
 }
 
-fn acl_rpc_hook_from_env() -> RocketMQResult<Option<Arc<dyn RPCHook>>> {
+fn acl_rpc_hook_from_env() -> ClientResult<Option<Arc<dyn RPCHook>>> {
     let hook = optional_acl_rpc_hook_from_env()?;
     if hook.is_none() {
         skip_or_fail("skipping ACL smoke test: ROCKETMQ_ACL_ACCESS_KEY and ROCKETMQ_ACL_SECRET_KEY are not set")?;
@@ -310,20 +307,20 @@ macro_rules! maybe_with_acl_push_rpc_hook {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_message_type_m01_send_smoke() -> RocketMQResult<()> {
+async fn broker_backed_message_type_m01_send_smoke() -> ClientResult<()> {
     if !env_flag_enabled(RUN_M01_MESSAGE_TYPE_SMOKE) {
         return Ok(());
     }
     let Some(env) = broker_env()? else {
-        return Err(RocketMQError::illegal_argument(format!(
+        return Err(ClientError::illegal_argument(format!(
             "{RUN_M01_MESSAGE_TYPE_SMOKE}=true requires ROCKETMQ_NAMESRV_ADDR"
         )));
     };
     let corpus: MessageTypeCorpus =
         serde_json::from_str(include_str!("../../scripts/fixtures/v1-message-type-corpus.json"))
-            .map_err(|error| RocketMQError::illegal_argument(format!("invalid M01 message type corpus: {error}")))?;
+            .map_err(|error| ClientError::illegal_argument(format!("invalid M01 message type corpus: {error}")))?;
     if corpus.result_id != "M01" {
-        return Err(RocketMQError::illegal_argument(
+        return Err(ClientError::illegal_argument(
             "message type corpus resultId must be M01",
         ));
     }
@@ -374,7 +371,7 @@ fn current_epoch_millis() -> u128 {
         .unwrap_or_default()
 }
 
-async fn ensure_topic_route(namesrv_addr: &str, topic: &str) -> RocketMQResult<()> {
+async fn ensure_topic_route(namesrv_addr: &str, topic: &str) -> ClientResult<()> {
     let mut producer = maybe_with_acl_rpc_hook!(DefaultMQProducer::builder(support::client_runtime(
         "broker-backed-producer"
     )))
@@ -404,7 +401,7 @@ async fn ensure_topic_route(namesrv_addr: &str, topic: &str) -> RocketMQResult<(
 
     producer.shutdown().await;
     Err(last_error.unwrap_or_else(|| {
-        RocketMQError::illegal_argument(format!(
+        ClientError::illegal_argument(format!(
             "topic route for {topic} was not available before smoke timeout"
         ))
     }))
@@ -442,7 +439,7 @@ impl TransactionListener for CommitTransactionListener {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_producer_sync_oneway_batch_smoke() -> RocketMQResult<()> {
+async fn broker_backed_producer_sync_oneway_batch_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -484,7 +481,7 @@ async fn broker_backed_producer_sync_oneway_batch_smoke() -> RocketMQResult<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
+async fn broker_backed_producer_mq_admin_offsets_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -514,7 +511,7 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
             Ok(queues) if !queues.is_empty() => break queues,
             Ok(_) => {
                 if tokio::time::Instant::now() >= queue_deadline {
-                    return Err(rocketmq_error::RocketMQError::illegal_argument(
+                    return Err(rocketmq_client::ClientError::illegal_argument(
                         "MQAdmin smoke topic did not expose publish queues",
                     ));
                 }
@@ -628,7 +625,7 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
     let view_msg_id = send_result
         .as_ref()
         .and_then(|result| result.offset_msg_id.as_deref().or(result.msg_id.as_deref()))
-        .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("send result did not contain a message id"))?;
+        .ok_or_else(|| rocketmq_client::ClientError::illegal_argument("send result did not contain a message id"))?;
     let viewed_message = smoke_timeout(
         "mqadmin_producer.view_message",
         Duration::from_secs(10),
@@ -822,7 +819,7 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> RocketMQResult<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_producer_create_topic_smoke() -> RocketMQResult<()> {
+async fn broker_backed_producer_create_topic_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -862,7 +859,7 @@ async fn broker_backed_producer_create_topic_smoke() -> RocketMQResult<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_producer_async_callback_smoke() -> RocketMQResult<()> {
+async fn broker_backed_producer_async_callback_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -910,7 +907,7 @@ async fn broker_backed_producer_async_callback_smoke() -> RocketMQResult<()> {
         .take()
         .expect("async callback should store an outcome");
     let msg_id = outcome.map_err(|_| {
-        rocketmq_error::RocketMQError::Shared(std::sync::Arc::new(rocketmq_error::Error::new(
+        rocketmq_client::ClientError::from_shared(std::sync::Arc::new(rocketmq_error::Error::new(
             &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
         )))
     })?;
@@ -922,7 +919,7 @@ async fn broker_backed_producer_async_callback_smoke() -> RocketMQResult<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_acl_producer_send_smoke() -> RocketMQResult<()> {
+async fn broker_backed_acl_producer_send_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -957,7 +954,7 @@ async fn broker_backed_acl_producer_send_smoke() -> RocketMQResult<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_tls_producer_send_smoke() -> RocketMQResult<()> {
+async fn broker_backed_tls_producer_send_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -992,7 +989,7 @@ async fn broker_backed_tls_producer_send_smoke() -> RocketMQResult<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_trace_producer_send_smoke() -> RocketMQResult<()> {
+async fn broker_backed_trace_producer_send_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -1088,7 +1085,7 @@ async fn broker_backed_trace_producer_send_smoke() -> RocketMQResult<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn broker_backed_producer_request_reply_smoke() -> RocketMQResult<()> {
+async fn broker_backed_producer_request_reply_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -1112,7 +1109,7 @@ async fn broker_backed_producer_request_reply_smoke() -> RocketMQResult<()> {
         reply_producer.start().await?;
         let Some(reply_message) = reply_rx.recv().await else {
             reply_producer.shutdown().await;
-            return Err(rocketmq_error::RocketMQError::illegal_argument(
+            return Err(rocketmq_client::ClientError::illegal_argument(
                 "request/reply smoke did not enqueue a reply message",
             ));
         };
@@ -1128,7 +1125,7 @@ async fn broker_backed_producer_request_reply_smoke() -> RocketMQResult<()> {
             "reply producer should return a message id"
         );
 
-        Ok::<(), rocketmq_error::RocketMQError>(())
+        Ok::<(), rocketmq_client::ClientError>(())
     });
 
     let expected_request_body = request_body.clone();
@@ -1157,7 +1154,7 @@ async fn broker_backed_producer_request_reply_smoke() -> RocketMQResult<()> {
                     let reply_message =
                         MessageUtil::create_reply_message(msg.message_inner(), reply_body_for_listener.as_bytes())?;
                     reply_tx_for_listener.send(reply_message).map_err(|error| {
-                        rocketmq_error::RocketMQError::illegal_argument(format!(
+                        rocketmq_client::ClientError::illegal_argument(format!(
                             "request/reply smoke failed to enqueue reply message: {error}"
                         ))
                     })?;
@@ -1189,10 +1186,7 @@ async fn broker_backed_producer_request_reply_smoke() -> RocketMQResult<()> {
 
     reply_task
         .await
-        .map_err(|error| rocketmq_error::RocketMQError::Internal {
-            operation: "join broker-backed reply task",
-            source: Box::new(error),
-        })??;
+        .map_err(|error| rocketmq_client::ClientError::internal("join broker-backed reply task", Box::new(error)))??;
 
     assert_eq!(
         response.get_body().map(|body| body.as_ref()),
@@ -1204,7 +1198,7 @@ async fn broker_backed_producer_request_reply_smoke() -> RocketMQResult<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_producer_recall_smoke() -> RocketMQResult<()> {
+async fn broker_backed_producer_recall_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -1235,7 +1229,7 @@ async fn broker_backed_producer_recall_smoke() -> RocketMQResult<()> {
     let recall_handle = send_result
         .recall_handle()
         .ok_or_else(|| {
-            rocketmq_error::RocketMQError::illegal_argument(
+            rocketmq_client::ClientError::illegal_argument(
                 "recall smoke broker did not return a recall handle for the delayed message",
             )
         })?
@@ -1253,7 +1247,7 @@ async fn broker_backed_producer_recall_smoke() -> RocketMQResult<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_transaction_producer_smoke() -> RocketMQResult<()> {
+async fn broker_backed_transaction_producer_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -1296,7 +1290,7 @@ async fn broker_backed_transaction_producer_smoke() -> RocketMQResult<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_lite_pull_assign_offset_smoke() -> RocketMQResult<()> {
+async fn broker_backed_lite_pull_assign_offset_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -1377,7 +1371,7 @@ async fn broker_backed_lite_pull_assign_offset_smoke() -> RocketMQResult<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(deprecated)]
-async fn broker_backed_classic_pull_send_pull_commit_offset_smoke() -> RocketMQResult<()> {
+async fn broker_backed_classic_pull_send_pull_commit_offset_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -1436,7 +1430,7 @@ async fn broker_backed_classic_pull_send_pull_commit_offset_smoke() -> RocketMQR
             });
             if received {
                 let next_offset = i64::try_from(result.next_begin_offset())
-                    .map_err(|_| RocketMQError::illegal_argument("classic pull next offset exceeds i64"))?;
+                    .map_err(|_| ClientError::illegal_argument("classic pull next offset exceeds i64"))?;
                 consumer.update_consume_offset(queue, next_offset).await?;
                 assert_eq!(consumer.fetch_consume_offset(queue, false).await?, next_offset);
                 committed = Some((queue.clone(), next_offset));
@@ -1459,7 +1453,7 @@ async fn broker_backed_classic_pull_send_pull_commit_offset_smoke() -> RocketMQR
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_push_consumer_concurrent_smoke() -> RocketMQResult<()> {
+async fn broker_backed_push_consumer_concurrent_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -1560,7 +1554,7 @@ async fn broker_backed_push_consumer_concurrent_smoke() -> RocketMQResult<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_push_consumer_retry_smoke() -> RocketMQResult<()> {
+async fn broker_backed_push_consumer_retry_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -1663,7 +1657,7 @@ async fn broker_backed_push_consumer_retry_smoke() -> RocketMQResult<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_push_consumer_orderly_smoke() -> RocketMQResult<()> {
+async fn broker_backed_push_consumer_orderly_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };
@@ -1785,7 +1779,7 @@ async fn broker_backed_push_consumer_orderly_smoke() -> RocketMQResult<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn broker_backed_lite_pull_subscribe_poll_smoke() -> RocketMQResult<()> {
+async fn broker_backed_lite_pull_subscribe_poll_smoke() -> ClientResult<()> {
     let Some(env) = broker_env()? else {
         return Ok(());
     };

@@ -251,7 +251,7 @@ impl Rebalance for RebalanceLitePullImpl {
     ///
     /// Returns an error if the broker is unreachable when a remote offset query is required.
     #[allow(deprecated)]
-    async fn compute_pull_from_where_with_exception(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn compute_pull_from_where_with_exception(&self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         let consumer_config = self.consumer_config.load_full();
         let consume_from_where = consumer_config.consume_from_where;
 

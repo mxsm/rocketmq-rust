@@ -15,9 +15,9 @@
 use super::*;
 pub(super) fn validate_acl_file_path_for_global_white_addr_config(
     acl_file_full_path: Option<&CheetahString>,
-) -> rocketmq_error::RocketMQResult<()> {
+) -> crate::ClientResult<()> {
     if acl_file_full_path.is_some_and(|acl_file_full_path| !acl_file_full_path.is_empty()) {
-        return Err(RocketMQError::illegal_argument(
+        return Err(ClientError::illegal_argument(
             "acl_file_full_path is not supported by RocketMQ ACL 2.0 global white address updates",
         ));
     }
@@ -29,11 +29,9 @@ impl DefaultMQAdminExtImpl {
         &self,
         broker_addr: CheetahString,
         acl_info: AclInfo,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         if acl_info.subject.as_ref().is_none_or(|subject| subject.is_empty()) {
-            return Err(rocketmq_error::RocketMQError::IllegalArgument(
-                "ACL subject is required".into(),
-            ));
+            return Err(crate::ClientError::illegal_argument("ACL subject is required"));
         }
 
         if let Some(ref client_instance) = self.client_instance {
@@ -42,7 +40,7 @@ impl DefaultMQAdminExtImpl {
                 .create_acl(broker_addr, &acl_info, self.remoting_timeout_millis()?)
                 .await
         } else {
-            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+            Err(crate::ClientError::not_started())
         }
     }
 
@@ -50,11 +48,9 @@ impl DefaultMQAdminExtImpl {
         &self,
         broker_addr: CheetahString,
         acl_info: AclInfo,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         if acl_info.subject.as_ref().is_none_or(|subject| subject.is_empty()) {
-            return Err(rocketmq_error::RocketMQError::IllegalArgument(
-                "ACL subject is required".into(),
-            ));
+            return Err(crate::ClientError::illegal_argument("ACL subject is required"));
         }
 
         if let Some(ref client_instance) = self.client_instance {
@@ -63,7 +59,7 @@ impl DefaultMQAdminExtImpl {
                 .update_acl(broker_addr, &acl_info, self.remoting_timeout_millis()?)
                 .await
         } else {
-            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+            Err(crate::ClientError::not_started())
         }
     }
 
@@ -71,11 +67,11 @@ impl DefaultMQAdminExtImpl {
         &self,
         broker_addr: CheetahString,
         user_info: UserInfo,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let username = user_info
             .username
             .clone()
-            .ok_or_else(|| rocketmq_error::RocketMQError::IllegalArgument("User username is required".into()))?;
+            .ok_or_else(|| crate::ClientError::illegal_argument("User username is required"))?;
 
         let password = user_info.password.clone().unwrap_or_default();
         let user_type = user_info.user_type.clone().unwrap_or_default();
@@ -87,11 +83,11 @@ impl DefaultMQAdminExtImpl {
         &self,
         broker_addr: CheetahString,
         user_info: UserInfo,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let username = user_info
             .username
             .clone()
-            .ok_or_else(|| rocketmq_error::RocketMQError::IllegalArgument("User username is required".into()))?;
+            .ok_or_else(|| crate::ClientError::illegal_argument("User username is required"))?;
 
         let password = user_info.password.clone().unwrap_or_default();
         let user_type = user_info.user_type.clone().unwrap_or_default();

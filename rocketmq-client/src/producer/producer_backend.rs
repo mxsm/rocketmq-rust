@@ -15,8 +15,8 @@
 use std::any::Any;
 use std::collections::HashMap;
 
+use crate::ClientError;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::MessageTrait;
@@ -26,8 +26,8 @@ use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
 
-fn unsupported_mq_admin_operation(operation: &'static str) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::illegal_argument(format!(
+fn unsupported_mq_admin_operation(operation: &'static str) -> crate::ClientError {
+    crate::ClientError::illegal_argument(format!(
         "{operation} is not supported by this ProducerBackend implementation"
     ))
 }
@@ -38,8 +38,8 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn start(&mut self) -> rocketmq_error::RocketMQResult<()>;
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
+    async fn start(&mut self) -> crate::ClientResult<()>;
 
     /// Shuts down the producer.
     async fn shutdown(&mut self);
@@ -52,9 +52,9 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<Vec<MessageQueue>>` - A result containing a vector of
+    /// * `crate::ClientResult<Vec<MessageQueue>>` - A result containing a vector of
     ///   message queues or an error.
-    async fn fetch_publish_message_queues(&mut self, topic: &str) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>>;
+    async fn fetch_publish_message_queues(&mut self, topic: &str) -> crate::ClientResult<Vec<MessageQueue>>;
 
     /// Creates a topic through the producer's admin facade.
     ///
@@ -66,7 +66,7 @@ pub(crate) trait ProducerBackend {
         _new_topic: &str,
         _queue_num: i32,
         _attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         Err(unsupported_mq_admin_operation("createTopic"))
     }
 
@@ -78,27 +78,27 @@ pub(crate) trait ProducerBackend {
         _queue_num: i32,
         _topic_sys_flag: i32,
         _attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         Err(unsupported_mq_admin_operation("createTopicWithFlag"))
     }
 
     /// Searches the offset in a queue by store timestamp.
-    async fn search_offset(&mut self, _mq: &MessageQueue, _timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+    async fn search_offset(&mut self, _mq: &MessageQueue, _timestamp: u64) -> crate::ClientResult<i64> {
         Err(unsupported_mq_admin_operation("searchOffset"))
     }
 
     /// Returns the broker max offset for a queue.
-    async fn max_offset(&mut self, _mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn max_offset(&mut self, _mq: &MessageQueue) -> crate::ClientResult<i64> {
         Err(unsupported_mq_admin_operation("maxOffset"))
     }
 
     /// Returns the broker min offset for a queue.
-    async fn min_offset(&mut self, _mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn min_offset(&mut self, _mq: &MessageQueue) -> crate::ClientResult<i64> {
         Err(unsupported_mq_admin_operation("minOffset"))
     }
 
     /// Returns the earliest store time for messages in a queue.
-    async fn earliest_msg_store_time(&mut self, _mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn earliest_msg_store_time(&mut self, _mq: &MessageQueue) -> crate::ClientResult<i64> {
         Err(unsupported_mq_admin_operation("earliestMsgStoreTime"))
     }
 
@@ -110,12 +110,12 @@ pub(crate) trait ProducerBackend {
         _max_num: i32,
         _begin: u64,
         _end: u64,
-    ) -> rocketmq_error::RocketMQResult<QueryResult> {
+    ) -> crate::ClientResult<QueryResult> {
         Err(unsupported_mq_admin_operation("queryMessage"))
     }
 
     /// Views a message by message id.
-    async fn view_message(&mut self, _topic: &str, _msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
+    async fn view_message(&mut self, _topic: &str, _msg_id: &str) -> crate::ClientResult<MessageExt> {
         Err(unsupported_mq_admin_operation("viewMessage"))
     }
 
@@ -131,9 +131,9 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<Option<SendResult>>` - A result containing an optional
+    /// * `crate::ClientResult<Option<SendResult>>` - A result containing an optional
     ///   send result or an error.
-    async fn send<M>(&mut self, msg: M) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    async fn send<M>(&mut self, msg: M) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync;
 
@@ -146,13 +146,9 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<SendResult>` - A result containing the send result or an
+    /// * `crate::ClientResult<SendResult>` - A result containing the send result or an
     ///   error.
-    async fn send_with_timeout<M>(
-        &mut self,
-        msg: M,
-        timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    async fn send_with_timeout<M>(&mut self, msg: M, timeout: u64) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync;
 
@@ -170,11 +166,11 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn send_with_callback<M, F>(&mut self, msg: M, send_callback: F) -> rocketmq_error::RocketMQResult<()>
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
+    async fn send_with_callback<M, F>(&mut self, msg: M, send_callback: F) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static;
 
     /// Sends a message with a callback and a timeout.
     ///
@@ -190,15 +186,15 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_with_callback_timeout<F, M>(
         &mut self,
         msg: M,
         send_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync;
 
     /// Sends a message without waiting for a response.
@@ -213,8 +209,8 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn send_oneway<M>(&mut self, msg: M) -> rocketmq_error::RocketMQResult<()>
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
+    async fn send_oneway<M>(&mut self, msg: M) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync;
 
@@ -231,14 +227,10 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<SendResult>` - A result containing an optional send result
+    /// * `crate::ClientResult<SendResult>` - A result containing an optional send result
     ///   or an error. Returns `Some(SendResult)` for synchronous sends, or `None` when the result
     ///   is delivered asynchronously via a callback.
-    async fn send_to_queue<M>(
-        &mut self,
-        msg: M,
-        mq: MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    async fn send_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync;
 
@@ -256,14 +248,14 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<Option<SendResult>>` - A result containing the send result
+    /// * `crate::ClientResult<Option<SendResult>>` - A result containing the send result
     ///   or an error.
     async fn send_to_queue_with_timeout<M>(
         &mut self,
         msg: M,
         mq: MessageQueue,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync;
 
@@ -282,16 +274,16 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_to_queue_with_callback<M, F>(
         &mut self,
         msg: M,
         mq: MessageQueue,
         send_callback: F,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static;
 
     /// Sends a message to a specific message queue with a callback and a timeout.
     ///
@@ -309,17 +301,17 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_to_queue_with_callback_timeout<M, F>(
         &mut self,
         msg: M,
         mq: MessageQueue,
         send_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static;
 
     /// Sends a message to a specific message queue without waiting for a response.
     ///
@@ -334,8 +326,8 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn send_oneway_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> rocketmq_error::RocketMQResult<()>
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
+    async fn send_oneway_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync;
 
@@ -355,14 +347,14 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<Option<SendResult>>` - A result containing the send result
+    /// * `crate::ClientResult<Option<SendResult>>` - A result containing the send result
     ///   or an error.
     async fn send_with_selector<M, S, T>(
         &mut self,
         msg: M,
         selector: S,
         arg: T,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
@@ -385,7 +377,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<Option<SendResult>>` - A result containing the send result
+    /// * `crate::ClientResult<Option<SendResult>>` - A result containing the send result
     ///   or an error.
     async fn send_with_selector_timeout<M, S, T>(
         &mut self,
@@ -393,7 +385,7 @@ pub(crate) trait ProducerBackend {
         selector: S,
         arg: T,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    ) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
@@ -416,14 +408,14 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_with_selector_callback<M, S, T>(
         &mut self,
         msg: M,
         selector: S,
         arg: T,
         send_callback: Option<ArcSendCallback>,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
@@ -448,7 +440,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_with_selector_callback_timeout<M, S, T>(
         &mut self,
         msg: M,
@@ -456,7 +448,7 @@ pub(crate) trait ProducerBackend {
         arg: T,
         send_callback: Option<ArcSendCallback>,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -479,13 +471,8 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn send_oneway_with_selector<M, S, T>(
-        &mut self,
-        msg: M,
-        selector: S,
-        arg: T,
-    ) -> rocketmq_error::RocketMQResult<()>
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
+    async fn send_oneway_with_selector<M, S, T>(&mut self, msg: M, selector: S, arg: T) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -500,13 +487,13 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<TransactionSendResult>` - A result containing the
+    /// * `crate::ClientResult<TransactionSendResult>` - A result containing the
     ///   transaction send result or an error.
     async fn send_message_in_transaction<T, M>(
         &mut self,
         msg: M,
         arg: Option<T>,
-    ) -> rocketmq_error::RocketMQResult<TransactionSendResult>
+    ) -> crate::ClientResult<TransactionSendResult>
     where
         T: std::any::Any + Sync + Send,
         M: MessageTrait + Send + Sync;
@@ -519,9 +506,9 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<SendResult>` - A result containing the send result or an
+    /// * `crate::ClientResult<SendResult>` - A result containing the send result or an
     ///   error.
-    async fn send_batch<M>(&mut self, msgs: Vec<M>) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send_batch<M>(&mut self, msgs: Vec<M>) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync;
 
@@ -534,13 +521,9 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<SendResult>` - A result containing the send result or an
+    /// * `crate::ClientResult<SendResult>` - A result containing the send result or an
     ///   error.
-    async fn send_batch_with_timeout<M>(
-        &mut self,
-        msgs: Vec<M>,
-        timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send_batch_with_timeout<M>(&mut self, msgs: Vec<M>, timeout: u64) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync;
 
@@ -553,13 +536,9 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<SendResult>` - A result containing the send result or an
+    /// * `crate::ClientResult<SendResult>` - A result containing the send result or an
     ///   error.
-    async fn send_batch_to_queue<M>(
-        &mut self,
-        msgs: Vec<M>,
-        mq: MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send_batch_to_queue<M>(&mut self, msgs: Vec<M>, mq: MessageQueue) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync;
 
@@ -573,14 +552,14 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<SendResult>` - A result containing the send result or an
+    /// * `crate::ClientResult<SendResult>` - A result containing the send result or an
     ///   error.
     async fn send_batch_to_queue_with_timeout<M>(
         &mut self,
         msgs: Vec<M>,
         mq: MessageQueue,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    ) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync;
 
@@ -593,11 +572,11 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn send_batch_with_callback<M, F>(&mut self, msgs: Vec<M>, f: F) -> rocketmq_error::RocketMQResult<()>
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
+    async fn send_batch_with_callback<M, F>(&mut self, msgs: Vec<M>, f: F) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static;
 
     /// Sends a batch of messages with a callback and a timeout.
     ///
@@ -609,16 +588,16 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_batch_with_callback_timeout<M, F>(
         &mut self,
         msgs: Vec<M>,
         f: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static;
 
     /// Sends a batch of messages to a specific message queue with a callback.
     ///
@@ -630,16 +609,16 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_batch_to_queue_with_callback<M, F>(
         &mut self,
         msgs: Vec<M>,
         mq: MessageQueue,
         f: F,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static;
 
     /// Sends a batch of messages to a specific message queue with a callback and a timeout.
     ///
@@ -652,17 +631,17 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_batch_to_queue_with_callback_timeout<M, F>(
         &mut self,
         msgs: Vec<M>,
         mq: MessageQueue,
         f: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
-        F: Fn(Option<&SendResult>, Option<&RocketMQError>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static;
 
     /// Sends a request message.
     ///
@@ -677,13 +656,9 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>` - A result containing the
+    /// * `crate::ClientResult<Box<dyn MessageTrait + Send>>` - A result containing the
     ///   response message or an error.
-    async fn request<M>(
-        &mut self,
-        msg: M,
-        timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    async fn request<M>(&mut self, msg: M, timeout: u64) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync;
 
@@ -702,15 +677,15 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn request_with_callback<F, M>(
         &mut self,
         msg: M,
         request_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
-        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&crate::ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync;
 
     /// Sends a request message with a selector function to choose the message queue.
@@ -730,7 +705,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>` - A result containing the
+    /// * `crate::ClientResult<Box<dyn MessageTrait + Send>>` - A result containing the
     ///   response message or an error.
     async fn request_with_selector<M, S, T>(
         &mut self,
@@ -738,7 +713,7 @@ pub(crate) trait ProducerBackend {
         selector: S,
         arg: T,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
         T: Send + Sync + 'static,
@@ -763,7 +738,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn request_with_selector_callback<M, S, T, F>(
         &mut self,
         msg: M,
@@ -771,10 +746,10 @@ pub(crate) trait ProducerBackend {
         arg: T,
         request_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
-        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&crate::ClientError>) + Send + Sync + 'static,
         T: Send + Sync + 'static,
         M: MessageTrait + Send + Sync;
 
@@ -792,14 +767,14 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>` - A result containing the
+    /// * `crate::ClientResult<Box<dyn MessageTrait + Send>>` - A result containing the
     ///   response message or an error.
     async fn request_to_queue<M>(
         &mut self,
         msg: M,
         mq: MessageQueue,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
+    ) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync;
 
@@ -819,16 +794,16 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn request_to_queue_with_callback<M, F>(
         &mut self,
         msg: M,
         mq: MessageQueue,
         request_callback: F,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
-        F: Fn(Option<&dyn MessageTrait>, Option<&rocketmq_error::RocketMQError>) + Send + Sync + 'static,
+        F: Fn(Option<&dyn MessageTrait>, Option<&crate::ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync;
 
     /// Returns a reference to the object as a trait object of type `Any`.
@@ -859,7 +834,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<String>` - A result containing a string indicating the
+    /// * `crate::ClientResult<String>` - A result containing a string indicating the
     ///   recall result or an error.
     ///
     /// # Errors
@@ -889,5 +864,5 @@ pub(crate) trait ProducerBackend {
         &mut self,
         topic: impl Into<CheetahString>,
         recall_handle: impl Into<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<String>;
+    ) -> crate::ClientResult<String>;
 }

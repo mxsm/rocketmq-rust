@@ -322,10 +322,7 @@ fn typed_dns_discovery_requires_its_opt_in_feature_before_client_start() {
             .start()
             .await
             .expect_err("DNS discovery must reject start when the feature is disabled");
-        assert!(matches!(
-            error,
-            rocketmq_error::RocketMQError::ConfigInvalidValue { .. }
-        ));
+        assert!($1.is(&rocketmq_error::CORE_CONFIGURATION_INVALID));
         assert!(runtime.pool().release(lease.into_parts().1).await);
         let report = runtime.shutdown().await;
         assert!(report.is_healthy(), "{}", report.to_json());

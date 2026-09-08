@@ -55,7 +55,7 @@ use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 /// // Closures automatically implement MessageListenerOrderly
 /// let listener = |msgs: &[&MessageExt],
 ///                 context: &mut ConsumeOrderlyContext|
-///  -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus> {
+///  -> crate::ClientResult<ConsumeOrderlyStatus> {
 ///     for msg in msgs {
 ///         println!("Processing message in order: {:?}", msg.msg_id());
 ///     }
@@ -72,7 +72,7 @@ use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 ///         &self,
 ///         msgs: &[&MessageExt],
 ///         context: &mut ConsumeOrderlyContext,
-///     ) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus> {
+///     ) -> crate::ClientResult<ConsumeOrderlyStatus> {
 ///         // Process messages sequentially
 ///         context.set_auto_commit(false);
 ///         Ok(ConsumeOrderlyStatus::Success)
@@ -106,7 +106,7 @@ pub trait MessageListenerOrderly: Send + Sync {
         &self,
         msgs: &[&MessageExt],
         context: &mut ConsumeOrderlyContext,
-    ) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>;
+    ) -> crate::ClientResult<ConsumeOrderlyStatus>;
 }
 
 /// Implement MessageListenerOrderly for all compatible closures and functions.
@@ -120,15 +120,13 @@ pub trait MessageListenerOrderly: Send + Sync {
 /// definition. This allows the closure to modify context state (auto-commit, suspension).
 impl<F> MessageListenerOrderly for F
 where
-    F: Fn(&[&MessageExt], &mut ConsumeOrderlyContext) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>
-        + Send
-        + Sync,
+    F: Fn(&[&MessageExt], &mut ConsumeOrderlyContext) -> crate::ClientResult<ConsumeOrderlyStatus> + Send + Sync,
 {
     fn consume_message(
         &self,
         msgs: &[&MessageExt],
         context: &mut ConsumeOrderlyContext,
-    ) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus> {
+    ) -> crate::ClientResult<ConsumeOrderlyStatus> {
         self(msgs, context)
     }
 }

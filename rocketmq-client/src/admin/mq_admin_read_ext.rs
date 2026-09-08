@@ -148,26 +148,23 @@ pub struct MessageMetadataRead {
 
 #[allow(async_fn_in_trait)]
 pub trait MQAdminReadExt: Send {
-    async fn start(&mut self) -> rocketmq_error::RocketMQResult<()>;
+    async fn start(&mut self) -> crate::ClientResult<()>;
 
     async fn shutdown(&mut self);
 
-    async fn fetch_all_topic_list(&self) -> rocketmq_error::RocketMQResult<TopicList>;
+    async fn fetch_all_topic_list(&self) -> crate::ClientResult<TopicList>;
 
-    async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<KVTable>;
+    async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> crate::ClientResult<KVTable>;
 
     /// Reads only the fixed non-sensitive Broker fields evaluated by the SRE
     /// generation-CAS action.
     async fn get_broker_config_allowlisted(
         &self,
         broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<BrokerConfigAllowlisted>;
+    ) -> crate::ClientResult<BrokerConfigAllowlisted>;
 
     /// Returns the authenticated, bounded drain state for one Proxy endpoint.
-    async fn proxy_drain_state(
-        &self,
-        proxy_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ProxyDrainStateResponseBody>;
+    async fn proxy_drain_state(&self, proxy_addr: CheetahString) -> crate::ClientResult<ProxyDrainStateResponseBody>;
 
     async fn examine_consume_stats(
         &self,
@@ -176,7 +173,7 @@ pub trait MQAdminReadExt: Send {
         cluster_name: Option<CheetahString>,
         broker_addr: Option<CheetahString>,
         timeout_millis: Option<u64>,
-    ) -> rocketmq_error::RocketMQResult<ConsumeStats>;
+    ) -> crate::ClientResult<ConsumeStats>;
 
     /// Reads consumer statistics without discarding an individual Broker
     /// failure. Broker addresses and backend error strings never enter the
@@ -187,7 +184,7 @@ pub trait MQAdminReadExt: Send {
         topic: Option<CheetahString>,
         broker_addr: Option<CheetahString>,
         timeout_millis: Option<u64>,
-    ) -> rocketmq_error::RocketMQResult<ConsumeStatsReadResult> {
+    ) -> crate::ClientResult<ConsumeStatsReadResult> {
         let stats = self
             .examine_consume_stats(consumer_group, topic, None, broker_addr, timeout_millis)
             .await?;
@@ -199,19 +196,16 @@ pub trait MQAdminReadExt: Send {
         })
     }
 
-    async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo>;
+    async fn examine_broker_cluster_info(&self) -> crate::ClientResult<ClusterInfo>;
 
-    async fn examine_topic_route_info(
-        &self,
-        topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>>;
+    async fn examine_topic_route_info(&self, topic: CheetahString) -> crate::ClientResult<Option<TopicRouteData>>;
 
     /// Reads one Broker's Topic configuration and metadata version atomically.
     async fn topic_config_with_version(
         &self,
         broker_addr: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicConfigVersioned>;
+    ) -> crate::ClientResult<TopicConfigVersioned>;
 
     /// Reads one Broker's Subscription Group configuration and metadata
     /// version atomically.
@@ -219,13 +213,13 @@ pub trait MQAdminReadExt: Send {
         &self,
         broker_addr: CheetahString,
         group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfigVersioned>;
+    ) -> crate::ClientResult<SubscriptionGroupConfigVersioned>;
 
     async fn examine_consumer_connection_info(
         &self,
         consumer_group: CheetahString,
         broker_addr: Option<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<ConsumerConnection>;
+    ) -> crate::ClientResult<ConsumerConnection>;
 
     /// Reads one exact target without converting an authoritative empty
     /// connection set into a synthetic error or offline inference.
@@ -233,13 +227,13 @@ pub trait MQAdminReadExt: Send {
         &self,
         consumer_group: CheetahString,
         broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ConsumerConnection>;
+    ) -> crate::ClientResult<ConsumerConnection>;
 
     async fn examine_producer_connection_info(
         &self,
         producer_group: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ProducerConnection>;
+    ) -> crate::ClientResult<ProducerConnection>;
 
     /// Reads producer connections without converting an authoritative empty
     /// set into a fabricated status or an unavailable observation.
@@ -247,7 +241,7 @@ pub trait MQAdminReadExt: Send {
         &self,
         producer_group: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ProducerConnection>;
+    ) -> crate::ClientResult<ProducerConnection>;
 
     /// Reads producer connections from one exact broker address. An empty
     /// connection set is authoritative and is returned unchanged.
@@ -255,14 +249,11 @@ pub trait MQAdminReadExt: Send {
         &self,
         producer_group: CheetahString,
         broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ProducerConnection>;
+    ) -> crate::ClientResult<ProducerConnection>;
 
-    async fn get_all_producer_info(
-        &self,
-        broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ProducerTableInfo>;
+    async fn get_all_producer_info(&self, broker_addr: CheetahString) -> crate::ClientResult<ProducerTableInfo>;
 
-    async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList>;
+    async fn query_topic_consume_by_who(&self, topic: CheetahString) -> crate::ClientResult<GroupList>;
 }
 
 /// Additive read-only capability for a NameServer Topic inventory.
@@ -273,7 +264,7 @@ pub trait MQAdminReadExt: Send {
 pub trait MQAdminTopicInventoryReadExt: Send {
     /// Fetches one cluster inventory when `cluster` is present, or the global
     /// NameServer inventory otherwise.
-    async fn fetch_topic_inventory(&self, cluster: Option<CheetahString>) -> rocketmq_error::RocketMQResult<TopicList>;
+    async fn fetch_topic_inventory(&self, cluster: Option<CheetahString>) -> crate::ClientResult<TopicList>;
 }
 
 /// Additive read-only capability for fixed, body-free message metadata.
@@ -285,23 +276,23 @@ pub trait MQAdminMessageReadExt: Send {
         &self,
         topic: CheetahString,
         message_id: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<MessageMetadataRead>;
+    ) -> crate::ClientResult<MessageMetadataRead>;
 
     /// Looks up one offset message identifier and derives the authoritative
     /// Topic from the returned message.
     async fn query_message_metadata_by_id(
         &self,
         _message_id: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<MessageMetadataRead> {
-        Err(rocketmq_error::RocketMQError::ResponseProcessFailed {
-            operation: "query_message_metadata_by_id",
-            reason: "Topic-free message metadata lookup is not implemented by this adapter".to_owned(),
-        })
+    ) -> crate::ClientResult<MessageMetadataRead> {
+        Err(crate::ClientError::response_process_failed(
+            "query_message_metadata_by_id",
+            "Topic-free message metadata lookup is not implemented by this adapter".to_owned(),
+        ))
     }
 }
 
 impl MQAdminReadExt for DefaultMQAdminExt {
-    async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
+    async fn start(&mut self) -> crate::ClientResult<()> {
         self.inner_mut().start_admin().await
     }
 
@@ -309,14 +300,14 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         self.inner_mut().shutdown_admin().await;
     }
 
-    async fn fetch_all_topic_list(&self) -> rocketmq_error::RocketMQResult<TopicList> {
+    async fn fetch_all_topic_list(&self) -> crate::ClientResult<TopicList> {
         self.inner()
             .mq_client_api()?
             .get_all_topic_list_from_name_server(self.inner().remoting_timeout_millis()?)
             .await
     }
 
-    async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
+    async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> crate::ClientResult<KVTable> {
         self.inner()
             .mq_client_api()?
             .get_broker_runtime_info(&broker_addr, self.inner().remoting_timeout_millis()?)
@@ -326,17 +317,17 @@ impl MQAdminReadExt for DefaultMQAdminExt {
     async fn get_broker_config_allowlisted(
         &self,
         broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<BrokerConfigAllowlisted> {
+    ) -> crate::ClientResult<BrokerConfigAllowlisted> {
         let snapshot = self
             .inner()
             .mq_client_api()?
             .get_broker_config_snapshot(&broker_addr, self.inner().remoting_timeout_millis()?)
             .await?;
         let generation = snapshot.generation.filter(|value| *value > 0).ok_or_else(|| {
-            rocketmq_error::RocketMQError::ResponseProcessFailed {
-                operation: "get_broker_config_allowlisted",
-                reason: "Broker config response does not include a positive config generation".to_owned(),
-            }
+            crate::ClientError::response_process_failed(
+                "get_broker_config_allowlisted",
+                "Broker config response does not include a positive config generation".to_owned(),
+            )
         })?;
         let properties = snapshot.properties;
         Ok(BrokerConfigAllowlisted {
@@ -348,10 +339,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         })
     }
 
-    async fn proxy_drain_state(
-        &self,
-        proxy_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ProxyDrainStateResponseBody> {
+    async fn proxy_drain_state(&self, proxy_addr: CheetahString) -> crate::ClientResult<ProxyDrainStateResponseBody> {
         self.inner()
             .mq_client_api()?
             .get_proxy_drain_state(&proxy_addr, self.inner().remoting_timeout_millis()?)
@@ -365,7 +353,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         _cluster_name: Option<CheetahString>,
         broker_addr: Option<CheetahString>,
         timeout_millis: Option<u64>,
-    ) -> rocketmq_error::RocketMQResult<ConsumeStats> {
+    ) -> crate::ClientResult<ConsumeStats> {
         let timeout = timeout_millis.unwrap_or(self.inner().remoting_timeout_millis()?);
         let topic = topic.unwrap_or_default();
         if let Some(broker_addr) = broker_addr {
@@ -423,7 +411,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         topic: Option<CheetahString>,
         broker_addr: Option<CheetahString>,
         timeout_millis: Option<u64>,
-    ) -> rocketmq_error::RocketMQResult<ConsumeStatsReadResult> {
+    ) -> crate::ClientResult<ConsumeStatsReadResult> {
         let timeout = timeout_millis.unwrap_or(self.inner().remoting_timeout_millis()?);
         let topic = topic.unwrap_or_default();
         let targets = match broker_addr {
@@ -484,17 +472,14 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         Ok(result)
     }
 
-    async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo> {
+    async fn examine_broker_cluster_info(&self) -> crate::ClientResult<ClusterInfo> {
         self.inner()
             .mq_client_api()?
             .get_broker_cluster_info(self.inner().remoting_timeout_millis()?)
             .await
     }
 
-    async fn examine_topic_route_info(
-        &self,
-        topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
+    async fn examine_topic_route_info(&self, topic: CheetahString) -> crate::ClientResult<Option<TopicRouteData>> {
         self.inner()
             .mq_client_api()?
             .get_topic_route_info_from_name_server(&topic, self.inner().remoting_timeout_millis()?)
@@ -505,7 +490,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicConfigVersioned> {
+    ) -> crate::ClientResult<TopicConfigVersioned> {
         self.inner()
             .mq_client_api()?
             .get_topic_config_with_version(&broker_addr, topic, self.inner().remoting_timeout_millis()?)
@@ -516,7 +501,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         &self,
         broker_addr: CheetahString,
         group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfigVersioned> {
+    ) -> crate::ClientResult<SubscriptionGroupConfigVersioned> {
         self.inner()
             .mq_client_api()?
             .get_subscription_group_config_with_version(&broker_addr, group, self.inner().remoting_timeout_millis()?)
@@ -527,7 +512,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         &self,
         consumer_group: CheetahString,
         broker_addr: Option<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<ConsumerConnection> {
+    ) -> crate::ClientResult<ConsumerConnection> {
         let timeout = self.inner().remoting_timeout_millis()?;
         let selected_addr = match broker_addr {
             Some(broker_addr) => Some(broker_addr),
@@ -566,7 +551,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         &self,
         consumer_group: CheetahString,
         broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ConsumerConnection> {
+    ) -> crate::ClientResult<ConsumerConnection> {
         self.inner()
             .mq_client_api()?
             .get_consumer_connection_list(
@@ -581,7 +566,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         &self,
         producer_group: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
+    ) -> crate::ClientResult<ProducerConnection> {
         let timeout = self.inner().remoting_timeout_millis()?;
         let route = self
             .inner()
@@ -611,7 +596,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         &self,
         producer_group: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
+    ) -> crate::ClientResult<ProducerConnection> {
         let timeout = self.inner().remoting_timeout_millis()?;
         let route = self
             .inner()
@@ -636,7 +621,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         &self,
         producer_group: CheetahString,
         broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
+    ) -> crate::ClientResult<ProducerConnection> {
         self.inner()
             .mq_client_api()?
             .get_producer_connection_list(
@@ -647,17 +632,14 @@ impl MQAdminReadExt for DefaultMQAdminExt {
             .await
     }
 
-    async fn get_all_producer_info(
-        &self,
-        broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ProducerTableInfo> {
+    async fn get_all_producer_info(&self, broker_addr: CheetahString) -> crate::ClientResult<ProducerTableInfo> {
         self.inner()
             .mq_client_api()?
             .get_all_producer_info(broker_addr.as_str(), self.inner().remoting_timeout_millis()?)
             .await
     }
 
-    async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList> {
+    async fn query_topic_consume_by_who(&self, topic: CheetahString) -> crate::ClientResult<GroupList> {
         let timeout = self.inner().remoting_timeout_millis()?;
         let route = self
             .inner()
@@ -687,7 +669,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
 }
 
 impl MQAdminTopicInventoryReadExt for DefaultMQAdminExt {
-    async fn fetch_topic_inventory(&self, cluster: Option<CheetahString>) -> rocketmq_error::RocketMQResult<TopicList> {
+    async fn fetch_topic_inventory(&self, cluster: Option<CheetahString>) -> crate::ClientResult<TopicList> {
         let client_api = self.inner().mq_client_api()?;
         let timeout_millis = self.inner().remoting_timeout_millis()?;
         fetch_topic_inventory_from(
@@ -704,7 +686,7 @@ impl MQAdminMessageReadExt for DefaultMQAdminExt {
         &self,
         topic: CheetahString,
         message_id: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<MessageMetadataRead> {
+    ) -> crate::ClientResult<MessageMetadataRead> {
         let (broker_addr, header) = message_lookup_target(message_id.as_str(), Some(topic.clone()))?;
         let message = self
             .inner()
@@ -734,7 +716,7 @@ impl MQAdminMessageReadExt for DefaultMQAdminExt {
     async fn query_message_metadata_by_id(
         &self,
         message_id: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<MessageMetadataRead> {
+    ) -> crate::ClientResult<MessageMetadataRead> {
         let (broker_addr, header) = message_lookup_target(message_id.as_str(), None)?;
         let message = self
             .inner()
@@ -749,12 +731,10 @@ impl MQAdminMessageReadExt for DefaultMQAdminExt {
 fn message_lookup_target(
     message_id: &str,
     topic: Option<CheetahString>,
-) -> rocketmq_error::RocketMQResult<(CheetahString, ViewMessageRequestHeader)> {
+) -> crate::ClientResult<(CheetahString, ViewMessageRequestHeader)> {
     MessageDecoder::validate_message_id(message_id)
-        .map_err(|error| rocketmq_error::RocketMQError::IllegalArgument(format!("Invalid message ID: {error}")))?;
-    let decoded = MessageDecoder::decode_message_id(message_id).map_err(|error| {
-        rocketmq_error::RocketMQError::IllegalArgument(format!("Failed to decode message ID: {error}"))
-    })?;
+        .map_err(|error| crate::ClientError::illegal_argument(format!("Invalid message ID: {error}")))?;
+    let decoded = MessageDecoder::decode_message_id(message_id).map_err(crate::ClientError::illegal_argument)?;
     Ok((
         CheetahString::from_string(decoded.address.to_string()),
         ViewMessageRequestHeader {
@@ -785,12 +765,12 @@ async fn fetch_topic_inventory_from<ClusterFetch, ClusterFuture, GlobalFetch, Gl
     cluster: Option<CheetahString>,
     fetch_cluster: ClusterFetch,
     fetch_global: GlobalFetch,
-) -> rocketmq_error::RocketMQResult<TopicList>
+) -> crate::ClientResult<TopicList>
 where
     ClusterFetch: FnOnce(CheetahString) -> ClusterFuture,
-    ClusterFuture: Future<Output = rocketmq_error::RocketMQResult<TopicList>>,
+    ClusterFuture: Future<Output = crate::ClientResult<TopicList>>,
     GlobalFetch: FnOnce() -> GlobalFuture,
-    GlobalFuture: Future<Output = rocketmq_error::RocketMQResult<TopicList>>,
+    GlobalFuture: Future<Output = crate::ClientResult<TopicList>>,
 {
     match cluster {
         Some(cluster) => fetch_cluster(cluster).await,
@@ -801,7 +781,7 @@ where
 fn parse_allowlisted_value<T>(
     properties: &std::collections::HashMap<CheetahString, CheetahString>,
     key: &str,
-) -> rocketmq_error::RocketMQResult<Option<T>>
+) -> crate::ClientResult<Option<T>>
 where
     T: std::str::FromStr,
 {
@@ -810,9 +790,7 @@ where
         .find_map(|(name, value)| (name.as_str() == key).then_some(value.as_str()))
         .map(|value| {
             value.parse().map_err(|_| {
-                rocketmq_error::RocketMQError::IllegalArgument(format!(
-                    "Broker allowlisted configuration `{key}` is malformed"
-                ))
+                crate::ClientError::illegal_argument(format!("Broker allowlisted configuration `{key}` is malformed"))
             })
         })
         .transpose()
@@ -846,9 +824,9 @@ fn consume_stats_read_targets(brokers: Vec<BrokerData>) -> Vec<ConsumeStatsReadT
         .collect()
 }
 
-fn broker_read_failure(broker_name: String, error: &rocketmq_error::RocketMQError) -> BrokerReadFailure {
-    let view = error.boundary_view();
-    let status = view.http().status.as_u16();
+fn broker_read_failure(broker_name: String, error: &crate::ClientError) -> BrokerReadFailure {
+    let descriptor = error.descriptor();
+    let status = descriptor.projection().http().status.as_u16();
     let code = match status {
         401 | 403 => ReadFailureCode::PermissionDenied,
         404 => ReadFailureCode::NotFound,
@@ -857,7 +835,14 @@ fn broker_read_failure(broker_name: String, error: &rocketmq_error::RocketMQErro
         400 | 413 | 422 => ReadFailureCode::InvalidResponse,
         _ => ReadFailureCode::SourceUnavailable,
     };
-    BrokerReadFailure::new(broker_name, code, view.is_retryable())
+    let retryable = matches!(
+        descriptor.recovery_hint(),
+        rocketmq_error::RecoveryHint::Backoff
+            | rocketmq_error::RecoveryHint::RefreshRoute
+            | rocketmq_error::RecoveryHint::RefreshLeader
+            | rocketmq_error::RecoveryHint::SwitchBroker
+    );
+    BrokerReadFailure::new(broker_name, code, retryable)
 }
 
 fn sanitize_broker_logical_target(target: &str) -> String {

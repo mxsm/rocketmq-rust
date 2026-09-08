@@ -27,6 +27,8 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use parking_lot::Mutex;
+use rocketmq_client::ClientError;
+use rocketmq_client::ClientResult;
 use rocketmq_client_rust::AclClientRPCHook;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::DefaultLitePullConsumer;
@@ -34,8 +36,6 @@ use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_client_rust::SendResult;
 use rocketmq_client_rust::SendStatus;
 use rocketmq_client_rust::SessionCredentials;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
@@ -51,13 +51,13 @@ enum Scenario {
 }
 
 impl Scenario {
-    fn parse(value: &str) -> RocketMQResult<Self> {
+    fn parse(value: &str) -> ClientResult<Self> {
         match value.to_ascii_lowercase().as_str() {
             "sync" | "producersync" => Ok(Self::Sync),
             "async" | "producerasync" => Ok(Self::Async),
             "batch" | "producerbatch" => Ok(Self::Batch),
             "lite-pull" | "litepull" | "litepullbenchmark" => Ok(Self::LitePull),
-            other => Err(RocketMQError::illegal_argument(format!(
+            other => Err(ClientError::illegal_argument(format!(
                 "unknown scenario '{other}', expected sync, async, batch, or lite-pull"
             ))),
         }
@@ -177,7 +177,7 @@ struct BenchmarkReport<'a> {
 }
 
 #[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+pub async fn main() -> ClientResult<()> {
     let example_runtime = support::ExampleClientRuntime::try_new("client-production-benchmark")?;
     let client_runtime = example_runtime.client_runtime();
     let config = Config::parse()?;
@@ -223,7 +223,7 @@ pub async fn main() -> RocketMQResult<()> {
     Ok(())
 }
 
-fn build_producer(client_runtime: Arc<ClientRuntime>, config: &Config) -> RocketMQResult<DefaultMQProducer> {
+fn build_producer(client_runtime: Arc<ClientRuntime>, config: &Config) -> ClientResult<DefaultMQProducer> {
     let mut builder = DefaultMQProducer::builder(client_runtime.clone())
         .producer_group(config.producer_group.clone())
         .name_server_addr(config.namesrv_addr.clone())
@@ -246,7 +246,7 @@ fn build_producer(client_runtime: Arc<ClientRuntime>, config: &Config) -> Rocket
 fn build_lite_pull_consumer(
     client_runtime: Arc<ClientRuntime>,
     config: &Config,
-) -> RocketMQResult<DefaultLitePullConsumer> {
+) -> ClientResult<DefaultLitePullConsumer> {
     let broker_suspend_ms = lite_pull_broker_suspend_ms(config.timeout_ms);
     let pull_timeout_ms = broker_suspend_ms.saturating_add(1_000);
     let mut builder = DefaultLitePullConsumer::builder(client_runtime.clone())
@@ -278,7 +278,7 @@ fn lite_pull_broker_suspend_ms(operation_timeout_ms: u64) -> u64 {
     operation_timeout_ms.clamp(100, 1_000)
 }
 
-async fn run_sync(producer: &mut DefaultMQProducer, config: &Config, body: &[u8]) -> RocketMQResult<Stats> {
+async fn run_sync(producer: &mut DefaultMQProducer, config: &Config, body: &[u8]) -> ClientResult<Stats> {
     let mut stats = Stats::default();
     for _ in 0..config.message_count {
         let begin = Instant::now();
@@ -304,7 +304,7 @@ async fn run_sync(producer: &mut DefaultMQProducer, config: &Config, body: &[u8]
     Ok(stats)
 }
 
-async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8]) -> RocketMQResult<Stats> {
+async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8]) -> ClientResult<Stats> {
     let success_count = Arc::new(AtomicUsize::new(0));
     let send_failed_count = Arc::new(AtomicUsize::new(0));
     let response_failed_count = Arc::new(AtomicUsize::new(0));
@@ -322,7 +322,7 @@ async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8
         if let Err(error) = producer
             .send_with_callback_timeout(
                 message(&config.topic, "RustAsyncBenchmark", body),
-                move |result: Option<&SendResult>, error: Option<&RocketMQError>| {
+                move |result: Option<&SendResult>, error: Option<&ClientError>| {
                     if completed_inner.swap(true, Ordering::AcqRel) {
                         return;
                     }
@@ -378,7 +378,7 @@ async fn run_async(producer: &mut DefaultMQProducer, config: &Config, body: &[u8
     })
 }
 
-async fn run_batch(producer: &mut DefaultMQProducer, config: &Config, body: &[u8]) -> RocketMQResult<Stats> {
+async fn run_batch(producer: &mut DefaultMQProducer, config: &Config, body: &[u8]) -> ClientResult<Stats> {
     let mut stats = Stats::default();
     let mut remaining = config.message_count;
     while remaining > 0 {
@@ -417,7 +417,7 @@ async fn run_lite_pull(
     client_runtime: Arc<ClientRuntime>,
     config: &Config,
     body: &[u8],
-) -> RocketMQResult<(Stats, Duration)> {
+) -> ClientResult<(Stats, Duration)> {
     let tag = format!("RustLitePullBenchmark-{}", config.run_id);
 
     let mut producer = build_producer(client_runtime.clone(), config)?;
@@ -451,7 +451,7 @@ async fn seed_lite_pull_messages(
     body: &[u8],
     tag: &str,
     queue: &MessageQueue,
-) -> RocketMQResult<()> {
+) -> ClientResult<()> {
     for _ in 0..config.message_count {
         match producer
             .send_to_queue_with_timeout(message(&config.topic, tag, body), queue.clone(), config.timeout_ms)
@@ -459,13 +459,13 @@ async fn seed_lite_pull_messages(
         {
             Some(send_result) if send_result.send_status == SendStatus::SendOk => {}
             Some(send_result) => {
-                return Err(RocketMQError::illegal_argument(format!(
+                return Err(ClientError::illegal_argument(format!(
                     "LitePull seed send status was {:?}",
                     send_result.send_status
                 )));
             }
             None => {
-                return Err(RocketMQError::illegal_argument(
+                return Err(ClientError::illegal_argument(
                     "LitePull seed send returned no SendResult",
                 ))
             }
@@ -517,11 +517,11 @@ fn message(topic: &str, tag: &str, body: &[u8]) -> Message {
         .build_unchecked()
 }
 
-fn first_queue(queues: Vec<MessageQueue>) -> RocketMQResult<MessageQueue> {
+fn first_queue(queues: Vec<MessageQueue>) -> ClientResult<MessageQueue> {
     queues
         .into_iter()
         .min()
-        .ok_or_else(|| RocketMQError::illegal_argument("LitePull benchmark found no message queues for topic"))
+        .ok_or_else(|| ClientError::illegal_argument("LitePull benchmark found no message queues for topic"))
 }
 
 fn message_matches_tag(message_ext: &MessageExt, expected_tag: &str) -> bool {
@@ -572,15 +572,15 @@ fn print_complete_summary(stats: &Stats, elapsed: Duration, operation: Operation
     );
 }
 
-fn write_json_report(path: &PathBuf, config: &Config, stats: &Stats, elapsed: Duration) -> RocketMQResult<()> {
+fn write_json_report(path: &PathBuf, config: &Config, stats: &Stats, elapsed: Duration) -> ClientResult<()> {
     if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
-            .map_err(|error| RocketMQError::internal("create benchmark report directory", error))?;
+            .map_err(|error| ClientError::internal("create benchmark report directory", error))?;
     }
     let report = benchmark_report(config, stats, elapsed);
     let body = serde_json::to_vec_pretty(&report)
-        .map_err(|error| RocketMQError::internal("serialize benchmark report", error))?;
-    std::fs::write(path, body).map_err(|error| RocketMQError::internal("write benchmark report", error))
+        .map_err(|error| ClientError::internal("serialize benchmark report", error))?;
+    std::fs::write(path, body).map_err(|error| ClientError::internal("write benchmark report", error))
 }
 
 fn benchmark_report<'a>(config: &'a Config, stats: &Stats, elapsed: Duration) -> BenchmarkReport<'a> {
@@ -669,7 +669,7 @@ fn elapsed_us_u64(elapsed: Duration) -> u64 {
 }
 
 impl Config {
-    fn parse() -> RocketMQResult<Self> {
+    fn parse() -> ClientResult<Self> {
         let mut config = Self {
             namesrv_addr: env_or("ROCKETMQ_NAMESRV_ADDR", "127.0.0.1:9876"),
             topic: env_or("ROCKETMQ_TEST_TOPIC", "TopicTest"),
@@ -711,10 +711,10 @@ impl Config {
                 "--tls" => config.use_tls = true,
                 "--acl" => {
                     let access_key = config.access_key.take().ok_or_else(|| {
-                        RocketMQError::illegal_argument("--acl requires --access-key or ROCKETMQ_ACL_ACCESS_KEY")
+                        ClientError::illegal_argument("--acl requires --access-key or ROCKETMQ_ACL_ACCESS_KEY")
                     })?;
                     let secret_key = config.secret_key.take().ok_or_else(|| {
-                        RocketMQError::illegal_argument("--acl requires --secret-key or ROCKETMQ_ACL_SECRET_KEY")
+                        ClientError::illegal_argument("--acl requires --secret-key or ROCKETMQ_ACL_SECRET_KEY")
                     })?;
                     config.access_key = Some(access_key);
                     config.secret_key = Some(secret_key);
@@ -726,28 +726,28 @@ impl Config {
                     config.output_json = Some(PathBuf::from(next_arg(&mut args, "--output-json")?));
                 }
                 "--run-id" => config.run_id = next_arg(&mut args, "--run-id")?,
-                other => return Err(RocketMQError::illegal_argument(format!("unknown argument: {other}"))),
+                other => return Err(ClientError::illegal_argument(format!("unknown argument: {other}"))),
             }
         }
 
         if config.namesrv_addr.trim().is_empty() {
-            return Err(RocketMQError::illegal_argument("--namesrv must not be blank"));
+            return Err(ClientError::illegal_argument("--namesrv must not be blank"));
         }
         if config.topic.trim().is_empty() {
-            return Err(RocketMQError::illegal_argument("--topic must not be blank"));
+            return Err(ClientError::illegal_argument("--topic must not be blank"));
         }
         if config.run_id.trim().is_empty() {
-            return Err(RocketMQError::illegal_argument("--run-id must not be blank"));
+            return Err(ClientError::illegal_argument("--run-id must not be blank"));
         }
         if config
             .output_json
             .as_ref()
             .is_some_and(|path| path.as_os_str().is_empty())
         {
-            return Err(RocketMQError::illegal_argument("--output-json must not be blank"));
+            return Err(ClientError::illegal_argument("--output-json must not be blank"));
         }
         if config.access_key.is_some() != config.secret_key.is_some() {
-            return Err(RocketMQError::illegal_argument(
+            return Err(ClientError::illegal_argument(
                 "ACL benchmark requires both access key and secret key",
             ));
         }
@@ -756,26 +756,26 @@ impl Config {
     }
 }
 
-fn next_arg(args: &mut impl Iterator<Item = String>, option: &str) -> RocketMQResult<String> {
+fn next_arg(args: &mut impl Iterator<Item = String>, option: &str) -> ClientResult<String> {
     args.next()
         .filter(|value| !value.starts_with("--"))
-        .ok_or_else(|| RocketMQError::illegal_argument(format!("{option} requires a value")))
+        .ok_or_else(|| ClientError::illegal_argument(format!("{option} requires a value")))
 }
 
-fn parse_positive_usize(value: String, option: &str) -> RocketMQResult<usize> {
+fn parse_positive_usize(value: String, option: &str) -> ClientResult<usize> {
     value
         .parse::<usize>()
         .ok()
         .filter(|parsed| *parsed > 0)
-        .ok_or_else(|| RocketMQError::illegal_argument(format!("{option} must be a positive integer")))
+        .ok_or_else(|| ClientError::illegal_argument(format!("{option} must be a positive integer")))
 }
 
-fn parse_positive_u64(value: String, option: &str) -> RocketMQResult<u64> {
+fn parse_positive_u64(value: String, option: &str) -> ClientResult<u64> {
     value
         .parse::<u64>()
         .ok()
         .filter(|parsed| *parsed > 0)
-        .ok_or_else(|| RocketMQError::illegal_argument(format!("{option} must be a positive integer")))
+        .ok_or_else(|| ClientError::illegal_argument(format!("{option} must be a positive integer")))
 }
 
 fn env_or(name: &str, default_value: &str) -> String {

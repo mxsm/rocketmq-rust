@@ -17,8 +17,8 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+use rocketmq_client::ClientResult;
 use rocketmq_client_rust::DefaultMQProducer;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_single::Message;
 
 pub const MESSAGE_COUNT: usize = 1;
@@ -27,7 +27,7 @@ pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "TopicTest";
 
 #[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+pub async fn main() -> ClientResult<()> {
     let example_runtime = support::ExampleClientRuntime::try_new("ordermessage-producer")?;
     let client_runtime = example_runtime.client_runtime();
     // create a producer builder with default configuration

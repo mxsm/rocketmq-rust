@@ -29,11 +29,11 @@ use crate::common::retry_policy::RetryPolicy;
 use crate::factory::mq_client_instance;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
+use crate::ClientError;
 use cheetah_string::CheetahString;
 use rocketmq_error::fields;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::constant::PermName;
@@ -57,21 +57,21 @@ use rocketmq_transport::api::RequestDeadline;
 
 const CREATE_TOPIC_ATTEMPTS: u32 = 5;
 
-fn create_topic_retry_error(input: RetryInput) -> RocketMQError {
+fn create_topic_retry_error(input: RetryInput) -> ClientError {
     match input {
-        RetryInput::Transport(error) => RocketMQError::Shared(error.into_shared_error()),
+        RetryInput::Transport(error) => ClientError::from_shared(error.into_shared_error()),
         RetryInput::Rejected(rejection) => match rejection.reason() {
             OutboundRequestRejectionReason::DeadlineExpired => {
                 let mut context = ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, "create_topic");
                 if let Some(timeout_millis) = rejection.timeout_millis() {
                     context = context.with_u64(fields::TIMEOUT_MS, timeout_millis);
                 }
-                RocketMQError::Shared(Arc::new(
+                ClientError::from_shared(Arc::new(
                     Error::new(&rocketmq_error::CORE_OPERATION_TIMED_OUT).with_context(context),
                 ))
             }
-            OutboundRequestRejectionReason::ClientStopping => RocketMQError::ClientNotStarted,
-            OutboundRequestRejectionReason::QueueSaturated => RocketMQError::Shared(Arc::new(Error::new(
+            OutboundRequestRejectionReason::ClientStopping => ClientError::not_started(),
+            OutboundRequestRejectionReason::QueueSaturated => ClientError::from_shared(Arc::new(Error::new(
                 &rocketmq_error::TRANSPORT_ADMISSION_QUEUE_SATURATED,
             ))),
             OutboundRequestRejectionReason::Cancelled
@@ -85,14 +85,14 @@ fn create_topic_retry_error(input: RetryInput) -> RocketMQError {
                 if rejection.remote_addr_present() {
                     context = context.with_secret_presence(fields::REMOTE_ADDR_PRESENT);
                 }
-                RocketMQError::Shared(Arc::new(
+                ClientError::from_shared(Arc::new(
                     Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED).with_context(context),
                 ))
             }
         },
         RetryInput::Contract(contract) => match contract.reason() {
             OutboundRequestContractReason::NameServerEndpointMissing => {
-                RocketMQError::Shared(Arc::new(Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED)))
+                ClientError::from_shared(Arc::new(Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED)))
             }
         },
         RetryInput::Response { terminal_error, .. } | RetryInput::BusinessError(terminal_error) => terminal_error,
@@ -129,11 +129,11 @@ impl MQAdminImpl {
         self.client.set(Arc::downgrade(client)).is_ok()
     }
 
-    fn client(&self) -> rocketmq_error::RocketMQResult<Arc<MQClientInstance>> {
+    fn client(&self) -> crate::ClientResult<Arc<MQClientInstance>> {
         self.client
             .get()
             .and_then(Weak::upgrade)
-            .ok_or_else(|| RocketMQError::not_initialized("MQClientInstance"))
+            .ok_or_else(|| ClientError::not_initialized("MQClientInstance"))
     }
 
     fn encode_topic_attributes(attributes: HashMap<String, String>) -> Option<CheetahString> {
@@ -189,11 +189,11 @@ impl MQAdminImpl {
         begin: u64,
         end: u64,
         unique_key_flag: bool,
-    ) -> rocketmq_error::RocketMQResult<QueryMessageRequestHeader> {
+    ) -> crate::ClientResult<QueryMessageRequestHeader> {
         let begin_timestamp = i64::try_from(begin)
-            .map_err(|_| RocketMQError::illegal_argument("queryMessage begin timestamp exceeds Java long range"))?;
+            .map_err(|_| ClientError::illegal_argument("queryMessage begin timestamp exceeds Java long range"))?;
         let end_timestamp = i64::try_from(end)
-            .map_err(|_| RocketMQError::illegal_argument("queryMessage end timestamp exceeds Java long range"))?;
+            .map_err(|_| ClientError::illegal_argument("queryMessage end timestamp exceeds Java long range"))?;
         let index_type = if unique_key_flag {
             MessageConst::INDEX_UNIQUE_TYPE
         } else {
@@ -212,18 +212,14 @@ impl MQAdminImpl {
         })
     }
 
-    fn timestamp_to_java_long(operation: &'static str, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+    fn timestamp_to_java_long(operation: &'static str, timestamp: u64) -> crate::ClientResult<i64> {
         i64::try_from(timestamp)
-            .map_err(|_| RocketMQError::illegal_argument(format!("{operation} timestamp exceeds Java long range")))
+            .map_err(|_| ClientError::illegal_argument(format!("{operation} timestamp exceeds Java long range")))
     }
 
-    fn java_long_to_u64(
-        operation: &'static str,
-        field: &'static str,
-        value: i64,
-    ) -> rocketmq_error::RocketMQResult<u64> {
+    fn java_long_to_u64(operation: &'static str, field: &'static str, value: i64) -> crate::ClientResult<u64> {
         u64::try_from(value).map_err(|_| {
-            RocketMQError::illegal_argument(format!(
+            ClientError::illegal_argument(format!(
                 "{operation} {field} is negative and cannot be represented as Rust u64"
             ))
         })
@@ -238,18 +234,18 @@ impl MQAdminImpl {
         queue_num: i32,
         topic_sys_flag: i32,
         attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         Validators::check_topic(new_topic)?;
         Validators::is_system_topic(new_topic)?;
         if queue_num <= 0 {
-            return Err(RocketMQError::illegal_argument("queueNum must be positive"));
+            return Err(ClientError::illegal_argument("queueNum must be positive"));
         }
 
         let client = self.client()?;
         let api_impl = client
             .mq_client_api_impl
             .load_full()
-            .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?;
+            .ok_or_else(|| ClientError::not_initialized("MQClientAPIImpl"))?;
         let route_data = api_impl
             .get_topic_route_info_from_name_server(key, self.timeout_millis)
             .await?
@@ -261,7 +257,7 @@ impl MQAdminImpl {
         let mut broker_datas = route_data.broker_datas;
         broker_datas.sort();
         let mut create_ok_at_least_once = false;
-        let mut last_error: Option<rocketmq_error::RocketMQError> = None;
+        let mut last_error: Option<crate::ClientError> = None;
         for broker_data in broker_datas {
             let Some(addr) = broker_data.broker_addrs().get(&mix_all::MASTER_ID).cloned() else {
                 continue;
@@ -374,7 +370,7 @@ impl MQAdminImpl {
         topic: &str,
         mq_client_api_impl: Arc<MQClientAPIImpl>,
         client_config: &ClientConfig,
-    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
+    ) -> crate::ClientResult<Vec<MessageQueue>> {
         let topic_route_data = mq_client_api_impl
             .get_topic_route_info_from_name_server_detail(topic, self.timeout_millis, true)
             .await?;
@@ -398,7 +394,7 @@ impl MQAdminImpl {
     /// # Errors
     ///
     /// Returns an error if the broker address cannot be resolved or the remote call fails.
-    pub async fn max_offset(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn max_offset(&self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         let client = self.client()?;
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
@@ -411,7 +407,7 @@ impl MQAdminImpl {
             return client
                 .mq_client_api_impl
                 .load_full()
-                .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
+                .ok_or_else(|| ClientError::not_initialized("MQClientAPIImpl"))?
                 .get_max_offset(broker_addr, mq, self.timeout_millis)
                 .await;
         }
@@ -427,7 +423,7 @@ impl MQAdminImpl {
     /// # Errors
     ///
     /// Returns an error if the broker address cannot be resolved or the remote call fails.
-    pub async fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> crate::ClientResult<i64> {
         let timestamp = Self::timestamp_to_java_long("searchOffset", timestamp)?;
         let client = self.client()?;
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
@@ -441,14 +437,14 @@ impl MQAdminImpl {
             return client
                 .mq_client_api_impl
                 .load_full()
-                .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
+                .ok_or_else(|| ClientError::not_initialized("MQClientAPIImpl"))?
                 .search_offset_by_timestamp(broker_addr, mq, timestamp, BoundaryType::Lower, self.timeout_millis)
                 .await;
         }
         Err(mq_client_err!(format!("The broker[{}] not exist", mq.broker_name())))
     }
 
-    pub async fn min_offset(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn min_offset(&self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         let client = self.client()?;
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
@@ -461,14 +457,14 @@ impl MQAdminImpl {
             return client
                 .mq_client_api_impl
                 .load_full()
-                .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
+                .ok_or_else(|| ClientError::not_initialized("MQClientAPIImpl"))?
                 .get_min_offset(broker_addr, mq, self.timeout_millis)
                 .await;
         }
         Err(mq_client_err!(format!("The broker[{}] not exist", mq.broker_name())))
     }
 
-    pub async fn earliest_msg_store_time(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    pub async fn earliest_msg_store_time(&self, mq: &MessageQueue) -> crate::ClientResult<i64> {
         let client = self.client()?;
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
@@ -481,14 +477,14 @@ impl MQAdminImpl {
             return client
                 .mq_client_api_impl
                 .load_full()
-                .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
+                .ok_or_else(|| ClientError::not_initialized("MQClientAPIImpl"))?
                 .get_earliest_msg_store_time(broker_addr, mq, self.timeout_millis)
                 .await;
         }
         Err(mq_client_err!(format!("The broker[{}] not exist", mq.broker_name())))
     }
 
-    pub async fn view_message(&self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
+    pub async fn view_message(&self, topic: &str, msg_id: &str) -> crate::ClientResult<MessageExt> {
         let message_id = MessageDecoder::decode_message_id(msg_id).map_err(|_| {
             mq_client_err!(
                 rocketmq_protocol::code::response_code::ResponseCode::NoMessage as i32,
@@ -504,7 +500,7 @@ impl MQAdminImpl {
         self.client()?
             .mq_client_api_impl
             .load_full()
-            .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
+            .ok_or_else(|| ClientError::not_initialized("MQClientAPIImpl"))?
             .view_message(&broker_addr, request_header, self.timeout_millis)
             .await
     }
@@ -516,7 +512,7 @@ impl MQAdminImpl {
         max_num: i32,
         begin: u64,
         end: u64,
-    ) -> rocketmq_error::RocketMQResult<QueryResult> {
+    ) -> crate::ClientResult<QueryResult> {
         self.query_message_with_unique_flag(topic, key, max_num, begin, end, false)
             .await
     }
@@ -529,12 +525,12 @@ impl MQAdminImpl {
         begin: u64,
         end: u64,
         unique_key_flag: bool,
-    ) -> rocketmq_error::RocketMQResult<QueryResult> {
+    ) -> crate::ClientResult<QueryResult> {
         let client = self.client()?;
         let api_impl = client
             .mq_client_api_impl
             .load_full()
-            .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?;
+            .ok_or_else(|| ClientError::not_initialized("MQClientAPIImpl"))?;
         let route_data = api_impl
             .get_topic_route_info_from_name_server(topic, self.timeout_millis)
             .await?
@@ -667,11 +663,11 @@ mod tests {
             )
         }
 
-        fn route_response(&self) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+        fn route_response(&self) -> crate::ClientResult<RemotingCommand> {
             let broker_addr = self
                 .broker_addr
                 .get()
-                .ok_or_else(|| RocketMQError::invariant_violated("test broker address must be initialized"))?;
+                .ok_or_else(|| ClientError::invariant_violated("test broker address must be initialized"))?;
             let route = TopicRouteData {
                 broker_datas: vec![BrokerData::new(
                     CheetahString::from_static_str("cluster-a"),
@@ -689,7 +685,7 @@ mod tests {
         fn process(
             &self,
             request: RemotingCommand,
-        ) -> Pin<Box<dyn Future<Output = rocketmq_error::RocketMQResult<RemotingCommand>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = crate::ClientResult<RemotingCommand>> + Send + '_>> {
             Box::pin(async move {
                 use std::sync::atomic::Ordering;
 
@@ -702,9 +698,9 @@ mod tests {
                         .lock()
                         .expect("create response queue")
                         .pop_front()
-                        .ok_or_else(|| RocketMQError::illegal_argument("unexpected create-topic request"))?
+                        .ok_or_else(|| ClientError::illegal_argument("unexpected create-topic request"))?
                 } else {
-                    return Err(RocketMQError::illegal_argument(format!(
+                    return Err(ClientError::illegal_argument(format!(
                         "unexpected request code {}",
                         request.code()
                     )));
@@ -859,7 +855,7 @@ mod tests {
         let weak = Arc::downgrade(&instance);
         drop(instance);
         assert!(weak.upgrade().is_none());
-        assert!(matches!(admin.client(), Err(RocketMQError::NotInitialized(_))));
+        assert!(matches!(admin.client(), Err(ClientError::not_initialized(_))));
     }
 
     #[test]

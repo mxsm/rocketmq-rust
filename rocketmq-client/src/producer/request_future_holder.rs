@@ -140,10 +140,7 @@ impl RequestFutureHolder {
         }
 
         for rf in rf_list {
-            let cause = rocketmq_error::RocketMQError::Timeout {
-                operation: "request_reply",
-                timeout_ms: rf.get_timeout_millis(),
-            };
+            let cause = crate::ClientError::timeout("request_reply", rf.get_timeout_millis());
             rf.set_cause(cause);
             rf.execute_request_callback();
         }
@@ -358,7 +355,7 @@ pub async fn run_request_future_holder_scan_probe(
         let callback_count = Arc::clone(&callbacks);
         let callback = Arc::new(
             move |_response: Option<&dyn rocketmq_model::common::message::MessageTrait>,
-                  _error: Option<&rocketmq_error::RocketMQError>| {
+                  _error: Option<&crate::ClientError>| {
                 callback_count.fetch_add(1, Ordering::Relaxed);
             },
         );
@@ -471,16 +468,10 @@ mod tests {
         let callback_called = Arc::new(AtomicBool::new(false));
         let callback_called_inner = Arc::clone(&callback_called);
         let callback = Arc::new(
-            move |response: Option<&dyn MessageTrait>, error: Option<&rocketmq_error::RocketMQError>| {
+            move |response: Option<&dyn MessageTrait>, error: Option<&crate::ClientError>| {
                 assert!(response.is_none());
                 let error = error.expect("timeout scan should pass timeout cause");
-                assert!(matches!(
-                    error,
-                    rocketmq_error::RocketMQError::Timeout {
-                        operation: "request_reply",
-                        ..
-                    }
-                ));
+                assert!(error.is(&rocketmq_error::CORE_OPERATION_TIMED_OUT));
                 callback_called_inner.store(true, Ordering::SeqCst);
             },
         );
@@ -500,7 +491,7 @@ mod tests {
         let callback_count = Arc::new(AtomicUsize::new(0));
         let callback_count_inner = Arc::clone(&callback_count);
         let callback = Arc::new(
-            move |_response: Option<&dyn MessageTrait>, _error: Option<&rocketmq_error::RocketMQError>| {
+            move |_response: Option<&dyn MessageTrait>, _error: Option<&crate::ClientError>| {
                 callback_count_inner.fetch_add(1, Ordering::SeqCst);
             },
         );
@@ -521,7 +512,7 @@ mod tests {
         let callback_count = Arc::new(AtomicUsize::new(0));
         let callback_count_inner = Arc::clone(&callback_count);
         let old_callback = Arc::new(
-            move |_response: Option<&dyn MessageTrait>, _error: Option<&rocketmq_error::RocketMQError>| {
+            move |_response: Option<&dyn MessageTrait>, _error: Option<&crate::ClientError>| {
                 callback_count_inner.fetch_add(1, Ordering::SeqCst);
             },
         );
@@ -553,7 +544,7 @@ mod tests {
         let callback_count = Arc::new(AtomicUsize::new(0));
         let callback_count_inner = Arc::clone(&callback_count);
         let callback = Arc::new(
-            move |_response: Option<&dyn MessageTrait>, _error: Option<&rocketmq_error::RocketMQError>| {
+            move |_response: Option<&dyn MessageTrait>, _error: Option<&crate::ClientError>| {
                 callback_count_inner.fetch_add(1, Ordering::SeqCst);
             },
         );

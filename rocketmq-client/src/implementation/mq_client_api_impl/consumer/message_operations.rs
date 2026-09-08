@@ -22,7 +22,7 @@ impl MQClientAPIImpl {
         addr: &str,
         message_queue: &MessageQueue,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    ) -> crate::ClientResult<i64> {
         let request_header = GetMaxOffsetRequestHeader {
             topic: CheetahString::from_slice(message_queue.topic_str()),
             queue_id: message_queue.queue_id(),
@@ -60,7 +60,7 @@ impl MQClientAPIImpl {
             Ok(OutboundRequestOutcome::Contract(contract)) => {
                 return Err(consumer_request_error("get_max_offset", RetryInput::Contract(contract)));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let response_header = response.decode_command_custom_header::<GetMaxOffsetResponseHeader>()?;
@@ -78,7 +78,7 @@ impl MQClientAPIImpl {
         addr: &str,
         message_queue: &MessageQueue,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    ) -> crate::ClientResult<i64> {
         let request_header = GetMinOffsetRequestHeader {
             topic: CheetahString::from_slice(message_queue.topic_str()),
             queue_id: message_queue.queue_id(),
@@ -115,7 +115,7 @@ impl MQClientAPIImpl {
             Ok(OutboundRequestOutcome::Contract(contract)) => {
                 return Err(consumer_request_error("get_min_offset", RetryInput::Contract(contract)));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let response_header = response.decode_command_custom_header::<GetMinOffsetResponseHeader>()?;
@@ -133,7 +133,7 @@ impl MQClientAPIImpl {
         addr: &str,
         message_queue: &MessageQueue,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    ) -> crate::ClientResult<i64> {
         let request_header = GetEarliestMsgStoretimeRequestHeader {
             topic: CheetahString::from_slice(message_queue.topic_str()),
             queue_id: message_queue.queue_id(),
@@ -173,7 +173,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let response_header = response.decode_command_custom_header::<GetEarliestMsgStoretimeResponseHeader>()?;
@@ -191,7 +191,7 @@ impl MQClientAPIImpl {
         addr: &str,
         message_queue: &MessageQueue,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    ) -> crate::ClientResult<i64> {
         self.get_earliest_msg_store_time(addr, message_queue, timeout_millis)
             .await
     }
@@ -214,7 +214,7 @@ impl MQClientAPIImpl {
         timestamp: i64,
         boundary_type: BoundaryType,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    ) -> crate::ClientResult<i64> {
         let request_header = SearchOffsetRequestHeader {
             topic: message_queue.topic().clone(),
             lite_topic: None,
@@ -255,7 +255,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let response_header = response.decode_command_custom_header::<SearchOffsetResponseHeader>()?;
@@ -275,7 +275,7 @@ impl MQClientAPIImpl {
         timestamp: i64,
         boundary_type: BoundaryType,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    ) -> crate::ClientResult<i64> {
         self.search_offset_by_timestamp(addr, message_queue, timestamp, boundary_type, timeout_millis)
             .await
     }
@@ -288,7 +288,7 @@ impl MQClientAPIImpl {
         mode: MessageRequestMode,
         pop_share_queue_num: i32,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let body = SetMessageRequestModeRequestBody {
             topic: topic.clone(),
             consumer_group: consumer_group.clone(),
@@ -323,7 +323,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             return Err(mq_client_err!(
@@ -400,7 +400,7 @@ impl MQClientAPIImpl {
         request_header: ChangeInvisibleTimeRequestHeader,
         timeout_millis: u64,
         ack_callback: impl AckCallback,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let offset = request_header.offset;
         let topic = request_header.topic.clone();
         let queue_id = request_header.queue_id;
@@ -457,7 +457,7 @@ impl MQClientAPIImpl {
                     .await;
             }
             Err(error) => {
-                let error = RocketMQError::Shared(error.into_shared_error());
+                let error = ClientError::from_shared(error.into_shared_error());
                 let _ = self
                     .callback_executor
                     .execute(async { ack_callback.on_exception(error) })
@@ -474,7 +474,7 @@ impl MQClientAPIImpl {
         request_header: PopMessageRequestHeader,
         timeout_millis: u64,
         pop_callback: PC,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         PC: PopCallback + 'static,
     {
@@ -500,7 +500,7 @@ impl MQClientAPIImpl {
                 Ok(OutboundRequestOutcome::Contract(contract)) => {
                     return Err(consumer_request_error("pop_message", RetryInput::Contract(contract)));
                 }
-                Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+                Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
             };
             self.process_pop_response(&broker_name, response, &topic, order)
         };
@@ -522,7 +522,7 @@ impl MQClientAPIImpl {
         request_header: PopLiteMessageRequestHeader,
         timeout_millis: u64,
         pop_callback: PC,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
         PC: PopCallback + 'static,
     {
@@ -553,7 +553,7 @@ impl MQClientAPIImpl {
                         RetryInput::Contract(contract),
                     ));
                 }
-                Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+                Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
             };
             self.process_pop_lite_response(&broker_name, response, &bind_topic)
         };
@@ -574,7 +574,7 @@ impl MQClientAPIImpl {
         mut response: RemotingCommand,
         topic: &CheetahString,
         is_order: bool,
-    ) -> rocketmq_error::RocketMQResult<PopResult> {
+    ) -> crate::ClientResult<PopResult> {
         let response_code = ResponseCode::from(response.code());
         let (pop_status, msg_found_list) = match response_code {
             ResponseCode::Success => {
@@ -826,7 +826,7 @@ impl MQClientAPIImpl {
         broker_name: &CheetahString,
         mut response: RemotingCommand,
         topic: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<PopResult> {
+    ) -> crate::ClientResult<PopResult> {
         let response_code = ResponseCode::from(response.code());
         let (pop_status, msg_found_list) = match response_code {
             ResponseCode::Success => {
@@ -926,7 +926,7 @@ impl MQClientAPIImpl {
         request_header: AckMessageRequestHeader,
         timeout_millis: u64,
         ack_callback: impl AckCallback,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         self.ack_message_async_inner(addr, Some(request_header), None, timeout_millis, ack_callback)
             .await
     }
@@ -936,7 +936,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         request_header: AckMessageRequestHeader,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<AckResult> {
+    ) -> crate::ClientResult<AckResult> {
         self.ack_message_inner(addr, Some(request_header), None, timeout_millis)
             .await
     }
@@ -947,7 +947,7 @@ impl MQClientAPIImpl {
         request_header: AckMessageRequestHeader,
         timeout_millis: u64,
         ack_callback: impl AckCallback,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         self.ack_message_async(addr, request_header, timeout_millis, ack_callback)
             .await
     }
@@ -958,7 +958,7 @@ impl MQClientAPIImpl {
         request_body: BatchAckMessageRequestBody,
         timeout_millis: u64,
         ack_callback: impl AckCallback,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         self.ack_message_async_inner(addr, None, Some(request_body), timeout_millis, ack_callback)
             .await
     }
@@ -968,7 +968,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         request_body: BatchAckMessageRequestBody,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<AckResult> {
+    ) -> crate::ClientResult<AckResult> {
         self.ack_message_inner(addr, None, Some(request_body), timeout_millis)
             .await
     }
@@ -980,7 +980,7 @@ impl MQClientAPIImpl {
         request_body: Option<BatchAckMessageRequestBody>,
         timeout_millis: u64,
         ack_callback: impl AckCallback,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         match self
             .ack_message_inner(addr, request_header, request_body, timeout_millis)
             .await
@@ -993,7 +993,7 @@ impl MQClientAPIImpl {
                 Ok(())
             }
             Err(error) => {
-                let propagated = mq_client_err!(error.to_string());
+                let propagated = error.clone();
                 let _ = self
                     .callback_executor
                     .execute(async { ack_callback.on_exception(error) })
@@ -1009,7 +1009,7 @@ impl MQClientAPIImpl {
         request_header: Option<AckMessageRequestHeader>,
         request_body: Option<BatchAckMessageRequestBody>,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<AckResult> {
+    ) -> crate::ClientResult<AckResult> {
         let request = if let Some(header) = request_header {
             self.create_request_command(RequestCode::AckMessage, header)
         } else {
@@ -1029,7 +1029,7 @@ impl MQClientAPIImpl {
             Ok(OutboundRequestOutcome::Contract(contract)) => {
                 return Err(consumer_request_error("ack_message", RetryInput::Contract(contract)));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         let response_code = ResponseCode::from(response.code());
         Ok(if response_code == ResponseCode::Success {

@@ -20,8 +20,8 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
+use crate::ClientResult;
 use futures::StreamExt;
-use rocketmq_error::RocketMQResult;
 use rocketmq_runtime::ChildServiceContext;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
@@ -87,7 +87,7 @@ impl<T> BoundedConsumeScheduler<T>
 where
     T: Send + 'static,
 {
-    pub(crate) fn new(capacity: usize) -> RocketMQResult<Self> {
+    pub(crate) fn new(capacity: usize) -> ClientResult<Self> {
         if capacity == 0 {
             return Err(crate::mq_client_err!(
                 "consume scheduler capacity must be greater than 0"
@@ -115,7 +115,7 @@ where
         service_context: &ChildServiceContext,
         worker_count: usize,
         handler: H,
-    ) -> RocketMQResult<()>
+    ) -> ClientResult<()>
     where
         H: Fn(T) -> F + Send + Sync + Clone + 'static,
         F: Future<Output = ()> + Send + 'static,
@@ -154,7 +154,7 @@ where
         &self,
         service_context: &ChildServiceContext,
         mut delayed_rx: mpsc::Receiver<DelayedCommand<T>>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let stopping = self.stopping.clone();
         let ready_tx = self.ready_tx.clone();
         let task = self.tasks.track_future(async move {
@@ -202,7 +202,7 @@ where
             Box::pin(task),
         )
         .map(|_| ())
-        .map_err(|error| crate::mq_client_err!(format!("failed to start consume delay scheduler: {error}")))
+        .map_err(|error| crate::ClientError::service_source("consume_delay_scheduler", error))
     }
 
     fn spawn_worker<H, F>(
@@ -210,7 +210,7 @@ where
         service_context: &ChildServiceContext,
         ready_rx: Arc<Mutex<mpsc::Receiver<ScheduledItem<T>>>>,
         handler: H,
-    ) -> RocketMQResult<()>
+    ) -> ClientResult<()>
     where
         H: Fn(T) -> F + Send + Sync + 'static,
         F: Future<Output = ()> + Send + 'static,
@@ -240,7 +240,7 @@ where
         });
         spawn_client_task_with_context(service_context, "rocketmq-client-consume-worker", Box::pin(task))
             .map(|_| ())
-            .map_err(|error| crate::mq_client_err!(format!("failed to start consume worker: {error}")))
+            .map_err(|error| crate::ClientError::service_source("consume_worker", error))
     }
 
     pub(crate) async fn schedule(&self, item: T) -> Result<(), ConsumeScheduleError<T>> {

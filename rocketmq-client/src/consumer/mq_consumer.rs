@@ -18,8 +18,8 @@ use crate::base::query_result::QueryResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 
-fn unsupported_mq_admin_operation(operation: &'static str) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::illegal_argument(format!(
+fn unsupported_mq_admin_operation(operation: &'static str) -> crate::ClientError {
+    crate::ClientError::illegal_argument(format!(
         "{operation} is not supported by this MQConsumer implementation"
     ))
 }
@@ -36,7 +36,7 @@ pub trait MQConsumer {
         _new_topic: &str,
         _queue_num: i32,
         _attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         Err(unsupported_mq_admin_operation("createTopic"))
     }
 
@@ -48,27 +48,27 @@ pub trait MQConsumer {
         _queue_num: i32,
         _topic_sys_flag: i32,
         _attributes: HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         Err(unsupported_mq_admin_operation("createTopicWithFlag"))
     }
 
     /// Searches the offset in a queue by store timestamp.
-    async fn search_offset(&mut self, _mq: &MessageQueue, _timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+    async fn search_offset(&mut self, _mq: &MessageQueue, _timestamp: u64) -> crate::ClientResult<i64> {
         Err(unsupported_mq_admin_operation("searchOffset"))
     }
 
     /// Returns the broker max offset for a queue.
-    async fn max_offset(&mut self, _mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn max_offset(&mut self, _mq: &MessageQueue) -> crate::ClientResult<i64> {
         Err(unsupported_mq_admin_operation("maxOffset"))
     }
 
     /// Returns the broker min offset for a queue.
-    async fn min_offset(&mut self, _mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn min_offset(&mut self, _mq: &MessageQueue) -> crate::ClientResult<i64> {
         Err(unsupported_mq_admin_operation("minOffset"))
     }
 
     /// Returns the earliest store time for messages in a queue.
-    async fn earliest_msg_store_time(&mut self, _mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+    async fn earliest_msg_store_time(&mut self, _mq: &MessageQueue) -> crate::ClientResult<i64> {
         Err(unsupported_mq_admin_operation("earliestMsgStoreTime"))
     }
 
@@ -80,12 +80,12 @@ pub trait MQConsumer {
         _max_num: i32,
         _begin: u64,
         _end: u64,
-    ) -> rocketmq_error::RocketMQResult<QueryResult> {
+    ) -> crate::ClientResult<QueryResult> {
         Err(unsupported_mq_admin_operation("queryMessage"))
     }
 
     /// Views a message by message id.
-    async fn view_message(&mut self, _topic: &str, _msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
+    async fn view_message(&mut self, _topic: &str, _msg_id: &str) -> crate::ClientResult<MessageExt> {
         Err(unsupported_mq_admin_operation("viewMessage"))
     }
 
@@ -94,7 +94,7 @@ pub trait MQConsumer {
         msg: MessageExt,
         delay_level: i32,
         broker_name: &str,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    ) -> crate::ClientResult<()>;
 
     /// Sends a message back using the broker name carried by the message.
     ///
@@ -105,15 +105,12 @@ pub trait MQConsumer {
         &mut self,
         msg: MessageExt,
         delay_level: i32,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let broker_name = msg.broker_name().to_string();
         self.send_message_back(msg, delay_level, &broker_name).await
     }
 
-    async fn fetch_subscribe_message_queues(
-        &mut self,
-        topic: &str,
-    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>>;
+    async fn fetch_subscribe_message_queues(&mut self, topic: &str) -> crate::ClientResult<Vec<MessageQueue>>;
 }
 
 #[cfg(test)]
@@ -128,14 +125,11 @@ mod tests {
             _msg: MessageExt,
             _delay_level: i32,
             _broker_name: &str,
-        ) -> rocketmq_error::RocketMQResult<()> {
+        ) -> crate::ClientResult<()> {
             Ok(())
         }
 
-        async fn fetch_subscribe_message_queues(
-            &mut self,
-            _topic: &str,
-        ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
+        async fn fetch_subscribe_message_queues(&mut self, _topic: &str) -> crate::ClientResult<Vec<MessageQueue>> {
             Ok(Vec::new())
         }
     }

@@ -18,8 +18,8 @@
 //! ensuring that configuration values are within acceptable bounds and
 //! properly formatted.
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use crate::ClientError;
+use crate::ClientResult;
 
 /// Validator for ProducerConfig fields
 ///
@@ -87,17 +87,17 @@ impl ProducerConfigValidator {
     /// Validate send message timeout
     ///
     /// Ensures the timeout is between 100ms and 5 minutes.
-    pub fn validate_send_msg_timeout(timeout: u32) -> RocketMQResult<()> {
+    pub fn validate_send_msg_timeout(timeout: u32) -> ClientResult<()> {
         if !(Self::MIN_SEND_MSG_TIMEOUT..=Self::MAX_SEND_MSG_TIMEOUT).contains(&timeout) {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "send_msg_timeout",
-                value: timeout.to_string(),
-                reason: format!(
+            return Err(ClientError::config_invalid(
+                "send_msg_timeout",
+                timeout.to_string(),
+                format!(
                     "must be between {} and {} milliseconds",
                     Self::MIN_SEND_MSG_TIMEOUT,
                     Self::MAX_SEND_MSG_TIMEOUT
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -105,18 +105,18 @@ impl ProducerConfigValidator {
     /// Validate send message max timeout per request
     ///
     /// None means no limit, otherwise validates the timeout.
-    pub fn validate_send_msg_max_timeout_per_request(timeout: Option<u32>) -> RocketMQResult<()> {
+    pub fn validate_send_msg_max_timeout_per_request(timeout: Option<u32>) -> ClientResult<()> {
         if let Some(t) = timeout {
             if !(Self::MIN_SEND_MSG_TIMEOUT..=Self::MAX_SEND_MSG_TIMEOUT).contains(&t) {
-                return Err(RocketMQError::ConfigInvalidValue {
-                    key: "send_msg_max_timeout_per_request",
-                    value: t.to_string(),
-                    reason: format!(
+                return Err(ClientError::config_invalid(
+                    "send_msg_max_timeout_per_request",
+                    t.to_string(),
+                    format!(
                         "must be between {} and {} milliseconds, or None for no limit",
                         Self::MIN_SEND_MSG_TIMEOUT,
                         Self::MAX_SEND_MSG_TIMEOUT
                     ),
-                });
+                ));
             }
         }
         Ok(())
@@ -125,17 +125,17 @@ impl ProducerConfigValidator {
     /// Validate maximum message size
     ///
     /// Ensures the size is between 1KB and 128MB.
-    pub fn validate_max_message_size(size: u32) -> RocketMQResult<()> {
+    pub fn validate_max_message_size(size: u32) -> ClientResult<()> {
         if !(Self::MIN_MAX_MESSAGE_SIZE..=Self::MAX_MAX_MESSAGE_SIZE).contains(&size) {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "max_message_size",
-                value: size.to_string(),
-                reason: format!(
+            return Err(ClientError::config_invalid(
+                "max_message_size",
+                size.to_string(),
+                format!(
                     "must be between {} and {} bytes",
                     Self::MIN_MAX_MESSAGE_SIZE,
                     Self::MAX_MAX_MESSAGE_SIZE
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -143,17 +143,17 @@ impl ProducerConfigValidator {
     /// Validate default topic queue numbers
     ///
     /// Ensures the queue count is between 1 and 1024.
-    pub fn validate_default_topic_queue_nums(nums: u32) -> RocketMQResult<()> {
+    pub fn validate_default_topic_queue_nums(nums: u32) -> ClientResult<()> {
         if !(Self::MIN_DEFAULT_TOPIC_QUEUE_NUMS..=Self::MAX_DEFAULT_TOPIC_QUEUE_NUMS).contains(&nums) {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "default_topic_queue_nums",
-                value: nums.to_string(),
-                reason: format!(
+            return Err(ClientError::config_invalid(
+                "default_topic_queue_nums",
+                nums.to_string(),
+                format!(
                     "must be between {} and {}",
                     Self::MIN_DEFAULT_TOPIC_QUEUE_NUMS,
                     Self::MAX_DEFAULT_TOPIC_QUEUE_NUMS
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -161,13 +161,13 @@ impl ProducerConfigValidator {
     /// Validate retry times when send failed
     ///
     /// Ensures the retry count is between 0 and 16.
-    pub fn validate_retry_times_when_send_failed(times: u32) -> RocketMQResult<()> {
+    pub fn validate_retry_times_when_send_failed(times: u32) -> ClientResult<()> {
         if times > Self::MAX_RETRY_TIMES {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "retry_times_when_send_failed",
-                value: times.to_string(),
-                reason: format!("must not exceed {}", Self::MAX_RETRY_TIMES),
-            });
+            return Err(ClientError::config_invalid(
+                "retry_times_when_send_failed",
+                times.to_string(),
+                format!("must not exceed {}", Self::MAX_RETRY_TIMES),
+            ));
         }
         Ok(())
     }
@@ -175,13 +175,13 @@ impl ProducerConfigValidator {
     /// Validate retry times when send async failed
     ///
     /// Ensures the retry count is between 0 and 16.
-    pub fn validate_retry_times_when_send_async_failed(times: u32) -> RocketMQResult<()> {
+    pub fn validate_retry_times_when_send_async_failed(times: u32) -> ClientResult<()> {
         if times > Self::MAX_RETRY_TIMES {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "retry_times_when_send_async_failed",
-                value: times.to_string(),
-                reason: format!("must not exceed {}", Self::MAX_RETRY_TIMES),
-            });
+            return Err(ClientError::config_invalid(
+                "retry_times_when_send_async_failed",
+                times.to_string(),
+                format!("must not exceed {}", Self::MAX_RETRY_TIMES),
+            ));
         }
         Ok(())
     }
@@ -189,17 +189,17 @@ impl ProducerConfigValidator {
     /// Validate compress message body threshold
     ///
     /// Ensures the threshold is between 1KB and 64MB.
-    pub fn validate_compress_msg_body_over_howmuch(threshold: u32) -> RocketMQResult<()> {
+    pub fn validate_compress_msg_body_over_howmuch(threshold: u32) -> ClientResult<()> {
         if !(Self::MIN_COMPRESS_MSG_BODY_OVER_HOWMUCH..=Self::MAX_COMPRESS_MSG_BODY_OVER_HOWMUCH).contains(&threshold) {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "compress_msg_body_over_howmuch",
-                value: threshold.to_string(),
-                reason: format!(
+            return Err(ClientError::config_invalid(
+                "compress_msg_body_over_howmuch",
+                threshold.to_string(),
+                format!(
                     "must be between {} and {} bytes",
                     Self::MIN_COMPRESS_MSG_BODY_OVER_HOWMUCH,
                     Self::MAX_COMPRESS_MSG_BODY_OVER_HOWMUCH
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -207,17 +207,17 @@ impl ProducerConfigValidator {
     /// Validate batch max delay
     ///
     /// None means no delay, otherwise validates the delay is within bounds.
-    pub fn validate_batch_max_delay_ms(delay: Option<u32>) -> RocketMQResult<()> {
+    pub fn validate_batch_max_delay_ms(delay: Option<u32>) -> ClientResult<()> {
         if let Some(d) = delay {
             if d > Self::MAX_BATCH_MAX_DELAY_MS {
-                return Err(RocketMQError::ConfigInvalidValue {
-                    key: "batch_max_delay_ms",
-                    value: d.to_string(),
-                    reason: format!(
+                return Err(ClientError::config_invalid(
+                    "batch_max_delay_ms",
+                    d.to_string(),
+                    format!(
                         "must be at most {} milliseconds, or None for no delay",
                         Self::MAX_BATCH_MAX_DELAY_MS
                     ),
-                });
+                ));
             }
         }
         Ok(())
@@ -226,17 +226,17 @@ impl ProducerConfigValidator {
     /// Validate back pressure for async send num
     ///
     /// Ensures the value is between 10 and 100,000.
-    pub fn validate_back_pressure_for_async_send_num(num: u32) -> RocketMQResult<()> {
+    pub fn validate_back_pressure_for_async_send_num(num: u32) -> ClientResult<()> {
         if !(Self::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM..=Self::MAX_BACK_PRESSURE_FOR_ASYNC_SEND_NUM).contains(&num) {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "back_pressure_for_async_send_num",
-                value: num.to_string(),
-                reason: format!(
+            return Err(ClientError::config_invalid(
+                "back_pressure_for_async_send_num",
+                num.to_string(),
+                format!(
                     "must be between {} and {}",
                     Self::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_NUM,
                     Self::MAX_BACK_PRESSURE_FOR_ASYNC_SEND_NUM
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -244,18 +244,18 @@ impl ProducerConfigValidator {
     /// Validate back pressure for async send size
     ///
     /// Ensures the size is between 1MB and 1GB.
-    pub fn validate_back_pressure_for_async_send_size(size: u32) -> RocketMQResult<()> {
+    pub fn validate_back_pressure_for_async_send_size(size: u32) -> ClientResult<()> {
         if !(Self::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE..=Self::MAX_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE).contains(&size)
         {
-            return Err(RocketMQError::ConfigInvalidValue {
-                key: "back_pressure_for_async_send_size",
-                value: size.to_string(),
-                reason: format!(
+            return Err(ClientError::config_invalid(
+                "back_pressure_for_async_send_size",
+                size.to_string(),
+                format!(
                     "must be between {} and {} bytes",
                     Self::MIN_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE,
                     Self::MAX_BACK_PRESSURE_FOR_ASYNC_SEND_SIZE
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -264,20 +264,20 @@ impl ProducerConfigValidator {
     ///
     /// None means no limit, otherwise validates the size is within reasonable bounds.
     /// Max batch size should not exceed 32MB (matches Java: batchMaxBytes).
-    pub fn validate_batch_max_bytes(size: Option<u64>) -> RocketMQResult<()> {
+    pub fn validate_batch_max_bytes(size: Option<u64>) -> ClientResult<()> {
         const MIN_BATCH_MAX_BYTES: u64 = 1024; // 1KB
         const MAX_BATCH_MAX_BYTES: u64 = 32 * 1024 * 1024; // 32MB
 
         if let Some(s) = size {
             if !(MIN_BATCH_MAX_BYTES..=MAX_BATCH_MAX_BYTES).contains(&s) {
-                return Err(RocketMQError::ConfigInvalidValue {
-                    key: "batch_max_bytes",
-                    value: s.to_string(),
-                    reason: format!(
+                return Err(ClientError::config_invalid(
+                    "batch_max_bytes",
+                    s.to_string(),
+                    format!(
                         "must be between {} and {} bytes, or None for no limit",
                         MIN_BATCH_MAX_BYTES, MAX_BATCH_MAX_BYTES
                     ),
-                });
+                ));
             }
         }
         Ok(())
@@ -287,20 +287,20 @@ impl ProducerConfigValidator {
     ///
     /// None means no limit, otherwise validates the size is within reasonable bounds.
     /// Max total batch size should not exceed 256MB
-    pub fn validate_total_batch_max_bytes(size: Option<u64>) -> RocketMQResult<()> {
+    pub fn validate_total_batch_max_bytes(size: Option<u64>) -> ClientResult<()> {
         const MIN_TOTAL_BATCH_MAX_BYTES: u64 = 1024; // 1KB
         const MAX_TOTAL_BATCH_MAX_BYTES: u64 = 256 * 1024 * 1024; // 256MB
 
         if let Some(s) = size {
             if !(MIN_TOTAL_BATCH_MAX_BYTES..=MAX_TOTAL_BATCH_MAX_BYTES).contains(&s) {
-                return Err(RocketMQError::ConfigInvalidValue {
-                    key: "total_batch_max_bytes",
-                    value: s.to_string(),
-                    reason: format!(
+                return Err(ClientError::config_invalid(
+                    "total_batch_max_bytes",
+                    s.to_string(),
+                    format!(
                         "must be between {} and {} bytes, or None for no limit",
                         MIN_TOTAL_BATCH_MAX_BYTES, MAX_TOTAL_BATCH_MAX_BYTES
                     ),
-                });
+                ));
             }
         }
         Ok(())
@@ -309,9 +309,9 @@ impl ProducerConfigValidator {
     /// Validate producer group
     ///
     /// Ensures the producer group is not empty.
-    pub fn validate_producer_group(group: &str) -> RocketMQResult<()> {
+    pub fn validate_producer_group(group: &str) -> ClientResult<()> {
         if group.is_empty() {
-            return Err(RocketMQError::ConfigMissing { key: "producer_group" });
+            return Err(ClientError::config_missing("producer_group"));
         }
         Ok(())
     }

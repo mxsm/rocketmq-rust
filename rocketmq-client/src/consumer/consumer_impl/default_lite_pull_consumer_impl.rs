@@ -29,14 +29,14 @@ use std::sync::Weak;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::ClientError;
+use crate::ClientResult;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
 #[cfg(any(test, feature = "test-support"))]
 use futures::stream::FuturesUnordered;
 #[cfg(any(test, feature = "test-support"))]
 use futures::StreamExt;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::filter::expression_type::ExpressionType;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -411,7 +411,7 @@ where
         self.callback.on_success(pull_result.pull_result);
     }
 
-    fn on_exception(&mut self, error: RocketMQError) {
+    fn on_exception(&mut self, error: ClientError) {
         self.callback.on_exception(error);
     }
 }
@@ -429,12 +429,8 @@ fn reset_classic_pull_message_topics(messages: &mut Option<Vec<MessageExt>>, nam
     }
 }
 
-fn duration_millis(field: &'static str, duration: Duration) -> RocketMQResult<u64> {
-    u64::try_from(duration.as_millis()).map_err(|_| RocketMQError::ConfigInvalidValue {
-        key: field,
-        value: duration.as_millis().to_string(),
-        reason: "duration exceeds the supported millisecond range".to_string(),
-    })
+fn duration_millis(field: &'static str, duration: Duration) -> ClientResult<u64> {
+    u64::try_from(duration.as_millis()).map_err(|source| ClientError::config_invalid_source(field, true, source))
 }
 
 struct PreparedClassicPull {
@@ -446,7 +442,7 @@ struct PreparedClassicPull {
     timeout_millis: u64,
 }
 
-fn prepare_classic_pull(options: &PullOptions) -> RocketMQResult<PreparedClassicPull> {
+fn prepare_classic_pull(options: &PullOptions) -> ClientResult<PreparedClassicPull> {
     options.validate()?;
     let message_queue = options.message_queue().clone();
     let mut subscription_data = FilterAPI::build(
@@ -454,7 +450,7 @@ fn prepare_classic_pull(options: &PullOptions) -> RocketMQResult<PreparedClassic
         options.selector().get_expression(),
         Some(options.selector().get_expression_type().clone()),
     )
-    .map_err(|error| crate::mq_client_err!(format!("parse subscription error: {error}")))?;
+    .map_err(crate::ClientError::illegal_argument)?;
     if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str()))
         && subscription_data.sub_version <= 0
     {
@@ -554,11 +550,7 @@ impl DefaultLitePullConsumerImpl {
 
     /// Creates a new lite pull consumer implementation with validated resource
     /// budgets.
-    pub fn try_new<C, L>(
-        client_runtime: Arc<ClientRuntime>,
-        client_config: C,
-        consumer_config: L,
-    ) -> RocketMQResult<Self>
+    pub fn try_new<C, L>(client_runtime: Arc<ClientRuntime>, client_config: C, consumer_config: L) -> ClientResult<Self>
     where
         C: AsRef<ClientConfig>,
         L: AsRef<LitePullConsumerConfig>,
@@ -574,7 +566,7 @@ impl DefaultLitePullConsumerImpl {
         client_runtime: Arc<ClientRuntime>,
         options: ClientOptions,
         consumer_config: L,
-    ) -> RocketMQResult<Self>
+    ) -> ClientResult<Self>
     where
         L: AsRef<LitePullConsumerConfig>,
     {
@@ -633,7 +625,7 @@ impl DefaultLitePullConsumerImpl {
     fn build_consume_request_queue(
         consumer_config: &LitePullConsumerConfig,
         parent_budget: &ResourceBudget,
-    ) -> RocketMQResult<BudgetedQueue<LitePullConsumeRequest>> {
+    ) -> ClientResult<BudgetedQueue<LitePullConsumeRequest>> {
         let queue_bytes = (parent_budget.limit().capacity.bytes / 16).max(1);
         let queue_count = usize::try_from(consumer_config.pull_threshold_for_all)
             .unwrap_or(DEFAULT_CONSUME_REQUEST_CAPACITY)
@@ -644,15 +636,11 @@ impl DefaultLitePullConsumerImpl {
             .with_max_age(CONSUME_REQUEST_MAX_AGE);
         let budget = parent_budget
             .child("lite-pull-consume-requests", limit)
-            .map_err(|error| RocketMQError::ConfigInvalidValue {
-                key: "client.litePull.consumeRequestQueue",
-                value: queue_count.to_string(),
-                reason: error.to_string(),
-            })?;
+            .map_err(|error| ClientError::config_invalid_source("client.litePull.consumeRequestQueue", true, error))?;
         Ok(BudgetedQueue::new(budget))
     }
 
-    fn enqueue_consume_request(&self, request: LitePullConsumeRequest) -> RocketMQResult<()> {
+    fn enqueue_consume_request(&self, request: LitePullConsumeRequest) -> ClientResult<()> {
         let retained_bytes = request.retained_bytes();
         match self.consume_requests.try_push_data(request, retained_bytes) {
             rocketmq_runtime::QueuePushOutcome::Rejected { .. } => {
@@ -713,7 +701,7 @@ impl DefaultLitePullConsumerImpl {
 
     /// Validates service state is Running.
     #[inline]
-    fn make_sure_state_ok(&self) -> RocketMQResult<()> {
+    fn make_sure_state_ok(&self) -> ClientResult<()> {
         let service_state = self.service_state();
         if service_state != ServiceState::Running {
             return Err(crate::mq_client_err!(format!(
@@ -725,17 +713,17 @@ impl DefaultLitePullConsumerImpl {
         Ok(())
     }
 
-    pub(crate) fn ensure_classic_pull_running(&self) -> RocketMQResult<()> {
+    pub(crate) fn ensure_classic_pull_running(&self) -> ClientResult<()> {
         self.make_sure_state_ok()
     }
 
-    pub(crate) async fn register_classic_pull_subscription(&self, topic: &CheetahString) -> RocketMQResult<()> {
+    pub(crate) async fn register_classic_pull_subscription(&self, topic: &CheetahString) -> ClientResult<()> {
         if self.rebalance_impl.get_subscription_inner().contains_key(topic) {
             return Ok(());
         }
         let subscription =
             FilterAPI::build_subscription_data(topic, &CheetahString::from_static_str(SubscriptionData::SUB_ALL))
-                .map_err(|error| crate::mq_client_err!(format!("parse subscription error: {error}")))?;
+                .map_err(crate::ClientError::illegal_argument)?;
         self.rebalance_impl.put_subscription_data(topic.clone(), subscription);
         if self.service_state() == ServiceState::Running {
             if let Some(client_instance) = self.component_snapshot(&self.client_instance) {
@@ -746,13 +734,13 @@ impl DefaultLitePullConsumerImpl {
         Ok(())
     }
 
-    pub(crate) async fn classic_pull(&self, options: &PullOptions) -> RocketMQResult<crate::PullResult> {
+    pub(crate) async fn classic_pull(&self, options: &PullOptions) -> ClientResult<crate::PullResult> {
         struct NoopPullCallback;
 
         impl PullCallback for NoopPullCallback {
             async fn on_success(&mut self, _pull_result: crate::PullResultExt) {}
 
-            fn on_exception(&mut self, _error: RocketMQError) {}
+            fn on_exception(&mut self, _error: ClientError) {}
         }
 
         self.make_sure_state_ok()?;
@@ -779,10 +767,7 @@ impl DefaultLitePullConsumerImpl {
         );
         let mut pull_result = tokio::time::timeout(options.timeout_value(), pull)
             .await
-            .map_err(|_| RocketMQError::Timeout {
-                operation: "classic pull request",
-                timeout_ms: prepared.timeout_millis,
-            })??
+            .map_err(|_| ClientError::timeout("classic pull request", prepared.timeout_millis))??
             .ok_or_else(|| crate::mq_client_err!("Synchronous classic pull returned no result"))?;
         wrapper.process_pull_result(&prepared.message_queue, &mut pull_result, &prepared.subscription_data);
         let namespace = self.client_config.load().namespace.clone();
@@ -790,7 +775,7 @@ impl DefaultLitePullConsumerImpl {
         Ok(pull_result.pull_result)
     }
 
-    pub(crate) async fn classic_pull_async<C>(&self, options: PullOptions, callback: C) -> RocketMQResult<()>
+    pub(crate) async fn classic_pull_async<C>(&self, options: PullOptions, callback: C) -> ClientResult<()>
     where
         C: ClassicPullCallback,
     {
@@ -828,7 +813,7 @@ impl DefaultLitePullConsumerImpl {
         Ok(())
     }
 
-    pub(crate) async fn update_classic_pull_offset(&self, mq: &MessageQueue, offset: i64) -> RocketMQResult<()> {
+    pub(crate) async fn update_classic_pull_offset(&self, mq: &MessageQueue, offset: i64) -> ClientResult<()> {
         self.make_sure_state_ok()?;
         if offset < 0 {
             return Err(crate::mq_client_err!("offset < 0"));
@@ -840,7 +825,7 @@ impl DefaultLitePullConsumerImpl {
         Ok(())
     }
 
-    pub(crate) async fn fetch_classic_pull_offset(&self, mq: &MessageQueue, from_store: bool) -> RocketMQResult<i64> {
+    pub(crate) async fn fetch_classic_pull_offset(&self, mq: &MessageQueue, from_store: bool) -> ClientResult<i64> {
         self.make_sure_state_ok()?;
         let offset_store = self
             .offset_store()
@@ -906,7 +891,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Updates the consumer group before startup and keeps rebalance config in sync.
-    pub fn set_consumer_group(&self, consumer_group: CheetahString) -> RocketMQResult<()> {
+    pub fn set_consumer_group(&self, consumer_group: CheetahString) -> ClientResult<()> {
         let service_state = self
             .service_state
             .read()
@@ -936,7 +921,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Updates the offset store before startup and keeps rebalance state in sync.
-    pub fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> RocketMQResult<()> {
+    pub fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> ClientResult<()> {
         let service_state = self
             .service_state
             .read()
@@ -969,7 +954,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Validates configuration before starting.
-    fn check_config(&self) -> RocketMQResult<()> {
+    fn check_config(&self) -> ClientResult<()> {
         let config = self.consumer_config_snapshot();
         if config.consumer_group.is_empty() {
             return Err(crate::mq_client_err!("Consumer group cannot be empty"));
@@ -1020,7 +1005,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Sets subscription type and validates no conflicts.
-    async fn set_subscription_type(&self, sub_type: SubscriptionType) -> RocketMQResult<()> {
+    async fn set_subscription_type(&self, sub_type: SubscriptionType) -> ClientResult<()> {
         let mut subscription_type = self.subscription_type.write().await;
         if *subscription_type == SubscriptionType::None {
             *subscription_type = sub_type;
@@ -1037,7 +1022,7 @@ impl DefaultLitePullConsumerImpl {
         topic: impl Into<CheetahString>,
         sub_expression: impl Into<CheetahString>,
         message_queue_listener: Option<ArcMessageQueueListener>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
         let topic = topic.into();
         let sub_expression = sub_expression.into();
@@ -1049,7 +1034,7 @@ impl DefaultLitePullConsumerImpl {
         self.set_subscription_type(SubscriptionType::Subscribe).await?;
 
         let subscription_data = FilterAPI::build_subscription_data(&topic, &sub_expression)
-            .map_err(|e| crate::mq_client_err!(format!("Failed to build subscription data: {}", e)))?;
+            .map_err(crate::ClientError::illegal_argument)?;
 
         self.rebalance_impl.put_subscription_data(topic, subscription_data);
         if let Some(listener) = message_queue_listener {
@@ -1071,12 +1056,12 @@ impl DefaultLitePullConsumerImpl {
         &self,
         topic: impl Into<CheetahString>,
         sub_expression: impl Into<CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         self.subscribe_inner(topic, sub_expression, None).await
     }
 
     /// Manually assigns specific message queues (ASSIGN mode).
-    pub async fn assign(&self, message_queues: Vec<MessageQueue>) -> RocketMQResult<()> {
+    pub async fn assign(&self, message_queues: Vec<MessageQueue>) -> ClientResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
         if message_queues.is_empty() {
             return Err(crate::mq_client_err!("Message queues can not be null or empty."));
@@ -1099,7 +1084,7 @@ impl DefaultLitePullConsumerImpl {
             .await;
     }
 
-    async fn update_pull_task_for_topic(&self, topic: &str, assigned: &HashSet<MessageQueue>) -> RocketMQResult<()> {
+    async fn update_pull_task_for_topic(&self, topic: &str, assigned: &HashSet<MessageQueue>) -> ClientResult<()> {
         self.assignment_registry.reconcile_topic(topic, assigned).await;
         for mq in assigned {
             let Some(entry) = self.assignment_registry.ensure(mq.clone()).await else {
@@ -1117,7 +1102,7 @@ impl DefaultLitePullConsumerImpl {
         topic: &str,
         mq_all: &HashSet<MessageQueue>,
         mq_divided: &HashSet<MessageQueue>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let assigned = match self.consumer_config.load().message_model {
             MessageModel::Broadcasting => mq_all,
             MessageModel::Clustering => mq_divided,
@@ -1142,7 +1127,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Starts pull tasks for assigned queues in ASSIGN mode.
-    async fn update_pull_task_for_assign(&self, assigned: &[MessageQueue]) -> RocketMQResult<()> {
+    async fn update_pull_task_for_assign(&self, assigned: &[MessageQueue]) -> ClientResult<()> {
         for mq in assigned {
             let Some(entry) = self.assignment_registry.ensure(mq.clone()).await else {
                 return Err(crate::mq_client_err!("LitePull assignment registry is closed"));
@@ -1155,7 +1140,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Updates topic subscription info when subscription changes (SUBSCRIBE mode).
-    async fn update_topic_subscribe_info_when_subscription_changed(&self) -> RocketMQResult<()> {
+    async fn update_topic_subscribe_info_when_subscription_changed(&self) -> ClientResult<()> {
         let topics: Vec<CheetahString> = self
             .rebalance_impl
             .get_subscription_inner()
@@ -1180,7 +1165,7 @@ impl DefaultLitePullConsumerImpl {
         Ok(())
     }
 
-    async fn sync_assigned_queues_from_rebalance(&self, topics: &[CheetahString]) -> RocketMQResult<()> {
+    async fn sync_assigned_queues_from_rebalance(&self, topics: &[CheetahString]) -> ClientResult<()> {
         let assignments: Vec<(CheetahString, HashSet<MessageQueue>)> = {
             let process_queue_table = self
                 .rebalance_impl
@@ -1211,7 +1196,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Starts the lite pull consumer.
-    pub async fn start(&self) -> RocketMQResult<()> {
+    pub async fn start(&self) -> ClientResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
         let previous_state = {
             let mut service_state = self
@@ -1358,7 +1343,7 @@ impl DefaultLitePullConsumerImpl {
     ///
     /// This mirrors Java's `operateAfterRunning`: subscriptions made before `start`
     /// need topic route refresh, and assignments made before `start` need pull tasks.
-    async fn operate_after_running(&self) -> RocketMQResult<()> {
+    async fn operate_after_running(&self) -> ClientResult<()> {
         let subscription_type = *self.subscription_type.read().await;
         match subscription_type {
             SubscriptionType::Subscribe => {
@@ -1380,7 +1365,7 @@ impl DefaultLitePullConsumerImpl {
         client_instance.check_client_in_broker().await
     }
 
-    fn start_topic_metadata_check_task(&self) -> RocketMQResult<()> {
+    fn start_topic_metadata_check_task(&self) -> ClientResult<()> {
         if self
             .topic_metadata_check_task_handle
             .lock()
@@ -1429,7 +1414,7 @@ impl DefaultLitePullConsumerImpl {
                 }
             },
         )
-        .map_err(|error| crate::mq_client_err!(format!("failed to spawn topic metadata check task: {error}")))?;
+        .map_err(|error| crate::ClientError::service_source("topic_metadata_check", error))?;
         *self
             .topic_metadata_check_task_handle
             .lock()
@@ -1438,7 +1423,7 @@ impl DefaultLitePullConsumerImpl {
         Ok(())
     }
 
-    async fn refresh_registered_topic_message_queue_snapshots(&self) -> RocketMQResult<()> {
+    async fn refresh_registered_topic_message_queue_snapshots(&self) -> ClientResult<()> {
         let topics: Vec<CheetahString> = self
             .topic_message_queue_change_listener_map
             .read()
@@ -1500,7 +1485,7 @@ impl DefaultLitePullConsumerImpl {
         }
     }
 
-    async fn fetch_topic_message_queues_and_compare(&self) -> RocketMQResult<()> {
+    async fn fetch_topic_message_queues_and_compare(&self) -> ClientResult<()> {
         let topics: Vec<CheetahString> = self
             .topic_message_queue_change_listener_map
             .read()
@@ -1519,7 +1504,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Shuts down the lite pull consumer gracefully.
-    pub async fn shutdown(&self) -> RocketMQResult<()> {
+    pub async fn shutdown(&self) -> ClientResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
         self.shutdown_transition().await
     }
@@ -1531,7 +1516,7 @@ impl DefaultLitePullConsumerImpl {
         }
     }
 
-    async fn shutdown_transition(&self) -> RocketMQResult<()> {
+    async fn shutdown_transition(&self) -> ClientResult<()> {
         match self.service_state() {
             ServiceState::Running => {
                 let consumer_group = self.consumer_config.load().consumer_group.clone();
@@ -1625,7 +1610,7 @@ impl DefaultLitePullConsumerImpl {
         topic: impl Into<CheetahString>,
         sub_expression: impl Into<CheetahString>,
         listener: L,
-    ) -> RocketMQResult<()>
+    ) -> ClientResult<()>
     where
         L: crate::consumer::message_queue_listener::MessageQueueListener + Send + Sync + 'static,
     {
@@ -1639,7 +1624,7 @@ impl DefaultLitePullConsumerImpl {
         topic: impl Into<CheetahString>,
         sub_expression: impl Into<CheetahString>,
         listener: ArcMessageQueueListener,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let topic = topic.into();
         let sub_expression = sub_expression.into();
 
@@ -1651,7 +1636,7 @@ impl DefaultLitePullConsumerImpl {
         &self,
         topic: impl Into<CheetahString>,
         selector: Option<crate::consumer::message_selector::MessageSelector>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let topic = topic.into();
 
         match selector {
@@ -1665,7 +1650,7 @@ impl DefaultLitePullConsumerImpl {
 
                 let subscription_data =
                     FilterAPI::build(&topic, sel.get_expression(), Some(sel.get_expression_type().clone()))
-                        .map_err(|e| crate::mq_client_err!(format!("Failed to build subscription data: {}", e)))?;
+                        .map_err(crate::ClientError::illegal_argument)?;
 
                 self.rebalance_impl.put_subscription_data(topic, subscription_data);
 
@@ -1706,7 +1691,7 @@ impl DefaultLitePullConsumerImpl {
         &self,
         topic: impl Into<CheetahString>,
         listener: Arc<dyn TopicMessageQueueChangeListener + Send + Sync>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let topic = topic.into();
         let previous = {
             let mut listeners = self.topic_message_queue_change_listener_map.write().await;
@@ -1733,7 +1718,7 @@ impl DefaultLitePullConsumerImpl {
         &self,
         topic: impl Into<CheetahString>,
         sub_expression: impl Into<CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
         let topic = topic.into();
         let sub_expression = sub_expression.into();
@@ -1753,7 +1738,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Alias for poll with explicit timeout parameter naming.
-    pub async fn poll_with_timeout(&self, timeout_millis: u64) -> RocketMQResult<Vec<Arc<MessageExt>>> {
+    pub async fn poll_with_timeout(&self, timeout_millis: u64) -> ClientResult<Vec<Arc<MessageExt>>> {
         self.poll(timeout_millis).await
     }
 
@@ -1761,7 +1746,7 @@ impl DefaultLitePullConsumerImpl {
     pub async fn build_subscriptions_for_heartbeat(
         &self,
         sub_expression_map: &mut HashMap<String, crate::consumer::message_selector::MessageSelector>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         // Get subscriptions from rebalance impl
         let subscriptions = self.rebalance_impl.get_subscription_inner();
 
@@ -1788,7 +1773,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Spawns an async pull task for a message queue.
-    async fn start_pull_task(&self, mq: MessageQueue) -> RocketMQResult<()> {
+    async fn start_pull_task(&self, mq: MessageQueue) -> ClientResult<()> {
         let entry = self
             .assignment_registry
             .get(&mq)
@@ -1901,7 +1886,7 @@ impl DefaultLitePullConsumerImpl {
                 }
             },
         )
-        .map_err(|error| crate::mq_client_err!(format!("failed to spawn pull task for {mq}: {error}")))?;
+        .map_err(|error| crate::ClientError::service_source("lite_pull_assignment", error))?;
 
         match self
             .assignment_registry
@@ -1929,13 +1914,13 @@ impl DefaultLitePullConsumerImpl {
         mq: &MessageQueue,
         process_queue: &Arc<crate::consumer::consumer_impl::process_queue::ProcessQueue>,
         assignment: Option<&AssignmentPullContext>,
-    ) -> RocketMQResult<u64> {
+    ) -> ClientResult<u64> {
         struct NoopPullCallback;
 
         impl PullCallback for NoopPullCallback {
             async fn on_success(&mut self, _pull_result: crate::PullResultExt) {}
 
-            fn on_exception(&mut self, _e: rocketmq_error::RocketMQError) {}
+            fn on_exception(&mut self, _e: crate::ClientError) {}
         }
 
         self.make_sure_state_ok()?;
@@ -1983,10 +1968,7 @@ impl DefaultLitePullConsumerImpl {
         );
         let mut pull_result = tokio::time::timeout_at(pull_deadline, pull_request)
             .await
-            .map_err(|_| RocketMQError::Timeout {
-                operation: "lite pull request",
-                timeout_ms: pull_rpc_timeout_millis,
-            })??
+            .map_err(|_| ClientError::timeout("lite pull request", pull_rpc_timeout_millis))??
             .ok_or_else(|| crate::mq_client_err!("Synchronous lite pull returned no result"))?;
         drop(pull_permit);
 
@@ -2057,7 +2039,7 @@ impl DefaultLitePullConsumerImpl {
         mq: &MessageQueue,
         process_queue: &Arc<crate::consumer::consumer_impl::process_queue::ProcessQueue>,
         pull_offset: i64,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let retry_offset = messages.first().map_or(pull_offset, |message| message.queue_offset);
         let cached_messages = messages.clone();
         process_queue.put_message(&messages).await;
@@ -2078,7 +2060,7 @@ impl DefaultLitePullConsumerImpl {
     async fn assignment_operation(
         &self,
         message_queue: &MessageQueue,
-    ) -> RocketMQResult<(Arc<AssignmentEntry>, Arc<Mutex<()>>)> {
+    ) -> ClientResult<(Arc<AssignmentEntry>, Arc<Mutex<()>>)> {
         let entry =
             self.assignment_registry.get(message_queue).await.ok_or_else(|| {
                 crate::mq_client_err!(format!("Message queue is not actively assigned: {message_queue}"))
@@ -2120,7 +2102,7 @@ impl DefaultLitePullConsumerImpl {
         self.consumer_config.load().pull_time_delay_millis_when_exception
     }
 
-    async fn subscription_data_for_queue(&self, mq: &MessageQueue) -> RocketMQResult<SubscriptionData> {
+    async fn subscription_data_for_queue(&self, mq: &MessageQueue) -> ClientResult<SubscriptionData> {
         let subscription_inner = self.rebalance_impl.get_subscription_inner();
         if let Some(subscription_data) = subscription_inner.get(mq.topic()) {
             return Ok(subscription_data.value().clone());
@@ -2139,10 +2121,10 @@ impl DefaultLitePullConsumerImpl {
             &expression,
             Some(CheetahString::from_static_str(ExpressionType::TAG)),
         )
-        .map_err(|e| crate::mq_client_err!(format!("buildSubscriptionData exception, {}", e)))
+        .map_err(crate::ClientError::illegal_argument)
     }
 
-    async fn next_pull_offset(&self, mq: &MessageQueue) -> RocketMQResult<i64> {
+    async fn next_pull_offset(&self, mq: &MessageQueue) -> ClientResult<i64> {
         let seek_offset = self.assigned_message_queue.get_seek_offset(mq).await;
         if seek_offset != -1 {
             self.assigned_message_queue.update_consume_offset(mq, seek_offset).await;
@@ -2160,7 +2142,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     #[allow(deprecated)]
-    async fn compute_initial_pull_offset(&self, mq: &MessageQueue) -> RocketMQResult<i64> {
+    async fn compute_initial_pull_offset(&self, mq: &MessageQueue) -> ClientResult<i64> {
         if let Some(offset_store) = self.offset_store() {
             let stored_offset = offset_store.read_offset(mq, ReadOffsetType::MemoryFirstThenStore).await;
             if stored_offset >= 0 {
@@ -2203,7 +2185,7 @@ impl DefaultLitePullConsumerImpl {
         &self,
         _mq: &MessageQueue,
         pq: &Arc<crate::consumer::consumer_impl::process_queue::ProcessQueue>,
-    ) -> RocketMQResult<Option<u64>> {
+    ) -> ClientResult<Option<u64>> {
         let config = self.consumer_config_snapshot();
 
         // Global cache flow control
@@ -2250,7 +2232,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Polls for messages with the specified timeout.
-    pub async fn poll(&self, timeout_millis: u64) -> RocketMQResult<Vec<Arc<MessageExt>>> {
+    pub async fn poll(&self, timeout_millis: u64) -> ClientResult<Vec<Arc<MessageExt>>> {
         let _poll_guard = self.poll_lock.lock().await;
         self.make_sure_state_ok()?;
 
@@ -2364,7 +2346,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Commits offsets for all assigned message queues.
-    pub async fn commit_all(&self) -> RocketMQResult<()> {
+    pub async fn commit_all(&self) -> ClientResult<()> {
         let queues = self.assigned_message_queue.message_queues().await;
 
         if let Err(e) = self.make_sure_state_ok() {
@@ -2382,7 +2364,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Commits offset for a specific message queue.
-    pub async fn commit_sync(&self, mq: &MessageQueue, persist: bool) -> RocketMQResult<()> {
+    pub async fn commit_sync(&self, mq: &MessageQueue, persist: bool) -> ClientResult<()> {
         self.make_sure_state_ok()?;
 
         let updated = self.commit_assigned_message_queue_offset(mq).await?;
@@ -2398,7 +2380,7 @@ impl DefaultLitePullConsumerImpl {
         Ok(())
     }
 
-    async fn commit_assigned_message_queue_offset(&self, mq: &MessageQueue) -> RocketMQResult<bool> {
+    async fn commit_assigned_message_queue_offset(&self, mq: &MessageQueue) -> ClientResult<bool> {
         let consume_offset = self.assigned_message_queue.get_consume_offset(mq).await;
 
         if consume_offset == -1 {
@@ -2421,7 +2403,7 @@ impl DefaultLitePullConsumerImpl {
         &self,
         message_queues: &HashSet<MessageQueue>,
         persist: bool,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         self.make_sure_state_ok()?;
 
         if message_queues.is_empty() {
@@ -2442,7 +2424,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Commits offsets for multiple message queues.
-    pub async fn commit(&self, offsets: HashMap<MessageQueue, i64>, persist: bool) -> RocketMQResult<()> {
+    pub async fn commit(&self, offsets: HashMap<MessageQueue, i64>, persist: bool) -> ClientResult<()> {
         self.make_sure_state_ok()?;
 
         if offsets.is_empty() {
@@ -2479,7 +2461,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Updates the consume offset for a message queue.
-    async fn update_consume_offset(&self, mq: &MessageQueue, offset: i64) -> RocketMQResult<()> {
+    async fn update_consume_offset(&self, mq: &MessageQueue, offset: i64) -> ClientResult<()> {
         if let Some(offset_store) = self.offset_store() {
             offset_store.update_offset(mq, offset, false).await;
         }
@@ -2549,20 +2531,20 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Seeks to the specified offset for the given message queue.
-    pub async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> RocketMQResult<()> {
+    pub async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> ClientResult<()> {
         self.make_sure_state_ok()?;
         self.seek_internal(message_queue, offset, true).await
     }
 
     /// Seeks to the beginning of the message queue.
-    pub async fn seek_to_begin(&self, message_queue: &MessageQueue) -> RocketMQResult<()> {
+    pub async fn seek_to_begin(&self, message_queue: &MessageQueue) -> ClientResult<()> {
         self.make_sure_state_ok()?;
         let begin = self.min_offset(message_queue).await?;
         self.seek_internal(message_queue, begin, false).await
     }
 
     /// Seeks to the end of the message queue.
-    pub async fn seek_to_end(&self, message_queue: &MessageQueue) -> RocketMQResult<()> {
+    pub async fn seek_to_end(&self, message_queue: &MessageQueue) -> ClientResult<()> {
         self.make_sure_state_ok()?;
         let end = self.max_offset(message_queue).await?;
         self.seek_internal(message_queue, end, false).await
@@ -2574,7 +2556,7 @@ impl DefaultLitePullConsumerImpl {
         message_queue: &MessageQueue,
         offset: i64,
         validate_offset: bool,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         self.ensure_message_queue_assigned(message_queue).await?;
 
         // Validate offset range if requested (skip for seek_to_begin/end to avoid duplicate queries)
@@ -2631,7 +2613,7 @@ impl DefaultLitePullConsumerImpl {
         Ok(())
     }
 
-    async fn ensure_message_queue_assigned(&self, message_queue: &MessageQueue) -> RocketMQResult<()> {
+    async fn ensure_message_queue_assigned(&self, message_queue: &MessageQueue) -> ClientResult<()> {
         let assigned = self.assigned_message_queue.message_queues().await;
         if assigned.contains(message_queue) {
             return Ok(());
@@ -2653,7 +2635,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Returns the committed offset for the message queue.
-    pub async fn committed(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    pub async fn committed(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         self.make_sure_state_ok()?;
 
         if let Some(offset_store) = self.offset_store() {
@@ -2678,7 +2660,7 @@ impl DefaultLitePullConsumerImpl {
     /// and clears assigned message queues for the topic.
     ///
     /// This operation can be performed regardless of the consumer state.
-    pub async fn unsubscribe(&self, topic: impl Into<CheetahString>) -> RocketMQResult<()> {
+    pub async fn unsubscribe(&self, topic: impl Into<CheetahString>) -> ClientResult<()> {
         let _transition = self.lifecycle_transition.lock().await;
         let topic = topic.into();
 
@@ -2704,7 +2686,7 @@ impl DefaultLitePullConsumerImpl {
     ///
     /// Returns an error if the consumer is not in a valid state or if the broker address
     /// cannot be resolved.
-    pub async fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> RocketMQResult<i64> {
+    pub async fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> ClientResult<i64> {
         self.make_sure_state_ok()?;
 
         let client_instance = self
@@ -2722,7 +2704,7 @@ impl DefaultLitePullConsumerImpl {
     ///
     /// Returns an error if the consumer is not in a valid state or if the topic route
     /// information cannot be retrieved.
-    pub async fn fetch_message_queues(&self, topic: impl Into<CheetahString>) -> RocketMQResult<HashSet<MessageQueue>> {
+    pub async fn fetch_message_queues(&self, topic: impl Into<CheetahString>) -> ClientResult<HashSet<MessageQueue>> {
         use crate::factory::mq_client_instance::topic_route_data2topic_subscribe_info;
 
         self.make_sure_state_ok()?;
@@ -2762,7 +2744,7 @@ impl DefaultLitePullConsumerImpl {
         queue_num: i32,
         topic_sys_flag: i32,
         attributes: HashMap<String, String>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         self.make_sure_state_ok()?;
 
         let client_instance = self
@@ -2783,7 +2765,7 @@ impl DefaultLitePullConsumerImpl {
         max_num: i32,
         begin: u64,
         end: u64,
-    ) -> RocketMQResult<QueryResult> {
+    ) -> ClientResult<QueryResult> {
         self.make_sure_state_ok()?;
 
         let client_instance = self
@@ -2797,7 +2779,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Queries one message by unique key, matching DefaultMQProducer's fallback path.
-    pub async fn query_message_by_uniq_key(&self, topic: &str, uniq_key: &str) -> RocketMQResult<MessageExt> {
+    pub async fn query_message_by_uniq_key(&self, topic: &str, uniq_key: &str) -> ClientResult<MessageExt> {
         self.make_sure_state_ok()?;
 
         let begin = current_millis().saturating_sub(QUERY_UNIQ_KEY_LOOKBACK_MILLIS);
@@ -2816,7 +2798,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Views a message by offset message id through the Java-compatible MQAdmin facade.
-    pub async fn view_message(&self, topic: &str, msg_id: &str) -> RocketMQResult<MessageExt> {
+    pub async fn view_message(&self, topic: &str, msg_id: &str) -> ClientResult<MessageExt> {
         self.make_sure_state_ok()?;
 
         let client_instance = self
@@ -2831,7 +2813,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Parses message queues by removing namespace from their topic names.
-    fn parse_message_queues(&self, queue_set: &HashSet<MessageQueue>) -> RocketMQResult<HashSet<MessageQueue>> {
+    fn parse_message_queues(&self, queue_set: &HashSet<MessageQueue>) -> ClientResult<HashSet<MessageQueue>> {
         let client_config = self.client_config.load();
         let namespace = client_config.get_namespace_v2().map(|s| s.as_str()).unwrap_or_default();
 
@@ -2848,13 +2830,13 @@ impl DefaultLitePullConsumerImpl {
     ///
     /// This is an alias for `search_offset`.
     #[allow(dead_code)]
-    pub async fn offset_for_timestamp(&self, mq: &MessageQueue, timestamp: u64) -> RocketMQResult<i64> {
+    pub async fn offset_for_timestamp(&self, mq: &MessageQueue, timestamp: u64) -> ClientResult<i64> {
         self.search_offset(mq, timestamp).await
     }
 
     /// Returns the earliest message store time for the specified message queue.
     #[allow(dead_code)]
-    pub async fn earliest_msg_store_time(&self, mq: &MessageQueue) -> RocketMQResult<i64> {
+    pub async fn earliest_msg_store_time(&self, mq: &MessageQueue) -> ClientResult<i64> {
         self.make_sure_state_ok()?;
 
         let client_instance = self
@@ -2866,13 +2848,13 @@ impl DefaultLitePullConsumerImpl {
 
     /// Returns the maximum offset of the specified message queue.
     #[allow(dead_code)]
-    pub async fn max_offset_public(&self, mq: &MessageQueue) -> RocketMQResult<i64> {
+    pub async fn max_offset_public(&self, mq: &MessageQueue) -> ClientResult<i64> {
         self.max_offset(mq).await
     }
 
     /// Returns the minimum offset of the specified message queue.
     #[allow(dead_code)]
-    pub async fn min_offset_public(&self, mq: &MessageQueue) -> RocketMQResult<i64> {
+    pub async fn min_offset_public(&self, mq: &MessageQueue) -> ClientResult<i64> {
         self.min_offset(mq).await
     }
 
@@ -2928,7 +2910,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Updates where consumption starts when no offset exists.
-    pub fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> RocketMQResult<()> {
+    pub fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> ClientResult<()> {
         validate_lite_pull_consume_from_where(consume_from_where)?;
         self.update_consumer_config(|config| config.consume_from_where = consume_from_where);
         self.rebalance_impl.set_consume_from_where(consume_from_where);
@@ -3087,7 +3069,7 @@ impl DefaultLitePullConsumerImpl {
     }
 
     /// Updates the configured number of concurrent pull RPCs before startup.
-    pub fn try_set_pull_thread_nums(&self, pull_thread_nums: usize) -> RocketMQResult<()> {
+    pub fn try_set_pull_thread_nums(&self, pull_thread_nums: usize) -> ClientResult<()> {
         if pull_thread_nums == 0 {
             return Err(crate::mq_client_err!("pullThreadNums must be greater than 0"));
         }
@@ -3106,7 +3088,7 @@ impl DefaultLitePullConsumerImpl {
         &self,
         message_queue: &MessageQueue,
         assignment: Option<&AssignmentPullContext>,
-    ) -> RocketMQResult<Option<OwnedSemaphorePermit>> {
+    ) -> ClientResult<Option<OwnedSemaphorePermit>> {
         let limiter = self.pull_concurrency_limiter.load_full();
         let permit = if let Some(assignment) = assignment {
             let cancellation = assignment.entry.cancellation();
@@ -3184,7 +3166,7 @@ impl DefaultLitePullConsumerImpl {
         self.update_consumer_config(|config| config.consume_max_span = consume_max_span);
     }
 
-    async fn max_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    async fn max_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         self.make_sure_state_ok()?;
 
         let client_instance = self
@@ -3206,7 +3188,7 @@ impl DefaultLitePullConsumerImpl {
             .await
     }
 
-    async fn min_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    async fn min_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         self.make_sure_state_ok()?;
 
         let client_instance = self
@@ -3390,7 +3372,7 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
         }
     }
 
-    async fn try_rebalance(&self) -> RocketMQResult<bool> {
+    async fn try_rebalance(&self) -> ClientResult<bool> {
         self.do_rebalance().await;
         Ok(true)
     }

@@ -80,11 +80,7 @@ impl MQClientAPIImpl {
         match communication_mode {
             CommunicationMode::Sync => {
                 if deadline.is_expired() {
-                    return Err(rocketmq_error::RocketMQError::Timeout {
-                        operation: "sendMessage",
-                        timeout_ms: deadline.budget_millis(),
-                    }
-                    .into());
+                    return Err(crate::ClientError::timeout("sendMessage", deadline.budget_millis()).into());
                 }
                 let result = self
                     .send_message_sync(addr, broker_name, msg, deadline, request)
@@ -93,11 +89,7 @@ impl MQClientAPIImpl {
             }
             CommunicationMode::Async => {
                 if deadline.is_expired() {
-                    return Err(rocketmq_error::RocketMQError::Timeout {
-                        operation: "sendMessage",
-                        timeout_ms: deadline.budget_millis(),
-                    }
-                    .into());
+                    return Err(crate::ClientError::timeout("sendMessage", deadline.budget_millis()).into());
                 }
                 self.send_message_async(
                     addr,
@@ -119,7 +111,7 @@ impl MQClientAPIImpl {
                 self.remoting_client
                     .invoke_request_oneway_with_deadline(addr, request, deadline)
                     .await
-                    .map_err(RetryInput::BusinessError)?;
+                    .map_err(RetryInput::from)?;
                 Ok(None)
             }
         }
@@ -141,10 +133,11 @@ impl MQClientAPIImpl {
         request: RemotingCommand,
         deadline: rocketmq_transport::api::RequestDeadline,
         permit: rocketmq_runtime::ResourcePermit,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         self.remoting_client
             .invoke_oneway_with_permit(addr, request, deadline, permit)
             .await
+            .map_err(ClientError::from)
     }
 
     pub(crate) async fn send_message_simple<T>(
@@ -205,7 +198,7 @@ impl MQClientAPIImpl {
             | ResponseCode::SlaveNotAvailable
             | ResponseCode::Success => self
                 .process_send_response(broker_name, msg, &response, addr)
-                .map_err(RetryInput::BusinessError),
+                .map_err(RetryInput::from),
             _ => Err(RetryInput::Response {
                 code: response.code(),
                 retry_after: None,
@@ -345,10 +338,10 @@ impl MQClientAPIImpl {
 
         loop {
             if deadline.is_expired() {
-                let err = Arc::new(last_error.take().unwrap_or(rocketmq_error::RocketMQError::Timeout {
-                    operation: "sendMessageAsync",
-                    timeout_ms: deadline.budget_millis(),
-                }));
+                let err = Arc::new(last_error.take().unwrap_or(crate::ClientError::timeout(
+                    "sendMessageAsync",
+                    deadline.budget_millis(),
+                )));
                 Self::execute_async_send_hook_after(&context_data, None, Some(Arc::clone(&err)));
                 Self::notify_send_callback_exception(&callback_executor, &send_callback, err.as_ref()).await;
                 return;
@@ -586,7 +579,7 @@ impl MQClientAPIImpl {
                                     "decode SendMessageResponseHeader",
                                 )
                                 .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT);
-                            let err_obj = Arc::new(RocketMQError::Shared(Arc::new(
+                            let err_obj = Arc::new(ClientError::from_shared(Arc::new(
                                 rocketmq_error::Error::caused_by(&rocketmq_error::CORE_SERIALIZATION_FAILED, source)
                                     .with_context(context),
                             )));
@@ -694,7 +687,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<(i32, Option<RemotingCommand>)> {
+    ) -> crate::ClientResult<(i32, Option<RemotingCommand>)> {
         let request = heartbeat_request(&self.command_factory, heartbeat_data, self.client_config.language)?;
         let outcome = self
             .remoting_client
@@ -718,7 +711,7 @@ impl MQClientAPIImpl {
                     ),
                 );
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok((response.version(), Some(response)));
@@ -735,11 +728,12 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let request = heartbeat_request(&self.command_factory, heartbeat_data, self.client_config.language)?;
         self.remoting_client
             .invoke_request_oneway(addr, request, timeout_millis)
             .await
+            .map_err(ClientError::from)
     }
 
     pub async fn register_client(
@@ -747,7 +741,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<bool> {
+    ) -> crate::ClientResult<bool> {
         let request = heartbeat_request(&self.command_factory, heartbeat_data, self.client_config.language)?;
         let outcome = self
             .remoting_client
@@ -771,7 +765,7 @@ impl MQClientAPIImpl {
                     ),
                 );
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         Ok(ResponseCode::from(response.code()) == ResponseCode::Success)
     }
@@ -781,7 +775,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<HeartbeatV2Result> {
+    ) -> crate::ClientResult<HeartbeatV2Result> {
         let request = heartbeat_request(&self.command_factory, heartbeat_data, self.client_config.language)?;
         let outcome = self
             .remoting_client
@@ -805,7 +799,7 @@ impl MQClientAPIImpl {
                     ),
                 );
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(HeartbeatV2Result::from_response(&response));
@@ -824,7 +818,7 @@ impl MQClientAPIImpl {
         client_id: &str,
         subscription_data: &SubscriptionData,
         timeout_millis: u64,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let mut request = self.create_remoting_command(RequestCode::CheckClientConfig);
         let body = CheckClientRequestBody::new(
             client_id.to_string(),
@@ -855,7 +849,7 @@ impl MQClientAPIImpl {
                     ),
                 );
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             return Err(mq_client_err!(
@@ -871,7 +865,7 @@ impl MQClientAPIImpl {
         addr: &str,
         request_header: RecallMessageRequestHeader,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<String> {
+    ) -> crate::ClientResult<String> {
         let request = self.create_request_command(RequestCode::RecallMessage, request_header);
 
         let remote_addr = CheetahString::from_slice(addr);
@@ -897,7 +891,7 @@ impl MQClientAPIImpl {
                     ),
                 );
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
 
         match ResponseCode::from(response.code()) {
@@ -925,9 +919,9 @@ impl MQClientAPIImpl {
         request_header: RecallMessageRequestHeader,
         timeout_millis: u64,
         invoke_callback: F,
-    ) -> rocketmq_error::RocketMQResult<()>
+    ) -> crate::ClientResult<()>
     where
-        F: FnOnce(rocketmq_error::RocketMQResult<RemotingCommand>) + Send,
+        F: FnOnce(crate::ClientResult<RemotingCommand>) + Send,
     {
         let request = self.create_request_command(RequestCode::RecallMessage, request_header);
         let outcome = self
@@ -948,7 +942,7 @@ impl MQClientAPIImpl {
                     Some(addr),
                 ),
             ),
-            Err(error) => Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => Err(ClientError::from_shared(error.into_shared_error())),
         };
         invoke_callback(response);
         Ok(())

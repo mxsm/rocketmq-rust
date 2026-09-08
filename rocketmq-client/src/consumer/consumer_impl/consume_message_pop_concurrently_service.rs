@@ -512,7 +512,7 @@ impl ConsumeMessagePopConcurrentlyService {
         impl AckCallback for DefaultAckCallback {
             fn on_success(&self, _ack_result: AckResult) {}
 
-            fn on_exception(&self, e: rocketmq_error::RocketMQError) {
+            fn on_exception(&self, e: crate::ClientError) {
                 error!("changePopInvisibleTime exception: {}", e);
             }
         }

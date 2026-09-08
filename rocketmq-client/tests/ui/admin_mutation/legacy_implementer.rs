@@ -22,7 +22,7 @@ use rocketmq_client_rust::SubscriptionGroupConfigPatch;
 use rocketmq_client_rust::SubscriptionGroupConfigPatchOutcome;
 use rocketmq_client_rust::TopicConfigPatch;
 use rocketmq_client_rust::TopicConfigPatchOutcome;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client::ClientResult;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -36,8 +36,8 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 
 struct LegacyAdmin;
 
-fn unsupported<T>() -> RocketMQResult<T> {
-    Err(rocketmq_error::RocketMQError::illegal_argument("fixture"))
+fn unsupported<T>() -> ClientResult<T> {
+    Err(rocketmq_client::ClientError::illegal_argument("fixture"))
 }
 
 impl MQAdminMutationExt for LegacyAdmin {
@@ -45,7 +45,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         &self,
         _proxy_addr: CheetahString,
         _operation_id: CheetahString,
-    ) -> RocketMQResult<ProxyDrainStateResponseBody> {
+    ) -> ClientResult<ProxyDrainStateResponseBody> {
         unsupported()
     }
 
@@ -53,11 +53,11 @@ impl MQAdminMutationExt for LegacyAdmin {
         &self,
         _proxy_addr: CheetahString,
         _operation_id: CheetahString,
-    ) -> RocketMQResult<ProxyDrainStateResponseBody> {
+    ) -> ClientResult<ProxyDrainStateResponseBody> {
         unsupported()
     }
 
-    async fn broker_config_generation(&self, _broker_addr: CheetahString) -> RocketMQResult<u64> {
+    async fn broker_config_generation(&self, _broker_addr: CheetahString) -> ClientResult<u64> {
         unsupported()
     }
 
@@ -66,7 +66,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         _broker_addr: CheetahString,
         _expected_generation: u64,
         _properties: HashMap<CheetahString, CheetahString>,
-    ) -> RocketMQResult<BrokerConfigPatchOutcome> {
+    ) -> ClientResult<BrokerConfigPatchOutcome> {
         unsupported()
     }
 
@@ -76,7 +76,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         _topic: CheetahString,
         _expected_version: u64,
         _patch: TopicConfigPatch,
-    ) -> RocketMQResult<TopicConfigPatchOutcome> {
+    ) -> ClientResult<TopicConfigPatchOutcome> {
         unsupported()
     }
 
@@ -86,15 +86,15 @@ impl MQAdminMutationExt for LegacyAdmin {
         _group: CheetahString,
         _expected_version: u64,
         _patch: SubscriptionGroupConfigPatch,
-    ) -> RocketMQResult<SubscriptionGroupConfigPatchOutcome> {
+    ) -> ClientResult<SubscriptionGroupConfigPatchOutcome> {
         unsupported()
     }
 
-    async fn upsert_topic_config(&self, _broker_addr: CheetahString, _config: TopicConfig) -> RocketMQResult<()> {
+    async fn upsert_topic_config(&self, _broker_addr: CheetahString, _config: TopicConfig) -> ClientResult<()> {
         unsupported()
     }
 
-    async fn remove_topic(&self, _topic_name: CheetahString, _cluster_name: CheetahString) -> RocketMQResult<()> {
+    async fn remove_topic(&self, _topic_name: CheetahString, _cluster_name: CheetahString) -> ClientResult<()> {
         unsupported()
     }
 
@@ -105,7 +105,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         _consumer_group: CheetahString,
         _timestamp: u64,
         _force: bool,
-    ) -> RocketMQResult<HashMap<MessageQueue, u64>> {
+    ) -> ClientResult<HashMap<MessageQueue, u64>> {
         unsupported()
     }
 
@@ -113,7 +113,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         &self,
         _broker_addr: CheetahString,
         _config: SubscriptionGroupConfig,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         unsupported()
     }
 
@@ -122,7 +122,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         _broker_addr: CheetahString,
         _group_name: CheetahString,
         _remove_offset: Option<bool>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         unsupported()
     }
 
@@ -131,7 +131,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         _broker_addr: CheetahString,
         _group_names: Vec<CheetahString>,
         _clean_offset: bool,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         unsupported()
     }
 
@@ -143,7 +143,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         _mode: MessageRequestMode,
         _pop_work_group_size: i32,
         _timeout_millis: u64,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         unsupported()
     }
 
@@ -153,7 +153,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         _client_id: CheetahString,
         _topic: CheetahString,
         _message_id: CheetahString,
-    ) -> RocketMQResult<ConsumeMessageDirectlyResult> {
+    ) -> ClientResult<ConsumeMessageDirectlyResult> {
         unsupported()
     }
 
@@ -163,15 +163,15 @@ impl MQAdminMutationExt for LegacyAdmin {
         _destination_group: CheetahString,
         _topic: CheetahString,
         _offline: bool,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         unsupported()
     }
 
-    async fn mutation_cluster_info(&self) -> RocketMQResult<ClusterInfo> {
+    async fn mutation_cluster_info(&self) -> ClientResult<ClusterInfo> {
         unsupported()
     }
 
-    async fn mutation_topic_route(&self, _topic: CheetahString) -> RocketMQResult<Option<TopicRouteData>> {
+    async fn mutation_topic_route(&self, _topic: CheetahString) -> ClientResult<Option<TopicRouteData>> {
         unsupported()
     }
 
@@ -179,7 +179,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         &self,
         _broker_addr: CheetahString,
         _topic: CheetahString,
-    ) -> RocketMQResult<TopicConfig> {
+    ) -> ClientResult<TopicConfig> {
         unsupported()
     }
 
@@ -187,7 +187,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         &self,
         _broker_addrs: HashSet<CheetahString>,
         _topic: CheetahString,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         unsupported()
     }
 
@@ -195,7 +195,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         &self,
         _broker_addr: CheetahString,
         _topics: Vec<CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         unsupported()
     }
 
@@ -204,11 +204,11 @@ impl MQAdminMutationExt for LegacyAdmin {
         _namesrv_addrs: HashSet<CheetahString>,
         _cluster_name: Option<CheetahString>,
         _topic: CheetahString,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         unsupported()
     }
 
-    async fn mutation_name_server_addresses(&self) -> RocketMQResult<Vec<CheetahString>> {
+    async fn mutation_name_server_addresses(&self) -> ClientResult<Vec<CheetahString>> {
         unsupported()
     }
 
@@ -217,7 +217,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         _topic: CheetahString,
         _value: CheetahString,
         _cluster_wide: bool,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         unsupported()
     }
 
@@ -228,7 +228,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         _topic: CheetahString,
         _timestamp: u64,
         _force: bool,
-    ) -> RocketMQResult<Vec<RollbackStats>> {
+    ) -> ClientResult<Vec<RollbackStats>> {
         unsupported()
     }
 
@@ -236,7 +236,7 @@ impl MQAdminMutationExt for LegacyAdmin {
         &self,
         _topic: CheetahString,
         _message_id: CheetahString,
-    ) -> RocketMQResult<MessageExt> {
+    ) -> ClientResult<MessageExt> {
         unsupported()
     }
 }

@@ -17,8 +17,8 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+use rocketmq_client::ClientResult;
 use rocketmq_client_rust::DefaultMQProducer;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::message::message_single::Message;
 
 pub const MESSAGE_COUNT: usize = 1;
@@ -28,7 +28,7 @@ pub const TOPIC: &str = "RequestTopic";
 pub const TAG: &str = "TagA";
 
 #[tokio::main]
-pub async fn main() -> RocketMQResult<()> {
+pub async fn main() -> ClientResult<()> {
     let example_runtime = support::ExampleClientRuntime::try_new("request-callback-producer")?;
     let client_runtime = example_runtime.client_runtime();
     // create a producer builder with default configuration

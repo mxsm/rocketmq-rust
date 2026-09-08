@@ -21,8 +21,8 @@
 use std::future::Future;
 use std::time::Duration;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use crate::ClientError;
+use crate::ClientResult;
 use tokio::time::timeout;
 
 /// Applies a timeout to a future operation.
@@ -37,35 +37,34 @@ use tokio::time::timeout;
 ///
 /// # Returns
 ///
-/// * `RocketMQResult<T>` - The result of the operation or a timeout error
+/// * `ClientResult<T>` - The result of the operation or a timeout error
 ///
 /// # Example
 ///
 /// ```ignore
-/// use rocketmq_error::RocketMQResult;
+/// use crate::ClientResult;
 /// use std::time::Duration;
 ///
-/// async fn send_message() -> RocketMQResult<String> {
+/// async fn send_message() -> ClientResult<String> {
 ///     // Simulate work
 ///     tokio::time::sleep(Duration::from_millis(100)).await;
 ///     Ok("Message sent".to_string())
 /// }
 ///
-/// # async fn example() -> RocketMQResult<()> {
+/// # async fn example() -> ClientResult<()> {
 /// use rocketmq_client_rust::with_timeout;
-/// let result: RocketMQResult<String> = with_timeout(Duration::from_secs(1), send_message()).await;
+/// let result: ClientResult<String> = with_timeout(Duration::from_secs(1), send_message()).await;
 /// assert!(result.is_ok());
 /// # Ok(())
 /// # }
 /// ```
-pub async fn with_timeout<F, T>(duration: Duration, future: F) -> RocketMQResult<T>
+pub async fn with_timeout<F, T>(duration: Duration, future: F) -> ClientResult<T>
 where
-    F: Future<Output = RocketMQResult<T>>,
+    F: Future<Output = ClientResult<T>>,
 {
-    timeout(duration, future).await.map_err(|_| RocketMQError::Timeout {
-        operation: "async operation",
-        timeout_ms: duration.as_millis() as u64,
-    })?
+    timeout(duration, future)
+        .await
+        .map_err(|_| ClientError::timeout("async operation", duration.as_millis() as u64))?
 }
 
 /// Applies a timeout with a custom operation name for better error messages.
@@ -78,15 +77,14 @@ where
 ///
 /// # Returns
 ///
-/// * `RocketMQResult<T>` - The result of the operation or a timeout error
-pub async fn with_timeout_named<F, T>(operation: &'static str, duration: Duration, future: F) -> RocketMQResult<T>
+/// * `ClientResult<T>` - The result of the operation or a timeout error
+pub async fn with_timeout_named<F, T>(operation: &'static str, duration: Duration, future: F) -> ClientResult<T>
 where
-    F: Future<Output = RocketMQResult<T>>,
+    F: Future<Output = ClientResult<T>>,
 {
-    timeout(duration, future).await.map_err(|_| RocketMQError::Timeout {
-        operation,
-        timeout_ms: duration.as_millis() as u64,
-    })?
+    timeout(duration, future)
+        .await
+        .map_err(|_| ClientError::timeout(operation, duration.as_millis() as u64))?
 }
 
 /// Applies a timeout specified in milliseconds.
@@ -99,10 +97,10 @@ where
 ///
 /// # Returns
 ///
-/// * `RocketMQResult<T>` - The result of the operation or a timeout error
-pub async fn with_timeout_millis<F, T>(operation: &'static str, timeout_ms: u64, future: F) -> RocketMQResult<T>
+/// * `ClientResult<T>` - The result of the operation or a timeout error
+pub async fn with_timeout_millis<F, T>(operation: &'static str, timeout_ms: u64, future: F) -> ClientResult<T>
 where
-    F: Future<Output = RocketMQResult<T>>,
+    F: Future<Output = ClientResult<T>>,
 {
     with_timeout_named(operation, Duration::from_millis(timeout_ms), future).await
 }
@@ -119,32 +117,32 @@ where
 ///
 /// # Returns
 ///
-/// * `RocketMQResult<Vec<T>>` - Results of all completed operations or timeout error
+/// * `ClientResult<Vec<T>>` - Results of all completed operations or timeout error
 ///
 /// # Example
 ///
 /// ```ignore
-/// use rocketmq_error::RocketMQResult;
+/// use crate::ClientResult;
 /// use std::time::Duration;
 ///
-/// async fn send_message(id: usize) -> RocketMQResult<usize> {
+/// async fn send_message(id: usize) -> ClientResult<usize> {
 ///     tokio::time::sleep(Duration::from_millis(100)).await;
 ///     Ok(id)
 /// }
 ///
-/// # async fn example() -> RocketMQResult<()> {
+/// # async fn example() -> ClientResult<()> {
 /// use rocketmq_client_rust::with_timeout_all;
 /// let futures = vec![send_message(1), send_message(2), send_message(3)];
-/// let results: RocketMQResult<Vec<usize>> =
+/// let results: ClientResult<Vec<usize>> =
 ///     with_timeout_all(Duration::from_secs(1), futures).await;
 /// assert!(results.is_ok());
 /// assert_eq!(results?.len(), 3);
 /// # Ok(())
 /// # }
 /// ```
-pub async fn with_timeout_all<F, T>(duration: Duration, futures: Vec<F>) -> RocketMQResult<Vec<T>>
+pub async fn with_timeout_all<F, T>(duration: Duration, futures: Vec<F>) -> ClientResult<Vec<T>>
 where
-    F: Future<Output = RocketMQResult<T>> + Send + 'static,
+    F: Future<Output = ClientResult<T>> + Send + 'static,
     T: Send + 'static,
 {
     let joined = async move {
@@ -152,7 +150,7 @@ where
         for future in futures {
             results.push(future.await?);
         }
-        RocketMQResult::Ok(results)
+        ClientResult::Ok(results)
     };
 
     with_timeout(duration, joined).await
@@ -165,7 +163,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_timeout_success() {
-        async fn quick_operation() -> RocketMQResult<String> {
+        async fn quick_operation() -> ClientResult<String> {
             tokio::time::sleep(Duration::from_millis(10)).await;
             Ok("Success".to_string())
         }
@@ -177,43 +175,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_timeout_failure() {
-        async fn slow_operation() -> RocketMQResult<String> {
+        async fn slow_operation() -> ClientResult<String> {
             tokio::time::sleep(Duration::from_millis(200)).await;
             Ok("Success".to_string())
         }
 
         let result = with_timeout(Duration::from_millis(50), slow_operation()).await;
         assert!(result.is_err());
-        match result.unwrap_err() {
-            RocketMQError::Timeout { operation, timeout_ms } => {
-                assert_eq!(operation, "async operation");
-                assert_eq!(timeout_ms, 50);
-            }
-            _ => panic!("Expected timeout error"),
-        }
+        assert!(result.unwrap_err().is(&rocketmq_error::CORE_OPERATION_TIMED_OUT));
     }
 
     #[tokio::test]
     async fn test_with_timeout_named() {
-        async fn slow_operation() -> RocketMQResult<String> {
+        async fn slow_operation() -> ClientResult<String> {
             tokio::time::sleep(Duration::from_millis(200)).await;
             Ok("Success".to_string())
         }
 
         let result = with_timeout_named("test_operation", Duration::from_millis(50), slow_operation()).await;
         assert!(result.is_err());
-        match result.unwrap_err() {
-            RocketMQError::Timeout { operation, timeout_ms } => {
-                assert_eq!(operation, "test_operation");
-                assert_eq!(timeout_ms, 50);
-            }
-            _ => panic!("Expected timeout error"),
-        }
+        assert!(result.unwrap_err().is(&rocketmq_error::CORE_OPERATION_TIMED_OUT));
     }
 
     #[tokio::test]
     async fn test_with_timeout_millis() {
-        async fn quick_operation() -> RocketMQResult<String> {
+        async fn quick_operation() -> ClientResult<String> {
             tokio::time::sleep(Duration::from_millis(10)).await;
             Ok("Success".to_string())
         }
@@ -225,7 +211,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_timeout_all_success() {
-        async fn operation(id: usize) -> RocketMQResult<usize> {
+        async fn operation(id: usize) -> ClientResult<usize> {
             tokio::time::sleep(Duration::from_millis(10)).await;
             Ok(id)
         }
@@ -239,7 +225,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_timeout_all_timeout() {
-        async fn slow_operation(id: usize) -> RocketMQResult<usize> {
+        async fn slow_operation(id: usize) -> ClientResult<usize> {
             tokio::time::sleep(Duration::from_millis(100)).await;
             Ok(id)
         }
@@ -248,25 +234,22 @@ mod tests {
         let result = with_timeout_all(Duration::from_millis(50), futures).await;
 
         assert!(result.is_err());
-        match result.unwrap_err() {
-            RocketMQError::Timeout { .. } => {}
-            _ => panic!("Expected timeout error"),
-        }
+        assert!(result.unwrap_err().is(&rocketmq_error::CORE_OPERATION_TIMED_OUT));
     }
 
     #[tokio::test]
     async fn test_with_timeout_propagates_error() {
-        async fn failing_operation() -> RocketMQResult<String> {
-            Err(RocketMQError::ClientInvalidState {
-                expected: "ready test operation",
-                actual: "failed test operation".to_string(),
-            })
+        async fn failing_operation() -> ClientResult<String> {
+            Err(ClientError::invalid_state(
+                "ready test operation",
+                "failed test operation".to_string(),
+            ))
         }
 
         let result = with_timeout(Duration::from_millis(100), failing_operation()).await;
         assert!(result.is_err());
         match result.unwrap_err() {
-            RocketMQError::ClientInvalidState { expected, actual } => {
+            ClientError::invalid_state(expected, actual) => {
                 assert_eq!(expected, "ready test operation");
                 assert_eq!(actual, "failed test operation");
             }

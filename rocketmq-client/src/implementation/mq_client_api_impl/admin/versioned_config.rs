@@ -48,7 +48,7 @@ pub(crate) struct BrokerConfigSnapshot {
     pub(crate) properties: HashMap<CheetahString, CheetahString>,
 }
 
-fn broker_config_snapshot_from_response(response: &RemotingCommand) -> RocketMQResult<BrokerConfigSnapshot> {
+fn broker_config_snapshot_from_response(response: &RemotingCommand) -> ClientResult<BrokerConfigSnapshot> {
     let body = response
         .get_body()
         .ok_or_else(|| mq_client_err!("Broker config response body is empty".to_string()))?;
@@ -64,22 +64,24 @@ fn broker_config_snapshot_from_response(response: &RemotingCommand) -> RocketMQR
 }
 
 #[cfg(feature = "admin-read")]
-fn topic_config_versioned_from_response(response: &RemotingCommand) -> RocketMQResult<TopicConfigVersioned> {
-    let body = response.get_body().ok_or(RocketMQError::ResponseProcessFailed {
-        operation: "get_topic_config_with_version",
-        reason: "Topic config response body is empty".to_owned(),
-    })?;
+fn topic_config_versioned_from_response(response: &RemotingCommand) -> ClientResult<TopicConfigVersioned> {
+    let body = response.get_body().ok_or(ClientError::response_process_failed(
+        "get_topic_config_with_version",
+        "Topic config response body is empty".to_owned(),
+    ))?;
     let mapping = serde_json::from_slice::<TopicConfigAndQueueMapping>(body.as_ref()).map_err(|error| {
-        RocketMQError::ResponseProcessFailed {
-            operation: "get_topic_config_with_version",
-            reason: format!("Topic config response body is invalid: {error}"),
-        }
+        ClientError::response_process_failed(
+            "get_topic_config_with_version",
+            format!("Topic config response body is invalid: {error}"),
+        )
     })?;
     let header = response
         .decode_command_custom_header::<UpdateTopicConfigCasResponseHeader>()
-        .map_err(|error| RocketMQError::ResponseProcessFailed {
-            operation: "get_topic_config_with_version",
-            reason: format!("Topic config response version is missing: {error}"),
+        .map_err(|error| {
+            ClientError::response_process_failed(
+                "get_topic_config_with_version",
+                format!("Topic config response version is missing: {error}"),
+            )
         })?;
     Ok(TopicConfigVersioned {
         version: header.topic_version,
@@ -90,22 +92,24 @@ fn topic_config_versioned_from_response(response: &RemotingCommand) -> RocketMQR
 #[cfg(feature = "admin-mutation")]
 pub(super) fn mutation_topic_config_versioned_from_response(
     response: &RemotingCommand,
-) -> RocketMQResult<MutationTopicConfigVersioned> {
-    let body = response.get_body().ok_or(RocketMQError::ResponseProcessFailed {
-        operation: "get_topic_config_with_version",
-        reason: "Topic config response body is empty".to_owned(),
-    })?;
+) -> ClientResult<MutationTopicConfigVersioned> {
+    let body = response.get_body().ok_or(ClientError::response_process_failed(
+        "get_topic_config_with_version",
+        "Topic config response body is empty".to_owned(),
+    ))?;
     let mapping = serde_json::from_slice::<TopicConfigAndQueueMapping>(body.as_ref()).map_err(|error| {
-        RocketMQError::ResponseProcessFailed {
-            operation: "get_topic_config_with_version",
-            reason: format!("Topic config response body is invalid: {error}"),
-        }
+        ClientError::response_process_failed(
+            "get_topic_config_with_version",
+            format!("Topic config response body is invalid: {error}"),
+        )
     })?;
     let header = response
         .decode_command_custom_header::<UpdateTopicConfigCasResponseHeader>()
-        .map_err(|error| RocketMQError::ResponseProcessFailed {
-            operation: "get_topic_config_with_version",
-            reason: format!("Topic config response version is missing: {error}"),
+        .map_err(|error| {
+            ClientError::response_process_failed(
+                "get_topic_config_with_version",
+                format!("Topic config response version is missing: {error}"),
+            )
         })?;
     Ok(MutationTopicConfigVersioned {
         version: header.topic_version,
@@ -116,23 +120,27 @@ pub(super) fn mutation_topic_config_versioned_from_response(
 #[cfg(feature = "admin-read")]
 fn subscription_group_config_versioned_from_response(
     response: &RemotingCommand,
-) -> RocketMQResult<SubscriptionGroupConfigVersioned> {
-    let body = response.get_body().ok_or(RocketMQError::ResponseProcessFailed {
-        operation: "get_subscription_group_config_with_version",
-        reason: "Subscription Group config response body is empty".to_owned(),
-    })?;
+) -> ClientResult<SubscriptionGroupConfigVersioned> {
+    let body = response.get_body().ok_or(ClientError::response_process_failed(
+        "get_subscription_group_config_with_version",
+        "Subscription Group config response body is empty".to_owned(),
+    ))?;
     let config = rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::decode(
         body.as_ref(),
     )
-    .map_err(|error| RocketMQError::ResponseProcessFailed {
-        operation: "get_subscription_group_config_with_version",
-        reason: format!("Subscription Group config response body is invalid: {error}"),
+    .map_err(|error| {
+        ClientError::response_process_failed(
+            "get_subscription_group_config_with_version",
+            format!("Subscription Group config response body is invalid: {error}"),
+        )
     })?;
     let header = response
         .decode_command_custom_header::<UpdateSubscriptionGroupConfigCasResponseHeader>()
-        .map_err(|error| RocketMQError::ResponseProcessFailed {
-            operation: "get_subscription_group_config_with_version",
-            reason: format!("Subscription Group config response version is missing: {error}"),
+        .map_err(|error| {
+            ClientError::response_process_failed(
+                "get_subscription_group_config_with_version",
+                format!("Subscription Group config response version is missing: {error}"),
+            )
         })?;
     Ok(SubscriptionGroupConfigVersioned {
         version: header.subscription_group_version,
@@ -144,29 +152,31 @@ fn subscription_group_config_versioned_from_response(
 fn topic_config_patch_outcome_from_response(
     response: &RemotingCommand,
     expected_version: u64,
-) -> RocketMQResult<TopicConfigPatchOutcome> {
+) -> ClientResult<TopicConfigPatchOutcome> {
     match ResponseCode::from(response.code()) {
         ResponseCode::Success => {
             let header = response
                 .decode_command_custom_header::<UpdateTopicConfigCasResponseHeader>()
-                .map_err(|error| RocketMQError::ResponseProcessFailed {
-                    operation: "patch_topic_config_if_version",
-                    reason: format!("missing committed Topic config version: {error}"),
+                .map_err(|error| {
+                    ClientError::response_process_failed(
+                        "patch_topic_config_if_version",
+                        format!("missing committed Topic config version: {error}"),
+                    )
                 })?;
             let expected_next = expected_version
                 .checked_add(1)
-                .ok_or(RocketMQError::ResponseProcessFailed {
-                    operation: "patch_topic_config_if_version",
-                    reason: "Broker accepted a Topic patch after the version counter was exhausted".to_owned(),
-                })?;
+                .ok_or(ClientError::response_process_failed(
+                    "patch_topic_config_if_version",
+                    "Broker accepted a Topic patch after the version counter was exhausted".to_owned(),
+                ))?;
             if header.topic_version != expected_next {
-                return Err(RocketMQError::ResponseProcessFailed {
-                    operation: "patch_topic_config_if_version",
-                    reason: format!(
+                return Err(ClientError::response_process_failed(
+                    "patch_topic_config_if_version",
+                    format!(
                         "Broker returned Topic config version {}, expected {}",
                         header.topic_version, expected_next
                     ),
-                });
+                ));
             }
             Ok(TopicConfigPatchOutcome::Applied {
                 previous_version: expected_version,
@@ -196,30 +206,31 @@ fn topic_config_patch_outcome_from_response(
 fn subscription_group_config_patch_outcome_from_response(
     response: &RemotingCommand,
     expected_version: u64,
-) -> RocketMQResult<SubscriptionGroupConfigPatchOutcome> {
+) -> ClientResult<SubscriptionGroupConfigPatchOutcome> {
     match ResponseCode::from(response.code()) {
         ResponseCode::Success => {
             let header = response
                 .decode_command_custom_header::<UpdateSubscriptionGroupConfigCasResponseHeader>()
-                .map_err(|error| RocketMQError::ResponseProcessFailed {
-                    operation: "patch_subscription_group_config_if_version",
-                    reason: format!("missing committed Subscription Group config version: {error}"),
+                .map_err(|error| {
+                    ClientError::response_process_failed(
+                        "patch_subscription_group_config_if_version",
+                        format!("missing committed Subscription Group config version: {error}"),
+                    )
                 })?;
             let expected_next = expected_version
                 .checked_add(1)
-                .ok_or(RocketMQError::ResponseProcessFailed {
-                    operation: "patch_subscription_group_config_if_version",
-                    reason: "Broker accepted a Subscription Group patch after the version counter was exhausted"
-                        .to_owned(),
-                })?;
+                .ok_or(ClientError::response_process_failed(
+                    "patch_subscription_group_config_if_version",
+                    "Broker accepted a Subscription Group patch after the version counter was exhausted".to_owned(),
+                ))?;
             if header.subscription_group_version != expected_next {
-                return Err(RocketMQError::ResponseProcessFailed {
-                    operation: "patch_subscription_group_config_if_version",
-                    reason: format!(
+                return Err(ClientError::response_process_failed(
+                    "patch_subscription_group_config_if_version",
+                    format!(
                         "Broker returned Subscription Group config version {}, expected {}",
                         header.subscription_group_version, expected_next
                     ),
-                });
+                ));
             }
             Ok(SubscriptionGroupConfigPatchOutcome::Applied {
                 previous_version: expected_version,
@@ -254,7 +265,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         topic: CheetahString,
         timeout_millis: u64,
-    ) -> RocketMQResult<TopicConfigVersioned> {
+    ) -> ClientResult<TopicConfigVersioned> {
         let request = self.create_request_command(
             RequestCode::GetTopicConfig,
             GetTopicConfigRequestHeader {
@@ -281,7 +292,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return topic_config_versioned_from_response(&response);
@@ -298,7 +309,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         topic: CheetahString,
         timeout_millis: u64,
-    ) -> RocketMQResult<MutationTopicConfigVersioned> {
+    ) -> ClientResult<MutationTopicConfigVersioned> {
         let request = self.create_request_command(
             RequestCode::GetTopicConfig,
             GetTopicConfigRequestHeader {
@@ -325,7 +336,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return mutation_topic_config_versioned_from_response(&response);
@@ -343,9 +354,9 @@ impl MQClientAPIImpl {
         expected_generation: u64,
         properties: HashMap<CheetahString, CheetahString>,
         timeout_millis: u64,
-    ) -> RocketMQResult<BrokerConfigPatchOutcome> {
+    ) -> ClientResult<BrokerConfigPatchOutcome> {
         if expected_generation == 0 {
-            return Err(RocketMQError::illegal_argument(
+            return Err(ClientError::illegal_argument(
                 "expected broker config generation must be greater than zero",
             ));
         }
@@ -357,7 +368,7 @@ impl MQClientAPIImpl {
 
         let body = mix_all::properties_to_string(&properties);
         if body.is_empty() {
-            return Err(RocketMQError::illegal_argument(
+            return Err(ClientError::illegal_argument(
                 "generation-checked broker config patch must not be empty",
             ));
         }
@@ -387,31 +398,33 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
 
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => {
                 let header = response
                     .decode_command_custom_header::<UpdateBrokerConfigResponseHeader>()
-                    .map_err(|error| RocketMQError::ResponseProcessFailed {
-                        operation: "update_broker_config_if_generation",
-                        reason: format!("missing committed config generation: {error}"),
+                    .map_err(|error| {
+                        ClientError::response_process_failed(
+                            "update_broker_config_if_generation",
+                            format!("missing committed config generation: {error}"),
+                        )
                     })?;
                 let expected_next = expected_generation
                     .checked_add(1)
-                    .ok_or(RocketMQError::ResponseProcessFailed {
-                        operation: "update_broker_config_if_generation",
-                        reason: "broker accepted a patch after the generation counter was exhausted".to_string(),
-                    })?;
+                    .ok_or(ClientError::response_process_failed(
+                        "update_broker_config_if_generation",
+                        "broker accepted a patch after the generation counter was exhausted".to_string(),
+                    ))?;
                 if header.config_generation != expected_next {
-                    return Err(RocketMQError::ResponseProcessFailed {
-                        operation: "update_broker_config_if_generation",
-                        reason: format!(
+                    return Err(ClientError::response_process_failed(
+                        "update_broker_config_if_generation",
+                        format!(
                             "broker returned generation {}, expected {}",
                             header.config_generation, expected_next
                         ),
-                    });
+                    ));
                 }
                 Ok(BrokerConfigPatchOutcome::Applied {
                     previous_generation: expected_generation,
@@ -445,9 +458,9 @@ impl MQClientAPIImpl {
         expected_version: u64,
         patch: TopicConfigPatch,
         timeout_millis: u64,
-    ) -> RocketMQResult<TopicConfigPatchOutcome> {
+    ) -> ClientResult<TopicConfigPatchOutcome> {
         if patch.is_empty() {
-            return Err(RocketMQError::illegal_argument(
+            return Err(ClientError::illegal_argument(
                 "version-checked Topic config patch must not be empty",
             ));
         }
@@ -455,24 +468,20 @@ impl MQClientAPIImpl {
             .read_queue_nums
             .map(|value| {
                 if !(1..=128).contains(&value) {
-                    return Err(RocketMQError::illegal_argument(
-                        "readQueueNums must be between 1 and 128",
-                    ));
+                    return Err(ClientError::illegal_argument("readQueueNums must be between 1 and 128"));
                 }
-                i32::try_from(value)
-                    .map_err(|_| RocketMQError::illegal_argument("readQueueNums exceeds Java int range"))
+                i32::try_from(value).map_err(|_| ClientError::illegal_argument("readQueueNums exceeds Java int range"))
             })
             .transpose()?;
         let write_queue_nums = patch
             .write_queue_nums
             .map(|value| {
                 if !(1..=128).contains(&value) {
-                    return Err(RocketMQError::illegal_argument(
+                    return Err(ClientError::illegal_argument(
                         "writeQueueNums must be between 1 and 128",
                     ));
                 }
-                i32::try_from(value)
-                    .map_err(|_| RocketMQError::illegal_argument("writeQueueNums exceeds Java int range"))
+                i32::try_from(value).map_err(|_| ClientError::illegal_argument("writeQueueNums exceeds Java int range"))
             })
             .transpose()?;
         let request = self.create_request_command(
@@ -504,7 +513,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         topic_config_patch_outcome_from_response(&response, expected_version)
     }
@@ -517,9 +526,9 @@ impl MQClientAPIImpl {
         expected_version: u64,
         patch: SubscriptionGroupConfigPatch,
         timeout_millis: u64,
-    ) -> RocketMQResult<SubscriptionGroupConfigPatchOutcome> {
+    ) -> ClientResult<SubscriptionGroupConfigPatchOutcome> {
         if patch.is_empty() {
-            return Err(RocketMQError::illegal_argument(
+            return Err(ClientError::illegal_argument(
                 "version-checked Subscription Group config patch must not be empty",
             ));
         }
@@ -527,36 +536,30 @@ impl MQClientAPIImpl {
             .retry_max_times
             .map(|value| {
                 if !(1..=16).contains(&value) {
-                    return Err(RocketMQError::illegal_argument(
-                        "retryMaxTimes must be between 1 and 16",
-                    ));
+                    return Err(ClientError::illegal_argument("retryMaxTimes must be between 1 and 16"));
                 }
-                i32::try_from(value)
-                    .map_err(|_| RocketMQError::illegal_argument("retryMaxTimes exceeds Java int range"))
+                i32::try_from(value).map_err(|_| ClientError::illegal_argument("retryMaxTimes exceeds Java int range"))
             })
             .transpose()?;
         let retry_queue_nums = patch
             .retry_queue_nums
             .map(|value| {
                 if !(1..=8).contains(&value) {
-                    return Err(RocketMQError::illegal_argument(
-                        "retryQueueNums must be between 1 and 8",
-                    ));
+                    return Err(ClientError::illegal_argument("retryQueueNums must be between 1 and 8"));
                 }
-                i32::try_from(value)
-                    .map_err(|_| RocketMQError::illegal_argument("retryQueueNums exceeds Java int range"))
+                i32::try_from(value).map_err(|_| ClientError::illegal_argument("retryQueueNums exceeds Java int range"))
             })
             .transpose()?;
         let consume_timeout_minutes = patch
             .consume_timeout_minutes
             .map(|value| {
                 if !(1..=1_440).contains(&value) {
-                    return Err(RocketMQError::illegal_argument(
+                    return Err(ClientError::illegal_argument(
                         "consumeTimeoutMinutes must be between 1 and 1440",
                     ));
                 }
                 i32::try_from(value)
-                    .map_err(|_| RocketMQError::illegal_argument("consumeTimeoutMinutes exceeds Java int range"))
+                    .map_err(|_| ClientError::illegal_argument("consumeTimeoutMinutes exceeds Java int range"))
             })
             .transpose()?;
         let request = self.create_request_command(
@@ -588,7 +591,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         subscription_group_config_patch_outcome_from_response(&response, expected_version)
     }
@@ -597,7 +600,7 @@ impl MQClientAPIImpl {
         &self,
         addr: &CheetahString,
         timeout_millis: u64,
-    ) -> RocketMQResult<BrokerConfigSnapshot> {
+    ) -> ClientResult<BrokerConfigSnapshot> {
         let request = self.create_remoting_command(RequestCode::GetBrokerConfig);
         let outcome = self
             .remoting_client
@@ -617,7 +620,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
 
         match ResponseCode::from(response.code()) {
@@ -635,7 +638,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         group: CheetahString,
         timeout_millis: u64,
-    ) -> RocketMQResult<SubscriptionGroupConfigVersioned> {
+    ) -> ClientResult<SubscriptionGroupConfigVersioned> {
         let request = self.create_request_command(
             RequestCode::GetSubscriptionGroupConfig,
             rocketmq_protocol::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader {
@@ -662,7 +665,7 @@ impl MQClientAPIImpl {
                     RetryInput::Contract(contract),
                 ));
             }
-            Err(error) => return Err(RocketMQError::Shared(error.into_shared_error())),
+            Err(error) => return Err(ClientError::from_shared(error.into_shared_error())),
         };
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return subscription_group_config_versioned_from_response(&response);

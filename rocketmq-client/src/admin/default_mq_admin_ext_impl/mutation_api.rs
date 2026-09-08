@@ -22,9 +22,9 @@ mod log_filter;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::ClientError;
 use cheetah_string::CheetahString;
 use rand::seq::IndexedRandom;
-use rocketmq_error::RocketMQError;
 use rocketmq_model::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
@@ -83,14 +83,14 @@ use super::NAMESPACE_ORDER_TOPIC_CONFIG;
 
 const MAX_SUPERVISED_OFFSET_TARGETS: usize = 1_000;
 
-fn timestamp_to_java_long(operation: &'static str, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
+fn timestamp_to_java_long(operation: &'static str, timestamp: u64) -> crate::ClientResult<i64> {
     i64::try_from(timestamp)
-        .map_err(|_| RocketMQError::illegal_argument(format!("{operation} timestamp exceeds Java long range")))
+        .map_err(|_| ClientError::illegal_argument(format!("{operation} timestamp exceeds Java long range")))
 }
 
-fn java_long_to_u64(operation: &'static str, field: &'static str, value: i64) -> rocketmq_error::RocketMQResult<u64> {
+fn java_long_to_u64(operation: &'static str, field: &'static str, value: i64) -> crate::ClientResult<u64> {
     u64::try_from(value).map_err(|_| {
-        RocketMQError::illegal_argument(format!(
+        ClientError::illegal_argument(format!(
             "{operation} {field} is negative and cannot be represented as Rust u64"
         ))
     })
@@ -130,14 +130,20 @@ fn merge_order_conf_entries(existing: &str, value: &str) -> String {
         .join(";")
 }
 
-fn offset_failure(broker_name: &str, queue_id: Option<i32>, error: &RocketMQError) -> TopicOffsetMutationTargetOutcome {
+fn offset_failure(broker_name: &str, queue_id: Option<i32>, error: &ClientError) -> TopicOffsetMutationTargetOutcome {
     TopicOffsetMutationTargetOutcome {
         broker_name: broker_name.to_owned(),
         queue_id,
         applied: false,
         offset: None,
         failure: Some(TopicOffsetMutationFailureCode::Unavailable),
-        retryable: error.boundary_view().is_retryable(),
+        retryable: matches!(
+            error.descriptor().recovery_hint(),
+            rocketmq_error::RecoveryHint::Backoff
+                | rocketmq_error::RecoveryHint::RefreshRoute
+                | rocketmq_error::RecoveryHint::RefreshLeader
+                | rocketmq_error::RecoveryHint::SwitchBroker
+        ),
     }
 }
 
@@ -167,7 +173,7 @@ fn select_consumer_direct_connection(
     consumer_group: &CheetahString,
     consumer_connection: &ConsumerConnection,
     requested_client_id: Option<&CheetahString>,
-) -> rocketmq_error::RocketMQResult<(CheetahString, CheetahString)> {
+) -> crate::ClientResult<(CheetahString, CheetahString)> {
     let requested = requested_client_id.filter(|client_id| !client_id.is_empty());
     let connection = consumer_connection
         .get_connection_set()
@@ -186,7 +192,7 @@ fn select_consumer_direct_connection(
                     )
                 })
                 .unwrap_or_else(|| format!("NO CONSUMER for consumer group `{consumer_group}`"));
-            RocketMQError::IllegalArgument(message)
+            ClientError::illegal_argument(message)
         })?;
     Ok((connection.get_client_id(), connection.get_client_addr()))
 }
@@ -200,7 +206,7 @@ impl DefaultMQAdminExtImpl {
         topic: CheetahString,
         timestamp: i64,
         force: bool,
-    ) -> rocketmq_error::RocketMQResult<Vec<RollbackStats>> {
+    ) -> crate::ClientResult<Vec<RollbackStats>> {
         let consume_stats = self
             .mq_client_api()?
             .get_consume_stats_for_mutation(
@@ -278,7 +284,7 @@ impl DefaultMQAdminExtImpl {
         offset_wrapper: &OffsetWrapper,
         timestamp: i64,
         force: bool,
-    ) -> rocketmq_error::RocketMQResult<RollbackStats> {
+    ) -> crate::ClientResult<RollbackStats> {
         let reset_offset = if timestamp == -1 {
             self.mq_client_api()?
                 .get_max_offset(broker_addr.as_str(), &queue, self.remoting_timeout_millis()?)
@@ -425,7 +431,7 @@ impl DefaultMQAdminExtImpl {
         consumer_group: CheetahString,
         timestamp: i64,
         force: bool,
-    ) -> rocketmq_error::RocketMQResult<TopicOffsetMutationOutcome> {
+    ) -> crate::ClientResult<TopicOffsetMutationOutcome> {
         let topic_route = MQAdminMutationExt::mutation_topic_route(self, topic.clone()).await?;
         let timeout = self.remoting_timeout_millis()?;
         let api = self.mq_client_api()?;
@@ -478,8 +484,9 @@ impl DefaultMQAdminExtImpl {
                             }
                         }
                     }
-                    Err(RocketMQError::BrokerOperationFailed { code, .. })
-                        if ResponseCode::from(code) == ResponseCode::ConsumerNotOnline =>
+                    Err(error)
+                        if error.broker_response_code().map(ResponseCode::from)
+                            == Some(ResponseCode::ConsumerNotOnline) =>
                     {
                         if let (Some(addr), Some(queue)) = (broker.select_broker_addr(), queue_data.get(&broker_name)) {
                             targets.extend(
@@ -517,7 +524,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         &self,
         proxy_addr: CheetahString,
         operation_id: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ProxyDrainStateResponseBody> {
+    ) -> crate::ClientResult<ProxyDrainStateResponseBody> {
         self.mq_client_api()?
             .begin_proxy_drain(&proxy_addr, operation_id, self.remoting_timeout_millis()?)
             .await
@@ -527,30 +534,32 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         &self,
         proxy_addr: CheetahString,
         operation_id: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ProxyDrainStateResponseBody> {
+    ) -> crate::ClientResult<ProxyDrainStateResponseBody> {
         self.mq_client_api()?
             .cancel_proxy_drain(&proxy_addr, operation_id, self.remoting_timeout_millis()?)
             .await
     }
 
-    async fn broker_config_generation(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<u64> {
+    async fn broker_config_generation(&self, broker_addr: CheetahString) -> crate::ClientResult<u64> {
         let runtime = self
             .mq_client_api()?
             .get_broker_runtime_info(&broker_addr, self.remoting_timeout_millis()?)
             .await?;
         let generation = runtime.table.get("brokerConfigGeneration").ok_or_else(|| {
-            rocketmq_error::RocketMQError::ResponseProcessFailed {
-                operation: "broker_config_generation",
-                reason: "broker runtime info does not contain brokerConfigGeneration".to_string(),
-            }
+            crate::ClientError::response_process_failed(
+                "broker_config_generation",
+                "broker runtime info does not contain brokerConfigGeneration".to_string(),
+            )
         })?;
         generation
             .parse::<u64>()
             .ok()
             .filter(|generation| *generation > 0)
-            .ok_or_else(|| rocketmq_error::RocketMQError::ResponseProcessFailed {
-                operation: "broker_config_generation",
-                reason: "brokerConfigGeneration is not a positive unsigned integer".to_string(),
+            .ok_or_else(|| {
+                crate::ClientError::response_process_failed(
+                    "broker_config_generation",
+                    "brokerConfigGeneration is not a positive unsigned integer".to_string(),
+                )
             })
     }
 
@@ -559,7 +568,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         broker_addr: CheetahString,
         expected_generation: u64,
         properties: HashMap<CheetahString, CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<BrokerConfigPatchOutcome> {
+    ) -> crate::ClientResult<BrokerConfigPatchOutcome> {
         self.mq_client_api()?
             .update_broker_config_if_generation(
                 &broker_addr,
@@ -576,7 +585,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         topic: CheetahString,
         expected_version: u64,
         patch: TopicConfigPatch,
-    ) -> rocketmq_error::RocketMQResult<TopicConfigPatchOutcome> {
+    ) -> crate::ClientResult<TopicConfigPatchOutcome> {
         self.mq_client_api()?
             .update_topic_config_if_version(
                 &broker_addr,
@@ -592,7 +601,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         &self,
         broker_addr: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<crate::admin::MutationTopicConfigVersioned> {
+    ) -> crate::ClientResult<crate::admin::MutationTopicConfigVersioned> {
         self.mq_client_api()?
             .get_topic_config_with_version_for_mutation(&broker_addr, topic, self.remoting_timeout_millis()?)
             .await
@@ -602,7 +611,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         &self,
         broker_addr: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<MutationTopicConfigState> {
+    ) -> crate::ClientResult<MutationTopicConfigState> {
         self.mq_client_api()?
             .get_topic_config_state_for_mutation(&broker_addr, topic, self.remoting_timeout_millis()?)
             .await
@@ -614,7 +623,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         topic: CheetahString,
         expected_state: MutationExpectedState,
         replacement: MutationTopicConfig,
-    ) -> rocketmq_error::RocketMQResult<MutationStateCasOutcome> {
+    ) -> crate::ClientResult<MutationStateCasOutcome> {
         self.mq_client_api()?
             .replace_topic_config_if_state(
                 &broker_addr,
@@ -632,7 +641,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         group: CheetahString,
         expected_version: u64,
         patch: SubscriptionGroupConfigPatch,
-    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfigPatchOutcome> {
+    ) -> crate::ClientResult<SubscriptionGroupConfigPatchOutcome> {
         self.mq_client_api()?
             .update_subscription_group_config_if_version(
                 &broker_addr,
@@ -648,7 +657,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         &self,
         broker_addr: CheetahString,
         group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<MutationSubscriptionGroupConfigState> {
+    ) -> crate::ClientResult<MutationSubscriptionGroupConfigState> {
         self.mq_client_api()?
             .get_subscription_group_config_state_for_mutation(&broker_addr, group, self.remoting_timeout_millis()?)
             .await
@@ -660,7 +669,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         group: CheetahString,
         expected_state: MutationExpectedState,
         replacement: MutationSubscriptionGroupConfig,
-    ) -> rocketmq_error::RocketMQResult<MutationStateCasOutcome> {
+    ) -> crate::ClientResult<MutationStateCasOutcome> {
         self.mq_client_api()?
             .replace_subscription_group_config_if_state(
                 &broker_addr,
@@ -675,7 +684,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
     async fn broker_mutation_config_state(
         &self,
         broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<BrokerMutationConfigState> {
+    ) -> crate::ClientResult<BrokerMutationConfigState> {
         self.mq_client_api()?
             .get_broker_mutation_config_state(&broker_addr, self.remoting_timeout_millis()?)
             .await
@@ -689,7 +698,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         queue_id: i32,
         expected_offset: i64,
         new_offset: i64,
-    ) -> rocketmq_error::RocketMQResult<ConditionalConsumerOffsetOutcome> {
+    ) -> crate::ClientResult<ConditionalConsumerOffsetOutcome> {
         self.mq_client_api()?
             .reset_consumer_offset_if_current(
                 &broker_addr,
@@ -711,9 +720,9 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         consumer_group: CheetahString,
         topic: CheetahString,
         timestamp: i64,
-    ) -> rocketmq_error::RocketMQResult<Vec<MutationConsumerOffsetPreview>> {
+    ) -> crate::ClientResult<Vec<MutationConsumerOffsetPreview>> {
         if read_queue_nums as usize > MAX_SUPERVISED_OFFSET_TARGETS {
-            return Err(RocketMQError::illegal_argument(
+            return Err(ClientError::illegal_argument(
                 "supervised offset preview exceeds 1000 queue targets",
             ));
         }
@@ -741,7 +750,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
                 || queue.queue_id() < 0
                 || queue.queue_id() >= read_queue_nums as i32
         }) {
-            return Err(RocketMQError::response_process_failed(
+            return Err(ClientError::response_process_failed(
                 "preview_consumer_offset_reset_on_broker",
                 "Broker returned consume-stats rows outside the exact Topic/Broker queue set",
             ));
@@ -759,7 +768,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
                     .enumerate()
                     .any(|(queue_id, (queue, _))| queue.queue_id() != queue_id as i32))
         {
-            return Err(RocketMQError::response_process_failed(
+            return Err(ClientError::response_process_failed(
                 "preview_consumer_offset_reset_on_broker",
                 "Broker returned an incomplete consume-stats queue set",
             ));
@@ -804,7 +813,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
                 .await?
             };
             if current_offset < -1 || planned_offset < 0 {
-                return Err(RocketMQError::response_process_failed(
+                return Err(ClientError::response_process_failed(
                     "preview_consumer_offset_reset_on_broker",
                     "Broker returned an invalid consumer offset",
                 ));
@@ -826,9 +835,9 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         consumer_group: CheetahString,
         topic: CheetahString,
         queue_id: i32,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    ) -> crate::ClientResult<i64> {
         if queue_id < 0 {
-            return Err(RocketMQError::illegal_argument("queueId must be non-negative"));
+            return Err(ClientError::illegal_argument("queueId must be non-negative"));
         }
         self.mq_client_api()?
             .query_consumer_offset(
@@ -844,7 +853,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         broker_addr: CheetahString,
         topic: CheetahString,
         consumer_group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<MutationMessageRequestMode>> {
+    ) -> crate::ClientResult<Option<MutationMessageRequestMode>> {
         self.mq_client_api()?
             .get_message_request_mode_for_mutation(&broker_addr, topic, consumer_group, self.remoting_timeout_millis()?)
             .await
@@ -857,7 +866,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         consumer_group: CheetahString,
         expected: MutationExpectedMessageRequestMode,
         replacement: MutationMessageRequestMode,
-    ) -> rocketmq_error::RocketMQResult<MutationMessageRequestModeOutcome> {
+    ) -> crate::ClientResult<MutationMessageRequestModeOutcome> {
         self.mq_client_api()?
             .replace_message_request_mode_if_current(
                 &broker_addr,
@@ -878,9 +887,9 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         expected: MutationExpectedMessageRequestMode,
         replacement: MutationMessageRequestMode,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<MutationMessageRequestModeOutcome> {
+    ) -> crate::ClientResult<MutationMessageRequestModeOutcome> {
         if timeout_millis == 0 || timeout_millis > 24_000 {
-            return Err(RocketMQError::illegal_argument(
+            return Err(ClientError::illegal_argument(
                 "request-mode timeoutMillis must be between 1 and 24000",
             ));
         }
@@ -903,7 +912,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         level: CheetahString,
         ttl_seconds: u32,
         operation_id: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let properties = log_filter::set_properties(&broker_addr, &logger, &level, ttl_seconds, &operation_id)?;
         self.mq_client_api()?
             .update_broker_config(&broker_addr, properties, self.remoting_timeout_millis()?)
@@ -914,22 +923,18 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         &self,
         broker_addr: CheetahString,
         operation_id: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let properties = log_filter::restore_properties(&broker_addr, &operation_id)?;
         self.mq_client_api()?
             .update_broker_config(&broker_addr, properties, self.remoting_timeout_millis()?)
             .await
     }
 
-    async fn upsert_topic_config(
-        &self,
-        broker_addr: CheetahString,
-        config: TopicConfig,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    async fn upsert_topic_config(&self, broker_addr: CheetahString, config: TopicConfig) -> crate::ClientResult<()> {
         let topic = config
             .topic_name
             .clone()
-            .ok_or_else(|| rocketmq_error::RocketMQError::IllegalArgument("Topic name is required".into()))?;
+            .ok_or_else(|| crate::ClientError::illegal_argument("Topic name is required"))?;
         let request_header = CreateTopicRequestHeader {
             topic,
             default_topic: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
@@ -949,11 +954,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
             .await
     }
 
-    async fn remove_topic(
-        &self,
-        topic_name: CheetahString,
-        cluster_name: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    async fn remove_topic(&self, topic_name: CheetahString, cluster_name: CheetahString) -> crate::ClientResult<()> {
         let cluster_info = MQAdminMutationExt::mutation_cluster_info(self).await?;
         let mut broker_addrs = HashSet::new();
         if let Some(cluster_addr_table) = cluster_info.cluster_addr_table.as_ref() {
@@ -982,7 +983,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         consumer_group: CheetahString,
         timestamp: u64,
         force: bool,
-    ) -> rocketmq_error::RocketMQResult<HashMap<MessageQueue, u64>> {
+    ) -> crate::ClientResult<HashMap<MessageQueue, u64>> {
         let timestamp = timestamp_to_java_long("resetOffsetByTimestamp", timestamp)?;
         let topic_route = MQAdminMutationExt::mutation_topic_route(self, topic.clone()).await?;
         let mut offset_table = HashMap::new();
@@ -1030,7 +1031,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         consumer_group: CheetahString,
         timestamp: u64,
         force: bool,
-    ) -> rocketmq_error::RocketMQResult<TopicOffsetMutationOutcome> {
+    ) -> crate::ClientResult<TopicOffsetMutationOutcome> {
         let timestamp = timestamp_to_java_long("resetOffsetByTimestampDetailed", timestamp)?;
         self.mutation_offset_detailed(cluster_name, topic, consumer_group, timestamp, force)
             .await
@@ -1042,7 +1043,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         topic: CheetahString,
         consumer_group: CheetahString,
         force: bool,
-    ) -> rocketmq_error::RocketMQResult<usize> {
+    ) -> crate::ClientResult<usize> {
         let topic_route = MQAdminMutationExt::mutation_topic_route(self, topic.clone()).await?;
         let mut offset_table = HashMap::new();
         let timeout = self.remoting_timeout_millis()?;
@@ -1078,13 +1079,13 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
                     }
                 }
             }
-            Ok::<_, RocketMQError>(offset_table.len())
+            Ok::<_, ClientError>(offset_table.len())
         }
         .await;
         match current {
             Ok(count) => Ok(count),
-            Err(RocketMQError::BrokerOperationFailed { code, .. })
-                if ResponseCode::from(code) == ResponseCode::ConsumerNotOnline =>
+            Err(error)
+                if error.broker_response_code().map(ResponseCode::from) == Some(ResponseCode::ConsumerNotOnline) =>
             {
                 let mut rollback_count = 0usize;
                 if let Some(route_data) = topic_route {
@@ -1128,7 +1129,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         topic: CheetahString,
         consumer_group: CheetahString,
         force: bool,
-    ) -> rocketmq_error::RocketMQResult<TopicOffsetMutationOutcome> {
+    ) -> crate::ClientResult<TopicOffsetMutationOutcome> {
         self.mutation_offset_detailed(cluster_name, topic, consumer_group, -1, force)
             .await
     }
@@ -1137,7 +1138,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         &self,
         broker_addr: CheetahString,
         config: SubscriptionGroupConfig,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         self.mq_client_api()?
             .create_subscription_group(&broker_addr, &config, self.remoting_timeout_millis()?)
             .await
@@ -1148,7 +1149,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         broker_addr: CheetahString,
         group_name: CheetahString,
         remove_offset: Option<bool>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         self.mq_client_api()?
             .delete_subscription_group(
                 &broker_addr,
@@ -1164,7 +1165,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         broker_addr: CheetahString,
         group_names: Vec<CheetahString>,
         clean_offset: bool,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         self.mq_client_api()?
             .delete_subscription_group_list(&broker_addr, group_names, clean_offset, self.remoting_timeout_millis()?)
             .await
@@ -1178,7 +1179,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         mode: MessageRequestMode,
         pop_work_group_size: i32,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         self.mq_client_api()?
             .set_message_request_mode(
                 &broker_addr,
@@ -1197,7 +1198,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         client_id: CheetahString,
         topic: CheetahString,
         message_id: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<ConsumeMessageDirectlyResult> {
+    ) -> crate::ClientResult<ConsumeMessageDirectlyResult> {
         let timeout = self.remoting_timeout_millis()?;
         let retry_topic = CheetahString::from_string(mix_all::get_retry_topic(consumer_group.as_str()));
         let selected_addr = self
@@ -1249,7 +1250,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         destination_group: CheetahString,
         topic: CheetahString,
         offline: bool,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let retry_topic = CheetahString::from_string(mix_all::get_retry_topic(source_group.as_str()));
         let route = MQAdminMutationExt::mutation_topic_route(self, retry_topic.clone())
             .await?
@@ -1272,16 +1273,13 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         Ok(())
     }
 
-    async fn mutation_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo> {
+    async fn mutation_cluster_info(&self) -> crate::ClientResult<ClusterInfo> {
         self.mq_client_api()?
             .get_broker_cluster_info(self.remoting_timeout_millis()?)
             .await
     }
 
-    async fn mutation_topic_route(
-        &self,
-        topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
+    async fn mutation_topic_route(&self, topic: CheetahString) -> crate::ClientResult<Option<TopicRouteData>> {
         self.mq_client_api()?
             .get_topic_route_info_from_name_server(&topic, self.remoting_timeout_millis()?)
             .await
@@ -1291,10 +1289,10 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         &self,
         broker_addr: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicConfig> {
+    ) -> crate::ClientResult<TopicConfig> {
         self.client_instance
             .as_ref()
-            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
+            .ok_or(crate::ClientError::not_started())?
             .get_topic_config(&broker_addr, topic, self.remoting_timeout_millis()?)
             .await
     }
@@ -1303,7 +1301,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         &self,
         broker_addrs: HashSet<CheetahString>,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let api = self.mq_client_api()?;
         let timeout = self.remoting_timeout_millis()?;
         for broker_addr in broker_addrs {
@@ -1324,7 +1322,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         &self,
         broker_addr: CheetahString,
         topics: Vec<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         self.mq_client_api()?
             .delete_topic_in_broker_list(&broker_addr, topics, self.remoting_timeout_millis()?)
             .await
@@ -1335,7 +1333,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         namesrv_addrs: HashSet<CheetahString>,
         cluster_name: Option<CheetahString>,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let request_header = DeleteTopicFromNamesrvRequestHeader::new(topic, cluster_name);
         let api = self.mq_client_api()?;
         let timeout = self.remoting_timeout_millis()?;
@@ -1346,7 +1344,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         Ok(())
     }
 
-    async fn mutation_name_server_addresses(&self) -> rocketmq_error::RocketMQResult<Vec<CheetahString>> {
+    async fn mutation_name_server_addresses(&self) -> crate::ClientResult<Vec<CheetahString>> {
         Ok(self.mq_client_api()?.get_name_server_address_list().to_vec())
     }
 
@@ -1355,7 +1353,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         topic: CheetahString,
         value: CheetahString,
         cluster_wide: bool,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> crate::ClientResult<()> {
         let api = self.mq_client_api()?;
         let timeout = self.remoting_timeout_millis()?;
         let namespace = CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG);
@@ -1376,10 +1374,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         .await
     }
 
-    async fn mutation_order_topic_config(
-        &self,
-        topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
+    async fn mutation_order_topic_config(&self, topic: CheetahString) -> crate::ClientResult<Option<CheetahString>> {
         self.mq_client_api()?
             .get_kvconfig_value(
                 CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
@@ -1389,7 +1384,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
             .await
     }
 
-    async fn delete_order_topic_config(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<()> {
+    async fn delete_order_topic_config(&self, topic: CheetahString) -> crate::ClientResult<()> {
         self.mq_client_api()?
             .delete_kvconfig_value(
                 CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
@@ -1406,7 +1401,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         topic: CheetahString,
         timestamp: u64,
         force: bool,
-    ) -> rocketmq_error::RocketMQResult<Vec<RollbackStats>> {
+    ) -> crate::ClientResult<Vec<RollbackStats>> {
         let timestamp = timestamp_to_java_long("resetOffsetByTimestampOld", timestamp)?;
         let mut route_topic = topic.clone();
         if !topic.is_empty()
@@ -1452,12 +1447,11 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         &self,
         topic: CheetahString,
         message_id: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<MessageExt> {
+    ) -> crate::ClientResult<MessageExt> {
         MessageDecoder::validate_message_id(message_id.as_str())
-            .map_err(|error| rocketmq_error::RocketMQError::IllegalArgument(format!("Invalid message ID: {error}")))?;
-        let decoded = MessageDecoder::decode_message_id(message_id.as_str()).map_err(|error| {
-            rocketmq_error::RocketMQError::IllegalArgument(format!("Failed to decode message ID: {error}"))
-        })?;
+            .map_err(|error| crate::ClientError::illegal_argument(format!("Invalid message ID: {error}")))?;
+        let decoded = MessageDecoder::decode_message_id(message_id.as_str())
+            .map_err(|error| crate::ClientError::illegal_argument(format!("Failed to decode message ID: {error}")))?;
         let broker_addr = CheetahString::from_string(format!("{}:{}", decoded.address.ip(), decoded.address.port()));
         self.mq_client_api()?
             .view_message(
@@ -1551,7 +1545,7 @@ mod detailed_offset_tests {
         fn process(
             &self,
             request: RemotingCommand,
-        ) -> Pin<Box<dyn Future<Output = rocketmq_error::RocketMQResult<RemotingCommand>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = crate::ClientResult<RemotingCommand>> + Send + '_>> {
             Box::pin(async move {
                 if request.code() == RequestCode::GetKvConfig.to_i32() {
                     let header = request.decode_command_custom_header::<GetKVConfigRequestHeader>()?;
@@ -1582,7 +1576,7 @@ mod detailed_offset_tests {
                     .get_mut(&request.code())
                     .and_then(VecDeque::pop_front)
                     .ok_or_else(|| {
-                        RocketMQError::illegal_argument(format!("unexpected request code {}", request.code()))
+                        ClientError::illegal_argument(format!("unexpected request code {}", request.code()))
                     })?;
                 Ok(response.set_opaque(request.opaque()))
             })
@@ -2084,7 +2078,7 @@ mod detailed_offset_tests {
 
     #[test]
     fn detailed_offset_outcomes_retain_applied_and_failed_queue_targets_in_order() {
-        let unavailable = RocketMQError::IllegalArgument("safe test failure".into());
+        let unavailable = ClientError::illegal_argument("safe test failure");
         let outcomes = [
             applied_offset("broker-a", 0, 41),
             offset_failure("broker-a", Some(1), &unavailable),

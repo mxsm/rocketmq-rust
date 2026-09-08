@@ -17,10 +17,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 
+use crate::ClientError;
+use crate::ClientResult;
 use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_queue::MessageQueue;
@@ -268,7 +268,7 @@ impl DefaultLitePullConsumer {
     }
 
     /// Starts the consumer.
-    pub async fn start(&self) -> RocketMQResult<()> {
+    pub async fn start(&self) -> ClientResult<()> {
         <Self as ConsumerLifecycle>::start(self).await
     }
 
@@ -283,18 +283,18 @@ impl DefaultLitePullConsumer {
     }
 
     /// Returns a Java-compatible running snapshot for broker admin diagnostics.
-    pub async fn consumer_running_info(&self) -> RocketMQResult<ConsumerRunningInfo> {
+    pub async fn consumer_running_info(&self) -> ClientResult<ConsumerRunningInfo> {
         let impl_ = self.try_impl_()?;
         Ok(MQConsumerInner::consumer_running_info(impl_.as_ref()).await)
     }
 
     /// Subscribes to a topic using the default subscription expression.
-    pub async fn subscribe(&self, topic: &str) -> RocketMQResult<()> {
+    pub async fn subscribe(&self, topic: &str) -> ClientResult<()> {
         <Self as SubscriptionControl>::subscribe(self, topic).await
     }
 
     /// Subscribes to a topic using a tag or SQL expression.
-    pub async fn subscribe_with_expression(&self, topic: &str, sub_expression: &str) -> RocketMQResult<()> {
+    pub async fn subscribe_with_expression(&self, topic: &str, sub_expression: &str) -> ClientResult<()> {
         <Self as SubscriptionControl>::subscribe_with_expression(self, topic, sub_expression).await
     }
 
@@ -304,7 +304,7 @@ impl DefaultLitePullConsumer {
         topic: &str,
         sub_expression: &str,
         listener: MQL,
-    ) -> RocketMQResult<()>
+    ) -> ClientResult<()>
     where
         MQL: MessageQueueListener + 'static,
     {
@@ -312,7 +312,7 @@ impl DefaultLitePullConsumer {
     }
 
     /// Subscribes using a server-side selector.
-    pub async fn subscribe_with_selector(&self, topic: &str, selector: Option<MessageSelector>) -> RocketMQResult<()> {
+    pub async fn subscribe_with_selector(&self, topic: &str, selector: Option<MessageSelector>) -> ClientResult<()> {
         <Self as SubscriptionControl>::subscribe_with_selector(self, topic, selector).await
     }
 
@@ -322,17 +322,17 @@ impl DefaultLitePullConsumer {
     }
 
     /// Returns the currently assigned queues.
-    pub async fn assignment(&self) -> RocketMQResult<HashSet<MessageQueue>> {
+    pub async fn assignment(&self) -> ClientResult<HashSet<MessageQueue>> {
         <Self as AssignmentControl>::assignment(self).await
     }
 
     /// Assigns queues manually, bypassing broker rebalance.
-    pub async fn assign(&self, message_queues: Vec<MessageQueue>) -> RocketMQResult<()> {
+    pub async fn assign(&self, message_queues: Vec<MessageQueue>) -> ClientResult<()> {
         <Self as AssignmentControl>::assign(self, message_queues).await
     }
 
     /// Sets the subscription expression used for manually assigned queues.
-    pub async fn set_sub_expression_for_assign(&self, topic: &str, sub_expression: &str) -> RocketMQResult<()> {
+    pub async fn set_sub_expression_for_assign(&self, topic: &str, sub_expression: &str) -> ClientResult<()> {
         <Self as AssignmentControl>::set_sub_expression_for_assign(self, topic, sub_expression).await
     }
 
@@ -340,7 +340,7 @@ impl DefaultLitePullConsumer {
     pub async fn build_subscriptions_for_heartbeat(
         &self,
         sub_expression_map: &mut HashMap<String, MessageSelector>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         <Self as SubscriptionControl>::build_subscriptions_for_heartbeat(self, sub_expression_map).await
     }
 
@@ -400,7 +400,7 @@ impl DefaultLitePullConsumer {
     }
 
     /// Sets where consumption starts when no offset exists.
-    pub async fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> RocketMQResult<()> {
+    pub async fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> ClientResult<()> {
         <Self as SubscriptionControl>::set_consume_from_where(self, consume_from_where).await
     }
 
@@ -463,7 +463,7 @@ impl DefaultLitePullConsumer {
     }
 
     /// Sets the configured offset store.
-    pub async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> RocketMQResult<()> {
+    pub async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> ClientResult<()> {
         <Self as ConsumerOffsetControl>::set_offset_store(self, offset_store).await
     }
 
@@ -578,7 +578,7 @@ impl DefaultLitePullConsumer {
     ///
     /// Returns an error when `pull_thread_nums` is zero or the consumer has
     /// already started.
-    pub async fn try_set_pull_thread_nums(&self, pull_thread_nums: usize) -> RocketMQResult<()> {
+    pub async fn try_set_pull_thread_nums(&self, pull_thread_nums: usize) -> ClientResult<()> {
         if pull_thread_nums == 0 {
             return Err(crate::mq_client_err!("pullThreadNums must be greater than 0"));
         }
@@ -675,17 +675,17 @@ impl DefaultLitePullConsumer {
     }
 
     /// Fetches message queues for a topic.
-    pub async fn fetch_message_queues(&self, topic: &str) -> RocketMQResult<Vec<MessageQueue>> {
+    pub async fn fetch_message_queues(&self, topic: &str) -> ClientResult<Vec<MessageQueue>> {
         <Self as ConsumerOffsetControl>::fetch_message_queues(self, topic).await
     }
 
     /// Returns the committed offset for a queue.
-    pub async fn committed(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    pub async fn committed(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         <Self as ConsumerOffsetControl>::committed(self, message_queue).await
     }
 
     /// Commits all offsets to the configured offset store.
-    pub async fn commit_all(&self) -> RocketMQResult<()> {
+    pub async fn commit_all(&self) -> ClientResult<()> {
         <Self as ConsumerOffsetControl>::commit_all(self).await
     }
 
@@ -750,22 +750,22 @@ impl DefaultLitePullConsumer {
     }
 
     /// Queries the offset for a timestamp.
-    pub async fn offset_for_timestamp(&self, message_queue: &MessageQueue, timestamp: u64) -> RocketMQResult<i64> {
+    pub async fn offset_for_timestamp(&self, message_queue: &MessageQueue, timestamp: u64) -> ClientResult<i64> {
         <Self as ConsumerOffsetControl>::offset_for_timestamp(self, message_queue, timestamp).await
     }
 
     /// Queries the earliest store time for a queue.
-    pub async fn earliest_msg_store_time(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    pub async fn earliest_msg_store_time(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         <Self as ConsumerOffsetControl>::earliest_msg_store_time(self, message_queue).await
     }
 
     /// Queries the broker max offset for a queue.
-    pub async fn max_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    pub async fn max_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         <Self as ConsumerOffsetControl>::max_offset(self, message_queue).await
     }
 
     /// Queries the broker min offset for a queue.
-    pub async fn min_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    pub async fn min_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         <Self as ConsumerOffsetControl>::min_offset(self, message_queue).await
     }
 
@@ -776,7 +776,7 @@ impl DefaultLitePullConsumer {
         new_topic: &str,
         queue_num: i32,
         attributes: HashMap<String, String>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         self.create_topic_with_flag(key, new_topic, queue_num, 0, attributes)
             .await
     }
@@ -789,7 +789,7 @@ impl DefaultLitePullConsumer {
         queue_num: i32,
         topic_sys_flag: i32,
         attributes: HashMap<String, String>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         let new_topic = self.with_namespace(new_topic);
         self.try_impl_()?
             .create_topic(key, new_topic.as_str(), queue_num, topic_sys_flag, attributes)
@@ -804,7 +804,7 @@ impl DefaultLitePullConsumer {
         max_num: i32,
         begin: u64,
         end: u64,
-    ) -> RocketMQResult<QueryResult> {
+    ) -> ClientResult<QueryResult> {
         let topic = self.with_namespace(topic);
         self.try_impl_()?
             .query_message(topic.as_str(), key, max_num, begin, end)
@@ -812,7 +812,7 @@ impl DefaultLitePullConsumer {
     }
 
     /// Views a message by offset message id or Java-compatible unique message id.
-    pub async fn view_message(&self, topic: &str, msg_id: &str) -> RocketMQResult<MessageExt> {
+    pub async fn view_message(&self, topic: &str, msg_id: &str) -> ClientResult<MessageExt> {
         let topic = self.with_namespace(topic);
         let impl_ = self.try_impl_()?;
         if MessageDecoder::decode_message_id(msg_id).is_ok() {
@@ -838,17 +838,17 @@ impl DefaultLitePullConsumer {
     }
 
     /// Seeks a queue to an offset.
-    pub async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> RocketMQResult<()> {
+    pub async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> ClientResult<()> {
         <Self as AssignmentControl>::seek(self, message_queue, offset).await
     }
 
     /// Seeks a queue to the beginning.
-    pub async fn seek_to_begin(&self, message_queue: &MessageQueue) -> RocketMQResult<()> {
+    pub async fn seek_to_begin(&self, message_queue: &MessageQueue) -> ClientResult<()> {
         <Self as AssignmentControl>::seek_to_begin(self, message_queue).await
     }
 
     /// Seeks a queue to the end.
-    pub async fn seek_to_end(&self, message_queue: &MessageQueue) -> RocketMQResult<()> {
+    pub async fn seek_to_end(&self, message_queue: &MessageQueue) -> ClientResult<()> {
         <Self as AssignmentControl>::seek_to_end(self, message_queue).await
     }
 
@@ -858,11 +858,7 @@ impl DefaultLitePullConsumer {
     }
 
     /// Registers a topic queue-change listener.
-    pub async fn register_topic_message_queue_change_listener<TL>(
-        &self,
-        topic: &str,
-        listener: TL,
-    ) -> RocketMQResult<()>
+    pub async fn register_topic_message_queue_change_listener<TL>(&self, topic: &str, listener: TL) -> ClientResult<()>
     where
         TL: TopicMessageQueueChangeListener + 'static,
     {
@@ -885,7 +881,7 @@ impl DefaultLitePullConsumer {
     /// configuration. If the internal implementation has already been initialized,
     /// the value is synchronized into the impl and rebalance configuration while it
     /// is still in the create state.
-    pub fn set_consumer_group(&self, consumer_group: impl Into<CheetahString>) -> RocketMQResult<()> {
+    pub fn set_consumer_group(&self, consumer_group: impl Into<CheetahString>) -> ClientResult<()> {
         let consumer_group = consumer_group.into();
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_consumer_group(consumer_group.clone())?;
@@ -985,7 +981,7 @@ impl DefaultLitePullConsumer {
     pub(crate) fn set_classic_pull_message_queue_listener(
         &self,
         listener: Option<ArcMessageQueueListener>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         self.set_message_queue_listener_local(listener.clone());
         if let Some(implementation) = self.default_lite_pull_consumer_impl.get() {
             implementation.set_message_queue_listener(listener);
@@ -1032,7 +1028,7 @@ impl DefaultLitePullConsumer {
     }
 
     /// Initializes the trace dispatcher if message trace is enabled.
-    async fn init_trace_dispatcher_internal(&self, impl_: &Arc<DefaultLitePullConsumerImpl>) -> RocketMQResult<()> {
+    async fn init_trace_dispatcher_internal(&self, impl_: &Arc<DefaultLitePullConsumerImpl>) -> ClientResult<()> {
         if !self.enable_msg_trace {
             return Ok(());
         }
@@ -1096,10 +1092,10 @@ impl DefaultLitePullConsumer {
     }
 
     /// Returns a reference to the internal implementation after it has been initialized.
-    pub(crate) fn try_impl_(&self) -> RocketMQResult<&Arc<DefaultLitePullConsumerImpl>> {
+    pub(crate) fn try_impl_(&self) -> ClientResult<&Arc<DefaultLitePullConsumerImpl>> {
         self.default_lite_pull_consumer_impl
             .get()
-            .ok_or_else(|| RocketMQError::not_initialized("DefaultLitePullConsumer not started. Call start() first."))
+            .ok_or_else(|| ClientError::not_initialized("DefaultLitePullConsumer not started. Call start() first."))
     }
 
     /// Returns the internal implementation, initializing it without starting network services.
@@ -1108,7 +1104,7 @@ impl DefaultLitePullConsumer {
     /// `setSubExpressionForAssign` while the implementation is still in
     /// `CREATE_JUST`. Those calls populate local subscription state and only
     /// trigger broker route updates after `start()`.
-    async fn get_or_init_impl(&self) -> RocketMQResult<&Arc<DefaultLitePullConsumerImpl>> {
+    async fn get_or_init_impl(&self) -> ClientResult<&Arc<DefaultLitePullConsumerImpl>> {
         self.default_lite_pull_consumer_impl
             .get_or_try_init(|| async {
                 let impl_ = Arc::new(DefaultLitePullConsumerImpl::try_new_with_options(
@@ -1132,7 +1128,7 @@ impl DefaultLitePullConsumer {
                     impl_.set_offset_store(Some(offset_store))?;
                 }
 
-                Ok::<Arc<DefaultLitePullConsumerImpl>, rocketmq_error::RocketMQError>(impl_)
+                Ok::<Arc<DefaultLitePullConsumerImpl>, crate::ClientError>(impl_)
             })
             .await
     }
@@ -1162,7 +1158,7 @@ impl DefaultLitePullConsumer {
         }
     }
 
-    pub(crate) async fn register_classic_pull_subscription(&self, topic: &CheetahString) -> RocketMQResult<()> {
+    pub(crate) async fn register_classic_pull_subscription(&self, topic: &CheetahString) -> ClientResult<()> {
         self.get_or_init_impl()
             .await?
             .register_classic_pull_subscription(topic)
@@ -1178,11 +1174,11 @@ impl ClientSessionProvider for DefaultLitePullConsumer {
 }
 
 impl SubscriptionControl for DefaultLitePullConsumer {
-    async fn subscribe(&self, topic: &str) -> RocketMQResult<()> {
+    async fn subscribe(&self, topic: &str) -> ClientResult<()> {
         self.subscribe_with_expression(topic, "*").await
     }
 
-    async fn subscribe_with_expression(&self, topic: &str, sub_expression: &str) -> RocketMQResult<()> {
+    async fn subscribe_with_expression(&self, topic: &str, sub_expression: &str) -> ClientResult<()> {
         let wrapped_topic = self.with_namespace(topic);
         self.get_or_init_impl()
             .await?
@@ -1190,7 +1186,7 @@ impl SubscriptionControl for DefaultLitePullConsumer {
             .await
     }
 
-    async fn subscribe_with_listener<MQL>(&self, topic: &str, sub_expression: &str, listener: MQL) -> RocketMQResult<()>
+    async fn subscribe_with_listener<MQL>(&self, topic: &str, sub_expression: &str, listener: MQL) -> ClientResult<()>
     where
         MQL: MessageQueueListener + 'static,
     {
@@ -1204,7 +1200,7 @@ impl SubscriptionControl for DefaultLitePullConsumer {
         Ok(())
     }
 
-    async fn subscribe_with_selector(&self, topic: &str, selector: Option<MessageSelector>) -> RocketMQResult<()> {
+    async fn subscribe_with_selector(&self, topic: &str, selector: Option<MessageSelector>) -> ClientResult<()> {
         let wrapped_topic = self.with_namespace(topic);
         self.get_or_init_impl()
             .await?
@@ -1227,7 +1223,7 @@ impl SubscriptionControl for DefaultLitePullConsumer {
     async fn build_subscriptions_for_heartbeat(
         &self,
         sub_expression_map: &mut HashMap<String, MessageSelector>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         self.try_impl_()?
             .build_subscriptions_for_heartbeat(sub_expression_map)
             .await
@@ -1254,7 +1250,7 @@ impl SubscriptionControl for DefaultLitePullConsumer {
         self.consumer_config.load().consume_from_where
     }
 
-    async fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> RocketMQResult<()> {
+    async fn set_consume_from_where(&self, consume_from_where: ConsumeFromWhere) -> ClientResult<()> {
         validate_lite_pull_consume_from_where(consume_from_where)?;
         self.update_consumer_config(|config| config.consume_from_where = consume_from_where);
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
@@ -1372,7 +1368,7 @@ impl SubscriptionControl for DefaultLitePullConsumer {
         }
     }
 
-    async fn register_topic_message_queue_change_listener<TL>(&self, topic: &str, listener: TL) -> RocketMQResult<()>
+    async fn register_topic_message_queue_change_listener<TL>(&self, topic: &str, listener: TL) -> ClientResult<()>
     where
         TL: TopicMessageQueueChangeListener + 'static,
     {
@@ -1385,7 +1381,7 @@ impl SubscriptionControl for DefaultLitePullConsumer {
 }
 
 impl AssignmentControl for DefaultLitePullConsumer {
-    async fn assignment(&self) -> RocketMQResult<HashSet<MessageQueue>> {
+    async fn assignment(&self) -> ClientResult<HashSet<MessageQueue>> {
         let assignment = self.try_impl_()?.assignment().await;
 
         // Remove namespace from all queues
@@ -1397,14 +1393,14 @@ impl AssignmentControl for DefaultLitePullConsumer {
         Ok(result)
     }
 
-    async fn assign(&self, message_queues: Vec<MessageQueue>) -> RocketMQResult<()> {
+    async fn assign(&self, message_queues: Vec<MessageQueue>) -> ClientResult<()> {
         // Wrap namespace for all queues
         let wrapped_queues: Vec<_> = message_queues.iter().map(|mq| self.queue_with_namespace(mq)).collect();
 
         self.get_or_init_impl().await?.assign(wrapped_queues).await
     }
 
-    async fn set_sub_expression_for_assign(&self, topic: &str, sub_expression: &str) -> RocketMQResult<()> {
+    async fn set_sub_expression_for_assign(&self, topic: &str, sub_expression: &str) -> ClientResult<()> {
         let wrapped_topic = self.with_namespace(topic);
         self.get_or_init_impl()
             .await?
@@ -1441,17 +1437,17 @@ impl AssignmentControl for DefaultLitePullConsumer {
         }
     }
 
-    async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> RocketMQResult<()> {
+    async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> ClientResult<()> {
         let wrapped_mq = self.queue_with_namespace(message_queue);
         self.try_impl_()?.seek(&wrapped_mq, offset).await
     }
 
-    async fn seek_to_begin(&self, message_queue: &MessageQueue) -> RocketMQResult<()> {
+    async fn seek_to_begin(&self, message_queue: &MessageQueue) -> ClientResult<()> {
         let wrapped_mq = self.queue_with_namespace(message_queue);
         self.try_impl_()?.seek_to_begin(&wrapped_mq).await
     }
 
-    async fn seek_to_end(&self, message_queue: &MessageQueue) -> RocketMQResult<()> {
+    async fn seek_to_end(&self, message_queue: &MessageQueue) -> ClientResult<()> {
         let wrapped_mq = self.queue_with_namespace(message_queue);
         self.try_impl_()?.seek_to_end(&wrapped_mq).await
     }
@@ -1629,7 +1625,7 @@ impl ConsumerOffsetControl for DefaultLitePullConsumer {
             .or_else(|| self.current_offset_store())
     }
 
-    async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> RocketMQResult<()> {
+    async fn set_offset_store(&self, offset_store: Option<Arc<OffsetStore>>) -> ClientResult<()> {
         if let Some(impl_) = self.default_lite_pull_consumer_impl.get() {
             impl_.set_offset_store(offset_store.clone())?;
         }
@@ -1637,7 +1633,7 @@ impl ConsumerOffsetControl for DefaultLitePullConsumer {
         Ok(())
     }
 
-    async fn fetch_message_queues(&self, topic: &str) -> RocketMQResult<Vec<MessageQueue>> {
+    async fn fetch_message_queues(&self, topic: &str) -> ClientResult<Vec<MessageQueue>> {
         let wrapped_topic = self.with_namespace(topic);
         let queues = self.try_impl_()?.fetch_message_queues(wrapped_topic).await?;
 
@@ -1647,12 +1643,12 @@ impl ConsumerOffsetControl for DefaultLitePullConsumer {
         Ok(result)
     }
 
-    async fn committed(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    async fn committed(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         let wrapped_mq = self.queue_with_namespace(message_queue);
         self.try_impl_()?.committed(&wrapped_mq).await
     }
 
-    async fn commit_all(&self) -> RocketMQResult<()> {
+    async fn commit_all(&self) -> ClientResult<()> {
         self.try_impl_()?.commit_all().await
     }
 
@@ -1732,29 +1728,29 @@ impl ConsumerOffsetControl for DefaultLitePullConsumer {
         }
     }
 
-    async fn offset_for_timestamp(&self, message_queue: &MessageQueue, timestamp: u64) -> RocketMQResult<i64> {
+    async fn offset_for_timestamp(&self, message_queue: &MessageQueue, timestamp: u64) -> ClientResult<i64> {
         let wrapped_mq = self.queue_with_namespace(message_queue);
         self.try_impl_()?.offset_for_timestamp(&wrapped_mq, timestamp).await
     }
 
-    async fn earliest_msg_store_time(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    async fn earliest_msg_store_time(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         let wrapped_mq = self.queue_with_namespace(message_queue);
         self.try_impl_()?.earliest_msg_store_time(&wrapped_mq).await
     }
 
-    async fn max_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    async fn max_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         let wrapped_mq = self.queue_with_namespace(message_queue);
         self.try_impl_()?.max_offset_public(&wrapped_mq).await
     }
 
-    async fn min_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
+    async fn min_offset(&self, message_queue: &MessageQueue) -> ClientResult<i64> {
         let wrapped_mq = self.queue_with_namespace(message_queue);
         self.try_impl_()?.min_offset_public(&wrapped_mq).await
     }
 }
 
 impl ConsumerLifecycle for DefaultLitePullConsumer {
-    async fn start(&self) -> RocketMQResult<()> {
+    async fn start(&self) -> ClientResult<()> {
         let impl_ = self.get_or_init_impl().await?;
 
         impl_.start().await?;
@@ -1794,7 +1790,7 @@ impl MQConsumer for DefaultLitePullConsumer {
         new_topic: &str,
         queue_num: i32,
         attributes: HashMap<String, String>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         DefaultLitePullConsumer::create_topic(self, key, new_topic, queue_num, attributes).await
     }
 
@@ -1805,7 +1801,7 @@ impl MQConsumer for DefaultLitePullConsumer {
         queue_num: i32,
         topic_sys_flag: i32,
         attributes: HashMap<String, String>,
-    ) -> RocketMQResult<()> {
+    ) -> ClientResult<()> {
         DefaultLitePullConsumer::create_topic_with_flag(self, key, new_topic, queue_num, topic_sys_flag, attributes)
             .await
     }
@@ -1817,20 +1813,15 @@ impl MQConsumer for DefaultLitePullConsumer {
         max_num: i32,
         begin: u64,
         end: u64,
-    ) -> RocketMQResult<QueryResult> {
+    ) -> ClientResult<QueryResult> {
         DefaultLitePullConsumer::query_message(self, topic, key, max_num, begin, end).await
     }
 
-    async fn view_message(&mut self, topic: &str, msg_id: &str) -> RocketMQResult<MessageExt> {
+    async fn view_message(&mut self, topic: &str, msg_id: &str) -> ClientResult<MessageExt> {
         DefaultLitePullConsumer::view_message(self, topic, msg_id).await
     }
 
-    async fn send_message_back(
-        &mut self,
-        _msg: MessageExt,
-        _delay_level: i32,
-        _broker_name: &str,
-    ) -> RocketMQResult<()> {
+    async fn send_message_back(&mut self, _msg: MessageExt, _delay_level: i32, _broker_name: &str) -> ClientResult<()> {
         // Lite pull consumer doesn't support send message back
         // This is typically used in push consumer for retry
         Err(crate::mq_client_err!(
@@ -1839,24 +1830,24 @@ impl MQConsumer for DefaultLitePullConsumer {
         ))
     }
 
-    async fn fetch_subscribe_message_queues(&mut self, topic: &str) -> RocketMQResult<Vec<MessageQueue>> {
+    async fn fetch_subscribe_message_queues(&mut self, topic: &str) -> ClientResult<Vec<MessageQueue>> {
         let queues = self.fetch_message_queues(topic).await?;
         Ok(queues.into_iter().collect())
     }
 
-    async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> RocketMQResult<i64> {
+    async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> ClientResult<i64> {
         <Self as ConsumerOffsetControl>::offset_for_timestamp(self, mq, timestamp).await
     }
 
-    async fn max_offset(&mut self, mq: &MessageQueue) -> RocketMQResult<i64> {
+    async fn max_offset(&mut self, mq: &MessageQueue) -> ClientResult<i64> {
         <Self as ConsumerOffsetControl>::max_offset(self, mq).await
     }
 
-    async fn min_offset(&mut self, mq: &MessageQueue) -> RocketMQResult<i64> {
+    async fn min_offset(&mut self, mq: &MessageQueue) -> ClientResult<i64> {
         <Self as ConsumerOffsetControl>::min_offset(self, mq).await
     }
 
-    async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> RocketMQResult<i64> {
+    async fn earliest_msg_store_time(&mut self, mq: &MessageQueue) -> ClientResult<i64> {
         <Self as ConsumerOffsetControl>::earliest_msg_store_time(self, mq).await
     }
 }
@@ -1890,7 +1881,7 @@ mod tests {
     }
 
     impl TraceDispatcher for CapturingTraceDispatcher {
-        fn start(&self, name_srv_addr: &str, access_channel: AccessChannel) -> RocketMQResult<()> {
+        fn start(&self, name_srv_addr: &str, access_channel: AccessChannel) -> ClientResult<()> {
             self.start_count.fetch_add(1, Ordering::SeqCst);
             *self.last_name_srv_addr.lock().expect("name server lock") = Some(name_srv_addr.to_string());
             *self.last_access_channel.lock().expect("access channel lock") = Some(access_channel);
@@ -1902,7 +1893,7 @@ mod tests {
             true
         }
 
-        fn flush(&self) -> RocketMQResult<()> {
+        fn flush(&self) -> ClientResult<()> {
             Ok(())
         }
 
