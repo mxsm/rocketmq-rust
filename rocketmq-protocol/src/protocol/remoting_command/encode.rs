@@ -24,28 +24,28 @@ mod rocketmq;
 
 impl RemotingCommand {
     #[inline]
-    pub(super) fn try_header_encode(&mut self) -> rocketmq_error::RocketMQResult<Bytes> {
+    pub(super) fn try_header_encode(&mut self) -> rocketmq_error::Result<Bytes> {
         match self.serialize_type {
             SerializeType::ROCKETMQ => {
                 let mut encoded = BytesMut::new();
                 RocketMQSerializable::try_rocketmq_protocol_encode(self, &mut encoded)
-                    .map_err(crate::protocol::header_codec::into_rocketmq_error)?;
+                    .map_err(crate::protocol::header_codec::into_error)?;
                 Ok(encoded.freeze())
             }
             SerializeType::JSON => {
                 self.try_make_custom_header_to_net()
-                    .map_err(crate::protocol::header_codec::into_rocketmq_error)?;
+                    .map_err(crate::protocol::header_codec::into_error)?;
                 #[cfg(feature = "simd")]
                 {
-                    simd_json::to_vec(self).map(Bytes::from).map_err(|error| {
-                        rocketmq_error::SerializationError::encode_failed("remoting-command", error.to_string()).into()
-                    })
+                    simd_json::to_vec(self)
+                        .map(Bytes::from)
+                        .map_err(|source| crate::error::serialization_source("encode", "remoting-command", source))
                 }
                 #[cfg(not(feature = "simd"))]
                 {
-                    serde_json::to_vec(self).map(Bytes::from).map_err(|error| {
-                        rocketmq_error::SerializationError::encode_failed("remoting-command", error.to_string()).into()
-                    })
+                    serde_json::to_vec(self)
+                        .map(Bytes::from)
+                        .map_err(|source| crate::error::serialization_source("encode", "remoting-command", source))
                 }
             }
         }
@@ -57,7 +57,7 @@ impl RemotingCommand {
     ///
     /// Returns the custom-header validation or direct-binary encoding failure.
     #[inline]
-    pub fn try_fast_header_encode(&mut self, dst: &mut BytesMut) -> rocketmq_error::RocketMQResult<()> {
+    pub fn try_fast_header_encode(&mut self, dst: &mut BytesMut) -> rocketmq_error::Result<()> {
         let body_length = self.body.as_ref().map_or(0, Bytes::len);
         self.try_fast_header_encode_with_body_length(dst, body_length)
     }
@@ -67,10 +67,10 @@ impl RemotingCommand {
         &mut self,
         dst: &mut BytesMut,
         body_length: usize,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> rocketmq_error::Result<()> {
         let checkpoint = dst.len();
         let result = match self.body.as_ref() {
-            Some(body) if body.len() != body_length => Err(rocketmq_error::SerializationError::encode_failed(
+            Some(body) if body.len() != body_length => Err(crate::error::serialization_encode_failed(
                 "remoting-command",
                 "explicit body length does not match the in-memory body",
             )
@@ -84,11 +84,7 @@ impl RemotingCommand {
     }
 
     #[inline]
-    fn try_fast_header_encode_inner(
-        &mut self,
-        dst: &mut BytesMut,
-        body_length: usize,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    fn try_fast_header_encode_inner(&mut self, dst: &mut BytesMut, body_length: usize) -> rocketmq_error::Result<()> {
         match self.serialize_type {
             SerializeType::JSON => self.fast_encode_json(dst, body_length),
             SerializeType::ROCKETMQ => self.fast_encode_rocketmq(dst, body_length),

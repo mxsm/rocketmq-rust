@@ -21,8 +21,7 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result;
 use tracing::info;
 
 use crate::consistent_hash::ConsistentHashRouter;
@@ -38,7 +37,7 @@ pub trait AllocateMessageQueueStrategy: Send + Sync {
         current_cid: &CheetahString,
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
-    ) -> RocketMQResult<Vec<MessageQueue>>;
+    ) -> Result<Vec<MessageQueue>>;
 
     fn get_name(&self) -> &'static str;
 }
@@ -51,15 +50,15 @@ pub fn check(
     current_cid: &CheetahString,
     mq_all: &[MessageQueue],
     cid_all: &[CheetahString],
-) -> RocketMQResult<bool> {
+) -> Result<bool> {
     if current_cid.is_empty() {
-        return Err(RocketMQError::illegal_argument("currentCID is empty"));
+        return Err(crate::error::invalid_argument("currentCID is empty"));
     }
     if mq_all.is_empty() {
-        return Err(RocketMQError::illegal_argument("mqAll is null or mqAll empty"));
+        return Err(crate::error::invalid_argument("mqAll is null or mqAll empty"));
     }
     if cid_all.is_empty() {
-        return Err(RocketMQError::illegal_argument("cidAll is null or cidAll empty"));
+        return Err(crate::error::invalid_argument("cidAll is null or cidAll empty"));
     }
     if !cid_all.iter().any(|cid| cid == current_cid) {
         info!(
@@ -82,7 +81,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueAveragely {
         current_cid: &CheetahString,
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
-    ) -> RocketMQResult<Vec<MessageQueue>> {
+    ) -> Result<Vec<MessageQueue>> {
         if !check(consumer_group, current_cid, mq_all, cid_all)? {
             return Ok(Vec::new());
         }
@@ -118,7 +117,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueAveragelyByCircle {
         current_cid: &CheetahString,
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
-    ) -> RocketMQResult<Vec<MessageQueue>> {
+    ) -> Result<Vec<MessageQueue>> {
         if !check(consumer_group, current_cid, mq_all, cid_all)? {
             return Ok(Vec::new());
         }
@@ -154,7 +153,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByConfig {
         _current_cid: &CheetahString,
         _mq_all: &[MessageQueue],
         _cid_all: &[CheetahString],
-    ) -> RocketMQResult<Vec<MessageQueue>> {
+    ) -> Result<Vec<MessageQueue>> {
         Ok(self.message_queue_list.clone())
     }
 
@@ -181,7 +180,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoom {
         current_cid: &CheetahString,
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
-    ) -> RocketMQResult<Vec<MessageQueue>> {
+    ) -> Result<Vec<MessageQueue>> {
         if !check(consumer_group, current_cid, mq_all, cid_all)? {
             return Ok(Vec::new());
         }
@@ -250,7 +249,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
         current_cid: &CheetahString,
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
-    ) -> RocketMQResult<Vec<MessageQueue>> {
+    ) -> Result<Vec<MessageQueue>> {
         if !check(consumer_group, current_cid, mq_all, cid_all)? {
             return Ok(Vec::new());
         }
@@ -260,7 +259,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
                 .resolver
                 .broker_deploy_in(queue)
                 .filter(|room| !room.is_empty())
-                .ok_or_else(|| RocketMQError::illegal_argument(format!("Machine room is null for mq {queue}")))?;
+                .ok_or_else(|| crate::error::invalid_argument(format!("Machine room is null for mq {queue}")))?;
             room_queues.entry(room).or_default().push(queue.clone());
         }
         let mut room_consumers: BTreeMap<CheetahString, Vec<CheetahString>> = BTreeMap::new();
@@ -269,9 +268,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
                 .resolver
                 .consumer_deploy_in(cid)
                 .filter(|room| !room.is_empty())
-                .ok_or_else(|| {
-                    RocketMQError::illegal_argument(format!("Machine room is null for consumer id {cid}"))
-                })?;
+                .ok_or_else(|| crate::error::invalid_argument(format!("Machine room is null for consumer id {cid}")))?;
             room_consumers.entry(room).or_default().push(cid.clone());
         }
         let Some(current_room) = self.resolver.consumer_deploy_in(current_cid) else {
@@ -340,9 +337,9 @@ impl AllocateMessageQueueConsistentHash {
         }
     }
 
-    pub fn try_new(virtual_node_count: i32) -> RocketMQResult<Self> {
+    pub fn try_new(virtual_node_count: i32) -> Result<Self> {
         if virtual_node_count < 0 {
-            return Err(RocketMQError::illegal_argument(format!(
+            return Err(crate::error::invalid_argument(format!(
                 "illegal virtualNodeCnt :{virtual_node_count}"
             )));
         }
@@ -352,9 +349,9 @@ impl AllocateMessageQueueConsistentHash {
     pub fn with_hash_function(
         virtual_node_count: i32,
         hash_function: Arc<dyn HashFunction + Send + Sync>,
-    ) -> RocketMQResult<Self> {
+    ) -> Result<Self> {
         if virtual_node_count < 0 {
-            return Err(RocketMQError::illegal_argument(format!(
+            return Err(crate::error::invalid_argument(format!(
                 "illegal virtualNodeCnt :{virtual_node_count}"
             )));
         }
@@ -383,12 +380,12 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueConsistentHash {
         current_cid: &CheetahString,
         mq_all: &[MessageQueue],
         cid_all: &[CheetahString],
-    ) -> RocketMQResult<Vec<MessageQueue>> {
+    ) -> Result<Vec<MessageQueue>> {
         if !check(consumer_group, current_cid, mq_all, cid_all)? {
             return Ok(Vec::new());
         }
         if self.virtual_node_count < 0 {
-            return Err(RocketMQError::illegal_argument(format!(
+            return Err(crate::error::invalid_argument(format!(
                 "illegal virtualNodeCnt :{}",
                 self.virtual_node_count
             )));

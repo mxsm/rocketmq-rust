@@ -20,7 +20,6 @@ use std::fmt::Debug;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
 // Use new unified error system
-use rocketmq_error::RocketMQError;
 
 use crate::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use crate::common::message::message_property::MessageProperties;
@@ -64,12 +63,12 @@ impl MessageBatch {
         self.messages.is_empty()
     }
 
-    pub fn generate_from_vec<M>(messages: Vec<M>) -> rocketmq_error::RocketMQResult<MessageBatch>
+    pub fn generate_from_vec<M>(messages: Vec<M>) -> rocketmq_error::Result<MessageBatch>
     where
         M: MessageTrait,
     {
         if messages.is_empty() {
-            return Err(RocketMQError::illegal_argument(
+            return Err(crate::error::invalid_argument(
                 "MessageBatch::generate_from_vec: messages is empty",
             ));
         }
@@ -83,9 +82,9 @@ impl MessageBatch {
     ///
     /// This keeps the same Java-compatible validation as [`Self::generate_from_vec`], but it is
     /// the preferred hot path when callers already normalized inputs to concrete `Message`s.
-    pub fn generate_from_messages(messages: Vec<Message>) -> rocketmq_error::RocketMQResult<MessageBatch> {
+    pub fn generate_from_messages(messages: Vec<Message>) -> rocketmq_error::Result<MessageBatch> {
         if messages.is_empty() {
-            return Err(RocketMQError::illegal_argument(
+            return Err(crate::error::invalid_argument(
                 "MessageBatch::generate_from_vec: messages is empty",
             ));
         }
@@ -93,24 +92,24 @@ impl MessageBatch {
         let mut first: Option<&Message> = None;
         for message in &messages {
             if Self::has_delay_property(message) {
-                return Err(RocketMQError::illegal_argument(
+                return Err(crate::error::invalid_argument(
                     "Delayed messages are not supported for batching",
                 ));
             }
             if message.topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
-                return Err(RocketMQError::illegal_argument(
+                return Err(crate::error::invalid_argument(
                     "Retry group topic is not supported for batching",
                 ));
             }
 
             if let Some(first_message) = first {
                 if first_message.topic() != message.topic() {
-                    return Err(RocketMQError::illegal_argument(
+                    return Err(crate::error::invalid_argument(
                         "The topic of the messages in one batch should be the same",
                     ));
                 }
                 if first_message.is_wait_store_msg_ok() != message.is_wait_store_msg_ok() {
-                    return Err(RocketMQError::illegal_argument(
+                    return Err(crate::error::invalid_argument(
                         "The waitStoreMsgOK of the messages in one batch should the same",
                     ));
                 }
@@ -119,7 +118,7 @@ impl MessageBatch {
             }
         }
         let Some(first) = first else {
-            return Err(RocketMQError::illegal_argument(
+            return Err(crate::error::invalid_argument(
                 "MessageBatch::generate_from_vec: messages is empty",
             ));
         };
@@ -320,7 +319,7 @@ mod tests {
         let result = MessageBatch::generate_from_vec(messages);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("empty"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -332,7 +331,7 @@ mod tests {
         let result = MessageBatch::generate_from_vec(messages);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("topic"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -345,7 +344,7 @@ mod tests {
         let result = MessageBatch::generate_from_vec(messages);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Delayed messages"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -360,7 +359,7 @@ mod tests {
         let result = MessageBatch::generate_from_vec(vec![msg1, msg2]);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Delayed messages"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -375,7 +374,7 @@ mod tests {
         let result = MessageBatch::generate_from_vec(vec![msg1, msg2]);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Delayed messages"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -390,7 +389,7 @@ mod tests {
         let result = MessageBatch::generate_from_vec(vec![msg1, msg2]);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Delayed messages"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -402,7 +401,7 @@ mod tests {
         let result = MessageBatch::generate_from_vec(messages);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Retry"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -416,7 +415,7 @@ mod tests {
         let result = MessageBatch::generate_from_vec(messages);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("waitStoreMsgOK"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]

@@ -20,30 +20,31 @@ use crate::get_type_name;
 
 pub(crate) fn generate(model: &HeaderModel) -> TokenStream {
     let struct_name = &model.ident;
+    let protocol_path = &model.protocol_path;
     let static_fields = model.fields.iter().map(gen_static_field);
     let to_maps = model.fields.iter().map(gen_to_map);
-    let from_map = model.fields.iter().map(gen_from_map);
+    let from_map = model.fields.iter().map(|field| gen_from_map(field, protocol_path));
 
     quote! {
         impl #struct_name {
             #(#static_fields)*
         }
 
-        impl crate::protocol::command_custom_header::CommandCustomHeader for #struct_name {
-            fn to_map(&self) -> Option<std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>> {
+        impl #protocol_path::protocol::command_custom_header::CommandCustomHeader for #struct_name {
+            fn to_map(&self) -> Option<std::collections::HashMap<#protocol_path::__request_header_codec::CheetahString, #protocol_path::__request_header_codec::CheetahString>> {
                 let mut map = std::collections::HashMap::new();
                 #(#to_maps)*
                 Some(map)
             }
         }
 
-        impl crate::protocol::command_custom_header::FromMap for #struct_name {
+        impl #protocol_path::protocol::command_custom_header::FromMap for #struct_name {
 
-            type Error = rocketmq_error::RocketMQError;
+            type Error = #protocol_path::__request_header_codec::Error;
 
             type Target = Self;
 
-            fn from(map: &std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>) -> Result<Self::Target, Self::Error> {
+            fn from(map: &std::collections::HashMap<#protocol_path::__request_header_codec::CheetahString, #protocol_path::__request_header_codec::CheetahString>) -> Result<Self::Target, Self::Error> {
                 Ok(#struct_name {
                     #(#from_map)*
                 })
@@ -121,7 +122,7 @@ fn gen_to_map(field: &FieldModel) -> TokenStream {
     }
 }
 
-fn gen_from_map(field: &FieldModel) -> TokenStream {
+fn gen_from_map(field: &FieldModel, protocol_path: &syn::Path) -> TokenStream {
     let field_name = &field.ident;
     let static_name = static_name(field);
     let required = field.legacy_required;
@@ -132,7 +133,7 @@ fn gen_from_map(field: &FieldModel) -> TokenStream {
             #field_name: Some(
                 map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                     .cloned()
-                    .ok_or(rocketmq_error::RocketMQError::request_header_error(
+                    .ok_or(#protocol_path::__request_header_codec::request_header_error(
                         format!("Missing {} field", Self::#static_name),
                     ))?
             ),
@@ -141,7 +142,7 @@ fn gen_from_map(field: &FieldModel) -> TokenStream {
             Some(
                 map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                     .cloned()
-                    .ok_or(rocketmq_error::RocketMQError::request_header_error(
+                    .ok_or(#protocol_path::__request_header_codec::request_header_error(
                         format!("Missing {} field", Self::#static_name),
                     ))?
                     .to_string()
@@ -151,16 +152,16 @@ fn gen_from_map(field: &FieldModel) -> TokenStream {
             #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name)).cloned(),
         },
         (Some(type_), _, true, _) => quote! {
-            #field_name: Some(<#type_ as crate::protocol::command_custom_header::FromMap>::from(map)?),
+            #field_name: Some(<#type_ as #protocol_path::protocol::command_custom_header::FromMap>::from(map)?),
         },
         (Some(type_), LegacyValueKind::Primitive, false, true) => quote! {
             #field_name: Some(
                 map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
-                    .ok_or(rocketmq_error::RocketMQError::request_header_error(
+                    .ok_or(#protocol_path::__request_header_codec::request_header_error(
                         format!("Missing {} field", Self::#static_name),
                     ))?
                     .parse::<#type_>()
-                    .map_err(|_| rocketmq_error::RocketMQError::request_header_error(
+                    .map_err(|_| #protocol_path::__request_header_codec::request_header_error(
                         format!("Parse {} field error", Self::#static_name)
                     ))?
             ),
@@ -172,14 +173,14 @@ fn gen_from_map(field: &FieldModel) -> TokenStream {
         (None, LegacyValueKind::CheetahString, false, true) => quote! {
             #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                 .cloned()
-                .ok_or(rocketmq_error::RocketMQError::request_header_error(
+                .ok_or(#protocol_path::__request_header_codec::request_header_error(
                     format!("Missing {} field", Self::#static_name),
                 ))?,
         },
         (None, LegacyValueKind::String, false, true) => quote! {
             #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                 .cloned()
-                .ok_or(rocketmq_error::RocketMQError::request_header_error(
+                .ok_or(#protocol_path::__request_header_codec::request_header_error(
                     format!("Missing {} field", Self::#static_name),
                 ))?
                 .to_string(),
@@ -192,18 +193,18 @@ fn gen_from_map(field: &FieldModel) -> TokenStream {
         (None, _, true, _) => {
             let type_ = &field.ty;
             quote! {
-                #field_name: <#type_ as crate::protocol::command_custom_header::FromMap>::from(map)?,
+                #field_name: <#type_ as #protocol_path::protocol::command_custom_header::FromMap>::from(map)?,
             }
         }
         (None, LegacyValueKind::Primitive, false, true) => {
             let type_ = &field.ty;
             quote! {
                 #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
-                    .ok_or(rocketmq_error::RocketMQError::request_header_error(
+                    .ok_or(#protocol_path::__request_header_codec::request_header_error(
                         format!("Missing {} field", Self::#static_name),
                     ))?
                     .parse::<#type_>()
-                    .map_err(|_| rocketmq_error::RocketMQError::request_header_error(
+                    .map_err(|_| #protocol_path::__request_header_codec::request_header_error(
                         format!("Parse {} field error", Self::#static_name)
                     ))?,
             }

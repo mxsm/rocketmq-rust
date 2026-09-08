@@ -44,12 +44,12 @@ impl CommandCustomHeader for ManualLegacyShim {
 }
 
 impl FromMap for ManualLegacyShim {
-    type Error = rocketmq_protocol::__request_header_codec::RocketMQError;
+    type Error = rocketmq_protocol::__request_header_codec::Error;
     type Target = Self;
 
     fn from(map: &HeaderMap) -> Result<Self::Target, Self::Error> {
         <Self as HeaderCodec>::decode_from_map(map)
-            .map_err(rocketmq_protocol::protocol::header_codec::into_rocketmq_error)
+            .map_err(rocketmq_protocol::protocol::header_codec::into_error)
     }
 }
 

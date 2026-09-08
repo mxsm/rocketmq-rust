@@ -8,7 +8,9 @@
 
 use std::any::Any;
 
-use rocketmq_error::RocketMQError;
+use rocketmq_error::Error;
+use rocketmq_error::ViewValueRef;
+use rocketmq_error::BROKER_OPERATION_FAILED;
 
 use crate::protocol::CommandCustomHeader;
 
@@ -17,7 +19,7 @@ pub struct RpcResponse {
     pub code: i32,
     pub header: Option<Box<dyn CommandCustomHeader + Send + Sync + 'static>>,
     pub body: Option<Box<dyn Any>>,
-    pub exception: Option<RocketMQError>,
+    pub exception: Option<Error>,
 }
 
 impl RpcResponse {
@@ -35,12 +37,9 @@ impl RpcResponse {
         self.header.as_mut()?.as_any_mut().downcast_mut::<T>()
     }
 
-    pub fn new_exception(exception: Option<RocketMQError>) -> Self {
+    pub fn new_exception(exception: Option<Error>) -> Self {
         Self {
-            code: exception.as_ref().map_or(0, |error| match error {
-                RocketMQError::BrokerOperationFailed { code, .. } => *code,
-                _ => 0,
-            }),
+            code: exception.as_ref().map_or(0, broker_response_code),
             header: None,
             body: None,
             exception,
@@ -67,5 +66,50 @@ impl RpcResponse {
             body,
             exception: None,
         }
+    }
+}
+
+fn broker_response_code(error: &Error) -> i32 {
+    if error.descriptor() != &BROKER_OPERATION_FAILED {
+        return 0;
+    }
+
+    error
+        .diagnostic_view()
+        .ok()
+        .and_then(|view| {
+            view.fields()
+                .find(|field| field.name() == rocketmq_error::fields::BROKER_CODE.schema().name())
+                .and_then(|field| match field.value() {
+                    ViewValueRef::I64(code) => i32::try_from(code).ok(),
+                    _ => None,
+                })
+        })
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_error::fields;
+    use rocketmq_error::ErrorContext;
+
+    use super::*;
+
+    #[test]
+    fn exception_response_retains_canonical_broker_code() {
+        let error = Error::new(&BROKER_OPERATION_FAILED).with_context(
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "test")
+                .with_i64(fields::BROKER_CODE, 207)
+                .with_secret_presence(fields::MESSAGE_PRESENT),
+        );
+
+        let response = RpcResponse::new_exception(Some(error));
+
+        assert_eq!(response.code, 207);
+        assert_eq!(
+            response.exception.as_ref().map(Error::descriptor),
+            Some(&BROKER_OPERATION_FAILED)
+        );
     }
 }

@@ -36,7 +36,7 @@ pub(crate) fn generate(model: &HeaderModel) -> TokenStream {
     let from_map_trait = from_map_trait(protocol_path);
     let map_type = quote!(#protocol_path::HeaderMap);
     let string_type = quote!(#protocol_path::__request_header_codec::CheetahString);
-    let error_type = quote!(#protocol_path::__request_header_codec::RocketMQError);
+    let error_type = quote!(#protocol_path::__request_header_codec::Error);
     let codec_error_type = quote!(#protocol_path::ProtocolContractViolation);
 
     let const_decls = fields.iter().filter(|field| !field.flattened).map(gen_const_decl);
@@ -77,7 +77,7 @@ pub(crate) fn generate(model: &HeaderModel) -> TokenStream {
     };
     let construct_fields = fields
         .iter()
-        .map(|field| gen_construct(field, &from_map_trait, &error_type));
+        .map(|field| gen_construct(field, &from_map_trait, protocol_path));
     let required_string_checks = fields
         .iter()
         .filter(|field| {
@@ -93,7 +93,7 @@ pub(crate) fn generate(model: &HeaderModel) -> TokenStream {
             let key = syn::LitStr::new(&field.key.value, field.span);
             quote! {
                 if self.#field_ident.is_empty() {
-                    return Err(#error_type::request_header_error(
+                    return Err(#protocol_path::__request_header_codec::request_header_error(
                         format!("Required header field {} must not be empty", #key),
                     ));
                 }
@@ -250,7 +250,7 @@ fn gen_scan_arm(field: &FieldModel) -> TokenStream {
     quote!(#key => #local = Some(value),)
 }
 
-fn gen_construct(field: &FieldModel, from_map_trait: &TokenStream, error_type: &TokenStream) -> TokenStream {
+fn gen_construct(field: &FieldModel, from_map_trait: &TokenStream, protocol_path: &syn::Path) -> TokenStream {
     let field_ident = &field.ident;
     if field.flattened {
         return if let Some(inner) = &field.option_inner {
@@ -279,7 +279,7 @@ fn gen_construct(field: &FieldModel, from_map_trait: &TokenStream, error_type: &
     ) {
         (LegacyValueKind::CheetahString, Some(_), _) => quote!(#field_ident: #local.cloned(),),
         (LegacyValueKind::CheetahString, None, true) => quote! {
-            #field_ident: #local.cloned().ok_or_else(|| #error_type::request_header_error(#missing.to_string()))?,
+            #field_ident: #local.cloned().ok_or_else(|| #protocol_path::__request_header_codec::request_header_error(#missing.to_string()))?,
         },
         (LegacyValueKind::CheetahString, None, false) => {
             quote!(#field_ident: #local.cloned().unwrap_or_else(|| #default),)
@@ -287,7 +287,7 @@ fn gen_construct(field: &FieldModel, from_map_trait: &TokenStream, error_type: &
         (LegacyValueKind::String, Some(_), _) => quote!(#field_ident: #local.map(ToString::to_string),),
         (LegacyValueKind::String, None, true) => quote! {
             #field_ident: #local.map(ToString::to_string)
-                .ok_or_else(|| #error_type::request_header_error(#missing.to_string()))?,
+                .ok_or_else(|| #protocol_path::__request_header_codec::request_header_error(#missing.to_string()))?,
         },
         (LegacyValueKind::String, None, false) => quote! {
             #field_ident: #local.map(ToString::to_string).unwrap_or_else(|| #default),
@@ -296,7 +296,7 @@ fn gen_construct(field: &FieldModel, from_map_trait: &TokenStream, error_type: &
             #field_ident: match #local {
                 Some(value) => value.as_str().parse::<#inner>()
                     .map(Some)
-                    .map_err(|_| #error_type::request_header_error(#parse_error.to_string()))?,
+                    .map_err(|_| #protocol_path::__request_header_codec::request_header_error(#parse_error.to_string()))?,
                 None => None,
             },
         },
@@ -304,10 +304,10 @@ fn gen_construct(field: &FieldModel, from_map_trait: &TokenStream, error_type: &
             let ty = &field.ty;
             quote! {
                 #field_ident: #local
-                    .ok_or_else(|| #error_type::request_header_error(#missing.to_string()))?
+                    .ok_or_else(|| #protocol_path::__request_header_codec::request_header_error(#missing.to_string()))?
                     .as_str()
                     .parse::<#ty>()
-                    .map_err(|_| #error_type::request_header_error(#parse_error.to_string()))?,
+                    .map_err(|_| #protocol_path::__request_header_codec::request_header_error(#parse_error.to_string()))?,
             }
         }
         (LegacyValueKind::Primitive, None, false) => {
@@ -315,7 +315,7 @@ fn gen_construct(field: &FieldModel, from_map_trait: &TokenStream, error_type: &
             quote! {
                 #field_ident: match #local {
                     Some(value) => value.as_str().parse::<#ty>()
-                        .map_err(|_| #error_type::request_header_error(#parse_error.to_string()))?,
+                        .map_err(|_| #protocol_path::__request_header_codec::request_header_error(#parse_error.to_string()))?,
                     None => #default,
                 },
             }

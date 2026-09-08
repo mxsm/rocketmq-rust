@@ -99,7 +99,7 @@ fn expected_map(fixture: &Value) -> HashMap<CheetahString, CheetahString> {
 
 fn assert_header_map<T>(command: &RemotingCommand, expected: &HashMap<CheetahString, CheetahString>)
 where
-    T: FromMap<Target = T, Error = rocketmq_error::RocketMQError> + CommandCustomHeader,
+    T: FromMap<Target = T, Error = rocketmq_error::Error> + CommandCustomHeader,
 {
     let header = command
         .decode_command_custom_header::<T>()
@@ -109,7 +109,7 @@ where
 
 fn assert_fast_header_map<T>(command: &RemotingCommand, expected: &HashMap<CheetahString, CheetahString>)
 where
-    T: FromMap<Target = T, Error = rocketmq_error::RocketMQError> + CommandCustomHeader + Default,
+    T: FromMap<Target = T, Error = rocketmq_error::Error> + CommandCustomHeader + Default,
 {
     let header = command
         .decode_command_custom_header_fast::<T>()
@@ -123,7 +123,7 @@ fn encode_rust_header<T>(
     expected: &HashMap<CheetahString, CheetahString>,
 ) -> Vec<u8>
 where
-    T: FromMap<Target = T, Error = rocketmq_error::RocketMQError> + CommandCustomHeader + Send + Sync + 'static,
+    T: FromMap<Target = T, Error = rocketmq_error::Error> + CommandCustomHeader + Send + Sync + 'static,
 {
     let header = T::from(expected).expect("canonical Java map must construct the Rust header");
     let command = RemotingCommand::create_request_command_with_defaults(code, header, 501, serialize_type)

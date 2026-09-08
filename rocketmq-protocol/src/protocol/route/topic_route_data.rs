@@ -75,11 +75,11 @@ impl TopicRouteData {
     ///
     /// The observable difference from the legacy path is deterministic map key ordering,
     /// which mirrors Java's `MapSortField` behavior for route responses.
-    pub fn encode_standard_json(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
+    pub fn encode_standard_json(&self) -> rocketmq_error::Result<Vec<u8>> {
         StandardJsonTopicRouteData::from(self).encode()
     }
 
-    pub fn decode(bytes: &[u8]) -> rocketmq_error::RocketMQResult<Self> {
+    pub fn decode(bytes: &[u8]) -> rocketmq_error::Result<Self> {
         match <Self as RemotingDeserializable>::decode(bytes) {
             Ok(route_data) => Ok(route_data),
             Err(error) => {

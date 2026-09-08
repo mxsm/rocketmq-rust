@@ -22,6 +22,7 @@
 //! Enable the `simd` feature to use accelerated protocol decoding paths.
 
 mod contract;
+mod error;
 
 pub mod code;
 pub mod common;
@@ -51,5 +52,10 @@ pub use rpc::topic_request_header::TopicRequestHeader;
 pub mod __request_header_codec {
     pub use bytes::BytesMut;
     pub use cheetah_string::CheetahString;
-    pub use rocketmq_error::RocketMQError;
+    pub use rocketmq_error::Error;
+
+    /// Creates a descriptor-backed header validation error for generated codecs.
+    pub fn request_header_error(_detail: impl Into<String>) -> Error {
+        crate::error::request_header_failure()
+    }
 }

@@ -438,9 +438,9 @@ impl Message {
 
     /// Sets the message priority with Java-compatible non-negative validation.
     #[inline]
-    pub fn try_set_priority(&mut self, priority: i32) -> rocketmq_error::RocketMQResult<()> {
+    pub fn try_set_priority(&mut self, priority: i32) -> rocketmq_error::Result<()> {
         if priority < 0 {
-            return Err(rocketmq_error::RocketMQError::illegal_argument(
+            return Err(crate::error::invalid_argument(
                 "The priority must be greater than or equal to 0",
             ));
         }
@@ -793,7 +793,7 @@ mod tests {
         let error = msg
             .try_set_priority(-1)
             .expect_err("negative priority should be rejected");
-        assert!(error.to_string().contains("greater than or equal to 0"));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -884,50 +884,48 @@ mod tests {
 
     #[test]
     fn test_put_user_property_error_handling() {
-        use rocketmq_error::RocketMQError;
-
         let mut msg = Message::new("test_topic", b"test body");
 
         // Test empty name
         let result = msg.put_user_property(CheetahString::empty(), CheetahString::from_slice("value"));
-        assert!(result.is_err());
-        if let Err(RocketMQError::InvalidProperty(e)) = result {
-            assert!(e.contains("null or blank"));
-        }
+        assert_eq!(
+            result.expect_err("empty property name must fail").descriptor(),
+            &rocketmq_error::PROTOCOL_MESSAGE_PROPERTY_INVALID
+        );
 
         // Test empty value
         let result = msg.put_user_property(CheetahString::from_slice("name"), CheetahString::empty());
-        assert!(result.is_err());
-        if let Err(RocketMQError::InvalidProperty(e)) = result {
-            assert!(e.contains("null or blank"));
-        }
+        assert_eq!(
+            result.expect_err("empty property value must fail").descriptor(),
+            &rocketmq_error::PROTOCOL_MESSAGE_PROPERTY_INVALID
+        );
 
         // Test system reserved property
         let result = msg.put_user_property(CheetahString::from_slice("KEYS"), CheetahString::from_slice("value"));
-        assert!(result.is_err());
-        if let Err(RocketMQError::InvalidProperty(e)) = result {
-            assert!(e.contains("used by system"));
-        }
+        assert_eq!(
+            result.expect_err("reserved property must fail").descriptor(),
+            &rocketmq_error::PROTOCOL_MESSAGE_PROPERTY_INVALID
+        );
 
         // Test Java-reserved priority property
         let result = msg.put_user_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_PRIORITY),
             CheetahString::from_slice("value"),
         );
-        assert!(result.is_err());
-        if let Err(RocketMQError::InvalidProperty(e)) = result {
-            assert!(e.contains("used by system"));
-        }
+        assert_eq!(
+            result.expect_err("priority property must fail").descriptor(),
+            &rocketmq_error::PROTOCOL_MESSAGE_PROPERTY_INVALID
+        );
 
         // Test Java-reserved origin group property
         let result = msg.put_user_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_ORIGIN_GROUP),
             CheetahString::from_slice("value"),
         );
-        assert!(result.is_err());
-        if let Err(RocketMQError::InvalidProperty(e)) = result {
-            assert!(e.contains("used by system"));
-        }
+        assert_eq!(
+            result.expect_err("origin group property must fail").descriptor(),
+            &rocketmq_error::PROTOCOL_MESSAGE_PROPERTY_INVALID
+        );
 
         // Test valid user property
         let result = msg.put_user_property(

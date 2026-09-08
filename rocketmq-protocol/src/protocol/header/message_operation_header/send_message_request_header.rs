@@ -192,7 +192,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
 pub fn parse_request_header(
     request: &RemotingCommand,
     request_code: RequestCode,
-) -> rocketmq_error::RocketMQResult<SendMessageRequestHeader> {
+) -> rocketmq_error::Result<SendMessageRequestHeader> {
     let mut request_header_v2 = None;
     if RequestCode::SendMessageV2 == request_code || RequestCode::SendBatchMessage == request_code {
         // Attempt to decode the command custom header as SendMessageRequestHeaderV2

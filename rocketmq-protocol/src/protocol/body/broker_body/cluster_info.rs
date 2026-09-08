@@ -42,7 +42,7 @@ impl ClusterInfo {
         }
     }
 
-    pub fn decode(bytes: &[u8]) -> rocketmq_error::RocketMQResult<Self> {
+    pub fn decode(bytes: &[u8]) -> rocketmq_error::Result<Self> {
         match <Self as RemotingDeserializable>::decode(bytes) {
             Ok(cluster_info) => Ok(cluster_info),
             Err(error) => {

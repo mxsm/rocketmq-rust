@@ -16,9 +16,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fmt::Display;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::SerializationError;
+use rocketmq_error::Result;
 use rocketmq_model::message::MessageQueue;
 use serde::Deserialize;
 use serde::Serialize;
@@ -85,21 +83,21 @@ impl ConsumerRunningInfo {
         self.properties.insert(key.into(), value.into());
     }
 
-    pub fn encode_java_compatible(&self) -> RocketMQResult<Vec<u8>> {
+    pub fn encode_java_compatible(&self) -> Result<Vec<u8>> {
         Ok(self.to_java_compatible_json()?.into_bytes())
     }
 
-    pub fn to_java_compatible_json(&self) -> RocketMQResult<String> {
+    pub fn to_java_compatible_json(&self) -> Result<String> {
         let mut body = String::new();
         body.push_str("{\"properties\":");
         body.push_str(
             &serde_json::to_string(&self.properties)
-                .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+                .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
         );
         body.push_str(",\"subscriptionSet\":");
         body.push_str(
             &serde_json::to_string(&self.subscription_set)
-                .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+                .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
         );
         body.push_str(",\"mqTable\":{");
         append_process_queue_map(&mut body, &self.mq_table)?;
@@ -108,25 +106,25 @@ impl ConsumerRunningInfo {
         body.push_str("},\"statusTable\":");
         body.push_str(
             &serde_json::to_string(&self.status_table)
-                .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+                .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
         );
         body.push_str(",\"userConsumerInfo\":");
         body.push_str(
             &serde_json::to_string(&self.user_consumer_info)
-                .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+                .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
         );
         if let Some(jstack) = &self.jstack {
             body.push_str(",\"jstack\":");
             body.push_str(
                 &serde_json::to_string(jstack)
-                    .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+                    .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
             );
         }
         body.push('}');
         Ok(body)
     }
 
-    pub fn decode(body: &[u8]) -> RocketMQResult<Self> {
+    pub fn decode(body: &[u8]) -> Result<Self> {
         match <Self as RemotingDeserializable>::decode(body) {
             Ok(mut info) => {
                 info.sync_derived_fields_from_properties();
@@ -183,10 +181,7 @@ fn java_consume_type_name(consume_type: ConsumeType) -> &'static str {
     }
 }
 
-fn append_process_queue_map(
-    output: &mut String,
-    table: &BTreeMap<MessageQueue, ProcessQueueInfo>,
-) -> RocketMQResult<()> {
+fn append_process_queue_map(output: &mut String, table: &BTreeMap<MessageQueue, ProcessQueueInfo>) -> Result<()> {
     for (index, (queue, info)) in table.iter().enumerate() {
         if index > 0 {
             output.push(',');
@@ -194,7 +189,8 @@ fn append_process_queue_map(
         append_message_queue_object_key(output, queue)?;
         output.push(':');
         output.push_str(
-            &serde_json::to_string(info).map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+            &serde_json::to_string(info)
+                .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
         );
     }
     Ok(())
@@ -203,7 +199,7 @@ fn append_process_queue_map(
 fn append_pop_process_queue_map(
     output: &mut String,
     table: &BTreeMap<MessageQueue, PopProcessQueueInfo>,
-) -> RocketMQResult<()> {
+) -> Result<()> {
     for (index, (queue, info)) in table.iter().enumerate() {
         if index > 0 {
             output.push(',');
@@ -211,7 +207,8 @@ fn append_pop_process_queue_map(
         append_message_queue_object_key(output, queue)?;
         output.push(':');
         output.push_str(
-            &serde_json::to_string(info).map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+            &serde_json::to_string(info)
+                .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
         );
     }
     Ok(())
@@ -312,9 +309,9 @@ impl ConsumerRunningInfo {
     pub fn analyze_subscription_at(
         cri_table: BTreeMap<String /* clientId */, ConsumerRunningInfo>,
         now_millis: u64,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         let first = cri_table.first_key_value().ok_or_else(|| {
-            RocketMQError::response_process_failed("analyze_subscription", "consumer running info table is empty")
+            crate::error::response_failure("analyze_subscription", "consumer running info table is empty")
         })?;
         let prev = first.1;
 
@@ -327,7 +324,7 @@ impl ConsumerRunningInfo {
             for v in cri_table.values() {
                 if v.subscription_set != prev.subscription_set {
                     // Different subscription in the same group of consumer
-                    return Err(RocketMQError::response_process_failed(
+                    return Err(crate::error::response_failure(
                         "analyze_subscription",
                         "different subscription in the same consumer group",
                     ));
@@ -339,11 +336,7 @@ impl ConsumerRunningInfo {
         Ok(())
     }
 
-    pub fn analyze_process_queue_at(
-        client_id: String,
-        info: ConsumerRunningInfo,
-        now_millis: u64,
-    ) -> RocketMQResult<String> {
+    pub fn analyze_process_queue_at(client_id: String, info: ConsumerRunningInfo, now_millis: u64) -> Result<String> {
         let mut sb = String::new();
         let push = matches!(info.consume_type, ConsumeType::ConsumePassively);
 
@@ -392,13 +385,6 @@ mod tests {
             .expect_err("empty consumer running info should be rejected");
 
         assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_RESPONSE_FAILED);
-        assert!(matches!(
-            error,
-            RocketMQError::ResponseProcessFailed {
-                operation: "analyze_subscription",
-                ..
-            }
-        ));
     }
 
     #[test]

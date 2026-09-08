@@ -139,7 +139,7 @@ mod reply_message_request_header_tests {
         map.insert("topic".into(), "test_topic".into());
         map.insert("defaultTopic".into(), "test_default_topic".into());
         map.insert("defaultTopicQueueNums".into(), "invalid".into());
-        let header: Result<ReplyMessageRequestHeader, rocketmq_error::RocketMQError> =
+        let header: Result<ReplyMessageRequestHeader, rocketmq_error::Error> =
             <ReplyMessageRequestHeader as FromMap>::from(&map);
         assert!(header.is_err());
     }

@@ -46,10 +46,7 @@ fn compress(payload: &[u8]) -> Bytes {
     Bytes::from(encoder.finish().expect("test compressor should finish"))
 }
 
-fn decode_compressed(
-    payload: &[u8],
-    limits: RegisterBrokerDecodeLimits,
-) -> rocketmq_error::RocketMQResult<RegisterBrokerBody> {
+fn decode_compressed(payload: &[u8], limits: RegisterBrokerDecodeLimits) -> rocketmq_error::Result<RegisterBrokerBody> {
     RegisterBrokerBody::decode_with_limits(&compress(payload), true, RocketMqVersion::V5_0_0, limits)
 }
 

@@ -16,8 +16,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use md5::Digest;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result;
 
 /// A physical or virtual node that can be placed on a hash ring.
 pub trait Node {
@@ -99,7 +98,7 @@ impl<T: Node + Clone> ConsistentHashRouter<T> {
         Self::new_with_hash_function(physical_nodes, virtual_node_count, Arc::new(MD5Hash))
     }
 
-    pub fn try_new(physical_nodes: Vec<T>, virtual_node_count: i32) -> RocketMQResult<Self> {
+    pub fn try_new(physical_nodes: Vec<T>, virtual_node_count: i32) -> Result<Self> {
         Self::try_new_with_hash_function(physical_nodes, virtual_node_count, Arc::new(MD5Hash))
     }
 
@@ -128,9 +127,9 @@ impl<T: Node + Clone> ConsistentHashRouter<T> {
         physical_nodes: Vec<T>,
         virtual_node_count: i32,
         hash_function: Arc<dyn HashFunction>,
-    ) -> RocketMQResult<Self> {
+    ) -> Result<Self> {
         if virtual_node_count < 0 {
-            return Err(RocketMQError::illegal_argument(format!(
+            return Err(crate::error::invalid_argument(format!(
                 "illegal virtual node counts: {virtual_node_count}"
             )));
         }
@@ -148,9 +147,9 @@ impl<T: Node + Clone> ConsistentHashRouter<T> {
         let _ = self.try_add_node(physical_node, virtual_node_count);
     }
 
-    pub fn try_add_node(&mut self, physical_node: T, virtual_node_count: i32) -> RocketMQResult<()> {
+    pub fn try_add_node(&mut self, physical_node: T, virtual_node_count: i32) -> Result<()> {
         if virtual_node_count < 0 {
-            return Err(RocketMQError::illegal_argument(format!(
+            return Err(crate::error::invalid_argument(format!(
                 "illegal virtual node counts: {virtual_node_count}"
             )));
         }

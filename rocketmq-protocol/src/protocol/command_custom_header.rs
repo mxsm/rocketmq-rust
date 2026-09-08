@@ -48,7 +48,7 @@ pub trait CommandCustomHeader: AsAny {
     /// If the fields are valid, the `Ok` variant is returned with an empty `()` value.
     /// If the fields are invalid, an error governed by a stable
     /// [`rocketmq_error::ErrorDescriptor`] is returned.
-    fn check_fields(&self) -> rocketmq_error::RocketMQResult<()> {
+    fn check_fields(&self) -> rocketmq_error::Result<()> {
         Ok(())
     }
 
@@ -198,7 +198,7 @@ pub trait CommandCustomHeader: AsAny {
     /// # Arguments
     ///
     /// * `_fields` - A reference to a `HashMap` that contains the fields to be decoded.
-    fn decode_fast(&mut self, _fields: &HashMap<CheetahString, CheetahString>) -> rocketmq_error::RocketMQResult<()> {
+    fn decode_fast(&mut self, _fields: &HashMap<CheetahString, CheetahString>) -> rocketmq_error::Result<()> {
         Ok(())
     }
 
@@ -224,26 +224,24 @@ pub trait CommandCustomHeader: AsAny {
     /// # Returns
     ///
     /// * `Ok(CheetahString)` - If the field is found in the map, returns the associated value.
-    /// * `Err(RocketMQError::Serialization)` - If the field is not found in the map, returns an
-    ///   error indicating the field is required.
+    /// * `Err(Error)` - If the field is not found in the map, returns an error indicating the
+    ///   field is required.
     ///
     /// # Errors
     ///
-    /// This function returns a `SerializationError::DecodeFailed` if the specified field is
-    /// not found in the map.
+    /// This function returns a serialization error if the specified field is not found in the
+    /// map.
     #[inline(always)]
     fn get_and_check_not_none(
         &self,
         map: &HashMap<CheetahString, CheetahString>,
         field: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<CheetahString> {
+    ) -> rocketmq_error::Result<CheetahString> {
         match map.get(field) {
             Some(value) => Ok(value.clone()),
-            None => Err(rocketmq_error::RocketMQError::Serialization(
-                rocketmq_error::SerializationError::DecodeFailed {
-                    format: "header",
-                    message: format!("The field {field} is required."),
-                },
+            None => Err(crate::error::serialization_decode_failed(
+                "header",
+                format!("The field {field} is required."),
             )),
         }
     }
@@ -254,14 +252,12 @@ pub trait CommandCustomHeader: AsAny {
         &self,
         map: &'a HashMap<CheetahString, CheetahString>,
         field: &CheetahString,
-    ) -> rocketmq_error::RocketMQResult<&'a CheetahString> {
+    ) -> rocketmq_error::Result<&'a CheetahString> {
         match map.get(field) {
             Some(value) => Ok(value),
-            None => Err(rocketmq_error::RocketMQError::Serialization(
-                rocketmq_error::SerializationError::DecodeFailed {
-                    format: "header",
-                    message: format!("The field {field} is required."),
-                },
+            None => Err(crate::error::serialization_decode_failed(
+                "header",
+                format!("The field {field} is required."),
             )),
         }
     }
@@ -284,7 +280,7 @@ impl<T: CommandCustomHeader> AsAny for T {
 }
 
 pub trait FromMap {
-    type Error: From<rocketmq_error::RocketMQError>;
+    type Error: From<rocketmq_error::Error>;
 
     type Target;
 

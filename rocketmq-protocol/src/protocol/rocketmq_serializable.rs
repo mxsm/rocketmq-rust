@@ -34,18 +34,15 @@ const MAP_ENTRY_ENCODED_BYTES_ESTIMATE: usize = 16;
 const MIN_MAP_CAPACITY: usize = 4;
 const MAX_MAP_CAPACITY: usize = 1024;
 
-fn decoding_error(required: usize, available: usize) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-        format: "binary",
-        message: format!("required {required} bytes, got {available}"),
-    })
+fn decoding_error(required: usize, available: usize) -> rocketmq_error::Error {
+    crate::error::serialization_decode_failed("binary", format!("required {required} bytes, got {available}"))
 }
 
-fn trailing_header_error(remaining: usize) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-        format: "binary",
-        message: format!("ROCKETMQ header has {remaining} trailing bytes after extension fields"),
-    })
+fn trailing_header_error(remaining: usize) -> rocketmq_error::Error {
+    crate::error::serialization_decode_failed(
+        "binary",
+        format!("ROCKETMQ header has {remaining} trailing bytes after extension fields"),
+    )
 }
 
 enum SortedExtFields<'a> {
@@ -107,7 +104,7 @@ impl RocketMQSerializable {
         buf: &mut BytesMut,
         use_short_length: bool,
         limit: usize,
-    ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
+    ) -> rocketmq_error::Result<Option<CheetahString>> {
         // Read length prefix
         let len = if use_short_length {
             if buf.remaining() < 2 {
@@ -138,7 +135,8 @@ impl RocketMQSerializable {
 
         // Checked UTF-8 decode with CheetahString storage optimization
         let bytes = buf.split_to(len).freeze();
-        let value = CheetahString::try_copy_from_bytes(bytes).map_err(|error| error.into_parts().1)?;
+        let value = CheetahString::try_copy_from_bytes(bytes)
+            .map_err(|error| crate::error::serialization_source("decode", "binary", error.into_parts().1))?;
         Ok(Some(value))
     }
 
@@ -411,7 +409,7 @@ impl RocketMQSerializable {
     pub fn rocket_mq_protocol_decode(
         header_buffer: &mut BytesMut,
         header_len: usize,
-    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    ) -> rocketmq_error::Result<RemotingCommand> {
         let available = header_buffer.remaining();
         if available < header_len {
             return Err(decoding_error(header_len, available));
@@ -423,7 +421,7 @@ impl RocketMQSerializable {
     }
 
     /// Decodes an immutable ROCKETMQ header without intermediate buffer splits.
-    pub(crate) fn rocket_mq_protocol_decode_bytes(header: Bytes) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    pub(crate) fn rocket_mq_protocol_decode_bytes(header: Bytes) -> rocketmq_error::Result<RemotingCommand> {
         const FIXED_HEADER_LEN: usize = 13;
         const LENGTH_FIELD_LEN: usize = 4;
 
@@ -455,8 +453,8 @@ impl RocketMQSerializable {
             None
         } else {
             let end = cursor + remark_length;
-            let value =
-                CheetahString::try_copy_from_bytes(header.slice(cursor..end)).map_err(|error| error.into_parts().1)?;
+            let value = CheetahString::try_copy_from_bytes(header.slice(cursor..end))
+                .map_err(|error| crate::error::serialization_source("decode", "binary", error.into_parts().1))?;
             cursor = end;
             Some(value)
         };
@@ -498,7 +496,7 @@ impl RocketMQSerializable {
     pub fn map_deserialize(
         buffer: &mut BytesMut,
         len: usize,
-    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, CheetahString>> {
+    ) -> rocketmq_error::Result<HashMap<CheetahString, CheetahString>> {
         if len == 0 {
             return Ok(HashMap::new());
         }

@@ -25,7 +25,7 @@ pub trait Compressor {
     /// # Returns
     ///
     /// Compressed byte data or an `std::io::Error`.
-    fn compress(&self, src: &[u8], level: i32) -> rocketmq_error::RocketMQResult<Bytes>;
+    fn compress(&self, src: &[u8], level: i32) -> rocketmq_error::Result<Bytes>;
 
     /// Decompress message by different compressor.
     ///
@@ -36,5 +36,5 @@ pub trait Compressor {
     /// # Returns
     ///
     /// Decompressed byte data or an `std::io::Error`.
-    fn decompress(&self, src: &[u8]) -> rocketmq_error::RocketMQResult<Bytes>;
+    fn decompress(&self, src: &[u8]) -> rocketmq_error::Result<Bytes>;
 }

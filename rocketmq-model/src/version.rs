@@ -1268,10 +1268,10 @@ impl RocketMqVersion {
 }
 
 impl TryFrom<u32> for RocketMqVersion {
-    type Error = rocketmq_error::RocketMQError;
+    type Error = rocketmq_error::Error;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        RocketMqVersion::from_repr(value).ok_or(rocketmq_error::RocketMQError::InvalidVersionOrdinal(value))
+        RocketMqVersion::from_repr(value).ok_or_else(|| crate::error::unsupported_version(value))
     }
 }
 
@@ -1324,12 +1324,8 @@ mod tests {
     #[test]
     fn test_try_from_invalid() {
         let result = RocketMqVersion::try_from(99999);
-        assert!(result.is_err());
-        if let Err(rocketmq_error::RocketMQError::InvalidVersionOrdinal(val)) = result {
-            assert_eq!(val, 99999);
-        } else {
-            panic!("Expected InvalidVersionOrdinal error");
-        }
+        let error = result.expect_err("invalid ordinal must fail");
+        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_VERSION_UNSUPPORTED);
     }
 
     #[test]

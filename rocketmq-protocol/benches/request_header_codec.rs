@@ -128,7 +128,7 @@ fn fields(case: &Case) -> HashMap<CheetahString, CheetahString> {
 
 fn fresh_command<T>(case: &Case, fields: &HashMap<CheetahString, CheetahString>) -> RemotingCommand
 where
-    T: FromMap<Target = T, Error = rocketmq_error::RocketMQError> + CommandCustomHeader + Send + Sync + 'static,
+    T: FromMap<Target = T, Error = rocketmq_error::Error> + CommandCustomHeader + Send + Sync + 'static,
 {
     let header = T::from(fields).unwrap_or_else(|error| panic!("{} header construction failed: {error}", case.id));
     RemotingCommand::create_request_command_with_defaults(case.request_code, header, 501, case.serialize_type.into())
@@ -138,7 +138,7 @@ where
 
 fn encode_once<T>(case: &Case, fields: &HashMap<CheetahString, CheetahString>) -> Vec<u8>
 where
-    T: FromMap<Target = T, Error = rocketmq_error::RocketMQError> + CommandCustomHeader + Send + Sync + 'static,
+    T: FromMap<Target = T, Error = rocketmq_error::Error> + CommandCustomHeader + Send + Sync + 'static,
 {
     EncodedFrame::from_command(fresh_command::<T>(case, fields))
         .unwrap_or_else(|error| panic!("{} frame encode failed: {error}", case.id))
@@ -152,24 +152,24 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     })
 }
 
-fn decode_normal<T>(command: &RemotingCommand) -> rocketmq_error::RocketMQResult<T>
+fn decode_normal<T>(command: &RemotingCommand) -> rocketmq_error::Result<T>
 where
-    T: FromMap<Target = T, Error = rocketmq_error::RocketMQError>,
+    T: FromMap<Target = T, Error = rocketmq_error::Error>,
 {
     command.decode_command_custom_header::<T>()
 }
 
-fn decode_fast<T>(command: &RemotingCommand) -> rocketmq_error::RocketMQResult<T>
+fn decode_fast<T>(command: &RemotingCommand) -> rocketmq_error::Result<T>
 where
-    T: FromMap<Target = T, Error = rocketmq_error::RocketMQError> + CommandCustomHeader + Default,
+    T: FromMap<Target = T, Error = rocketmq_error::Error> + CommandCustomHeader + Default,
 {
     command.decode_command_custom_header_fast::<T>()
 }
 
 fn verify_frame<T, D>(case: &Case, fields: &HashMap<CheetahString, CheetahString>, frame: &[u8], decode: D)
 where
-    T: FromMap<Target = T, Error = rocketmq_error::RocketMQError> + CommandCustomHeader,
-    D: Fn(&RemotingCommand) -> rocketmq_error::RocketMQResult<T>,
+    T: FromMap<Target = T, Error = rocketmq_error::Error> + CommandCustomHeader,
+    D: Fn(&RemotingCommand) -> rocketmq_error::Result<T>,
 {
     let mut input = BytesMut::from(frame);
     let command = RemotingCommand::decode(&mut input)
@@ -187,8 +187,8 @@ where
 
 fn register<T, D>(criterion: &mut Criterion, case: &Case, allocations: &mut Vec<AllocationCase>, decode: D)
 where
-    T: FromMap<Target = T, Error = rocketmq_error::RocketMQError> + CommandCustomHeader + Send + Sync + 'static,
-    D: Fn(&RemotingCommand) -> rocketmq_error::RocketMQResult<T> + Copy,
+    T: FromMap<Target = T, Error = rocketmq_error::Error> + CommandCustomHeader + Send + Sync + 'static,
+    D: Fn(&RemotingCommand) -> rocketmq_error::Result<T> + Copy,
 {
     let canonical_fields = fields(case);
     let reference_frame = encode_once::<T>(case, &canonical_fields);

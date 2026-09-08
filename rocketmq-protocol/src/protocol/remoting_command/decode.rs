@@ -31,7 +31,7 @@ impl RemotingCommand {
     /// Transport owners with an explicit total-wire limit should use
     /// [`Self::decode_with_max_frame_bytes`] so inbound and outbound policy stays symmetric.
     #[inline]
-    pub fn decode(src: &mut BytesMut) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    pub fn decode(src: &mut BytesMut) -> rocketmq_error::Result<Option<RemotingCommand>> {
         Self::decode_with_max_frame_bytes(src, 16 * 1024 * 1024 + 4)
     }
 
@@ -46,7 +46,7 @@ impl RemotingCommand {
     pub fn decode_with_max_frame_bytes(
         src: &mut BytesMut,
         max_frame_bytes: usize,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> rocketmq_error::Result<Option<RemotingCommand>> {
         const FRAME_HEADER_SIZE: usize = 4;
         const SERIALIZE_TYPE_SIZE: usize = 4;
         const MIN_PAYLOAD_SIZE: usize = SERIALIZE_TYPE_SIZE; // Minimum: just serialize_type field
@@ -61,24 +61,22 @@ impl RemotingCommand {
         // Read total size without advancing the buffer (peek)
         let announced_size = i32::from_be_bytes([src[0], src[1], src[2], src[3]]);
         let total_size = usize::try_from(announced_size).map_err(|_| {
-            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                format: "remoting_command",
-                message: format!("Invalid negative frame size {announced_size}"),
-            })
+            crate::error::serialization_decode_failed(
+                "remoting_command",
+                format!("Invalid negative frame size {announced_size}"),
+            )
         })?;
         let full_frame_size = total_size.checked_add(FRAME_HEADER_SIZE).ok_or_else(|| {
-            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                format: "remoting_command",
-                message: format!("Frame size {total_size} overflows the wire envelope"),
-            })
+            crate::error::serialization_decode_failed(
+                "remoting_command",
+                format!("Frame size {total_size} overflows the wire envelope"),
+            )
         })?;
 
         if full_frame_size > max_frame_bytes {
-            return Err(rocketmq_error::RocketMQError::Serialization(
-                rocketmq_error::SerializationError::DecodeFailed {
-                    format: "remoting_command",
-                    message: format!("Wire frame size {full_frame_size} exceeds configured limit {max_frame_bytes}"),
-                },
+            return Err(crate::error::serialization_decode_failed(
+                "remoting_command",
+                format!("Wire frame size {full_frame_size} exceeds configured limit {max_frame_bytes}"),
             ));
         }
 
@@ -89,11 +87,9 @@ impl RemotingCommand {
 
         // Now validate minimum total_size (we have the complete frame)
         if total_size < MIN_PAYLOAD_SIZE {
-            return Err(rocketmq_error::RocketMQError::Serialization(
-                rocketmq_error::SerializationError::DecodeFailed {
-                    format: "remoting_command",
-                    message: format!("Invalid total_size {total_size}, minimum required is {MIN_PAYLOAD_SIZE}"),
-                },
+            return Err(crate::error::serialization_decode_failed(
+                "remoting_command",
+                format!("Invalid total_size {total_size}, minimum required is {MIN_PAYLOAD_SIZE}"),
             ));
         }
 
@@ -106,11 +102,9 @@ impl RemotingCommand {
 
         // Validate header length
         if header_length > total_size - SERIALIZE_TYPE_SIZE {
-            return Err(rocketmq_error::RocketMQError::Serialization(
-                rocketmq_error::SerializationError::DecodeFailed {
-                    format: "remoting_command",
-                    message: format!("Invalid header length {header_length}, total size {total_size}"),
-                },
+            return Err(crate::error::serialization_decode_failed(
+                "remoting_command",
+                format!("Invalid header length {header_length}, total size {total_size}"),
             ));
         }
 
@@ -146,26 +140,18 @@ impl RemotingCommand {
     fn decode_json_header_fallback(
         src: &mut BytesMut,
         _header_length: usize,
-    ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
+    ) -> rocketmq_error::Result<RemotingCommand> {
         #[cfg(feature = "simd")]
         {
             let mut slice = src.split_to(_header_length).to_vec();
-            simd_json::from_slice::<RemotingCommand>(&mut slice).map_err(|error| {
-                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                    format: "json",
-                    message: format!("SIMD JSON deserialization error: {error}"),
-                })
-            })
+            simd_json::from_slice::<RemotingCommand>(&mut slice)
+                .map_err(|error| crate::error::serialization_source("decode", "json", error))
         }
 
         #[cfg(not(feature = "simd"))]
         {
-            serde_json::from_slice::<RemotingCommand>(src).map_err(|error| {
-                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
-                    format: "json",
-                    message: format!("JSON deserialization error: {error}"),
-                })
-            })
+            serde_json::from_slice::<RemotingCommand>(src)
+                .map_err(|error| crate::error::serialization_source("decode", "json", error))
         }
     }
 
@@ -175,7 +161,7 @@ impl RemotingCommand {
         src: &mut BytesMut,
         header_length: usize,
         type_: SerializeType,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+    ) -> rocketmq_error::Result<Option<RemotingCommand>> {
         match type_ {
             SerializeType::JSON => {
                 if let Some(cmd) = try_decode_json_header(src, header_length) {

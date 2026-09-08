@@ -207,7 +207,7 @@ impl RegisterBrokerBody {
         bytes: &Bytes,
         compressed: bool,
         broker_version: RocketMqVersion,
-    ) -> rocketmq_error::RocketMQResult<RegisterBrokerBody> {
+    ) -> rocketmq_error::Result<RegisterBrokerBody> {
         Self::decode_with_limits(bytes, compressed, broker_version, RegisterBrokerDecodeLimits::default())
     }
 
@@ -216,7 +216,7 @@ impl RegisterBrokerBody {
         compressed: bool,
         broker_version: RocketMqVersion,
         limits: RegisterBrokerDecodeLimits,
-    ) -> rocketmq_error::RocketMQResult<RegisterBrokerBody> {
+    ) -> rocketmq_error::Result<RegisterBrokerBody> {
         if bytes.len() > limits.max_wire_bytes {
             return Err(invalid_registration(format!(
                 "registration body exceeds wire limit: {} > {} bytes",
@@ -227,9 +227,9 @@ impl RegisterBrokerBody {
 
         // Fast path: non-compressed data
         if !compressed {
-            let body = serde_json::from_slice::<RegisterBrokerBody>(bytes.as_ref()).map_err(|e| {
-                error!("Failed to decode RegisterBrokerBody: {:?}", e);
-                invalid_registration(format!("Failed to decode RegisterBrokerBody: {e}"))
+            let body = serde_json::from_slice::<RegisterBrokerBody>(bytes.as_ref()).map_err(|source| {
+                error!("Failed to decode RegisterBrokerBody: {:?}", source);
+                invalid_registration_source(source)
             })?;
             validate_decoded_body(&body, limits)?;
             return Ok(body);
@@ -245,13 +245,11 @@ impl RegisterBrokerBody {
         let mut decompressed = Vec::new();
         decompressed
             .try_reserve(initial_capacity)
-            .map_err(|e| invalid_registration(format!("unable to reserve decompression buffer: {e}")))?;
+            .map_err(invalid_registration_source)?;
 
-        if let Err(e) = limited_decoder.read_to_end(&mut decompressed) {
-            error!("Failed to decompress RegisterBrokerBody: {:?}", e);
-            return Err(invalid_registration(format!(
-                "Failed to decompress RegisterBrokerBody: {e}"
-            )));
+        if let Err(source) = limited_decoder.read_to_end(&mut decompressed) {
+            error!("Failed to decompress RegisterBrokerBody: {:?}", source);
+            return Err(invalid_registration_source(source));
         }
         if decompressed.len() > limits.max_decompressed_bytes {
             return Err(invalid_registration(format!(
@@ -265,9 +263,9 @@ impl RegisterBrokerBody {
 
         // 1. Decode DataVersion
         let data_version_bytes = read_entry(&mut buf, "DataVersion", limits.max_single_entry_bytes)?;
-        let data_version = DataVersion::decode(data_version_bytes.as_ref()).map_err(|e| {
-            error!("Failed to decode DataVersion: {:?}", e);
-            invalid_registration(format!("Failed to decode DataVersion: {e}"))
+        let data_version = DataVersion::decode(data_version_bytes.as_ref()).map_err(|source| {
+            error!("Failed to decode DataVersion: {:?}", source);
+            invalid_registration_source(source)
         })?;
 
         // 2. Decode TopicConfig table
@@ -276,12 +274,12 @@ impl RegisterBrokerBody {
         let mut topic_config_table = HashMap::new();
         topic_config_table
             .try_reserve(topic_config_number)
-            .map_err(|e| invalid_registration(format!("unable to reserve topic config table: {e}")))?;
+            .map_err(invalid_registration_source)?;
 
         for i in 0..topic_config_number {
             let topic_config_bytes = read_entry(&mut buf, "topic config", limits.max_single_entry_bytes)?;
-            let topic_config_text = std::str::from_utf8(topic_config_bytes.as_ref())
-                .map_err(|e| invalid_registration(format!("topic config {i} is not valid UTF-8: {e}")))?;
+            let topic_config_text =
+                std::str::from_utf8(topic_config_bytes.as_ref()).map_err(invalid_registration_source)?;
             let mut topic_config = TopicConfig::default();
             if !topic_config.decode(topic_config_text) {
                 return Err(invalid_registration(format!(
@@ -297,7 +295,7 @@ impl RegisterBrokerBody {
         // 3. Decode filter server list
         let filter_server_list_json = read_entry(&mut buf, "filter server list", limits.max_single_entry_bytes)?;
         let filter_server_list = serde_json::from_slice::<Vec<CheetahString>>(filter_server_list_json.as_ref())
-            .map_err(|e| invalid_registration(format!("Failed to parse filter server list: {e}")))?;
+            .map_err(invalid_registration_source)?;
         if filter_server_list.len() > limits.max_filter_server_count {
             return Err(invalid_registration(format!(
                 "filter server count exceeds limit: {} > {}",
@@ -312,12 +310,11 @@ impl RegisterBrokerBody {
             let topic_queue_mapping_num = read_count(&mut buf, "queue mapping", limits.max_mapping_count)?;
             topic_queue_mapping_info_map
                 .try_reserve(topic_queue_mapping_num)
-                .map_err(|e| invalid_registration(format!("unable to reserve queue mapping table: {e}")))?;
+                .map_err(invalid_registration_source)?;
 
             for i in 0..topic_queue_mapping_num {
                 let buffer = read_entry(&mut buf, "queue mapping", limits.max_single_entry_bytes)?;
-                let info = TopicQueueMappingInfo::decode(buffer.as_ref())
-                    .map_err(|e| invalid_registration(format!("Failed to decode queue mapping {i}: {e}")))?;
+                let info = TopicQueueMappingInfo::decode(buffer.as_ref()).map_err(invalid_registration_source)?;
                 let Some(topic) = info.topic.clone().filter(|topic| !topic.is_empty()) else {
                     return Err(invalid_registration(format!("queue mapping {i} has no topic name")));
                 };
@@ -351,11 +348,15 @@ impl RegisterBrokerBody {
     }
 }
 
-fn invalid_registration(reason: impl Into<String>) -> rocketmq_error::RocketMQError {
-    rocketmq_error::RocketMQError::request_body_invalid("decode_register_broker_body", reason)
+fn invalid_registration(reason: impl Into<String>) -> rocketmq_error::Error {
+    crate::error::invalid_body("decode_register_broker_body", reason)
 }
 
-fn read_count(buf: &mut Bytes, field: &str, maximum: usize) -> rocketmq_error::RocketMQResult<usize> {
+fn invalid_registration_source(source: impl std::error::Error + Send + Sync + 'static) -> rocketmq_error::Error {
+    crate::error::invalid_body_source("decode_register_broker_body", source)
+}
+
+fn read_count(buf: &mut Bytes, field: &str, maximum: usize) -> rocketmq_error::Result<usize> {
     let count = read_i32(buf, &format!("{field} count"))?;
     let count =
         usize::try_from(count).map_err(|_| invalid_registration(format!("{field} count must not be negative")))?;
@@ -367,7 +368,7 @@ fn read_count(buf: &mut Bytes, field: &str, maximum: usize) -> rocketmq_error::R
     Ok(count)
 }
 
-fn read_entry(buf: &mut Bytes, field: &str, maximum: usize) -> rocketmq_error::RocketMQResult<Bytes> {
+fn read_entry(buf: &mut Bytes, field: &str, maximum: usize) -> rocketmq_error::Result<Bytes> {
     let length = read_i32(buf, &format!("{field} length"))?;
     let length =
         usize::try_from(length).map_err(|_| invalid_registration(format!("{field} length must not be negative")))?;
@@ -385,17 +386,14 @@ fn read_entry(buf: &mut Bytes, field: &str, maximum: usize) -> rocketmq_error::R
     Ok(buf.split_to(length))
 }
 
-fn read_i32(buf: &mut Bytes, field: &str) -> rocketmq_error::RocketMQResult<i32> {
+fn read_i32(buf: &mut Bytes, field: &str) -> rocketmq_error::Result<i32> {
     if buf.remaining() < std::mem::size_of::<i32>() {
         return Err(invalid_registration(format!("insufficient data for {field}")));
     }
     Ok(buf.get_i32())
 }
 
-fn validate_decoded_body(
-    body: &RegisterBrokerBody,
-    limits: RegisterBrokerDecodeLimits,
-) -> rocketmq_error::RocketMQResult<()> {
+fn validate_decoded_body(body: &RegisterBrokerBody, limits: RegisterBrokerDecodeLimits) -> rocketmq_error::Result<()> {
     let topic_count = body
         .topic_config_serialize_wrapper
         .topic_config_serialize_wrapper

@@ -50,11 +50,7 @@ const fn language_name(language: LanguageCode) -> &'static str {
 impl RemotingCommand {
     /// Optimized JSON encoding with pre-calculated capacity and zero-copy optimizations
     #[inline]
-    pub(super) fn fast_encode_json(
-        &mut self,
-        dst: &mut BytesMut,
-        body_length: usize,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    pub(super) fn fast_encode_json(&mut self, dst: &mut BytesMut, body_length: usize) -> rocketmq_error::Result<()> {
         let direct_fields = !self.custom_header_to_net
             && self.ext_fields.is_absent()
             && self
@@ -65,7 +61,7 @@ impl RemotingCommand {
         }
 
         self.try_make_custom_header_to_net()
-            .map_err(crate::protocol::header_codec::into_rocketmq_error)?;
+            .map_err(crate::protocol::header_codec::into_error)?;
 
         let estimated_header_size = self.estimate_json_header_size();
         let begin_index = dst.len();
@@ -80,9 +76,7 @@ impl RemotingCommand {
         #[cfg(not(feature = "simd"))]
         let encode_result = serde_json::to_writer((&mut *dst).writer(), self);
 
-        encode_result.map_err(|error| {
-            rocketmq_error::SerializationError::encode_failed("remoting-command", error.to_string())
-        })?;
+        encode_result.map_err(|source| crate::error::serialization_source("encode", "remoting-command", source))?;
         let header_length = dst.len() - header_index;
         let (total_length, marked_header_length) =
             Self::checked_frame_lengths(header_length, body_length, SerializeType::JSON)?;
@@ -93,9 +87,9 @@ impl RemotingCommand {
     }
 
     #[inline]
-    fn fast_encode_json_direct(&self, dst: &mut BytesMut, body_length: usize) -> rocketmq_error::RocketMQResult<()> {
+    fn fast_encode_json_direct(&self, dst: &mut BytesMut, body_length: usize) -> rocketmq_error::Result<()> {
         let header = self.command_custom_header_ref().ok_or_else(|| {
-            rocketmq_error::SerializationError::encode_failed(
+            crate::error::serialization_encode_failed(
                 "remoting-command",
                 "direct JSON header capability was selected without a custom header",
             )
@@ -128,7 +122,7 @@ impl RemotingCommand {
         dst.extend_from_slice(b",\"extFields\":");
         header
             .encode_direct_json_fields(dst)
-            .map_err(crate::protocol::header_codec::into_rocketmq_error)?;
+            .map_err(crate::protocol::header_codec::into_error)?;
         dst.extend_from_slice(b",\"serializeTypeCurrentRPC\":\"JSON\"}");
 
         let header_length = dst.len() - header_index;

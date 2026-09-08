@@ -15,7 +15,6 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::SerializationError;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -39,11 +38,11 @@ pub struct ConsumeStatsList {
 }
 
 impl ConsumeStatsList {
-    pub fn encode_java_compatible(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
+    pub fn encode_java_compatible(&self) -> rocketmq_error::Result<Vec<u8>> {
         Ok(self.to_java_compatible_json()?.into_bytes())
     }
 
-    pub fn to_java_compatible_json(&self) -> rocketmq_error::RocketMQResult<String> {
+    pub fn to_java_compatible_json(&self) -> rocketmq_error::Result<String> {
         let mut body = String::new();
         body.push_str("{\"consumeStatsList\":[");
 
@@ -58,7 +57,7 @@ impl ConsumeStatsList {
                 }
                 body.push_str(
                     &serde_json::to_string(group)
-                        .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+                        .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
                 );
                 body.push(':');
                 body.push('[');
@@ -77,7 +76,7 @@ impl ConsumeStatsList {
         match &self.broker_addr {
             Some(broker_addr) => body.push_str(
                 &serde_json::to_string(broker_addr)
-                    .map_err(|error| SerializationError::source("serialize", "JSON", error))?,
+                    .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
             ),
             None => body.push_str("null"),
         }
@@ -89,7 +88,7 @@ impl ConsumeStatsList {
         Ok(body)
     }
 
-    pub fn decode(body: &[u8]) -> rocketmq_error::RocketMQResult<Self> {
+    pub fn decode(body: &[u8]) -> rocketmq_error::Result<Self> {
         match <Self as RemotingDeserializable>::decode(body) {
             Ok(stats) => Ok(stats),
             Err(error) => {

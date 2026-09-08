@@ -59,7 +59,7 @@ impl RemotingCommand {
         since = "1.0.0",
         note = "use try_read_custom_header_ref; this compatibility alias is fallible despite its historical unchecked name"
     )]
-    pub fn read_custom_header_ref_unchecked<T>(&self) -> rocketmq_error::RocketMQResult<&T>
+    pub fn read_custom_header_ref_unchecked<T>(&self) -> rocketmq_error::Result<&T>
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
@@ -82,7 +82,7 @@ impl RemotingCommand {
         since = "1.0.0",
         note = "use try_read_custom_header_mut; this compatibility alias is fallible despite its historical unchecked name"
     )]
-    pub fn read_custom_header_mut_unchecked<T>(&mut self) -> rocketmq_error::RocketMQResult<&mut T>
+    pub fn read_custom_header_mut_unchecked<T>(&mut self) -> rocketmq_error::Result<&mut T>
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {

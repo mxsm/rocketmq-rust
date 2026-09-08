@@ -16,8 +16,7 @@ use std::fmt;
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result;
 
 use crate::common::message::message_single::Message;
 use crate::common::mix_all;
@@ -90,9 +89,9 @@ impl MessageBatchV2 {
     /// - Contains delayed messages
     /// - Contains retry topics
     /// - `wait_store_msg_ok` properties are inconsistent
-    pub fn new(messages: Vec<Message>) -> RocketMQResult<Self> {
+    pub fn new(messages: Vec<Message>) -> Result<Self> {
         if messages.is_empty() {
-            return Err(RocketMQError::illegal_argument("MessageBatch cannot be empty"));
+            return Err(crate::error::invalid_argument("MessageBatch cannot be empty"));
         }
 
         // Validate all messages
@@ -108,32 +107,32 @@ impl MessageBatchV2 {
     }
 
     /// Validates batch message consistency
-    fn validate_batch_messages(messages: &[Message], first: &Message) -> RocketMQResult<()> {
+    fn validate_batch_messages(messages: &[Message], first: &Message) -> Result<()> {
         for message in messages {
             // Delayed messages not supported
             if Self::has_delay_property(message) {
-                return Err(RocketMQError::illegal_argument(
+                return Err(crate::error::invalid_argument(
                     "Delayed messages are not supported for batching",
                 ));
             }
 
             // Retry topics not supported
             if message.topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
-                return Err(RocketMQError::illegal_argument(
+                return Err(crate::error::invalid_argument(
                     "Retry group topic is not supported for batching",
                 ));
             }
 
             // Topics must be consistent
             if first.topic() != message.topic() {
-                return Err(RocketMQError::illegal_argument(
+                return Err(crate::error::invalid_argument(
                     "The topic of the messages in one batch should be the same",
                 ));
             }
 
             // wait_store_msg_ok must be consistent
             if first.is_wait_store_msg_ok() != message.is_wait_store_msg_ok() {
-                return Err(RocketMQError::illegal_argument(
+                return Err(crate::error::invalid_argument(
                     "The waitStoreMsgOK of the messages in one batch should be the same",
                 ));
             }
@@ -243,7 +242,7 @@ mod tests {
         let result = MessageBatchV2::new(messages);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("empty"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -256,7 +255,7 @@ mod tests {
         let result = MessageBatchV2::new(messages);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("topic"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -269,7 +268,7 @@ mod tests {
         let result = MessageBatchV2::new(messages);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Delayed messages"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -284,7 +283,7 @@ mod tests {
         let result = MessageBatchV2::new(vec![msg1, msg2]);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Delayed messages"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -299,7 +298,7 @@ mod tests {
         let result = MessageBatchV2::new(vec![msg1, msg2]);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Delayed messages"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -314,7 +313,7 @@ mod tests {
         let result = MessageBatchV2::new(vec![msg1, msg2]);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Delayed messages"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -327,7 +326,7 @@ mod tests {
         let result = MessageBatchV2::new(messages);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Retry"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]
@@ -341,7 +340,7 @@ mod tests {
         let result = MessageBatchV2::new(messages);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("waitStoreMsgOK"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 
     #[test]

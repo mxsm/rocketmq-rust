@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #[cfg(feature = "simd")]
-use rocketmq_error::SerializationError;
 
 /// SIMD-accelerated JSON utility for high-performance serialization and deserialization.
 ///
@@ -86,18 +85,18 @@ impl SimdJsonUtils {
     /// let result: HashMap<String, String> = SimdJsonUtils::from_json_bytes(&mut json_data)?;
     /// ```
     #[inline]
-    pub fn from_json_bytes<T>(bytes: &mut [u8]) -> rocketmq_error::RocketMQResult<T>
+    pub fn from_json_bytes<T>(bytes: &mut [u8]) -> rocketmq_error::Result<T>
     where
         T: serde::de::DeserializeOwned,
     {
-        simd_json::from_slice(bytes).map_err(|e| SerializationError::decode_failed("SIMD-JSON", e.to_string()).into())
+        simd_json::from_slice(bytes).map_err(|source| crate::error::serialization_source("decode", "SIMD-JSON", source))
     }
 
     /// Deserialize JSON from a mutable byte slice into a Rust type.
     ///
     /// This is an alias for `from_json_bytes` for consistency with the SerdeJsonUtils API.
     #[inline]
-    pub fn from_json_slice<T>(bytes: &mut [u8]) -> rocketmq_error::RocketMQResult<T>
+    pub fn from_json_slice<T>(bytes: &mut [u8]) -> rocketmq_error::Result<T>
     where
         T: serde::de::DeserializeOwned,
     {
@@ -123,13 +122,13 @@ impl SimdJsonUtils {
     /// let result: HashMap<String, String> = SimdJsonUtils::from_json_str(json_str)?;
     /// ```
     #[inline]
-    pub fn from_json_str<T>(json: &str) -> rocketmq_error::RocketMQResult<T>
+    pub fn from_json_str<T>(json: &str) -> rocketmq_error::Result<T>
     where
         T: serde::de::DeserializeOwned,
     {
         let mut bytes = json.as_bytes().to_vec();
         simd_json::from_slice(&mut bytes)
-            .map_err(|e| SerializationError::decode_failed("SIMD-JSON", e.to_string()).into())
+            .map_err(|source| crate::error::serialization_source("decode", "SIMD-JSON", source))
     }
 
     /// Serialize a Rust type into a JSON string (compact format) using SIMD acceleration.
@@ -149,11 +148,11 @@ impl SimdJsonUtils {
     /// let json_string = SimdJsonUtils::serialize_json(&data)?;
     /// ```
     #[inline]
-    pub fn serialize_json<T>(value: &T) -> rocketmq_error::RocketMQResult<String>
+    pub fn serialize_json<T>(value: &T) -> rocketmq_error::Result<String>
     where
         T: serde::Serialize,
     {
-        simd_json::to_string(value).map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
+        simd_json::to_string(value).map_err(|source| crate::error::serialization_source("encode", "SIMD-JSON", source))
     }
 
     /// Serialize a Rust type into a JSON string (pretty-printed format).
@@ -169,13 +168,13 @@ impl SimdJsonUtils {
     ///
     /// Returns a pretty-printed JSON string or an error if serialization fails.
     #[inline]
-    pub fn serialize_json_pretty<T>(value: &T) -> rocketmq_error::RocketMQResult<String>
+    pub fn serialize_json_pretty<T>(value: &T) -> rocketmq_error::Result<String>
     where
         T: serde::Serialize,
     {
         // simd-json doesn't support pretty printing, fall back to serde_json
         Ok(serde_json::to_string_pretty(value)
-            .map_err(|error| SerializationError::source("serialize", "JSON", error))?)
+            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?)
     }
 
     /// Serialize a Rust type into a JSON byte vector (compact format) using SIMD acceleration.
@@ -195,11 +194,11 @@ impl SimdJsonUtils {
     /// let json_bytes = SimdJsonUtils::serialize_json_vec(&data)?;
     /// ```
     #[inline]
-    pub fn serialize_json_vec<T>(value: &T) -> rocketmq_error::RocketMQResult<Vec<u8>>
+    pub fn serialize_json_vec<T>(value: &T) -> rocketmq_error::Result<Vec<u8>>
     where
         T: serde::Serialize,
     {
-        simd_json::to_vec(value).map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
+        simd_json::to_vec(value).map_err(|source| crate::error::serialization_source("encode", "SIMD-JSON", source))
     }
 
     /// Serialize a Rust type into a JSON byte vector (pretty-printed format).
@@ -215,12 +214,13 @@ impl SimdJsonUtils {
     ///
     /// Returns a pretty-printed JSON byte vector or an error if serialization fails.
     #[inline]
-    pub fn serialize_json_vec_pretty<T>(value: &T) -> rocketmq_error::RocketMQResult<Vec<u8>>
+    pub fn serialize_json_vec_pretty<T>(value: &T) -> rocketmq_error::Result<Vec<u8>>
     where
         T: serde::Serialize,
     {
         // simd-json doesn't support pretty printing, fall back to serde_json
-        Ok(serde_json::to_vec_pretty(value).map_err(|error| SerializationError::source("serialize", "JSON", error))?)
+        Ok(serde_json::to_vec_pretty(value)
+            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?)
     }
 
     /// Serialize a Rust type into a JSON byte vector using a preallocated writer.
@@ -236,12 +236,12 @@ impl SimdJsonUtils {
     ///
     /// Returns Ok(()) on success or an error if serialization fails.
     #[inline]
-    pub fn serialize_json_to_writer<T>(writer: &mut Vec<u8>, value: &T) -> rocketmq_error::RocketMQResult<()>
+    pub fn serialize_json_to_writer<T>(writer: &mut Vec<u8>, value: &T) -> rocketmq_error::Result<()>
     where
         T: serde::Serialize,
     {
         simd_json::to_writer(writer, value)
-            .map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
+            .map_err(|source| crate::error::serialization_source("encode", "SIMD-JSON", source))
     }
 }
 
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn test_from_json_str_error() {
         let json_str = r#"{"name":"Alice","age":"thirty"}"#;
-        let result: rocketmq_error::RocketMQResult<TestStruct> = SimdJsonUtils::from_json_str(json_str);
+        let result: rocketmq_error::Result<TestStruct> = SimdJsonUtils::from_json_str(json_str);
         assert!(result.is_err());
     }
 
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn test_from_json_bytes_error() {
         let mut json_data = br#"{"name":"Bob","age":"twenty-five"}"#.to_vec();
-        let result: rocketmq_error::RocketMQResult<TestStruct> = SimdJsonUtils::from_json_bytes(&mut json_data);
+        let result: rocketmq_error::Result<TestStruct> = SimdJsonUtils::from_json_bytes(&mut json_data);
         assert!(result.is_err());
     }
 

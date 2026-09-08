@@ -16,8 +16,8 @@ use std::net::SocketAddrV6;
 use bytes::Buf;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Error;
+use rocketmq_error::Result;
 
 use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 
@@ -48,7 +48,7 @@ pub struct DecodedMessageFrame {
     pub properties: HashMap<CheetahString, CheetahString>,
 }
 
-pub fn decode_message_frame(input: &mut Bytes) -> RocketMQResult<DecodedMessageFrame> {
+pub fn decode_message_frame(input: &mut Bytes) -> Result<DecodedMessageFrame> {
     let initial_len = input.remaining();
     let store_size = read_i32(input)?;
     if store_size <= 0 || store_size as usize > initial_len {
@@ -80,7 +80,7 @@ pub fn decode_message_frame(input: &mut Bytes) -> RocketMQResult<DecodedMessageF
     let topic_bytes = take(input, topic_len)?;
     let topic = std::str::from_utf8(&topic_bytes)
         .map(CheetahString::from_slice)
-        .map_err(|_| invalid("topic is not valid UTF-8"))?;
+        .map_err(invalid_source)?;
     let property_len = usize::try_from(read_i16(input)?).map_err(|_| invalid("negative properties length"))?;
     let property_bytes = take(input, property_len)?;
     let properties_string = CheetahString::from(String::from_utf8_lossy(&property_bytes).as_ref());
@@ -123,11 +123,15 @@ pub fn decode_properties(bytes: &[u8]) -> HashMap<CheetahString, CheetahString> 
         .collect()
 }
 
-fn invalid(reason: &'static str) -> RocketMQError {
-    RocketMQError::request_body_invalid("decode_message_frame", reason)
+fn invalid(reason: &'static str) -> Error {
+    crate::error::invalid_body("decode_message_frame", reason)
 }
 
-fn ensure(input: &Bytes, len: usize) -> RocketMQResult<()> {
+fn invalid_source(source: impl std::error::Error + Send + Sync + 'static) -> Error {
+    crate::error::invalid_body_source("decode_message_frame", source)
+}
+
+fn ensure(input: &Bytes, len: usize) -> Result<()> {
     if input.remaining() < len {
         Err(invalid("truncated message frame"))
     } else {
@@ -135,36 +139,36 @@ fn ensure(input: &Bytes, len: usize) -> RocketMQResult<()> {
     }
 }
 
-fn read_u8(input: &mut Bytes) -> RocketMQResult<u8> {
+fn read_u8(input: &mut Bytes) -> Result<u8> {
     ensure(input, 1)?;
     Ok(input.get_u8())
 }
-fn read_i16(input: &mut Bytes) -> RocketMQResult<i16> {
+fn read_i16(input: &mut Bytes) -> Result<i16> {
     ensure(input, 2)?;
     Ok(input.get_i16())
 }
-fn read_i32(input: &mut Bytes) -> RocketMQResult<i32> {
+fn read_i32(input: &mut Bytes) -> Result<i32> {
     ensure(input, 4)?;
     Ok(input.get_i32())
 }
-fn read_u32(input: &mut Bytes) -> RocketMQResult<u32> {
+fn read_u32(input: &mut Bytes) -> Result<u32> {
     ensure(input, 4)?;
     Ok(input.get_u32())
 }
-fn read_i64(input: &mut Bytes) -> RocketMQResult<i64> {
+fn read_i64(input: &mut Bytes) -> Result<i64> {
     ensure(input, 8)?;
     Ok(input.get_i64())
 }
-fn take(input: &mut Bytes, len: usize) -> RocketMQResult<Bytes> {
+fn take(input: &mut Bytes, len: usize) -> Result<Bytes> {
     ensure(input, len)?;
     Ok(input.split_to(len))
 }
-fn read_sized_i32(input: &mut Bytes) -> RocketMQResult<Bytes> {
+fn read_sized_i32(input: &mut Bytes) -> Result<Bytes> {
     let len = usize::try_from(read_i32(input)?).map_err(|_| invalid("negative body length"))?;
     take(input, len)
 }
 
-fn read_host(input: &mut Bytes, ipv6: bool) -> RocketMQResult<SocketAddr> {
+fn read_host(input: &mut Bytes, ipv6: bool) -> Result<SocketAddr> {
     if ipv6 {
         let bytes = take(input, 16)?;
         let mut address = [0_u8; 16];

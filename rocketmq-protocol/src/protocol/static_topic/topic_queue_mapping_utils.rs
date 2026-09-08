@@ -22,8 +22,8 @@ use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::mix_all;
 use rocketmq_model::time::current_millis;
 
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Error;
+use rocketmq_error::Result;
 
 use crate::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use crate::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
@@ -36,15 +36,12 @@ use crate::protocol::RemotingSerializable;
 
 pub struct TopicQueueMappingUtils;
 
-fn static_topic_mapping_invalid_item(reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::illegal_argument(reason)
+fn static_topic_mapping_invalid_item(reason: impl Into<String>) -> Error {
+    crate::error::invalid_argument(reason)
 }
 
-fn static_topic_mapping_inconsistent(reason: impl Into<String>) -> RocketMQError {
-    RocketMQError::RouteInconsistent {
-        topic: "static_topic_mapping".to_string(),
-        reason: reason.into(),
-    }
+fn static_topic_mapping_inconsistent(reason: impl Into<String>) -> Error {
+    crate::error::route_inconsistent("static_topic_mapping", reason)
 }
 
 impl TopicQueueMappingUtils {
@@ -118,7 +115,7 @@ impl TopicQueueMappingUtils {
     }
     pub fn get_mapping_detail_from_config(
         configs: Vec<TopicConfigAndQueueMapping>,
-    ) -> RocketMQResult<Vec<TopicQueueMappingDetail>> {
+    ) -> Result<Vec<TopicQueueMappingDetail>> {
         let mut detail_list = vec![];
         for config_mapping in &configs {
             if let Some(detail) = &config_mapping.topic_queue_mapping_detail {
@@ -130,7 +127,7 @@ impl TopicQueueMappingUtils {
     pub fn check_name_epoch_num_consistence(
         topic: &CheetahString,
         broker_config_map: &HashMap<CheetahString, TopicConfigAndQueueMapping>,
-    ) -> RocketMQResult<(i64, i32)> {
+    ) -> Result<(i64, i32)> {
         if broker_config_map.is_empty() {
             return Err(static_topic_mapping_inconsistent(
                 "check_name_epoch_num_consistence get empty config map",
@@ -212,7 +209,7 @@ impl TopicQueueMappingUtils {
             "check_name_epoch_num_consistence err ! maybe some var is none",
         ))
     }
-    pub fn check_if_reuse_physical_queue(mapping_ones: &Vec<TopicQueueMappingOne>) -> RocketMQResult<()> {
+    pub fn check_if_reuse_physical_queue(mapping_ones: &Vec<TopicQueueMappingOne>) -> Result<()> {
         let mut physical_queue_id_map: HashMap<String, TopicQueueMappingOne> = HashMap::new();
         for mapping_one in mapping_ones {
             for item in mapping_one.items() {
@@ -234,7 +231,7 @@ impl TopicQueueMappingUtils {
         Ok(())
     }
 
-    pub fn check_logic_queue_mapping_item_offset(items: &[LogicQueueMappingItem]) -> RocketMQResult<()> {
+    pub fn check_logic_queue_mapping_item_offset(items: &[LogicQueueMappingItem]) -> Result<()> {
         if items.is_empty() {
             return Ok(());
         }
@@ -289,7 +286,7 @@ impl TopicQueueMappingUtils {
         item.bname.as_ref() == mapping_detail.topic_queue_mapping_info.bname.as_ref()
     }
 
-    pub fn get_leader_item(items: &[LogicQueueMappingItem]) -> RocketMQResult<LogicQueueMappingItem> {
+    pub fn get_leader_item(items: &[LogicQueueMappingItem]) -> Result<LogicQueueMappingItem> {
         if items.is_empty() {
             return Err(static_topic_mapping_inconsistent(
                 "get_leader_item failed with empty items",
@@ -302,7 +299,7 @@ impl TopicQueueMappingUtils {
             "get_leader_item failed with empty items",
         ))
     }
-    pub fn get_leader_broker(items: &[LogicQueueMappingItem]) -> RocketMQResult<CheetahString> {
+    pub fn get_leader_broker(items: &[LogicQueueMappingItem]) -> Result<CheetahString> {
         let item = TopicQueueMappingUtils::get_leader_item(items)?;
         if let Some(bname) = &item.bname {
             return Ok(bname.to_string().into());
@@ -315,7 +312,7 @@ impl TopicQueueMappingUtils {
         mut mapping_detail_list: Vec<TopicQueueMappingDetail>,
         replace: bool,
         check_consistence: bool,
-    ) -> RocketMQResult<HashMap<i32, TopicQueueMappingOne>> {
+    ) -> Result<HashMap<i32, TopicQueueMappingOne>> {
         mapping_detail_list.sort_by(|o1, o2| {
             let sub = o1.topic_queue_mapping_info.epoch - o2.topic_queue_mapping_info.epoch;
             if sub > 0 {
@@ -388,7 +385,7 @@ impl TopicQueueMappingUtils {
         TopicQueueMappingUtils::check_if_reuse_physical_queue(&values)?;
         Ok(global_id_map)
     }
-    pub fn write_to_temp(wrapper: &TopicRemappingDetailWrapper, after: bool) -> RocketMQResult<CheetahString> {
+    pub fn write_to_temp(wrapper: &TopicRemappingDetailWrapper, after: bool) -> Result<CheetahString> {
         let topic = wrapper.topic();
         let data = wrapper.serialize_json()?;
         let mut suffix = topic_remapping_detail_wrapper::SUFFIX_BEFORE;
@@ -397,16 +394,17 @@ impl TopicQueueMappingUtils {
         }
         if let Ok(tmpdir) = std::env::var("java.io.tmpdir") {
             let file_name = format!("{}/{}-{}{}", tmpdir, topic, wrapper.get_epoch(), suffix);
-            std::fs::write(&file_name, data).map_err(RocketMQError::IO)?;
+            std::fs::write(&file_name, data)
+                .map_err(|source| crate::error::io_source("write_static_topic_mapping", source))?;
             return Ok(file_name.into());
         }
 
-        Err(RocketMQError::ConfigMissing { key: "java.io.tmpdir" })
+        Err(crate::error::missing_configuration("java.io.tmpdir"))
     }
     pub fn check_target_brokers_complete(
         target_brokers: &HashSet<CheetahString>,
         broker_config_map: &HashMap<CheetahString, TopicConfigAndQueueMapping>,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         for broker in broker_config_map.keys() {
             if let Some(mapping) = broker_config_map.get(broker) {
                 if let Some(detail) = mapping.get_topic_queue_mapping_detail() {
@@ -429,7 +427,7 @@ impl TopicQueueMappingUtils {
     }
     pub fn check_physical_queue_consistence(
         broker_config_map: &HashMap<CheetahString, TopicConfigAndQueueMapping>,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         for entry in broker_config_map {
             let config_mapping = entry.1;
             if let Some(detail) = config_mapping.get_topic_queue_mapping_detail() {
@@ -471,7 +469,7 @@ impl TopicQueueMappingUtils {
         queue_num: i32,
         target_brokers: &HashSet<CheetahString>,
         broker_config_map: &mut HashMap<CheetahString, TopicConfigAndQueueMapping>,
-    ) -> RocketMQResult<TopicRemappingDetailWrapper> {
+    ) -> Result<TopicRemappingDetailWrapper> {
         TopicQueueMappingUtils::check_target_brokers_complete(target_brokers, broker_config_map)?;
         let mut global_id_map = HashMap::new();
         let mut max_epoch_and_num = (current_millis(), queue_num);
@@ -700,7 +698,7 @@ impl TopicQueueMappingUtils {
     pub fn check_leader_in_target_brokers(
         mapping_ones: &[TopicQueueMappingOne],
         target_brokers: &HashSet<CheetahString>,
-    ) -> RocketMQResult<()> {
+    ) -> Result<()> {
         for mapping_one in mapping_ones {
             if !target_brokers.contains(&CheetahString::from(mapping_one.bname())) {
                 return Err(static_topic_mapping_inconsistent(
@@ -725,7 +723,7 @@ impl TopicQueueMappingUtils {
         topic: &str,
         broker_config_map: &mut HashMap<CheetahString, TopicConfigAndQueueMapping>,
         target_brokers: &HashSet<CheetahString>,
-    ) -> RocketMQResult<TopicRemappingDetailWrapper> {
+    ) -> Result<TopicRemappingDetailWrapper> {
         let max_epoch_and_num =
             TopicQueueMappingUtils::check_name_epoch_num_consistence(&CheetahString::from(topic), broker_config_map)?;
 
