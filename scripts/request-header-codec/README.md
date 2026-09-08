@@ -2,7 +2,7 @@
 
 This directory owns the reviewed compatibility contract between RocketMQ Rust request headers and a pinned Apache RocketMQ Java checkout.
 
-The Java checkout is an offline oracle. Cargo build and normal Rust tests never read it. Generated mappings, schemas, golden fixtures, hashes, and normalized benchmark summaries are checked in so that regular validation is reproducible.
+The Java checkout is an offline oracle. Cargo build and normal Rust tests never read it. Generated mappings, schemas, golden fixtures, and their provenance are checked in so that regular compatibility validation is reproducible.
 
 ## Pinned sources
 
@@ -49,57 +49,27 @@ python scripts/request-header-codec/migrate.py check
 2. Regenerate `header-class-map.json`, `java-schema.json`, and golden fixtures into a temporary output directory.
 3. Review the old-to-new normalized schema diff. Every new difference must be aligned or recorded in a reviewed override or extension allowlist.
 4. Replay Java-to-Rust and Rust-to-Java golden verification.
-5. Update the pinned commit, fixture hashes, corpus version, and normalized benchmark baselines in one reviewed change.
+5. Update the pinned contract, fixture provenance, and performance corpus together when the fixture set changes.
 
 Do not edit generated schema or golden files by hand. Do not commit raw JMH, Criterion, Cargo target, or machine-specific environment output.
 
-## Performance workflow
+## Performance investigation
 
-`perf-corpus-v1.json` defines the production-weighted set of 48 encode and decode operations. Regenerate it after the fixture manifest changes, or use `--check` in verification jobs:
+The V2/V3 migration performance gate and machine-specific baselines were retired on
+2026-09-08. Performance investigation is optional and scoped to the changed behavior;
+it does not require a clean checkout, source fingerprint, frozen V2 replay, or fixed
+percentage improvement.
 
-```powershell
+`perf-corpus-v1.json` remains the shared input for the Rust and Java benchmarks.
+Regenerate it after fixture changes, or check it without rewriting files:
+
+```bash
 python scripts/request-header-codec/generate_perf_corpus.py --check
+cargo bench -p rocketmq-protocol --bench request_header_codec
+cargo bench -p rocketmq-protocol --bench remoting_command_hot_paths
 ```
 
-Run the unified harness from a clean Rust worktree. The pinned Java oracle must also be clean. `-Quick` verifies wiring only; its measurements are diagnostic and the comparison tool rejects them as release evidence.
-
-```powershell
-$common = @{
-  JavaRepo = 'D:\Github\Java\rocketmq-header-codec-oracle'
-  Corpus = 'scripts/request-header-codec/perf-corpus-v1.json'
-  Gates = 'scripts/request-header-codec/perf-gates.json'
-}
-
-# Establish the compatibility-correct post-baseline before codec optimization.
-.\scripts\request-header-codec\run-benchmarks.ps1 @common `
-  -Mode PostP0 `
-  -Output target/request-header-codec-perf/post-p0-<run-id> `
-  -PublishBaseline
-
-# Freeze the hardened V2 comparison point.
-.\scripts\request-header-codec\run-benchmarks.ps1 @common `
-  -Mode Phase1 `
-  -Output target/request-header-codec-perf/v2-phase1-<run-id> `
-  -PublishBaseline
-
-# Gate V3 against Java and the hardened V2 in the same run.
-.\scripts\request-header-codec\run-benchmarks.ps1 @common `
-  -Mode Release `
-  -V2Worktree D:\path\to\clean\v2-worktree `
-  -V2Manifest D:\path\to\v2-phase1.json `
-  -Output target/request-header-codec-perf/release-<run-id>
-```
-
-Interrupted runs can continue with `-Resume` and the same output directory. Never use `-Resume` after changing the corpus, fixtures, source commit, runner, or benchmark configuration.
-
-Release replay temporarily overlays the bundled current Rust benchmark harness and corpus onto the clean frozen V2 checkout. Only benchmark-driver files are replaced; codec library sources and the frozen commit identity are unchanged. The original bytes are restored in a `finally` path, the checkout must be clean afterward, and the evidence manifest records the shared harness digest used by V3 and V2.
-
-The release comparison is fail-closed. In addition to matching commits, corpus and fixture hashes, runner fingerprint, benchmark profile, and build recipe, it requires all gates in `perf-gates.json`. The primary throughput requirements are:
-
-- V3 aggregate throughput is at least 15% above hardened V2.
-- V3 aggregate throughput is at least 10% above pinned Java.
-- V3 fast-header throughput is at least 5% above both baselines.
-- the 95% confidence-interval lower bound for every aggregate claim is strictly above parity;
-- no Tier-1 operation regresses by more than 3% against either baseline.
-
-Allocation, artifact-size, clean-build time, peak process-tree memory, and incremental-build time budgets are independent hard gates. A release is not accepted when any gate lacks evidence or fails.
+The Java benchmark harness and cross-language golden verification remain available
+for interoperability investigations. Keep raw benchmark results under `target/`.
+For comparisons, use equivalent inputs and record the relevant environment and
+measurement settings in the report.

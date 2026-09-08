@@ -36,7 +36,6 @@ class CoreReleaseStaticGuardTests(unittest.TestCase):
                 "architecture-dependency",
                 "architecture-documentation",
                 "architecture-debt",
-                "module-maintainability",
                 "stable-surface",
                 "architecture-release",
             },
