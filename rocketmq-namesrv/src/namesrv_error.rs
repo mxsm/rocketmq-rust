@@ -175,16 +175,6 @@ pub(crate) fn request_body_source(
     )
 }
 
-pub(crate) fn response_failed(operation: impl AsRef<str>) -> SharedError {
-    shared(
-        Error::new(&rocketmq_error::PROTOCOL_RESPONSE_FAILED).with_context(
-            ErrorContext::new()
-                .with_text(fields::OPERATION_DIAGNOSTIC, operation)
-                .with_secret_presence(fields::REASON_PRESENT),
-        ),
-    )
-}
-
 pub(crate) fn response_source(
     operation: impl AsRef<str>,
     source: impl StdError + Send + Sync + 'static,

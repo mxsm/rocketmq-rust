@@ -752,7 +752,8 @@ fn extract_register_broker_body_from_request(
             return RegisterBrokerBody::decode_with_limits(body_inner, request_header.compressed, version, limits)
                 .inspect_err(|e| {
                     warn!("Failed to decode RegisterBrokerBody: {:?}", e);
-                });
+                })
+                .map_err(crate::namesrv_error::from_error);
         }
     }
     let mut register_broker_body = RegisterBrokerBody::default();
