@@ -60,6 +60,7 @@ pub(crate) struct BrokerBasicServiceShutdownReport {
     pub(crate) service_tasks: BrokerShutdownComponentReport,
     pub(crate) observability: BrokerShutdownComponentReport,
     pub(crate) scheduled_tasks: BrokerShutdownComponentReport,
+    pub(crate) schedule_message: BrokerShutdownComponentReport,
     pub(crate) message_store: BrokerShutdownComponentReport,
     pub(crate) deferred_services: BrokerShutdownComponentReport,
     pub(crate) deferred_producer_tasks: Option<ShutdownReport>,
@@ -268,7 +269,7 @@ pub(super) fn record_message_store_shutdown_outcome(
 }
 
 impl BrokerBasicServiceShutdownReport {
-    const COMPONENT_NAMES: [&'static str; 18] = [
+    const COMPONENT_NAMES: [&'static str; 19] = [
         "remoting",
         "request_processor",
         "topic_config",
@@ -278,6 +279,7 @@ impl BrokerBasicServiceShutdownReport {
         "service_tasks",
         "observability",
         "scheduled_tasks",
+        "schedule_message",
         "message_store",
         "deferred_services",
         "transaction_services",
@@ -376,6 +378,7 @@ impl BrokerBasicServiceShutdownReport {
             &self.service_tasks,
             &self.observability,
             &self.scheduled_tasks,
+            &self.schedule_message,
             &self.message_store,
             &self.deferred_services,
             &self.transaction_services,

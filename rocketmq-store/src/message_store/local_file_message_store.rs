@@ -676,6 +676,9 @@ pub struct LocalFileMessageStore {
     delay_level_table: Arc<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     max_delay_level: i32,
     last_recovery_report: Option<RecoveryReport>,
+    last_recovery_error: Option<StoreError>,
+    #[cfg(test)]
+    recovery_failure: Option<(RecoveryPhase, StoreError)>,
     store_root_lease_state: StoreRootLeaseState,
     store_root_mode: StoreRootMode,
     // Declared last so the verified Store-root boundary outlives every component field during

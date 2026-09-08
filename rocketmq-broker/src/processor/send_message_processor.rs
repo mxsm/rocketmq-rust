@@ -128,6 +128,7 @@ pub struct SendMessageProcessor<MS: BrokerWriteStore, TS> {
 }
 
 struct SendCompletionFacts {
+    policy: Arc<SendMessagePolicy>,
     opaque: i32,
     body_len: i32,
     owner: Option<CheetahString>,
@@ -137,10 +138,11 @@ struct SendCompletionFacts {
 }
 
 impl SendCompletionFacts {
-    fn capture(request: &RemotingCommand) -> Self {
+    fn capture(request: &RemotingCommand, policy: Arc<SendMessagePolicy>) -> Self {
         let binding = HashMap::new();
         let ext_fields = request.ext_fields().unwrap_or(&binding);
         Self {
+            policy,
             opaque: request.opaque(),
             body_len: request.body().as_ref().map_or(0, |body| body.len() as i32),
             owner: ext_fields.get(BrokerStatsManager::COMMERCIAL_OWNER).cloned(),
@@ -169,6 +171,21 @@ impl<MS: BrokerWriteStore, TS> Clone for SendMessageProcessor<MS, TS> {
         Self {
             inner: Arc::clone(&self.inner),
             after_hooks: Arc::clone(&self.after_hooks),
+        }
+    }
+}
+
+#[cfg(test)]
+impl<MS: BrokerWriteStore, TS> SendMessageProcessor<MS, TS> {
+    pub(crate) fn with_hook_for_test(&self, hook: Box<dyn SendMessageHook>) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                send_message_hook_vec: Arc::new(vec![hook]),
+                consume_message_hook_vec: Arc::clone(&self.inner.consume_message_hook_vec),
+                transactional_message_service: Arc::clone(&self.inner.transactional_message_service),
+                context: Arc::clone(&self.inner.context),
+            }),
+            after_hooks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -354,6 +371,9 @@ where
         request: &mut RemotingCommand,
         parsed_request: Option<ParsedSendRequest>,
     ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+        // One immutable generation follows the request through completion. Permission
+        // remains live so a configuration snapshot cannot preserve revoked access.
+        let policy = self.inner.context.policy.snapshot();
         let ParsedSendRequest {
             header: mut request_header,
             properties: parsed_properties,
@@ -380,12 +400,13 @@ where
 
         let (send_message_context, mut request_properties) =
             self.inner
-                .build_msg_context_at(inbound_peer, &mut request_header, request, parsed_properties);
+                .build_msg_context_at(&policy, inbound_peer, &mut request_header, request, parsed_properties);
         self.inner.execute_send_message_hook_before(&send_message_context);
         clear_reserved_properties(&mut request_header, &mut request_properties);
 
         if request_header.is_batch() {
             self.send_batch_message(
+                policy,
                 inbound_peer,
                 control,
                 request_id,
@@ -399,6 +420,7 @@ where
             .await
         } else {
             self.send_message(
+                policy,
                 inbound_peer,
                 control,
                 request_id,
@@ -491,6 +513,7 @@ where
     )]
     async fn send_message(
         &self,
+        policy: Arc<SendMessagePolicy>,
         inbound_peer: SocketAddr,
         control: rocketmq_transport::api::RequestControlView,
         request_id: RequestId,
@@ -501,7 +524,7 @@ where
         request_properties: HashMap<CheetahString, CheetahString>,
         mut mapping_context: TopicQueueMappingContext,
     ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
-        let mut response = self.pre_send_at(inbound_peer, request, &request_header).await;
+        let mut response = self.pre_send_at(&policy, inbound_peer, request, &request_header).await;
         if response.code() != -1 {
             return BrokerResponseParts::from_command(response)?.into_handler_outcome();
         }
@@ -526,6 +549,7 @@ where
         let mut properties = request_properties;
         if !self
             .handle_retry_and_dlq(
+                &policy,
                 &request_header,
                 &mut response,
                 request,
@@ -567,7 +591,7 @@ where
         );
         message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
         message_ext.message_ext_inner.born_host = inbound_peer;
-        message_ext.message_ext_inner.store_host = self.inner.context.policy.snapshot().store_host;
+        message_ext.message_ext_inner.store_host = policy.store_host;
         message_ext.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
         message_ext
             .message_ext_inner
@@ -576,7 +600,7 @@ where
             .as_map_mut()
             .insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER),
-                self.inner.context.policy.snapshot().broker_cluster_name.clone(),
+                policy.broker_cluster_name.clone(),
             );
         message_ext.properties_string =
             MessageDecoder::message_properties_to_string(message_ext.message_ext_inner.message.properties().as_map());
@@ -584,7 +608,6 @@ where
         let transactional = if tra_flag
             && !(message_ext.reconsume_times() > 0 && message_ext.message_ext_inner.message.delay_time_level() > 0)
         {
-            let policy = self.inner.context.policy.snapshot();
             if policy.reject_transaction_message {
                 return BrokerResponseParts::from_command(response.set_code(ResponseCode::NoPermission).set_remark(
                     format!(
@@ -603,8 +626,11 @@ where
         let topic = message_ext.topic().clone();
         let topic_message_type = crate::metrics::broker_metrics_manager::get_message_type(&request_header);
         let transaction_id = MessageClientIDSetter::get_uniq_id(&message_ext.message_ext_inner.message);
-        let recall_handle = self.build_recall_handle(&message_ext);
-        let completion_facts = SendCompletionFacts::capture(request);
+        let recall_handle = self.build_recall_handle(&policy, &message_ext);
+        if !self.inner.check_broker_permission(&policy, &mut response) {
+            return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+        }
+        let completion_facts = SendCompletionFacts::capture(request, policy);
         if transactional {
             let mut store = TransactionalMessageAppender::new(self.inner.transactional_message_service.as_ref());
             let result = match await_store(StoreAwaitControl::Request(control), store.append_message(message_ext))
@@ -694,6 +720,7 @@ where
     )]
     async fn send_batch_message(
         &self,
+        policy: Arc<SendMessagePolicy>,
         inbound_peer: SocketAddr,
         control: rocketmq_transport::api::RequestControlView,
         request_id: RequestId,
@@ -704,7 +731,7 @@ where
         request_properties: HashMap<CheetahString, CheetahString>,
         mut mapping_context: TopicQueueMappingContext,
     ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
-        let mut response = self.pre_send_at(inbound_peer, request, &request_header).await;
+        let mut response = self.pre_send_at(&policy, inbound_peer, request, &request_header).await;
         if response.code() != -1 {
             return BrokerResponseParts::from_command(response)?.into_handler_outcome();
         }
@@ -747,11 +774,11 @@ where
         message_ext.message_ext_inner.message.set_body(request.body().cloned());
         message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
         message_ext.message_ext_inner.born_host = inbound_peer;
-        message_ext.message_ext_inner.store_host = self.inner.context.policy.snapshot().store_host;
+        message_ext.message_ext_inner.store_host = policy.store_host;
         message_ext.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
         message_ext.message_ext_inner.message.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER),
-            self.inner.context.policy.snapshot().broker_cluster_name.clone(),
+            policy.broker_cluster_name.clone(),
         );
 
         let mut batch_message = MessageExtBatch {
@@ -800,7 +827,10 @@ where
             MessageClientIDSetter::get_uniq_id(&batch_message.message_ext_broker_inner.message_ext_inner.message);
         let topic = batch_message.message_ext_broker_inner.message_ext_inner.topic().clone();
         let topic_message_type = crate::metrics::broker_metrics_manager::get_message_type(&request_header);
-        let completion_facts = SendCompletionFacts::capture(request);
+        if !self.inner.check_broker_permission(&policy, &mut response) {
+            return BrokerResponseParts::from_command(response)?.into_handler_outcome();
+        }
+        let completion_facts = SendCompletionFacts::capture(request, policy);
         let processor = self;
         let reply = if is_inner_batch {
             let mut store = self.inner.context.store.clone();
@@ -1067,6 +1097,7 @@ where
     /// Update send message context for hooks
     fn update_send_context_on_success(
         &self,
+        policy: &SendMessagePolicy,
         send_message_context: &mut SendMessageContext,
         response_header: &SendMessageResponseHeader,
         append_receipt: &StoreAppendReceipt,
@@ -1075,7 +1106,6 @@ where
         owner_parent: Option<CheetahString>,
         owner_self: Option<CheetahString>,
     ) {
-        let policy = self.inner.context.policy.snapshot();
         let commercial_size_per_msg = policy.commercial_size_per_msg;
         let commercial_base_count = policy.commercial_base_count;
 
@@ -1107,6 +1137,7 @@ where
     /// Update send message context for failure case
     fn update_send_context_on_failure(
         &self,
+        policy: &SendMessagePolicy,
         send_message_context: &mut SendMessageContext,
         append_receipt: &StoreAppendReceipt,
         request_body_len: i32,
@@ -1115,7 +1146,7 @@ where
         owner_parent: Option<CheetahString>,
         owner_self: Option<CheetahString>,
     ) {
-        let commercial_size_per_msg = self.inner.context.policy.snapshot().commercial_size_per_msg;
+        let commercial_size_per_msg = policy.commercial_size_per_msg;
 
         let msg_num = append_receipt
             .result()
@@ -1158,10 +1189,18 @@ where
         _message_type: MessageType,
     ) -> (Option<RemotingCommand>, bool) {
         let send_ok = map_put_status_to_response(append_receipt.result().put_message_status(), response);
+        if response.code() != ResponseCode::Success as i32 {
+            warn!(
+                response_code = response.code(),
+                append_evidence = ?append_receipt.execution_evidence(),
+                "Store append completed without a successful send response"
+            );
+        }
 
         let has_send_message_hook = self.has_send_message_hook();
 
         if send_ok {
+            response.set_command_custom_header_ref(SendMessageResponseHeader::default());
             self.update_broker_stats_on_success(
                 topic,
                 queue_id_int,
@@ -1194,6 +1233,7 @@ where
 
                 if has_send_message_hook {
                     self.update_send_context_on_success(
+                        &completion_facts.policy,
                         send_message_context,
                         response_header,
                         &append_receipt,
@@ -1210,6 +1250,7 @@ where
         } else {
             if has_send_message_hook {
                 self.update_send_context_on_failure(
+                    &completion_facts.policy,
                     send_message_context,
                     &append_receipt,
                     completion_facts.body_len,
@@ -1223,8 +1264,11 @@ where
         }
     }
 
-    fn build_recall_handle(&self, message: &MessageExtBrokerInner) -> Option<CheetahString> {
-        let policy = self.inner.context.policy.snapshot();
+    fn build_recall_handle(
+        &self,
+        policy: &SendMessagePolicy,
+        message: &MessageExtBrokerInner,
+    ) -> Option<CheetahString> {
         let max_delay_sec = if policy.timer_store_mode == rocketmq_store_api::TimerStoreMode::ExtendedTimeline {
             u64::from(policy.timer_maximum_horizon_days).saturating_mul(86_400)
         } else {
@@ -1249,16 +1293,12 @@ where
 
     async fn pre_send_at(
         &self,
+        policy: &Arc<SendMessagePolicy>,
         inbound_peer: SocketAddr,
         request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
     ) -> RemotingCommand {
-        let mut response = self
-            .inner
-            .context
-            .command_factory
-            .create_success_response_command_with_header(SendMessageResponseHeader::default());
-        let policy = self.inner.context.policy.snapshot();
+        let mut response = self.inner.context.command_factory.create_success_response_command();
         // set opaque
         response.with_opaque(request.opaque());
         add_send_response_metadata(&mut response, policy.region_id.clone(), policy.trace_on);
@@ -1275,13 +1315,14 @@ where
         }
         response = response.set_code(-1);
         self.inner
-            .msg_check_at(inbound_peer, request, request_header, &mut response)
+            .msg_check_at(policy, inbound_peer, request, request_header, &mut response)
             .await;
         response
     }
 
     async fn handle_retry_and_dlq(
         &self,
+        policy: &Arc<SendMessagePolicy>,
         request_header: &SendMessageRequestHeader,
         response: &mut RemotingCommand,
         request: &RemotingCommand,
@@ -1344,6 +1385,7 @@ where
                     .context
                     .topics
                     .create_topic_in_send_message_back(
+                        Arc::clone(policy),
                         new_topic,
                         retry_config::DLQ_NUMS_PER_GROUP as i32,
                         PermName::PERM_WRITE | PermName::PERM_READ,
@@ -1769,6 +1811,7 @@ where
             .context
             .topics
             .create_topic_in_send_message_back(
+                Arc::clone(&policy),
                 &new_topic,
                 subscription_group_config.retry_queue_nums(),
                 PermName::PERM_WRITE | PermName::PERM_READ,
@@ -1845,6 +1888,7 @@ where
                 .context
                 .topics
                 .create_topic_in_send_message_back(
+                    Arc::clone(&policy),
                     &new_topic,
                     retry_config::DLQ_NUMS_PER_GROUP as i32,
                     PermName::PERM_WRITE | PermName::PERM_READ,
@@ -1895,6 +1939,10 @@ where
         msg_inner.properties_string = message_properties_to_string(msg_ext.get_properties());
 
         let inner_topic = msg_inner.get_topic().clone();
+        let mut response = self.context.command_factory.create_success_response_command();
+        if !self.check_broker_permission(&policy, &mut response) {
+            return Ok(Some(response));
+        }
         let put_message_result = await_store(StoreAwaitControl::Legacy, self.context.store.put_message(msg_inner))
             .await
             .map_err(map_legacy_store_wait_stopped)?
@@ -1983,13 +2031,13 @@ where
 
     pub(crate) fn build_msg_context_at(
         &self,
+        policy: &SendMessagePolicy,
         inbound_peer: SocketAddr,
         request_header: &mut SendMessageRequestHeader,
         request: &RemotingCommand,
         properties: HashMap<CheetahString, CheetahString>,
     ) -> (SendMessageContext, HashMap<CheetahString, CheetahString>) {
         let namespace = NamespaceUtil::get_namespace_from_resource(request_header.topic.as_str());
-        let policy = self.context.policy.snapshot();
         let region_id = policy.region_id.to_string();
 
         let mut send_message_context = SendMessageContext {
@@ -2035,6 +2083,7 @@ where
 
     pub(crate) async fn msg_check_at(
         &self,
+        policy: &Arc<SendMessagePolicy>,
         inbound_peer: SocketAddr,
         request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
@@ -2042,14 +2091,7 @@ where
     ) where
         MS: BrokerMasterAddressStore,
     {
-        //check broker permission
-        let policy = self.context.policy.snapshot();
-        if broker_send_permission_denied(policy.broker_permission.get()) {
-            response.with_code(ResponseCode::NoPermission);
-            response.with_remark(format!(
-                "the broker[{}] sending message is forbidden",
-                policy.broker_ip.clone()
-            ));
+        if !self.check_broker_permission(policy, response) {
             return;
         }
 
@@ -2094,6 +2136,7 @@ where
                 .context
                 .topics
                 .create_topic_in_send_message(
+                    Arc::clone(policy),
                     &request_header.topic,
                     &request_header.default_topic,
                     inbound_peer,
@@ -2107,6 +2150,7 @@ where
                     .context
                     .topics
                     .create_topic_in_send_message_back(
+                        Arc::clone(policy),
                         request_header.topic.as_ref(),
                         1,
                         PermName::PERM_WRITE | PermName::PERM_READ,
@@ -2139,6 +2183,16 @@ where
                 queue_id_int, topic_config_inner, inbound_peer
             ));
         }
+    }
+
+    // Check at admission and again after asynchronous preparation, just before append.
+    pub(crate) fn check_broker_permission(&self, policy: &SendMessagePolicy, response: &mut RemotingCommand) -> bool {
+        if broker_send_permission_denied(policy.broker_permission.get()) {
+            response.with_code(ResponseCode::NoPermission);
+            response.with_remark(format!("the broker[{}] sending message is forbidden", policy.broker_ip));
+            return false;
+        }
+        true
     }
 
     #[inline]

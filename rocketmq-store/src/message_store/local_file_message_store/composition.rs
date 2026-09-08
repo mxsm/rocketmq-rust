@@ -601,6 +601,9 @@ impl LocalFileMessageStore {
             delay_level_table,
             max_delay_level,
             last_recovery_report: None,
+            last_recovery_error: None,
+            #[cfg(test)]
+            recovery_failure: None,
             store_root_lease_state: StoreRootLeaseState::Operational,
             store_root_mode,
             store_root_lease,

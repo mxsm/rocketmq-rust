@@ -364,6 +364,24 @@ where
 
 #[cfg(test)]
 impl<MS: BrokerStorePort, TS> BrokerRequestProcessor<BrokerProcessorType<MS, TS>> {
+    pub(crate) fn install_send_hook_for_test(
+        &mut self,
+        request_code: RequestCode,
+        hook: Box<dyn crate::mqtrace::send_message_hook::SendMessageHook>,
+    ) {
+        let code = request_code.to_i32();
+        let processor = match self.process_table.get(&code).expect("send/reply route") {
+            BrokerProcessorType::Send(processor) => {
+                BrokerProcessorType::Send(Arc::new(processor.with_hook_for_test(hook)))
+            }
+            BrokerProcessorType::Reply(processor) => {
+                BrokerProcessorType::Reply(Arc::new(processor.with_hook_for_test(hook)))
+            }
+            _ => panic!("test hook requires a send/reply route"),
+        };
+        self.register_processor(code, processor);
+    }
+
     pub(crate) fn dispatch_processor_variant_for_test(&self, request_code: RequestCode) -> Option<&'static str> {
         self.process_table
             .get(&request_code.to_i32())

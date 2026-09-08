@@ -120,6 +120,22 @@ async fn sync_master_without_slave_ack_returns_flush_slave_timeout() {
     let result = store.put_message(build_message(&topic, b"phase6-ha-body")).await;
 
     assert_eq!(result.put_message_status(), PutMessageStatus::FlushSlaveTimeout);
+    let receipt = rocketmq_store::store_append_receipt(result, store.get_max_phy_offset(), store.get_flushed_where());
+    let rocketmq_store::AppendExecutionEvidence::Appended { range, local_watermark } = receipt.execution_evidence()
+    else {
+        panic!("replica timeout must retain the finalized local append");
+    };
+    assert_eq!(range.end, *local_watermark);
+    assert!(store.look_message_by_offset(range.start).is_some());
+    assert_eq!(
+        receipt.canonical().unwrap().status(),
+        rocketmq_store_api::AppendStatus::FlushReplicaTimeout
+    );
+    assert_eq!(receipt.canonical().unwrap().appended_range(), Some(range.clone()));
+    assert_ne!(
+        receipt.canonical().unwrap().durability(),
+        rocketmq_store_api::Durability::Replicated
+    );
 
     store.shutdown().await;
 }

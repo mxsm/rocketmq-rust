@@ -16,11 +16,29 @@ use crate::base::message_status_enum::PutMessageStatus;
 
 pub use rocketmq_store_local::commit_log::append::AppendMessageResult;
 
+/// Physical append facts, independent of response eligibility and durability.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum AppendExecutionEvidence {
+    /// The request was rejected before any message append could occur.
+    NotAppended,
+    /// The append worker finalized this message range in the local primary log.
+    Appended {
+        /// Exclusive range occupied by the finalized message or batch.
+        range: std::ops::Range<i64>,
+        /// Exclusive local append watermark observed by that worker.
+        local_watermark: i64,
+    },
+    /// The producer supplied no execution evidence, or completion is uncertain.
+    #[default]
+    Unknown,
+}
+
 #[derive(Default, Clone)]
 pub struct PutMessageResult {
     put_message_status: PutMessageStatus,
     append_message_result: Option<AppendMessageResult>,
     remote_put: bool,
+    execution_evidence: AppendExecutionEvidence,
 }
 
 impl PutMessageResult {
@@ -34,6 +52,7 @@ impl PutMessageResult {
             put_message_status,
             append_message_result,
             remote_put,
+            execution_evidence: AppendExecutionEvidence::Unknown,
         }
     }
 
@@ -46,6 +65,7 @@ impl PutMessageResult {
             put_message_status,
             append_message_result,
             remote_put: false,
+            execution_evidence: AppendExecutionEvidence::Unknown,
         }
     }
 
@@ -55,12 +75,27 @@ impl PutMessageResult {
             put_message_status,
             append_message_result: None,
             remote_put: false,
+            execution_evidence: AppendExecutionEvidence::Unknown,
         }
     }
 
     #[inline]
     pub fn put_message_status(&self) -> PutMessageStatus {
         self.put_message_status
+    }
+
+    pub(crate) fn rejected_before_append(status: PutMessageStatus) -> Self {
+        Self::new_default(status).with_execution_evidence(AppendExecutionEvidence::NotAppended)
+    }
+
+    pub(crate) fn with_execution_evidence(mut self, evidence: AppendExecutionEvidence) -> Self {
+        self.execution_evidence = evidence;
+        self
+    }
+
+    /// Returns write-stage evidence without interpreting the final response status.
+    pub const fn execution_evidence(&self) -> &AppendExecutionEvidence {
+        &self.execution_evidence
     }
 
     #[inline]

@@ -25,17 +25,28 @@ use rocketmq_store::GetMessageResult;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 
+use crate::broker_error::BrokerResult;
 use crate::failover::escape_bridge::EscapeBridge;
+
+fn transaction_store_unavailable() -> rocketmq_error::SharedError {
+    crate::broker_error::from_canonical(rocketmq_error::Error::new(
+        &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED,
+    ))
+}
 
 /// Narrow, non-owning Store capability for the transaction subsystem.
 pub(crate) struct TransactionMessageStore<MS> {
     escape_bridge: Weak<EscapeBridge<MS>>,
+    #[cfg(test)]
+    read_results: Arc<parking_lot::Mutex<std::collections::VecDeque<BrokerResult<Option<GetMessageResult>>>>>,
 }
 
 impl<MS> Clone for TransactionMessageStore<MS> {
     fn clone(&self) -> Self {
         Self {
             escape_bridge: Weak::clone(&self.escape_bridge),
+            #[cfg(test)]
+            read_results: Arc::clone(&self.read_results),
         }
     }
 }
@@ -44,14 +55,17 @@ impl<MS: BrokerReadStore> TransactionMessageStore<MS> {
     pub(crate) fn new(escape_bridge: &Arc<EscapeBridge<MS>>) -> Self {
         Self {
             escape_bridge: Arc::downgrade(escape_bridge),
+            #[cfg(test)]
+            read_results: Arc::default(),
         }
     }
 
-    pub(crate) fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
+    pub(crate) fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> BrokerResult<i64> {
         self.escape_bridge
             .upgrade()
-            .and_then(|provider| provider.get_min_offset_from_local_store(topic, queue_id).ok())
-            .unwrap_or(-1)
+            .ok_or_else(transaction_store_unavailable)?
+            .get_min_offset_from_local_store(topic, queue_id)
+            .map_err(|_| transaction_store_unavailable())
     }
 
     pub(crate) async fn get_message(
@@ -61,13 +75,21 @@ impl<MS: BrokerReadStore> TransactionMessageStore<MS> {
         queue_id: i32,
         offset: i64,
         nums: i32,
-    ) -> Option<GetMessageResult> {
-        let provider = self.escape_bridge.upgrade()?;
+    ) -> BrokerResult<Option<GetMessageResult>> {
+        let provider = self.escape_bridge.upgrade().ok_or_else(transaction_store_unavailable)?;
+        #[cfg(test)]
+        if let Some(result) = self.read_results.lock().pop_front() {
+            return result;
+        }
         provider
             .get_message_from_local_store(group, topic, queue_id, offset, nums)
             .await
-            .ok()
-            .flatten()
+            .map_err(|_| transaction_store_unavailable())
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_read_results(&self, results: Vec<BrokerResult<Option<GetMessageResult>>>) {
+        *self.read_results.lock() = results.into();
     }
 
     pub(crate) fn look_message_by_offset(&self, offset: i64) -> Option<MessageExt> {
@@ -118,12 +140,22 @@ mod tests {
     async fn transaction_store_fails_closed_after_provider_shutdown() {
         let store = TransactionMessageStore::<StorePorts> {
             escape_bridge: Weak::new(),
+            read_results: Arc::default(),
         };
         let topic = CheetahString::from_static_str("transaction-topic");
         let group = CheetahString::from_static_str("transaction-group");
 
-        assert_eq!(store.get_min_offset_in_queue(&topic, 0), -1);
-        assert!(store.get_message(&group, &topic, 0, 0, 1).await.is_none());
+        let offset_error = store.get_min_offset_in_queue(&topic, 0).unwrap_err();
+        let read_error = store
+            .get_message(&group, &topic, 0, 0, 1)
+            .await
+            .err()
+            .expect("provider unavailable");
+        assert_eq!(
+            offset_error.descriptor(),
+            &rocketmq_error::STORAGE_LIFECYCLE_NOT_STARTED
+        );
+        assert_eq!(read_error.descriptor(), offset_error.descriptor());
         assert!(store.look_message_by_offset(0).is_none());
         assert!(store.state_machine_version().is_none());
         assert_eq!(

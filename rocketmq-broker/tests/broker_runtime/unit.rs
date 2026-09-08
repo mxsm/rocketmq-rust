@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+
+#[path = "send_policy.rs"]
+mod send_policy;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -819,7 +822,7 @@ async fn schedule_role_status_changes_only_after_final_persistence_succeeds() {
         .change_schedule_service_status(false)
         .await
         .expect_err("invalid store root should reject the final persistence transition");
-    assert!(error.to_string().contains("ScheduleMessageService"));
+    assert_eq!(error.code(), rocketmq_error::CORE_SERVICE_FAILED.code());
     assert!(runtime
         .composition
         .state
@@ -861,6 +864,7 @@ fn broker_basic_shutdown_report_exposes_required_component_names() {
             "service_tasks",
             "observability",
             "scheduled_tasks",
+            "schedule_message",
             "message_store",
             "deferred_services",
             "transaction_services",

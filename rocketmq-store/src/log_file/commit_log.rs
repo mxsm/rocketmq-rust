@@ -211,6 +211,22 @@ fn log_abnormal_recovery_window(
     );
 }
 
+fn commitlog_recovery_failure(detail: &'static str) -> StoreError {
+    StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, StoreOperation::Load)
+        .in_component(StoreComponent::CommitLog)
+        .with_detail(detail)
+}
+
+fn commitlog_recovery_completion_result(completed: bool) -> Result<(), StoreError> {
+    if completed {
+        Ok(())
+    } else {
+        Err(commitlog_recovery_failure(
+            "destructive recovery completion is pending; legacy cleanup supplied no underlying cause",
+        ))
+    }
+}
+
 macro_rules! apply_recovery_completion {
     ($commit_log:ident, $completion:expr, $max_consume_queue_offset:expr $(,)?) => {{
         match $completion {
@@ -373,6 +389,8 @@ macro_rules! lock_active_mapped_file_parts {
 
 pub struct CommitLog {
     root: CommitLogRoot<CommitLogAdapter>,
+    #[cfg(test)]
+    after_append: parking_lot::Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 mod adapter {
@@ -529,6 +547,8 @@ impl CommitLog {
                 .with_source(error)
         })?;
         Ok(Self {
+            #[cfg(test)]
+            after_append: parking_lot::Mutex::new(None),
             root: CommitLogRoot::new(CommitLogAdapter {
                 mapped_file_queue,
                 message_store_config: message_store_config.clone(),
@@ -1096,14 +1116,16 @@ impl CommitLog {
 
         let ha_service = self.store_context.ha_service().ok_or_else(|| {
             error!("HA Service is None");
-            PutMessageResult::new_default(PutMessageStatus::UnknownError)
+            PutMessageResult::rejected_before_append(PutMessageStatus::UnknownError)
         })?;
 
         if self.broker_config.enable_controller_mode {
             if ha_service.in_sync_replicas_nums(curr_offset as i64)
                 < self.message_store_config.min_in_sync_replicas as i32
             {
-                return Err(PutMessageResult::new_default(PutMessageStatus::InSyncReplicasNotEnough));
+                return Err(PutMessageResult::rejected_before_append(
+                    PutMessageStatus::InSyncReplicasNotEnough,
+                ));
             }
             if self.message_store_config.all_ack_in_sync_state_set {
                 need_ack_nums = mix_all::ALL_ACK_IN_SYNC_STATE_SET;
@@ -1116,7 +1138,9 @@ impl CommitLog {
                 .min(ha_service.in_sync_replicas_nums(curr_offset as i64));
             need_ack_nums = self.calc_need_ack_nums(in_sync_replicas);
             if need_ack_nums > in_sync_replicas {
-                return Err(PutMessageResult::new_default(PutMessageStatus::InSyncReplicasNotEnough));
+                return Err(PutMessageResult::rejected_before_append(
+                    PutMessageStatus::InSyncReplicasNotEnough,
+                ));
             }
             if self.message_store_config.all_ack_in_sync_state_set {
                 need_ack_nums = mix_all::ALL_ACK_IN_SYNC_STATE_SET;
@@ -1139,7 +1163,7 @@ impl CommitLog {
         let append_span = rocketmq_observability::trace::store::append_span(&self.telemetry_handle);
         let requested_lease = match self.store_context.controller_write_lease.capture() {
             Ok(lease) => lease,
-            Err(()) => return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable),
+            Err(()) => return PutMessageResult::rejected_before_append(PutMessageStatus::ServiceNotAvailable),
         };
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
         rocketmq_observability::trace::record_message_properties_with_handle(
@@ -1150,7 +1174,7 @@ impl CommitLog {
         );
         let tran_type = MessageSysFlag::get_transaction_value(msg_batch.message_ext_broker_inner.sys_flag());
         if MessageSysFlag::TRANSACTION_NOT_TYPE != tran_type {
-            return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+            return PutMessageResult::rejected_before_append(PutMessageStatus::MessageIllegal);
         }
         if msg_batch
             .message_ext_broker_inner
@@ -1159,7 +1183,7 @@ impl CommitLog {
             .delay_time_level()
             > 0
         {
-            return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+            return PutMessageResult::rejected_before_append(PutMessageStatus::MessageIllegal);
         }
 
         //setting ip type:IPV4 OR IPV6, default is ipv4
@@ -1177,7 +1201,7 @@ impl CommitLog {
         let need_handle_ha = self.need_handle_ha(&msg_batch.message_ext_broker_inner);
         let need_ack_nums = match self.handle_ha_service(curr_offset, need_handle_ha) {
             Ok(ack_nums) => ack_nums,
-            Err(result) => return result,
+            Err(result) => return result.with_execution_evidence(crate::AppendExecutionEvidence::NotAppended),
         };
         msg_batch.message_ext_broker_inner.version = MessageVersion::V1;
         let auto_message_version_on_topic_len = self.message_store_config.auto_message_version_on_topic_len;
@@ -1191,7 +1215,7 @@ impl CommitLog {
             &self.message_store_config,
         ) {
             Ok(prepared) => prepared,
-            Err(result) => return result,
+            Err(result) => return result.with_execution_evidence(crate::AppendExecutionEvidence::NotAppended),
         };
         let sequenced = self
             .append_runtime
@@ -1216,7 +1240,7 @@ impl CommitLog {
         let append_span = rocketmq_observability::trace::store::append_span(&self.telemetry_handle);
         let requested_lease = match self.store_context.controller_write_lease.capture() {
             Ok(lease) => lease,
-            Err(()) => return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable),
+            Err(()) => return PutMessageResult::rejected_before_append(PutMessageStatus::ServiceNotAvailable),
         };
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
         rocketmq_observability::trace::record_message_properties_with_handle(
@@ -1257,7 +1281,7 @@ impl CommitLog {
         let need_handle_ha = self.need_handle_ha(&msg);
         let need_ack_nums = match self.handle_ha_service(curr_offset, need_handle_ha) {
             Ok(ack_nums) => ack_nums,
-            Err(result) => return result,
+            Err(result) => return result.with_execution_evidence(crate::AppendExecutionEvidence::NotAppended),
         };
 
         let need_assign_offset = !(self.message_store_config.duplication_enable
@@ -1265,7 +1289,7 @@ impl CommitLog {
 
         let prepared = match message_encoder_pool::prepare_message_with_pool(&msg, &self.message_store_config) {
             Ok(prepared) => prepared,
-            Err(result) => return result,
+            Err(result) => return result.with_execution_evidence(crate::AppendExecutionEvidence::NotAppended),
         };
         let sequenced = self
             .append_runtime
@@ -1321,6 +1345,13 @@ impl CommitLog {
         need_handle_ha: bool,
         requested_lease: Option<WriteLeaseToken>,
     ) -> PutMessageResult {
+        #[cfg(test)]
+        {
+            let after_append = self.after_append.lock().take();
+            if let Some(after_append) = after_append {
+                after_append();
+            }
+        }
         let append_message_result = put_message_result.append_message_result().unwrap();
 
         // Use efficient branching based on actual requirements
@@ -1470,6 +1501,15 @@ impl CommitLog {
     /// Runs optimized normal recovery and reports whether destructive completion succeeded.
     #[must_use]
     pub async fn try_recover_normally_optimized(&mut self, max_phy_offset_of_consume_queue: i64) -> bool {
+        self.recover_normally_optimized_result(max_phy_offset_of_consume_queue)
+            .await
+            .is_ok()
+    }
+
+    pub(crate) async fn recover_normally_optimized_result(
+        &mut self,
+        max_phy_offset_of_consume_queue: i64,
+    ) -> Result<(), StoreError> {
         use crate::log_file::commit_log_recovery::BatchMessageIterator;
         use crate::log_file::commit_log_recovery::RecoveryContext;
 
@@ -1482,11 +1522,11 @@ impl CommitLog {
 
         if mapped_files_inner.is_empty() {
             warn!("The commitlog files are deleted, and delete the consume queue files");
-            return apply_recovery_completion!(
+            return commitlog_recovery_completion_result(apply_recovery_completion!(
                 self,
                 CommitLogRecoveryCompletion::Empty,
                 max_phy_offset_of_consume_queue,
-            );
+            ));
         }
 
         let recovery_window = plan_normal_recovery_file_window(
@@ -1504,14 +1544,14 @@ impl CommitLog {
             Ok(offset) => offset,
             Err(error) => {
                 warn!("normal optimized recovery initial offset conversion failed: {error}");
-                return false;
+                return Err(commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error));
             }
         };
         let mut normal_recovery = match NormalRecoveryState::try_new(initial_offset, NormalRecoveryPolicy::Optimized) {
             Some(state) => state,
             None => {
                 warn!("normal optimized recovery initial state rejected its offset");
-                return false;
+                return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
             }
         };
         let do_dispatch = false;
@@ -1598,29 +1638,37 @@ impl CommitLog {
                     NormalRecoveryAdapterViolation::RelativeOffsetConversion(error),
                 ) => {
                     warn!("normal optimized recovery relative offset conversion failed: {error}");
-                    break 'segments;
+                    return Err(
+                        commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
+                    );
                 }
                 NormalRecoverySegmentOutcome::AdapterFailed(NormalRecoveryAdapterViolation::MessageSizeConversion(
                     error,
                 )) => {
                     warn!("normal optimized recovery message size conversion failed: {error}");
-                    break 'segments;
+                    return Err(
+                        commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
+                    );
                 }
                 NormalRecoverySegmentOutcome::AdapterFailed(
                     NormalRecoveryAdapterViolation::FramePositionOverflow { position, size },
                 ) => {
                     warn!("normal optimized recovery frame position overflow at {position} with size {size}");
-                    break 'segments;
+                    return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
                 NormalRecoverySegmentOutcome::StateFailed => {
                     warn!("normal optimized recovery offset state failed");
-                    break 'segments;
+                    return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
             }
         }
 
         let completion = normal_recovery.completion(max_phy_offset_of_consume_queue);
-        let recovery_succeeded = apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue);
+        let recovery_succeeded = commitlog_recovery_completion_result(apply_recovery_completion!(
+            self,
+            completion,
+            max_phy_offset_of_consume_queue
+        ));
 
         recovery_ctx.stats.recovery_time_ms = start.elapsed().as_millis();
         recovery_ctx.stats.log_summary("Normal");
@@ -1636,6 +1684,15 @@ impl CommitLog {
     /// Runs compatibility normal recovery and reports whether destructive completion succeeded.
     #[must_use]
     pub async fn try_recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) -> bool {
+        self.recover_normally_result(max_phy_offset_of_consume_queue)
+            .await
+            .is_ok()
+    }
+
+    pub(crate) async fn recover_normally_result(
+        &mut self,
+        max_phy_offset_of_consume_queue: i64,
+    ) -> Result<(), StoreError> {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
         let message_store_config = self.message_store_config.clone();
@@ -1657,7 +1714,9 @@ impl CommitLog {
                 Ok(offset) => offset,
                 Err(error) => {
                     warn!("normal recovery initial offset conversion failed: {error}");
-                    return false;
+                    return Err(
+                        commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
+                    );
                 }
             };
             let mut normal_recovery = match NormalRecoveryState::try_new(initial_offset, NormalRecoveryPolicy::Standard)
@@ -1665,7 +1724,7 @@ impl CommitLog {
                 Some(state) => state,
                 None => {
                     warn!("normal recovery initial state rejected its offset");
-                    return false;
+                    return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
             };
             let do_dispatch = false;
@@ -1765,39 +1824,47 @@ impl CommitLog {
                         NormalRecoveryAdapterViolation::FramePositionOverflow { position, size },
                     ) => {
                         warn!("normal recovery frame position overflow at {position} with size {size}");
-                        break 'segments;
+                        return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                     }
                     NormalRecoverySegmentOutcome::AdapterFailed(
                         NormalRecoveryAdapterViolation::RelativeOffsetConversion(error),
                     ) => {
                         warn!("normal recovery relative offset conversion failed: {error}");
-                        break 'segments;
+                        return Err(
+                            commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
+                        );
                     }
                     NormalRecoverySegmentOutcome::AdapterFailed(
                         NormalRecoveryAdapterViolation::MessageSizeConversion(error),
                     ) => {
                         warn!("normal recovery message size conversion failed: {error}");
-                        break 'segments;
+                        return Err(
+                            commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
+                        );
                     }
                     NormalRecoverySegmentOutcome::StateFailed => {
                         warn!("normal recovery offset state failed");
-                        break 'segments;
+                        return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                     }
                 }
             }
 
             let completion = normal_recovery.completion(max_phy_offset_of_consume_queue);
-            apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue)
+            commitlog_recovery_completion_result(apply_recovery_completion!(
+                self,
+                completion,
+                max_phy_offset_of_consume_queue
+            ))
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
                                         files"
             );
-            apply_recovery_completion!(
+            commitlog_recovery_completion_result(apply_recovery_completion!(
                 self,
                 CommitLogRecoveryCompletion::Empty,
                 max_phy_offset_of_consume_queue,
-            )
+            ))
         }
     }
 
@@ -1851,6 +1918,15 @@ impl CommitLog {
     /// Runs optimized abnormal recovery and reports whether destructive completion succeeded.
     #[must_use]
     pub async fn try_recover_abnormally_optimized(&mut self, max_phy_offset_of_consume_queue: i64) -> bool {
+        self.recover_abnormally_optimized_result(max_phy_offset_of_consume_queue)
+            .await
+            .is_ok()
+    }
+
+    pub(crate) async fn recover_abnormally_optimized_result(
+        &mut self,
+        max_phy_offset_of_consume_queue: i64,
+    ) -> Result<(), StoreError> {
         use crate::log_file::commit_log_recovery::plan_abnormal_recovery_window;
         use crate::log_file::commit_log_recovery::BatchMessageIterator;
         use crate::log_file::commit_log_recovery::RecoveryContext;
@@ -1865,11 +1941,11 @@ impl CommitLog {
 
         if mapped_files_inner.is_empty() {
             warn!("The commitlog files are deleted, and delete the consume queue files");
-            return apply_recovery_completion!(
+            return commitlog_recovery_completion_result(apply_recovery_completion!(
                 self,
                 CommitLogRecoveryCompletion::Empty,
                 max_phy_offset_of_consume_queue,
-            );
+            ));
         }
 
         let recovery_window = plan_abnormal_recovery_window(
@@ -1886,7 +1962,7 @@ impl CommitLog {
         let mut index = recovery_window.start_index;
         let Some(first_recovery_file) = mapped_files_inner.get(index) else {
             warn!("optimized abnormal recovery window starts outside mapped files: {index}");
-            return false;
+            return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
         };
         let initial_offset = if index == 0 {
             first_recovery_file.get_file_from_offset()
@@ -1898,7 +1974,7 @@ impl CommitLog {
                 Some(state) => state,
                 None => {
                     warn!("optimized abnormal recovery initial state rejected its offset");
-                    return false;
+                    return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
             };
         let do_dispatch = true;
@@ -2008,45 +2084,55 @@ impl CommitLog {
                 AbnormalRecoverySegmentOutcome::StopRecovery => break 'segments,
                 AbnormalRecoverySegmentOutcome::AdapterFailed(AbnormalRecoveryAdapterViolation::ConfirmCandidate) => {
                     warn!("optimized abnormal recovery confirm candidate failed");
-                    break 'segments;
+                    return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
                 AbnormalRecoverySegmentOutcome::AdapterFailed(
                     AbnormalRecoveryAdapterViolation::ConfirmLimitConversion(error),
                 ) => {
                     warn!("optimized abnormal recovery confirm limit conversion failed: {error}");
-                    break 'segments;
+                    return Err(
+                        commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
+                    );
                 }
                 AbnormalRecoverySegmentOutcome::AdapterFailed(
                     AbnormalRecoveryAdapterViolation::RelativeOffsetConversion(error),
                 ) => {
                     warn!("optimized abnormal recovery relative offset conversion failed: {error}");
-                    break 'segments;
+                    return Err(
+                        commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
+                    );
                 }
                 AbnormalRecoverySegmentOutcome::AdapterFailed(
                     AbnormalRecoveryAdapterViolation::ValidatedSizeConversion(error),
                 ) => {
                     warn!("optimized abnormal recovery validated size conversion failed: {error}");
-                    break 'segments;
+                    return Err(
+                        commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
+                    );
                 }
                 AbnormalRecoverySegmentOutcome::AdapterFailed(
                     AbnormalRecoveryAdapterViolation::FramePositionOverflow { position, size },
                 ) => {
                     warn!("optimized abnormal recovery frame position overflow at {position} with size {size}");
-                    break 'segments;
+                    return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
                 AbnormalRecoverySegmentOutcome::StateFailed => {
                     warn!("optimized abnormal recovery offset state failed");
-                    break 'segments;
+                    return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
                 AbnormalRecoverySegmentOutcome::UnexpectedAction(action) => {
                     warn!("optimized abnormal recovery unexpected action: {action:?}");
-                    break 'segments;
+                    return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                 }
             }
         }
 
         let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);
-        let recovery_succeeded = apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue);
+        let recovery_succeeded = commitlog_recovery_completion_result(apply_recovery_completion!(
+            self,
+            completion,
+            max_phy_offset_of_consume_queue
+        ));
 
         recovery_ctx.stats.recovery_time_ms = start.elapsed().as_millis();
         recovery_ctx.stats.log_summary("Abnormal");
@@ -2062,6 +2148,15 @@ impl CommitLog {
     /// Runs compatibility abnormal recovery and reports whether destructive completion succeeded.
     #[must_use]
     pub async fn try_recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) -> bool {
+        self.recover_abnormally_result(max_phy_offset_of_consume_queue)
+            .await
+            .is_ok()
+    }
+
+    pub(crate) async fn recover_abnormally_result(
+        &mut self,
+        max_phy_offset_of_consume_queue: i64,
+    ) -> Result<(), StoreError> {
         use crate::log_file::commit_log_recovery::plan_abnormal_recovery_window;
 
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
@@ -2085,7 +2180,7 @@ impl CommitLog {
             let mut index = recovery_window.start_index;
             let Some(first_recovery_file) = mapped_files_inner.get(index) else {
                 warn!("standard abnormal recovery window starts outside mapped files: {index}");
-                return false;
+                return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
             };
             let initial_offset = first_recovery_file.get_file_from_offset();
             let mut abnormal_recovery =
@@ -2093,7 +2188,7 @@ impl CommitLog {
                     Some(state) => state,
                     None => {
                         warn!("standard abnormal recovery initial state rejected its offset");
-                        return false;
+                        return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                     }
                 };
             let do_dispatch = true;
@@ -2209,55 +2304,65 @@ impl CommitLog {
                         AbnormalRecoveryAdapterViolation::ConfirmCandidate,
                     ) => {
                         warn!("standard abnormal recovery confirm candidate failed");
-                        break 'segments;
+                        return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                     }
                     AbnormalRecoverySegmentOutcome::AdapterFailed(
                         AbnormalRecoveryAdapterViolation::ConfirmLimitConversion(error),
                     ) => {
                         warn!("standard abnormal recovery confirm limit conversion failed: {error}");
-                        break 'segments;
+                        return Err(
+                            commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
+                        );
                     }
                     AbnormalRecoverySegmentOutcome::AdapterFailed(
                         AbnormalRecoveryAdapterViolation::FramePositionOverflow { position, size },
                     ) => {
                         warn!("standard abnormal recovery frame position overflow at {position} with size {size}");
-                        break 'segments;
+                        return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                     }
                     AbnormalRecoverySegmentOutcome::AdapterFailed(
                         AbnormalRecoveryAdapterViolation::RelativeOffsetConversion(error),
                     ) => {
                         warn!("standard abnormal recovery relative offset conversion failed: {error}");
-                        break 'segments;
+                        return Err(
+                            commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
+                        );
                     }
                     AbnormalRecoverySegmentOutcome::AdapterFailed(
                         AbnormalRecoveryAdapterViolation::ValidatedSizeConversion(error),
                     ) => {
                         warn!("standard abnormal recovery validated size conversion failed: {error}");
-                        break 'segments;
+                        return Err(
+                            commitlog_recovery_failure("recovery offset or adapter state failed").with_source(error)
+                        );
                     }
                     AbnormalRecoverySegmentOutcome::StateFailed => {
                         warn!("standard abnormal recovery offset state failed");
-                        break 'segments;
+                        return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                     }
                     AbnormalRecoverySegmentOutcome::UnexpectedAction(action) => {
                         warn!("standard abnormal recovery unexpected action: {action:?}");
-                        break 'segments;
+                        return Err(commitlog_recovery_failure("recovery offset or adapter state failed"));
                     }
                 }
             }
 
             let completion = abnormal_recovery.completion(max_phy_offset_of_consume_queue);
-            apply_recovery_completion!(self, completion, max_phy_offset_of_consume_queue)
+            commitlog_recovery_completion_result(apply_recovery_completion!(
+                self,
+                completion,
+                max_phy_offset_of_consume_queue
+            ))
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
                                         files"
             );
-            apply_recovery_completion!(
+            commitlog_recovery_completion_result(apply_recovery_completion!(
                 self,
                 CommitLogRecoveryCompletion::Empty,
                 max_phy_offset_of_consume_queue,
-            )
+            ))
         }
     }
 
@@ -3105,6 +3210,153 @@ mod tests {
         assert_eq!(accepted.put_message_status(), PutMessageStatus::PutOk);
 
         let _ = std::fs::remove_dir_all(temp_root);
+    }
+
+    #[tokio::test]
+    async fn append_execution_evidence_survives_post_append_lease_fence_and_renewal() {
+        for batch in [false, true] {
+            for replace_lease in [false, true] {
+                let directory = tempfile::TempDir::new().unwrap();
+                let mut store = new_test_message_store_with_config(
+                    directory.path(),
+                    MessageStoreConfig {
+                        mapped_file_size_commit_log: 4096,
+                        ha_listen_port: 0,
+                        ..Default::default()
+                    },
+                    BrokerRole::AsyncMaster,
+                    false,
+                );
+                store.init().await.unwrap();
+                let log = store.get_commit_log();
+                let before = log.get_max_offset();
+                let denied = log.put_message(append_test_message("evidence-topic", b"denied")).await;
+                let denied = crate::store_append_receipt(denied, log.get_max_offset(), log.get_flushed_where());
+                assert_eq!(
+                    denied.execution_evidence(),
+                    &crate::AppendExecutionEvidence::NotAppended
+                );
+                assert_eq!(log.get_max_offset(), before);
+                assert!(!denied.canonical().unwrap().is_accepted());
+
+                let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+                let token = WriteLeaseToken::try_new(authority, 1).unwrap();
+                let next_token = WriteLeaseToken::try_new(authority, 2).unwrap();
+                assert!(log.install_controller_write_lease(token, Duration::from_secs(60)));
+                let lease = log.controller_write_lease_state();
+                *log.after_append.lock() = Some(Box::new(move || {
+                    if replace_lease {
+                        assert!(lease.install(next_token, Duration::from_secs(60)));
+                    } else {
+                        lease.fence();
+                    }
+                }));
+                let result = if batch {
+                    let mut item = rocketmq_model::common::message::message_single::Message::default();
+                    item.set_body(Some(Bytes::from_static(b"evidence")));
+                    let mut message = append_test_message("evidence-topic", b"unused");
+                    message.set_body(rocketmq_protocol::common::message::message_decoder::encode_messages(&[
+                        item,
+                    ]));
+                    log.put_messages(MessageExtBatch {
+                        message_ext_broker_inner: message,
+                        ..Default::default()
+                    })
+                    .await
+                } else {
+                    log.put_message(append_test_message("evidence-topic", b"evidence"))
+                        .await
+                };
+                let receipt = crate::store_append_receipt(result, log.get_max_offset(), log.get_flushed_where());
+                assert_eq!(
+                    receipt.result().put_message_status(),
+                    PutMessageStatus::ServiceNotAvailable
+                );
+                assert!(!receipt.canonical().unwrap().is_accepted());
+                assert_eq!(receipt.canonical().unwrap().appended_range(), None);
+                let crate::AppendExecutionEvidence::Appended { range, local_watermark } = receipt.execution_evidence()
+                else {
+                    panic!("finalized worker append must retain evidence");
+                };
+                assert_eq!(range.start, before);
+                assert_eq!(range.end, *local_watermark);
+                assert_eq!(*local_watermark, log.get_max_offset());
+                let stored = store.look_message_by_offset(range.start).unwrap();
+                assert_eq!(stored.topic(), "evidence-topic");
+                assert_eq!(stored.commit_log_offset(), range.start);
+                assert_eq!(
+                    receipt
+                        .result()
+                        .append_message_result()
+                        .unwrap()
+                        .get_message_id()
+                        .as_deref(),
+                    Some(stored.msg_id().as_str())
+                );
+
+                if !replace_lease {
+                    assert!(log.install_controller_write_lease(next_token, Duration::from_secs(60)));
+                }
+                let next = log
+                    .put_message(append_test_message("evidence-topic", b"evidence"))
+                    .await;
+                let next = crate::store_append_receipt(next, log.get_max_offset(), log.get_flushed_where());
+                assert!(next.canonical().unwrap().is_accepted());
+                let crate::AppendExecutionEvidence::Appended { range: next_range, .. } = next.execution_evidence()
+                else {
+                    panic!("next generation append should be observable");
+                };
+                assert_eq!(next_range.start, range.end);
+                assert!(store.look_message_by_offset(range.start).is_some());
+                assert!(store.look_message_by_offset(next_range.start).is_some());
+                store.shutdown().await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn append_execution_evidence_survives_sync_flush_timeout() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let mut store = new_test_message_store_with_config(
+            directory.path(),
+            MessageStoreConfig {
+                mapped_file_size_commit_log: 4096,
+                ha_listen_port: 0,
+                flush_disk_type: FlushDiskType::SyncFlush,
+                sync_flush_timeout: 1,
+                ..Default::default()
+            },
+            BrokerRole::AsyncMaster,
+            false,
+        );
+        // The append worker is installed, but the flush worker has not started.
+        store.init().await.unwrap();
+        let log = store.get_commit_log();
+        let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+        assert!(log
+            .install_controller_write_lease(WriteLeaseToken::try_new(authority, 1).unwrap(), Duration::from_secs(60)));
+        let mut message = append_test_message("flush-evidence", b"stored-before-flush");
+        message.set_wait_store_msg_ok(true);
+        let result = log.put_message(message).await;
+        let receipt = crate::store_append_receipt(result, log.get_max_offset(), log.get_flushed_where());
+        assert_eq!(
+            receipt.result().put_message_status(),
+            PutMessageStatus::FlushDiskTimeout
+        );
+        let crate::AppendExecutionEvidence::Appended { range, .. } = receipt.execution_evidence() else {
+            panic!("flush timeout must retain completed append evidence");
+        };
+        assert!(store.look_message_by_offset(range.start).is_some());
+        assert_eq!(
+            receipt.canonical().unwrap().status(),
+            rocketmq_store_api::AppendStatus::FlushDiskTimeout
+        );
+        assert_eq!(receipt.canonical().unwrap().appended_range(), Some(range.clone()));
+        assert_eq!(
+            receipt.canonical().unwrap().durability(),
+            rocketmq_store_api::Durability::Memory
+        );
+        store.shutdown().await;
     }
 
     #[tokio::test]

@@ -138,7 +138,7 @@ impl LocalFileMessageStore {
     pub(crate) async fn put_message_shared(&self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         if !self.is_store_available_for_io() || !self.running_flags.is_writeable() {
             warn!("message store is unavailable for writes, so putMessage is forbidden");
-            return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
+            return PutMessageResult::rejected_before_append(PutMessageStatus::ServiceNotAvailable);
         }
 
         #[cfg(feature = "extended_timeline")]
@@ -150,7 +150,7 @@ impl LocalFileMessageStore {
                     | TimelineAdmissionOutcome::HorizonOverflow
                     | TimelineAdmissionOutcome::HorizonExceeded
                     | TimelineAdmissionOutcome::RecordTooLarge,
-                ) => return PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal),
+                ) => return PutMessageResult::rejected_before_append(PutMessageStatus::WheelTimerMsgIllegal),
                 Ok(
                     TimelineAdmissionOutcome::RoleInactive
                     | TimelineAdmissionOutcome::MaterializationLag
@@ -159,7 +159,7 @@ impl LocalFileMessageStore {
                     | TimelineAdmissionOutcome::TenantQuota
                     | TimelineAdmissionOutcome::HotBucket
                     | TimelineAdmissionOutcome::DiskHeadroom,
-                ) => return PutMessageResult::new_default(PutMessageStatus::WheelTimerFlowControl),
+                ) => return PutMessageResult::rejected_before_append(PutMessageStatus::WheelTimerFlowControl),
                 Err(error) => {
                     warn!(
                         "Extended Timer admission failed: descriptor={}, operation={:?}, component={:?}",
@@ -167,7 +167,7 @@ impl LocalFileMessageStore {
                         error.operation(),
                         error.component()
                     );
-                    return PutMessageResult::new_default(PutMessageStatus::WheelTimerFlowControl);
+                    return PutMessageResult::rejected_before_append(PutMessageStatus::WheelTimerFlowControl);
                 }
             }
         }
@@ -180,7 +180,7 @@ impl LocalFileMessageStore {
         let lmq_dispatch_queue_keys = self.prepare_lmq_dispatch(&mut msg);
         let lmq_quota_reservation = match self.reserve_lmq_quota(&lmq_dispatch_queue_keys) {
             Some(reservation) => reservation,
-            None => return PutMessageResult::new_default(PutMessageStatus::LmqConsumeQueueNumExceeded),
+            None => return PutMessageResult::rejected_before_append(PutMessageStatus::LmqConsumeQueueNumExceeded),
         };
         let lmq_dispatch_message_num = self.get_lmq_dispatch_message_num(&msg);
 
@@ -194,14 +194,14 @@ impl LocalFileMessageStore {
                 "[BUG]The message had property {} but is not an inner batch",
                 MessageConst::PROPERTY_INNER_NUM
             );
-            return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+            return PutMessageResult::rejected_before_append(PutMessageStatus::MessageIllegal);
         }
 
         if MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) {
             let topic_config = self.get_topic_config(msg.topic());
             if !QueueTypeUtils::is_batch_cq_arc_mut(topic_config.as_ref()) {
                 error!("[BUG]The message is an inner batch but cq type is not batch cq");
-                return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
+                return PutMessageResult::rejected_before_append(PutMessageStatus::MessageIllegal);
             }
         }
         let begin_time = Instant::now();
@@ -237,7 +237,7 @@ impl LocalFileMessageStore {
     pub(crate) async fn put_messages_shared(&self, mut message_ext_batch: MessageExtBatch) -> PutMessageResult {
         if !self.is_store_available_for_io() || !self.running_flags.is_writeable() {
             warn!("message store is unavailable for writes, so putMessages is forbidden");
-            return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
+            return PutMessageResult::rejected_before_append(PutMessageStatus::ServiceNotAvailable);
         }
 
         for hook in self.put_message_hook_list.snapshot() {
@@ -248,7 +248,7 @@ impl LocalFileMessageStore {
         let lmq_dispatch_queue_keys = self.prepare_lmq_dispatch(&mut message_ext_batch.message_ext_broker_inner);
         let lmq_quota_reservation = match self.reserve_lmq_quota(&lmq_dispatch_queue_keys) {
             Some(reservation) => reservation,
-            None => return PutMessageResult::new_default(PutMessageStatus::LmqConsumeQueueNumExceeded),
+            None => return PutMessageResult::rejected_before_append(PutMessageStatus::LmqConsumeQueueNumExceeded),
         };
         let lmq_dispatch_message_num = self.get_lmq_dispatch_message_num(&message_ext_batch.message_ext_broker_inner);
 

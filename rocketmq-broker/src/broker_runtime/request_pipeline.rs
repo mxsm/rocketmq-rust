@@ -207,7 +207,6 @@ impl BrokerRuntime {
         transactional_message_service: Arc<DefaultTransactionalMessageService<BrokerMessageStore>>,
     ) -> Result<(DefaultServerProcessor, DefaultServerProcessor), BrokerStartupError> {
         let send_message_topic_capability = Arc::new(SendMessageTopicCapability::new(
-            self.composition.state.send_message_policy_state.clone(),
             self.composition.state.topic_config_manager_handle(),
             self.composition.state.topic_config_coordinator_handle(),
             self.composition.state.topic_queue_mapping_manager_handle(),

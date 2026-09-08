@@ -37,6 +37,11 @@ impl LocalFileMessageStore {
         self.message_store_config.clone()
     }
 
+    /// Returns the last recovery failure with its original diagnostic source.
+    pub fn last_recovery_error(&self) -> Option<&StoreError> {
+        self.last_recovery_error.as_ref()
+    }
+
     pub fn last_recovery_report(&self) -> Option<&RecoveryReport> {
         self.last_recovery_report.as_ref()
     }
@@ -75,32 +80,127 @@ where
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum DiskSpaceSample {
+    Known {
+        total: u64,
+        available: u64,
+        observed_at: std::time::Instant,
+    },
+    Unknown {
+        reason: &'static str,
+        observed_at: std::time::Instant,
+    },
+}
+
+impl DiskSpaceSample {
+    fn sample(path: &Path) -> Self {
+        let observed_at = std::time::Instant::now();
+        // Windows volume probes may succeed for a missing path on an existing drive.
+        if !path.is_dir() {
+            return Self::Unknown {
+                reason: "storage root unavailable",
+                observed_at,
+            };
+        }
+        match (fs2::total_space(path), fs2::available_space(path)) {
+            (Ok(total), Ok(available)) if total > 0 && available <= total => Self::Known {
+                total,
+                available,
+                observed_at,
+            },
+            (Ok(_), Ok(_)) => Self::Unknown {
+                reason: "invalid capacity sample",
+                observed_at,
+            },
+            _ => Self::Unknown {
+                reason: "disk probe unavailable",
+                observed_at,
+            },
+        }
+    }
+
+    fn ratio(self) -> Option<f64> {
+        match self {
+            Self::Known { total, available, .. } => Some((total - available) as f64 / total as f64),
+            Self::Unknown { .. } => None,
+        }
+    }
+
+    fn state(self, policy: LocalCleanupPolicy) -> DiskUsageState {
+        match self {
+            Self::Known { observed_at, .. } => {
+                tracing::trace!(
+                    sample_age_ms = observed_at.elapsed().as_millis() as u64,
+                    "disk capacity sampled"
+                );
+                policy.classify(self.ratio().unwrap_or(f64::NAN))
+            }
+            Self::Unknown { reason, observed_at } => {
+                warn!(
+                    reason,
+                    sample_age_ms = observed_at.elapsed().as_millis() as u64,
+                    "disk capacity is unknown; retaining write protection"
+                );
+                DiskUsageState::Unknown
+            }
+        }
+    }
+}
+
+struct DiskAvailabilitySummary {
+    active: Option<DiskUsageState>,
+    allocation: Vec<DiskUsageState>,
+    cleanup: Vec<DiskUsageState>,
+    logic: DiskUsageState,
+}
+
+impl DiskAvailabilitySummary {
+    fn physical_state(&self) -> DiskUsageState {
+        // An unhealthy active segment cannot be made safe by a healthy spare.
+        // Once the segment is full, normal allocation validates the next root again.
+        self.active.unwrap_or_else(|| {
+            self.allocation
+                .iter()
+                .copied()
+                .find(|state| matches!(state, DiskUsageState::Healthy | DiskUsageState::Reclaim))
+                .or_else(|| self.allocation.first().copied())
+                .unwrap_or(DiskUsageState::Unknown)
+        })
+    }
+
+    fn apply(&self, flags: &RunningFlags) -> DiskCleanDecision {
+        match self.physical_state() {
+            DiskUsageState::Unknown | DiskUsageState::Warning => {
+                flags.get_and_make_disk_full();
+            }
+            DiskUsageState::Healthy | DiskUsageState::Reclaim => {
+                flags.get_and_make_disk_ok();
+            }
+            DiskUsageState::Forcible => {}
+        }
+        match self.logic {
+            DiskUsageState::Unknown | DiskUsageState::Warning => {
+                flags.get_and_make_logic_disk_full();
+            }
+            DiskUsageState::Healthy | DiskUsageState::Reclaim => {
+                flags.get_and_make_logic_disk_ok();
+            }
+            DiskUsageState::Forcible => {}
+        }
+        let states = self.cleanup.iter().copied().chain([self.physical_state(), self.logic]);
+        let mut decision = DiskCleanDecision::default();
+        for state in states {
+            decision.should_delete |= !matches!(state, DiskUsageState::Healthy);
+            decision.clean_immediately |= matches!(state, DiskUsageState::Warning | DiskUsageState::Forcible);
+        }
+        decision
+    }
+}
+
+// Legacy runtime-info projection only. Admission uses explicit samples above.
 pub(super) fn store_path_disk_used_ratio(path: &str) -> f64 {
-    let path = path.trim();
-    if path.is_empty() {
-        error!("Error when measuring disk space usage, path is null or empty");
-        return -1.0;
-    }
-
-    let path = Path::new(path);
-    if !path.exists() {
-        error!(
-            "Error when measuring disk space usage, file doesn't exist on this path: {}",
-            path.to_string_lossy()
-        );
-        return -1.0;
-    }
-
-    match (fs2::total_space(path), fs2::available_space(path)) {
-        (Ok(total_space), Ok(available_space)) if total_space > 0 => {
-            total_space.saturating_sub(available_space) as f64 / total_space as f64
-        }
-        (Ok(_), Ok(_)) => -1.0,
-        (Err(error), _) | (_, Err(error)) => {
-            error!("Error when measuring disk space usage, got exception: {:?}", error);
-            -1.0
-        }
-    }
+    DiskSpaceSample::sample(Path::new(path.trim())).ratio().unwrap_or(-1.0)
 }
 
 pub(super) type CommitLogWalPin = dyn Fn() -> Option<u64> + Send + Sync;
@@ -151,26 +251,33 @@ impl CleanCommitLogService {
             .minimum_pinned_wal_segment
             .as_ref()
             .and_then(|minimum_pinned_wal_segment| minimum_pinned_wal_segment());
-        let delete_count = if is_time_up || disk_decision.should_delete || is_manual_delete {
-            self.commit_log.delete_expired_files_by_time_before(
+        if is_time_up || disk_decision.should_delete || is_manual_delete {
+            let outcome = self.commit_log.delete_expired_files_by_time_before(
                 expired_time,
                 self.message_store_config.delete_commit_log_files_interval as i32,
                 self.message_store_config.destroy_mapped_file_interval_forcibly as i64,
                 clean_at_once,
                 self.message_store_config.delete_file_batch_max as i32,
                 minimum_pinned_wal_segment,
-            )
-        } else {
-            0
-        };
-        if delete_count > 0 {
-            info!(
-                "clean commit log service deleted {} expired commitlog file(s), is_time_up={}, is_space_to_delete={}, \
-                 is_manual_delete={}, clean_at_once={}",
-                delete_count, is_time_up, disk_decision.should_delete, is_manual_delete, clean_at_once
             );
-        } else if disk_decision.should_delete {
-            warn!("disk space will be full soon, but delete commitlog file failed");
+            use crate::consume_queue::mapped_file_queue::CleanupOutcome;
+            match outcome {
+                CleanupOutcome::ManagedSubmitted { selected, submitted } => {
+                    if selected > 0 {
+                        info!(
+                            selected,
+                            submitted, "commitlog retirement tickets submitted; completion belongs to the reaper"
+                        );
+                    }
+                }
+                CleanupOutcome::LegacyCompleted { namespace_removed } => {
+                    if namespace_removed > 0 {
+                        info!(namespace_removed, "expired commitlog namespace entries removed; physical free space requires a new disk sample");
+                    } else if disk_decision.should_delete {
+                        warn!("disk capacity requires reclaim; no commitlog namespace entries removed");
+                    }
+                }
+            }
         }
 
         let first_file_is_before_pin = minimum_pinned_wal_segment
@@ -214,101 +321,29 @@ impl CleanCommitLogService {
             return decision;
         }
 
-        let (min_physic_ratio, min_store_path) = self.min_physic_disk_ratio();
-
-        match self.cleanup_policy.classify(min_physic_ratio) {
-            DiskUsageState::Warning => {
-                if self.running_flags.get_and_make_disk_full() {
-                    error!(
-                        "physic disk maybe full soon {}, so mark disk full, storePathPhysic={}",
-                        min_physic_ratio,
-                        min_store_path.as_deref().unwrap_or("")
-                    );
-                }
-                return DiskCleanDecision {
-                    should_delete: true,
-                    clean_immediately: true,
-                };
-            }
-            DiskUsageState::Forcible => {
-                return DiskCleanDecision {
-                    should_delete: true,
-                    clean_immediately: true,
-                };
-            }
-            DiskUsageState::Reclaim | DiskUsageState::Healthy => {
-                if !self.running_flags.get_and_make_disk_ok() {
-                    info!(
-                        "physic disk space OK {}, so mark disk ok, storePathPhysic={}",
-                        min_physic_ratio,
-                        min_store_path.as_deref().unwrap_or("")
-                    );
-                }
-            }
+        let sample = |path: &Path| DiskSpaceSample::sample(path).state(self.cleanup_policy);
+        let active = self.commit_log.active_root().as_deref().map(sample);
+        let allocation = self
+            .commit_log
+            .allocation_candidates()
+            .iter()
+            .map(|path| sample(path))
+            .collect();
+        let commit_log_path = LocalFileMessageStore::get_store_path_physic(&self.message_store_config);
+        let cleanup = commit_log_path
+            .split(mix_all::MULTI_PATH_SPLITTER.as_str())
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(|path| sample(Path::new(path)))
+            .collect();
+        let logic_path = LocalFileMessageStore::get_store_path_logic(&self.message_store_config);
+        DiskAvailabilitySummary {
+            active,
+            allocation,
+            cleanup,
+            logic: sample(Path::new(logic_path.as_str())),
         }
-
-        let store_path_logics = LocalFileMessageStore::get_store_path_logic(&self.message_store_config);
-        let logics_ratio = store_path_disk_used_ratio(store_path_logics.as_str());
-        match self.cleanup_policy.classify(logics_ratio) {
-            DiskUsageState::Warning => {
-                if self.running_flags.get_and_make_logic_disk_full() {
-                    error!("logics disk maybe full soon {}, so mark disk full", logics_ratio);
-                }
-                return DiskCleanDecision {
-                    should_delete: true,
-                    clean_immediately: true,
-                };
-            }
-            DiskUsageState::Forcible => {
-                return DiskCleanDecision {
-                    should_delete: true,
-                    clean_immediately: true,
-                };
-            }
-            DiskUsageState::Reclaim | DiskUsageState::Healthy => {
-                if !self.running_flags.get_and_make_logic_disk_ok() {
-                    info!("logics disk space OK {}, so mark disk ok", logics_ratio);
-                }
-            }
-        }
-
-        let decision = self.cleanup_policy.decide(min_physic_ratio, logics_ratio);
-        if self.cleanup_policy.classify(min_physic_ratio) == DiskUsageState::Reclaim {
-            info!("commitLog disk maybe full soon, so reclaim space, {}", min_physic_ratio);
-            return decision;
-        }
-
-        if self.cleanup_policy.classify(logics_ratio) == DiskUsageState::Reclaim {
-            info!("consumeQueue disk maybe full soon, so reclaim space, {}", logics_ratio);
-            return decision;
-        }
-
-        decision
-    }
-
-    pub(super) fn min_physic_disk_ratio(&self) -> (f64, Option<String>) {
-        let commit_log_store_path = LocalFileMessageStore::get_store_path_physic(&self.message_store_config);
-        let mut min_ratio = f64::MAX;
-        let mut min_store_path = None;
-
-        for store_path in commit_log_store_path.split(mix_all::MULTI_PATH_SPLITTER.as_str()) {
-            let store_path = store_path.trim();
-            if store_path.is_empty() {
-                continue;
-            }
-
-            let ratio = store_path_disk_used_ratio(store_path);
-            if min_ratio > ratio {
-                min_ratio = ratio;
-                min_store_path = Some(store_path.to_string());
-            }
-        }
-
-        if min_ratio == f64::MAX {
-            (-1.0, None)
-        } else {
-            (min_ratio, min_store_path)
-        }
+        .apply(&self.running_flags)
     }
 
     pub(super) fn disk_space_warning_level_ratio(&self) -> f64 {
@@ -395,5 +430,67 @@ impl CorrectLogicOffsetService {
                     .correct_min_offset(consume_queue.as_ref(), min_commit_log_offset);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod disk_tests {
+    use super::*;
+
+    fn summary(
+        active: Option<DiskUsageState>,
+        allocation: Vec<DiskUsageState>,
+        logic: DiskUsageState,
+    ) -> DiskAvailabilitySummary {
+        DiskAvailabilitySummary {
+            active,
+            allocation,
+            cleanup: Vec::new(),
+            logic,
+        }
+    }
+
+    #[test]
+    fn warning_unknown_and_recovery_preserve_independent_write_failures() {
+        let flags = RunningFlags::new();
+        summary(Some(DiskUsageState::Warning), vec![], DiskUsageState::Healthy).apply(&flags);
+        assert!(!flags.is_writeable());
+        summary(
+            Some(DiskUsageState::Unknown),
+            vec![DiskUsageState::Healthy],
+            DiskUsageState::Healthy,
+        )
+        .apply(&flags);
+        assert!(!flags.is_writeable(), "a spare cannot clear the active segment fence");
+        summary(Some(DiskUsageState::Healthy), vec![], DiskUsageState::Unknown).apply(&flags);
+        assert!(!flags.is_writeable(), "CQ capacity is independent");
+        flags.get_and_make_not_writeable();
+        summary(Some(DiskUsageState::Healthy), vec![], DiskUsageState::Healthy).apply(&flags);
+        assert!(
+            !flags.is_writeable(),
+            "capacity recovery does not clear a flush failure"
+        );
+        flags.get_and_make_writeable();
+        assert!(flags.is_writeable());
+    }
+
+    #[test]
+    fn allocation_and_cleanup_do_not_share_a_minimum_ratio() {
+        let flags = RunningFlags::new();
+        let mut disks = summary(None, vec![DiskUsageState::Healthy], DiskUsageState::Healthy);
+        disks.cleanup = vec![DiskUsageState::Warning, DiskUsageState::Healthy];
+        let decision = disks.apply(&flags);
+        assert!(decision.clean_immediately);
+        assert!(
+            flags.is_writeable(),
+            "a full inactive root does not block a verified new-segment candidate"
+        );
+        disks.allocation.clear();
+        disks.cleanup = vec![DiskUsageState::Healthy];
+        disks.apply(&flags);
+        assert!(
+            !flags.is_writeable(),
+            "healthy readonly storage cannot authorize allocation"
+        );
     }
 }

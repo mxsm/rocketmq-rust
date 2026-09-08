@@ -58,6 +58,7 @@ use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 use rocketmq_store::get_delay_offset_store_path;
@@ -70,6 +71,7 @@ use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
 use tokio::sync::watch;
 use tokio::sync::Mutex;
+use tokio::sync::OwnedMutexGuard;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
@@ -102,6 +104,25 @@ struct ScheduleLifecycle {
     next_generation: u64,
     run: Option<ScheduleRun>,
     finalized: bool,
+    stopping: bool,
+    finalize_requested: bool,
+    final_persist: Option<SchedulePersistFuture>,
+}
+
+type SchedulePersistFuture = Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScheduleStopStage {
+    Lifecycle,
+    PersistenceGate,
+    Drain,
+    FinalPersist,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScheduleStopOutcome {
+    Completed,
+    TimedOut { generation: u64, stage: ScheduleStopStage },
 }
 
 struct ScheduleRun {
@@ -312,7 +333,9 @@ pub struct ScheduleMessageService<MS: BrokerWriteStore> {
     escape_bridge: Weak<EscapeBridge<MS>>,
     runtime_capabilities: ScheduleRuntimeCapabilities,
     lifecycle: Mutex<ScheduleLifecycle>,
-    persistence_gate: Mutex<()>,
+    persistence_gate: Arc<Mutex<()>>,
+    #[cfg(test)]
+    before_persist_write: ParkingMutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 fn schedule_message_service_shutdown_failed(_error: impl Display) -> SharedError {
@@ -378,8 +401,13 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
                 next_generation: 1,
                 run: None,
                 finalized: false,
+                stopping: false,
+                finalize_requested: false,
+                final_persist: None,
             }),
-            persistence_gate: Mutex::new(()),
+            persistence_gate: Arc::new(Mutex::new(())),
+            #[cfg(test)]
+            before_persist_write: ParkingMutex::new(None),
         }
     }
 
@@ -487,6 +515,11 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         let mut lifecycle = this.lifecycle.lock().await;
         if lifecycle.finalized {
             return Err(schedule_message_service_startup_failed("service is already finalized"));
+        }
+        if lifecycle.stopping {
+            return Err(schedule_message_service_startup_failed(
+                "previous generation is still stopping",
+            ));
         }
         if lifecycle.run.is_some() {
             return Ok(());
@@ -627,56 +660,125 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
     ///
     /// Signals all tasks to stop, waits for them to complete, and persists final state.
     pub async fn shutdown(&self) -> Result<()> {
-        self.stop_inner(true).await.map(|_| ())
+        self.shutdown_until(ShutdownDeadline::after(Duration::from_millis(WAIT_FOR_SHUTDOWN)))
+            .await
+    }
+
+    pub(crate) async fn shutdown_until(&self, deadline: ShutdownDeadline) -> Result<()> {
+        let timeout_ms = u64::try_from(deadline.remaining().as_millis()).unwrap_or(u64::MAX);
+        match self.stop_until(true, deadline).await? {
+            ScheduleStopOutcome::Completed => Ok(()),
+            ScheduleStopOutcome::TimedOut { generation, stage } => {
+                warn!(
+                    generation,
+                    ?stage,
+                    "ScheduleMessageService shutdown timed out; owner retained"
+                );
+                Err(crate::broker_error::timeout(
+                    "schedule_message_service_shutdown",
+                    timeout_ms,
+                ))
+            }
+        }
     }
 
     pub async fn stop(&self) -> Result<bool> {
-        self.stop_inner(false).await
+        self.stop_inner(false)
+            .await
+            .map(|outcome| outcome == ScheduleStopOutcome::Completed)
     }
 
-    async fn stop_inner(&self, finalize: bool) -> Result<bool> {
-        let mut lifecycle = self.lifecycle.lock().await;
+    pub(crate) async fn stop_checked(&self) -> Result<()> {
+        if self.stop().await? {
+            Ok(())
+        } else {
+            Err(crate::broker_error::timeout(
+                "schedule_message_service_stop",
+                WAIT_FOR_SHUTDOWN,
+            ))
+        }
+    }
+
+    async fn stop_inner(&self, finalize: bool) -> Result<ScheduleStopOutcome> {
+        self.stop_until(
+            finalize,
+            ShutdownDeadline::after(Duration::from_millis(WAIT_FOR_SHUTDOWN)),
+        )
+        .await
+    }
+
+    async fn stop_until(&self, finalize: bool, deadline: ShutdownDeadline) -> Result<ScheduleStopOutcome> {
+        let at = tokio::time::Instant::from_std(deadline.instant());
+        let Ok(mut lifecycle) = tokio::time::timeout_at(at, self.lifecycle.lock()).await else {
+            return Ok(ScheduleStopOutcome::TimedOut {
+                generation: self.active_generation.load(Ordering::Acquire),
+                stage: ScheduleStopStage::Lifecycle,
+            });
+        };
         if lifecycle.finalized {
-            return Ok(true);
+            return Ok(ScheduleStopOutcome::Completed);
         }
 
-        let run = lifecycle.run.take();
+        lifecycle.stopping = true;
+        lifecycle.finalize_requested |= finalize;
+        let generation = lifecycle.run.as_ref().map_or(0, |run| run.generation);
+        let timed_out = |stage| ScheduleStopOutcome::TimedOut { generation, stage };
         self.started.store(false, Ordering::Release);
         self.active_generation.store(0, Ordering::Release);
 
-        if let Some(run) = run {
-            info!(
-                generation = run.generation,
-                finalize, "Stopping ScheduleMessageService generation"
-            );
-            run.operation.cancel();
-
-            // Wait for any already-submitted blocking write. Periodic writers waiting for this
-            // gate observe cancellation and leave without writing.
-            drop(self.persistence_gate.lock().await);
-            let joined = run
-                .operation
-                .cancel_and_wait(&run.task_group, Duration::from_millis(WAIT_FOR_SHUTDOWN))
-                .await
-                .map_err(schedule_message_service_shutdown_failed)?;
-            if !joined {
-                warn!(
-                    generation = run.generation,
-                    "ScheduleMessageService generation exceeded its shutdown deadline"
-                );
+        if lifecycle.final_persist.is_none() {
+            if let Some(run) = lifecycle.run.as_ref() {
+                run.operation.cancel();
             }
-            run.scheduled_tasks
-                .clear_completed()
-                .map_err(schedule_message_service_shutdown_failed)?;
+            // A submitted blocking writer owns this gate until the actual I/O
+            // exits, even if its asynchronous waiter has already timed out.
+            let Ok(guard) = tokio::time::timeout_at(at, Arc::clone(&self.persistence_gate).lock_owned()).await else {
+                return Ok(timed_out(ScheduleStopStage::PersistenceGate));
+            };
+            drop(guard);
+            if let Some(run) = lifecycle.run.as_ref() {
+                let joined = run
+                    .operation
+                    .cancel_and_wait(&run.task_group, deadline.remaining())
+                    .await
+                    .map_err(schedule_message_service_shutdown_failed)?;
+                if !joined {
+                    return Ok(timed_out(ScheduleStopStage::Drain));
+                }
+                run.scheduled_tasks
+                    .clear_completed()
+                    .map_err(schedule_message_service_shutdown_failed)?;
+            }
+            if deadline.is_expired() {
+                return Ok(timed_out(ScheduleStopStage::FinalPersist));
+            }
+            let Ok(guard) = tokio::time::timeout_at(at, Arc::clone(&self.persistence_gate).lock_owned()).await else {
+                return Ok(timed_out(ScheduleStopStage::FinalPersist));
+            };
+            lifecycle.final_persist = Some(self.persistence_future(guard));
         }
 
-        self.persist_current().await?;
-        lifecycle.finalized = finalize;
+        // Keep the future inside the stopping owner. Dropping this caller or
+        // exceeding the deadline cannot lose the in-flight final write.
+        let persist = lifecycle.final_persist.as_mut().ok_or_else(|| {
+            crate::broker_error::invariant_violated("stopping schedule generation has no final persistence")
+        })?;
+        let result = tokio::time::timeout_at(at, persist).await;
+        let Ok(result) = result else {
+            return Ok(timed_out(ScheduleStopStage::FinalPersist));
+        };
+        lifecycle.final_persist = None;
+        result?;
+        lifecycle.run = None;
+        lifecycle.stopping = false;
+        lifecycle.finalized = lifecycle.finalize_requested;
+        lifecycle.finalize_requested = false;
         info!(
-            finalize,
+            generation,
+            finalized = lifecycle.finalized,
             "ScheduleMessageService stopped after final offset persistence"
         );
-        Ok(true)
+        Ok(ScheduleStopOutcome::Completed)
     }
 
     pub fn is_started(&self) -> bool {
@@ -718,34 +820,37 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
     }
 
     async fn persist_generation(&self, run_context: &ScheduleRunContext) -> Result<()> {
-        let _guard = tokio::select! {
+        let guard = tokio::select! {
             _ = run_context.cancellation.cancelled() => return Ok(()),
-            guard = self.persistence_gate.lock() => guard,
+            guard = Arc::clone(&self.persistence_gate).lock_owned() => guard,
         };
         if !self.is_generation_active(run_context.generation) || run_context.cancellation.is_cancelled() {
             return Ok(());
         }
-        self.persist_current_locked().await
+        self.persistence_future(guard).await
     }
 
-    async fn persist_current(&self) -> Result<()> {
-        let _guard = self.persistence_gate.lock().await;
-        self.persist_current_locked().await
-    }
-
-    async fn persist_current_locked(&self) -> Result<()> {
-        let runtime_capabilities = self.runtime_capabilities();
+    fn persistence_future(&self, guard: OwnedMutexGuard<()>) -> SchedulePersistFuture {
+        let blocking = self.runtime_capabilities().blocking.clone();
         let json = self.encode_pretty(true);
         let file_name = self.config_file_path();
-        runtime_capabilities
-            .blocking
-            .spawn_io("broker.schedule.persist-delay-offset", move || {
-                file_utils::string_to_file(json.as_str(), file_name.as_str())
-            })
-            .await
-            .map_err(schedule_message_service_shutdown_failed)?
-            .map_err(schedule_message_service_shutdown_failed)?;
-        Ok(())
+        #[cfg(test)]
+        let before_write = self.before_persist_write.lock().take();
+        Box::pin(async move {
+            blocking
+                .spawn_io("broker.schedule.persist-delay-offset", move || {
+                    let _guard = guard;
+                    #[cfg(test)]
+                    if let Some(before_write) = before_write {
+                        before_write();
+                    }
+                    file_utils::string_to_file(json.as_str(), file_name.as_str())
+                })
+                .await
+                .map_err(schedule_message_service_shutdown_failed)?
+                .map_err(schedule_message_service_shutdown_failed)?;
+            Ok(())
+        })
     }
 
     pub fn get_max_delay_level(&self) -> i32 {
@@ -968,18 +1073,19 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         snapshot: &DelayOffsetSerializeWrapper,
     ) -> Result<bool> {
         let lifecycle = self.lifecycle.lock().await;
-        if lifecycle.run.is_some() {
+        if lifecycle.run.is_some() || lifecycle.stopping {
             return Err(schedule_message_service_shutdown_failed(
                 "peer delay-offset synchronization requires a stopped delivery generation",
             ));
         }
         let runtime_capabilities = self.runtime_capabilities();
-        let _persist_guard = self.persistence_gate.lock().await;
+        let persist_guard = Arc::clone(&self.persistence_gate).lock_owned().await;
         let file_name = self.config_file_path();
         let encoded_snapshot = encoded_snapshot.to_owned();
         runtime_capabilities
             .blocking
             .spawn_io("broker.schedule.persist-peer-delay-offset", move || {
+                let _persist_guard = persist_guard;
                 file_utils::string_to_file(encoded_snapshot.as_str(), file_name.as_str())
             })
             .await
@@ -2197,6 +2303,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn schedule_stop_retains_blocked_writers_and_final_persistence_after_caller_cancel() {
+        for final_write in [false, true] {
+            let temp_dir = TempDir::new().unwrap();
+            let root = temp_dir.path().to_string_lossy().into_owned();
+            let mut runtime = BrokerRuntime::new(
+                Arc::new(BrokerConfig {
+                    store_path_root_dir: root.clone().into(),
+                    ..BrokerConfig::default()
+                }),
+                Arc::new(MessageStoreConfig {
+                    store_path_root_dir: root.into(),
+                    ..MessageStoreConfig::default()
+                }),
+            );
+            let service = runtime
+                .runtime_state_mut()
+                .schedule_message_service_for_test()
+                .unwrap()
+                .clone();
+            service.offset_state.update_offset(1, 7, 1, 0);
+            let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+            let writer_release = Arc::clone(&release);
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+            *service.before_persist_write.lock() = Some(Box::new(move || {
+                let _ = entered_tx.send(());
+                let (lock, ready) = &*writer_release;
+                let guard = lock.lock().unwrap();
+                drop(ready.wait_while(guard, |released| !*released).unwrap());
+            }));
+            ScheduleMessageService::start_persist_task_for_probe(
+                service.clone(),
+                if final_write {
+                    Duration::from_secs(60)
+                } else {
+                    Duration::ZERO
+                },
+            )
+            .await
+            .unwrap();
+            let generation = service.active_generation.load(Ordering::Acquire);
+            let stopping_caller = final_write.then(|| {
+                let service = service.clone();
+                tokio::spawn(async move {
+                    service
+                        .stop_until(false, ShutdownDeadline::after(Duration::from_secs(30)))
+                        .await
+                })
+            });
+            let entered = tokio::time::timeout(Duration::from_secs(5), entered_rx).await;
+            if let Some(caller) = stopping_caller {
+                caller.abort();
+                let _ = caller.await;
+            }
+            let outcome = service.stop_until(false, ShutdownDeadline::after(Duration::ZERO)).await;
+            let retained = {
+                let lifecycle = service.lifecycle.lock().await;
+                lifecycle.stopping && lifecycle.run.as_ref().is_some_and(|run| run.generation == generation)
+            };
+            let restarted =
+                ScheduleMessageService::start_persist_task_for_probe(service.clone(), Duration::from_secs(60)).await;
+            // Always release the blocking writer and await its owner before assertions.
+            let (lock, ready) = &*release;
+            *lock.lock().unwrap() = true;
+            ready.notify_all();
+            let completed = service
+                .stop_until(false, ShutdownDeadline::after(Duration::from_secs(5)))
+                .await;
+            assert!(entered.is_ok_and(|result| result.is_ok()));
+            assert_eq!(
+                outcome.unwrap(),
+                ScheduleStopOutcome::TimedOut {
+                    generation,
+                    stage: if final_write {
+                        ScheduleStopStage::FinalPersist
+                    } else {
+                        ScheduleStopStage::PersistenceGate
+                    },
+                }
+            );
+            assert!(retained);
+            assert!(restarted.is_err());
+            assert_eq!(completed.unwrap(), ScheduleStopOutcome::Completed);
+            assert_eq!(service.task_count(), 0);
+
+            ScheduleMessageService::start_persist_task_for_probe(service.clone(), Duration::from_secs(60))
+                .await
+                .unwrap();
+            assert!(service.active_generation.load(Ordering::Acquire) > generation);
+            service.offset_state.update_offset(1, 11, 1, 0);
+            service.shutdown().await.unwrap();
+            let encoded = std::fs::read_to_string(service.config_file_path()).unwrap();
+            let persisted: DelayOffsetSerializeWrapper = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(persisted.offset_table().unwrap().get(&1), Some(&11));
+        }
+    }
+
+    #[tokio::test]
     async fn broker_runtime_injects_schedule_context_before_first_start() {
         let temp_dir = TempDir::new().expect("schedule context temp dir should be created");
         let root = temp_dir.path().to_string_lossy().into_owned();
@@ -2393,7 +2596,7 @@ mod tests {
     fn schedule_message_service_uses_typed_errors() {
         let source = include_str!("schedule_message_service.rs");
 
-        assert!(source.contains("async fn persist_current(&self) -> Result<()>"));
+        assert!(source.contains("Future<Output = Result<()>>"));
         assert!(source.contains("Result<PutResultProcess<MS>>"));
         assert!(!source.contains(concat!("ArcMut<", "ScheduleMessageService")));
         assert!(!source.contains(concat!("mut_from_ref()", ".escape_bridge_mut()")));

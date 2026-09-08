@@ -33,6 +33,7 @@ pub use crate::base::message_arriving_listener::MessageArrivingListener;
 pub use crate::base::message_encoder_pool::encode_message_batch_with_pool;
 pub use crate::base::message_encoder_pool::encode_message_with_pool;
 pub use crate::base::message_encoder_pool::generate_key_with_pool;
+pub use crate::base::message_result::AppendExecutionEvidence;
 pub use crate::base::message_result::AppendMessageResult;
 pub use crate::base::message_result::PutMessageResult;
 pub use crate::base::message_status_enum::AppendMessageStatus;
