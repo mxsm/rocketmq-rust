@@ -22,6 +22,7 @@ mod log_store;
 mod network;
 mod node;
 mod persistence;
+mod rollout;
 mod state_machine;
 pub mod storage;
 
@@ -29,6 +30,7 @@ pub use grpc_server::GrpcRaftService;
 pub use log_store::LogStore;
 pub use network::NetworkFactory;
 pub use node::RaftNodeManager;
+pub use rollout::RolloutQuorumStatus;
 pub(crate) use state_machine::inspect_snapshot_payload;
 pub use state_machine::validate_snapshot_payload;
 pub use state_machine::StateMachine;

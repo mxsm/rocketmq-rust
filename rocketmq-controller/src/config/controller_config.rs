@@ -209,6 +209,18 @@ pub struct ControllerConfig {
     /// Controller remoting peer list used for broker-facing leader discovery
     pub controller_peers: Vec<RaftPeer>,
 
+    /// Restart-required Raft bind address, independent of advertised DNS endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raft_listen_addr: Option<SocketAddr>,
+
+    /// Restart-required advertised Raft membership; mutually exclusive with legacy peer lists.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raft_peer_endpoints: Vec<super::ControllerPeerEndpoint>,
+
+    /// Restart-required broker-facing endpoints with the same member identities as Raft.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controller_peer_endpoints: Vec<super::ControllerPeerEndpoint>,
+
     /// Election timeout (ms) used by Raft
     pub election_timeout_ms: u64,
 
@@ -266,6 +278,9 @@ impl Clone for ControllerConfig {
             listen_addr: self.listen_addr,
             raft_peers: self.raft_peers.clone(),
             controller_peers: self.controller_peers.clone(),
+            raft_listen_addr: self.raft_listen_addr,
+            raft_peer_endpoints: self.raft_peer_endpoints.clone(),
+            controller_peer_endpoints: self.controller_peer_endpoints.clone(),
             election_timeout_ms: self.election_timeout_ms,
             heartbeat_interval_ms: self.heartbeat_interval_ms,
             snapshot_logs_since_last: self.snapshot_logs_since_last,
@@ -335,6 +350,9 @@ impl Default for ControllerConfig {
             listen_addr: SocketAddr::from(([127, 0, 0, 1], 60109)),
             raft_peers: Vec::new(),
             controller_peers: Vec::new(),
+            raft_listen_addr: None,
+            raft_peer_endpoints: Vec::new(),
+            controller_peer_endpoints: Vec::new(),
             election_timeout_ms: 1000,
             heartbeat_interval_ms: 300,
             snapshot_logs_since_last: 5000,
@@ -552,7 +570,9 @@ impl ControllerConfig {
 
     /// Resolve the local Raft RPC address, falling back to the remoting address for legacy configs.
     pub fn local_raft_addr(&self) -> SocketAddr {
-        self.raft_addr_for(self.node_id).unwrap_or(self.listen_addr)
+        self.raft_listen_addr
+            .or_else(|| self.raft_addr_for(self.node_id))
+            .unwrap_or(self.listen_addr)
     }
 
     /// Resolve the broker-facing controller remoting address for a node.
@@ -590,6 +610,7 @@ impl ControllerConfig {
 
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_peer_endpoints()?;
         if self.controller_type != RAFT_CONTROLLER {
             return Err(format!(
                 "Invalid controller type: {}. Must be '{}'",
@@ -723,6 +744,21 @@ impl ControllerConfig {
             .map(|peer| format!("{}-{}", peer.id, peer.addr))
             .collect();
         write_property!("controllerPeers={}", controller_peers.join(";"));
+        if let Some(addr) = self.raft_listen_addr {
+            write_property!("raftListenAddr={addr}");
+        }
+        for (name, endpoints) in [
+            ("raftPeerEndpoints", &self.raft_peer_endpoints),
+            ("controllerPeerEndpoints", &self.controller_peer_endpoints),
+        ] {
+            if !endpoints.is_empty() {
+                let endpoints = endpoints
+                    .iter()
+                    .map(|peer| format!("{}-{}", peer.id, peer.addr))
+                    .collect::<Vec<_>>();
+                write_property!("{name}={}", endpoints.join(";"));
+            }
+        }
 
         write_property!("electionTimeoutMs={}", self.election_timeout_ms);
         write_property!("heartbeatIntervalMs={}", self.heartbeat_interval_ms);

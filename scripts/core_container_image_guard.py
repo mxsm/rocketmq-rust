@@ -16,6 +16,11 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "distribution") not in sys.path:
+    sys.path.insert(0, str(ROOT / "distribution"))
+
+from core_helm_contract import POLICY, POLICY_RELATIVE_PATH, REQUIRED_FILES
+
 CORE_KEYS = {"namesrv", "broker", "controller", "proxy"}
 FORBIDDEN = ("mcp", "sre", "dashboard", "openmessaging", "brokercontainer", "dledger")
 
@@ -54,17 +59,11 @@ def audit(policy_path: Path, chart: Path) -> list[str]:
         for forbidden in ("cargo build", "docker push", "buildx --push"):
             if forbidden in source:
                 findings.append(f"core Dockerfile contains a forbidden build/publication route: {forbidden}")
-    required_chart = {
-        "Chart.yaml",
-        "values.yaml",
-        "values.schema.json",
-        "templates/_helpers.tpl",
-        "templates/configmaps.yaml",
-        "templates/workloads.yaml",
-        "templates/services.yaml",
-        "templates/networkpolicies.yaml",
-        *policy.get("chart", {}).get("profiles", []),
-    }
+    required_chart = REQUIRED_FILES
+    if policy.get("chart", {}).get("deployment_policy") != POLICY_RELATIVE_PATH.as_posix():
+        findings.append("core container and Helm deployment policy paths must agree")
+    if policy.get("chart", {}).get("profiles") != POLICY["profiles"]:
+        findings.append("core container and Helm deployment profiles must agree")
     present = {path.relative_to(chart).as_posix() for path in chart.rglob("*") if path.is_file()}
     if present != required_chart:
         findings.append(
@@ -91,7 +90,7 @@ def audit(policy_path: Path, chart: Path) -> list[str]:
         lint = subprocess.run([helm, "lint", str(chart)], capture_output=True, text=True, check=False)
         if lint.returncode != 0:
             findings.append(f"helm lint failed: {lint.stderr.strip()}")
-        for profile in policy.get("chart", {}).get("profiles", []):
+        for profile in POLICY["profiles"]:
             rendered = subprocess.run(
                 [helm, "template", "rocketmq-core", str(chart), "-f", str(chart / profile)],
                 capture_output=True,

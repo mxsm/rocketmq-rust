@@ -1,0 +1,21 @@
+{{- range $service, $config := .Values.services }}
+{{- if and $config.enabled (gt (int $config.replicas) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "rocketmq-core.name" (dict "Release" $.Release "service" $service) }}
+spec:
+  {{- if eq $service "controller" }}
+  minAvailable: {{ add1 (div (int $config.replicas) 2) }}
+  {{- else if eq $service "broker" }}
+  minAvailable: {{ $config.minInSyncReplicas }}
+  {{- else }}
+  maxUnavailable: 1
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: {{ $service }}
+{{- end }}
+{{- end }}

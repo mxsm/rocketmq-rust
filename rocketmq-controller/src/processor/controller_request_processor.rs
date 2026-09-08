@@ -107,7 +107,7 @@ impl ControllerRequestProcessor {
             RequestCode::ControllerAlterSyncStateSet => self.handle_alter_sync_state_set(request).await,
             RequestCode::ControllerElectMaster => self.handle_elect_master(request).await,
             RequestCode::ControllerGetReplicaInfo => self.handle_get_replica_info(request).await,
-            RequestCode::ControllerGetMetadataInfo => self.handle_get_metadata_info().await,
+            RequestCode::ControllerGetMetadataInfo => self.handle_get_metadata_info(request).await,
             RequestCode::BrokerHeartbeat => self.handle_broker_heartbeat(session, request).await,
             RequestCode::ControllerGetSyncStateData => self.handle_get_sync_state_data(request).await,
             RequestCode::UpdateControllerConfig => self.handle_update_controller_config(request).await,
@@ -190,8 +190,25 @@ impl ControllerRequestProcessor {
             .await
     }
 
-    async fn handle_get_metadata_info(&self) -> ControllerResult<Option<RemotingCommand>> {
-        self.controller_manager()?.controller().get_controller_metadata().await
+    async fn handle_get_metadata_info(&self, request: &RemotingCommand) -> ControllerResult<Option<RemotingCommand>> {
+        let manager = self.controller_manager()?;
+        let controller = manager.controller();
+        // Existing Java requests retain the original header and empty body. The rollout
+        // operator explicitly requests a fresh quorum observation; old peers omit it.
+        let target = request.ext_fields().and_then(|fields| fields.get("checkQuorumForNode"));
+        let Some(target) = target else {
+            return controller.get_controller_metadata().await;
+        };
+        let target = target
+            .parse::<u64>()
+            .map_err(|error| request_header_invalid_by("checkQuorumForNode", error))?;
+        let status = controller.check_rollout_quorum(target).await?;
+        let body = serde_json::to_vec(&status)
+            .map_err(|error| crate::error::serialization_failed("encode rollout quorum", "json", error))?;
+        Ok(controller
+            .get_controller_metadata()
+            .await?
+            .map(|response| response.set_body(body)))
     }
 
     async fn handle_get_sync_state_data(

@@ -30,6 +30,9 @@ pub struct GetControllerMetadataSubCommand {
         help = "Address of the controller to query"
     )]
     controller_address: String,
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..),
+          help = "Require fresh quorum without this voter and print a JSON observation; query the current leader")]
+    check_quorum_for_node: Option<u64>,
 }
 
 impl CommandExecute for GetControllerMetadataSubCommand {
@@ -38,6 +41,19 @@ impl CommandExecute for GetControllerMetadataSubCommand {
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> CanonicalResult<()> {
+        if let Some(target) = self.check_quorum_for_node {
+            let status = ControllerService::check_controller_rollout_with_credentials(
+                self.request()?,
+                target,
+                credentials,
+                client_runtime,
+            )
+            .await?;
+            let json = serde_json::to_string(&status)
+                .map_err(|error| crate::errors::serialization_failed_by("JSON", error))?;
+            println!("{json}");
+            return Ok(());
+        }
         let result = ControllerService::query_controller_metadata_by_request_with_credentials(
             self.request()?,
             credentials,
@@ -114,5 +130,29 @@ mod tests {
             .unwrap();
 
         assert_eq!(cmd.request().unwrap().controller_addr().as_str(), "127.0.0.1:9878");
+        assert!(cmd.check_quorum_for_node.is_none());
+    }
+
+    #[test]
+    fn rollout_check_requires_a_nonzero_explicit_target() {
+        let command = GetControllerMetadataSubCommand::try_parse_from([
+            "getControllerMetaData",
+            "-a",
+            "localhost:9878",
+            "--check-quorum-for-node",
+            "2",
+        ])
+        .unwrap();
+        assert_eq!(command.check_quorum_for_node, Some(2));
+        assert!(
+            GetControllerMetadataSubCommand::try_parse_from([
+                "getControllerMetaData",
+                "-a",
+                "localhost:9878",
+                "--check-quorum-for-node",
+                "0",
+            ])
+            .is_err()
+        );
     }
 }

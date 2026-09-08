@@ -361,6 +361,13 @@ impl OpenRaftController {
         self.lifecycle.lock().node.clone()
     }
 
+    pub(crate) async fn check_rollout_quorum(&self, target: u64) -> ControllerResult<crate::RolloutQuorumStatus> {
+        self.node()
+            .ok_or_else(|| crate::error::not_initialized("controller-rollout"))?
+            .check_rollout_quorum(target)
+            .await
+    }
+
     fn is_current_leader(&self) -> bool {
         let Some(node) = self.node() else {
             return false;
@@ -1318,12 +1325,7 @@ impl Controller for OpenRaftController {
         let controller_metadata_info: GetMetaDataResponseHeader = {
             let config = self.config.snapshot();
             let peers: Option<CheetahString> = {
-                let joined = config
-                    .controller_peer_addrs()
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect::<Vec<String>>()
-                    .join(";");
+                let joined = config.controller_advertised_endpoints().join(";");
 
                 (!joined.is_empty()).then_some(joined.as_str().into())
             };
@@ -1343,8 +1345,8 @@ impl Controller for OpenRaftController {
                 };
 
             let controller_leader_address: Option<CheetahString> = controller_leader_id
-                .and_then(|leader_node_id| config.controller_addr_for(leader_node_id))
-                .map(|addr| CheetahString::from(addr.to_string()));
+                .and_then(|leader_node_id| config.controller_endpoint_for(leader_node_id))
+                .map(CheetahString::from);
 
             let is_leader = controller_leader_id.map(|id| config.node_id == id);
 

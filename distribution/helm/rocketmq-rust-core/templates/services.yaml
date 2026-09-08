@@ -15,5 +15,34 @@ spec:
     - name: service
       port: {{ $config.port }}
       targetPort: service
+{{- if ne $service "proxy" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rocketmq-core.name" (dict "Release" $.Release "service" $service) }}-peer
+  labels:
+    {{- include "rocketmq-core.labels" (dict "Release" $.Release "service" $service) | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/component: {{ $service }}
+  ports:
+    - name: service
+      port: {{ $config.port }}
+      targetPort: service
+    {{- if eq $service "broker" }}
+    - name: ha
+      port: {{ $config.haPort }}
+      targetPort: ha
+    {{- end }}
+    {{- if eq $service "controller" }}
+    - name: raft
+      port: {{ $config.raftPort }}
+      targetPort: raft
+    {{- end }}
+{{- end }}
 {{- end }}
 {{- end }}

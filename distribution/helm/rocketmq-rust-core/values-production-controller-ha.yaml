@@ -1,3 +1,5 @@
+placement:
+  requireSeparateHosts: true
 services:
   namesrv:
     enabled: true
@@ -6,6 +8,7 @@ services:
     enabled: true
     replicas: 3
     controllerMode: true
+    minInSyncReplicas: 2
   controller:
     enabled: true
     replicas: 3

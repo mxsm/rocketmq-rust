@@ -76,11 +76,11 @@ impl RaftNodeManager {
         let network = NetworkFactory::new();
 
         // Add peer addresses
-        for peer in &startup_config.raft_peers {
+        for peer in startup_config.raft_member_endpoints() {
             if peer.id == node_id {
                 continue;
             }
-            network.add_peer(peer.id, peer.addr.to_string()).await;
+            network.add_peer(peer.id, peer.addr).await;
         }
 
         // Configure OpenRaft

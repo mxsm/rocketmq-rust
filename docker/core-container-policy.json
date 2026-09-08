@@ -27,6 +27,7 @@
   ],
   "chart": {
     "path": "distribution/helm/rocketmq-rust-core",
+    "deployment_policy": "distribution/helm/rocketmq-rust-core/files/deployment-policy.json",
     "profiles": [
       "values-dev-single.yaml",
       "values-production-default-ha.yaml",

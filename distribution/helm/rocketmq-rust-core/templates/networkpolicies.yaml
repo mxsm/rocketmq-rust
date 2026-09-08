@@ -1,3 +1,4 @@
+{{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -17,6 +18,38 @@ spec:
               app.kubernetes.io/instance: {{ .Release.Name }}
   egress:
     - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/instance: {{ .Release.Name }}
+{{- if .Values.networkPolicy.clientNamespaceSelector }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-clients
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.clientNamespaceSelector | nindent 14 }}
+      ports:
+        {{- range $service, $config := .Values.services }}
+        {{- if and $config.enabled (ne $service "controller") }}
+        - protocol: TCP
+          port: {{ $config.port }}
+        {{- end }}
+        {{- end }}
+{{- end }}
+{{- end }}

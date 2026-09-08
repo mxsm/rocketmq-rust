@@ -65,6 +65,10 @@ pub struct RaftController {
 }
 
 impl RaftController {
+    pub(crate) async fn check_rollout_quorum(&self, target: u64) -> ControllerResult<crate::RolloutQuorumStatus> {
+        self.inner.check_rollout_quorum(target).await
+    }
+
     /// Create a new OpenRaft-based controller
     pub fn new_open_raft(config: ControllerConfigReader, service_context: ChildServiceContext) -> Self {
         Self::new_open_raft_with_remoting_command_factory(

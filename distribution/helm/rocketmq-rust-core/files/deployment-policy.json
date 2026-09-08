@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "chart": "distribution/helm/rocketmq-rust-core",
+  "services": ["namesrv", "broker", "controller", "proxy"],
+  "profiles": [
+    "values-dev-single.yaml",
+    "values-production-default-ha.yaml",
+    "values-production-controller-ha.yaml",
+    "values-production-proxy-tls.yaml"
+  ],
+  "chart_files": [
+    "Chart.yaml",
+    "README.md",
+    "values.yaml",
+    "values.schema.json",
+    "values-dev-single.yaml",
+    "values-production-default-ha.yaml",
+    "values-production-controller-ha.yaml",
+    "values-production-proxy-tls.yaml",
+    "files/deployment-policy.json",
+    "files/rollout.py",
+    "templates/_helpers.tpl",
+    "templates/_config.tpl",
+    "templates/configmaps.yaml",
+    "templates/workloads.yaml",
+    "templates/services.yaml",
+    "templates/networkpolicies.yaml",
+    "templates/disruptionbudgets.yaml"
+  ],
+  "runtime": {
+    "health_paths": ["/readyz", "/livez", "/drainz"],
+    "stateful_update_strategy": "OnDelete",
+    "controller_minimum_voters": 3,
+    "controller_quorum": "majority of current voters",
+    "pvc_retention_default": "Retain",
+    "config_activation": "restart-required",
+    "secret_source": "existing Kubernetes Secret"
+  }
+}

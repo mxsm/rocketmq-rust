@@ -3,6 +3,29 @@ global:
   imageRegistry: "ghcr.io/mxsm/rocketmq-rust"
   imagePullPolicy: IfNotPresent
   storageClassName: ""
+  clusterDomain: cluster.local
+  clusterName: DefaultCluster
+
+runtime:
+  healthPort: 8088
+  shutdownTimeoutSeconds: 45
+  terminationGracePeriodSeconds: 60
+  livenessStaleSeconds: 30
+  startupFailureThreshold: 60
+
+persistence:
+  whenDeleted: Retain
+  whenScaled: Retain
+
+placement:
+  # Production profiles require separate hosts; zone spread is best effort.
+  requireSeparateHosts: false
+  spreadAcrossZones: true
+
+networkPolicy:
+  enabled: true
+  # Add namespace selectors for clients outside this release. Health stays internal.
+  clientNamespaceSelector: {}
 
 services:
   namesrv:
@@ -10,21 +33,49 @@ services:
     replicas: 1
     port: 9876
     storage: 1Gi
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: "1", memory: 512Mi}
+    auth: {enabled: false, secretName: "", aclKey: plain_acl.yml}
   broker:
     enabled: true
     replicas: 1
     port: 10911
     storage: 10Gi
     controllerMode: false
+    haPort: 10912
+    brokerName: broker-a
+    minInSyncReplicas: 1
+    flushDiskType: SYNC_FLUSH
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits: {cpu: "2", memory: 2Gi}
+    auth: {enabled: false, secretName: "", aclKey: plain_acl.yml}
   controller:
     enabled: false
     replicas: 3
     port: 9878
     storage: 2Gi
+    raftPort: 9879
+    storageBackend: RocksDB
+    resources:
+      requests: {cpu: 250m, memory: 512Mi}
+      limits: {cpu: "1", memory: 1Gi}
+    auth: {enabled: false, secretName: "", aclKey: plain_acl.yml}
   proxy:
     enabled: false
     replicas: 1
     port: 8081
+    resources:
+      requests: {cpu: 250m, memory: 512Mi}
+      limits: {cpu: "2", memory: 1Gi}
+    auth: {enabled: false, secretName: "", aclKey: plain_acl.yml}
+    cluster:
+      ioMaxInflight: 256
+      controlReserve: 32
+      commandQueueCapacity: 4096
     tls:
       enabled: false
       secretName: ""
+      clientAuth: none
+      clientCaKey: ca.crt
