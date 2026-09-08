@@ -205,7 +205,7 @@ impl MQClientAPIImpl {
                 terminal_error: client_broker_err!(
                     response.code(),
                     response.remark().map_or("".to_string(), |remark| remark.to_string()),
-                    addr.to_string()
+                    addr
                 ),
             }),
         }
@@ -408,7 +408,7 @@ impl MQClientAPIImpl {
                                 terminal_error: client_broker_err!(
                                     response.code(),
                                     response.remark().map_or("".to_string(), |s| s.to_string()),
-                                    current_addr.to_string()
+                                    &current_addr
                                 ),
                             };
                             if Self::handle_async_retry_input(
@@ -719,7 +719,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -807,7 +807,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -908,7 +908,7 @@ impl MQClientAPIImpl {
             _ => Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or(String::new(), |s| s.to_string()),
-                addr.to_string()
+                addr
             )),
         }
     }

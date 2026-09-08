@@ -34,12 +34,12 @@ struct CountingCompressor {
 }
 
 impl Compressor for CountingCompressor {
-    fn compress(&self, src: &[u8], _level: i32) -> rocketmq_client::ClientResult<Bytes> {
+    fn compress(&self, src: &[u8], _level: i32) -> rocketmq_error::Result<Bytes> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         Ok(Bytes::copy_from_slice(src))
     }
 
-    fn decompress(&self, src: &[u8]) -> rocketmq_client::ClientResult<Bytes> {
+    fn decompress(&self, src: &[u8]) -> rocketmq_error::Result<Bytes> {
         Ok(Bytes::copy_from_slice(src))
     }
 }
@@ -60,8 +60,9 @@ impl rocketmq_transport::test_support::SessionProcessor for ProducerRoutePrepara
     fn process(
         &self,
         request: RemotingCommand,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = rocketmq_client::ClientResult<RemotingCommand>> + Send + '_>>
-    {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>,
+    > {
         Box::pin(async move {
             if request.code() != rocketmq_protocol::code::request_code::RequestCode::GetRouteinfoByTopic.to_i32() {
                 self.primary_sends.fetch_add(1, Ordering::SeqCst);
@@ -288,7 +289,7 @@ fn request_cause_from_error_uses_typed_error() {
         ),
     )));
 
-    assert!($1.is(&rocketmq_error::PROTOCOL_RESPONSE_FAILED));
+    assert!(error.is(&rocketmq_error::PROTOCOL_RESPONSE_FAILED));
     assert_eq!(
         error.to_string(),
         "Response request_response_callback failed: transport.connection.failed: Transport connection operation failed"
@@ -1005,7 +1006,7 @@ fn retry_failure_preserves_shared_network_source_identity_and_redaction() {
         std::io::Error::new(std::io::ErrorKind::ConnectionReset, "private network detail"),
     ));
     let mut retry_state = RetryState::new(1);
-    retry_state.set_error(rocketmq_client::ClientError::from_shared(Arc::clone(&canonical)));
+    retry_state.set_error(crate::ClientError::from_shared(Arc::clone(&canonical)));
     let error = retry_state.take_failure_error(&CheetahString::from_static_str("TopicTest"), 1);
     let rendered = error.to_string();
     let remoting_code = error.descriptor().projection().remoting().code.as_i32();

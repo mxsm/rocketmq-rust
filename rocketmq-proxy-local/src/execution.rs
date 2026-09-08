@@ -329,9 +329,7 @@ fn dispatch_to_lane<H>(
             .await;
         });
         if let Err(error) = spawn {
-            queued
-                .command
-                .reject_with_transport(format!("failed to spawn proxy local command lane: {error}"));
+            queued.command.reject_with_transport_source(error);
             return;
         }
         registry.insert(

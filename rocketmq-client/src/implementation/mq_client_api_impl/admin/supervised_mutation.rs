@@ -269,10 +269,7 @@ impl MQClientAPIImpl {
                 let header = response
                     .decode_command_custom_header::<UpdateSubscriptionGroupConfigCasResponseHeader>()
                     .map_err(|error| {
-                        ClientError::response_process_failed(
-                            "mutation_subscription_group_config_state",
-                            format!("Subscription Group response version is missing: {error}"),
-                        )
+                        ClientError::response_process_source("mutation_subscription_group_config_state", error)
                     })?;
                 Ok(MutationSubscriptionGroupConfigState {
                     state: MutationExpectedState::Present {

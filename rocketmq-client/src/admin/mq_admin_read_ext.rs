@@ -286,7 +286,7 @@ pub trait MQAdminMessageReadExt: Send {
     ) -> crate::ClientResult<MessageMetadataRead> {
         Err(crate::ClientError::response_process_failed(
             "query_message_metadata_by_id",
-            "Topic-free message metadata lookup is not implemented by this adapter".to_owned(),
+            "Topic-free message metadata lookup is not implemented by this adapter",
         ))
     }
 }
@@ -326,7 +326,7 @@ impl MQAdminReadExt for DefaultMQAdminExt {
         let generation = snapshot.generation.filter(|value| *value > 0).ok_or_else(|| {
             crate::ClientError::response_process_failed(
                 "get_broker_config_allowlisted",
-                "Broker config response does not include a positive config generation".to_owned(),
+                "Broker config response does not include a positive config generation",
             )
         })?;
         let properties = snapshot.properties;

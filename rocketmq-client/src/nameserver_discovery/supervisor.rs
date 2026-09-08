@@ -721,7 +721,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!($1, Err(error) if error.is(&rocketmq_error::CORE_CONFIGURATION_INVALID)));
+        assert!(matches!(result, Err(error) if error.is(&rocketmq_error::CORE_CONFIGURATION_INVALID)));
         assert_eq!(parent.task_group().component_count(), initial_components);
     }
 }

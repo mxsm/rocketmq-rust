@@ -210,7 +210,7 @@ pub(crate) fn build_client_resource_budget(
                 "{}/{}",
                 config.managed_memory_numerator, config.managed_memory_denominator
             ),
-            "numerator and denominator must be positive and numerator must not exceed denominator".to_string(),
+            "numerator and denominator must be positive and numerator must not exceed denominator",
         ));
     }
     let managed_bytes = ((configured_bytes as u128 * u128::from(config.managed_memory_numerator))

@@ -67,22 +67,13 @@ fn broker_config_snapshot_from_response(response: &RemotingCommand) -> ClientRes
 fn topic_config_versioned_from_response(response: &RemotingCommand) -> ClientResult<TopicConfigVersioned> {
     let body = response.get_body().ok_or(ClientError::response_process_failed(
         "get_topic_config_with_version",
-        "Topic config response body is empty".to_owned(),
+        "Topic config response body is empty",
     ))?;
-    let mapping = serde_json::from_slice::<TopicConfigAndQueueMapping>(body.as_ref()).map_err(|error| {
-        ClientError::response_process_failed(
-            "get_topic_config_with_version",
-            format!("Topic config response body is invalid: {error}"),
-        )
-    })?;
+    let mapping = serde_json::from_slice::<TopicConfigAndQueueMapping>(body.as_ref())
+        .map_err(|error| ClientError::response_process_source("get_topic_config_with_version", error))?;
     let header = response
         .decode_command_custom_header::<UpdateTopicConfigCasResponseHeader>()
-        .map_err(|error| {
-            ClientError::response_process_failed(
-                "get_topic_config_with_version",
-                format!("Topic config response version is missing: {error}"),
-            )
-        })?;
+        .map_err(|error| ClientError::response_process_source("get_topic_config_with_version", error))?;
     Ok(TopicConfigVersioned {
         version: header.topic_version,
         config: mapping.topic_config,
@@ -95,22 +86,13 @@ pub(super) fn mutation_topic_config_versioned_from_response(
 ) -> ClientResult<MutationTopicConfigVersioned> {
     let body = response.get_body().ok_or(ClientError::response_process_failed(
         "get_topic_config_with_version",
-        "Topic config response body is empty".to_owned(),
+        "Topic config response body is empty",
     ))?;
-    let mapping = serde_json::from_slice::<TopicConfigAndQueueMapping>(body.as_ref()).map_err(|error| {
-        ClientError::response_process_failed(
-            "get_topic_config_with_version",
-            format!("Topic config response body is invalid: {error}"),
-        )
-    })?;
+    let mapping = serde_json::from_slice::<TopicConfigAndQueueMapping>(body.as_ref())
+        .map_err(|error| ClientError::response_process_source("get_topic_config_with_version", error))?;
     let header = response
         .decode_command_custom_header::<UpdateTopicConfigCasResponseHeader>()
-        .map_err(|error| {
-            ClientError::response_process_failed(
-                "get_topic_config_with_version",
-                format!("Topic config response version is missing: {error}"),
-            )
-        })?;
+        .map_err(|error| ClientError::response_process_source("get_topic_config_with_version", error))?;
     Ok(MutationTopicConfigVersioned {
         version: header.topic_version,
         config: mapping.topic_config,
@@ -123,25 +105,15 @@ fn subscription_group_config_versioned_from_response(
 ) -> ClientResult<SubscriptionGroupConfigVersioned> {
     let body = response.get_body().ok_or(ClientError::response_process_failed(
         "get_subscription_group_config_with_version",
-        "Subscription Group config response body is empty".to_owned(),
+        "Subscription Group config response body is empty",
     ))?;
     let config = rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::decode(
         body.as_ref(),
     )
-    .map_err(|error| {
-        ClientError::response_process_failed(
-            "get_subscription_group_config_with_version",
-            format!("Subscription Group config response body is invalid: {error}"),
-        )
-    })?;
+    .map_err(|error| ClientError::response_process_source("get_subscription_group_config_with_version", error))?;
     let header = response
         .decode_command_custom_header::<UpdateSubscriptionGroupConfigCasResponseHeader>()
-        .map_err(|error| {
-            ClientError::response_process_failed(
-                "get_subscription_group_config_with_version",
-                format!("Subscription Group config response version is missing: {error}"),
-            )
-        })?;
+        .map_err(|error| ClientError::response_process_source("get_subscription_group_config_with_version", error))?;
     Ok(SubscriptionGroupConfigVersioned {
         version: header.subscription_group_version,
         config,
@@ -157,17 +129,12 @@ fn topic_config_patch_outcome_from_response(
         ResponseCode::Success => {
             let header = response
                 .decode_command_custom_header::<UpdateTopicConfigCasResponseHeader>()
-                .map_err(|error| {
-                    ClientError::response_process_failed(
-                        "patch_topic_config_if_version",
-                        format!("missing committed Topic config version: {error}"),
-                    )
-                })?;
+                .map_err(|error| ClientError::response_process_source("patch_topic_config_if_version", error))?;
             let expected_next = expected_version
                 .checked_add(1)
                 .ok_or(ClientError::response_process_failed(
                     "patch_topic_config_if_version",
-                    "Broker accepted a Topic patch after the version counter was exhausted".to_owned(),
+                    "Broker accepted a Topic patch after the version counter was exhausted",
                 ))?;
             if header.topic_version != expected_next {
                 return Err(ClientError::response_process_failed(
@@ -212,16 +179,13 @@ fn subscription_group_config_patch_outcome_from_response(
             let header = response
                 .decode_command_custom_header::<UpdateSubscriptionGroupConfigCasResponseHeader>()
                 .map_err(|error| {
-                    ClientError::response_process_failed(
-                        "patch_subscription_group_config_if_version",
-                        format!("missing committed Subscription Group config version: {error}"),
-                    )
+                    ClientError::response_process_source("patch_subscription_group_config_if_version", error)
                 })?;
             let expected_next = expected_version
                 .checked_add(1)
                 .ok_or(ClientError::response_process_failed(
                     "patch_subscription_group_config_if_version",
-                    "Broker accepted a Subscription Group patch after the version counter was exhausted".to_owned(),
+                    "Broker accepted a Subscription Group patch after the version counter was exhausted",
                 ))?;
             if header.subscription_group_version != expected_next {
                 return Err(ClientError::response_process_failed(
@@ -406,16 +370,13 @@ impl MQClientAPIImpl {
                 let header = response
                     .decode_command_custom_header::<UpdateBrokerConfigResponseHeader>()
                     .map_err(|error| {
-                        ClientError::response_process_failed(
-                            "update_broker_config_if_generation",
-                            format!("missing committed config generation: {error}"),
-                        )
+                        ClientError::response_process_source("update_broker_config_if_generation", error)
                     })?;
                 let expected_next = expected_generation
                     .checked_add(1)
                     .ok_or(ClientError::response_process_failed(
                         "update_broker_config_if_generation",
-                        "broker accepted a patch after the generation counter was exhausted".to_string(),
+                        "broker accepted a patch after the generation counter was exhausted",
                     ))?;
                 if header.config_generation != expected_next {
                     return Err(ClientError::response_process_failed(
@@ -728,6 +689,17 @@ mod tests {
         let snapshot = topic_config_versioned_from_response(&response).expect("versioned Topic config");
         assert_eq!(snapshot.version, 9);
         assert_eq!(snapshot.config, config);
+    }
+
+    #[cfg(feature = "admin-read")]
+    #[test]
+    fn topic_config_response_preserves_body_decode_source() {
+        let response = RemotingCommand::create_success_response_command().set_body("{");
+
+        let error = topic_config_versioned_from_response(&response).expect_err("invalid body must fail");
+
+        assert!(error.is(&rocketmq_error::PROTOCOL_RESPONSE_FAILED));
+        assert!(error.source_ref::<serde_json::Error>().is_some());
     }
 
     #[cfg(feature = "admin-read")]

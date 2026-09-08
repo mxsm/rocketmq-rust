@@ -707,9 +707,9 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let addr = config.remoting.socket_addr()?;
-    let listener = TcpListener::bind(addr).await.map_err(|error| ProxyError::Transport {
-        message: format!("proxy remoting server failed to bind {addr}: {error}"),
-    })?;
+    let listener = TcpListener::bind(addr)
+        .await
+        .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
     let proxy_protocol = config.remoting.proxy_protocol.clone();
     let session_binder = Arc::new(ProxySessionBinder::new(sessions.clone()));
     let transport_sessions = Arc::new(SessionRegistry::with_lifecycle_listener(session_binder.clone()));
@@ -749,19 +749,16 @@ where
     tokio::pin!(server_future);
     let startup = tokio::select! {
         biased;
-        startup = &mut startup_rx => startup.map_err(|error| ProxyError::Transport {
-            message: format!("proxy remoting startup acknowledgement was dropped: {error}"),
-        })?,
+        startup = &mut startup_rx => startup
+            .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?,
         result = &mut server_future => {
-            let report = result.map_err(|error| ProxyError::Transport {
-                message: format!("proxy remoting server failed before readiness: {error}"),
-            })?;
-            let startup = startup_rx.await.map_err(|error| ProxyError::Transport {
-                message: format!("proxy remoting startup acknowledgement was dropped: {error}"),
-            })?;
-            startup.map_err(|error| ProxyError::Transport {
-                message: format!("proxy remoting server failed before readiness: {error}"),
-            })?;
+            let report = result
+                .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
+            let startup = startup_rx
+                .await
+                .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
+            startup
+                .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
             run_ready_transition(&mut ready)?;
             if !report.is_healthy() {
                 warn!(
@@ -772,9 +769,7 @@ where
             return Ok(Some(report));
         }
     };
-    startup.map_err(|error| ProxyError::Transport {
-        message: format!("proxy remoting server failed before readiness: {error}"),
-    })?;
+    startup.map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
     if let Err(error) = run_ready_transition(&mut ready) {
         readiness_cancellation.cancel();
         match server_future.await {
@@ -790,9 +785,9 @@ where
         }
         return Err(error);
     }
-    let report = server_future.await.map_err(|error| ProxyError::Transport {
-        message: format!("proxy remoting server failed: {error}"),
-    })?;
+    let report = server_future
+        .await
+        .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
     if !report.is_healthy() {
         warn!(
             report = %report.to_json(),
@@ -2569,7 +2564,7 @@ fn proxy_operation_error_response(
         ProxyError::BrokerResponse(error) => descriptor_error_response(command_factory, opaque, &error),
         ProxyError::Canonical(error) if canonical_error_replies_directly(&error) => {
             let context = error.context();
-            let view = PublicErrorView::try_new(error.descriptor(), &context)
+            let view = PublicErrorView::try_new(error.descriptor(), context)
                 .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
             error_response(
                 view,
@@ -2693,6 +2688,8 @@ mod tests {
     use rocketmq_protocol::protocol::RemotingSerializable;
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_runtime::RuntimeContext;
+    use rocketmq_runtime::RuntimeError;
+    use rocketmq_runtime::RuntimeOperation;
     use rocketmq_runtime::ServiceLifecycle;
     use rocketmq_runtime::ServiceLifecycleConfig;
     use rocketmq_security_api::Action;
@@ -2876,7 +2873,10 @@ mod tests {
             &super::application_remoting_command_factory(),
             14,
             rocketmq_proxy_core::ProxyDrainError::ReadinessTransition {
-                message: "password=plain-text".to_owned(),
+                source: Box::new(RuntimeError::internal(
+                    RuntimeOperation::SuspendServiceReadiness,
+                    std::io::Error::other("password=plain-text"),
+                )),
             },
         );
 

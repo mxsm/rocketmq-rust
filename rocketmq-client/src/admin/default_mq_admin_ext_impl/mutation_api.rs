@@ -548,7 +548,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
         let generation = runtime.table.get("brokerConfigGeneration").ok_or_else(|| {
             crate::ClientError::response_process_failed(
                 "broker_config_generation",
-                "broker runtime info does not contain brokerConfigGeneration".to_string(),
+                "broker runtime info does not contain brokerConfigGeneration",
             )
         })?;
         generation
@@ -558,7 +558,7 @@ impl MQAdminMutationExt for DefaultMQAdminExtImpl {
             .ok_or_else(|| {
                 crate::ClientError::response_process_failed(
                     "broker_config_generation",
-                    "brokerConfigGeneration is not a positive unsigned integer".to_string(),
+                    "brokerConfigGeneration is not a positive unsigned integer",
                 )
             })
     }
@@ -1545,7 +1545,7 @@ mod detailed_offset_tests {
         fn process(
             &self,
             request: RemotingCommand,
-        ) -> Pin<Box<dyn Future<Output = crate::ClientResult<RemotingCommand>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
             Box::pin(async move {
                 if request.code() == RequestCode::GetKvConfig.to_i32() {
                     let header = request.decode_command_custom_header::<GetKVConfigRequestHeader>()?;

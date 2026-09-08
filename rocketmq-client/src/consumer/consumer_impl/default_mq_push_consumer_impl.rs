@@ -2021,7 +2021,7 @@ impl DefaultMQPushConsumerImpl {
                 .find_broker_address_in_subscribe(&destination_broker, mix_all::MASTER_ID, true)
                 .await;
         }
-        let broker = broker.ok_or_else(|| ClientError::broker_not_found(destination_broker.to_string()))?;
+        let broker = broker.ok_or_else(|| ClientError::broker_not_found(&destination_broker))?;
         Ok((client_instance, broker.broker_addr))
     }
 
@@ -2747,7 +2747,7 @@ mod tests {
             .await
             .expect_err("missing MQClientAPIImpl should fail post-start broker compatibility check");
         assert!(
-            $1.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED),
+            error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED),
             "unexpected post-start error: {error:?}"
         );
         assert_eq!(consumer.service_state(), ServiceState::ShutdownAlready);

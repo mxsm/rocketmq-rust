@@ -806,7 +806,7 @@ mod cluster_session {
             assert!(message.contains("auth.security_provider.operation_failed"));
             assert!(!message.contains("secret signing diagnostic"));
             assert_eq!(error.descriptor(), &rocketmq_error::SECURITY_PROVIDER_OPERATION_FAILED);
-            let io = std::error::Error::source(error.shared_error().as_ref()).expect("I/O cause must remain available");
+            let io = std::error::Error::source(error.as_ref()).expect("I/O cause must remain available");
             assert!(io.downcast_ref::<std::io::Error>().is_some());
         }
 
@@ -845,7 +845,7 @@ mod cluster_session {
                 .err()
                 .expect("conflicting managed configuration must fail closed");
 
-            assert!($1.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
+            assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
             first.shutdown_owned().await;
         }
 

@@ -47,10 +47,10 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
 
-use rocketmq_client::ClientError;
-use rocketmq_client::ClientResult;
 use rocketmq_client_rust::AclClientRPCHook;
 use rocketmq_client_rust::ClientConfig;
+use rocketmq_client_rust::ClientError;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::ConsumeOrderlyContext;
@@ -511,7 +511,7 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> ClientResult<()> {
             Ok(queues) if !queues.is_empty() => break queues,
             Ok(_) => {
                 if tokio::time::Instant::now() >= queue_deadline {
-                    return Err(rocketmq_client::ClientError::illegal_argument(
+                    return Err(rocketmq_client_rust::ClientError::illegal_argument(
                         "MQAdmin smoke topic did not expose publish queues",
                     ));
                 }
@@ -625,7 +625,9 @@ async fn broker_backed_producer_mq_admin_offsets_smoke() -> ClientResult<()> {
     let view_msg_id = send_result
         .as_ref()
         .and_then(|result| result.offset_msg_id.as_deref().or(result.msg_id.as_deref()))
-        .ok_or_else(|| rocketmq_client::ClientError::illegal_argument("send result did not contain a message id"))?;
+        .ok_or_else(|| {
+            rocketmq_client_rust::ClientError::illegal_argument("send result did not contain a message id")
+        })?;
     let viewed_message = smoke_timeout(
         "mqadmin_producer.view_message",
         Duration::from_secs(10),
@@ -907,7 +909,7 @@ async fn broker_backed_producer_async_callback_smoke() -> ClientResult<()> {
         .take()
         .expect("async callback should store an outcome");
     let msg_id = outcome.map_err(|_| {
-        rocketmq_client::ClientError::from_shared(std::sync::Arc::new(rocketmq_error::Error::new(
+        rocketmq_client_rust::ClientError::from_shared(std::sync::Arc::new(rocketmq_error::Error::new(
             &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
         )))
     })?;
@@ -1109,7 +1111,7 @@ async fn broker_backed_producer_request_reply_smoke() -> ClientResult<()> {
         reply_producer.start().await?;
         let Some(reply_message) = reply_rx.recv().await else {
             reply_producer.shutdown().await;
-            return Err(rocketmq_client::ClientError::illegal_argument(
+            return Err(rocketmq_client_rust::ClientError::illegal_argument(
                 "request/reply smoke did not enqueue a reply message",
             ));
         };
@@ -1125,7 +1127,7 @@ async fn broker_backed_producer_request_reply_smoke() -> ClientResult<()> {
             "reply producer should return a message id"
         );
 
-        Ok::<(), rocketmq_client::ClientError>(())
+        Ok::<(), rocketmq_client_rust::ClientError>(())
     });
 
     let expected_request_body = request_body.clone();
@@ -1154,7 +1156,7 @@ async fn broker_backed_producer_request_reply_smoke() -> ClientResult<()> {
                     let reply_message =
                         MessageUtil::create_reply_message(msg.message_inner(), reply_body_for_listener.as_bytes())?;
                     reply_tx_for_listener.send(reply_message).map_err(|error| {
-                        rocketmq_client::ClientError::illegal_argument(format!(
+                        rocketmq_client_rust::ClientError::illegal_argument(format!(
                             "request/reply smoke failed to enqueue reply message: {error}"
                         ))
                     })?;
@@ -1184,9 +1186,9 @@ async fn broker_backed_producer_request_reply_smoke() -> ClientResult<()> {
     responder.shutdown().await;
     drop(reply_tx);
 
-    reply_task
-        .await
-        .map_err(|error| rocketmq_client::ClientError::internal("join broker-backed reply task", Box::new(error)))??;
+    reply_task.await.map_err(|error| {
+        rocketmq_client_rust::ClientError::internal("join broker-backed reply task", Box::new(error))
+    })??;
 
     assert_eq!(
         response.get_body().map(|body| body.as_ref()),
@@ -1229,7 +1231,7 @@ async fn broker_backed_producer_recall_smoke() -> ClientResult<()> {
     let recall_handle = send_result
         .recall_handle()
         .ok_or_else(|| {
-            rocketmq_client::ClientError::illegal_argument(
+            rocketmq_client_rust::ClientError::illegal_argument(
                 "recall smoke broker did not return a recall handle for the delayed message",
             )
         })?

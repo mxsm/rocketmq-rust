@@ -504,7 +504,7 @@ impl ProduceAccumulator {
                 };
 
                 if let Some(error) = error {
-                    return Err(crate::mq_client_err!(error));
+                    return Err(error);
                 }
                 return Ok(result);
             }
@@ -624,7 +624,7 @@ impl ProduceAccumulator {
                         let mut accumulation = batch
                             .try_lock()
                             .expect("new sync accumulation is inaccessible while its map shard is locked");
-                        accumulation.send_error = Some(error.to_string());
+                        accumulation.send_error = Some(error.clone());
                         accumulation.mark_closed();
                         accumulation.completion_notify.notify_waiters();
                     }
@@ -663,7 +663,7 @@ impl ProduceAccumulator {
                         let mut accumulation = batch
                             .try_lock()
                             .expect("new async accumulation is inaccessible while its map shard is locked");
-                        accumulation.send_error = Some(error.to_string());
+                        accumulation.send_error = Some(error.clone());
                         accumulation.mark_closed();
                         accumulation.completion_notify.notify_waiters();
                     }
@@ -689,10 +689,10 @@ impl ProduceAccumulator {
 
             if batch_guard.messages.is_empty() {
                 let error = crate::mq_client_err!("No messages to send");
-                batch_guard.send_error = Some(error.to_string());
+                batch_guard.send_error = Some(error.clone());
                 batch_guard.mark_closed();
                 notify.notify_waiters();
-                return Err(crate::mq_client_err!("No messages to send"));
+                return Err(error);
             }
 
             let total_size = batch_guard.messages_size.load(Ordering::Acquire) as u64;
@@ -723,7 +723,7 @@ impl ProduceAccumulator {
             Err(error) => {
                 self.release_hold_size(total_size);
                 let mut batch_guard = batch.lock().await;
-                batch_guard.send_error = Some(error.to_string());
+                batch_guard.send_error = Some(error.clone());
                 batch_guard.mark_closed();
                 notify.notify_waiters();
                 return Err(error);
@@ -736,7 +736,7 @@ impl ProduceAccumulator {
             Err(error) => {
                 self.release_hold_size(total_size);
                 let mut batch_guard = batch.lock().await;
-                batch_guard.send_error = Some(error.to_string());
+                batch_guard.send_error = Some(error.clone());
                 batch_guard.mark_closed();
                 notify.notify_waiters();
                 return Err(error);
@@ -752,7 +752,7 @@ impl ProduceAccumulator {
                 Ok(results) => results,
                 Err(error) => {
                     let mut batch_guard = batch.lock().await;
-                    batch_guard.send_error = Some(error.to_string());
+                    batch_guard.send_error = Some(error.clone());
                     batch_guard.mark_closed();
                     notify.notify_waiters();
                     return Err(error);
@@ -784,7 +784,7 @@ impl ProduceAccumulator {
 
             if batch_guard.messages.is_empty() {
                 let error = crate::mq_client_err!("No messages to send");
-                batch_guard.send_error = Some(error.to_string());
+                batch_guard.send_error = Some(error.clone());
                 batch_guard.mark_closed();
                 notify.notify_waiters();
                 return Err(error);
@@ -817,7 +817,7 @@ impl ProduceAccumulator {
             Err(error) => {
                 self.release_hold_size(total_size);
                 let mut batch_guard = batch.lock().await;
-                batch_guard.send_error = Some(error.to_string());
+                batch_guard.send_error = Some(error.clone());
                 batch_guard.mark_closed();
                 notify.notify_waiters();
                 for callback in &callbacks {
@@ -868,7 +868,7 @@ impl ProduceAccumulator {
             release_resource_permits(&permit_owner);
             release_hold_size(&currently_hold_size, total_size);
             let mut batch_guard = batch.lock().await;
-            batch_guard.send_error = Some(error.to_string());
+            batch_guard.send_error = Some(error.clone());
             batch_guard.mark_closed();
             notify.notify_waiters();
             for callback in callbacks_for_send_error.iter() {
@@ -932,12 +932,12 @@ fn close_pending_batch(
     let total_size = batch.messages_size.load(Ordering::Acquire) as u64;
     release_hold_size(currently_hold_size, total_size);
     batch.resource_permits.clear();
-    batch.send_error = Some(error_message.to_string());
+    let error = crate::mq_client_err!(error_message.to_string());
+    batch.send_error = Some(error.clone());
     batch.mark_closed();
     batch.completion_notify.notify_waiters();
 
     if notify_callbacks {
-        let error = crate::mq_client_err!(error_message.to_string());
         for callback in &batch.send_callbacks {
             callback.on_exception(&error);
         }
@@ -1214,6 +1214,26 @@ mod tests {
         assert!(!accumulation.try_mark_closing());
         accumulation.mark_closed();
         assert_eq!(accumulation.state(), BatchState::Closed);
+    }
+
+    #[test]
+    fn message_accumulation_preserves_typed_send_error() {
+        let producer = DefaultMQProducer::unbound();
+        let aggregate_key = AggregateKey::new(CheetahString::from("test-topic"), None, true, None);
+        let mut accumulation = MessageAccumulation::new(aggregate_key, producer);
+        let error = ClientError::internal(
+            "send accumulated messages",
+            std::io::Error::new(std::io::ErrorKind::ConnectionReset, "broker disconnected"),
+        );
+
+        accumulation.send_error = Some(error.clone());
+
+        let stored = accumulation.send_error.clone().expect("stored send error");
+        assert_eq!(stored.descriptor().code(), error.descriptor().code());
+        assert_eq!(
+            stored.source_ref::<std::io::Error>().expect("typed I/O source").kind(),
+            std::io::ErrorKind::ConnectionReset
+        );
     }
 
     #[test]
@@ -1693,7 +1713,7 @@ struct MessageAccumulation {
     keys: HashSet<String>,
     state: AtomicU8,
     send_results: Option<Vec<SendResult>>, // Stores results for sync send
-    send_error: Option<String>,
+    send_error: Option<ClientError>,
     aggregate_key: AggregateKey,
     messages_size: Arc<AtomicI32>,
     count: usize,
@@ -2534,7 +2554,7 @@ impl GuardForAsyncSendService {
 
             if batch_guard.messages.is_empty() {
                 let error = crate::mq_client_err!("No messages to send");
-                batch_guard.send_error = Some(error.to_string());
+                batch_guard.send_error = Some(error.clone());
                 batch_guard.mark_closed();
                 notify.notify_waiters();
                 return Err(error);
@@ -2567,7 +2587,7 @@ impl GuardForAsyncSendService {
             Err(error) => {
                 release_hold_size(&currently_hold_size, total_size);
                 let mut batch_guard = batch.lock().await;
-                batch_guard.send_error = Some(error.to_string());
+                batch_guard.send_error = Some(error.clone());
                 batch_guard.mark_closed();
                 notify.notify_waiters();
                 for callback in &callbacks {
@@ -2616,7 +2636,7 @@ impl GuardForAsyncSendService {
             release_resource_permits(&permit_owner);
             release_hold_size(&currently_hold_size, total_size);
             let mut batch_guard = batch.lock().await;
-            batch_guard.send_error = Some(error.to_string());
+            batch_guard.send_error = Some(error.clone());
             batch_guard.mark_closed();
             notify.notify_waiters();
             for callback in callbacks_for_send_error.iter() {

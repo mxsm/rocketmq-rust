@@ -312,7 +312,6 @@ impl ClientPool {
 
 #[cfg(test)]
 mod tests {
-    use crate::ClientError;
     use cheetah_string::CheetahString;
     use rocketmq_protocol::protocol::SerializeType;
 

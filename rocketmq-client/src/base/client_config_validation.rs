@@ -212,7 +212,7 @@ impl ClientConfigValidator {
             return Err(ClientError::config_invalid(
                 "concurrent_heartbeat_thread_pool_size",
                 size.to_string(),
-                "must be greater than 0".to_string(),
+                "must be greater than 0",
             ));
         }
 
@@ -240,7 +240,7 @@ impl ClientConfigValidator {
             return Err(ClientError::config_invalid(
                 "client_callback_executor_threads",
                 threads.to_string(),
-                "must be greater than 0".to_string(),
+                "must be greater than 0",
             ));
         }
 
@@ -269,7 +269,7 @@ impl ClientConfigValidator {
             return Err(ClientError::config_invalid(
                 "pull_message_service_shards",
                 shards.to_string(),
-                "must be greater than 0".to_string(),
+                "must be greater than 0",
             ));
         }
 

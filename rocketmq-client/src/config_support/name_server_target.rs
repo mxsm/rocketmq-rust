@@ -153,7 +153,7 @@ fn validate_dns_name(host: &str) -> Result<(), &'static str> {
 }
 
 fn invalid_namesrv_addr(value: &str, reason: impl Into<String>) -> ClientError {
-    ClientError::config_invalid("namesrv_addr", value.to_owned(), reason.into())
+    ClientError::config_invalid("namesrv_addr", value, reason.into())
 }
 
 #[cfg(test)]

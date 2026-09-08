@@ -14,6 +14,7 @@
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -1522,7 +1523,7 @@ async fn forward_remoting_inner(
     let broker_addr = client
         .find_subscribe_broker_addr(&broker_name, MASTER_ID, true)
         .await
-        .ok_or_else(|| canonical::broker_not_found(broker_name.to_string()))?;
+        .ok_or_else(|| canonical::broker_not_found(&broker_name))?;
     proxy_client_result(
         client
             .invoke_remoting(&broker_addr, request, timeout_millis.max(1))
@@ -1646,7 +1647,7 @@ async fn resolve_remoting_broker_addr(
             .await;
     }
     result
-        .ok_or_else(|| canonical::broker_not_found(broker_name.to_string()))
+        .ok_or_else(|| canonical::broker_not_found(&broker_name))
         .map_err(Into::into)
 }
 
@@ -2143,7 +2144,7 @@ async fn ack_message_inner(
                     .await;
             let broker_addr = find_subscribe_broker_addr(client.as_ref(), &actual_broker_name, &route_topic)
                 .await
-                .ok_or_else(|| canonical::broker_not_found(actual_broker_name.to_string()))?;
+                .ok_or_else(|| canonical::broker_not_found(&actual_broker_name))?;
             client
                 .batch_ack_message(&broker_addr, batch_request.body, timeout_ms)
                 .await
@@ -2218,7 +2219,7 @@ async fn forward_message_to_dead_letter_queue_inner(
         resolve_subscription_broker_name(client.as_ref(), &parsed.topic, &parsed.broker_name, parsed.queue_id).await;
     let broker_addr = find_subscribe_broker_addr(client.as_ref(), &actual_broker_name, &parsed.topic)
         .await
-        .ok_or_else(|| canonical::broker_not_found(actual_broker_name.to_string()))?;
+        .ok_or_else(|| canonical::broker_not_found(&actual_broker_name))?;
     let message = build_dead_letter_message(&request, &parsed, &actual_broker_name)?;
 
     client
@@ -2390,7 +2391,7 @@ async fn fetch_topic_route(
     }
 
     let route = proxy_client_result(client.topic_route(topic_name, config.mq_client_api_timeout_ms).await)?
-        .ok_or_else(|| canonical::route_not_found(topic_name.to_owned()))?;
+        .ok_or_else(|| canonical::route_not_found(topic_name))?;
     state.cache_route(topic_name.to_owned(), route.clone(), config.route_cache_ttl());
     Ok(route)
 }
@@ -2488,8 +2489,7 @@ async fn resolve_broker_target(
     }
 
     let route = fetch_topic_route(client, config, state, topic_name.as_str()).await?;
-    let broker_addr =
-        select_master_broker_addr(&route).ok_or_else(|| canonical::broker_not_found(topic_name.to_string()))?;
+    let broker_addr = select_master_broker_addr(&route).ok_or_else(|| canonical::broker_not_found(&topic_name))?;
     let broker_name = route
         .broker_datas
         .iter()
@@ -2522,7 +2522,7 @@ async fn ack_message_entry_inner(
         resolve_subscription_broker_name(client, &parsed.topic, &parsed.broker_name, parsed.queue_id).await;
     let broker_addr = find_subscribe_broker_addr(client, &actual_broker_name, &parsed.topic)
         .await
-        .ok_or_else(|| canonical::broker_not_found(actual_broker_name.to_string()))?;
+        .ok_or_else(|| canonical::broker_not_found(&actual_broker_name))?;
     let request_header = AckMessageRequestHeader {
         consumer_group: CheetahString::from(group.to_string()),
         topic: parsed.topic.clone(),
@@ -2562,7 +2562,7 @@ async fn change_invisible_duration_inner(
         resolve_subscription_broker_name(client, &parsed.topic, &parsed.broker_name, parsed.queue_id).await;
     let broker_addr = find_subscribe_broker_addr(client, &actual_broker_name, &parsed.topic)
         .await
-        .ok_or_else(|| canonical::broker_not_found(actual_broker_name.to_string()))?;
+        .ok_or_else(|| canonical::broker_not_found(&actual_broker_name))?;
     let request_header = ChangeInvisibleTimeRequestHeader {
         consumer_group: CheetahString::from(request.group.to_string()),
         topic: parsed.topic.clone(),
@@ -2865,14 +2865,14 @@ fn parse_receipt_handle(receipt_handle: &str, topic: &str, consumer_group: &str)
     let parts = ExtraInfoUtil::split(trimmed);
     let broker_name = ExtraInfoUtil::get_broker_name(parts.as_slice())
         .map(CheetahString::from_string)
-        .map_err(|error| ProxyError::invalid_receipt_handle(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::receipt_handle_invalid_with_source(error)))?;
     let queue_id = ExtraInfoUtil::get_queue_id(parts.as_slice())
-        .map_err(|error| ProxyError::invalid_receipt_handle(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::receipt_handle_invalid_with_source(error)))?;
     let queue_offset = ExtraInfoUtil::get_queue_offset(parts.as_slice())
-        .map_err(|error| ProxyError::invalid_receipt_handle(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::receipt_handle_invalid_with_source(error)))?;
     let real_topic = ExtraInfoUtil::get_real_topic(parts.as_slice(), topic, consumer_group)
         .map(CheetahString::from_string)
-        .map_err(|error| ProxyError::invalid_receipt_handle(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::receipt_handle_invalid_with_source(error)))?;
 
     Ok(ParsedReceiptHandle {
         raw: CheetahString::from(trimmed),
@@ -3045,14 +3045,27 @@ fn transaction_resolution_flag(resolution: TransactionResolution) -> i32 {
 
 fn decode_end_transaction_message_id(message_id: &str) -> ProxyResult<MessageId> {
     MessageDecoder::decode_message_id(&CheetahString::from(message_id)).map_err(|error| {
-        ProxyError::invalid_transaction_id(format!("failed to decode transactional message id: {error}"))
+        ProxyError::from(canonical::transaction_id_invalid_with_source(MessageIdDecodeError(
+            error,
+        )))
     })
 }
 
 fn decode_broker_message_id(message_id: &str) -> ProxyResult<MessageId> {
     MessageDecoder::decode_message_id(&CheetahString::from(message_id))
-        .map_err(|error| ProxyError::illegal_message_id(format!("failed to decode broker message id: {error}")))
+        .map_err(|error| ProxyError::from(canonical::message_id_invalid_with_source(MessageIdDecodeError(error))))
 }
+
+#[derive(Debug)]
+struct MessageIdDecodeError(String);
+
+impl fmt::Display for MessageIdDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for MessageIdDecodeError {}
 
 fn effective_send_timeout_ms(config: &ClusterConfig, deadline: Option<Duration>) -> u64 {
     effective_request_timeout_ms(config.send_message_timeout_ms, deadline)
@@ -3129,7 +3142,7 @@ mod tests {
     use std::time::Instant;
 
     use cheetah_string::CheetahString;
-    use rocketmq_error::CanonicalError;
+    use rocketmq_error::Error as CanonicalError;
     use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
     use rocketmq_model::common::message::MessageConst;
     use rocketmq_model::result::SendResult;
@@ -3139,6 +3152,7 @@ mod tests {
     use rocketmq_protocol::protocol::route::route_data_view::QueueData;
     use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
     use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+    use rocketmq_proxy_core::error::canonical;
     use rocketmq_proxy_core::AckMessageRequest;
     use rocketmq_proxy_core::MessageQueueTarget;
     use rocketmq_proxy_core::ProxyMessage;
@@ -3156,6 +3170,8 @@ mod tests {
     use super::compatible_batch_entries;
     use super::convert_subscription_group;
     use super::convert_topic_message_type;
+    use super::decode_broker_message_id;
+    use super::decode_end_transaction_message_id;
     use super::master_broker_addrs;
     use super::run_cluster_lane;
     use super::select_auth_metadata_broker_addr;
@@ -3169,6 +3185,7 @@ mod tests {
     use super::ClusterExecutionPolicy;
     use super::ClusterTaskExecutor;
     use super::ClusterWorkerState;
+    use super::MessageIdDecodeError;
     use super::RocketmqClusterClient;
     use super::TelemetryHandle;
     use crate::cluster::cluster_admission::ClusterCommandClass;
@@ -3183,6 +3200,28 @@ mod tests {
             client_message_id: id.to_owned(),
             message: ProxyMessage::new("TopicA", id.as_bytes().to_vec()),
             queue_id: None,
+        }
+    }
+
+    #[test]
+    fn message_id_decode_failures_keep_typed_sources() {
+        let cases = [
+            (
+                decode_broker_message_id("not-a-message-id"),
+                &rocketmq_error::PROXY_MESSAGE_ID_INVALID,
+            ),
+            (
+                decode_end_transaction_message_id("not-a-message-id"),
+                &rocketmq_error::PROXY_TRANSACTION_ID_INVALID,
+            ),
+        ];
+
+        for (result, descriptor) in cases {
+            let error = result.expect_err("invalid message id must fail");
+            assert_eq!(error.descriptor(), descriptor);
+            let canonical = std::error::Error::source(&error).expect("Proxy error keeps canonical source");
+            let decoder = canonical.source().expect("canonical error keeps decoder source");
+            assert!(decoder.downcast_ref::<MessageIdDecodeError>().is_some());
         }
     }
 

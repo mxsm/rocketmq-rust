@@ -413,9 +413,9 @@ impl ProxyAuthRuntime {
             .authentication_builder
             .build_from_remoting(command, auth_context.channel_id())
             .map_err(|error| {
-                ProxyError::from(canonical::authentication_failed(
+                ProxyError::from(canonical::authentication_failed_with_source(
                     "build_remoting_context",
-                    error.to_string(),
+                    error,
                 ))
             })?;
         let username = authentication_context.username().map(ToString::to_string);
@@ -588,9 +588,9 @@ impl ProxyAuthRuntime {
             .authentication_builder
             .build_from_grpc(request.metadata(), request.get_ref())
             .map_err(|error| {
-                ProxyError::from(canonical::authentication_failed(
+                ProxyError::from(canonical::authentication_failed_with_source(
                     "build_auth_context",
-                    error.to_string(),
+                    error,
                 ))
             })?;
 

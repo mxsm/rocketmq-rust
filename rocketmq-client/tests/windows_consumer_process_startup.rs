@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use rocketmq_client::ClientResult;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;

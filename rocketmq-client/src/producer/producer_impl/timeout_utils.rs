@@ -242,18 +242,15 @@ mod tests {
         async fn failing_operation() -> ClientResult<String> {
             Err(ClientError::invalid_state(
                 "ready test operation",
-                "failed test operation".to_string(),
+                "failed test operation",
             ))
         }
 
         let result = with_timeout(Duration::from_millis(100), failing_operation()).await;
         assert!(result.is_err());
-        match result.unwrap_err() {
-            ClientError::invalid_state(expected, actual) => {
-                assert_eq!(expected, "ready test operation");
-                assert_eq!(actual, "failed test operation");
-            }
-            _ => panic!("Expected client invalid state error"),
-        }
+        assert!(
+            result.unwrap_err().is(&rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE),
+            "expected client invalid state error"
+        );
     }
 }

@@ -30,6 +30,15 @@ fn pop_background_task_cancelled(actual: impl Into<String>) -> ClientError {
     ClientError::invalid_state("active client POP request", actual.into())
 }
 
+fn pop_background_task_spawn_failed(source: impl std::error::Error + Send + Sync + 'static) -> ClientError {
+    let context = ErrorContext::new()
+        .with_text(fields::EXPECTED_STATE, "active client POP request")
+        .with_text(fields::ACTUAL_STATE, "client POP task spawn failed");
+    ClientError::from_error(
+        Error::caused_by(&rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE, source).with_context(context),
+    )
+}
+
 fn consumer_request_error(operation: &'static str, input: RetryInput) -> ClientError {
     match input {
         RetryInput::Transport(error) => ClientError::from_shared(error.into_shared_error()),
@@ -163,9 +172,7 @@ impl MQClientAPIImpl {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
             {
-                callback.on_error(pop_background_task_cancelled(format!(
-                    "failed to spawn client POP task: {error}"
-                )));
+                callback.on_error(pop_background_task_spawn_failed(error));
             }
         }
     }
@@ -221,7 +228,7 @@ impl MQClientAPIImpl {
             _ => Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or_else(String::new, |remark| remark.to_string()),
-                broker_addr.to_string()
+                broker_addr
             )),
         }
     }
@@ -277,14 +284,14 @@ impl MQClientAPIImpl {
                 return Err(client_broker_err!(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
-                    addr.to_string()
+                    addr
                 ))
             }
         }
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -333,14 +340,14 @@ impl MQClientAPIImpl {
                 return Err(client_broker_err!(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
-                    addr.to_string()
+                    addr
                 ))
             }
         }
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -389,14 +396,14 @@ impl MQClientAPIImpl {
                 return Err(client_broker_err!(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
-                    addr.to_string()
+                    addr
                 ));
             }
         }
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -502,14 +509,14 @@ impl MQClientAPIImpl {
                 return Err(client_broker_err!(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
-                    addr.to_string()
+                    addr
                 ));
             }
         }
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -571,7 +578,7 @@ impl MQClientAPIImpl {
             Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
-                addr.to_string()
+                addr
             ))
         } else {
             Ok(())
@@ -624,8 +631,8 @@ impl MQClientAPIImpl {
                 return response_header.offset.ok_or_else(|| {
                     client_broker_err!(
                         response.code(),
-                        "QueryConsumerOffset response header missing offset".to_string(),
-                        addr.to_string()
+                        "QueryConsumerOffset response header missing offset",
+                        addr
                     )
                 });
             }
@@ -633,7 +640,7 @@ impl MQClientAPIImpl {
                 return Err(client_broker_err!(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
-                    addr.to_string()
+                    addr
                 ));
             }
             _ => {}
@@ -641,7 +648,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -692,7 +699,7 @@ impl MQClientAPIImpl {
             _ => Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
-                addr.to_string()
+                addr
             )),
         }
     }
@@ -834,7 +841,7 @@ impl MQClientAPIImpl {
                 return Err(client_broker_err!(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
-                    addr.to_string()
+                    addr
                 ));
             }
         };
@@ -910,7 +917,7 @@ impl MQClientAPIImpl {
             Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
-                addr.to_string()
+                addr
             ))
         }
     }
@@ -1005,7 +1012,7 @@ impl MQClientAPIImpl {
             Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
-                addr.to_string()
+                addr
             ))
         }
     }
@@ -1059,7 +1066,7 @@ impl MQClientAPIImpl {
                 Err(client_broker_err!(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
-                    addr.to_string()
+                    addr
                 ))
             }
         }
@@ -1111,17 +1118,13 @@ impl MQClientAPIImpl {
                         ClientError::broker_operation_source("lock_batch_mq", response.code(), Some(addr), source)
                     })
             } else {
-                Err(client_broker_err!(
-                    response.code(),
-                    "Response body is empty".to_string(),
-                    addr.to_string()
-                ))
+                Err(client_broker_err!(response.code(), "Response body is empty", addr))
             }
         } else {
             Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
-                addr.to_string()
+                addr
             ))
         }
     }
@@ -1137,3 +1140,19 @@ impl MQClientAPIImpl {
 }
 
 mod message_operations;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pop_background_task_spawn_failure_preserves_cause() {
+        let error = pop_background_task_spawn_failed(std::io::Error::other("task group closed"));
+
+        assert_eq!(
+            error.descriptor().code(),
+            rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE.code()
+        );
+        assert!(error.source_ref::<std::io::Error>().is_some());
+    }
+}

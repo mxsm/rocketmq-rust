@@ -2552,10 +2552,10 @@ mod facade_tests {
 
     fn assert_not_initialized<T>(result: ClientResult<T>) {
         match result {
-            Err(ClientError::not_initialized(reason)) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            Err(other) => panic!("Unexpected error: {other:?}"),
+            Err(error) => assert!(
+                error.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED),
+                "unexpected error: {error:?}"
+            ),
             Ok(_) => panic!("expected producer facade to require a started implementation"),
         }
     }
@@ -2639,12 +2639,7 @@ mod tests {
         let result = producer.request_with_callback(msg, callback, 1000).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            ClientError::not_initialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[tokio::test]
@@ -2661,12 +2656,7 @@ mod tests {
         let result = producer.request_with_selector(msg, selector, 1, 1000).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            ClientError::not_initialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[tokio::test]
@@ -2688,12 +2678,7 @@ mod tests {
             .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            ClientError::not_initialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[tokio::test]
@@ -2715,12 +2700,7 @@ mod tests {
         let result: ClientResult<()> = producer.send_batch_with_callback(vec![msg], callback).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            ClientError::not_initialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[tokio::test]
@@ -2795,12 +2775,7 @@ mod tests {
             .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            ClientError::not_initialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[tokio::test]
@@ -2825,12 +2800,7 @@ mod tests {
             .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            ClientError::not_initialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[tokio::test]
@@ -2849,12 +2819,7 @@ mod tests {
         // Assert
         assert!(result.is_err());
         let err = result.unwrap_err();
-        match err {
-            ClientError::not_initialized(reason) => {
-                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
-            }
-            other => panic!("Unexpected error: {other:?}"),
-        }
+        assert!(err.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
     }
 
     #[test]

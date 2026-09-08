@@ -69,7 +69,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -124,7 +124,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -182,7 +182,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -264,7 +264,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -385,11 +385,7 @@ impl MQClientAPIImpl {
         Err(RetryInput::Response {
             code,
             retry_after: None,
-            terminal_error: client_broker_err!(
-                code,
-                response.remark().map_or("".to_string(), |s| s.to_string()),
-                addr.to_string()
-            ),
+            terminal_error: client_broker_err!(code, response.remark().map_or("".to_string(), |s| s.to_string()), addr),
         })
     }
 

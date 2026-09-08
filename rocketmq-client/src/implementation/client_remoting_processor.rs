@@ -725,7 +725,7 @@ mod tests {
         assert!(weak.upgrade().is_none());
         assert!(matches!(
             processor.client_instance(),
-            Err(crate::ClientError::not_started())
+            Err(error) if error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED)
         ));
     }
 

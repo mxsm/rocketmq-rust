@@ -897,8 +897,8 @@ impl MQClientInstance {
         {
             Err(ClientError::config_invalid(
                 "nameserver_discovery.dns",
-                "enabled".to_string(),
-                "requires the nameserver-dns-discovery Cargo feature".to_string(),
+                "enabled",
+                "requires the nameserver-dns-discovery Cargo feature",
             ))
         }
 
@@ -3061,13 +3061,12 @@ mod tests {
         fn process(
             &self,
             request: RemotingCommand,
-        ) -> Pin<Box<dyn Future<Output = crate::ClientResult<RemotingCommand>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
             Box::pin(async move {
                 if request.code() != RequestCode::GetRouteinfoByTopic.to_i32() {
-                    return Err(ClientError::illegal_argument(format!(
-                        "unexpected request code {}",
-                        request.code()
-                    )));
+                    return Err(
+                        ClientError::illegal_argument(format!("unexpected request code {}", request.code())).into(),
+                    );
                 }
                 let header = request.decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
                 self.topics.lock().expect("route preparation topics").push(header.topic);
@@ -3356,7 +3355,7 @@ mod tests {
 
         let result = instance.get_mq_client_api_impl();
 
-        assert!(matches!($1, Err(error) if error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED)));
+        assert!(matches!(result, Err(error) if error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED)));
     }
 
     #[tokio::test]

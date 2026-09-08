@@ -77,14 +77,14 @@ impl CommandCustomHeader for AsyncRetryTestHeader {
 }
 
 impl FromMap for AsyncRetryTestHeader {
-    type Error = rocketmq_client::ClientError;
+    type Error = rocketmq_error::Error;
     type Target = Self;
 
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self, Self::Error> {
         let retry_marker = map
             .get(&CheetahString::from_static_str("retryMarker"))
             .cloned()
-            .ok_or_else(|| rocketmq_client::ClientError::illegal_argument("missing retryMarker test header"))?;
+            .ok_or_else(|| rocketmq_error::Error::new(&rocketmq_error::CORE_ARGUMENT_INVALID))?;
         Ok(Self { retry_marker })
     }
 }
@@ -939,7 +939,7 @@ async fn pop_callback_task_completes_once_when_shutdown_cancels_the_request() {
         &tracker,
         &token,
         ClientCallbackExecutor::new(1),
-        pending::<rocketmq_client::ClientResult<PopResult>>(),
+        pending::<crate::ClientResult<PopResult>>(),
         RecordingPopCallback {
             calls: calls.clone(),
             errors: errors.clone(),

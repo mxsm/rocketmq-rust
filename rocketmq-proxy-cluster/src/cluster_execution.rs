@@ -347,9 +347,7 @@ impl ClusterTaskExecutor {
         }) {
             worker_context.task_group().cancel();
             lanes.close();
-            return Err(ProxyError::Transport {
-                message: format!("failed to spawn proxy cluster execution owner: {error}"),
-            });
+            return Err(ProxyError::from(canonical::transport_unavailable_with_source(error)));
         }
         Ok((
             Self {
@@ -616,9 +614,9 @@ impl ClusterTaskExecutor {
         }
 
         let receive = async {
-            receiver.await.map_err(|_| ProxyError::Transport {
-                message: "proxy cluster keyed executor dropped response".to_owned(),
-            })?
+            receiver
+                .await
+                .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?
         };
         tokio::pin!(receive);
         match request_deadline {
@@ -684,8 +682,7 @@ impl ClusterTaskExecutor {
             lane_task.completed = true;
         });
         if let Err(error) = spawn_result {
-            let message = format!("failed to spawn proxy cluster keyed lane: {error}");
-            return Err(ProxyError::Transport { message });
+            return Err(ProxyError::from(canonical::transport_unavailable_with_source(error)));
         }
         Ok(())
     }

@@ -593,7 +593,7 @@ impl TraceDispatcher for AsyncTraceDispatcher {
         let (sender, receiver) = std_mpsc::channel();
         self.tx
             .try_send(TraceWorkerCommand::Flush(TraceFlushResponder::Blocking(sender)))
-            .map_err(|error| trace_dispatcher_interrupted(format!("flush queue failed: {error}")))?;
+            .map_err(trace_dispatcher_interrupted_source)?;
 
         match receiver.recv_timeout(TRACE_WORKER_FLUSH_TIMEOUT) {
             Ok(result) => result?,
@@ -695,6 +695,10 @@ where
 
 fn trace_dispatcher_interrupted(_reason: impl Into<String>) -> ClientError {
     ClientError::service_failed("trace_dispatcher_interrupted")
+}
+
+fn trace_dispatcher_interrupted_source(source: impl std::error::Error + Send + Sync + 'static) -> ClientError {
+    ClientError::service_source("trace_dispatcher_interrupted", source)
 }
 
 fn trace_dispatcher_flush_timeout() -> ClientError {
@@ -1109,6 +1113,14 @@ mod tests {
         let error = trace_dispatcher_interrupted("worker is stopped");
 
         assert_eq!(error.descriptor().code(), rocketmq_error::CORE_SERVICE_FAILED.code());
+    }
+
+    #[test]
+    fn trace_dispatcher_interrupted_source_preserves_cause() {
+        let error = trace_dispatcher_interrupted_source(std::io::Error::other("flush queue closed"));
+
+        assert_eq!(error.descriptor().code(), rocketmq_error::CORE_SERVICE_FAILED.code());
+        assert!(error.source_ref::<std::io::Error>().is_some());
     }
 
     #[test]

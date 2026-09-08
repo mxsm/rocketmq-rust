@@ -37,6 +37,7 @@ use crate::cluster::ClusterRemotingBackend;
 use crate::cluster::RocketmqClusterClient;
 use crate::config::ProxyConfig;
 use crate::config::ProxyMode;
+use crate::error::canonical;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::grpc::server;
@@ -69,6 +70,23 @@ struct DefaultBackend {
     context: Option<ChildServiceContext>,
 }
 
+#[derive(Debug)]
+struct ProxyShutdownFailures {
+    failures: Vec<ProxyError>,
+}
+
+impl std::fmt::Display for ProxyShutdownFailures {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("multiple Proxy component shutdown failures")
+    }
+}
+
+impl std::error::Error for ProxyShutdownFailures {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.failures.first().map(|failure| failure as _)
+    }
+}
+
 impl LifecycleReadiness {
     fn new(lifecycle: ServiceLifecycle, listener_count: usize) -> Self {
         Self {
@@ -87,9 +105,9 @@ impl LifecycleReadiness {
                 message: "Proxy listener readiness was published more than once".to_string(),
             })?;
         if previous == 1 {
-            self.lifecycle.mark_ready().map_err(|error| ProxyError::Transport {
-                message: format!("failed to publish Proxy readiness: {error}"),
-            })?;
+            self.lifecycle
+                .mark_ready()
+                .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
         }
         Ok(())
     }
@@ -509,9 +527,7 @@ where
             if let Some(lifecycle) = lifecycle.as_ref() {
                 drain
                     .attach_lifecycle(lifecycle.clone())
-                    .map_err(|error| ProxyError::Transport {
-                        message: format!("failed to attach Proxy drain lifecycle: {error}"),
-                    })?;
+                    .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
             }
             let auth_context = service_context.component("auth");
             let effective_auth_runtime = match auth_runtime.clone() {
@@ -634,9 +650,11 @@ async fn finalize_proxy_run(
                 cleanup_error = %cleanup,
                 "Proxy failed and its transactional cleanup was also unhealthy"
             );
-            Err(ProxyError::Transport {
-                message: format!("Proxy startup or serving failed: {primary}; transactional cleanup failed: {cleanup}"),
-            })
+            Err(ProxyError::from(canonical::transport_unavailable_with_source(
+                ProxyShutdownFailures {
+                    failures: vec![primary, cleanup],
+                },
+            )))
         }
     }
 }
@@ -653,34 +671,36 @@ async fn shutdown_proxy_components(
     if let Some(backend_context) = backend_context {
         let report = backend_context.task_group().shutdown_until(deadline).await;
         if let Err(error) = require_healthy_component_shutdown("Proxy backend", report) {
-            failures.push(error.to_string());
+            failures.push(error);
         }
     }
 
     if let Some(auth_runtime) = auth_runtime {
         match tokio::time::timeout(deadline.remaining(), auth_runtime.shutdown()).await {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => failures.push(format!("Proxy authentication runtime shutdown failed: {error}")),
-            Err(_) => failures.push("Proxy authentication runtime shutdown exceeded the shared deadline".to_owned()),
+            Ok(Err(error)) => failures.push(ProxyError::from(canonical::transport_unavailable_with_source(error))),
+            Err(_) => failures.push(ProxyError::Transport {
+                message: "Proxy authentication runtime shutdown exceeded the shared deadline".to_owned(),
+            }),
         }
     }
 
     let auth_report = auth_context.task_group().shutdown_until(deadline).await;
     if let Err(error) = require_healthy_component_shutdown("Proxy authentication", auth_report) {
-        failures.push(error.to_string());
+        failures.push(error);
     }
 
     let report = service_context.task_group().shutdown_until(deadline).await;
     if let Err(error) = require_healthy_component_shutdown("Proxy service", report) {
-        failures.push(error.to_string());
+        failures.push(error);
     }
 
     if failures.is_empty() {
         Ok(())
     } else {
-        Err(ProxyError::Transport {
-            message: format!("Proxy component shutdown failures: {}", failures.join("; ")),
-        })
+        Err(ProxyError::from(canonical::transport_unavailable_with_source(
+            ProxyShutdownFailures { failures },
+        )))
     }
 }
 

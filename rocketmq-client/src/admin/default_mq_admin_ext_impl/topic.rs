@@ -411,5 +411,5 @@ pub(super) fn retain_java_user_topic_config(
 }
 
 pub(super) fn admin_route_not_found(route_topic: &CheetahString) -> crate::ClientError {
-    crate::ClientError::route_not_found(route_topic.to_string())
+    crate::ClientError::route_not_found(route_topic)
 }

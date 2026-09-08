@@ -19,7 +19,6 @@ use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_client::ClientError;
 use rocketmq_client_rust::AckCallback;
 use rocketmq_client_rust::AckCallbackFn;
 use rocketmq_client_rust::AckResult;
@@ -44,6 +43,7 @@ use rocketmq_client_rust::AsyncTraceDispatcher;
 use rocketmq_client_rust::AuthAdmin;
 #[cfg(feature = "admin-full")]
 use rocketmq_client_rust::BrokerAdmin;
+use rocketmq_client_rust::ClientError;
 use rocketmq_client_rust::ClientInstanceHandle;
 use rocketmq_client_rust::ClientRpcHook;
 use rocketmq_client_rust::ClientSession;
@@ -156,7 +156,7 @@ impl AckCallback for RootAckCallback {
         assert_eq!(ack_result.status(), AckStatus::Ok);
     }
 
-    fn on_exception(&self, _e: rocketmq_client::ClientError) {}
+    fn on_exception(&self, _e: rocketmq_client_rust::ClientError) {}
 }
 
 struct RootMessageQueueListener;
@@ -483,7 +483,7 @@ async fn crate_root_exports_java_style_admin_list_user_alias() {
         .await
         .expect_err("list_user should delegate to the same started-client requirement as list_users");
 
-    assert!($1.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
+    assert!(error.is(&rocketmq_error::CLIENT_LIFECYCLE_NOT_STARTED));
 }
 
 #[test]

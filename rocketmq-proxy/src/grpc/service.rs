@@ -426,9 +426,7 @@ where
                 decode_gzip_message_bodies(request, max_body_size)
             })
             .await
-            .map_err(|error| ProxyError::Transport {
-                message: format!("gzip decode task failed: {error}"),
-            })?
+            .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?
     }
 
     pub fn metrics_snapshot(&self) -> ProxyMetricsSnapshot {
@@ -1157,7 +1155,7 @@ fn decode_gzip_message_bodies(
         decoder
             .take(limit)
             .read_to_end(&mut decoded)
-            .map_err(|error| canonical::argument(format!("invalid gzip message body: {error}")))?;
+            .map_err(canonical::argument_with_source)?;
         if decoded.len() > max_body_size {
             return Err(canonical::argument(format!(
                 "decoded message body exceeds the configured maximum {max_body_size} bytes"

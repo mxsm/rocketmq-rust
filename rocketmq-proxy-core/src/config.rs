@@ -75,13 +75,9 @@ impl GrpcConfig {
     }
 
     pub fn socket_addr(&self) -> ProxyResult<SocketAddr> {
-        self.listen_addr.parse().map_err(|error| {
-            canonical::argument(format!(
-                "invalid proxy gRPC listen address '{}': {error}",
-                self.listen_addr
-            ))
-            .into()
-        })
+        self.listen_addr
+            .parse()
+            .map_err(|error| canonical::configuration_parse_failed_with_source("proxy.grpc.listen_addr", error).into())
     }
 
     pub fn listen_port(&self) -> ProxyResult<u16> {
@@ -215,11 +211,7 @@ impl RemotingConfig {
 
     pub fn socket_addr(&self) -> ProxyResult<SocketAddr> {
         self.listen_addr.parse().map_err(|error| {
-            canonical::argument(format!(
-                "invalid proxy remoting listen address '{}': {error}",
-                self.listen_addr
-            ))
-            .into()
+            canonical::configuration_parse_failed_with_source("proxy.remoting.listen_addr", error).into()
         })
     }
 
@@ -327,12 +319,29 @@ impl SessionConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as StdError;
+
     use super::*;
 
     #[test]
     fn ingress_defaults_preserve_public_ports() {
         assert_eq!(GrpcConfig::default().listen_port().expect("gRPC port"), 8081);
         assert_eq!(RemotingConfig::default().listen_port().expect("remoting port"), 8080);
+    }
+
+    #[test]
+    fn ingress_address_errors_preserve_typed_parse_source() {
+        let grpc = GrpcConfig {
+            listen_addr: "invalid-address".to_owned(),
+            ..GrpcConfig::default()
+        };
+        let error = grpc.socket_addr().expect_err("invalid gRPC address");
+        let canonical = StdError::source(&error).expect("canonical source");
+        assert!(canonical
+            .source()
+            .and_then(|source| source.downcast_ref::<std::net::AddrParseError>())
+            .is_some());
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_PARSE_FAILED);
     }
 
     #[test]

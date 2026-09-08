@@ -110,7 +110,7 @@ impl ExecutionGuards {
             BudgetLimit::new(total_permits, managed_bytes.max(1), FullPolicy::Reject)
                 .with_control_reserve(BudgetCapacity::new(control_permits, control_reserve_bytes)),
         )
-        .map_err(|error| ProxyError::invalid_metadata(error.to_string()))?;
+        .map_err(|error| ProxyError::from(canonical::invalid_metadata_with_source(error)))?;
         let root = tree.root();
 
         let route = execution_budget(
@@ -164,7 +164,7 @@ impl ExecutionGuards {
                     ))
                     .with_max_age(telemetry_limits.max_age),
             )
-            .map_err(|error| ProxyError::invalid_metadata(error.to_string()))?;
+            .map_err(|error| ProxyError::from(canonical::invalid_metadata_with_source(error)))?;
 
         Ok(Self {
             route,
@@ -228,7 +228,7 @@ impl ExecutionGuards {
                 ))
                 .with_max_age(self.telemetry_limits.max_age),
             )
-            .map_err(|error| ProxyError::invalid_metadata(error.to_string()))?;
+            .map_err(|error| ProxyError::from(canonical::invalid_metadata_with_source(error)))?;
         Ok(BudgetedQueue::new(budget))
     }
 
@@ -261,7 +261,7 @@ fn execution_budget(
         limit = limit.with_rate(RateLimit::new(rate_per_second, rate_per_second));
     }
     root.child(name, limit)
-        .map_err(|error| ProxyError::invalid_metadata(error.to_string()))
+        .map_err(|error| ProxyError::from(canonical::invalid_metadata_with_source(error)))
 }
 
 fn runtime_memory_detection_error(source: RuntimeError) -> ProxyError {

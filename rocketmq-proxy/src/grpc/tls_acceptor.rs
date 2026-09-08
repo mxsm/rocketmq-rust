@@ -20,6 +20,7 @@ use std::time::SystemTime;
 
 use arc_swap::ArcSwap;
 use parking_lot::RwLock;
+use rocketmq_error::SharedError;
 use rocketmq_proxy_core::GrpcTlsClientAuth;
 use rocketmq_proxy_core::GrpcTlsConfig;
 use rocketmq_runtime::BlockingExecutor;
@@ -34,13 +35,14 @@ use tokio::net::TcpStream;
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
 
+use crate::error::canonical;
 use crate::ProxyError;
 use crate::ProxyResult;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct GrpcTlsReloadHealth {
     pub(crate) active_generation: u64,
-    pub(crate) last_error: Option<String>,
+    pub(crate) last_error: Option<SharedError>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,9 +72,7 @@ impl ReloadableGrpcTlsAcceptor {
                 (acceptor, snapshot)
             })
             .await
-            .map_err(|error| ProxyError::Transport {
-                message: format!("failed to initialize Proxy gRPC TLS material: {error}"),
-            })?;
+            .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
         let acceptor = acceptor?;
         Ok(Self {
             config: Arc::new(config),
@@ -99,9 +99,7 @@ impl ReloadableGrpcTlsAcceptor {
                     runtime.reload_if_changed().await;
                 }
             })
-            .map_err(|error| ProxyError::Transport {
-                message: format!("failed to start Proxy gRPC TLS reload task: {error}"),
-            })?;
+            .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
         Ok(())
     }
 
@@ -110,7 +108,7 @@ impl ReloadableGrpcTlsAcceptor {
             .load_full()
             .accept(stream)
             .await
-            .map_err(|error| std::io::Error::other(format!("Proxy gRPC TLS handshake failed: {error}")))
+            .map_err(std::io::Error::other)
     }
 
     async fn reload_if_changed(&self) {
@@ -122,7 +120,7 @@ impl ReloadableGrpcTlsAcceptor {
         {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                self.record_reload_error(format!("TLS file inspection failed: {error}"));
+                self.record_reload_error(error);
                 return;
             }
         };
@@ -139,7 +137,7 @@ impl ReloadableGrpcTlsAcceptor {
         {
             Ok(candidate) => candidate,
             Err(error) => {
-                self.record_reload_error(format!("TLS reload work failed: {error}"));
+                self.record_reload_error(error);
                 return;
             }
         };
@@ -154,12 +152,12 @@ impl ReloadableGrpcTlsAcceptor {
                     "Proxy gRPC TLS material generation reloaded"
                 );
             }
-            Err(error) => self.record_reload_error(error.to_string()),
+            Err(error) => self.record_reload_error(error),
         }
     }
 
-    fn record_reload_error(&self, reason: String) {
-        self.health.write().last_error = Some(reason);
+    fn record_reload_error(&self, source: impl std::error::Error + Send + Sync + 'static) {
+        self.health.write().last_error = Some(Arc::new(canonical::transport_unavailable_with_source(source)));
         tracing::warn!("Proxy gRPC TLS material reload was rejected; retaining last-known-good generation");
     }
 }

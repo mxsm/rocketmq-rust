@@ -685,7 +685,7 @@ mod tests {
         fn process(
             &self,
             request: RemotingCommand,
-        ) -> Pin<Box<dyn Future<Output = crate::ClientResult<RemotingCommand>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
             Box::pin(async move {
                 use std::sync::atomic::Ordering;
 
@@ -700,10 +700,9 @@ mod tests {
                         .pop_front()
                         .ok_or_else(|| ClientError::illegal_argument("unexpected create-topic request"))?
                 } else {
-                    return Err(ClientError::illegal_argument(format!(
-                        "unexpected request code {}",
-                        request.code()
-                    )));
+                    return Err(
+                        ClientError::illegal_argument(format!("unexpected request code {}", request.code())).into(),
+                    );
                 };
                 response.set_opaque_mut(request.opaque());
                 Ok(response)
@@ -855,7 +854,7 @@ mod tests {
         let weak = Arc::downgrade(&instance);
         drop(instance);
         assert!(weak.upgrade().is_none());
-        assert!(matches!(admin.client(), Err(ClientError::not_initialized(_))));
+        assert!(matches!(admin.client(), Err(error) if error.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED)));
     }
 
     #[test]

@@ -378,7 +378,7 @@ impl MQClientAPIImpl {
                 return Err(client_broker_err!(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
-                    addr.to_string()
+                    addr
                 ))
             }
         };

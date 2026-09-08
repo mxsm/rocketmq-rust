@@ -115,7 +115,7 @@ impl SessionProcessor for AssignmentProcessor {
     fn process(
         &self,
         request: RemotingCommand,
-    ) -> Pin<Box<dyn Future<Output = crate::ClientResult<RemotingCommand>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
         Box::pin(async move {
             use std::sync::atomic::Ordering;
 
@@ -133,7 +133,8 @@ impl SessionProcessor for AssignmentProcessor {
                 return Err(crate::ClientError::illegal_argument(format!(
                     "unexpected request code {}",
                     request.code()
-                )));
+                ))
+                .into());
             };
             Ok(response.set_opaque(request.opaque()))
         })

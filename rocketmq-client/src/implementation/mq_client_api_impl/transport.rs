@@ -81,8 +81,8 @@ impl MQClientAPIImpl {
         if let Some(reason) = self.startup_config_error.as_ref() {
             return Err(ClientError::config_invalid(
                 ClientConfig::SOCKS_PROXY_CONFIG,
-                "<redacted>".to_string(),
-                reason.to_string(),
+                "<redacted>",
+                reason,
             ));
         }
         self.remoting_client

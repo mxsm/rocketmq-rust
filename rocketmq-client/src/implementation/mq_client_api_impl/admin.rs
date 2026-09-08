@@ -1758,7 +1758,7 @@ impl MQClientAPIImpl {
             _ => Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or_else(String::new, |remark| remark.to_string()),
-                broker_addr.to_string()
+                broker_addr
             )),
         }
     }
@@ -2194,7 +2194,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -2380,7 +2380,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -2504,7 +2504,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -3004,7 +3004,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 
@@ -3055,7 +3055,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            addr.to_string()
+            addr
         ))
     }
 }
@@ -3748,7 +3748,7 @@ impl MQClientAPIImpl {
             _ => Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or_else(String::new, |remark| remark.to_string()),
-                broker_addr.to_string()
+                broker_addr
             )),
         }
     }
@@ -4052,7 +4052,7 @@ impl MQClientAPIImpl {
             _ => Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or_else(String::new, |remark| remark.to_string()),
-                broker_addr.to_string()
+                &broker_addr
             )),
         }
     }
@@ -4093,7 +4093,7 @@ impl MQClientAPIImpl {
             _ => Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or_else(String::new, |remark| remark.to_string()),
-                broker_addr.to_string()
+                &broker_addr
             )),
         }
     }
@@ -4134,7 +4134,7 @@ impl MQClientAPIImpl {
             _ => Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or_else(String::new, |remark| remark.to_string()),
-                broker_addr.to_string()
+                &broker_addr
             )),
         }
     }
@@ -4167,7 +4167,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or_else(String::new, |remark| remark.to_string()),
-            broker_addr.to_string()
+            &broker_addr
         ))
     }
 
@@ -4612,7 +4612,7 @@ impl MQClientAPIImpl {
         Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
-            broker_addr.to_string()
+            broker_addr
         ))
     }
 
@@ -4697,12 +4697,11 @@ fn decode_proxy_drain_response(
             response.remark().map_or_else(String::new, |remark| remark.to_string())
         ));
     }
-    let body = response.body().ok_or_else(|| {
-        ClientError::response_process_failed(operation, "Proxy drain response body is missing".to_owned())
-    })?;
-    let state = ProxyDrainStateResponseBody::decode(body.as_ref()).map_err(|error| {
-        ClientError::response_process_failed(operation, format!("invalid Proxy drain response body: {error}"))
-    })?;
+    let body = response
+        .body()
+        .ok_or_else(|| ClientError::response_process_failed(operation, "Proxy drain response body is missing"))?;
+    let state = ProxyDrainStateResponseBody::decode(body.as_ref())
+        .map_err(|error| ClientError::response_process_source(operation, error))?;
     if state.schema_version != PROXY_DRAIN_SCHEMA_VERSION {
         return Err(ClientError::response_process_failed(
             operation,
@@ -5036,13 +5035,12 @@ mod retry_executor_tests {
         fn process(
             &self,
             request: RemotingCommand,
-        ) -> Pin<Box<dyn Future<Output = crate::ClientResult<RemotingCommand>> + Send + '_>> {
+        ) -> Pin<Box<dyn Future<Output = Result<RemotingCommand, rocketmq_error::SharedError>> + Send + '_>> {
             Box::pin(async move {
                 if request.code() != RequestCode::GetKvConfig.to_i32() {
-                    return Err(ClientError::illegal_argument(format!(
-                        "unexpected request code {}",
-                        request.code()
-                    )));
+                    return Err(
+                        ClientError::illegal_argument(format!("unexpected request code {}", request.code())).into(),
+                    );
                 }
                 self.requests.fetch_add(1, Ordering::SeqCst);
                 let response = self
@@ -5266,5 +5264,17 @@ mod json_error_boundary_tests {
         assert!(error.source_ref::<serde_json::Error>().is_some());
 
         assert!(error.is(&rocketmq_error::CORE_SERIALIZATION_FAILED));
+    }
+
+    #[cfg(any(feature = "admin-read", feature = "admin-mutation"))]
+    #[test]
+    fn proxy_drain_decode_preserves_source() {
+        let response = rocketmq_protocol::RemotingCommand::create_success_response_command().set_body("invalid");
+
+        let error =
+            super::decode_proxy_drain_response(response, "proxy_drain_test").expect_err("invalid body must fail");
+
+        assert!(error.is(&rocketmq_error::PROTOCOL_RESPONSE_FAILED));
+        assert!(error.source_ref::<rocketmq_error::Error>().is_some());
     }
 }

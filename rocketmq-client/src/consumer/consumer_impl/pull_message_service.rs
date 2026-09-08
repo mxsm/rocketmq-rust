@@ -1303,11 +1303,11 @@ fn pull_message_service_startup_failed(
 }
 
 fn pull_message_service_request_type_mismatch(expected: &'static str) -> ClientError {
-    ClientError::invalid_state(expected, "message request payload type mismatch".to_string())
+    ClientError::invalid_state(expected, "message request payload type mismatch")
 }
 
 fn pull_message_service_shutdown_signal_failed() -> ClientError {
-    ClientError::invalid_state("active shutdown receiver", "shutdown receiver unavailable".to_string())
+    ClientError::invalid_state("active shutdown receiver", "shutdown receiver unavailable")
 }
 
 #[cfg(test)]

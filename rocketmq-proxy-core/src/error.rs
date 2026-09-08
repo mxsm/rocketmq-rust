@@ -366,8 +366,48 @@ pub mod canonical {
             .with_context(ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT))
     }
 
+    fn message_with_source(
+        descriptor: &'static ErrorDescriptor,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> CanonicalError {
+        CanonicalError::caused_by(descriptor, source)
+            .with_context(ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT))
+    }
+
     pub fn argument(value: impl Into<String>) -> CanonicalError {
         message(&CORE_ARGUMENT_INVALID, value)
+    }
+
+    pub fn argument_with_source(source: impl std::error::Error + Send + Sync + 'static) -> CanonicalError {
+        message_with_source(&CORE_ARGUMENT_INVALID, source)
+    }
+
+    pub fn transport_unavailable_with_source(source: impl std::error::Error + Send + Sync + 'static) -> CanonicalError {
+        message_with_source(&PROXY_TRANSPORT_UNAVAILABLE, source)
+    }
+
+    pub fn invalid_metadata_with_source(source: impl std::error::Error + Send + Sync + 'static) -> CanonicalError {
+        message_with_source(&PROXY_METADATA_INVALID, source)
+    }
+
+    pub fn message_id_invalid_with_source(source: impl std::error::Error + Send + Sync + 'static) -> CanonicalError {
+        message_with_source(&PROXY_MESSAGE_ID_INVALID, source)
+    }
+
+    pub fn transaction_id_invalid_with_source(
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> CanonicalError {
+        message_with_source(&PROXY_TRANSACTION_ID_INVALID, source)
+    }
+
+    pub fn delivery_time_invalid_with_source(source: impl std::error::Error + Send + Sync + 'static) -> CanonicalError {
+        message_with_source(&PROXY_DELIVERY_TIME_INVALID, source)
+    }
+
+    pub fn receipt_handle_invalid_with_source(
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> CanonicalError {
+        message_with_source(&PROXY_RECEIPT_HANDLE_INVALID, source)
     }
 
     pub fn request_body_invalid(operation: &'static str, reason: impl Into<String>) -> CanonicalError {
@@ -421,6 +461,14 @@ pub mod canonical {
 
     pub fn authentication_failed(_operation: &'static str, reason: impl Into<String>) -> CanonicalError {
         CanonicalError::caused_by(&AUTH_CREDENTIALS_INVALID, DiagnosticMessage(reason.into()))
+            .with_context(ErrorContext::new().with_secret_presence(fields::CREDENTIALS_PRESENT))
+    }
+
+    pub fn authentication_failed_with_source(
+        _operation: &'static str,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> CanonicalError {
+        CanonicalError::caused_by(&AUTH_CREDENTIALS_INVALID, source)
             .with_context(ErrorContext::new().with_secret_presence(fields::CREDENTIALS_PRESENT))
     }
 
@@ -649,6 +697,21 @@ mod tests {
     fn non_broker_canonical_errors_keep_the_existing_proxy_variant() {
         let error = ProxyError::from(canonical::argument("invalid request"));
         assert!(matches!(error, ProxyError::Canonical(_)));
+    }
+
+    #[test]
+    fn transport_source_preserves_its_typed_cause_and_projection() {
+        let error = ProxyError::from(canonical::transport_unavailable_with_source(std::io::Error::other(
+            "injected transport failure",
+        )));
+
+        assert_eq!(error.descriptor(), &PROXY_TRANSPORT_UNAVAILABLE);
+        let ProxyError::Canonical(error) = error else {
+            panic!("source-bearing transport errors must use the canonical proxy carrier");
+        };
+        assert!(StdError::source(&error)
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
     }
 
     #[test]

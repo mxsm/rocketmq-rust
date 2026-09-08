@@ -1201,10 +1201,10 @@ fn apply_message_type(
                     ProxyError::illegal_delivery_time("delay message requires systemProperties.deliveryTimestamp")
                 })?;
             let policy = TimerPolicySnapshot::try_new(config.timer_precision_ms, config.timer_max_delay_ms)
-                .map_err(|error| ProxyError::illegal_delivery_time(error.to_string()))?;
+                .map_err(|error| ProxyError::from(canonical::delivery_time_invalid_with_source(error)))?;
             let deliver_time = deliver_time_ms.to_string();
             normalize_timer_request_fields(None, None, Some(deliver_time.as_str()), now_ms, policy)
-                .map_err(|error| ProxyError::illegal_delivery_time(error.to_string()))?;
+                .map_err(|error| ProxyError::from(canonical::delivery_time_invalid_with_source(error)))?;
             message.put_property(PROPERTY_TIMER_DELIVER_MS, deliver_time_ms.to_string());
             Ok(())
         }
