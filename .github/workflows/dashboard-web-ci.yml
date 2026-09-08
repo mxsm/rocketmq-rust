@@ -4,6 +4,7 @@ permissions:
   contents: read
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "main" ]
     paths:
@@ -19,6 +20,7 @@ on:
       - 'rustfmt.toml'
       - '.clippy.toml'
       - '.github/workflows/dashboard-web-ci.yml'
+      - '!**/AGENTS.md'
   pull_request:
     branches: [ "main" ]
     paths:
@@ -34,6 +36,7 @@ on:
       - 'rustfmt.toml'
       - '.clippy.toml'
       - '.github/workflows/dashboard-web-ci.yml'
+      - '!**/AGENTS.md'
 
 env:
   CARGO_TERM_COLOR: always
@@ -44,6 +47,10 @@ env:
   CARGO_PROFILE_DEV_OPT_LEVEL: 1
   CARGO_PROFILE_DEV_OVERFLOW_CHECKS: "false"
   ROCKSDB_DISABLE_JEMALLOC: 1
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   frontend-build:
@@ -123,9 +130,6 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Build backend
-        run: cargo build --all-targets --all-features
-
       - name: Clippy check
         run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -133,6 +137,7 @@ jobs:
         run: cargo test --locked --all-targets --all-features
 
   storage-contract:
+    if: github.event_name != 'pull_request'
     name: Storage Contract (File, SQLite, MySQL, PostgreSQL)
     runs-on: ubuntu-latest
     timeout-minutes: 45

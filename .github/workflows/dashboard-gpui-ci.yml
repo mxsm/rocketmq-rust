@@ -19,6 +19,7 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/dashboard-gpui-ci.yml"
+      - '!**/AGENTS.md'
   pull_request:
     branches: [main]
     paths:
@@ -34,15 +35,20 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/dashboard-gpui-ci.yml"
+      - '!**/AGENTS.md'
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_PROFILE_DEV_DEBUG: "false"
   CARGO_PROFILE_TEST_DEBUG: "false"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
-    name: GPUI fmt, Clippy, check, and test
+    name: GPUI fmt, Clippy, and test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -70,9 +76,6 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Check all targets
-        run: cargo check --all-targets --all-features
 
       - name: Test
         run: cargo test

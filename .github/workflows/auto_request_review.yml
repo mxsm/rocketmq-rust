@@ -9,6 +9,10 @@ on:
     types: [ opened, ready_for_review, reopened, synchronize ]
     branches: [ main ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   auto-request-review:
     name: Auto Request Review

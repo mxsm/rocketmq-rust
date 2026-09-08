@@ -13,9 +13,6 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
       - name: Remove multiple labels using github-script
         uses: actions/github-script@v9
         with:

@@ -52,13 +52,14 @@ class ArchitectureDocumentationGuardTest(unittest.TestCase):
         for record in payload["documents"]:
             self.assertEqual({"path", "sections", "link_targets", "commands"}, set(record))
 
-    def test_documentation_workflow_provisions_property_suite_native_dependencies(self) -> None:
+    def test_ci_routes_test_inventory_and_coverage_match_current_workflows(self) -> None:
         root = Path(__file__).resolve().parents[2]
-        workflow = (root / ".github/workflows/architecture-documentation.yml").read_text(encoding="utf-8")
-
-        self.assertIn("Install native build dependencies", workflow)
-        self.assertIn("clang llvm libclang-dev", workflow)
-        self.assertIn("protobuf-compiler", workflow)
+        policy = guard.load_json(root / guard.POLICY_RELATIVE)
+        facts = guard.collect_facts(root, policy)
+        findings = guard.validate_routes(root, policy, facts)
+        findings.extend(guard.validate_python_tests(root, policy))
+        findings.extend(guard.validate_coverage(root, policy))
+        self.assertEqual([], findings)
 
     def test_observability_cache_key_is_normalized_for_feature_lists(self) -> None:
         root = Path(__file__).resolve().parents[2]
