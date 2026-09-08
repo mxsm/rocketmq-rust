@@ -76,7 +76,7 @@ pub trait MessageTrait: Any + Display + Debug {
     fn put_user_property(&mut self, name: CheetahString, value: CheetahString) -> Result<()> {
         if name.is_empty() || value.is_empty() {
             return Err(crate::error::invalid_property(
-                "The name or value of property can not be null or blank string!".to_string(),
+                "The name or value of property can not be null or blank string!",
             ));
         }
         if STRING_HASH_SET.contains(name.as_str()) {

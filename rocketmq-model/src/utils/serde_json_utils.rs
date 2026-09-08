@@ -41,8 +41,7 @@ impl SerdeJsonUtils {
     where
         T: serde::de::DeserializeOwned,
     {
-        Ok(serde_json::from_str(json)
-            .map_err(|error| crate::error::serialization_source("deserialize", "JSON", error))?)
+        serde_json::from_str(json).map_err(|error| crate::error::serialization_source("deserialize", "JSON", error))
     }
 
     /// Deserialize JSON from a byte slice into a Rust type.
@@ -51,8 +50,7 @@ impl SerdeJsonUtils {
     where
         T: serde::de::DeserializeOwned,
     {
-        Ok(serde_json::from_slice(json)
-            .map_err(|error| crate::error::serialization_source("deserialize", "JSON", error))?)
+        serde_json::from_slice(json).map_err(|error| crate::error::serialization_source("deserialize", "JSON", error))
     }
 
     /// Serialize a Rust type into a JSON string (compact format).
@@ -61,8 +59,7 @@ impl SerdeJsonUtils {
     where
         T: serde::Serialize,
     {
-        Ok(serde_json::to_string(value)
-            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?)
+        serde_json::to_string(value).map_err(|error| crate::error::serialization_source("serialize", "JSON", error))
     }
 
     /// Serialize a Rust type into a JSON string (pretty-printed format).
@@ -71,8 +68,8 @@ impl SerdeJsonUtils {
     where
         T: serde::Serialize,
     {
-        Ok(serde_json::to_string_pretty(value)
-            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?)
+        serde_json::to_string_pretty(value)
+            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))
     }
 
     /// Serialize a Rust type into a JSON byte vector (compact format).
@@ -81,10 +78,7 @@ impl SerdeJsonUtils {
     where
         T: serde::Serialize,
     {
-        Ok(
-            serde_json::to_vec(value)
-                .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?,
-        )
+        serde_json::to_vec(value).map_err(|error| crate::error::serialization_source("serialize", "JSON", error))
     }
 
     /// Serialize a Rust type into a JSON byte vector (pretty-printed format).
@@ -93,8 +87,7 @@ impl SerdeJsonUtils {
     where
         T: serde::Serialize,
     {
-        Ok(serde_json::to_vec_pretty(value)
-            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?)
+        serde_json::to_vec_pretty(value).map_err(|error| crate::error::serialization_source("serialize", "JSON", error))
     }
 }
 

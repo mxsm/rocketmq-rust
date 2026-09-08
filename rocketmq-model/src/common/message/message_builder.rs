@@ -259,7 +259,7 @@ impl MessageBuilder {
     pub fn build(mut self) -> Result<super::message_single::Message> {
         let topic = self
             .topic
-            .ok_or_else(|| crate::error::invalid_property("Topic is required for message".to_string()))?;
+            .ok_or_else(|| crate::error::invalid_property("Topic is required for message"))?;
         if self.properties.get(MessagePropertyKey::WaitStoreMsgOk).is_none() {
             self.properties.insert(MessagePropertyKey::WaitStoreMsgOk, "true");
         }
