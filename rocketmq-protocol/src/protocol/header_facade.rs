@@ -21,3 +21,34 @@ fn current_millis() -> i64 {
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn now_millis() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be later than the unix epoch")
+            .as_millis() as u64
+    }
+
+    #[test]
+    fn default_elect_master_request_header_matches_production_defaults() {
+        let header = default_elect_master_request_header();
+
+        assert_eq!(header.cluster_name, "");
+        assert_eq!(header.broker_name, "");
+        assert_eq!(header.broker_id, 0);
+        assert!(!header.designate_elect);
+    }
+
+    #[test]
+    fn default_elect_master_request_header_uses_wall_clock_invoke_time() {
+        let before = now_millis();
+        let header = default_elect_master_request_header();
+
+        assert!(header.invoke_time > 0);
+        assert!(header.invoke_time >= before);
+    }
+}

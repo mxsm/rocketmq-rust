@@ -24,3 +24,38 @@ fn current_millis() -> i64 {
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn now_millis() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be later than the unix epoch")
+            .as_millis() as i64
+    }
+
+    #[test]
+    fn default_subscription_data_uses_wall_clock_sub_version() {
+        let before = now_millis();
+        let data = default_subscription_data();
+
+        assert!(data.sub_version > 0);
+        assert!(data.sub_version >= before);
+    }
+
+    #[test]
+    fn default_subscription_data_keeps_remaining_defaults() {
+        let data = default_subscription_data();
+        let expected = SubscriptionData::default();
+
+        assert_eq!(data.class_filter_mode, expected.class_filter_mode);
+        assert_eq!(data.topic, expected.topic);
+        assert_eq!(data.sub_string, expected.sub_string);
+        assert_eq!(data.tags_set, expected.tags_set);
+        assert_eq!(data.code_set, expected.code_set);
+        assert_eq!(data.expression_type, expected.expression_type);
+        assert_eq!(data.filter_class_source, expected.filter_class_source);
+    }
+}

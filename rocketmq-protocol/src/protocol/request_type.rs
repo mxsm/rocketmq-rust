@@ -41,3 +41,29 @@ impl RequestType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn value_of_maps_zero_to_stream() {
+        assert_eq!(RequestType::value_of(0), Some(RequestType::Stream));
+    }
+
+    #[test]
+    fn value_of_rejects_unknown_codes() {
+        assert_eq!(RequestType::value_of(1), None);
+        assert_eq!(RequestType::value_of(255), None);
+    }
+
+    #[test]
+    fn get_code_returns_zero_for_stream() {
+        assert_eq!(RequestType::Stream.get_code(), 0);
+    }
+
+    #[test]
+    fn display_prints_stream_for_stream_variant() {
+        assert_eq!(RequestType::Stream.to_string(), "STREAM");
+    }
+}
