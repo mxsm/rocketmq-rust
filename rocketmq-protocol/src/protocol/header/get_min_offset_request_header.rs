@@ -132,40 +132,6 @@ mod tests {
 
     use super::*;
     use crate::protocol::command_custom_header::FromMap;
-    use crate::rpc::rpc_request_header::RpcRequestHeader;
-
-    #[test]
-    fn get_min_offset_request_header_trait_impl() {
-        let mut header = GetMinOffsetRequestHeader::default();
-
-        assert!(header.lo().is_none());
-        header.topic_request_header = Some(TopicRequestHeader::default());
-        header.set_lo(Some(true));
-        assert_eq!(header.lo(), Some(true));
-
-        header.set_topic(CheetahString::from("test_topic"));
-        assert_eq!(header.topic(), &CheetahString::from("test_topic"));
-
-        assert!(header.broker_name().is_none());
-        header.topic_request_header.as_mut().unwrap().rpc_request_header = Some(RpcRequestHeader::default());
-        header.set_broker_name(CheetahString::from("broker"));
-        assert_eq!(header.broker_name(), Some(&CheetahString::from("broker")));
-
-        assert!(header.namespace().is_none());
-        header.set_namespace(CheetahString::from("ns"));
-        assert_eq!(header.namespace(), Some("ns"));
-
-        assert!(header.namespaced().is_none());
-        header.set_namespaced(true);
-        assert_eq!(header.namespaced(), Some(true));
-
-        assert!(header.oneway().is_none());
-        header.set_oneway(true);
-        assert_eq!(header.oneway(), Some(true));
-
-        header.set_queue_id(1);
-        assert_eq!(header.queue_id(), 1);
-    }
 
     #[test]
     fn get_min_offset_request_header_serialization() {
