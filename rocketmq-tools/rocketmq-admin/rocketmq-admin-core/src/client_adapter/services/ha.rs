@@ -232,13 +232,11 @@ fn ha_status_target_from_options(
         (None, None) => Err(crate::client_adapter::services::errors::admin_validation_failed(
             "target",
             "either brokerAddr or clusterName must be specified",
-        )
-        .into()),
+        )),
         (Some(_), Some(_)) => Err(crate::client_adapter::services::errors::admin_validation_failed(
             "target",
             "brokerAddr and clusterName cannot both be specified",
-        )
-        .into()),
+        )),
     }
 }
 
@@ -252,13 +250,11 @@ fn sync_state_set_target_from_options(
         (None, None) => Err(crate::client_adapter::services::errors::admin_validation_failed(
             "target",
             "either brokerName or clusterName must be specified",
-        )
-        .into()),
+        )),
         (Some(_), Some(_)) => Err(crate::client_adapter::services::errors::admin_validation_failed(
             "target",
             "brokerName and clusterName cannot both be specified",
-        )
-        .into()),
+        )),
     }
 }
 
@@ -275,8 +271,7 @@ fn trim_required_controller_address(value: impl Into<String>) -> CanonicalResult
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             "controllerAddress",
             "controllerAddress must not be empty",
-        )
-        .into());
+        ));
     }
     Ok(CheetahString::from(controller_address))
 }

@@ -226,7 +226,7 @@ mod tests {
         let source = std::error::Error::source(&error).expect("serde source must be retained");
         assert!(source.downcast_ref::<serde_json::Error>().is_some());
         let context = error.context();
-        let public = rocketmq_error::PublicErrorView::try_new(error.descriptor(), &context).expect("valid public view");
+        let public = rocketmq_error::PublicErrorView::try_new(error.descriptor(), context).expect("valid public view");
         assert!(!format!("{public:?}").contains("expected ident"));
     }
 }

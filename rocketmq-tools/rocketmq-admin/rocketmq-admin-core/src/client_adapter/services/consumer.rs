@@ -70,8 +70,7 @@ fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> Canon
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             field,
             format!("{field} must not be empty"),
-        )
-        .into());
+        ));
     }
     Ok(CheetahString::from(value))
 }
@@ -88,13 +87,11 @@ fn target_from_options(broker_addr: Option<String>, cluster_name: Option<String>
         (None, None) => Err(crate::client_adapter::services::errors::admin_validation_failed(
             "target",
             "either brokerAddr or clusterName must be provided",
-        )
-        .into()),
+        )),
         (Some(_), Some(_)) => Err(crate::client_adapter::services::errors::admin_validation_failed(
             "target",
             "brokerAddr and clusterName cannot be provided together",
-        )
-        .into()),
+        )),
     }
 }
 
@@ -320,9 +317,8 @@ impl UpdateSubscriptionGroupRequest {
     }
 
     fn validate(&self) -> CanonicalResult<()> {
-        validate_subscription_group_name(self.config.group_name().as_str()).map_err(|error| {
-            crate::client_adapter::services::errors::admin_validation_failed_by("groupName", error).into()
-        })
+        validate_subscription_group_name(self.config.group_name().as_str())
+            .map_err(|error| crate::client_adapter::services::errors::admin_validation_failed_by("groupName", error))
     }
 }
 
@@ -480,22 +476,19 @@ impl StartMonitoringRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "roundCount",
                 "roundCount must be greater than zero",
-            )
-            .into());
+            ));
         }
         if round_interval_millis == 0 {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "roundIntervalMillis",
                 "roundIntervalMillis must be greater than zero",
-            )
-            .into());
+            ));
         }
         if max_events == Some(0) {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "maxEvents",
                 "maxEvents must be greater than zero",
-            )
-            .into());
+            ));
         }
         Ok(Self {
             namesrv_addr: trim_optional_string(namesrv_addr),
@@ -648,9 +641,8 @@ impl UpdateSubscriptionGroupListRequest {
     }
 
     fn validate(&self) -> CanonicalResult<()> {
-        validate_subscription_group_configs(&self.configs).map_err(|error| {
-            crate::client_adapter::services::errors::admin_validation_failed_by("groupConfigs", error).into()
-        })
+        validate_subscription_group_configs(&self.configs)
+            .map_err(|error| crate::client_adapter::services::errors::admin_validation_failed_by("groupConfigs", error))
     }
 }
 

@@ -447,7 +447,7 @@ fn failure_targets(failures: &[AdminSourceFailure]) -> Vec<String> {
 }
 
 fn source_failure(source: AdminQuerySource, broker_name: &str, error: &CanonicalError) -> AdminSourceFailure {
-    let code = match crate::client_adapter::services::error_view::rocketmq_http_status(error) {
+    let code = match crate::canonical_http_status(error) {
         401 | 403 => AdminQueryFailureCode::PermissionDenied,
         404 => AdminQueryFailureCode::NotFound,
         408 | 504 => AdminQueryFailureCode::Timeout,
@@ -455,12 +455,7 @@ fn source_failure(source: AdminQuerySource, broker_name: &str, error: &Canonical
         400 | 413 | 422 => AdminQueryFailureCode::InvalidResponse,
         _ => AdminQueryFailureCode::SourceUnavailable,
     };
-    AdminSourceFailure::new(
-        source,
-        code,
-        crate::client_adapter::services::error_view::rocketmq_is_retryable(error),
-        broker_name,
-    )
+    AdminSourceFailure::new(source, code, crate::canonical_is_retryable(error), broker_name)
 }
 
 fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError) -> AdminError {

@@ -326,7 +326,9 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
                     .audit_rejection(properties, operator, &source_ip, super_user, "validation_failure")
                     .await;
                 return Ok(Some(
-                    response.set_code(ResponseCode::InvalidParameter).set_remark(remark),
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark(remark.to_string()),
                 ));
             }
         };

@@ -28,10 +28,14 @@ pub(crate) fn generate(model: &HeaderModel) -> TokenStream {
     quote! {
         impl #struct_name {
             #(#static_fields)*
+
+            fn __request_header_error(_detail: impl Into<String>) -> rocketmq_error::Error {
+                rocketmq_error::Error::new(&rocketmq_error::PROTOCOL_HEADER_INVALID)
+            }
         }
 
         impl #protocol_path::protocol::command_custom_header::CommandCustomHeader for #struct_name {
-            fn to_map(&self) -> Option<std::collections::HashMap<#protocol_path::__request_header_codec::CheetahString, #protocol_path::__request_header_codec::CheetahString>> {
+            fn to_map(&self) -> Option<std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>> {
                 let mut map = std::collections::HashMap::new();
                 #(#to_maps)*
                 Some(map)
@@ -40,11 +44,11 @@ pub(crate) fn generate(model: &HeaderModel) -> TokenStream {
 
         impl #protocol_path::protocol::command_custom_header::FromMap for #struct_name {
 
-            type Error = #protocol_path::__request_header_codec::Error;
+            type Error = rocketmq_error::Error;
 
             type Target = Self;
 
-            fn from(map: &std::collections::HashMap<#protocol_path::__request_header_codec::CheetahString, #protocol_path::__request_header_codec::CheetahString>) -> Result<Self::Target, Self::Error> {
+            fn from(map: &std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>) -> Result<Self::Target, Self::Error> {
                 Ok(#struct_name {
                     #(#from_map)*
                 })
@@ -133,7 +137,7 @@ fn gen_from_map(field: &FieldModel, protocol_path: &syn::Path) -> TokenStream {
             #field_name: Some(
                 map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                     .cloned()
-                    .ok_or(#protocol_path::__request_header_codec::request_header_error(
+                    .ok_or(Self::__request_header_error(
                         format!("Missing {} field", Self::#static_name),
                     ))?
             ),
@@ -142,7 +146,7 @@ fn gen_from_map(field: &FieldModel, protocol_path: &syn::Path) -> TokenStream {
             Some(
                 map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                     .cloned()
-                    .ok_or(#protocol_path::__request_header_codec::request_header_error(
+                    .ok_or(Self::__request_header_error(
                         format!("Missing {} field", Self::#static_name),
                     ))?
                     .to_string()
@@ -157,11 +161,11 @@ fn gen_from_map(field: &FieldModel, protocol_path: &syn::Path) -> TokenStream {
         (Some(type_), LegacyValueKind::Primitive, false, true) => quote! {
             #field_name: Some(
                 map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
-                    .ok_or(#protocol_path::__request_header_codec::request_header_error(
+                    .ok_or(Self::__request_header_error(
                         format!("Missing {} field", Self::#static_name),
                     ))?
                     .parse::<#type_>()
-                    .map_err(|_| #protocol_path::__request_header_codec::request_header_error(
+                    .map_err(|_| Self::__request_header_error(
                         format!("Parse {} field error", Self::#static_name)
                     ))?
             ),
@@ -173,14 +177,14 @@ fn gen_from_map(field: &FieldModel, protocol_path: &syn::Path) -> TokenStream {
         (None, LegacyValueKind::CheetahString, false, true) => quote! {
             #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                 .cloned()
-                .ok_or(#protocol_path::__request_header_codec::request_header_error(
+                .ok_or(Self::__request_header_error(
                     format!("Missing {} field", Self::#static_name),
                 ))?,
         },
         (None, LegacyValueKind::String, false, true) => quote! {
             #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
                 .cloned()
-                .ok_or(#protocol_path::__request_header_codec::request_header_error(
+                .ok_or(Self::__request_header_error(
                     format!("Missing {} field", Self::#static_name),
                 ))?
                 .to_string(),
@@ -200,11 +204,11 @@ fn gen_from_map(field: &FieldModel, protocol_path: &syn::Path) -> TokenStream {
             let type_ = &field.ty;
             quote! {
                 #field_name: map.get(&cheetah_string::CheetahString::from_static_str(Self::#static_name))
-                    .ok_or(#protocol_path::__request_header_codec::request_header_error(
+                    .ok_or(Self::__request_header_error(
                         format!("Missing {} field", Self::#static_name),
                     ))?
                     .parse::<#type_>()
-                    .map_err(|_| #protocol_path::__request_header_codec::request_header_error(
+                    .map_err(|_| Self::__request_header_error(
                         format!("Parse {} field error", Self::#static_name)
                     ))?,
             }

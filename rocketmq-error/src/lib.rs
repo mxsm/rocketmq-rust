@@ -52,8 +52,6 @@ mod projection;
 mod recovery;
 mod view;
 
-// Re-export new error types as primary API
-// Re-export auth error types from unified module
 pub use boundary::CliExitCode;
 pub use boundary::CliSpec;
 pub use boundary::GrpcPayloadCode;
@@ -93,7 +91,6 @@ pub use field::I64Field;
 pub use field::SecretPresenceField;
 pub use field::TextField;
 pub use field::U64Field;
-// Re-export filter error types
 pub use filter_error::FilterCompileError;
 pub use filter_error::FilterCompileErrorKind;
 pub use filter_error::FilterCompileSource;

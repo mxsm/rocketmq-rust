@@ -425,10 +425,10 @@ impl TopicService {
         topic: impl Into<CheetahString>,
     ) -> CanonicalResult<Option<rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData>> {
         let topic = topic.into();
-        Ok(admin
+        admin
             .examine_topic_route_info(topic.clone())
             .await
-            .map_err(|_| crate::client_adapter::services::errors::topic_route_not_found(topic.to_string()))?)
+            .map_err(|_| crate::client_adapter::services::errors::topic_route_not_found(topic.to_string()))
     }
 
     /// Delete a topic from cluster
@@ -448,10 +448,10 @@ impl TopicService {
         let topic = topic.into();
         let cluster = cluster_name.into();
 
-        Ok(admin
+        admin
             .delete_topic(topic.clone(), cluster.clone())
             .await
-            .map_err(|e| crate::client_adapter::services::errors::internal_by(e))?)
+            .map_err(crate::client_adapter::services::errors::internal_by)
     }
 
     /// Create or update a topic configuration
@@ -499,7 +499,7 @@ impl TopicService {
                     let cluster_info = admin
                         .examine_broker_cluster_info()
                         .await
-                        .map_err(|e| crate::client_adapter::services::errors::internal_by(e))?;
+                        .map_err(crate::client_adapter::services::errors::internal_by)?;
                     HashSet::from([BrokerAddressResolver::fetch_broker_name_by_addr(
                         &cluster_info,
                         addr.as_str(),
@@ -536,7 +536,7 @@ impl TopicService {
             admin
                 .create_and_update_topic_config(addr, internal_config.clone())
                 .await
-                .map_err(|e| crate::client_adapter::services::errors::internal_by(e))?;
+                .map_err(crate::client_adapter::services::errors::internal_by)?;
         }
 
         if order {
@@ -544,7 +544,7 @@ impl TopicService {
             admin
                 .create_or_update_order_conf(topic_name, order_conf.into(), cluster_wide)
                 .await
-                .map_err(|e| crate::client_adapter::services::errors::internal_by(e))?;
+                .map_err(crate::client_adapter::services::errors::internal_by)?;
         }
 
         Ok(())
@@ -560,8 +560,7 @@ impl TopicService {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "topicConfigs",
                 "topicConfigs must not be empty",
-            )
-            .into());
+            ));
         }
 
         let broker_addrs = match &target {
@@ -586,7 +585,7 @@ impl TopicService {
             admin
                 .create_and_update_topic_config_list(broker_addr.clone(), topic_configs.clone())
                 .await
-                .map_err(|e| crate::client_adapter::services::errors::internal_by(e))?;
+                .map_err(crate::client_adapter::services::errors::internal_by)?;
         }
 
         Ok(UpdateTopicListResult { target, broker_addrs })
@@ -636,7 +635,7 @@ impl TopicService {
         let topic_list = admin
             .fetch_all_topic_list()
             .await
-            .map_err(|e| crate::client_adapter::services::errors::internal_by(e))?;
+            .map_err(crate::client_adapter::services::errors::internal_by)?;
 
         let Some(cluster_name) = request.cluster_name() else {
             return Ok(TopicListResult {
@@ -655,7 +654,7 @@ impl TopicService {
         let cluster_info = admin
             .examine_broker_cluster_info()
             .await
-            .map_err(|e| crate::client_adapter::services::errors::internal_by(e))?;
+            .map_err(crate::client_adapter::services::errors::internal_by)?;
 
         let mut topics = Vec::new();
         for topic in topic_list.topic_list {
@@ -732,7 +731,7 @@ impl TopicService {
         admin
             .examine_topic_stats(topic.into(), broker_addr)
             .await
-            .map_err(|e| crate::client_adapter::services::errors::internal_by(e))
+            .map_err(crate::client_adapter::services::errors::internal_by)
     }
 
     /// Update topic permission
@@ -761,7 +760,7 @@ impl TopicService {
                 let topic_config = admin
                     .examine_topic_config(broker_addr.clone(), topic.clone())
                     .await
-                    .map_err(|e| crate::client_adapter::services::errors::internal_by(e))?;
+                    .map_err(crate::client_adapter::services::errors::internal_by)?;
 
                 // Update permission
                 let updated_config = RocketMQTopicConfig {
@@ -778,7 +777,7 @@ impl TopicService {
                 admin
                     .create_and_update_topic_config(broker_addr, updated_config)
                     .await
-                    .map_err(|e| crate::client_adapter::services::errors::internal_by(e))?;
+                    .map_err(crate::client_adapter::services::errors::internal_by)?;
 
                 Ok(())
             }
@@ -787,7 +786,7 @@ impl TopicService {
                 let cluster_info = admin
                     .examine_broker_cluster_info()
                     .await
-                    .map_err(|e| crate::client_adapter::services::errors::internal_by(e))?;
+                    .map_err(crate::client_adapter::services::errors::internal_by)?;
 
                 // Find master brokers
                 let master_addrs =
@@ -802,7 +801,7 @@ impl TopicService {
                     let topic_config = admin
                         .examine_topic_config(broker_addr.clone(), topic.clone())
                         .await
-                        .map_err(|e| crate::client_adapter::services::errors::internal_by(e))?;
+                        .map_err(crate::client_adapter::services::errors::internal_by)?;
 
                     let updated_config = RocketMQTopicConfig {
                         topic_name: Some(topic.clone()),
@@ -818,7 +817,7 @@ impl TopicService {
                     admin
                         .create_and_update_topic_config(broker_addr, updated_config)
                         .await
-                        .map_err(|e| crate::client_adapter::services::errors::internal_by(e))?;
+                        .map_err(crate::client_adapter::services::errors::internal_by)?;
                 }
 
                 Ok(())
@@ -898,7 +897,7 @@ impl TopicService {
                 order_conf.into(),
             )
             .await
-            .map_err(|e| crate::client_adapter::services::errors::internal_by(e))
+            .map_err(crate::client_adapter::services::errors::internal_by)
     }
 
     /// Get order configuration
@@ -917,7 +916,7 @@ impl TopicService {
         admin
             .get_kv_config(CheetahString::from_static_str(NAMESPACE), topic.into())
             .await
-            .map_err(|e| crate::client_adapter::services::errors::internal_by(e))
+            .map_err(crate::client_adapter::services::errors::internal_by)
     }
 
     /// Delete order configuration
@@ -936,7 +935,7 @@ impl TopicService {
         admin
             .delete_kv_config(CheetahString::from_static_str(NAMESPACE), topic.into())
             .await
-            .map_err(|e| crate::client_adapter::services::errors::internal_by(e))
+            .map_err(crate::client_adapter::services::errors::internal_by)
     }
 }
 

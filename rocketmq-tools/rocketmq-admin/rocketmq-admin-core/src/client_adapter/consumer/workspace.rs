@@ -766,7 +766,7 @@ fn safe_failure(target: String, stage: WorkspaceFailureStage, error: &rocketmq_e
         target,
         stage,
         code: WorkspaceFailureCode::Unavailable,
-        retryable: crate::client_adapter::services::error_view::rocketmq_is_retryable(&error),
+        retryable: crate::client_adapter::services::error_view::rocketmq_is_retryable(error),
     }
 }
 

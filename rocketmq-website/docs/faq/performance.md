@@ -258,7 +258,7 @@ use std::time::Instant;
 async fn benchmark_send(
     producer: &mut DefaultMQProducer,
     count: usize,
-) -> rocketmq_error::RocketMQResult<()> {
+) -> rocketmq_client_rust::ClientResult<()> {
     let start = Instant::now();
 
     for i in 0..count {

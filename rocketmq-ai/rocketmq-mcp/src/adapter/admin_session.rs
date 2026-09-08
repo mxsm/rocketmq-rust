@@ -1339,7 +1339,8 @@ fn map_logical_admin_error(error: rocketmq_admin_core::core::AdminError) -> Tool
     match error.failure() {
         rocketmq_admin_core::core::AdminFailure::InvalidArgument
         | rocketmq_admin_core::core::AdminFailure::NotFound => ToolFailure::invalid_arguments(error),
-        rocketmq_admin_core::core::AdminFailure::Backend
-        | rocketmq_admin_core::core::AdminFailure::SessionClosed => ToolFailure::backend(error),
+        rocketmq_admin_core::core::AdminFailure::Backend | rocketmq_admin_core::core::AdminFailure::SessionClosed => {
+            ToolFailure::backend(error)
+        }
     }
 }

@@ -17,7 +17,7 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-use rocketmq_client::ClientResult;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::DefaultMQProducer;
 use rocketmq_model::common::message::message_single::Message;

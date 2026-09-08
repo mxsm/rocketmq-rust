@@ -99,9 +99,7 @@ fn injected_fault_preserves_canonical_network_policy_and_typed_source() {
         "processor faults retain the legacy SystemError remoting code"
     );
 
-    let canonical = &error else {
-        panic!("injected processor failure must remain a canonical Shared error")
-    };
+    let canonical = &error;
     assert_eq!(canonical.fault(), rocketmq_error::FaultAttribution::Dependency);
     let source = canonical
         .source()

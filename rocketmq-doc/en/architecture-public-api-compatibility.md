@@ -29,10 +29,12 @@ paths removed by the architecture migration.
 
 - The intent guard's eight crates are a different denominator from the E8-3
   historical eight priority crates (`store`, `store-api`, `store-local`,
-  `transport`, `runtime`, `broker`, `auth`, and `security-api`). The manifest
-  contains exactly five supported `*Error` exports: `RocketMQError`,
-  `InfrastructureObservationReadError`, `RuntimeError`, `StoreError`, and
-  `TransportError`; this count must not be mixed with the live Error inventory.
+  `transport`, `runtime`, `broker`, `auth`, and `security-api`). The current
+  canonical kernel exports opaque `Error` and `SharedError`; owner-specific
+  public facades include `ClientError`, `InfrastructureObservationReadError`,
+  `RuntimeError`, `StoreError`, and `TransportError`. This surface must not be
+  inferred from the older checked-in intent snapshot while its post-cutover
+  reconciliation is pending.
 
 - The current Transport surface has one unversioned `api` module, one
   `RequestProcessor` contract, one authorized dispatcher facade, and one
@@ -68,7 +70,7 @@ core-release's 26 packages and 50 profiles. It exited 1 with
 additions + 139 incompatible removals`. Manual review classifies the 139
 removals as `admin-cli=1`, `protocol=6`, Windows `store-local` sendfile=12,
 and Transport old helpers=120. They touch 39 unique paths, and there is no
-`Error`/`ErrorKind` identity difference. The nonzero result is drift from
+canonical `Error` identity difference. The nonzero result is drift from
 earlier completed API-removal stages, not a new Error identity change.
 
 E8-3 therefore does not refresh the checked-in baseline. After E9-1 completes

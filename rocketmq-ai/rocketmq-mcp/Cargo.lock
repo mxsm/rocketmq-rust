@@ -3429,6 +3429,7 @@ name = "rocketmq-security-api"
 version = "1.0.0"
 dependencies = [
  "cheetah-string",
+ "rocketmq-error",
  "serde",
  "thiserror",
  "zeroize",

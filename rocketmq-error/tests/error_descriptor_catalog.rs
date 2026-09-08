@@ -39,6 +39,7 @@ const EXPECTED_DESCRIPTOR_SNAPSHOTS: &[&str] = &[
     "protocol.header.invalid|validation|InvalidArgument|Caller|protocol|Request header is invalid|Info|never|Never|Public|29|BadRequest|InvalidArgument|400|64|operation:Diagnostic:Text:Some(64),invalid_value_present:SecretPresenceOnly:Presence:None,source_present:SecretPresenceOnly:Presence:None",
     "route.topic.not_found|routing|NotFound|RemotePeer|route|Topic route was not found|Warn|refresh_route|Never|Public|17|TopicNotFound|NotFound|404|66|topic:Public:Text:Some(127)",
     "auth.credentials.invalid|authentication|Unauthenticated|Caller|auth|Authentication credentials are invalid|Error|refresh_credentials|Never|Generic|16|Unauthorized|Unauthenticated|401|77|credentials_present:SecretPresenceOnly:Presence:None",
+    "auth.user.not_found|authentication|NotFound|Caller|auth|User does not exist|Warn|never|Never|Generic|3001|NotFound|NotFound|404|66|operation:Diagnostic:Text:Some(64),source_present:SecretPresenceOnly:Presence:None",
     "auth.permission.denied|authorization|PermissionDenied|Caller|auth|Permission was denied|Error|never|Never|Public|16|Forbidden|PermissionDenied|403|77|operation:Public:Text:Some(64)",
     "transport.admission.queue_saturated|capacity|ResourceExhausted|LocalResource|transport|Transport admission queue is saturated|Warn|backoff|Never|Public|2|TooManyRequests|ResourceExhausted|429|75|remote_addr:Diagnostic:Text:Some(256)",
     "controller.leadership.not_leader|routing|FailedPrecondition|LocalResource|controller|Controller is not the leader|Warn|refresh_leader|Never|Public|2007|InternalError|FailedPrecondition|409|65|leader_id:Diagnostic:U64:None",
@@ -213,7 +214,7 @@ fn descriptor_snapshot(descriptor: &ErrorDescriptor) -> String {
 
 #[test]
 fn descriptor_catalog_snapshot_is_exact() {
-    assert_eq!(EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 135);
+    assert_eq!(EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 136);
     assert_eq!(ALL_DESCRIPTORS.len(), EXPECTED_DESCRIPTOR_SNAPSHOTS.len());
 
     for (descriptor, expected) in ALL_DESCRIPTORS.iter().zip(EXPECTED_DESCRIPTOR_SNAPSHOTS) {

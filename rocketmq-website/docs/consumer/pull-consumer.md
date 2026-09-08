@@ -12,10 +12,10 @@ Pull consumption in RocketMQ-Rust is provided by `DefaultLitePullConsumer`. It g
 ```rust
 use rocketmq_client_rust::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
 use rocketmq_client_rust::consumer::lite_pull_consumer::LitePullConsumer;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 
 #[tokio::main]
-async fn main() -> RocketMQResult<()> {
+async fn main() -> ClientResult<()> {
     let consumer = DefaultLitePullConsumer::builder()
         .consumer_group("my_consumer_group")
         .name_server_addr("localhost:9876")

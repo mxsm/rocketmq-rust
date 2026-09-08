@@ -47,10 +47,10 @@ Create `src/main.rs`:
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_common::common::message::message_single::Message;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 
 #[tokio::main]
-async fn main() -> RocketMQResult<()> {
+async fn main() -> ClientResult<()> {
     let mut producer = DefaultMQProducer::builder()
         .producer_group("producer_group_1")
         .name_server_addr("localhost:9876")
@@ -100,7 +100,7 @@ use rocketmq_client_rust::consumer::listener::consume_concurrently_status::Consu
 use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 
 struct MyListener;
 
@@ -109,7 +109,7 @@ impl MessageListenerConcurrently for MyListener {
         &self,
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         for msg in &messages {
             println!("Received message: {:?}", msg);
         }
@@ -118,7 +118,7 @@ impl MessageListenerConcurrently for MyListener {
 }
 
 #[tokio::main]
-async fn main() -> RocketMQResult<()> {
+async fn main() -> ClientResult<()> {
     let mut consumer = DefaultMQPushConsumer::builder()
         .consumer_group("consumer_group_1")
         .name_server_addr("localhost:9876")

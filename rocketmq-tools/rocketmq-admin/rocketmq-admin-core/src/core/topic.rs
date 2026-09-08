@@ -444,7 +444,7 @@ impl TopicBatchUpsertRequest {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "client-adapter"))]
     pub(crate) fn unchecked_for_execution_test(
         topic: String,
         broker_names: Vec<String>,

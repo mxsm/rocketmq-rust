@@ -43,8 +43,7 @@ fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> Canon
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             field,
             format!("{field} must not be empty"),
-        )
-        .into());
+        ));
     }
     Ok(CheetahString::from(value))
 }

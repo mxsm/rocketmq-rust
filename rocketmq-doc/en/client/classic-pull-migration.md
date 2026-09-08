@@ -70,7 +70,7 @@ impl PullTaskCallback for Callback {
         &'a self,
         queue: &'a MessageQueue,
         context: &'a mut PullTaskContext,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = rocketmq_client_rust::ClientResult<()>> + Send + 'a>> {
         Box::pin(async move {
             let consumer = context.get_pull_consumer()?;
             let offset = consumer.fetch_consume_offset(queue, false).await?.max(0);

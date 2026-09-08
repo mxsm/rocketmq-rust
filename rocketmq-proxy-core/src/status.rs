@@ -328,17 +328,16 @@ mod tests {
 
     #[test]
     fn auth_config_errors_map_to_bad_request_payload_and_transport_status() {
-        for error in [ProxyError::Canonical(canonical::configuration_invalid(
+        let error = ProxyError::Canonical(canonical::configuration_invalid(
             "auth.authorization",
             "provider not ready",
-        ))] {
-            let payload_status = ProxyStatusMapper::from_error(&error);
-            assert_eq!(payload_status.code, v2::Code::BadRequest as i32);
-            assert_eq!(
-                ProxyStatusMapper::to_tonic_status(&error).code(),
-                tonic::Code::InvalidArgument
-            );
-        }
+        ));
+        let payload_status = ProxyStatusMapper::from_error(&error);
+        assert_eq!(payload_status.code, v2::Code::BadRequest as i32);
+        assert_eq!(
+            ProxyStatusMapper::to_tonic_status(&error).code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[test]

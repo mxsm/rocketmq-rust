@@ -49,9 +49,7 @@ impl ParseGetUserSubCommand {
     fn new(command: &GetUserSubCommand) -> Result<Self, CanonicalError> {
         let username = command.username.trim();
         if username.is_empty() {
-            Err(crate::errors::argument_invalid(
-                "GetUserSubCommand: username is empty".into(),
-            ))
+            Err(crate::errors::argument_invalid("GetUserSubCommand: username is empty"))
         } else {
             Ok(Self {
                 username: username.into(),

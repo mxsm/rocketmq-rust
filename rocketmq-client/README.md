@@ -33,7 +33,8 @@ which owns client registration, route refresh, heartbeats, pull/rebalance servic
 signing, trace dispatch, latency fault strategy, and offset stores around the broker remoting path.
 
 The crate keeps Java-facing names for common concepts while exposing Rust async APIs and typed errors through
-`rocketmq_error::RocketMQResult`.
+`rocketmq_client_rust::ClientError` and `rocketmq_client_rust::ClientResult<T>`. The client facade retains a shared
+canonical `rocketmq_error::Error`, so callbacks and retry coordinators preserve descriptor identity and typed sources.
 
 ## Crate Layout
 
@@ -87,11 +88,11 @@ rocketmq-client-rust = { version = "1.0.0", features = ["observability", "otlp-t
 ```rust
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_common::common::message::message_single::Message;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_rust::rocketmq;
 
 #[rocketmq::main]
-async fn main() -> RocketMQResult<()> {
+async fn main() -> ClientResult<()> {
     rocketmq_common::log::init_logger()?;
 
     let mut producer = DefaultMQProducer::builder(client_runtime.clone())
@@ -124,11 +125,11 @@ use rocketmq_client_rust::consumer::listener::consume_concurrently_status::Consu
 use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_rust::rocketmq;
 
 #[rocketmq::main]
-async fn main() -> RocketMQResult<()> {
+async fn main() -> ClientResult<()> {
     rocketmq_common::log::init_logger()?;
 
     let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
@@ -152,7 +153,7 @@ impl MessageListenerConcurrently for PrintListener {
         &self,
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         for message in messages {
             println!("received: {:?}", message);
         }

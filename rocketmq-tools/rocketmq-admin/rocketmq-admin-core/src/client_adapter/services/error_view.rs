@@ -16,7 +16,6 @@
 
 use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RecoveryHint;
 use rocketmq_error::ViewValueRef;
 use serde::Deserialize;
 use serde::Serialize;
@@ -31,7 +30,7 @@ pub struct AdminErrorView {
 impl AdminErrorView {
     pub fn from_error(error: &CanonicalError) -> Self {
         let context = error.context();
-        let public = PublicErrorView::try_new(error.descriptor(), &context)
+        let public = PublicErrorView::try_new(error.descriptor(), context)
             .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
         Self {
             code: public.code().as_str().to_string(),
@@ -66,14 +65,11 @@ fn render_public_context(view: &PublicErrorView<'_>) -> Option<String> {
 }
 
 pub(crate) fn rocketmq_http_status(error: &CanonicalError) -> u16 {
-    error.descriptor().projection().http().status.as_u16()
+    crate::canonical_http_status(error)
 }
 
 pub(crate) fn rocketmq_is_retryable(error: &CanonicalError) -> bool {
-    matches!(
-        error.descriptor().recovery_hint(),
-        RecoveryHint::Backoff | RecoveryHint::RefreshRoute | RecoveryHint::RefreshLeader | RecoveryHint::SwitchBroker
-    )
+    crate::canonical_is_retryable(error)
 }
 
 pub fn stable_error_code(error: &CanonicalError) -> String {

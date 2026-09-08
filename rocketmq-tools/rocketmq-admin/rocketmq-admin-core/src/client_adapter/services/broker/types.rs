@@ -42,8 +42,7 @@ fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> Canon
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             field,
             format!("{field} must not be empty"),
-        )
-        .into());
+        ));
     }
     Ok(CheetahString::from(value))
 }
@@ -53,22 +52,19 @@ pub(super) fn validate_config_key(key: &str) -> CanonicalResult<()> {
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             "key",
             "config key must not be empty",
-        )
-        .into());
+        ));
     }
     if key.contains('=') {
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             "key",
             format!("invalid config key '{key}', '=' is not allowed"),
-        )
-        .into());
+        ));
     }
     if key.chars().any(char::is_whitespace) {
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             "key",
             format!("invalid config key '{key}', whitespace is not allowed"),
-        )
-        .into());
+        ));
     }
     Ok(())
 }
@@ -78,15 +74,13 @@ pub(super) fn validate_update_value(key: &str, new_value: &str, old_value: Optio
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             "value",
             format!("config value for key '{key}' must not be empty"),
-        )
-        .into());
+        ));
     }
     if new_value.contains('\n') || new_value.contains('\r') {
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             "value",
             format!("config value for key '{key}' must not contain line breaks"),
-        )
-        .into());
+        ));
     }
 
     if let Some(old_value) = old_value {
@@ -94,22 +88,19 @@ pub(super) fn validate_update_value(key: &str, new_value: &str, old_value: Optio
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "value",
                 format!("config key '{key}' expects boolean value, old='{old_value}', new='{new_value}'"),
-            )
-            .into());
+            ));
         }
         if old_value.parse::<i64>().is_ok() && new_value.parse::<i64>().is_err() {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "value",
                 format!("config key '{key}' expects integer, old='{old_value}', new='{new_value}'"),
-            )
-            .into());
+            ));
         }
         if old_value.parse::<f64>().is_ok() && new_value.parse::<f64>().is_err() {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "value",
                 format!("config key '{key}' expects numeric value, old='{old_value}', new='{new_value}'"),
-            )
-            .into());
+            ));
         }
     }
 
@@ -214,15 +205,13 @@ impl BrokerConfigQueryRequest {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerAddr or clusterName must be provided",
-                )
-                .into());
+                ));
             }
             (Some(_), Some(_)) => {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerAddr and clusterName cannot be provided together",
-                )
-                .into());
+                ));
             }
         };
 
@@ -250,7 +239,7 @@ impl BrokerConfigQueryRequest {
         self.key_pattern()
             .map(|pattern| {
                 Regex::new(pattern).map_err(|error| {
-                    crate::client_adapter::services::errors::admin_validation_failed_by("keyPattern", error).into()
+                    crate::client_adapter::services::errors::admin_validation_failed_by("keyPattern", error)
                 })
             })
             .transpose()
@@ -316,8 +305,7 @@ impl BrokerConfigUpdateRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "entries",
                 "at least one config entry must be provided",
-            )
-            .into());
+            ));
         }
 
         let broker_addr = trim_optional_string(broker_addr);
@@ -329,15 +317,13 @@ impl BrokerConfigUpdateRequest {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerAddr or clusterName must be provided",
-                )
-                .into());
+                ));
             }
             (Some(_), Some(_)) => {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerAddr and clusterName cannot be provided together",
-                )
-                .into());
+                ));
             }
         };
 
@@ -476,15 +462,13 @@ impl BrokerRuntimeStatsQueryRequest {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerAddr or clusterName must be provided",
-                )
-                .into());
+                ));
             }
             (Some(_), Some(_)) => {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerAddr and clusterName cannot be provided together",
-                )
-                .into());
+                ));
             }
         };
 
@@ -652,8 +636,7 @@ impl ResetMasterFlushOffsetRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "offset",
                 "offset must not be negative",
-            )
-            .into());
+            ));
         }
 
         Ok(Self {
@@ -712,15 +695,13 @@ impl SwitchTimerEngineRequest {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerAddr or clusterName must be provided",
-                )
-                .into());
+                ));
             }
             (Some(_), Some(_)) => {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerAddr and clusterName cannot be provided together",
-                )
-                .into());
+                ));
             }
         };
 
@@ -733,8 +714,7 @@ impl SwitchTimerEngineRequest {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "engineType",
                     "engineType must be R or F",
-                )
-                .into());
+                ));
             }
         };
 
@@ -971,15 +951,13 @@ impl BrokerEpochQueryRequest {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerName or clusterName must be provided",
-                )
-                .into());
+                ));
             }
             (Some(_), Some(_)) => {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerName and clusterName cannot be provided together",
-                )
-                .into());
+                ));
             }
         };
 
@@ -1134,8 +1112,7 @@ impl CommitLogReadAheadMode {
             other => Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "commitLogReadAheadMode",
                 format!("invalid commitLogReadAheadMode '{other}', expected 0 or 1"),
-            )
-            .into()),
+            )),
         }
     }
 
@@ -1194,8 +1171,7 @@ impl CommitLogReadAheadRequest {
                     return Err(crate::client_adapter::services::errors::admin_validation_failed(
                         "readAheadSize",
                         "readAheadSize must be greater than 0",
-                    )
-                    .into());
+                    ));
                 }
                 Some(parsed)
             }
@@ -1206,8 +1182,7 @@ impl CommitLogReadAheadRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "showOnly",
                 "--showOnly cannot be used with update options",
-            )
-            .into());
+            ));
         }
 
         Ok(Self {
@@ -1295,13 +1270,11 @@ fn broker_target_from_options(
         (None, None) => Err(crate::client_adapter::services::errors::admin_validation_failed(
             "target",
             "either brokerAddr or clusterName must be provided",
-        )
-        .into()),
+        )),
         (Some(_), Some(_)) => Err(crate::client_adapter::services::errors::admin_validation_failed(
             "target",
             "brokerAddr and clusterName cannot be provided together",
-        )
-        .into()),
+        )),
     }
 }
 

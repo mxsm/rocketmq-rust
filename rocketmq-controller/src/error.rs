@@ -194,7 +194,6 @@ pub(crate) fn io_failed(operation: &'static str, source: impl StdError + Send + 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::error::Error as _;
     use std::io;
 
     #[test]

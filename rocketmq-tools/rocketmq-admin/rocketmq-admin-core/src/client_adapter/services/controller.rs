@@ -40,8 +40,7 @@ impl ControllerConfigQueryRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "controllerAddress",
                 "controllerAddress must contain at least one address",
-            )
-            .into());
+            ));
         }
         Ok(Self {
             controller_servers,
@@ -90,8 +89,7 @@ impl ControllerConfigUpdateRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "controllerAddress",
                 "controllerAddress must contain at least one address",
-            )
-            .into());
+            ));
         }
 
         let key = trim_required_cheetah("key", key)?;
@@ -185,8 +183,7 @@ impl ControllerElectMasterRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "brokerId",
                 "brokerId must be greater than or equal to 0",
-            )
-            .into());
+            ));
         }
 
         Ok(Self {
@@ -259,8 +256,7 @@ impl ControllerMetadataCleanRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "clusterName",
                 "clusterName must not be empty when cleanLivingBroker is false",
-            )
-            .into());
+            ));
         }
 
         let broker_controller_ids_to_clean =
@@ -478,8 +474,7 @@ fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> Canon
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             field,
             format!("{field} must not be empty"),
-        )
-        .into());
+        ));
     }
     Ok(CheetahString::from(value))
 }

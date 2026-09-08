@@ -309,7 +309,10 @@ mod tests {
         let ConsumerError::Admin(error) = error else {
             panic!("invalid admin input must retain the canonical admin facade");
         };
-        assert_eq!(error.failure(), rocketmq_admin_core::core::AdminFailure::InvalidArgument);
+        assert_eq!(
+            error.failure(),
+            rocketmq_admin_core::core::AdminFailure::InvalidArgument
+        );
     }
 
     fn group(name: &str, category: &str) -> DashboardConsumerGroupItem {

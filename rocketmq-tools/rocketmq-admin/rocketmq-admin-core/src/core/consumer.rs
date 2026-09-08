@@ -1404,7 +1404,7 @@ impl<T: ConsumerAdmin + ?Sized> ConsumerMutationAdmin for T {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "client-adapter"))]
 pub(crate) mod batch_test_support {
     use super::*;
 

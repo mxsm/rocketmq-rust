@@ -164,43 +164,6 @@ impl BrokerAdmin for AdminSession {
     fn probe_broker_runtime<'a>(
         &'a mut self,
         request: &'a ProbeBrokerRuntimeRequest,
-    ) -> AdminFuture<'a, ProbeBrokerRuntimeResult> {
-        Box::pin(async move {
-            self.ensure_open()?;
-            let cluster_info = self
-                .inner
-                .examine_broker_cluster_info()
-                .await
-                .map_err(|error| AdminError::backend_source("examine_broker_cluster_info", error))?;
-            let broker_names = cluster_info
-                .cluster_addr_table
-                .as_ref()
-                .and_then(|table| table.get(request.cluster.as_str()))
-                .cloned()
-                .unwrap_or_default();
-            let broker_table = cluster_info.broker_addr_table.unwrap_or_default();
-            let mut result = ProbeBrokerRuntimeResult::default();
-            for broker_name in broker_names {
-                let Some(broker_data) = broker_table.get(&broker_name) else {
-                    continue;
-                };
-                for broker_addr in broker_data.broker_addrs().values() {
-                    result.attempted += 1;
-                    if let Err(error) = self.inner.fetch_broker_runtime_stats(broker_addr.clone()).await {
-                        result.failures.push(format!(
-                            "{broker_addr}: {}",
-                            crate::client_adapter::services::stable_error_message(&error)
-                        ));
-                    }
-                }
-            }
-            Ok(result)
-        })
-    }
-
-    fn probe_broker_runtime_with_evidence<'a>(
-        &'a mut self,
-        request: &'a ProbeBrokerRuntimeRequest,
     ) -> AdminFuture<'a, AdminQueryResult<ProbeBrokerRuntimeResult>> {
         Box::pin(async move {
             self.ensure_open()?;
@@ -252,18 +215,6 @@ impl BrokerAdmin for AdminSession {
                     }
                 }
             }
-            result.failures = failures
-                .iter()
-                .map(|failure| {
-                    format!(
-                        "source={:?};code={:?};target={}",
-                        failure.source(),
-                        failure.code(),
-                        failure.logical_target()
-                    )
-                    .to_ascii_lowercase()
-                })
-                .collect();
             AdminQueryResult::from_sources(result, successful_sources, failures)
         })
     }

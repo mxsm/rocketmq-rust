@@ -58,6 +58,24 @@
         },
         {
           "category": "stable",
+          "declaration": "pub use crate::client_error::ClientError",
+          "identity": "rocketmq-client/src/lib.rs:pub use crate::client_error::ClientError",
+          "owner": "client",
+          "path": "rocketmq-client/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub use crate::client_error::ClientResult",
+          "identity": "rocketmq-client/src/lib.rs:pub use crate::client_error::ClientResult",
+          "owner": "client",
+          "path": "rocketmq-client/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
+        },
+        {
+          "category": "stable",
           "declaration": "pub use crate::common::acl::AclConstants",
           "identity": "rocketmq-client/src/lib.rs:pub use crate::common::acl::AclConstants",
           "owner": "client",
@@ -2262,7 +2280,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 251
+      "maximum_exports": 253
     },
     "rocketmq-model": {
       "entries": [
@@ -2412,24 +2430,6 @@
         },
         {
           "category": "stable",
-          "declaration": "pub use rocketmq_error::RocketMQError",
-          "identity": "rocketmq-model/src/lib.rs:pub use rocketmq_error::RocketMQError",
-          "owner": "model",
-          "path": "rocketmq-model/src/lib.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
-          "declaration": "pub use rocketmq_error::RocketMQResult",
-          "identity": "rocketmq-model/src/lib.rs:pub use rocketmq_error::RocketMQResult",
-          "owner": "model",
-          "path": "rocketmq-model/src/lib.rs",
-          "rationale": "deliberate root entry point",
-          "removal_condition": "retain while the stable entry point remains supported"
-        },
-        {
-          "category": "stable",
           "declaration": "pub use utils::crc32_utils as CRC32Utils",
           "identity": "rocketmq-model/src/lib.rs:pub use utils::crc32_utils as CRC32Utils",
           "owner": "model",
@@ -2447,7 +2447,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 20
+      "maximum_exports": 18
     },
     "rocketmq-protocol": {
       "entries": [
@@ -3963,6 +3963,15 @@
           "path": "rocketmq-store/src/lib.rs",
           "rationale": "explicitly exposed module or diagnostic surface under non-growth review",
           "removal_condition": "promote with an API decision or narrow/remove before 2.0.0"
+        },
+        {
+          "category": "stable",
+          "declaration": "pub type StoreResult<T> = std::result::Result<T, rocketmq_store_api::StoreError>",
+          "identity": "rocketmq-store/src/lib.rs:pub type StoreResult<T> = std::result::Result<T, rocketmq_store_api::StoreError>",
+          "owner": "store",
+          "path": "rocketmq-store/src/lib.rs",
+          "rationale": "deliberate root entry point",
+          "removal_condition": "retain while the stable entry point remains supported"
         },
         {
           "category": "stable",
@@ -5792,7 +5801,7 @@
           "removal_condition": "retain while the stable entry point remains supported"
         }
       ],
-      "maximum_exports": 204
+      "maximum_exports": 205
     },
     "rocketmq-store-local": {
       "entries": [
@@ -5966,9 +5975,18 @@
           "path": "rocketmq-store-local/src/lib.rs",
           "rationale": "explicitly exposed module or diagnostic surface under non-growth review",
           "removal_condition": "promote with an API decision or narrow/remove before 2.0.0"
+        },
+        {
+          "category": "experimental",
+          "declaration": "pub type StoreResult<T> = std::result::Result<T, rocketmq_store_api::StoreError>",
+          "identity": "rocketmq-store-local/src/lib.rs:pub type StoreResult<T> = std::result::Result<T, rocketmq_store_api::StoreError>",
+          "owner": "store-local",
+          "path": "rocketmq-store-local/src/lib.rs",
+          "rationale": "explicitly exposed module or diagnostic surface under non-growth review",
+          "removal_condition": "promote with an API decision or narrow/remove before 2.0.0"
         }
       ],
-      "maximum_exports": 19
+      "maximum_exports": 20
     },
     "rocketmq-store-rocksdb": {
       "entries": [

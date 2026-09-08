@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_client::ClientResult;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::LocalTransactionState;
 use rocketmq_client_rust::TransactionListener;
 use rocketmq_client_rust::TransactionMQProducer;

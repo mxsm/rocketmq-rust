@@ -18,6 +18,7 @@ use rocketmq_error::GrpcStatusCode;
 use rocketmq_error::HttpStatusCode;
 use rocketmq_error::RemotingResponseCode;
 use rocketmq_error::AUTH_CREDENTIALS_INVALID;
+use rocketmq_error::AUTH_USER_NOT_FOUND;
 use rocketmq_error::CORE_ARGUMENT_INVALID;
 use rocketmq_error::ROUTE_TOPIC_NOT_FOUND;
 use rocketmq_error::STORAGE_CAPACITY_EXHAUSTED;
@@ -34,6 +35,17 @@ fn four_boundary_mappings_match_the_golden_contract() {
                 GrpcStatusCode::Unauthenticated,
                 HttpStatusCode::UNAUTHORIZED,
                 CliExitCode::PERMISSION,
+            ),
+        ),
+        (
+            &AUTH_USER_NOT_FOUND,
+            (
+                "auth.user.not_found",
+                RemotingResponseCode::UserNotExist,
+                GrpcPayloadCode::NotFound,
+                GrpcStatusCode::NotFound,
+                HttpStatusCode::NOT_FOUND,
+                CliExitCode::NOT_FOUND,
             ),
         ),
         (

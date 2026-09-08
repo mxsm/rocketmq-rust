@@ -26,6 +26,7 @@ use rocketmq_observability::LogFilterHandle;
 use rocketmq_observability::LogFilterInputs;
 use rocketmq_observability::LogFilterReloadRequest;
 use rocketmq_observability::LogFilterResolver;
+use rocketmq_observability::ObservabilityError;
 use rocketmq_observability::ResolvedLogFilter;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::BlockingExecutor;
@@ -63,6 +64,20 @@ pub(crate) enum BrokerLogFilterControlError {
     Reload(#[source] Box<dyn StdError + Send + Sync + 'static>),
 }
 
+#[derive(Debug, Error)]
+pub(crate) enum BrokerLogFilterRequestError {
+    #[error("{0}")]
+    Validation(String),
+    #[error("log filter policy is invalid")]
+    InvalidFilter(#[source] ObservabilityError),
+}
+
+impl From<String> for BrokerLogFilterRequestError {
+    fn from(message: String) -> Self {
+        Self::Validation(message)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrokerLogFilterRequest {
     pub filter: Option<String>,
@@ -81,7 +96,7 @@ impl BrokerLogFilterRequest {
         operator: &str,
         source_ip: impl Into<String>,
         super_user: bool,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, BrokerLogFilterRequestError> {
         reject_unknown_or_mixed_keys(properties)?;
         let operator = required_bounded("AccessKey", operator, 256)?;
         let reason = required_property(properties, LOG_FILTER_REASON_KEY, 512)?;
@@ -89,7 +104,7 @@ impl BrokerLogFilterRequest {
         let restore = match properties.get(LOG_FILTER_RESTORE_KEY) {
             Some(value) if value.eq_ignore_ascii_case("true") => true,
             Some(value) if value.eq_ignore_ascii_case("false") => false,
-            Some(_) => return Err(format!("{LOG_FILTER_RESTORE_KEY} must be true or false")),
+            Some(_) => return Err(format!("{LOG_FILTER_RESTORE_KEY} must be true or false").into()),
             None => false,
         };
         let ttl_seconds = match properties.get(LOG_FILTER_TTL_KEY) {
@@ -102,7 +117,8 @@ impl BrokerLogFilterRequest {
         if !(MIN_LOG_FILTER_TTL_SECONDS..=MAX_LOG_FILTER_TTL_SECONDS).contains(&ttl_seconds) {
             return Err(format!(
                 "{LOG_FILTER_TTL_KEY} must be between {MIN_LOG_FILTER_TTL_SECONDS} and {MAX_LOG_FILTER_TTL_SECONDS}"
-            ));
+            )
+            .into());
         }
 
         let filter = properties
@@ -111,9 +127,7 @@ impl BrokerLogFilterRequest {
             .transpose()?;
         if restore {
             if filter.is_some() {
-                return Err(format!(
-                    "{LOG_FILTER_RESTORE_KEY}=true cannot be combined with {LOG_FILTER_KEY}"
-                ));
+                return Err(format!("{LOG_FILTER_RESTORE_KEY}=true cannot be combined with {LOG_FILTER_KEY}").into());
             }
         } else {
             let filter = filter
@@ -174,12 +188,12 @@ fn required_bounded(key: &'static str, value: &str, max_len: usize) -> Result<St
     Ok(value.to_owned())
 }
 
-fn validate_filter_policy(filter: &str, super_user: bool) -> Result<(), String> {
+fn validate_filter_policy(filter: &str, super_user: bool) -> Result<(), BrokerLogFilterRequestError> {
     LogFilterResolver::resolve(LogFilterInputs {
         runtime: Some(filter),
         ..LogFilterInputs::default()
     })
-    .map_err(|error| error.to_string())?;
+    .map_err(BrokerLogFilterRequestError::InvalidFilter)?;
     if super_user {
         return Ok(());
     }
@@ -187,27 +201,33 @@ fn validate_filter_policy(filter: &str, super_user: bool) -> Result<(), String> 
     let mut has_info_baseline = false;
     for directive in filter.split(',').map(str::trim) {
         if directive.contains(['[', ']', '{', '}']) {
-            return Err("span and field directives require a super-user break-glass request".to_string());
+            return Err("span and field directives require a super-user break-glass request"
+                .to_string()
+                .into());
         }
         let Some((target, level)) = directive.split_once('=') else {
             if directive.eq_ignore_ascii_case("info") {
                 has_info_baseline = true;
                 continue;
             }
-            return Err("non-super-users must keep the global log baseline at info".to_string());
+            return Err("non-super-users must keep the global log baseline at info"
+                .to_string()
+                .into());
         };
         if !target.trim().starts_with("rocketmq_") {
-            return Err("non-super-users may only target rocketmq_* modules".to_string());
+            return Err("non-super-users may only target rocketmq_* modules".to_string().into());
         }
         if !matches!(
             level.trim().to_ascii_lowercase().as_str(),
             "off" | "error" | "warn" | "info" | "debug" | "trace"
         ) {
-            return Err("unsupported target log level".to_string());
+            return Err("unsupported target log level".to_string().into());
         }
     }
     if !has_info_baseline {
-        return Err("non-super-users must include an explicit info baseline".to_string());
+        return Err("non-super-users must include an explicit info baseline"
+            .to_string()
+            .into());
     }
     Ok(())
 }
@@ -741,6 +761,20 @@ mod tests {
 
         assert_eq!(request.filter.as_deref(), Some("debug"));
         assert!(request.super_user);
+    }
+
+    #[test]
+    fn invalid_filter_retains_the_typed_observability_source() {
+        let error = BrokerLogFilterRequest::parse(
+            &base_properties("info,rocketmq_broker=invalid"),
+            "root",
+            "127.0.0.1",
+            true,
+        )
+        .expect_err("invalid filter directive must be rejected");
+
+        assert!(matches!(error, BrokerLogFilterRequestError::InvalidFilter(_)));
+        assert!(StdError::source(&error).is_some());
     }
 
     #[test]

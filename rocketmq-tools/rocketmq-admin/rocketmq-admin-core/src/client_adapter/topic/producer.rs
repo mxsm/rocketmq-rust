@@ -55,7 +55,7 @@ impl TransactionListener for CommitTransactionListener {
 }
 
 pub(crate) fn is_consumer_not_online_error(error: &CanonicalError) -> bool {
-    crate::client_adapter::services::errors::broker_response_code(error)
+    crate::canonical_broker_response_code(error)
         .is_some_and(|code| ResponseCode::from(code) == ResponseCode::ConsumerNotOnline)
 }
 

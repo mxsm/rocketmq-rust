@@ -52,6 +52,8 @@ pub enum RemotingResponseCode {
     ControllerNotLeader = 2007,
     /// Represents the controller jraft internal error case.
     ControllerJraftInternalError = 2015,
+    /// Represents the user not exist case.
+    UserNotExist = 3001,
 }
 
 impl RemotingResponseCode {

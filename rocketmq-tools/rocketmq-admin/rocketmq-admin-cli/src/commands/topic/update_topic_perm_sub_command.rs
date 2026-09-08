@@ -65,7 +65,7 @@ impl UpdateTopicPermSubCommand {
             TopicTarget::Cluster(cluster_name.trim().into())
         } else {
             return Err(crate::errors::argument_invalid(
-                "UpdateTopicPermSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided".into(),
+                "UpdateTopicPermSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided",
             ));
         };
         let perm = self.perm.parse::<i32>().map_err(|e| {

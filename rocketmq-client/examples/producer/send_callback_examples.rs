@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use rocketmq_client::DefaultMQProducer;
 use rocketmq_client::ProducerConfig;
 use rocketmq_model::common::message::message_single::Message;
-use rocketmq_client::ClientResult;
+use rocketmq_client_rust::ClientResult;
 use tracing::{error, info};
 
 const TOPIC: &str = "CallbackExample";

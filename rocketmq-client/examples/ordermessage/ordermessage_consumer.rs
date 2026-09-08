@@ -20,7 +20,7 @@ mod support;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
 
-use rocketmq_client::ClientResult;
+use rocketmq_client_rust::ClientResult;
 #[allow(unused_imports)]
 use rocketmq_client_rust::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::ConsumeOrderlyContext;

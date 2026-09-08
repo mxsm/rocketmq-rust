@@ -192,7 +192,7 @@ impl SupervisedMutationAdmin for MutationAdminSession {
                         persistence: MutationPersistenceState::NotRequired,
                         verification: MutationVerificationState::NotPerformed,
                         failure: Some(MutationFailureCode::Unavailable),
-                        retryable: crate::client_adapter::services::error_view::rocketmq_is_retryable(&error),
+                        retryable: crate::canonical_is_retryable(&error),
                     }),
                 }
             }
@@ -867,7 +867,7 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
                         persistence: MutationPersistenceState::Persisted,
                         verification: MutationVerificationState::Failed,
                         failure: Some(MutationFailureCode::VerificationFailed),
-                        retryable: crate::client_adapter::services::error_view::rocketmq_is_retryable(&error),
+                        retryable: crate::canonical_is_retryable(&error),
                     }),
                 }
             }
@@ -893,7 +893,7 @@ async fn execute_broker_config_patch_verified_with_admin<A: MQAdminMutationExt +
                 persistence: MutationPersistenceState::NotRequired,
                 verification: MutationVerificationState::NotPerformed,
                 failure: Some(MutationFailureCode::Unavailable),
-                retryable: crate::client_adapter::services::error_view::rocketmq_is_retryable(&error),
+                retryable: crate::canonical_is_retryable(&error),
             }),
         }
     }
@@ -984,7 +984,7 @@ async fn execute_request_mode_checked_inner<A: MQAdminMutationExt + ?Sized>(
                         None,
                         MutationVerificationState::Failed,
                         true,
-                        crate::client_adapter::services::error_view::rocketmq_is_retryable(&error),
+                        crate::canonical_is_retryable(&error),
                     ),
                 };
                 let persistence = map_client_persistence(result.persistence);
@@ -1026,7 +1026,7 @@ async fn execute_request_mode_checked_inner<A: MQAdminMutationExt + ?Sized>(
                 persistence: MutationPersistenceState::NotRequired,
                 verification: MutationVerificationState::NotPerformed,
                 failure: Some(MutationFailureCode::Unavailable),
-                retryable: crate::client_adapter::services::error_view::rocketmq_is_retryable(&error),
+                retryable: crate::canonical_is_retryable(&error),
             }),
         }
     }
@@ -1236,7 +1236,7 @@ async fn execute_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                         applied: true,
                         changed: true,
                         failure: Some(MutationFailureCode::VerificationFailed),
-                        retryable: crate::client_adapter::services::error_view::rocketmq_is_retryable(&error),
+                        retryable: crate::canonical_is_retryable(&error),
                     }),
                 }
             }
@@ -1260,7 +1260,7 @@ async fn execute_offset_reset_with_admin<A: MQAdminMutationExt + ?Sized>(
                 applied: false,
                 changed: false,
                 failure: Some(MutationFailureCode::Unavailable),
-                retryable: crate::client_adapter::services::error_view::rocketmq_is_retryable(&error),
+                retryable: crate::canonical_is_retryable(&error),
             }),
         }
     }
@@ -1486,7 +1486,7 @@ fn client_failure(broker_name: String, queue_id: Option<i32>, error: &CanonicalE
         broker_name,
         queue_id,
         code: MutationFailureCode::Unavailable,
-        retryable: crate::client_adapter::services::error_view::rocketmq_is_retryable(&error),
+        retryable: crate::canonical_is_retryable(error),
     }
 }
 
@@ -1503,7 +1503,7 @@ fn metadata_client_failure<T>(
         persistence: MutationPersistenceState::NotRequired,
         verification: MutationVerificationState::NotPerformed,
         failure: Some(MutationFailureCode::Unavailable),
-        retryable: crate::client_adapter::services::error_view::rocketmq_is_retryable(&error),
+        retryable: crate::canonical_is_retryable(error),
     }
 }
 
@@ -1783,7 +1783,7 @@ mod tests {
     }
 
     fn unsupported<T>() -> rocketmq_client_rust::ClientResult<T> {
-        Err(crate::client_adapter::services::errors::admin_validation_failed("test", "unused fake operation").into())
+        Err(crate::canonical_admin_validation_failed("test", "unused fake operation").into())
     }
 
     impl MQAdminMutationExt for CountingMutationAdmin {
@@ -1835,18 +1835,12 @@ mod tests {
                     "autoCreateSubscriptionGroup" => state.auto_create_subscription_group = value == "true",
                     "brokerPermission" => {
                         state.broker_permission = value.parse().map_err(|_| {
-                            crate::client_adapter::services::errors::admin_validation_failed(
-                                "test",
-                                "invalid test broker permission",
-                            )
+                            crate::canonical_admin_validation_failed("test", "invalid test broker permission")
                         })?;
                     }
                     "defaultTopicQueueNums" => {
                         state.default_topic_queue_nums = value.parse().map_err(|_| {
-                            crate::client_adapter::services::errors::admin_validation_failed(
-                                "test",
-                                "invalid test queue count",
-                            )
+                            crate::canonical_admin_validation_failed("test", "invalid test queue count")
                         })?;
                     }
                     "messageIndexEnable" => state.message_index_enable = value == "true",
@@ -2107,10 +2101,7 @@ mod tests {
                 .expect("offsets")
                 .get(&queue_id)
                 .copied()
-                .ok_or_else(|| {
-                    crate::client_adapter::services::errors::admin_validation_failed("test", "offset was not applied")
-                        .into()
-                })
+                .ok_or_else(|| crate::canonical_admin_validation_failed("test", "offset was not applied").into())
         }
 
         async fn mutation_topic_config_state(
@@ -2248,11 +2239,7 @@ mod tests {
             self.record_endpoint("broker", &broker_addr);
             self.broker_reads.fetch_add(1, Ordering::SeqCst);
             if self.broker_fail_postread.load(Ordering::SeqCst) && self.broker_writes.load(Ordering::SeqCst) > 0 {
-                return Err(crate::client_adapter::services::errors::admin_validation_failed(
-                    "test",
-                    "test postread failure",
-                )
-                .into());
+                return Err(crate::canonical_admin_validation_failed("test", "test postread failure").into());
             }
             Ok(*self.broker_state.lock().expect("broker state"))
         }
@@ -2890,10 +2877,7 @@ mod tests {
 
     #[test]
     fn partial_failures_expose_only_logical_identity() {
-        let error = crate::client_adapter::services::errors::admin_validation_failed(
-            "test",
-            "backend at 10.0.0.9:10911 with accessKey=secret",
-        );
+        let error = crate::canonical_admin_validation_failed("test", "backend at 10.0.0.9:10911 with accessKey=secret");
         let failure = client_failure("broker-a".to_owned(), Some(3), &error);
         assert_eq!(failure.broker_name, "broker-a");
         assert_eq!(failure.queue_id, Some(3));

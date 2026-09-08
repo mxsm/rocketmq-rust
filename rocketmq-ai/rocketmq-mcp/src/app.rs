@@ -701,9 +701,7 @@ mod tests {
         use std::error::Error;
         let error = crate::McpError::from_source(super::TelemetryRollbackError {
             primary: crate::McpError::from_source(std::io::Error::other("primary-private-sentinel")),
-            _cleanup: rocketmq_observability::ObservabilityError::MetricsShutdown(
-                "cleanup-private-sentinel".to_string(),
-            ),
+            _cleanup: rocketmq_observability::ObservabilityError::metrics_shutdown("cleanup-private-sentinel"),
         });
         let composite = error
             .source()
@@ -711,10 +709,7 @@ mod tests {
             .downcast_ref::<super::TelemetryRollbackError>()
             .unwrap();
         assert!(composite.source().unwrap().source().unwrap().is::<std::io::Error>());
-        assert!(matches!(
-            composite._cleanup,
-            rocketmq_observability::ObservabilityError::MetricsShutdown(_)
-        ));
+        assert_eq!(composite._cleanup.code().as_str(), "observability.shutdown.failed");
         for projection in [
             error.to_string(),
             format!("{error:?}"),

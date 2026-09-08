@@ -63,7 +63,7 @@ use rocketmq_client_rust::consumer::listener::consume_concurrently_status::Consu
 use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 
 struct MyListener;
 
@@ -72,7 +72,7 @@ impl MessageListenerConcurrently for MyListener {
         &self,
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         for msg in messages {
             println!("Received message: {:?}", msg.msg_id());
         }
@@ -81,7 +81,7 @@ impl MessageListenerConcurrently for MyListener {
 }
 
 #[tokio::main]
-async fn main() -> RocketMQResult<()> {
+async fn main() -> ClientResult<()> {
     let mut consumer = DefaultMQPushConsumer::builder()
         .consumer_group("my_consumer_group")
         .name_server_addr("localhost:9876")
@@ -161,7 +161,7 @@ impl MessageListenerConcurrently for MyListener {
         &self,
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         for msg in messages {
             if msg.reconsume_times() >= 3 {
                 eprintln!("Max retries exceeded: {:?}", msg.msg_id());

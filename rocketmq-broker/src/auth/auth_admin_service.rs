@@ -146,7 +146,7 @@ impl AuthAdminService {
         let mut existing = match self.get_existing_user(user.username().as_str()).await {
             Ok(existing) => existing,
             Err(error) if error.kind() == AuthFailureKind::NotFound => {
-                return Err(crate::broker_error::authentication_failed("The user is not exist"))
+                return Err(crate::broker_error::auth_service_error(error));
             }
             Err(error) => return Err(crate::broker_error::auth_service_error(error)),
         };

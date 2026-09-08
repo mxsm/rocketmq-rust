@@ -72,8 +72,7 @@ fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> Canon
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             field,
             format!("{field} must not be empty"),
-        )
-        .into());
+        ));
     }
     Ok(CheetahString::from(value))
 }
@@ -265,8 +264,7 @@ impl QueryMessageByKeyRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "keyType",
                 "keyType only supports K for keys or T for tags",
-            )
-            .into());
+            ));
         }
 
         Ok(Self {
@@ -331,8 +329,7 @@ impl QueryMessageByIdRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "messageId",
                 "At least one message ID is required",
-            )
-            .into());
+            ));
         }
 
         let mut normalized_ids = Vec::with_capacity(message_ids.len());
@@ -432,8 +429,7 @@ impl DecodeMessageIdRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "messageId",
                 "At least one message ID is required",
-            )
-            .into());
+            ));
         }
 
         Ok(Self { message_ids })
@@ -731,8 +727,7 @@ impl MessageTrackRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "messageId",
                 "At least one message ID is required",
-            )
-            .into());
+            ));
         }
 
         let mut normalized_ids = Vec::with_capacity(message_ids.len());
@@ -1002,24 +997,21 @@ impl ConsumeMessagesRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "MessageNumber",
                 "Please input a positive messageNumber!",
-            )
-            .into());
+            ));
         }
 
         if queue_id.is_some() && trim_optional_string(broker_name.clone()).is_none() {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "brokerName",
                 "Please set the brokerName before queueId!",
-            )
-            .into());
+            ));
         }
 
         if offset.is_some() && queue_id.is_none() {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "offset",
                 "Please set queueId before offset!",
-            )
-            .into());
+            ));
         }
 
         let now = current_millis() as i64;
@@ -1028,8 +1020,7 @@ impl ConsumeMessagesRequest {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "beginTimestamp",
                     "Please set the beginTimestamp before now!",
-                )
-                .into());
+                ));
             }
         }
 
@@ -1038,8 +1029,7 @@ impl ConsumeMessagesRequest {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "endTimestamp",
                     "Please set the endTimestamp before now!",
-                )
-                .into());
+                ));
             }
         }
 
@@ -1048,8 +1038,7 @@ impl ConsumeMessagesRequest {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "timestamp",
                     "Please make sure that the beginTimestamp is less than or equal to the endTimestamp",
-                )
-                .into());
+                ));
             }
         }
 
@@ -1947,8 +1936,7 @@ impl MessageService {
             _ => Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "target",
                 "invalid consume message target",
-            )
-            .into()),
+            )),
         }
     }
 

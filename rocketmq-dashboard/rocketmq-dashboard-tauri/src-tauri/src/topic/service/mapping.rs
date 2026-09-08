@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use rocketmq_admin_core::core::AdminError;
 
 pub(super) fn map_admin_error(error: AdminError) -> TopicError {
     TopicError::Admin(error)

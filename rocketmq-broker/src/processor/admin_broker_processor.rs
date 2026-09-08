@@ -824,6 +824,9 @@ mod tests {
     use super::AdminRequestCaller;
     use super::AdminSessionFact;
     use bytes::Bytes;
+    use rocketmq_auth::AuthFailureKind;
+    use rocketmq_auth::AuthOperation;
+    use rocketmq_auth::AuthServiceError;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
@@ -915,12 +918,15 @@ mod tests {
     fn auth_admin_error_response_maps_auth_and_config_errors_consistently() {
         let response = map_auth_admin_error_response(
             RemotingCommand::create_java_default_error_response_command(),
-            crate::broker_error::authentication_failed("alice"),
+            crate::broker_error::auth_service_error(AuthServiceError::new(
+                AuthOperation::ManageMetadata,
+                AuthFailureKind::NotFound,
+            )),
         );
-        assert_eq!(ResponseCode::from(response.code()), ResponseCode::NoPermission);
+        assert_eq!(ResponseCode::from(response.code()), ResponseCode::UserNotExist);
         assert_eq!(
             response.remark().map(|remark| remark.as_str()),
-            Some("Authentication credentials are invalid")
+            Some("User does not exist")
         );
         assert!(!response.remark().is_some_and(|remark| remark.contains("alice")));
 

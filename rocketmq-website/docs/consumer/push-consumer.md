@@ -12,10 +12,10 @@ Push consumption in RocketMQ-Rust is implemented by `DefaultMQPushConsumer`. The
 ```rust
 use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 
 #[tokio::main]
-async fn main() -> RocketMQResult<()> {
+async fn main() -> ClientResult<()> {
     let mut consumer = DefaultMQPushConsumer::builder()
         .consumer_group("my_consumer_group")
         .name_server_addr("localhost:9876")
@@ -39,7 +39,7 @@ use rocketmq_client_rust::consumer::listener::consume_concurrently_context::Cons
 use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 
 struct MyListener;
 
@@ -48,7 +48,7 @@ impl MessageListenerConcurrently for MyListener {
         &self,
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
         for msg in messages {
             println!("Processing: {:?}", msg.msg_id());
         }
@@ -66,7 +66,7 @@ use rocketmq_client_rust::consumer::listener::consume_orderly_context::ConsumeOr
 use rocketmq_client_rust::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use rocketmq_client_rust::consumer::listener::message_listener_orderly::MessageListenerOrderly;
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_error::RocketMQResult;
+use rocketmq_client_rust::ClientResult;
 
 struct OrderListener;
 
@@ -75,7 +75,7 @@ impl MessageListenerOrderly for OrderListener {
         &self,
         messages: &[&MessageExt],
         context: &mut ConsumeOrderlyContext,
-    ) -> RocketMQResult<ConsumeOrderlyStatus> {
+    ) -> ClientResult<ConsumeOrderlyStatus> {
         for msg in messages {
             process_in_order(msg);
         }

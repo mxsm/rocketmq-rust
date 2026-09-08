@@ -126,7 +126,7 @@ async fn split_and_send(
     topic: &str,
     data: Vec<u8>,
     chunk_size: usize,
-) -> rocketmq_error::RocketMQResult<()> {
+) -> rocketmq_client_rust::ClientResult<()> {
     let chunks: Vec<_> = data.chunks(chunk_size).collect();
     let total = chunks.len();
 
@@ -157,7 +157,7 @@ async fn send_with_retry(
     producer: &mut DefaultMQProducer,
     message: Message,
     max_retries: u32,
-) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
+) -> rocketmq_client_rust::ClientResult<Option<SendResult>> {
     let mut retry_count = 0;
 
     loop {
@@ -181,7 +181,7 @@ async fn send_with_fallback(
     producer: &mut DefaultMQProducer,
     message: Message,
     fallback_topic: &str,
-) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
+) -> rocketmq_client_rust::ClientResult<Option<SendResult>> {
     match producer.send(message.clone()).await {
         Ok(result) => Ok(result),
         Err(_) => {
@@ -222,8 +222,13 @@ async fn send_order_event(
     order_id: &str,
     event_type: &str,
     order_data: &Order,
-) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
-    let body = serde_json::to_vec(order_data)?;
+) -> rocketmq_client_rust::ClientResult<Option<SendResult>> {
+    let body = serde_json::to_vec(order_data).map_err(|source| {
+        rocketmq_client_rust::ClientError::from_error(rocketmq_error::Error::caused_by(
+            &rocketmq_error::CORE_SERIALIZATION_FAILED,
+            source,
+        ))
+    })?;
 
     let message = Message::builder()
         .topic("OrderEvents")
@@ -245,7 +250,7 @@ async fn send_log(
     producer: &mut DefaultMQProducer,
     level: &str,
     message_text: &str,
-) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
+) -> rocketmq_client_rust::ClientResult<Option<SendResult>> {
     let message = Message::builder()
         .topic("Logs")
         .body(message_text)

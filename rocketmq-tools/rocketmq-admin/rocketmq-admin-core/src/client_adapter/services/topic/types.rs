@@ -38,8 +38,7 @@ fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> Canon
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             field,
             format!("{field} must not be empty"),
-        )
-        .into());
+        ));
     }
     Ok(CheetahString::from(value))
 }
@@ -104,8 +103,7 @@ impl TopicClusterQueryRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "topic",
                 "topic name must not be empty",
-            )
-            .into());
+            ));
         }
 
         Ok(Self {
@@ -153,8 +151,7 @@ impl TopicRouteQueryRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "topic",
                 "topic name must not be empty",
-            )
-            .into());
+            ));
         }
 
         Ok(Self {
@@ -203,8 +200,7 @@ impl TopicStatusQueryRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "topic",
                 "topic name must not be empty",
-            )
-            .into());
+            ));
         }
 
         Ok(Self {
@@ -396,8 +392,7 @@ impl OrderConfMethod {
             method => Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "method",
                 format!("invalid method '{method}', allowed values: put, get, delete"),
-            )
-            .into()),
+            )),
         }
     }
 }
@@ -424,8 +419,7 @@ impl OrderConfRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "orderConf",
                 "orderConf must be provided for put method",
-            )
-            .into());
+            ));
         }
 
         Ok(Self {
@@ -562,8 +556,7 @@ impl UpdateTopicListRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "topicConfigs",
                 "topicConfigs must not be empty",
-            )
-            .into());
+            ));
         }
 
         Ok(Self {
@@ -631,15 +624,13 @@ impl UpdateTopicRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "perm",
                 "perm must be 2, 4, or 6",
-            )
-            .into());
+            ));
         }
         if read_queue_nums == 0 || write_queue_nums == 0 {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "queueNums",
                 "queue nums must be greater than 0",
-            )
-            .into());
+            ));
         }
 
         let topic_sys_flag =
@@ -717,8 +708,7 @@ impl UpdateTopicPermRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "perm",
                 "perm must be 2, 4, or 6",
-            )
-            .into());
+            ));
         }
 
         Ok(Self {

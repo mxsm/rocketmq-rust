@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[allow(
+    dead_code,
+    reason = "the integration fixture includes the production Broker error helpers in isolation"
+)]
+#[path = "../src/broker_error.rs"]
+mod broker_error;
 #[path = "../src/transaction/transaction_metrics.rs"]
 mod transaction_metrics;
 

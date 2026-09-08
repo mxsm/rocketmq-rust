@@ -118,8 +118,7 @@ impl RemappingStaticTopicRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "target",
                 "either brokers or clusters must be provided",
-            )
-            .into());
+            ));
         }
 
         Ok(Self {
@@ -463,8 +462,7 @@ fn split_csv_required(field: &'static str, value: impl Into<String>) -> Canonica
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             field,
             format!("{field} must not be empty"),
-        )
-        .into());
+        ));
     }
     Ok(values)
 }
@@ -496,8 +494,7 @@ fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> Canon
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             field,
             format!("{field} must not be empty"),
-        )
-        .into());
+        ));
     }
     Ok(CheetahString::from(value))
 }

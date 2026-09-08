@@ -114,7 +114,7 @@ impl UpdateTopicSubCommand {
             TopicTarget::Cluster(cluster_name.trim().into())
         } else {
             return Err(crate::errors::argument_invalid(
-                "UpdateTopicSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided".into(),
+                "UpdateTopicSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided",
             ));
         };
 

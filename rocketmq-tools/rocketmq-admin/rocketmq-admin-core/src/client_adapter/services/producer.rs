@@ -99,8 +99,7 @@ impl SendMessageRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "brokerName",
                 "brokerName must be set if queueId is provided",
-            )
-            .into());
+            ));
         }
 
         Ok(Self {
@@ -238,8 +237,7 @@ impl CheckMessageSendRtRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "amount",
                 "amount must be at least 2",
-            )
-            .into());
+            ));
         }
         Ok(Self {
             topic: trim_required_cheetah("topic", topic)?,
@@ -526,8 +524,7 @@ fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> Canon
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             field,
             format!("{field} must not be empty"),
-        )
-        .into());
+        ));
     }
     Ok(CheetahString::from(value))
 }
@@ -539,8 +536,7 @@ fn trim_required_string(field: &'static str, value: impl Into<String>) -> Canoni
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             field,
             format!("{field} must not be empty"),
-        )
-        .into());
+        ));
     }
     Ok(value.to_string())
 }

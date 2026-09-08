@@ -119,7 +119,8 @@ fn run_cli_main_thread(verbosity: CliVerbosity) -> CanonicalResult<i32> {
         owner.root_context().component("rocketmq-admin-client"),
         ClientRuntimeConfig::default(),
         TelemetryHandle::noop(),
-    )?;
+    )
+    .map_err(|error| error.into_error())?;
     let exit_code = owner.block_on(async_main(client_runtime.clone(), verbosity));
     let client_report = owner.block_on(client_runtime.shutdown());
     if !client_report.is_healthy() {

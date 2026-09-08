@@ -107,7 +107,7 @@ let client_config = ClientConfig::builder()
     .tls_client_cert_path("/path/to/client.pem")
     .tls_client_key_path("/path/to/client.key")
     .build()?;
-# Ok::<(), rocketmq_error::RocketMQError>(())
+# Ok::<(), rocketmq_client_rust::ClientError>(())
 ```
 
 Broker-backed TLS smoke tests reuse `ROCKETMQ_ENABLE_TLS_SMOKE=true`.

@@ -91,8 +91,7 @@ impl ClusterSendMessageRtRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "amount",
                 "amount must be greater than 0",
-            )
-            .into());
+            ));
         }
         Ok(Self {
             amount,

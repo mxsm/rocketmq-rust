@@ -12,7 +12,6 @@
 ## 本 crate 职责
 
 - 不透明的规范 `Error`、`Result<T>` 和 `SharedError` 类型。
-- workspace 中使用的 `RocketMQError`、`RocketMQResult<T>` 和保留的领域错误枚举。
 - `ErrorDescriptor` 和唯一的 `ALL_DESCRIPTORS` catalog。
 - 稳定 descriptor 元数据：code、class、condition、fault attribution、component、
   固定公开消息、severity、recovery hint、backtrace policy、exposure、四个显式边界投影，
@@ -27,37 +26,35 @@
 ```rust
 use std::sync::Arc;
 
-use rocketmq_error::Error;
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
-use rocketmq_error::TRANSPORT_ENDPOINT_INVALID;
+use rocketmq_error::{Error, Result, SharedError, TRANSPORT_ENDPOINT_INVALID};
 
-fn validate_transport_endpoint(addr: &str) -> RocketMQResult<()> {
+fn validate_transport_endpoint(addr: &str) -> Result<()> {
     if addr.is_empty() {
-        return Err(RocketMQError::Shared(Arc::new(Error::new(
-            &TRANSPORT_ENDPOINT_INVALID,
-        ))));
+        return Err(Error::new(&TRANSPORT_ENDPOINT_INVALID));
     }
 
     Ok(())
 }
+
+let error = validate_transport_endpoint("").expect_err("empty endpoint must fail");
+let shared: SharedError = Arc::new(error);
+assert_eq!(shared.code().as_str(), "transport.endpoint.invalid");
 ```
 
-`Shared` variant 是唯一的规范 `SharedError` 载体，因此 descriptor 标识、上下文和
-类型化物理 source 可以跨 crate 传递而无需重建。保留的领域错误类型，
-如 `SerializationError`、`ProtocolError`、`RpcClientError`、`AuthError`、
-`ToolsError`、`FilterError`、`ObservabilityError` 和
-`UnifiedServiceError`，都可通过 `From` 转换为 `RocketMQError`。
+`Error` 是唯一的规范错误信封，且有意不实现 `Clone`。需要多个 owner 时，使用
+`Arc<Error>` 的别名 `SharedError`，它会保留同一 descriptor、上下文和类型化 source。
+crate 专属 facade 应直接携带 `Error` 或 `SharedError`，不能从显示文本重建错误。
 
 ## 规范 Descriptor
 
-每个保留的错误 leaf 都且仅关联一个不可变 descriptor。需要稳定行为的代码读取
-descriptor，不从枚举、显示字符串或调用方 override 推导 policy。
+每个规范错误都且仅选择一个不可变 descriptor。需要稳定行为的代码读取
+descriptor，不从显示字符串或调用方 override 推导 policy。
 
 ```rust
-use rocketmq_error::RocketMQError;
+use rocketmq_error::{fields, Error, ErrorContext, ROUTE_TOPIC_NOT_FOUND};
 
-let error = RocketMQError::route_not_found("TopicA");
+let error = Error::new(&ROUTE_TOPIC_NOT_FOUND)
+    .with_context(ErrorContext::new().with_text(fields::TOPIC, "TopicA"));
 let descriptor = error.descriptor();
 
 assert_eq!(descriptor.code().as_str(), "route.topic.not_found");
@@ -86,15 +83,16 @@ assert_eq!(
 中的协议映射。CLI 边界使用 `CliErrorView`。
 
 ```rust
-use rocketmq_error::RocketMQError;
-use rocketmq_error::PublicErrorView;
+use rocketmq_error::{fields, Error, ErrorContext, STORAGE_READ_FAILED};
 
-let error = RocketMQError::storage_read_failed(
-    "/var/lib/rocketmq/commitlog/00000000000000000000",
-    "permission denied",
+let error = Error::new(&STORAGE_READ_FAILED).with_context(
+    ErrorContext::new()
+        .with_text(fields::STORE_OPERATION, "read")
+        .with_text(fields::STORE_COMPONENT, "commitlog")
+        .with_secret_presence(fields::STORE_DETAIL_PRESENT)
+        .with_secret_presence(fields::SOURCE_PRESENT),
 );
-let context = error.context();
-let view = PublicErrorView::try_new(error.descriptor(), &context).unwrap();
+let view = error.public_view().unwrap();
 
 assert_eq!(view.code().as_str(), "storage.read.failed");
 assert_eq!(view.message(), "Storage read failed");
@@ -150,20 +148,24 @@ assert_eq!(error.descriptor().severity(), ErrorSeverity::Warn);
 
 ```rust
 use std::error::Error as _;
-use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQError;
+use rocketmq_error::{fields, Error, ErrorContext, PROTOCOL_BODY_INVALID};
 
-let error = RocketMQError::request_header_source(
-    "decode header",
+let error = Error::caused_by(
+    &PROTOCOL_BODY_INVALID,
     std::io::Error::other("private detail"),
+)
+.with_context(
+    ErrorContext::new()
+        .with_text(fields::OPERATION_DIAGNOSTIC, "decode header")
+        .with_secret_presence(fields::INVALID_VALUE_PRESENT)
+        .with_secret_presence(fields::SOURCE_PRESENT),
 );
 
 assert!(error
     .source()
     .and_then(|source| source.downcast_ref::<std::io::Error>())
     .is_some());
-let context = error.context();
-let public = PublicErrorView::try_new(error.descriptor(), &context).unwrap();
+let public = error.public_view().unwrap();
 assert_eq!(public.fields().count(), 0);
 ```
 
@@ -171,11 +173,9 @@ assert_eq!(public.fields().count(), 0);
 
 - 稳定集成使用 descriptor code 和投影，不解析 `Display`。
 - Descriptor 和 projection 的构造保持私有；catalog 常量是只读公开值。
-- 已删除的 legacy `ErrorSpec`、recovery/observability policy 表及
-  category/scope 元数据不会保留兼容别名。
-- 六个废弃 `ProtocolError` leaf、Controller-specific error enum 与 facade
-  variants，以及未使用的 required-property leaf 已删除；保留的调用方使用规范
-  `RocketMQError` variant 和 descriptor。
+- 该 crate 只维护当前错误模型，不提供版本化兼容 facade。
+- 组件适配器可以暴露窄 facade，但规范标识、上下文、类型化 source 和边界投影
+  仍由 descriptor 管理。
 
 ## 测试
 
@@ -191,7 +191,8 @@ cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 
 ```bash
 cargo test -p rocketmq-error --test error_descriptor_catalog
-cargo test -p rocketmq-error --test legacy_descriptor_associations
+cargo test -p rocketmq-error --test typed_error_public_api
+cargo test -p rocketmq-error --test shared_error_contract
 cargo test -p rocketmq-error --test error_context_redaction
 ```
 

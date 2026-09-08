@@ -290,6 +290,11 @@ impl From<AuthServiceError> for CanonicalError {
                 &rocketmq_error::AUTH_CREDENTIALS_INVALID,
                 ErrorContext::new().with_secret_presence(fields::CREDENTIALS_PRESENT),
             ),
+            (AuthOperation::ManageMetadata, AuthFailureKind::NotFound) => project_canonical(
+                error,
+                &rocketmq_error::AUTH_USER_NOT_FOUND,
+                ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation.as_str()),
+            ),
             (_, AuthFailureKind::InvalidInput | AuthFailureKind::NotFound) => project_canonical(
                 error,
                 &CORE_ARGUMENT_INVALID,
@@ -447,6 +452,10 @@ mod tests {
     #[test]
     fn rocketmq_projection_preserves_frozen_error_categories() {
         let cases = [
+            (
+                AuthServiceError::new(AuthOperation::ManageMetadata, AuthFailureKind::NotFound),
+                &rocketmq_error::AUTH_USER_NOT_FOUND,
+            ),
             (
                 AuthServiceError::new(AuthOperation::Initialize, AuthFailureKind::InvalidConfiguration),
                 &AUTH_CONFIGURATION_INVALID,

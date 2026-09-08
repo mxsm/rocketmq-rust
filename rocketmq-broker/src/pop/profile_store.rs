@@ -17,9 +17,8 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use parking_lot::Mutex;
-use rocketmq_error::fields;
-use rocketmq_error::ErrorContext;
 use rocketmq_error::SharedError;
+#[cfg(test)]
 use rocketmq_error::CORE_CONFIGURATION_INVALID;
 use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
 use rocketmq_model::common::pop_retry_policy::PopRetryTopicVersion;

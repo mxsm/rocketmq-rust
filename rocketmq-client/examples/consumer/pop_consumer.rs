@@ -17,7 +17,7 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-use rocketmq_client::ClientResult;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ConsumeConcurrentlyContext;
 use rocketmq_client_rust::ConsumeConcurrentlyStatus;
 use rocketmq_client_rust::DefaultMQPushConsumer;

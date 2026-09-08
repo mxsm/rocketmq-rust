@@ -200,6 +200,29 @@ define_error_catalog! {
             cli: CliExitCode::PERMISSION,
         },
     }
+    /// Requested authentication user does not exist.
+    AUTH_USER_NOT_FOUND {
+        code: "auth.user.not_found",
+        class: ErrorClass::AUTHENTICATION,
+        condition: CanonicalCondition::NotFound,
+        fault: FaultAttribution::Caller,
+        component: ComponentId::AUTH,
+        public_message: "User does not exist",
+        severity: ErrorSeverity::Warn,
+        recovery_hint: RecoveryHint::Never,
+        backtrace: BacktracePolicy::Never,
+        exposure: Exposure::Generic,
+        fields: [fields::OPERATION_DIAGNOSTIC, fields::SOURCE_PRESENT],
+        projection: {
+            remoting: RemotingResponseCode::UserNotExist,
+            grpc: {
+                payload: GrpcPayloadCode::NotFound,
+                status: GrpcStatusCode::NotFound,
+            },
+            http: HttpStatusCode::NOT_FOUND,
+            cli: CliExitCode::NOT_FOUND,
+        },
+    }
     /// Permission denied for an authenticated principal.
     AUTH_PERMISSION_DENIED {
         code: "auth.permission.denied",
@@ -982,6 +1005,7 @@ pub const ALL_DESCRIPTORS: &[ErrorDescriptor] = &[
     PROTOCOL_HEADER_INVALID,
     ROUTE_TOPIC_NOT_FOUND,
     AUTH_CREDENTIALS_INVALID,
+    AUTH_USER_NOT_FOUND,
     AUTH_PERMISSION_DENIED,
     TRANSPORT_ADMISSION_QUEUE_SATURATED,
     CONTROLLER_LEADERSHIP_NOT_LEADER,

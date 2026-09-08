@@ -14,8 +14,8 @@
 
 use std::sync::Arc;
 
-use rocketmq_client::ClientError;
-use rocketmq_client::ClientResult;
+use rocketmq_client_rust::ClientError;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_runtime::RuntimeConfig;

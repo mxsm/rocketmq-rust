@@ -55,15 +55,13 @@ impl BrokerLiteInfoQueryRequest {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "either brokerAddr or clusterName must be provided",
-                )
-                .into());
+                ));
             }
             (Some(_), Some(_)) => {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "target",
                     "brokerAddr and clusterName cannot be provided together",
-                )
-                .into());
+                ));
             }
         };
 
@@ -857,8 +855,7 @@ fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> Canon
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             field,
             format!("{field} must not be empty"),
-        )
-        .into());
+        ));
     }
     Ok(CheetahString::from(value))
 }

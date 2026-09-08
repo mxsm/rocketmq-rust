@@ -92,14 +92,14 @@ impl ResetOffsetByTimeSubCommand {
         let group = self.group.trim();
         if group.is_empty() {
             return Err(crate::errors::argument_invalid(
-                "Consumer group name (--group / -g) cannot be empty".into(),
+                "Consumer group name (--group / -g) cannot be empty",
             ));
         }
 
         let topic = self.topic.trim();
         if topic.is_empty() {
             return Err(crate::errors::argument_invalid(
-                "Topic name (--topic / -t) cannot be empty".into(),
+                "Topic name (--topic / -t) cannot be empty",
             ));
         }
 

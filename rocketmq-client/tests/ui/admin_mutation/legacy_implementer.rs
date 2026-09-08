@@ -22,7 +22,7 @@ use rocketmq_client_rust::SubscriptionGroupConfigPatch;
 use rocketmq_client_rust::SubscriptionGroupConfigPatchOutcome;
 use rocketmq_client_rust::TopicConfigPatch;
 use rocketmq_client_rust::TopicConfigPatchOutcome;
-use rocketmq_client::ClientResult;
+use rocketmq_client_rust::ClientResult;
 use rocketmq_model::common::config::TopicConfig;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -37,7 +37,7 @@ use rocketmq_protocol::protocol::subscription::subscription_group_config::Subscr
 struct LegacyAdmin;
 
 fn unsupported<T>() -> ClientResult<T> {
-    Err(rocketmq_client::ClientError::illegal_argument("fixture"))
+    Err(rocketmq_client_rust::ClientError::illegal_argument("fixture"))
 }
 
 impl MQAdminMutationExt for LegacyAdmin {

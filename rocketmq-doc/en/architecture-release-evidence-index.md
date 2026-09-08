@@ -91,6 +91,7 @@ must reference this baseline ID or a deliberately versioned successor.
 | `rocketmq-dashboard-gpui` | `rocketmq-runtime` | `rocketmq-runtime` |
 | `rocketmq-dashboard-tauri` | `rocketmq-admin-core` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
 | `rocketmq-dashboard-tauri` | `rocketmq-dashboard-common` | `rocketmq-dashboard/rocketmq-dashboard-common` |
+| `rocketmq-dashboard-tauri` | `rocketmq-error` | `rocketmq-error` |
 | `rocketmq-dashboard-tauri` | `rocketmq-runtime` | `rocketmq-runtime` |
 | `rocketmq-dashboard-web-backend` | `rocketmq-admin-core` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
 | `rocketmq-dashboard-web-backend` | `rocketmq-dashboard-common` | `rocketmq-dashboard/rocketmq-dashboard-common` |
@@ -98,7 +99,6 @@ must reference this baseline ID or a deliberately versioned successor.
 | `rocketmq-dashboard-web-backend` | `rocketmq-observability` | `rocketmq-observability` |
 | `rocketmq-dashboard-web-backend` | `rocketmq-runtime` | `rocketmq-runtime` |
 | `rocketmq-example` | `rocketmq-client-rust` | `rocketmq-client` |
-| `rocketmq-example` | `rocketmq-error` | `rocketmq-error` |
 | `rocketmq-example` | `rocketmq-model` | `rocketmq-model` |
 | `rocketmq-example` | `rocketmq-observability` | `rocketmq-observability` |
 | `rocketmq-example` | `rocketmq-protocol` | `rocketmq-protocol` |
@@ -155,6 +155,21 @@ libraries inherit an explicit feature union rather than the `full` meta-feature.
 | `Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | no |
 | `Cargo.toml` | `tokio-stream` | `fs, io-util, net, signal, sync, time` | no |
 | `Cargo.toml` | `tokio-util` | `codec, compat, io-util, net, rt, time` | no |
+| `rocketmq-ai/rocketmq-mcp/Cargo.toml` | `tokio` | `full` | no |
+| `rocketmq-ai/rocketmq-mcp/Cargo.toml` | `tokio-util` | `full` | no |
+| `rocketmq-ai/rocketmq-sre/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | no |
+| `rocketmq-ai/rocketmq-sre/Cargo.toml` | `tokio-stream` | `net, sync` | no |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-cli/Cargo.toml` | `tokio` | `macros, net, rt, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-client/Cargo.toml` | `tokio` | `macros, net, rt, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-connector/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/Cargo.toml` | `tokio-stream` | `net, sync` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-eval/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-model-gateway/Cargo.toml` | `tokio` | `io-util, macros, net, rt, signal, sync, time` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-model-gateway/Cargo.toml` | `tokio-stream` | `net, sync` | yes |
+| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-probe/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
 | `rocketmq-auth/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | yes |
 | `rocketmq-broker/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | yes |
 | `rocketmq-broker/Cargo.toml` | `tokio-util` | `codec, compat, io-util, net, rt, time` | yes |
@@ -185,19 +200,6 @@ libraries inherit an explicit feature union rather than the `full` meta-feature.
 | `rocketmq-proxy/Cargo.toml` | `tokio-util` | `codec, compat, io-util, net, rt, time` | yes |
 | `rocketmq-runtime/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt, rt-multi-thread, signal, sync, time` | yes |
 | `rocketmq-runtime/Cargo.toml` | `tokio-util` | `codec, compat, io-util, net, rt, time` | yes |
-| `rocketmq-ai/rocketmq-sre/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | no |
-| `rocketmq-ai/rocketmq-sre/Cargo.toml` | `tokio-stream` | `net, sync` | no |
-| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-cli/Cargo.toml` | `tokio` | `macros, net, rt, signal, sync, time` | yes |
-| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-client/Cargo.toml` | `tokio` | `macros, net, rt, signal, sync, time` | yes |
-| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-connector/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
-| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
-| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/Cargo.toml` | `tokio-stream` | `net, sync` | yes |
-| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-eval/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
-| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
-| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
-| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-model-gateway/Cargo.toml` | `tokio` | `io-util, macros, net, rt, signal, sync, time` | yes |
-| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-model-gateway/Cargo.toml` | `tokio-stream` | `net, sync` | yes |
-| `rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-probe/Cargo.toml` | `tokio` | `macros, net, signal, sync, time` | yes |
 | `rocketmq-store-local/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | yes |
 | `rocketmq-store-local/Cargo.toml` | `tokio-util` | `codec, compat, io-util, net, rt, time` | yes |
 | `rocketmq-store-rocksdb/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | yes |
@@ -209,8 +211,6 @@ libraries inherit an explicit feature union rather than the `full` meta-feature.
 | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | yes |
 | `rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | yes |
 | `rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/Cargo.toml` | `tokio-stream` | `fs, io-util, net, signal, sync, time` | yes |
-| `rocketmq-ai/rocketmq-mcp/Cargo.toml` | `tokio` | `full` | no |
-| `rocketmq-ai/rocketmq-mcp/Cargo.toml` | `tokio-util` | `full` | no |
 | `rocketmq-transport/Cargo.toml` | `tokio` | `fs, io-std, io-util, macros, net, process, rt-multi-thread, signal, sync, time` | yes |
 | `rocketmq-transport/Cargo.toml` | `tokio-util` | `codec, compat, io-util, net, rt, time` | yes |
 
@@ -230,17 +230,17 @@ and inject `ChildServiceContext`/`TaskGroup` capabilities.
 
 ## Python architecture test inventory
 
-- Inventoried test modules: 63.
+- Inventoried test modules: 119.
 - Guard runner: `python scripts/run_architecture_tests.py --tier pr_static`.
 - Contract runner: `python scripts/run_architecture_tests.py --tier milestone_contract --tier phase_contract --tier dynamic_fixture`.
 
 | Tier | Modules |
 |---|---:|
-| `pr_static` | 25 |
+| `pr_static` | 39 |
 | `milestone_contract` | 26 |
-| `phase_contract` | 4 |
-| `dynamic_fixture` | 7 |
-| `deferred_validation` | 1 |
+| `phase_contract` | 24 |
+| `dynamic_fixture` | 25 |
+| `deferred_validation` | 5 |
 
 ## Evidence workflows and artifact identities
 

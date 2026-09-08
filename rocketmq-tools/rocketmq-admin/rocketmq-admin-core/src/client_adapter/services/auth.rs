@@ -150,8 +150,7 @@ impl UpdateUserRequest {
             return Err(crate::client_adapter::services::errors::admin_validation_failed(
                 "updateField",
                 "at least one of password, userType, or userStatus must be provided",
-            )
-            .into());
+            ));
         }
 
         Ok(Self {
@@ -1389,8 +1388,7 @@ fn trim_required_cheetah(field: &'static str, value: impl Into<String>) -> Canon
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             field,
             format!("{field} must not be empty"),
-        )
-        .into());
+        ));
     }
     Ok(CheetahString::from(value))
 }
@@ -1404,13 +1402,11 @@ fn target_from_options(broker_addr: Option<String>, cluster_name: Option<String>
         (None, None) => Err(crate::client_adapter::services::errors::admin_validation_failed(
             "target",
             "either brokerAddr or clusterName must be provided",
-        )
-        .into()),
+        )),
         (Some(_), Some(_)) => Err(crate::client_adapter::services::errors::admin_validation_failed(
             "target",
             "brokerAddr and clusterName cannot be provided together",
-        )
-        .into()),
+        )),
     }
 }
 
@@ -1430,8 +1426,7 @@ fn split_required_csv(field: &'static str, value: impl Into<String>) -> Canonica
         return Err(crate::client_adapter::services::errors::admin_validation_failed(
             field,
             format!("{field} must not be empty"),
-        )
-        .into());
+        ));
     }
     Ok(values)
 }

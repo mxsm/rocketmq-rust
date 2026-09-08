@@ -76,19 +76,27 @@ dispatcher on shutdown, and fetch the message by queue offset:
 
 ```rust
 use bytes::Bytes;
-use rocketmq_error::RocketMQError;
+use rocketmq_runtime::RuntimeContext;
+use rocketmq_store_api::StoreError;
 use rocketmq_tieredstore::{
     TieredDispatchRequest, TieredDispatcher, TieredLifecycle, TieredMessageFetcher,
     TieredStorageLevel, TieredStore, TieredStoreConfig,
 };
 
-async fn example() -> Result<(), RocketMQError> {
-    let store = TieredStore::new(TieredStoreConfig {
-        storage_level: TieredStorageLevel::Force,
-        backend_provider: "memory".to_owned(),
-        max_pending_tasks: 16,
-        ..TieredStoreConfig::default()
-    })?;
+async fn example() -> Result<(), StoreError> {
+    let runtime = RuntimeContext::from_current("tieredstore-readme");
+    let Some(store) = TieredStore::new(
+        TieredStoreConfig {
+            storage_level: TieredStorageLevel::Force,
+            backend_provider: "memory".to_owned(),
+            max_pending_tasks: 16,
+            ..TieredStoreConfig::default()
+        },
+        runtime.root_group().clone(),
+    )?
+    else {
+        return Ok(());
+    };
 
     store.load().await?;
     store.start().await?;
@@ -133,15 +141,26 @@ cargo run -p rocketmq-tieredstore --example basic_memory_tieredstore
 Use the default POSIX provider for local durable tiered data:
 
 ```rust
+use rocketmq_runtime::RuntimeContext;
+use rocketmq_store_api::StoreError;
 use rocketmq_tieredstore::{TieredStorageLevel, TieredStore, TieredStoreConfig};
 
-let store = TieredStore::new(TieredStoreConfig {
-    storage_level: TieredStorageLevel::Force,
-    backend_provider: "posix".to_owned(),
-    store_path_root_dir: "./store/tieredstore".into(),
-    ..TieredStoreConfig::default()
-})?;
-# Ok::<_, rocketmq_error::RocketMQError>(())
+# async fn open() -> Result<(), StoreError> {
+let runtime = RuntimeContext::from_current("tieredstore-readme");
+let Some(store) = TieredStore::new(
+    TieredStoreConfig {
+        storage_level: TieredStorageLevel::Force,
+        backend_provider: "posix".to_owned(),
+        store_path_root_dir: "./store/tieredstore".into(),
+        ..TieredStoreConfig::default()
+    },
+    runtime.root_group().clone(),
+)? else {
+    return Ok(());
+};
+# let _ = store;
+# Ok(())
+# }
 ```
 
 ## Feature Flags

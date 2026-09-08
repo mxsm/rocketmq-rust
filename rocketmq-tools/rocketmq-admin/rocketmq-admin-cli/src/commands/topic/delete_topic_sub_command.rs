@@ -83,7 +83,7 @@ impl CommandExecute for DeleteTopicSubCommand {
     ) -> rocketmq_error::Result<()> {
         if self.cluster_name.is_none() {
             return Err(crate::errors::argument_invalid(
-                "DeleteTopicSubCommand: clusterName (-c) must be provided".into(),
+                "DeleteTopicSubCommand: clusterName (-c) must be provided",
             ));
         }
         let validation_result = TopicValidator::validate_topic(&self.topic);
