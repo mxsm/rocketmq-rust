@@ -628,6 +628,47 @@ impl ConsumeQueueStore {
         }
     }
 
+    pub(crate) async fn recover_result_with_parallelism(
+        &self,
+        parallelism: usize,
+    ) -> Result<(), crate::store_error::StoreError> {
+        use crate::store_error::{StoreComponent, StoreError, StoreOperation};
+        use futures_util::StreamExt;
+        let runtime = self.inner.runtime_scope.clone();
+        let results = futures_util::stream::iter(self.snapshot_consume_queues())
+            .map(|queue| {
+                let runtime = runtime.clone();
+                async move {
+                    let complete = crate::runtime::spawn_io(&runtime, "local-file-cq-recover-result", move || {
+                        queue.write().recover_with_outcome()
+                    })
+                    .await
+                    .map_err(|source| {
+                        StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, StoreOperation::Load)
+                            .in_component(StoreComponent::Store)
+                            .with_detail("consume queue recovery executor failed")
+                            .with_source(source)
+                    })?;
+                    if complete {
+                        Ok(())
+                    } else {
+                        Err(
+                            StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, StoreOperation::Load)
+                                .in_component(StoreComponent::Store)
+                                .with_detail(
+                                    "consume queue cleanup remains pending; legacy helper supplied no underlying cause",
+                                ),
+                        )
+                    }
+                }
+            })
+            .buffer_unordered(parallelism.max(1))
+            .collect::<Vec<_>>()
+            .await;
+        // Await every owned worker before returning the first failure to the next phase.
+        results.into_iter().collect()
+    }
+
     pub async fn recover_concurrently_with_summary(&self, parallelism: usize) -> ConsumeQueueRecoverySummary {
         let total_started = Instant::now();
         let queues = self.snapshot_consume_queues();
@@ -2115,6 +2156,18 @@ mod tests {
         assert_eq!(summary.failure_count, 0);
         assert!(summary.failures.is_empty());
         assert_eq!(summary.failure_description(), "none");
+    }
+
+    #[tokio::test]
+    async fn recovery_result_preserves_executor_failure_and_awaits_other_queues() {
+        let (store, states) = tracking_store(3, Duration::ZERO, Some(1));
+        let error = store.recover_result_with_parallelism(2).await.unwrap_err();
+        assert!(std::error::Error::source(&error).is_some());
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_INTERNAL_FAILURE);
+        assert!(states
+            .iter()
+            .all(|state| state.recover_count.load(Ordering::SeqCst) == 1));
+        assert_eq!(states[1].visible_max_physic_offset.load(Ordering::SeqCst), -1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

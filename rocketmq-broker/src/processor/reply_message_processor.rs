@@ -60,6 +60,7 @@ use tracing::warn;
 
 use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::processor::response_assembly::BrokerResponseParts;
+use crate::processor::send_message_processor::capability::SendMessagePolicy;
 use crate::processor::send_message_processor::capability::SendMessageProcessorContext;
 use crate::processor::send_message_processor::structured_store::append_message_with_control_reply;
 use crate::processor::send_message_processor::structured_store::StoreHookCompletion;
@@ -200,7 +201,7 @@ fn apply_reply_store_result(
         }
     };
     if let (true, Some(append_result)) = (put_ok, put_message_result.append_message_result()) {
-        response_header.set_msg_id(append_result.msg_id.clone().unwrap_or_default());
+        response_header.set_msg_id(append_result.get_message_id().unwrap_or_default());
         response_header.set_queue_id(queue_id);
         response_header.set_queue_offset(append_result.logics_offset);
     }
@@ -248,13 +249,15 @@ pub struct ReplyMessageProcessor<MS: BrokerWriteStore, TS> {
 }
 
 struct ReplyCompletionFacts {
+    policy: Arc<SendMessagePolicy>,
     owner: Option<CheetahString>,
     body_len: usize,
 }
 
 impl ReplyCompletionFacts {
-    fn capture(request: &RemotingCommand) -> Self {
+    fn capture(request: &RemotingCommand, policy: Arc<SendMessagePolicy>) -> Self {
         Self {
+            policy,
             owner: request
                 .get_ext_fields()
                 .and_then(|fields| fields.get(BrokerStatsManager::COMMERCIAL_OWNER))
@@ -268,6 +271,20 @@ impl<MS: BrokerWriteStore, TS> Clone for ReplyMessageProcessor<MS, TS> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+#[cfg(test)]
+impl<MS: BrokerWriteStore, TS> ReplyMessageProcessor<MS, TS> {
+    pub(crate) fn with_hook_for_test(&self, hook: Box<dyn crate::mqtrace::send_message_hook::SendMessageHook>) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                send_message_hook_vec: Arc::new(vec![hook]),
+                consume_message_hook_vec: Arc::clone(&self.inner.consume_message_hook_vec),
+                transactional_message_service: Arc::clone(&self.inner.transactional_message_service),
+                context: Arc::clone(&self.inner.context),
+            }),
         }
     }
 }
@@ -388,11 +405,12 @@ where
         original_opaque: i32,
         request: &mut RemotingCommand,
     ) -> crate::broker_error::BrokerResult<HandlerOutcome> {
+        let policy = self.inner.context.policy.snapshot();
         let mut request_header = parse_request_header(request)?;
         let request_properties = MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
         let mut send_message_context = self
             .inner
-            .build_msg_context_at(inbound_peer, &mut request_header, request, request_properties)
+            .build_msg_context_at(&policy, inbound_peer, &mut request_header, request, request_properties)
             .0;
         self.inner.execute_send_message_hook_before(&send_message_context);
 
@@ -402,16 +420,8 @@ where
             .command_factory
             .create_success_response_command()
             .set_opaque(original_opaque);
-        let (region_id, trace_on, start_timestamp, store_reply_message_enable) = {
-            let policy = self.inner.context.policy.snapshot();
-            (
-                policy.region_id.clone(),
-                policy.trace_on,
-                policy.start_accept_send_request_time_stamp as u64,
-                policy.store_reply_message_enable,
-            )
-        };
-        add_reply_response_metadata(&mut response, region_id.as_str(), trace_on);
+        add_reply_response_metadata(&mut response, policy.region_id.as_str(), policy.trace_on);
+        let start_timestamp = policy.start_accept_send_request_time_stamp as u64;
         if current_millis() < start_timestamp {
             response = response
                 .set_code(ResponseCode::SystemError)
@@ -420,7 +430,7 @@ where
         }
         response.set_code_mut(-1);
         self.inner
-            .msg_check_at(inbound_peer, request, &request_header, &mut response)
+            .msg_check_at(&policy, inbound_peer, request, &request_header, &mut response)
             .await;
         if response.code() != -1 {
             return self.finish_reply(response, send_message_context);
@@ -440,9 +450,11 @@ where
         if queue_id < 0 {
             queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
         }
-        let mut message = self.build_msg_inner(inbound_peer, request, &request_header, queue_id);
-        let completion_facts = ReplyCompletionFacts::capture(request);
-        let store_host = self.inner.context.policy.snapshot().store_host;
+        let mut message = self.build_msg_inner(&policy, inbound_peer, request, &request_header, queue_id);
+        let store_host = policy.store_host;
+        if !self.inner.check_broker_permission(&policy, &mut response) {
+            return self.finish_reply(response, send_message_context);
+        }
         // Outbound reply delivery uses the session-owned request capability;
         // the inbound request never carries that authority.
         let mut push_port = BrokerReplyPushPort {
@@ -454,11 +466,17 @@ where
         let mut response_header = SendMessageResponseHeader::default();
         Self::handle_push_reply_result(&mut push_result, &mut response, &mut response_header, queue_id);
 
-        if !store_reply_message_enable {
-            response = response.set_command_custom_header(response_header);
+        if !policy.store_reply_message_enable {
+            if !response_header.msg_id().is_empty() {
+                response = response.set_command_custom_header(response_header);
+            }
             return self.finish_reply(response, send_message_context);
         }
 
+        if !self.inner.check_broker_permission(&policy, &mut response) {
+            return self.finish_reply(response, send_message_context);
+        }
+        let completion_facts = ReplyCompletionFacts::capture(request, policy);
         let mut store = self.inner.context.store.clone();
         let processor = self;
         let reply = append_reply_message_with_control_reply(control, &mut store, message, move |result| match result {
@@ -472,7 +490,9 @@ where
                     TopicMessageType::Normal,
                     request_header.topic(),
                 );
-                response = response.set_command_custom_header(response_header);
+                if !response_header.msg_id().is_empty() {
+                    response = response.set_command_custom_header(response_header);
+                }
                 processor
                     .inner
                     .execute_send_message_hook_after(Some(&mut response), &mut send_message_context);
@@ -508,6 +528,7 @@ where
     // Build MessageExtBrokerInner to improve readability
     fn build_msg_inner(
         &self,
+        policy: &SendMessagePolicy,
         inbound_peer: SocketAddr,
         request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
@@ -527,7 +548,7 @@ where
         msg_inner.properties_string = request_header.properties.clone().unwrap_or_default();
         msg_inner.message_ext_inner.born_timestamp = request_header.born_timestamp;
         msg_inner.message_ext_inner.born_host = inbound_peer;
-        msg_inner.message_ext_inner.store_host = self.inner.context.policy.snapshot().store_host;
+        msg_inner.message_ext_inner.store_host = policy.store_host;
         msg_inner.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
         msg_inner
     }
@@ -546,12 +567,10 @@ where
             put_message_result,
             response_header,
             queue_id_int,
-            self.inner.context.policy.snapshot().max_message_size,
+            completion_facts.policy.max_message_size,
         );
-        let (commercial_size_per_msg, commercial_base_count) = {
-            let policy = self.inner.context.policy.snapshot();
-            (policy.commercial_size_per_msg, policy.commercial_base_count)
-        };
+        let commercial_size_per_msg = completion_facts.policy.commercial_size_per_msg;
+        let commercial_base_count = completion_facts.policy.commercial_base_count;
 
         if put_ok {
             // Cache append_message_result to avoid repeated unwrap

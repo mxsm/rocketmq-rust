@@ -5201,7 +5201,7 @@ fn clean_commit_log_service_manual_delete_uses_java_retry_budget() {
 }
 
 #[test]
-fn clean_commit_log_service_uses_lowest_commitlog_path_ratio_like_java() {
+fn clean_commit_log_service_unknown_configured_root_requests_reclaim() {
     let temp_dir = tempdir().unwrap();
     let store = new_test_store(&temp_dir);
     let missing_path = temp_dir.path().join("missing-commitlog");
@@ -5227,10 +5227,8 @@ fn clean_commit_log_service_uses_lowest_commitlog_path_ratio_like_java() {
         None,
     );
 
-    let (ratio, selected_path) = service.min_physic_disk_ratio();
-
-    assert!(ratio < 0.0);
-    assert_eq!(selected_path, Some(missing_path.to_string_lossy().into_owned()));
+    let decision = service.is_space_to_delete();
+    assert!(decision.should_delete);
 }
 
 #[tokio::test]
@@ -5457,4 +5455,120 @@ async fn clean_expired_removes_trimmed_queue_directly() {
         .consume_queue_store
         .find_consume_queue_map(&expired_topic)
         .is_none());
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[tokio::test]
+async fn managed_cleanup_reports_submission_before_reaper_completion() {
+    use crate::consume_queue::mapped_file_queue::CleanupOutcome;
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_configured_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            enable_mapped_file_lifecycle_wave_b: true,
+            message_index_enable: false,
+            timer_wheel_enable: false,
+            enable_consume_queue_ext: false,
+            mapped_file_size_commit_log: 512,
+            ..Default::default()
+        },
+    );
+    store.init().await.unwrap();
+    assert!(store.load().await);
+    store.start().await.unwrap();
+    store
+        .mapped_file_retirement_service
+        .as_mut()
+        .unwrap()
+        .pause_scheduling_for_test()
+        .await;
+    for offset in [0, 512, 1024] {
+        assert!(store
+            .get_commit_log_mut()
+            .append_data(offset, &[1; 512], 0, 512)
+            .await
+            .unwrap());
+    }
+    let alias = store.commit_log.get_data(0).unwrap();
+    let runtime = store.managed_lifecycle_runtime.as_ref().unwrap();
+    let outcome = store
+        .commit_log
+        .cleanup_handle()
+        .delete_expired_files_by_time_before(0, 0, 0, true, 10, None);
+    assert_eq!(
+        outcome,
+        CleanupOutcome::ManagedSubmitted {
+            selected: 2,
+            submitted: 2
+        }
+    );
+    let pending = runtime.snapshot();
+    assert_eq!(pending.completed(), 0);
+    assert!(
+        pending.pending_tickets() >= 2,
+        "the allocator may also own orphan-retirement work"
+    );
+    assert!(temp_dir.path().join("commitlog/00000000000000000000").exists());
+    assert_eq!(alias.get_buffer(), &[1; 512]);
+    drop(alias);
+    let mut completed = 0;
+    for _ in 0..8 {
+        let report = runtime.drive_batch(64);
+        completed += report.completed();
+        if report.pending_tickets() == 0 {
+            break;
+        }
+    }
+    assert!(completed >= 2);
+    assert_eq!(
+        runtime.snapshot().pending_tickets(),
+        pending.pending_tickets() - completed
+    );
+    assert!(!temp_dir.path().join("commitlog/00000000000000000000").exists());
+    assert!(
+        temp_dir.path().join("commitlog/00000000000000001024").exists(),
+        "tail is retained"
+    );
+    store.shutdown().await;
+}
+
+#[tokio::test]
+async fn load_reports_failed_and_skipped_phases_and_retains_the_original_error() {
+    for managed in [false, true] {
+        for failing in [RecoveryPhase::ConsumeQueue, RecoveryPhase::CommitLog] {
+            let temp_dir = tempdir().unwrap();
+            let mut store = new_configured_test_store(
+                &temp_dir,
+                MessageStoreConfig {
+                    enable_mapped_file_lifecycle_wave_b: managed,
+                    message_index_enable: false,
+                    timer_wheel_enable: false,
+                    ..Default::default()
+                },
+            );
+            store.init().await.unwrap();
+            store.recovery_failure = Some((
+                failing,
+                StoreError::new(&rocketmq_error::STORAGE_INTERNAL_FAILURE, StoreOperation::Load).with_source(
+                    std::io::Error::new(std::io::ErrorKind::PermissionDenied, "private-recovery-cause"),
+                ),
+            ));
+            assert!(!store.load().await);
+            let report = store.last_recovery_report().unwrap();
+            assert_eq!(report.phases.len(), 3);
+            let failed_index = if failing == RecoveryPhase::ConsumeQueue { 0 } else { 1 };
+            assert_eq!(report.phases[failed_index].status, RecoveryPhaseStatus::Failed);
+            assert!(report.phases[failed_index].failure.is_some());
+            assert!(report.phases[failed_index + 1..]
+                .iter()
+                .all(|phase| phase.status == RecoveryPhaseStatus::Skipped));
+            assert!(!format!("{report:?}").contains("private-recovery-cause"));
+            let source = std::error::Error::source(store.last_recovery_error().unwrap()).unwrap();
+            assert_eq!(
+                source.downcast_ref::<std::io::Error>().unwrap().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+            assert!(report.phase_duration_ms(failing).is_some());
+        }
+    }
 }

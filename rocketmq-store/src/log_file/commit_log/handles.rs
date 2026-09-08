@@ -51,6 +51,14 @@ pub(crate) struct CommitLogCleanupHandle {
 }
 
 impl CommitLogCleanupHandle {
+    pub(crate) fn active_root(&self) -> Option<std::path::PathBuf> {
+        self.mapped_file_queue.active_root()
+    }
+
+    pub(crate) fn allocation_candidates(&self) -> Vec<std::path::PathBuf> {
+        self.mapped_file_queue.allocation_candidates()
+    }
+
     #[inline]
     pub(crate) fn get_min_offset(&self) -> i64 {
         self.mapped_file_queue.get_min_offset()
@@ -64,7 +72,7 @@ impl CommitLogCleanupHandle {
         clean_immediately: bool,
         delete_file_batch_max: i32,
         pinned_file_offset: Option<u64>,
-    ) -> i32 {
+    ) -> crate::consume_queue::mapped_file_queue::CleanupOutcome {
         self.mapped_file_queue.delete_expired_files_by_time_before(
             expired_time,
             delete_files_interval,
@@ -224,7 +232,7 @@ impl CommitLogInternalMessageWriteHandle {
         let append_span = rocketmq_observability::trace::store::append_span(&self.telemetry_handle);
         let requested_lease = match self.store_context.controller_write_lease.capture() {
             Ok(lease) => lease,
-            Err(()) => return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable),
+            Err(()) => return PutMessageResult::rejected_before_append(PutMessageStatus::ServiceNotAvailable),
         };
         msg.set_wait_store_msg_ok(false);
         #[cfg(any(feature = "observability", feature = "observability-traces"))]
@@ -254,7 +262,7 @@ impl CommitLogInternalMessageWriteHandle {
             && self.store_runtime_state.broker_role() != BrokerRole::Slave);
         let prepared = match message_encoder_pool::prepare_message_with_pool(&msg, &self.message_store_config) {
             Ok(prepared) => prepared,
-            Err(result) => return result,
+            Err(result) => return result.with_execution_evidence(crate::AppendExecutionEvidence::NotAppended),
         };
         let mut result = self
             .append_port

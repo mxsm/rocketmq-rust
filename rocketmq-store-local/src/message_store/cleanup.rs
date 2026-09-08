@@ -25,6 +25,7 @@ pub struct DiskCleanDecision {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiskUsageState {
+    Unknown,
     Warning,
     Forcible,
     Reclaim,
@@ -58,11 +59,13 @@ impl CleanupPolicy {
     }
 
     pub fn classify(self, ratio: f64) -> DiskUsageState {
-        if ratio > self.disk_warning_ratio() {
+        if !ratio.is_finite() || !(0.0..=1.0).contains(&ratio) {
+            DiskUsageState::Unknown
+        } else if ratio > self.disk_warning_ratio() {
             DiskUsageState::Warning
         } else if ratio > self.disk_clean_forcibly_ratio() {
             DiskUsageState::Forcible
-        } else if ratio < 0.0 || ratio > self.disk_max_used_ratio() {
+        } else if ratio > self.disk_max_used_ratio() {
             DiskUsageState::Reclaim
         } else {
             DiskUsageState::Healthy
@@ -81,7 +84,9 @@ impl CleanupPolicy {
             };
         }
 
-        if physic == DiskUsageState::Reclaim || logic == DiskUsageState::Reclaim {
+        if matches!(physic, DiskUsageState::Reclaim | DiskUsageState::Unknown)
+            || matches!(logic, DiskUsageState::Reclaim | DiskUsageState::Unknown)
+        {
             return DiskCleanDecision {
                 should_delete: true,
                 clean_immediately: false,
@@ -133,6 +138,16 @@ mod tests {
             disk_max_used_ratio: 0.75,
             clean_file_forcibly_enabled: true,
         })
+    }
+
+    #[test]
+    fn invalid_capacity_samples_are_unknown() {
+        for ratio in [-1.0, f64::NAN, f64::INFINITY, 1.01] {
+            assert_eq!(policy().classify(ratio), DiskUsageState::Unknown);
+            let decision = policy().decide(ratio, 0.1);
+            assert!(decision.should_delete);
+            assert!(!decision.clean_immediately);
+        }
     }
 
     #[test]

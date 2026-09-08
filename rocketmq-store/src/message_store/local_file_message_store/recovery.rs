@@ -26,6 +26,11 @@ impl LocalFileMessageStore {
     }
 
     pub(super) async fn recover(&mut self, last_exit_ok: bool) -> bool {
+        self.last_recovery_error = self.recover_result(last_exit_ok).await.err();
+        self.last_recovery_error.is_none()
+    }
+
+    async fn recover_result(&mut self, last_exit_ok: bool) -> Result<(), StoreError> {
         let previous_state = self.lifecycle_state();
         let recover_concurrently = self.is_recover_concurrently();
         let mut recovery_plan = RecoveryPlan::new(
@@ -76,11 +81,8 @@ impl LocalFileMessageStore {
                 .local_file_parallelism
         );
         self.set_lifecycle_state(LocalStoreState::RecoveringConsumeQueue);
-        let mut consume_queue_recovered = false;
-        let recover_consume_queue = recovery_executor
-            .run_phase(RecoveryPhase::ConsumeQueue, async {
-                consume_queue_recovered = self.recover_consume_queue().await;
-            })
+        let consume_queue_result = recovery_executor
+            .run_result_phase(RecoveryPhase::ConsumeQueue, self.recover_consume_queue_result())
             .await;
         let dispatch_recovery_offset = self.get_dispatch_recovery_offset();
         recovery_executor
@@ -89,36 +91,36 @@ impl LocalFileMessageStore {
         recovery_executor
             .plan_mut()
             .set_max_consume_queue_physical_offset(dispatch_recovery_offset);
-
-        self.set_lifecycle_state(LocalStoreState::RecoveringCommitLog);
-        let mut commit_log_recovered = false;
-        let recover_commit_log = if !consume_queue_recovered {
-            error!("consume-queue recovery cleanup failed; skipping CommitLog recovery");
-            0
-        } else if last_exit_ok {
-            recovery_executor
-                .run_phase(RecoveryPhase::CommitLog, async {
-                    commit_log_recovered = self.recover_normally(dispatch_recovery_offset).await;
-                })
-                .await
-        } else {
-            recovery_executor
-                .run_phase(RecoveryPhase::CommitLog, async {
-                    commit_log_recovered = self.recover_abnormally(dispatch_recovery_offset).await;
-                })
-                .await
-        };
-
-        self.set_lifecycle_state(LocalStoreState::RecoveringTopicQueueTable);
-        let recover_topic_queue_table = if commit_log_recovered {
-            recovery_executor
-                .run_phase(RecoveryPhase::TopicQueueTable, async {
-                    self.recover_topic_queue_table();
-                })
-                .await
-        } else {
-            error!("CommitLog recovery cleanup failed; skipping topic queue table recovery");
-            0
+        let recovery_result = match consume_queue_result {
+            Err(error) => {
+                recovery_executor.skip_phase(RecoveryPhase::CommitLog);
+                recovery_executor.skip_phase(RecoveryPhase::TopicQueueTable);
+                Err(error)
+            }
+            Ok(()) => {
+                self.set_lifecycle_state(LocalStoreState::RecoveringCommitLog);
+                let commit_log_result = recovery_executor
+                    .run_result_phase(
+                        RecoveryPhase::CommitLog,
+                        self.recover_commit_log_result(last_exit_ok, dispatch_recovery_offset),
+                    )
+                    .await;
+                match commit_log_result {
+                    Err(error) => {
+                        recovery_executor.skip_phase(RecoveryPhase::TopicQueueTable);
+                        Err(error)
+                    }
+                    Ok(()) => {
+                        self.set_lifecycle_state(LocalStoreState::RecoveringTopicQueueTable);
+                        recovery_executor
+                            .run_result_phase(RecoveryPhase::TopicQueueTable, async {
+                                self.recover_topic_queue_table();
+                                Ok(())
+                            })
+                            .await
+                    }
+                }
+            }
         };
         if self.lifecycle_state() != LocalStoreState::Shutdown {
             self.set_lifecycle_state(previous_state);
@@ -137,9 +139,15 @@ impl LocalFileMessageStore {
              recoverOffsetTable: {} ms, recoveryMode: {}, lastExit: {}, dispatchRecoveryOffset: {:?}, commitLogRange: \
              {:?}-{:?}, confirmOffset: {:?}, indexSafeOffset: {:?}",
             recovery_report.total_duration_ms,
-            recover_consume_queue,
-            recover_commit_log,
-            recover_topic_queue_table,
+            recovery_report
+                .phase_duration_ms(RecoveryPhase::ConsumeQueue)
+                .unwrap_or_default(),
+            recovery_report
+                .phase_duration_ms(RecoveryPhase::CommitLog)
+                .unwrap_or_default(),
+            recovery_report
+                .phase_duration_ms(RecoveryPhase::TopicQueueTable)
+                .unwrap_or_default(),
             recovery_report.plan.mode.as_str(),
             recovery_report.plan.exit.as_str(),
             recovery_report.plan.dispatch_recovery_offset,
@@ -149,7 +157,52 @@ impl LocalFileMessageStore {
             recovery_report.plan.offsets.index_safe_offset
         );
         self.last_recovery_report = Some(recovery_report);
-        consume_queue_recovered && commit_log_recovered
+        recovery_result
+    }
+
+    async fn recover_consume_queue_result(&mut self) -> Result<(), StoreError> {
+        #[cfg(test)]
+        if self
+            .recovery_failure
+            .as_ref()
+            .is_some_and(|(phase, _)| *phase == RecoveryPhase::ConsumeQueue)
+        {
+            return Err(self.recovery_failure.take().unwrap().1);
+        }
+        let parallelism = if self.is_recover_concurrently() {
+            self.composition.config().recovery.consume_queue_parallelism
+        } else {
+            1
+        };
+        self.consume_queue_store
+            .recover_result_with_parallelism(parallelism)
+            .await
+    }
+
+    async fn recover_commit_log_result(&mut self, normal: bool, offset: i64) -> Result<(), StoreError> {
+        #[cfg(test)]
+        if self
+            .recovery_failure
+            .as_ref()
+            .is_some_and(|(phase, _)| *phase == RecoveryPhase::CommitLog)
+        {
+            return Err(self.recovery_failure.take().unwrap().1);
+        }
+        let use_optimized =
+            optimized_recovery_requested(std::env::var("ROCKETMQ_USE_OPTIMIZED_RECOVERY").ok().as_deref());
+        drive_commit_log_recovery(use_optimized, |step| async move {
+            match (normal, step) {
+                (true, CommitLogRecoveryStep::Optimized) => {
+                    self.commit_log.recover_normally_optimized_result(offset).await
+                }
+                (true, CommitLogRecoveryStep::Standard) => self.commit_log.recover_normally_result(offset).await,
+                (false, CommitLogRecoveryStep::Optimized) => {
+                    self.commit_log.recover_abnormally_optimized_result(offset).await
+                }
+                (false, CommitLogRecoveryStep::Standard) => self.commit_log.recover_abnormally_result(offset).await,
+            }
+        })
+        .await
     }
 
     pub(super) fn current_index_safe_offset(&self) -> i64 {
@@ -217,34 +270,6 @@ impl LocalFileMessageStore {
             && self
                 .message_store_config
                 .enable_local_file_consume_queue_recovery_concurrently
-    }
-
-    pub(super) async fn recover_consume_queue(&mut self) -> bool {
-        if self.broker_config.recover_concurrently && self.message_store_config.is_enable_rocksdb_store() {
-            self.consume_queue_store.recover_concurrently().await
-        } else if self.broker_config.recover_concurrently && self.is_local_file_consume_queue_recover_concurrently() {
-            let parallelism = self.composition.config().recovery.consume_queue_parallelism;
-            let summary = self
-                .consume_queue_store
-                .recover_concurrently_with_summary(parallelism)
-                .await;
-            if !summary.is_success() {
-                warn!(
-                    "local file consume queue concurrent recovery failed; aborting recovery, \
-                     parallelism={}, queues={}, success={}, failed={}, failures={}",
-                    parallelism,
-                    summary.queue_count,
-                    summary.success_count,
-                    summary.failure_count,
-                    summary.failure_description()
-                );
-                false
-            } else {
-                true
-            }
-        } else {
-            self.consume_queue_store.recover_with_outcome().await
-        }
     }
 
     pub(super) fn get_dispatch_recovery_offset(&self) -> i64 {

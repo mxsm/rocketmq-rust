@@ -293,7 +293,7 @@ impl<MS: BrokerReplicationStore> BrokerSpecialServiceCapability<MS> {
             if should_start {
                 ScheduleMessageService::start(schedule).await?;
             } else {
-                schedule.stop().await?;
+                schedule.stop_checked().await?;
             }
             if let Some(timer) = self.timer.as_ref().and_then(Weak::upgrade) {
                 timer.sync_last_read_time_ms();

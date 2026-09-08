@@ -672,20 +672,47 @@ where
         .then_some(mapped_file)
 }
 
-/// Narrow, cloneable capability used by background commit-log cleanup.
-///
-/// The capability owns only the atomically published mapped-file generation.
-/// It deliberately excludes the queue's allocation and runtime state so a
-/// scheduled cleanup task never needs shared access to the composition-root-owned
-/// `MappedFileQueue` facade.
+/// Submission and namespace completion are distinct cleanup outcomes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CleanupOutcome {
+    ManagedSubmitted { selected: usize, submitted: i32 },
+    LegacyCompleted { namespace_removed: i32 },
+}
+
+impl CleanupOutcome {
+    // Compatibility only: managed counts mean accepted tickets, never physical deletion.
+    fn compatibility_count(self) -> i32 {
+        match self {
+            Self::ManagedSubmitted { submitted, .. } => submitted,
+            Self::LegacyCompleted { namespace_removed } => namespace_removed,
+        }
+    }
+}
+
+/// Narrow capability for cleanup and read-only allocation eligibility probes.
 #[derive(Clone)]
 pub(crate) struct MappedFileQueueCleanupHandle {
+    commit_log_paths: Option<Arc<CommitLogPathSet>>,
     mapped_files: MappedFileGeneration,
     mapped_file_size: u64,
     runtime_state: MappedFileQueueRuntimeState,
 }
 
 impl MappedFileQueueCleanupHandle {
+    pub(crate) fn active_root(&self) -> Option<std::path::PathBuf> {
+        let files = self.mapped_files.snapshot();
+        let file = files.last().filter(|file| !file.is_full())?;
+        Path::new(file.get_file_name().as_str()).parent().map(Path::to_path_buf)
+    }
+
+    pub(crate) fn allocation_candidates(&self) -> Vec<std::path::PathBuf> {
+        // Reuse allocation eligibility; never treat a readonly/retired root as a spare.
+        self.commit_log_paths
+            .as_ref()
+            .and_then(|paths| paths.creation_candidates(StoreFaultPoint::CreateSegment).ok())
+            .unwrap_or_default()
+    }
+
     fn check_self(&self) {
         let mapped_files = self.mapped_files.snapshot();
         for_each_discontinuous_pair(
@@ -723,7 +750,7 @@ impl MappedFileQueueCleanupHandle {
         clean_immediately: bool,
         delete_file_batch_max: i32,
         pinned_file_offset: Option<u64>,
-    ) -> i32 {
+    ) -> CleanupOutcome {
         let _maintenance_guard = self.runtime_state.commit_lock().lock();
         let files = self.mapped_files.snapshot();
         self.check_self();
@@ -736,7 +763,10 @@ impl MappedFileQueueCleanupHandle {
                 pinned_file_offset,
                 || i64::try_from(current_millis()).unwrap_or(i64::MAX),
             );
-            return submit_managed_retirements(&runtime, &generation, candidates, ManagedRetirementReason::TtlExpired);
+            let selected = candidates.len();
+            let submitted =
+                submit_managed_retirements(&runtime, &generation, candidates, ManagedRetirementReason::TtlExpired);
+            return CleanupOutcome::ManagedSubmitted { selected, submitted };
         }
         let deletion = delete_expired_mapped_files_by_time_before(
             files.as_ref(),
@@ -748,7 +778,9 @@ impl MappedFileQueueCleanupHandle {
             pinned_file_offset,
             || i64::try_from(current_millis()).unwrap_or(i64::MAX),
         );
-        self.mapped_files.apply_legacy_namespace_removal(deletion)
+        CleanupOutcome::LegacyCompleted {
+            namespace_removed: self.mapped_files.apply_legacy_namespace_removal(deletion),
+        }
     }
 
     pub(crate) fn retry_delete_first_file(&self, interval_forcibly: i64) -> bool {
@@ -1172,6 +1204,7 @@ impl MappedFileQueue {
     #[inline]
     pub(crate) fn cleanup_handle(&self) -> MappedFileQueueCleanupHandle {
         MappedFileQueueCleanupHandle {
+            commit_log_paths: self.commit_log_paths.clone(),
             mapped_files: self.storage.mapped_files().clone(),
             mapped_file_size: self.storage.mapped_file_size(),
             runtime_state: self.runtime_state.clone(),
@@ -1404,7 +1437,8 @@ impl MappedFileQueue {
     /// * `delete_file_batch_max` - Maximum files to delete in one batch
     ///
     /// # Returns
-    /// Number of files deleted
+    /// Legacy namespace removals, or accepted retirement tickets in managed mode.
+    /// Neither count measures physical space released.
     pub fn delete_expired_file_by_time(
         &self,
         expired_time: i64,
@@ -1432,14 +1466,16 @@ impl MappedFileQueue {
         delete_file_batch_max: i32,
         pinned_file_offset: Option<u64>,
     ) -> i32 {
-        self.cleanup_handle().delete_expired_files_by_time_before(
-            expired_time,
-            delete_files_interval,
-            interval_forcibly,
-            clean_immediately,
-            delete_file_batch_max,
-            pinned_file_offset,
-        )
+        self.cleanup_handle()
+            .delete_expired_files_by_time_before(
+                expired_time,
+                delete_files_interval,
+                interval_forcibly,
+                clean_immediately,
+                delete_file_batch_max,
+                pinned_file_offset,
+            )
+            .compatibility_count()
     }
 
     /// Delete expired files by offset

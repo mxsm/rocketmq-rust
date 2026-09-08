@@ -137,6 +137,10 @@ fn rejected_outer_status_ignores_inner_append_shape_for_canonical_projection() {
             let mut diagnostics = append_result();
             diagnostics.wrote_bytes = wrote_bytes;
             let receipt = store_append_receipt(PutMessageResult::new_append_result(status, Some(diagnostics)), 80, 48);
+            assert_eq!(
+                receipt.execution_evidence(),
+                &rocketmq_store::AppendExecutionEvidence::Unknown
+            );
 
             let canonical = receipt.canonical().expect("rejected status projects without a range");
             assert_eq!(put_status_to_append_status(status), canonical.status());

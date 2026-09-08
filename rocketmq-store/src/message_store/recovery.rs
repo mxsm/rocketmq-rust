@@ -232,6 +232,7 @@ pub enum RecoveryPhaseStatus {
     Success,
     Fallback,
     Failed,
+    Skipped,
 }
 
 impl RecoveryPhaseStatus {
@@ -240,6 +241,7 @@ impl RecoveryPhaseStatus {
             Self::Success => "success",
             Self::Fallback => "fallback",
             Self::Failed => "failed",
+            Self::Skipped => "skipped",
         }
     }
 }
@@ -265,9 +267,18 @@ impl RecoveryReportStats {
     }
 }
 
+/// Safe report metadata; the original error remains with the recovery caller.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecoveryPhaseFailure {
+    pub descriptor: &'static rocketmq_error::ErrorDescriptor,
+    pub operation: crate::store_error::StoreOperation,
+    pub component: crate::store_error::StoreComponent,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecoveryPhaseReport {
     pub phase: RecoveryPhase,
+    pub failure: Option<RecoveryPhaseFailure>,
     pub duration_ms: u128,
     pub status: RecoveryPhaseStatus,
     pub stats: RecoveryReportStats,
@@ -312,6 +323,7 @@ impl RecoveryReport {
         self.stats.accumulate(stats);
         self.phases.push(RecoveryPhaseReport {
             phase,
+            failure: None,
             duration_ms,
             status,
             stats,
@@ -352,6 +364,39 @@ impl RecoveryExecutor {
 
     pub fn report(&self) -> &RecoveryReport {
         &self.report
+    }
+
+    pub(crate) async fn run_result_phase<T>(
+        &mut self,
+        phase: RecoveryPhase,
+        future: impl Future<Output = Result<T, crate::store_error::StoreError>>,
+    ) -> Result<T, crate::store_error::StoreError> {
+        let start = Instant::now();
+        let result = future.await;
+        let failure = result.as_ref().err().map(|error| RecoveryPhaseFailure {
+            descriptor: error.descriptor(),
+            operation: error.operation(),
+            component: error.component(),
+        });
+        self.report.record_phase_with_status(
+            phase,
+            start.elapsed().as_millis(),
+            if result.is_ok() {
+                RecoveryPhaseStatus::Success
+            } else {
+                RecoveryPhaseStatus::Failed
+            },
+            RecoveryReportStats::default(),
+        );
+        if let Some(report) = self.report.phases.last_mut() {
+            report.failure = failure;
+        }
+        result
+    }
+
+    pub(crate) fn skip_phase(&mut self, phase: RecoveryPhase) {
+        self.report
+            .record_phase_with_status(phase, 0, RecoveryPhaseStatus::Skipped, RecoveryReportStats::default());
     }
 
     pub async fn run_phase<F>(&mut self, phase: RecoveryPhase, future: F) -> u128

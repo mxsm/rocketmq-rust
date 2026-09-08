@@ -168,13 +168,6 @@ impl BrokerPermissionState {
         }
     }
 
-    pub(crate) fn runtime_snapshot(&self) -> Option<BrokerRuntimeMutationSnapshot> {
-        match &self.source {
-            BrokerPermissionSource::Runtime(runtime) => Some(runtime.snapshot().mutation_snapshot()),
-            BrokerPermissionSource::Fixed(_) => None,
-        }
-    }
-
     #[inline]
     pub(crate) fn auto_create_subscription_group(&self) -> Option<bool> {
         match &self.source {

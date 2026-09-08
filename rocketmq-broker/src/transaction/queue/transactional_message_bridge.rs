@@ -40,9 +40,10 @@ use rocketmq_store_api::ReadOutcome;
 use tokio::sync::Mutex;
 use tracing::error;
 
+use crate::broker_error::BrokerResult;
 use crate::failover::escape_bridge::EscapeBridge;
 use crate::offset::manager::consumer_offset_manager::ConsumerOffsetManager;
-use crate::store_read::decode_read_outcome;
+use crate::store_read::decode_transaction_read_outcome;
 use crate::transaction::queue::transaction_message_store::TransactionMessageStore;
 use crate::transaction::queue::transaction_topic_registration::TransactionTopicRegistration;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
@@ -87,15 +88,20 @@ impl<MS> TransactionalMessageBridge<MS>
 where
     MS: BrokerWriteStore,
 {
-    pub(crate) fn fetch_consume_offset(&self, mq: &MessageQueue) -> i64 {
+    pub(crate) fn fetch_consume_offset(&self, mq: &MessageQueue) -> BrokerResult<i64> {
         let group = CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group());
         let topic = mq.topic();
         let queue_id = mq.queue_id();
         let mut offset = self.consumer_offset_manager.query_offset(&group, topic, queue_id);
         if offset == -1 {
-            offset = self.message_store.get_min_offset_in_queue(topic, queue_id);
+            offset = self.message_store.get_min_offset_in_queue(topic, queue_id)?;
         }
-        offset
+        Ok(offset)
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_read_results(&self, results: Vec<BrokerResult<Option<rocketmq_store::GetMessageResult>>>) {
+        self.message_store.set_read_results(results);
     }
 
     pub async fn fetch_message_queues(&self, topic: &CheetahString) -> HashSet<MessageQueue>
@@ -123,7 +129,12 @@ where
         );
     }
 
-    pub async fn get_half_message(&self, queue_id: i32, offset: i64, nums: i32) -> Option<ReadOutcome<MessageExt>> {
+    pub async fn get_half_message(
+        &self,
+        queue_id: i32,
+        offset: i64,
+        nums: i32,
+    ) -> BrokerResult<Option<ReadOutcome<MessageExt>>> {
         self.get_message(
             &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
             &CheetahString::from_static_str(TransactionalMessageUtil::build_half_topic()),
@@ -135,7 +146,12 @@ where
         .await
     }
 
-    pub async fn get_op_message(&self, queue_id: i32, offset: i64, nums: i32) -> Option<ReadOutcome<MessageExt>> {
+    pub async fn get_op_message(
+        &self,
+        queue_id: i32,
+        offset: i64,
+        nums: i32,
+    ) -> BrokerResult<Option<ReadOutcome<MessageExt>>> {
         self.get_message(
             &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
             &CheetahString::from_static_str(TransactionalMessageUtil::build_op_topic()),
@@ -156,20 +172,20 @@ where
         nums: i32,
         _sub: Option<SubscriptionData>, /* in Java version, this is not used, so we keep it as
                                          * Option */
-    ) -> Option<ReadOutcome<MessageExt>> {
+    ) -> BrokerResult<Option<ReadOutcome<MessageExt>>> {
         let get_message_result = self
             .message_store
             .get_message(group, topic, queue_id, offset, nums)
-            .await;
+            .await?;
 
         if let Some(get_message_result) = get_message_result {
-            decode_read_outcome(get_message_result, false)
+            decode_transaction_read_outcome(get_message_result).map(Some)
         } else {
             error!(
                 "Get message from store return null. topic={}, groupId={}, requestOffset={}",
                 topic, group, offset
             );
-            None
+            Ok(None)
         }
     }
 
@@ -309,10 +325,13 @@ where
     }
 
     pub async fn write_op(&self, queue_id: i32, message: Message) -> bool {
+        self.write_op_result(queue_id, message).await.put_message_status() == PutMessageStatus::PutOk
+    }
+
+    pub(crate) async fn write_op_result(&self, queue_id: i32, message: Message) -> PutMessageResult {
         let op_queue = resolve_op_queue(&self.op_queue_map, queue_id, &self.broker_name).await;
         let inner = self.make_op_message_inner(message, &op_queue);
-        let result = self.put_message_return_result(inner).await;
-        result.put_message_status() == PutMessageStatus::PutOk
+        self.put_message_return_result(inner).await
     }
 
     pub async fn put_message_return_result(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult {

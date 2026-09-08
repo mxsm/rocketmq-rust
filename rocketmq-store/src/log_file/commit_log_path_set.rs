@@ -229,12 +229,12 @@ impl CommitLogPathSet {
                 self.writable.contains(*root) && !state.retired.contains(*root) && !state.unhealthy.contains(*root)
             })
             .filter_map(|(index, root)| {
-                if self.fault_injector.should_fail(point, root) {
+                if !root.is_dir() || self.fault_injector.should_fail(point, root) {
                     return None;
                 }
                 let total = fs2::total_space(root).ok()?;
                 let available = fs2::available_space(root).ok()?;
-                if total == 0 || available < self.minimum_remaining_bytes {
+                if total == 0 || available > total || available < self.minimum_remaining_bytes {
                     return None;
                 }
                 let used = total.saturating_sub(available);

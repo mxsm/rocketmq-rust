@@ -221,6 +221,11 @@ impl<D: RetirementBatchDriver> MappedFileRetirementService<D> {
                         .await
                     {
                         Ok(report) => {
+                            if report.completed > 0 || report.attempted > 0 {
+                                tracing::info!(completed = report.completed, pending = report.pending_tickets,
+                                    pending_age_ms = report.oldest_pending_age.as_millis() as u64,
+                                    "mapped-file retirement batch finished; completion does not measure physical space released");
+                            }
                             if report.recovery_required {
                                 accepting.store(false, Ordering::Release);
                                 driver.begin_shutdown();
@@ -251,6 +256,14 @@ impl<D: RetirementBatchDriver> MappedFileRetirementService<D> {
         self.task_group = Some(task_group);
         self.scheduled_tasks = Some(scheduled_tasks);
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) async fn pause_scheduling_for_test(&mut self) {
+        self.scheduled_tasks.take();
+        if let Some(tasks) = self.task_group.take() {
+            assert!(tasks.shutdown(self.config.task_shutdown_timeout).await.is_healthy());
+        }
     }
 
     pub(super) async fn cancel_drain_and_await(&mut self) -> Result<RetirementServiceBatch, StoreError> {

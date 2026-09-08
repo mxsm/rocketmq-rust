@@ -744,9 +744,18 @@ pub struct StoreAppendReceipt {
     canonical: Result<AppendReceipt, StoreContractViolation>,
     appended_watermark: i64,
     durable_watermark: i64,
+    execution_evidence: crate::base::message_result::AppendExecutionEvidence,
 }
 
 impl StoreAppendReceipt {
+    /// Returns physical append evidence supplied by the write stage.
+    ///
+    /// An `Appended` result can accompany a rejected canonical receipt after a
+    /// lease fence or durability timeout. It does not authorize a success reply.
+    pub const fn execution_evidence(&self) -> &crate::base::message_result::AppendExecutionEvidence {
+        &self.execution_evidence
+    }
+
     /// Returns the backend append result.
     pub const fn result(&self) -> &PutMessageResult {
         &self.result
@@ -793,6 +802,7 @@ pub fn store_append_receipt(
         AppendReceipt::try_rejected(status, appended_watermark, durable_watermark)
     };
     StoreAppendReceipt {
+        execution_evidence: result.execution_evidence().clone(),
         result,
         canonical,
         appended_watermark,

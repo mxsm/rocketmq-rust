@@ -675,14 +675,17 @@ mod tests {
     }
 
     fn queued(command: LocalBrokerCommand) -> QueuedLocalBrokerCommand {
-        let count = Arc::new(Semaphore::new(1));
-        let bytes = Arc::new(Semaphore::new(1));
+        let budget = rocketmq_runtime::ResourceBudgetTree::new(
+            "test",
+            rocketmq_runtime::BudgetLimit::new(1, 1, rocketmq_runtime::FullPolicy::Reject),
+        )
+        .unwrap()
+        .root();
         QueuedLocalBrokerCommand {
             command,
             enqueued_at: Instant::now(),
             control: RequestControl::new(Instant::now(), None, None, &CancellationToken::new()).unwrap(),
-            _count_permit: count.try_acquire_owned().expect("count permit"),
-            _byte_permit: bytes.try_acquire_owned().expect("byte permit"),
+            _permit: budget.try_acquire_data(1).expect("command permit"),
         }
     }
 

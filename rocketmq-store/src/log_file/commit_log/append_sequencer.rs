@@ -33,8 +33,11 @@ use rocketmq_store_local::commit_log::append::sequencer::AppendSequencer;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerConfig;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerReceiver;
 use rocketmq_store_local::commit_log::append::sequencer::AppendSequencerSender;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAborted;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendAttempt;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendCompleted;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendFailure;
+use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendOutcome;
 use rocketmq_store_local::commit_log::append_attempt::CommitLogAppendResolution;
 use tokio::sync::oneshot;
 use tracing::error;
@@ -54,6 +57,7 @@ use super::MessageStoreConfig;
 use super::PutMessageContext;
 use super::PutMessageResult;
 use super::PutMessageStatus;
+use crate::base::message_result::AppendExecutionEvidence;
 use crate::base::message_result::AppendMessageResult;
 use crate::ha::ha_service::HAService;
 
@@ -103,7 +107,7 @@ impl CommitLogAppendPort {
         };
         let retained_bytes = request.retained_bytes();
         if let AppendAdmissionOutcome::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
-            request.reject(PutMessageResult::new_default(Self::admission_status(reason)));
+            request.reject(PutMessageResult::rejected_before_append(Self::admission_status(reason)));
         }
         response.await.unwrap_or_else(|response_error| {
             error!(error = %response_error, "CommitLog append worker dropped a message response");
@@ -129,7 +133,7 @@ impl CommitLogAppendPort {
         };
         let retained_bytes = request.retained_bytes();
         if let AppendAdmissionOutcome::Rejected { request, reason } = self.sender.try_submit(request, retained_bytes) {
-            request.reject(PutMessageResult::new_default(Self::admission_status(reason)));
+            request.reject(PutMessageResult::rejected_before_append(Self::admission_status(reason)));
         }
         response.await.unwrap_or_else(|response_error| {
             error!(error = %response_error, "CommitLog append worker dropped a batch response");
@@ -619,13 +623,45 @@ impl CommitLogAppendProcessor {
         topic: &str,
         born_host: String,
     ) -> (PutMessageResult, Option<Arc<DefaultMappedFile>>) {
+        // Capture the worker's finalized outcome before legacy status projection.
+        // A later lease fence or flush/replication timeout cannot erase these facts.
+        let evidence = match &outcome {
+            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::PutOk { result, .. }) => {
+                match (
+                    result.wrote_offset.checked_add(i64::from(result.wrote_bytes)),
+                    i64::try_from(self.append.current_append_offset()),
+                ) {
+                    (Some(end), Ok(local_watermark))
+                        if result.wrote_offset >= 0 && result.wrote_bytes > 0 && end <= local_watermark =>
+                    {
+                        AppendExecutionEvidence::Appended {
+                            range: result.wrote_offset..end,
+                            local_watermark,
+                        }
+                    }
+                    _ => AppendExecutionEvidence::Unknown,
+                }
+            }
+            CommitLogAppendOutcome::Completed(CommitLogAppendCompleted::RetryRejected { .. })
+            | CommitLogAppendOutcome::Aborted(CommitLogAppendAborted::InitialUnknown { .. }) => {
+                AppendExecutionEvidence::Unknown
+            }
+            CommitLogAppendOutcome::Aborted(
+                CommitLogAppendAborted::InitialSegmentUnavailable
+                | CommitLogAppendAborted::InitialActiveLockFailed { .. }
+                | CommitLogAppendAborted::InitialMessageIllegal { .. }
+                | CommitLogAppendAborted::RolledSegmentUnavailable { .. }
+                | CommitLogAppendAborted::RolledActiveLockFailed { .. },
+            ) => AppendExecutionEvidence::NotAppended,
+        };
         match outcome.resolve() {
             CommitLogAppendResolution::Continue {
                 status,
                 result,
                 unlock_segment,
             } => (
-                PutMessageResult::new_append_result(CommitLog::put_message_status(status), Some(result)),
+                PutMessageResult::new_append_result(CommitLog::put_message_status(status), Some(result))
+                    .with_execution_evidence(evidence),
                 unlock_segment,
             ),
             CommitLogAppendResolution::Return {
@@ -651,7 +687,8 @@ impl CommitLogAppendProcessor {
                 }
                 drop(abandoned_segment);
                 (
-                    PutMessageResult::new_append_result(CommitLog::put_message_status(status), append_result),
+                    PutMessageResult::new_append_result(CommitLog::put_message_status(status), append_result)
+                        .with_execution_evidence(evidence),
                     None,
                 )
             }

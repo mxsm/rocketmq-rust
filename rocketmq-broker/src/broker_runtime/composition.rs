@@ -1031,7 +1031,7 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
                     ScheduleMessageService::start(schedule_message_service.clone()).await?;
                 }
             } else if let Some(schedule_message_service) = &self.schedule_message_service {
-                schedule_message_service.stop().await?;
+                schedule_message_service.stop_checked().await?;
             }
 
             self.is_schedule_service_start.store(should_start, Ordering::Release);

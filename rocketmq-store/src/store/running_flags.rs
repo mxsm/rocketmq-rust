@@ -114,11 +114,16 @@ impl RunningFlags {
 
     #[inline]
     pub fn get_and_make_not_writeable(&self) -> bool {
-        let result = self.is_writeable();
-        if result {
-            self.flag_bits.fetch_or(NOT_WRITEABLE_BIT, Ordering::SeqCst);
-        }
-        result
+        // Record this independent failure even when another fence already blocks writes.
+        let previous = self.flag_bits.fetch_or(NOT_WRITEABLE_BIT, Ordering::SeqCst);
+        previous
+            & (NOT_WRITEABLE_BIT
+                | WRITE_LOGICS_QUEUE_ERROR_BIT
+                | DISK_FULL_BIT
+                | WRITE_INDEX_FILE_ERROR_BIT
+                | FENCED_BIT
+                | LOGIC_DISK_FULL_BIT)
+            == 0
     }
 
     #[inline]

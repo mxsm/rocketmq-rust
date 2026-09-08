@@ -127,6 +127,9 @@ use rocketmq_proxy_core::UpdateOffsetRequest;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_runtime::{
+    BudgetCapacity, BudgetClass, BudgetLimit, FullPolicy, ResourceBudget, ResourceBudgetTree, ResourcePermit,
+};
 use rocketmq_transport::api::EmbeddedDispatchOutcome;
 use rocketmq_transport::api::EmbeddedResponse;
 use rocketmq_transport::api::EmbeddedResponseBody;
@@ -136,8 +139,6 @@ use rocketmq_transport::api::TopicRequestHeader;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::oneshot;
-use tokio::sync::OwnedSemaphorePermit;
-use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::command_control::RequestControl;
@@ -156,8 +157,7 @@ const LOCAL_REMOTING_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Clone)]
 pub struct LocalBrokerFacadeClient {
     sender: mpsc::Sender<QueuedLocalBrokerCommand>,
-    count_budget: Arc<Semaphore>,
-    byte_budget: Arc<Semaphore>,
+    budget: ResourceBudget,
     rejected: Arc<AtomicU64>,
     broker_name: String,
     context_deadline: Option<Instant>,
@@ -168,8 +168,7 @@ pub(crate) struct QueuedLocalBrokerCommand {
     pub(crate) command: LocalBrokerCommand,
     pub(crate) enqueued_at: Instant,
     pub(crate) control: RequestControl,
-    pub(crate) _count_permit: OwnedSemaphorePermit,
-    pub(crate) _byte_permit: OwnedSemaphorePermit,
+    pub(crate) _permit: ResourcePermit,
 }
 
 pub(crate) enum LocalBrokerCommand {
@@ -384,9 +383,9 @@ fn local_queue_overloaded() -> ProxyError {
 }
 
 fn validate_local_queue_config(config: &LocalConfig) -> ProxyResult<()> {
-    if config.command_queue_capacity == 0 {
+    if config.command_queue_capacity <= config.control_reserve {
         return Err(ProxyError::Transport {
-            message: "local command queue capacity must be greater than zero".to_owned(),
+            message: "local command queue capacity must exceed control_reserve".to_owned(),
         });
     }
     if config.command_queue_max_bytes == 0 || config.command_queue_max_bytes > u32::MAX as usize {
@@ -394,6 +393,7 @@ fn validate_local_queue_config(config: &LocalConfig) -> ProxyResult<()> {
             message: "local command queue byte budget must be in 1..=u32::MAX".to_owned(),
         });
     }
+    local_control_reserve_bytes(config)?;
     if config.command_queue_max_age().is_zero() {
         return Err(ProxyError::Transport {
             message: "local command queue maximum age must be greater than zero".to_owned(),
@@ -417,6 +417,34 @@ fn validate_local_queue_config(config: &LocalConfig) -> ProxyResult<()> {
     Ok(())
 }
 
+fn local_control_reserve_bytes(config: &LocalConfig) -> ProxyResult<usize> {
+    let reserved = config
+        .command_queue_max_bytes
+        .checked_mul(config.control_reserve)
+        .and_then(|bytes| bytes.checked_div(config.command_queue_capacity))
+        .map(|bytes| bytes.max(size_of::<LocalBrokerCommand>()))
+        .filter(|bytes| *bytes < config.command_queue_max_bytes)
+        .ok_or_else(|| ProxyError::Transport {
+            message: "local command byte budget must leave room beyond the control reserve".to_owned(),
+        })?;
+    Ok(reserved)
+}
+
+fn local_command_budget(config: &LocalConfig) -> ProxyResult<ResourceBudget> {
+    let reserve = BudgetCapacity::new(config.control_reserve, local_control_reserve_bytes(config)?);
+    ResourceBudgetTree::new(
+        "proxy-local-commands",
+        BudgetLimit::new(
+            config.command_queue_capacity,
+            config.command_queue_max_bytes,
+            FullPolicy::Reject,
+        )
+        .with_control_reserve(reserve),
+    )
+    .map(|tree| tree.root())
+    .map_err(|error| canonical::configuration_invalid_with_source("proxy.local.command_budget", error).into())
+}
+
 impl LocalBrokerFacadeClient {
     pub fn new(
         config: LocalConfig,
@@ -426,22 +454,21 @@ impl LocalBrokerFacadeClient {
         validate_local_queue_config(&config)?;
         let broker_config = build_broker_config(&config);
         let (sender, receiver) = mpsc::channel(config.command_queue_capacity);
-        let count_budget = Arc::new(Semaphore::new(config.command_queue_capacity));
-        let byte_budget = Arc::new(Semaphore::new(config.command_queue_max_bytes));
+        let budget = local_command_budget(&config)?;
         let rejected = Arc::new(AtomicU64::new(0));
         let capacity_items = config.command_queue_capacity;
         let capacity_bytes = config.command_queue_max_bytes;
-        let metric_count_budget = Arc::clone(&count_budget);
-        let metric_byte_budget = Arc::clone(&byte_budget);
+        let metric_budget = budget.clone();
         let metric_rejected = Arc::clone(&rejected);
         rocketmq_observability::metrics::resource::ResourceStabilityMetrics::from_handle(
             &telemetry_handle,
             rocketmq_observability::PROXY_METER_SCOPE,
         )
         .register_queue("proxy-local", "commands", "aggregate", move || {
+            let snapshot = metric_budget.snapshot();
             rocketmq_observability::metrics::resource::ResourceQueueSnapshot {
-                items: capacity_items.saturating_sub(metric_count_budget.available_permits()) as u64,
-                bytes: capacity_bytes.saturating_sub(metric_byte_budget.available_permits()) as u64,
+                items: snapshot.current_count as u64,
+                bytes: snapshot.current_bytes as u64,
                 capacity_items: capacity_items as u64,
                 capacity_bytes: capacity_bytes as u64,
                 active: 0,
@@ -479,8 +506,7 @@ impl LocalBrokerFacadeClient {
             .map_err(|error| ProxyError::from(canonical::transport_unavailable_with_source(error)))?;
         Ok(Self {
             sender,
-            count_budget,
-            byte_budget,
+            budget,
             rejected,
             broker_name,
             context_deadline: None,
@@ -657,19 +683,21 @@ impl LocalBrokerFacadeClient {
         )?;
         control.check()?;
         let estimated_bytes = command.estimated_bytes();
-        let count_permit = Arc::clone(&self.count_budget)
-            .try_acquire_owned()
-            .map_err(|_| self.queue_overloaded())?;
-        let byte_permits = u32::try_from(estimated_bytes).map_err(|_| self.queue_overloaded())?;
-        let byte_permit = Arc::clone(&self.byte_budget)
-            .try_acquire_many_owned(byte_permits)
+        let class = match command.execution_class() {
+            crate::execution::LocalExecutionClass::Control => BudgetClass::Control,
+            crate::execution::LocalExecutionClass::ShortData | crate::execution::LocalExecutionClass::LongPoll => {
+                BudgetClass::Data
+            }
+        };
+        let permit = self
+            .budget
+            .try_acquire(estimated_bytes, class)
             .map_err(|_| self.queue_overloaded())?;
         let queued = QueuedLocalBrokerCommand {
             command,
             enqueued_at,
             control: control.clone(),
-            _count_permit: count_permit,
-            _byte_permit: byte_permit,
+            _permit: permit,
         };
         match self.sender.try_send(queued) {
             Ok(()) => {}
@@ -1138,8 +1166,7 @@ async fn drain_local_commands(
             command,
             enqueued_at: _,
             control,
-            _count_permit,
-            _byte_permit,
+            _permit,
         } = queued;
         if let Some(message) = startup_error {
             command.reject_with_transport(message.to_owned());
@@ -2787,6 +2814,15 @@ mod tests {
         }
     }
 
+    fn test_budget(count: usize, bytes: usize) -> rocketmq_runtime::ResourceBudget {
+        rocketmq_runtime::ResourceBudgetTree::new(
+            "test",
+            rocketmq_runtime::BudgetLimit::new(count, bytes, rocketmq_runtime::FullPolicy::Reject),
+        )
+        .unwrap()
+        .root()
+    }
+
     #[test]
     fn message_id_decode_failure_keeps_typed_source() {
         let error = decode_broker_message_id("not-a-message-id").expect_err("invalid message id must fail");
@@ -3153,7 +3189,7 @@ mod tests {
         let store = tempfile::tempdir().expect("create local Broker store directory");
         let config = LocalConfig {
             command_queue_capacity: 7,
-            command_queue_max_bytes: 1,
+            command_queue_max_bytes: 4096,
             broker_listen_port: available_local_broker_port(),
             store_root_dir: store.path().to_string_lossy().into_owned(),
             ..LocalConfig::default()
@@ -3163,7 +3199,7 @@ mod tests {
         assert_eq!(client.sender.max_capacity(), 7);
 
         let error = client
-            .query_route(ResourceIdentity::new("", "TopicA"))
+            .query_route(ResourceIdentity::new("", "x".repeat(4096)))
             .await
             .expect_err("request exceeding the queue byte budget must be rejected");
         assert!(matches!(
@@ -3182,8 +3218,7 @@ mod tests {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
         let client = LocalBrokerFacadeClient {
             sender,
-            count_budget: Arc::new(tokio::sync::Semaphore::new(1)),
-            byte_budget: Arc::new(tokio::sync::Semaphore::new(4_096)),
+            budget: test_budget(1, 4096),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
             context_deadline: None,
@@ -3215,8 +3250,7 @@ mod tests {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let client = LocalBrokerFacadeClient {
             sender,
-            count_budget: Arc::new(tokio::sync::Semaphore::new(1)),
-            byte_budget: Arc::new(tokio::sync::Semaphore::new(4_096)),
+            budget: test_budget(1, 4096),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
             context_deadline: None,
@@ -3266,8 +3300,7 @@ mod tests {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let client = LocalBrokerFacadeClient {
             sender,
-            count_budget: Arc::new(tokio::sync::Semaphore::new(1)),
-            byte_budget: Arc::new(tokio::sync::Semaphore::new(4_096)),
+            budget: test_budget(1, 4096),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
             context_deadline: None,
@@ -3315,14 +3348,7 @@ mod tests {
     #[test]
     fn local_command_queue_rejects_expired_entries() {
         let (reply, mut receiver) = tokio::sync::oneshot::channel();
-        let byte_budget = Arc::new(tokio::sync::Semaphore::new(1));
-        let permit = byte_budget
-            .try_acquire_owned()
-            .expect("test byte permit should be available");
-        let count_budget = Arc::new(tokio::sync::Semaphore::new(1));
-        let count_permit = count_budget
-            .try_acquire_owned()
-            .expect("test count permit should be available");
+        let permit = test_budget(1, 1).try_acquire_data(1).unwrap();
         let enqueued_at = Instant::now();
         let queued = super::QueuedLocalBrokerCommand {
             command: super::LocalBrokerCommand::QueryRoute {
@@ -3337,8 +3363,7 @@ mod tests {
                 &tokio_util::sync::CancellationToken::new(),
             )
             .unwrap(),
-            _count_permit: count_permit,
-            _byte_permit: permit,
+            _permit: permit,
         };
 
         assert!(queued.is_expired(enqueued_at + Duration::from_millis(11), Duration::from_millis(10)));
@@ -3400,11 +3425,10 @@ mod tests {
     #[tokio::test]
     async fn caller_drop_cancels_envelope_but_keeps_queue_budget() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        let count_budget = Arc::new(tokio::sync::Semaphore::new(1));
+        let budget = test_budget(1, 4096);
         let client = LocalBrokerFacadeClient {
             sender,
-            count_budget: count_budget.clone(),
-            byte_budget: Arc::new(tokio::sync::Semaphore::new(4096)),
+            budget: budget.clone(),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
             context_deadline: None,
@@ -3416,12 +3440,12 @@ mod tests {
         drop(call);
         assert!(queued.control.cancellation.is_cancelled());
         assert_eq!(
-            count_budget.available_permits(),
-            0,
+            budget.snapshot().current_count,
+            1,
             "caller cannot release an envelope's payload budget"
         );
         drop(queued);
-        assert_eq!(count_budget.available_permits(), 1);
+        assert_eq!(budget.snapshot().current_count, 0);
     }
 
     #[tokio::test]
@@ -3429,8 +3453,7 @@ mod tests {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
         let client = LocalBrokerFacadeClient {
             sender,
-            count_budget: Arc::new(tokio::sync::Semaphore::new(1)),
-            byte_budget: Arc::new(tokio::sync::Semaphore::new(4096)),
+            budget: test_budget(1, 4096),
             rejected: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             broker_name: "broker-a".to_owned(),
             context_deadline: Some(Instant::now()),
@@ -3469,5 +3492,166 @@ mod tests {
         assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
         assert!(results[0].status.is_ok());
         assert!(!results[1].status.is_ok());
+    }
+    #[tokio::test]
+    async fn facade_control_commands_execute_when_data_count_or_bytes_are_full() {
+        use super::*;
+        struct Handler {
+            release_data: CancellationToken,
+        }
+        impl LocalCommandHandler for Handler {
+            async fn handle(&self, command: LocalBrokerCommand, _control: RequestControl) {
+                match command {
+                    LocalBrokerCommand::QueryRoute { reply, .. } => {
+                        let _ = reply.send(Ok(TopicRouteData::default()));
+                    }
+                    LocalBrokerCommand::ProcessRemoting { request, reply, .. }
+                        if request.code() == RequestCode::AckMessage as i32 =>
+                    {
+                        let response = RemotingResponse::command(RemotingCommand::create_response_command_with_code(
+                            ResponseCode::Success,
+                        ))
+                        .unwrap();
+                        let _ = reply.send(Ok(EmbeddedDispatchOutcome::Reply(response)));
+                    }
+                    LocalBrokerCommand::SendMessage { reply, .. } => {
+                        self.release_data.cancelled().await;
+                        let _ = reply.send(Ok(Vec::new()));
+                    }
+                    command => command.reject_unavailable(),
+                }
+            }
+        }
+        for bytes_full in [false, true] {
+            let config = LocalConfig {
+                command_queue_capacity: 5,
+                command_queue_max_bytes: 65536,
+                control_reserve: 1,
+                io_max_inflight: 2,
+                ..Default::default()
+            };
+            let budget = local_command_budget(&config).unwrap();
+            let (sender, receiver) = mpsc::channel(config.command_queue_capacity);
+            let client = LocalBrokerFacadeClient {
+                sender,
+                budget: budget.clone(),
+                rejected: Arc::new(AtomicU64::new(0)),
+                broker_name: "test".into(),
+                context_deadline: None,
+                cancellation: CancellationToken::new(),
+            };
+            let data_bytes = config.command_queue_max_bytes - local_control_reserve_bytes(&config).unwrap();
+            let count = if bytes_full {
+                1
+            } else {
+                config.command_queue_capacity - config.control_reserve
+            };
+            let mut replies = Vec::new();
+            for _ in 0..count {
+                replies.push(
+                    client
+                        .enqueue(|reply| LocalBrokerCommand::SendMessage {
+                            request: SendMessageRequest {
+                                messages: Vec::new(),
+                                timeout: None,
+                                validate_message_type: false,
+                            },
+                            client_id: None,
+                            request_id: if bytes_full {
+                                "d".repeat(data_bytes - size_of::<LocalBrokerCommand>())
+                            } else {
+                                "data".into()
+                            },
+                            reply,
+                        })
+                        .unwrap(),
+                );
+            }
+            assert!(matches!(
+                client
+                    .send_message(
+                        SendMessageRequest {
+                            messages: Vec::new(),
+                            timeout: None,
+                            validate_message_type: false
+                        },
+                        None,
+                        "extra".into()
+                    )
+                    .await,
+                Err(ProxyError::TooManyRequests { .. })
+            ));
+            let mut route = Box::pin(client.query_route(ResourceIdentity::new("", "TopicA")));
+            tokio::select! { result = &mut route => panic!("control must reach the queue: {result:?}"), () = tokio::task::yield_now() => {} }
+            if !bytes_full {
+                assert_eq!(budget.snapshot().current_count, config.command_queue_capacity);
+                assert!(matches!(
+                    client.query_route(ResourceIdentity::new("", "TopicB")).await,
+                    Err(ProxyError::TooManyRequests { .. })
+                ));
+            } else {
+                assert!(budget.snapshot().current_bytes > data_bytes);
+                assert!(budget.snapshot().current_bytes <= config.command_queue_max_bytes);
+            }
+            let runtime = rocketmq_runtime::RuntimeContext::try_from_current("local-control-reserve-test").unwrap();
+            let service = runtime.service_context("local-control-reserve-test.service");
+            let release = CancellationToken::new();
+            let stopping = CancellationToken::new();
+            let run = run_local_execution(
+                LocalExecutionPolicy::from_config(&config),
+                receiver,
+                stopping.clone(),
+                service.clone(),
+                service.component("lanes"),
+                Arc::new(Handler {
+                    release_data: release.clone(),
+                }),
+                Duration::from_secs(1),
+            );
+            let observe = async {
+                route.as_mut().await.unwrap();
+                assert!(matches!(
+                    client
+                        .process_remoting(RemotingCommand::create_remoting_command(RequestCode::AckMessage))
+                        .await
+                        .unwrap(),
+                    EmbeddedDispatchOutcome::Reply(_)
+                ));
+                assert_eq!(
+                    budget.snapshot().current_count,
+                    count,
+                    "data owners remain charged after control completes"
+                );
+                release.cancel();
+                for (reply, _control) in replies {
+                    reply.await.unwrap().unwrap();
+                }
+                stopping.cancel();
+            };
+            tokio::join!(run, observe);
+            assert_eq!(budget.snapshot().current_count, 0);
+            assert_eq!(budget.snapshot().current_bytes, 0);
+            assert!(service.task_group().shutdown(Duration::from_secs(1)).await.is_healthy());
+        }
+    }
+
+    #[test]
+    fn local_reserve_rejects_configs_without_data_capacity() {
+        for config in [
+            LocalConfig {
+                command_queue_capacity: 2,
+                ..Default::default()
+            },
+            LocalConfig {
+                command_queue_max_bytes: size_of::<super::LocalBrokerCommand>(),
+                ..Default::default()
+            },
+            LocalConfig {
+                command_queue_max_bytes: usize::MAX,
+                ..Default::default()
+            },
+        ] {
+            assert!(validate_local_queue_config(&config).is_err());
+        }
     }
 }

@@ -279,11 +279,27 @@ impl BrokerRuntime {
         // message store is still available. Detach the service only after that owned shutdown
         // completes so in-flight delivery cannot observe a missing runtime slot.
         if let Some(schedule_message_service) = self.composition.state.schedule_message_service.as_ref().cloned() {
-            if let Err(error) = schedule_message_service.shutdown().await {
-                warn!(?error, "Failed to shutdown ScheduleMessageService cleanly");
+            let started = Instant::now();
+            if let Err(error) = schedule_message_service.shutdown_until(deadline).await {
+                shutdown_report.schedule_message = if error.descriptor() == &rocketmq_error::CORE_OPERATION_TIMED_OUT {
+                    BrokerShutdownComponentReport::timed_out("schedule_message", started.elapsed())
+                } else {
+                    BrokerShutdownComponentReport::unhealthy(
+                        "schedule_message",
+                        started.elapsed(),
+                        error.code().as_str(),
+                    )
+                };
+                shutdown_report.unfinished_components = progress.unfinished();
+                return shutdown_report;
             }
+            shutdown_report.schedule_message =
+                BrokerShutdownComponentReport::completed("schedule_message", started.elapsed());
             self.composition.state.schedule_message_service.take();
+        } else {
+            shutdown_report.schedule_message = BrokerShutdownComponentReport::skipped("schedule_message");
         }
+        progress.complete("schedule_message");
 
         // Transaction checking can create the checked-too-many-times topic and read/write the
         // message store. Stop admission, drain its owned check tasks, then stop the op batch

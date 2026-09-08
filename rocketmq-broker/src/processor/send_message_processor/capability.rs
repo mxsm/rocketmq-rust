@@ -392,7 +392,6 @@ impl MessageAppender<MessageExtBatch> for SendMessageStoreCapability {
 
 /// Topic lookup, creation, persistence, and registration boundary for send paths.
 pub(crate) struct SendMessageTopicCapability<MS: BrokerWriteStore> {
-    policy: SendMessagePolicyState,
     topic_config_manager: Arc<TopicConfigManager>,
     topic_config_coordinator: Arc<TopicConfigCoordinator>,
     topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -407,7 +406,6 @@ pub(crate) struct SendMessageTopicCapability<MS: BrokerWriteStore> {
 impl<MS: BrokerWriteStore> Clone for SendMessageTopicCapability<MS> {
     fn clone(&self) -> Self {
         Self {
-            policy: self.policy.clone(),
             topic_config_manager: Arc::clone(&self.topic_config_manager),
             topic_config_coordinator: Arc::clone(&self.topic_config_coordinator),
             topic_queue_mapping_manager: Arc::clone(&self.topic_queue_mapping_manager),
@@ -430,7 +428,6 @@ where
         reason = "constructor enumerates the complete topic creation and registration boundary"
     )]
     pub(crate) fn new(
-        policy: SendMessagePolicyState,
         topic_config_manager: Arc<TopicConfigManager>,
         topic_config_coordinator: Arc<TopicConfigCoordinator>,
         topic_queue_mapping_manager: Arc<TopicQueueMappingManager>,
@@ -442,7 +439,6 @@ where
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         Self {
-            policy,
             topic_config_manager,
             topic_config_coordinator,
             topic_queue_mapping_manager,
@@ -474,6 +470,7 @@ where
 
     pub(crate) async fn create_topic_in_send_message(
         &self,
+        policy: Arc<SendMessagePolicy>,
         topic: &CheetahString,
         default_topic: &CheetahString,
         remote_address: SocketAddr,
@@ -484,14 +481,6 @@ where
         MS: BrokerMasterAddressStore,
     {
         let start_time = Instant::now();
-        let policy = self.policy.snapshot();
-        let runtime_config = policy.broker_permission.runtime_snapshot();
-        let auto_create_topic_enable = runtime_config
-            .map(|snapshot| snapshot.auto_create_topic_enable)
-            .unwrap_or(policy.auto_create_topic_enable);
-        let default_topic_queue_nums = runtime_config
-            .map(|snapshot| snapshot.default_topic_queue_nums)
-            .unwrap_or(policy.default_topic_queue_nums);
         let state_machine_version = self.message_store.state_machine_version()?;
         let creation = self.topic_config_manager.create_topic_in_send_message_method(
             topic,
@@ -500,14 +489,15 @@ where
             queue_nums,
             topic_sys_flag,
             state_machine_version,
-            auto_create_topic_enable,
-            default_topic_queue_nums,
+            policy.auto_create_topic_enable,
+            policy.default_topic_queue_nums,
         )?;
         Some(self.complete_creation(creation, start_time, policy).await)
     }
 
     pub(crate) async fn create_topic_in_send_message_back(
         &self,
+        policy: Arc<SendMessagePolicy>,
         topic: &CheetahString,
         queue_nums: i32,
         perm: u32,
@@ -518,7 +508,6 @@ where
         MS: BrokerMasterAddressStore,
     {
         let start_time = Instant::now();
-        let policy = self.policy.snapshot();
         let state_machine_version = self.message_store.state_machine_version()?;
         let creation = self.topic_config_manager.create_topic_in_send_message_back_method(
             topic,
@@ -548,21 +537,21 @@ where
             policy.async_topic_create_persist_enable,
             move |update| {
                 let registration = registration.clone();
-                async move { registration.register_update(update).await }
+                let policy = Arc::clone(&policy);
+                async move { registration.register_update(update, &policy).await }
             },
         )
         .await
     }
 
-    async fn register_update(&self, update: TopicConfigUpdate)
+    async fn register_update(&self, update: TopicConfigUpdate, policy: &SendMessagePolicy)
     where
         MS: BrokerMasterAddressStore,
     {
-        let policy = self.policy.snapshot();
         if policy.enable_single_topic_register {
-            self.register_single_topic(update.topic_config, &policy).await;
+            self.register_single_topic(update.topic_config, policy).await;
         } else {
-            self.register_incremental_topic(update, &policy).await;
+            self.register_incremental_topic(update, policy).await;
         }
     }
 
