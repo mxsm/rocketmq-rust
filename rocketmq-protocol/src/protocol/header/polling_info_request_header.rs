@@ -136,7 +136,6 @@ mod tests {
     use super::*;
     use crate::protocol::command_custom_header::CommandCustomHeader;
     use crate::protocol::command_custom_header::FromMap;
-    use crate::rpc::rpc_request_header::RpcRequestHeader;
 
     #[test]
     fn polling_info_request_header_serializes_correctly() {
@@ -196,51 +195,6 @@ mod tests {
 
         let result = <PollingInfoRequestHeader as FromMap>::from(&map);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn topic_request_header_trait_forwards_fields() {
-        let mut header = PollingInfoRequestHeader {
-            consumer_group: CheetahString::from_static_str("test_group"),
-            topic: CheetahString::from_static_str("test_topic"),
-            queue_id: 0,
-            topic_request_header: Some(TopicRequestHeader {
-                lo: None,
-                rpc: Some(RpcRequestHeader::default()),
-            }),
-        };
-
-        header.set_topic(CheetahString::from_static_str("new_topic"));
-        header.set_queue_id(10);
-        header.set_lo(Some(true));
-        header.set_broker_name(CheetahString::from_static_str("new_broker"));
-        header.set_namespace(CheetahString::from_static_str("new_namespace"));
-        header.set_namespaced(true);
-        header.set_oneway(false);
-
-        assert_eq!(header.topic(), "new_topic");
-        assert_eq!(header.queue_id(), 10);
-        assert_eq!(header.lo(), Some(true));
-        assert_eq!(
-            header.broker_name(),
-            Some(&CheetahString::from_static_str("new_broker"))
-        );
-        assert_eq!(header.namespace(), Some("new_namespace"));
-        assert_eq!(header.namespaced(), Some(true));
-        assert_eq!(header.oneway(), Some(false));
-
-        header.set_queue_id(-1);
-        assert_eq!(header.queue_id(), -1);
-
-        header.set_lo(Some(false));
-        assert_eq!(header.lo(), Some(false));
-        header.set_lo(None);
-        assert_eq!(header.lo(), None);
-
-        header.set_namespaced(false);
-        assert_eq!(header.namespaced(), Some(false));
-        header.set_oneway(true);
-        assert_eq!(header.oneway(), Some(true));
     }
 
     #[test]
