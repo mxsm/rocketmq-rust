@@ -15,7 +15,6 @@
 use std::sync::Arc;
 
 use rocketmq_admin_core::client_adapter::AdminSession;
-use rocketmq_admin_core::core::AdminError;
 use rocketmq_admin_core::core::topic::DeleteTopicAdminRequest;
 use rocketmq_admin_core::core::topic::GetTopicConfigRequest as AdminGetTopicConfigRequest;
 use rocketmq_admin_core::core::topic::GetTopicRouteRequest;
@@ -421,7 +420,7 @@ impl TopicManager {
 
     fn should_reset_session<T>(result: &TopicResult<T>) -> bool {
         match result {
-            Err(TopicError::Admin(error)) => error.is_retryable() || matches!(error, AdminError::SessionClosed),
+            Err(TopicError::Admin(error)) => error.is_retryable() || error.is_session_closed(),
             _ => false,
         }
     }

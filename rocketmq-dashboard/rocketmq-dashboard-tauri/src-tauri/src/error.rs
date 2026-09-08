@@ -14,6 +14,8 @@
 
 use rocketmq_admin_core::core::AdminError;
 use rocketmq_dashboard_common::DashboardCommonError;
+use rocketmq_error::CanonicalCondition;
+use rocketmq_error::RecoveryHint;
 use serde::Serialize;
 use thiserror::Error;
 
@@ -95,53 +97,28 @@ impl DashboardError {
                 false,
                 None,
             ),
-            Self::Admin(AdminError::InvalidArgument { field, .. }) => (
-                "admin.invalid_argument",
-                "The request is invalid.",
-                CommandErrorCategory::Validation,
-                false,
-                Some((*field).to_string()),
+            Self::Admin(error) => (
+                error.code().as_str(),
+                error.descriptor().public_message(),
+                canonical_category(error.condition()),
+                error.is_retryable(),
+                error.field().map(str::to_owned),
             ),
-            Self::Admin(AdminError::NotFound { .. }) => (
-                "admin.not_found",
-                "The requested resource was not found.",
-                CommandErrorCategory::NotFound,
-                false,
+            Self::Common(error) => (
+                error.code().as_str(),
+                error.descriptor().public_message(),
+                canonical_category(error.condition()),
+                automatic_recovery(error.recovery_hint()),
                 None,
             ),
-            Self::Admin(AdminError::Backend { retryable, .. }) => (
-                "admin.backend_unavailable",
-                "The RocketMQ administration operation failed.",
-                CommandErrorCategory::Unavailable,
-                *retryable,
-                None,
-            ),
-            Self::Admin(AdminError::SessionClosed) => (
-                "admin.session.closed",
-                "The RocketMQ administration session closed. Try again.",
-                CommandErrorCategory::Unavailable,
-                true,
-                None,
-            ),
-            Self::Common(DashboardCommonError::Validation(_)) => (
-                "dashboard.invalid_argument",
-                "The request is invalid.",
-                CommandErrorCategory::Validation,
-                false,
-                None,
-            ),
-            Self::Io(_) | Self::Database(_) | Self::Common(DashboardCommonError::Store(_)) | Self::Tauri(_) => (
+            Self::Io(_) | Self::Database(_) | Self::Tauri(_) => (
                 "dashboard.storage_unavailable",
                 "Dashboard storage is unavailable.",
                 CommandErrorCategory::Unavailable,
                 true,
                 None,
             ),
-            Self::PasswordHash(_)
-            | Self::Json(_)
-            | Self::Internal(_)
-            | Self::Common(DashboardCommonError::ParseInt { .. })
-            | Self::Common(DashboardCommonError::Runtime(_)) => (
+            Self::PasswordHash(_) | Self::Json(_) | Self::Internal(_) => (
                 "dashboard.internal",
                 "The dashboard could not complete the operation.",
                 CommandErrorCategory::Internal,
@@ -158,6 +135,37 @@ impl DashboardError {
             field,
         }
     }
+}
+
+fn canonical_category(condition: CanonicalCondition) -> CommandErrorCategory {
+    match condition {
+        CanonicalCondition::InvalidArgument
+        | CanonicalCondition::AlreadyExists
+        | CanonicalCondition::ResourceExhausted
+        | CanonicalCondition::FailedPrecondition
+        | CanonicalCondition::Aborted => CommandErrorCategory::Validation,
+        CanonicalCondition::NotFound => CommandErrorCategory::NotFound,
+        CanonicalCondition::Unauthenticated | CanonicalCondition::PermissionDenied => {
+            CommandErrorCategory::Authentication
+        }
+        CanonicalCondition::Unavailable | CanonicalCondition::DeadlineExceeded | CanonicalCondition::Cancelled => {
+            CommandErrorCategory::Unavailable
+        }
+        CanonicalCondition::DataLoss | CanonicalCondition::Unimplemented | CanonicalCondition::Internal => {
+            CommandErrorCategory::Internal
+        }
+    }
+}
+
+fn automatic_recovery(hint: RecoveryHint) -> bool {
+    matches!(
+        hint,
+        RecoveryHint::Backoff
+            | RecoveryHint::RefreshRoute
+            | RecoveryHint::RefreshLeader
+            | RecoveryHint::SwitchBroker
+            | RecoveryHint::RefreshCredentials
+    )
 }
 
 impl From<password_hash::Error> for DashboardError {
@@ -200,8 +208,10 @@ impl From<DashboardError> for CommandError {
 mod tests {
     use super::CommandError;
     use super::CommandErrorCategory;
+    use super::DashboardCommonError;
     use super::DashboardError;
     use rocketmq_admin_core::core::AdminError;
+    use rocketmq_dashboard_common::DashboardEndpointKind;
     use std::error::Error;
 
     #[test]
@@ -215,29 +225,24 @@ mod tests {
         let admin_error = DashboardError::from(AdminError::backend("query", "sensitive broker detail"));
         assert_eq!(
             admin_error.source().map(ToString::to_string).as_deref(),
-            Some("query failed: sensitive broker detail")
+            Some("tools.operation.failed: Administrative operation failed")
         );
     }
 
     #[test]
     fn public_error_is_stable_and_redacted() {
-        let command_error = CommandError::from(DashboardError::from(AdminError::backend_view(
+        let command_error = CommandError::from(DashboardError::from(AdminError::unavailable(
             "query",
-            "BROKER_SECRET",
             "password=do-not-disclose",
-            Some("token=do-not-disclose".to_string()),
-            503,
-            true,
         )));
 
-        assert_eq!(command_error.code, "admin.backend_unavailable");
-        assert_eq!(command_error.message, "The RocketMQ administration operation failed.");
+        assert_eq!(command_error.code, "client.component.unavailable");
+        assert_eq!(command_error.message, "Client component is unavailable");
         assert_eq!(command_error.category, CommandErrorCategory::Unavailable);
         assert!(command_error.retryable);
         let serialized = serde_json::to_string(&command_error).expect("command error should serialize");
         assert!(!serialized.contains("password"));
         assert!(!serialized.contains("token"));
-        assert!(!serialized.contains("BROKER_SECRET"));
     }
 
     #[test]
@@ -250,6 +255,24 @@ mod tests {
             !serde_json::to_string(&command_error)
                 .expect("command error should serialize")
                 .contains("database detail")
+        );
+    }
+
+    #[test]
+    fn common_error_uses_canonical_public_projection() {
+        const SENTINEL: &str = "private-port";
+        let parse_source = SENTINEL.parse::<u16>().expect_err("invalid port");
+        let error = DashboardCommonError::endpoint_port(DashboardEndpointKind::NameServer, parse_source);
+        let command_error = CommandError::from(DashboardError::from(error));
+
+        assert_eq!(command_error.code, "core.argument.invalid");
+        assert_eq!(command_error.message, "Argument is invalid");
+        assert_eq!(command_error.category, CommandErrorCategory::Validation);
+        assert!(!command_error.retryable);
+        assert!(
+            !serde_json::to_string(&command_error)
+                .expect("command error should serialize")
+                .contains(SENTINEL)
         );
     }
 

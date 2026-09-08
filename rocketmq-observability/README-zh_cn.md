@@ -100,7 +100,8 @@ fn main() -> Result<(), rocketmq_observability::ObservabilityError> {
 | `prometheus` | 通过 Prometheus reader 和 HTTP scrape endpoint 导出 metrics，隐含 `otel-metrics`。 |
 | `stdout` | 兼容性 feature。运行时日志输出由 `MetricsExporter::Log`、`TraceExporter::Log` 或 `LogsExporter::Log` 选择。 |
 
-如果运行时配置请求了未启用 feature 的 exporter，`init_observability` 会返回 `ObservabilityError::FeatureDisabled`。
+如果运行时配置请求了未启用 feature 的 exporter，`init_observability` 会返回由
+`observability.feature.disabled` descriptor 分类的 `ObservabilityError`。
 `ObservabilityError` 由 `rocketmq-error` 托管，并由 `rocketmq-observability` 重新导出以保持兼容。
 
 ## 模块职责

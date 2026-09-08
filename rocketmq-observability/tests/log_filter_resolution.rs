@@ -16,7 +16,6 @@ use rocketmq_observability::LogFilterInputs;
 use rocketmq_observability::LogFilterResolver;
 use rocketmq_observability::LogFilterSource;
 use rocketmq_observability::LoggingOverrides;
-use rocketmq_observability::ObservabilityError;
 use rocketmq_observability::DEFAULT_LOG_FILTER;
 
 #[test]
@@ -87,7 +86,7 @@ fn resolver_accepts_matching_config_aliases_and_rejects_conflicts() {
         ..LogFilterInputs::default()
     })
     .expect_err("conflicting aliases must fail");
-    assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
+    assert_eq!(error.code(), rocketmq_error::OBSERVABILITY_CONFIGURATION_INVALID.code());
 }
 
 #[test]
@@ -99,7 +98,7 @@ fn resolver_rejects_explicit_blank_and_invalid_filters() {
         })
         .expect_err("an explicit invalid filter must fail");
 
-        assert!(matches!(error, ObservabilityError::InvalidLogFilter { .. }));
+        assert_eq!(error.code(), rocketmq_error::OBSERVABILITY_LOG_FILTER_INVALID.code());
     }
 }
 

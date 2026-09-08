@@ -16,6 +16,9 @@
 
 use crate::error::DashboardCommonError;
 use crate::error::DashboardCommonResult as Result;
+use crate::DashboardContractViolation;
+use crate::DashboardEndpointKind;
+use crate::DashboardOperation;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -105,7 +108,12 @@ where
                 .iter()
                 .any(|item| item == &normalized_address)
             {
-                return Err(DashboardCommonError::validation("NameServer address not found"));
+                return Err(DashboardCommonError::contract(
+                    DashboardOperation::UpdateNameServer,
+                    DashboardContractViolation::EndpointNotConfigured {
+                        kind: DashboardEndpointKind::NameServer,
+                    },
+                ));
             }
 
             snapshot.current_namesrv = Some(normalized_address.clone());
@@ -121,7 +129,12 @@ where
                 .iter()
                 .any(|item| item == &normalized_address)
             {
-                return Err(DashboardCommonError::validation("NameServer address already exists"));
+                return Err(DashboardCommonError::contract(
+                    DashboardOperation::AddNameServer,
+                    DashboardContractViolation::EndpointAlreadyConfigured {
+                        kind: DashboardEndpointKind::NameServer,
+                    },
+                ));
             }
 
             snapshot.namesrv_addr_list.push(normalized_address.clone());
@@ -133,14 +146,22 @@ where
         let normalized_address = normalize_nameserver_address(address)?;
         self.mutate_snapshot("NameServer removed", move |snapshot| {
             if snapshot.current_namesrv.as_deref() == Some(normalized_address.as_str()) {
-                return Err(DashboardCommonError::validation("Cannot delete the active NameServer"));
+                return Err(DashboardCommonError::contract(
+                    DashboardOperation::DeleteNameServer,
+                    DashboardContractViolation::ActiveNameServerDeletion,
+                ));
             }
 
             let original_len = snapshot.namesrv_addr_list.len();
             snapshot.namesrv_addr_list.retain(|item| item != &normalized_address);
 
             if snapshot.namesrv_addr_list.len() == original_len {
-                return Err(DashboardCommonError::validation("NameServer address not found"));
+                return Err(DashboardCommonError::contract(
+                    DashboardOperation::DeleteNameServer,
+                    DashboardContractViolation::EndpointNotConfigured {
+                        kind: DashboardEndpointKind::NameServer,
+                    },
+                ));
             }
 
             Ok(())
@@ -185,19 +206,29 @@ where
 
 pub fn normalize_nameserver_address(address: &str) -> Result<String> {
     let trimmed = address.trim();
-    let (host_part, port_part) = trimmed
-        .rsplit_once(':')
-        .ok_or_else(|| DashboardCommonError::validation("NameServer address must be in host:port format"))?;
+    let (host_part, port_part) = trimmed.rsplit_once(':').ok_or_else(|| {
+        DashboardCommonError::contract(
+            DashboardOperation::NormalizeNameServerAddress,
+            DashboardContractViolation::EndpointFormat {
+                kind: DashboardEndpointKind::NameServer,
+            },
+        )
+    })?;
 
     let host = host_part.trim().to_ascii_lowercase();
     if host.is_empty() {
-        return Err(DashboardCommonError::validation("NameServer host cannot be empty"));
+        return Err(DashboardCommonError::contract(
+            DashboardOperation::NormalizeNameServerAddress,
+            DashboardContractViolation::EndpointHostEmpty {
+                kind: DashboardEndpointKind::NameServer,
+            },
+        ));
     }
 
     let port = port_part.trim();
     let port_number: u16 = port
         .parse()
-        .map_err(|error| DashboardCommonError::parse_int(format!("Invalid NameServer port `{port}`"), error))?;
+        .map_err(|error| DashboardCommonError::endpoint_port(DashboardEndpointKind::NameServer, error))?;
 
     Ok(format!("{host}:{port_number}"))
 }
@@ -209,7 +240,12 @@ pub fn canonicalize_snapshot(snapshot: &NameServerConfigSnapshot) -> Result<Name
     for address in &snapshot.namesrv_addr_list {
         let normalized = normalize_nameserver_address(address)?;
         if !seen.insert(normalized.clone()) {
-            return Err(DashboardCommonError::validation("NameServer address already exists"));
+            return Err(DashboardCommonError::contract(
+                DashboardOperation::CanonicalizeNameServerSnapshot,
+                DashboardContractViolation::EndpointAlreadyConfigured {
+                    kind: DashboardEndpointKind::NameServer,
+                },
+            ));
         }
         addresses.push(normalized);
     }
@@ -222,8 +258,11 @@ pub fn canonicalize_snapshot(snapshot: &NameServerConfigSnapshot) -> Result<Name
 
     if let Some(current) = &current_namesrv {
         if !addresses.iter().any(|address| address == current) {
-            return Err(DashboardCommonError::validation(
-                "Current NameServer must exist in the address list",
+            return Err(DashboardCommonError::contract(
+                DashboardOperation::CanonicalizeNameServerSnapshot,
+                DashboardContractViolation::SelectedEndpointNotConfigured {
+                    kind: DashboardEndpointKind::NameServer,
+                },
             ));
         }
     }
@@ -240,12 +279,16 @@ pub fn canonicalize_snapshot(snapshot: &NameServerConfigSnapshot) -> Result<Name
 mod tests {
     use crate::DashboardCommonError;
     use crate::DashboardCommonResult;
+    use crate::DashboardContractViolation;
+    use crate::DashboardEndpointKind;
+    use crate::DashboardOperation;
 
     use super::NameServerConfigSnapshot;
     use super::NameServerConfigStore;
     use super::NameServerConfigTransaction;
     use super::NameServerRuntimeAdapter;
     use super::NameServerService;
+    use std::error::Error as _;
     use std::sync::Arc;
     use std::sync::Mutex;
 
@@ -326,7 +369,10 @@ mod tests {
     impl NameServerRuntimeAdapter for RuntimeSpy {
         fn apply_snapshot(&self, snapshot: &NameServerConfigSnapshot) -> DashboardCommonResult<()> {
             if *self.fail_apply.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) {
-                return Err(DashboardCommonError::runtime("runtime apply failed"));
+                return Err(DashboardCommonError::runtime(
+                    DashboardOperation::ApplyNameServerSnapshot,
+                    std::io::Error::other("runtime apply failed"),
+                ));
             }
 
             self.applied_snapshots
@@ -404,7 +450,14 @@ mod tests {
             .add_nameserver(" LOCALHOST : 9876 ")
             .expect_err("duplicate address should be rejected");
 
-        assert!(error.to_string().contains("already exists"));
+        assert!(matches!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<DashboardContractViolation>()),
+            Some(DashboardContractViolation::EndpointAlreadyConfigured {
+                kind: DashboardEndpointKind::NameServer
+            })
+        ));
     }
 
     #[test]
@@ -415,7 +468,12 @@ mod tests {
             .delete_nameserver("127.0.0.1:9876")
             .expect_err("active nameserver should not be deleted");
 
-        assert!(error.to_string().contains("Cannot delete the active"));
+        assert!(matches!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<DashboardContractViolation>()),
+            Some(DashboardContractViolation::ActiveNameServerDeletion)
+        ));
     }
 
     #[test]
@@ -439,7 +497,12 @@ mod tests {
 
         let error = service.update_use_tls(true).expect_err("runtime apply should fail");
 
-        assert!(error.to_string().contains("runtime apply failed"));
+        assert_eq!(error.code(), rocketmq_error::RUNTIME_INTERNAL_FAILURE.code());
+        assert_eq!(error.operation(), DashboardOperation::ApplyNameServerSnapshot);
+        assert!(error
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
         assert!(!store.load_snapshot().expect("snapshot should load").use_tls);
         assert_eq!(runtime.apply_count(), 0);
     }

@@ -15,10 +15,7 @@
 use super::*;
 
 pub(super) fn map_admin_error(error: AdminError) -> TopicError {
-    match error {
-        AdminError::InvalidArgument { reason, .. } => TopicError::Validation(reason),
-        error => TopicError::Admin(error),
-    }
+    TopicError::Admin(error)
 }
 
 pub(super) fn map_route_view(topic: String, route: TopicRoute) -> TopicRouteView {

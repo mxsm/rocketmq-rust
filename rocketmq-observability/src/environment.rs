@@ -33,7 +33,7 @@ pub enum StandardOtlpEnvironmentStatus {
 ///
 /// # Errors
 ///
-/// Returns [`ObservabilityError::InvalidConfig`] when a configured endpoint or protocol is not
+/// Returns [`ObservabilityError`] when a configured endpoint or protocol is not
 /// valid UTF-8, when the protocol is missing, or when it is not exactly `grpc`. Error text names
 /// only the invalid variable and never includes its value.
 pub fn apply_standard_otlp_environment(
@@ -51,7 +51,7 @@ pub fn apply_standard_otlp_environment(
 ///
 /// # Errors
 ///
-/// Returns [`ObservabilityError::InvalidConfig`] under the same fail-closed conditions as
+/// Returns [`ObservabilityError`] under the same fail-closed conditions as
 /// [`apply_standard_otlp_environment`].
 pub fn apply_standard_otlp_environment_values(
     config: &mut TelemetryBootstrapConfig,

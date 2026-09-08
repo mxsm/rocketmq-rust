@@ -21,7 +21,6 @@ use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::PublicErrorView;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::ViewValueRef;
-use rocketmq_error::descriptor_by_code;
 use rocketmq_runtime::RuntimeError;
 use serde::Serialize;
 use serde_json::Value;
@@ -178,17 +177,11 @@ impl DashboardError {
 }
 
 fn common_http_projection(error: &DashboardCommonError) -> DashboardHttpProjection {
-    match error {
-        DashboardCommonError::Validation(_) | DashboardCommonError::ParseInt { .. } => {
-            DashboardHttpProjection::fixed(StatusCode::BAD_REQUEST, "VALIDATION_ERROR", "Request validation failed")
-        }
-        DashboardCommonError::Store(_) => DashboardHttpProjection::fixed(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "CONFIG_ERROR",
-            "Dashboard configuration is invalid",
-        ),
-        DashboardCommonError::Runtime(_) => DashboardHttpProjection::unknown(),
-    }
+    error
+        .public_view()
+        .ok()
+        .and_then(public_view_projection)
+        .unwrap_or_else(DashboardHttpProjection::unknown)
 }
 
 impl IntoResponse for DashboardError {
@@ -290,80 +283,12 @@ fn public_view_projection(view: PublicErrorView<'_>) -> Option<DashboardHttpProj
 }
 
 fn admin_http_projection(error: &AdminError) -> DashboardHttpProjection {
-    match error {
-        AdminError::InvalidArgument { .. } => DashboardHttpProjection::fixed(
-            StatusCode::BAD_REQUEST,
-            "ADMIN_INVALID_ARGUMENT",
-            "Admin request is invalid",
-        ),
-        AdminError::NotFound { .. } => {
-            DashboardHttpProjection::fixed(StatusCode::NOT_FOUND, "ADMIN_NOT_FOUND", "Admin resource was not found")
-        }
-        AdminError::SessionClosed => DashboardHttpProjection::fixed(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "ADMIN_SESSION_CLOSED",
-            "Admin service is unavailable",
-        ),
-        AdminError::Backend {
-            code: Some(code),
-            http_status: Some(http_status),
-            ..
-        } => catalog_admin_projection(code, *http_status)
-            .or_else(|| fixed_admin_backend_projection(code, *http_status))
-            .unwrap_or_else(DashboardHttpProjection::unknown),
-        AdminError::Backend { .. } => DashboardHttpProjection::unknown(),
-    }
-}
-
-fn catalog_admin_projection(code: &str, http_status: u16) -> Option<DashboardHttpProjection> {
-    let descriptor = descriptor_by_code(code)?;
-    if descriptor.projection().http().status.as_u16() != http_status {
-        return None;
-    }
-    public_view_projection(PublicErrorView::descriptor_only(descriptor))
-}
-
-fn fixed_admin_backend_projection(code: &str, http_status: u16) -> Option<DashboardHttpProjection> {
-    let (status, message) = match (code, http_status) {
-        (
-            "CONSUMER_OBSERVATION_TARGET_LIMIT_EXCEEDED"
-            | "HA_OBSERVATION_TARGET_LIMIT_EXCEEDED"
-            | "TOPIC_OBSERVATION_TARGET_LIMIT_EXCEEDED"
-            | "TOPIC_PRODUCER_TARGET_LIMIT_EXCEEDED",
-            422,
-        ) => (StatusCode::UNPROCESSABLE_ENTITY, "Admin target limit was exceeded"),
-        ("TARGET_DRIFT", 409) => (StatusCode::CONFLICT, "Admin target state changed"),
-        ("ADMIN_QUERY_ALL_SOURCES_FAILED", 503) => {
-            (StatusCode::SERVICE_UNAVAILABLE, "Admin data sources are unavailable")
-        }
-        ("INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE", 429) => {
-            (StatusCode::TOO_MANY_REQUESTS, "Admin data source is unavailable")
-        }
-        ("INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE", 500) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, "Admin data source is unavailable")
-        }
-        ("INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE", 503) => {
-            (StatusCode::SERVICE_UNAVAILABLE, "Admin data source is unavailable")
-        }
-        ("INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE", 504) => {
-            (StatusCode::GATEWAY_TIMEOUT, "Admin data source is unavailable")
-        }
-        _ => return None,
-    };
-    Some(DashboardHttpProjection::fixed(
-        status,
-        match code {
-            "CONSUMER_OBSERVATION_TARGET_LIMIT_EXCEEDED" => "CONSUMER_OBSERVATION_TARGET_LIMIT_EXCEEDED",
-            "HA_OBSERVATION_TARGET_LIMIT_EXCEEDED" => "HA_OBSERVATION_TARGET_LIMIT_EXCEEDED",
-            "TOPIC_OBSERVATION_TARGET_LIMIT_EXCEEDED" => "TOPIC_OBSERVATION_TARGET_LIMIT_EXCEEDED",
-            "TOPIC_PRODUCER_TARGET_LIMIT_EXCEEDED" => "TOPIC_PRODUCER_TARGET_LIMIT_EXCEEDED",
-            "TARGET_DRIFT" => "TARGET_DRIFT",
-            "ADMIN_QUERY_ALL_SOURCES_FAILED" => "ADMIN_QUERY_ALL_SOURCES_FAILED",
-            "INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE" => "INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE",
-            _ => return None,
-        },
-        message,
-    ))
+    error
+        .public_view()
+        .ok()
+        .and_then(public_view_projection)
+        .or_else(|| public_view_projection(PublicErrorView::descriptor_only(error.descriptor())))
+        .unwrap_or_else(DashboardHttpProjection::unknown)
 }
 
 fn storage_http_projection(error: &PersistenceError) -> DashboardHttpProjection {
@@ -412,6 +337,7 @@ mod tests {
     use axum::response::IntoResponse;
     use rocketmq_admin_core::core::AdminError;
     use rocketmq_dashboard_common::DashboardCommonError;
+    use rocketmq_dashboard_common::DashboardEndpointKind;
     use rocketmq_error::ErrorContext;
     use rocketmq_error::ROUTE_TOPIC_NOT_FOUND;
     use rocketmq_error::RocketMQError;
@@ -492,186 +418,65 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn catalog_admin_error_uses_descriptor_only_public_projection() {
-        let error = AdminError::backend_view(
-            "query",
-            "route.topic.not_found",
-            "password=plain-text\r\nNo route info",
-            Some("token=secret; topic=Orders".to_string()),
-            404,
-            false,
-        );
+    async fn promoted_admin_error_preserves_the_source_descriptor_projection() {
+        let error = AdminError::from_rocketmq("query", RocketMQError::route_not_found("Orders"));
 
         let (status, body, bytes) = failure_response(DashboardError::from(error)).await;
 
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body.code, "route.topic.not_found");
         assert_eq!(body.message, "Topic route was not found");
-        assert!(body.details.is_empty());
+        assert_eq!(body.details.get("topic"), Some(&Value::String("Orders".to_string())));
         let serialized = String::from_utf8(bytes).expect("UTF-8 JSON");
         assert!(!serialized.contains("password=plain-text"));
         assert!(!serialized.contains("token=secret"));
-        assert!(!serialized.contains("Orders"));
     }
 
     #[tokio::test]
-    async fn admin_not_found_uses_fixed_value_free_contract() {
-        let (status, body, bytes) = failure_response(DashboardError::from(AdminError::not_found(
-            "topic",
+    async fn admin_not_found_uses_its_canonical_descriptor_contract() {
+        let (status, body, bytes) = failure_response(DashboardError::from(AdminError::topic_not_found(
             "Orders\r\ntoken=secret",
         )))
         .await;
 
         assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(body.code, "ADMIN_NOT_FOUND");
-        assert_eq!(body.message, "Admin resource was not found");
-        assert!(!String::from_utf8(bytes).expect("UTF-8 JSON").contains("Orders"));
+        assert_eq!(body.code, "broker.topic.not_found");
+        assert_eq!(body.message, "Topic does not exist");
+        assert!(!String::from_utf8(bytes).expect("UTF-8 JSON").contains("token=secret"));
     }
 
     #[tokio::test]
-    async fn admin_typed_and_fixed_allowlist_statuses_are_explicit() {
+    async fn admin_http_status_and_code_are_descriptor_owned() {
         let cases = [
             (
                 AdminError::invalid_argument("topic", "password=plain-text"),
                 StatusCode::BAD_REQUEST,
-                "ADMIN_INVALID_ARGUMENT",
-                "Admin request is invalid",
+                "core.argument.invalid",
+                "Argument is invalid",
             ),
             (
-                AdminError::SessionClosed,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "ADMIN_SESSION_CLOSED",
-                "Admin service is unavailable",
-            ),
-            (
-                AdminError::backend_view(
-                    "mutation",
-                    "TARGET_DRIFT",
-                    "token=secret",
-                    Some("C:\\private\\target".to_string()),
-                    409,
-                    false,
-                ),
+                AdminError::session_closed(),
                 StatusCode::CONFLICT,
-                "TARGET_DRIFT",
-                "Admin target state changed",
+                "client.lifecycle.not_started",
+                "Client is not started",
             ),
             (
-                AdminError::backend_view(
-                    "query",
-                    "TOPIC_OBSERVATION_TARGET_LIMIT_EXCEEDED",
-                    "password=plain-text",
-                    None,
-                    422,
-                    false,
-                ),
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "TOPIC_OBSERVATION_TARGET_LIMIT_EXCEEDED",
-                "Admin target limit was exceeded",
+                AdminError::target_drift("mutation", "token=secret C:\\private\\target"),
+                StatusCode::CONFLICT,
+                "client.lifecycle.invalid_state",
+                "Client state is invalid",
             ),
             (
-                AdminError::backend_view(
-                    "query",
-                    "CONSUMER_OBSERVATION_TARGET_LIMIT_EXCEEDED",
-                    "password=plain-text",
-                    None,
-                    422,
-                    false,
-                ),
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "CONSUMER_OBSERVATION_TARGET_LIMIT_EXCEEDED",
-                "Admin target limit was exceeded",
+                AdminError::target_limit("query", "password=plain-text"),
+                StatusCode::BAD_REQUEST,
+                "core.argument.invalid",
+                "Argument is invalid",
             ),
             (
-                AdminError::backend_view(
-                    "query",
-                    "HA_OBSERVATION_TARGET_LIMIT_EXCEEDED",
-                    "password=plain-text",
-                    None,
-                    422,
-                    false,
-                ),
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "HA_OBSERVATION_TARGET_LIMIT_EXCEEDED",
-                "Admin target limit was exceeded",
-            ),
-            (
-                AdminError::backend_view(
-                    "query",
-                    "TOPIC_PRODUCER_TARGET_LIMIT_EXCEEDED",
-                    "password=plain-text",
-                    None,
-                    422,
-                    false,
-                ),
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "TOPIC_PRODUCER_TARGET_LIMIT_EXCEEDED",
-                "Admin target limit was exceeded",
-            ),
-            (
-                AdminError::backend_view(
-                    "query",
-                    "ADMIN_QUERY_ALL_SOURCES_FAILED",
-                    "password=plain-text",
-                    None,
-                    503,
-                    true,
-                ),
+                AdminError::unavailable("query", "password=plain-text"),
                 StatusCode::SERVICE_UNAVAILABLE,
-                "ADMIN_QUERY_ALL_SOURCES_FAILED",
-                "Admin data sources are unavailable",
-            ),
-            (
-                AdminError::backend_view(
-                    "query",
-                    "INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE",
-                    "token=secret",
-                    None,
-                    429,
-                    true,
-                ),
-                StatusCode::TOO_MANY_REQUESTS,
-                "INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE",
-                "Admin data source is unavailable",
-            ),
-            (
-                AdminError::backend_view(
-                    "query",
-                    "INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE",
-                    "token=secret",
-                    None,
-                    500,
-                    false,
-                ),
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE",
-                "Admin data source is unavailable",
-            ),
-            (
-                AdminError::backend_view(
-                    "query",
-                    "INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE",
-                    "token=secret",
-                    None,
-                    503,
-                    true,
-                ),
-                StatusCode::SERVICE_UNAVAILABLE,
-                "INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE",
-                "Admin data source is unavailable",
-            ),
-            (
-                AdminError::backend_view(
-                    "query",
-                    "INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE",
-                    "token=secret",
-                    None,
-                    504,
-                    true,
-                ),
-                StatusCode::GATEWAY_TIMEOUT,
-                "INFRASTRUCTURE_OBSERVATION_SOURCE_UNAVAILABLE",
-                "Admin data source is unavailable",
+                "client.component.unavailable",
+                "Client component is unavailable",
             ),
         ];
 
@@ -690,13 +495,9 @@ mod tests {
 
     #[tokio::test]
     async fn admin_reason_cannot_amplify_the_public_response() {
-        let error = AdminError::backend_view(
+        let error = AdminError::unavailable(
             "query",
-            "ADMIN_QUERY_ALL_SOURCES_FAILED",
             format!("password=plain-text\r\nC:\\private\\admin\0{}", "x".repeat(65_536)),
-            Some("token=secret".to_string()),
-            503,
-            true,
         );
 
         let (_, _, bytes) = failure_response(DashboardError::from(error)).await;
@@ -727,8 +528,8 @@ mod tests {
     #[tokio::test]
     async fn common_parse_error_keeps_typed_source_but_hides_dynamic_text() {
         let parse_source = "secret-value".parse::<u64>().expect_err("invalid integer");
-        let error = DashboardError::from(DashboardCommonError::parse_int(
-            "password=plain-text\r\nC:\\private\\value",
+        let error = DashboardError::from(DashboardCommonError::endpoint_port(
+            DashboardEndpointKind::NameServer,
             parse_source,
         ));
         assert!(
@@ -741,8 +542,8 @@ mod tests {
         let (status, body, bytes) = failure_response(error).await;
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(body.code, "VALIDATION_ERROR");
-        assert_eq!(body.message, "Request validation failed");
+        assert_eq!(body.code, "core.argument.invalid");
+        assert_eq!(body.message, "Argument is invalid");
         let serialized = String::from_utf8(bytes).expect("UTF-8 JSON");
         assert!(!serialized.contains("plain-text"));
         assert!(!serialized.contains("private"));
@@ -851,38 +652,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_or_inconsistent_admin_metadata_uses_exact_generic_500() {
-        let cases = [
-            AdminError::backend_view(
-                "query",
-                "EVIL\r\nCODE",
-                "password=plain-text",
-                Some("C:\\private\\admin".to_string()),
-                200,
-                false,
-            ),
-            AdminError::backend_view(
-                "query",
-                "route.topic.not_found",
-                "secret",
-                Some("token=secret".to_string()),
-                503,
-                false,
-            ),
-            AdminError::backend("query", "password=plain-text"),
-        ];
+    async fn generic_admin_backend_uses_the_tools_descriptor() {
+        let error = AdminError::backend("query", "password=plain-text C:\\private\\admin");
+        let (status, body, bytes) = failure_response(DashboardError::from(error)).await;
 
-        for error in cases {
-            let (status, body, bytes) = failure_response(DashboardError::from(error)).await;
-            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-            assert_eq!(body.code, "INTERNAL_ERROR");
-            assert_eq!(body.message, "Internal error");
-            assert!(body.details.is_empty());
-            let serialized = String::from_utf8(bytes).expect("UTF-8 JSON");
-            assert!(!serialized.contains("plain-text"));
-            assert!(!serialized.contains("private"));
-            assert!(!serialized.contains("token=secret"));
-        }
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body.code, "tools.operation.failed");
+        assert_eq!(body.message, "Administrative operation failed");
+        assert!(body.details.is_empty());
+        let serialized = String::from_utf8(bytes).expect("UTF-8 JSON");
+        assert!(!serialized.contains("plain-text"));
+        assert!(!serialized.contains("private"));
     }
 
     #[tokio::test]

@@ -4403,6 +4403,7 @@ name = "rocketmq-dashboard-common"
 version = "1.0.0"
 dependencies = [
  "async-trait",
+ "rocketmq-error",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

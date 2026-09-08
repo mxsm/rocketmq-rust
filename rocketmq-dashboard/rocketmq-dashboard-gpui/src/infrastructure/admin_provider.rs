@@ -16,7 +16,10 @@
 
 use std::{error::Error as StdError, fmt, future::Future, sync::Arc, time::SystemTime};
 
-use rocketmq_admin_core::{client_adapter::ClientRuntime, core::AdminError};
+use rocketmq_admin_core::{
+    client_adapter::ClientRuntime,
+    core::{AdminError, AdminFailure},
+};
 use rocketmq_dashboard_common::{
     AdminSessionStatus, AdminSessionSummary, ConnectionScope, ConnectionSnapshot, EndpointAvailability, EndpointHealth,
 };
@@ -757,22 +760,20 @@ fn map_auth_error(rejection: AuthRejection) -> ProviderFailure {
 }
 
 fn map_admin_error(error: AdminError) -> ProviderFailure {
-    let retryable = error.is_retryable() || matches!(error, AdminError::SessionClosed);
-    match error {
-        error @ AdminError::InvalidArgument { .. } => ProviderFailure::caused_by(
+    let retryable = error.is_retryable() || error.is_session_closed();
+    match error.failure() {
+        AdminFailure::InvalidArgument => ProviderFailure::caused_by(
             ProviderFailureCode::Unavailable,
             "The Admin operation configuration is invalid.",
             false,
             error,
         ),
-        error @ (AdminError::NotFound { .. } | AdminError::Backend { .. } | AdminError::SessionClosed) => {
-            ProviderFailure::caused_by(
-                ProviderFailureCode::Unavailable,
-                "The RocketMQ Admin operation failed.",
-                retryable,
-                error,
-            )
-        }
+        AdminFailure::NotFound | AdminFailure::Backend | AdminFailure::SessionClosed => ProviderFailure::caused_by(
+            ProviderFailureCode::Unavailable,
+            "The RocketMQ Admin operation failed.",
+            retryable,
+            error,
+        ),
     }
 }
 

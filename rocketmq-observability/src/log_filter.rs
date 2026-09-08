@@ -250,7 +250,7 @@ impl LogFilterResolver {
             .unwrap_or((DEFAULT_LOG_FILTER, LogFilterSource::Default));
         let candidate = candidate.trim();
         if candidate.is_empty() {
-            return Err(ObservabilityError::invalid_log_filter(
+            return Err(ObservabilityError::invalid_log_filter_detail(
                 candidate,
                 "log filter must not be blank",
             ));
@@ -289,6 +289,6 @@ mod tests {
         let error = decode_environment_filter(OsString::from_vec(vec![0xff]))
             .expect_err("non-Unicode environment values must fail closed");
 
-        assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
+        assert_eq!(error.code(), rocketmq_error::OBSERVABILITY_CONFIGURATION_INVALID.code());
     }
 }

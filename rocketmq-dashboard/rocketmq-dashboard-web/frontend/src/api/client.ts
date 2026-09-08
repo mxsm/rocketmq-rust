@@ -52,7 +52,7 @@ function safeServerErrorMessage(code: string, status: number): string {
     case 'FORBIDDEN':
       return 'Permission was denied.';
     case 'VALIDATION_ERROR':
-    case 'ADMIN_INVALID_ARGUMENT':
+    case 'core.argument.invalid':
     case 'INVALID_JSON':
     case 'INVALID_JSON_DATA':
     case 'INVALID_QUERY':
@@ -63,13 +63,17 @@ function safeServerErrorMessage(code: string, status: number): string {
     case 'PAYLOAD_TOO_LARGE':
       return 'The request is too large.';
     case 'NOT_FOUND':
-    case 'ADMIN_NOT_FOUND':
     case 'API_ROUTE_NOT_FOUND':
       return 'The requested resource was not found.';
     case 'METHOD_NOT_ALLOWED':
       return 'The requested operation is not allowed.';
-    case 'ADMIN_SESSION_CLOSED':
+    case 'client.lifecycle.not_started':
+    case 'client.component.unavailable':
       return 'The admin service is unavailable.';
+    case 'client.lifecycle.invalid_state':
+      return 'The admin operation cannot continue because its target state changed.';
+    case 'tools.operation.failed':
+      return 'The RocketMQ administration operation failed.';
     case 'CONFIG_ERROR':
       return 'Dashboard configuration is invalid.';
     case 'NOT_IMPLEMENTED':

@@ -62,7 +62,7 @@ impl DashboardAdminClient {
                 .items
                 .into_iter()
                 .find(|item| item.raw_group_name == operation_group || item.display_group_name == operation_group)
-                .ok_or_else(|| AdminError::not_found("consumerGroup", operation_group.clone()))?;
+                .ok_or_else(|| AdminError::consumer_group_not_found(operation_group.clone()))?;
             let delete_request = core_consumer::ConsumerBatchDeleteRequest::try_new(
                 operation_group,
                 selected_for_call,

@@ -430,7 +430,7 @@ fn init_telemetry_providers_inner(
         #[cfg(not(feature = "otel-metrics"))]
         {
             let _ = guard.shutdown();
-            return Err(ObservabilityError::FeatureDisabled("otel-metrics"));
+            return Err(ObservabilityError::feature_disabled("otel-metrics"));
         }
     }
 
@@ -449,7 +449,7 @@ fn init_telemetry_providers_inner(
         #[cfg(not(feature = "otel-traces"))]
         {
             let _ = guard.shutdown();
-            return Err(ObservabilityError::FeatureDisabled("otel-traces"));
+            return Err(ObservabilityError::feature_disabled("otel-traces"));
         }
     }
 
@@ -468,7 +468,7 @@ fn init_telemetry_providers_inner(
         #[cfg(not(feature = "otel-logs"))]
         {
             let _ = guard.shutdown();
-            return Err(ObservabilityError::FeatureDisabled("otel-logs"));
+            return Err(ObservabilityError::feature_disabled("otel-logs"));
         }
     }
 
@@ -566,7 +566,7 @@ fn init_metrics(config: &ObservabilityConfig) -> Result<MetricsRuntime, Observab
 
             #[cfg(not(feature = "otlp-metrics"))]
             {
-                return Err(ObservabilityError::FeatureDisabled("otlp-metrics"));
+                return Err(ObservabilityError::feature_disabled("otlp-metrics"));
             }
         }
         MetricsExporter::Prometheus => {
@@ -579,7 +579,7 @@ fn init_metrics(config: &ObservabilityConfig) -> Result<MetricsRuntime, Observab
 
             #[cfg(not(feature = "prometheus"))]
             {
-                return Err(ObservabilityError::FeatureDisabled("prometheus"));
+                return Err(ObservabilityError::feature_disabled("prometheus"));
             }
         }
     };
@@ -611,7 +611,7 @@ fn init_traces(
 
             #[cfg(not(feature = "otlp-traces"))]
             {
-                return Err(ObservabilityError::FeatureDisabled("otlp-traces"));
+                return Err(ObservabilityError::feature_disabled("otlp-traces"));
             }
         }
     };
@@ -642,7 +642,7 @@ fn init_logs(config: &ObservabilityConfig) -> Result<opentelemetry_sdk::logs::Sd
 
             #[cfg(not(feature = "otlp-logs"))]
             {
-                return Err(ObservabilityError::FeatureDisabled("otlp-logs"));
+                return Err(ObservabilityError::feature_disabled("otlp-logs"));
             }
         }
     };
@@ -791,7 +791,7 @@ mod tests {
 
         let error = init_observability(&config).expect_err("invalid sample ratio should fail");
 
-        assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
+        assert_eq!(error.code(), rocketmq_error::OBSERVABILITY_CONFIGURATION_INVALID.code());
     }
 
     #[test]
@@ -801,7 +801,7 @@ mod tests {
 
         let error = init_observability(&config).expect_err("non-finite metrics sample ratio should fail");
 
-        assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
+        assert_eq!(error.code(), rocketmq_error::OBSERVABILITY_CONFIGURATION_INVALID.code());
     }
 
     #[test]
@@ -819,7 +819,7 @@ mod tests {
 
         for config in configs {
             let error = init_observability(&config).expect_err("zero telemetry duration should fail");
-            assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
+            assert_eq!(error.code(), rocketmq_error::OBSERVABILITY_CONFIGURATION_INVALID.code());
         }
     }
 
@@ -835,7 +835,7 @@ mod tests {
 
         let error = init_observability(&config).expect_err("blank OTLP endpoint should fail");
 
-        assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
+        assert_eq!(error.code(), rocketmq_error::OBSERVABILITY_CONFIGURATION_INVALID.code());
     }
 
     #[test]
@@ -845,7 +845,7 @@ mod tests {
 
         let error = init_observability(&config).expect_err("zero cardinality limit should fail");
 
-        assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
+        assert_eq!(error.code(), rocketmq_error::OBSERVABILITY_CONFIGURATION_INVALID.code());
     }
 
     #[test]
@@ -860,7 +860,7 @@ mod tests {
 
         let error = init_observability(&config).expect_err("OTLP HTTP must fail closed");
 
-        assert!(matches!(error, ObservabilityError::InvalidConfig(_)));
+        assert_eq!(error.code(), rocketmq_error::OBSERVABILITY_CONFIGURATION_INVALID.code());
     }
 
     #[cfg(feature = "otel-metrics")]

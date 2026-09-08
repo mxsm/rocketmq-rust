@@ -138,8 +138,8 @@ fn required_traces_report_subscriber_install_failure() {
         .expect_err("required mode should fail when the subscriber layer cannot be installed");
 
     assert!(matches!(
-        error,
-        rocketmq_observability::ObservabilityError::SubscriberInstallFailed {
+        error.operation(),
+        rocketmq_observability::ObservabilityOperation::InstallSubscriber {
             attempted: true,
             installed: false
         }
@@ -376,8 +376,8 @@ fn bootstrap_required_conflict() {
     };
 
     assert!(matches!(
-        error,
-        rocketmq_observability::ObservabilityError::SubscriberInstallFailed {
+        error.operation(),
+        rocketmq_observability::ObservabilityOperation::InstallSubscriber {
             attempted: true,
             installed: false
         }
@@ -420,10 +420,7 @@ fn bootstrap_reload_filter() {
             "rocketmq_reload_probe==trace",
         ))
         .expect_err("invalid reload should fail");
-    assert!(matches!(
-        error,
-        rocketmq_observability::ObservabilityError::InvalidLogFilter { .. }
-    ));
+    assert_eq!(error.code(), rocketmq_error::OBSERVABILITY_LOG_FILTER_INVALID.code());
     assert_eq!(handle.current().filter(), "info,rocketmq_reload_probe=debug");
     assert_eq!(
         handle.current().source(),
