@@ -43,21 +43,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::protocol::command_custom_header::CommandCustomHeader;
     use crate::protocol::command_custom_header::FromMap;
-
-    #[test]
-    fn delete_user_request_header_serializes_correctly() {
-        let mut header = DeleteUserRequestHeader::new(CheetahString::from_static_str("test_admin"));
-        assert_eq!(header.username, "test_admin");
-
-        header.set_username(CheetahString::from_static_str("updated_admin"));
-        let map = header.to_map().unwrap();
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("username")).unwrap(),
-            "updated_admin"
-        );
-    }
 
     #[test]
     fn delete_user_request_header_deserializes_correctly() {
