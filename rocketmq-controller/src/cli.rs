@@ -226,8 +226,9 @@ impl ControllerCli {
         println!("\n========== Raft Configuration ==========");
         println!("Election Timeout:        {} ms", config.election_timeout_ms);
         println!("Heartbeat Interval:      {} ms", config.heartbeat_interval_ms);
-        println!("Raft Peers:              {} peers", config.raft_peers.len());
-        for peer in &config.raft_peers {
+        let peers = config.raft_member_endpoints();
+        println!("Raft Peers:              {} peers", peers.len());
+        for peer in &peers {
             println!("  - Node {}: {}", peer.id, peer.addr);
         }
 

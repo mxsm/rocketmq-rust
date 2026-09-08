@@ -669,16 +669,16 @@ fn resolve_startup_log_filter(
 
 async fn initialize_cluster_if_configured(controller_manager: &Arc<ControllerManager>) -> Result<()> {
     let config = controller_manager.controller_config();
-    if config.raft_peers.is_empty() {
+    let peers = config.raft_member_endpoints();
+    if peers.is_empty() {
         return Ok(());
     }
 
-    let is_single_node = config.raft_peers.len() == 1;
+    let is_single_node = peers.len() == 1;
     if !is_single_node && !auto_initialize_cluster_enabled()? {
         return Ok(());
     }
-    let bootstrap_node_id = config
-        .raft_peers
+    let bootstrap_node_id = peers
         .iter()
         .map(|peer| peer.id)
         .min()
@@ -694,15 +694,14 @@ async fn initialize_cluster_if_configured(controller_manager: &Arc<ControllerMan
         return Ok(());
     }
 
-    let nodes = config
-        .raft_peers
+    let nodes = peers
         .iter()
         .map(|peer| {
             (
                 peer.id,
                 Node {
                     node_id: peer.id,
-                    rpc_addr: peer.addr.to_string(),
+                    rpc_addr: peer.addr.clone(),
                 },
             )
         })
@@ -728,7 +727,7 @@ async fn initialize_cluster_if_configured(controller_manager: &Arc<ControllerMan
 
 async fn wait_for_cluster_recovery(controller_manager: &Arc<ControllerManager>) -> Result<()> {
     let config = controller_manager.controller_config();
-    if config.raft_peers.is_empty() {
+    if config.raft_member_endpoints().is_empty() {
         return Ok(());
     }
 

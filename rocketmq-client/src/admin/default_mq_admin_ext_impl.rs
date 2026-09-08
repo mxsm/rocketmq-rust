@@ -257,6 +257,8 @@ pub struct DefaultMQAdminExtImpl {
 mod admin_api;
 #[cfg(feature = "admin-full")]
 mod broker;
+#[cfg(feature = "admin-read")]
+mod controller_read;
 #[cfg(feature = "admin-full")]
 mod group;
 mod lifecycle;

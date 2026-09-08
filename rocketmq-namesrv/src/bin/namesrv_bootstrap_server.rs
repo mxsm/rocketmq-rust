@@ -1024,10 +1024,32 @@ struct Args {
 }
 
 #[cfg(test)]
+#[path = "../../../scripts/tests/rust/core_helm_configs.rs"]
+mod core_helm_configs;
+
+#[cfg(test)]
 mod tests {
     use rocketmq_protocol::code::request_code::RequestCode;
 
     use super::*;
+
+    #[test]
+    #[ignore = "requires CORE_HELM_CONFIG_DIR exported by scripts/core_helm_configs.py"]
+    fn rendered_core_helm_configs_use_namesrv_loader() {
+        for path in core_helm_configs::rendered_configs("namesrv") {
+            let args = Args::try_parse_from([
+                std::ffi::OsStr::new("mqnamesrv"),
+                std::ffi::OsStr::new("-c"),
+                path.as_os_str(),
+            ])
+            .unwrap();
+            let (config, server, _, _, _) = parse_and_merge_config(&args).unwrap();
+            assert_eq!(server.listen_port, 9876, "{path:?}");
+            assert_eq!(server.bind_address, "0.0.0.0");
+            assert!(config.kv_config_path.starts_with("/var/lib/rocketmq/"));
+            assert!(config.config_store_path.starts_with("/var/lib/rocketmq/"));
+        }
+    }
 
     fn secure_bootstrap(root: &std::path::Path) -> SecurityBootstrap {
         let material = root.join("material.pem");

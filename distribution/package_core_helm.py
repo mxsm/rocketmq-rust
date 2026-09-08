@@ -22,22 +22,7 @@ if str(ROOT / "distribution") not in sys.path:
 
 from release_archive_common import ArchiveError, candidate_relative, load_candidate, write_json
 from release_state import atomic_write_json, read_json, resolve_existing_file
-
-
-REQUIRED_FILES = {
-    "Chart.yaml",
-    "values.yaml",
-    "values.schema.json",
-    "values-dev-single.yaml",
-    "values-production-default-ha.yaml",
-    "values-production-controller-ha.yaml",
-    "values-production-proxy-tls.yaml",
-    "templates/_helpers.tpl",
-    "templates/configmaps.yaml",
-    "templates/workloads.yaml",
-    "templates/services.yaml",
-    "templates/networkpolicies.yaml",
-}
+from core_helm_contract import REQUIRED_FILES
 
 
 def _render(relative: str, content: bytes, version: str) -> bytes:

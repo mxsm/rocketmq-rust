@@ -1,9 +1,14 @@
+placement:
+  requireSeparateHosts: true
 services:
   namesrv:
     enabled: true
+    replicas: 2
   broker:
     enabled: true
     controllerMode: false
+    replicas: 2
+    minInSyncReplicas: 2
   controller:
     enabled: false
   proxy:

@@ -1,6 +1,7 @@
 {{- range $service, $config := .Values.services }}
 {{- if $config.enabled }}
-{{- $stateful := or (eq $service "broker") (eq $service "controller") }}
+{{- $stateful := ne $service "proxy" }}
+{{- $name := include "rocketmq-core.name" (dict "Release" $.Release "service" $service) }}
 ---
 apiVersion: apps/v1
 kind: {{ ternary "StatefulSet" "Deployment" $stateful }}
@@ -15,41 +16,155 @@ spec:
       app.kubernetes.io/instance: {{ $.Release.Name }}
       app.kubernetes.io/component: {{ $service }}
   {{- if $stateful }}
-  serviceName: {{ include "rocketmq-core.name" (dict "Release" $.Release "service" $service) }}
+  serviceName: {{ $name }}-peer
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: OnDelete
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: {{ $.Values.persistence.whenDeleted }}
+    whenScaled: {{ $.Values.persistence.whenScaled }}
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   {{- end }}
   template:
     metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmaps.yaml") $ | sha256sum }}
       labels:
         app.kubernetes.io/instance: {{ $.Release.Name }}
         app.kubernetes.io/component: {{ $service }}
     spec:
+      terminationGracePeriodSeconds: {{ $.Values.runtime.terminationGracePeriodSeconds }}
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      {{- if $.Values.placement.requireSeparateHosts }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/instance: {{ $.Release.Name }}
+                  app.kubernetes.io/component: {{ $service }}
+      {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $.Release.Name }}
+              app.kubernetes.io/component: {{ $service }}
+        {{- if $.Values.placement.spreadAcrossZones }}
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $.Release.Name }}
+              app.kubernetes.io/component: {{ $service }}
+        {{- end }}
       containers:
         - name: {{ $service }}
           image: {{ include "rocketmq-core.image" (dict "Values" $.Values "service" $service) }}
           imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          {{- if $stateful }}
+          args: ["-c", "/etc/rocketmq/$(POD_NAME).toml"]
+          {{- else }}
           args: ["-c", "/etc/rocketmq/service.toml"]
+          {{- end }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ROCKETMQ_HEALTH_BIND_ADDR
+              value: "0.0.0.0:{{ $.Values.runtime.healthPort }}"
+            - name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS
+              value: {{ $.Values.runtime.shutdownTimeoutSeconds | quote }}
+            - name: ROCKETMQ_LIVENESS_STALE_SECONDS
+              value: {{ $.Values.runtime.livenessStaleSeconds | quote }}
+            {{- if eq $service "controller" }}
+            - name: ROCKETMQ_CONTROLLER_AUTO_INITIALIZE_CLUSTER
+              value: "true"
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml $config.resources | nindent 12 }}
           ports:
             - name: service
               containerPort: {{ $config.port }}
+            - name: health
+              containerPort: {{ $.Values.runtime.healthPort }}
+            {{- if eq $service "broker" }}
+            - name: ha
+              containerPort: {{ $config.haPort }}
+            {{- end }}
+            {{- if eq $service "controller" }}
+            - name: raft
+              containerPort: {{ $config.raftPort }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: health
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: {{ $.Values.runtime.startupFailureThreshold }}
           readinessProbe:
-            tcpSocket:
-              port: service
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 2
+          lifecycle:
+            preStop:
+              httpGet:
+                path: /drainz
+                port: health
           volumeMounts:
             - name: config
               mountPath: /etc/rocketmq
               readOnly: true
             - name: data
               mountPath: /var/lib/rocketmq
+            - name: tmp
+              mountPath: /tmp
+            {{- if $config.auth.enabled }}
+            - name: acl
+              mountPath: /etc/rocketmq/acl
+              readOnly: true
+            {{- end }}
           {{- if and (eq $service "proxy") $config.tls.enabled }}
             - name: proxy-tls
               mountPath: /etc/rocketmq/tls
               readOnly: true
           {{- end }}
       volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
         - name: config
           configMap:
             name: {{ include "rocketmq-core.name" (dict "Release" $.Release "service" $service) }}
@@ -57,10 +172,27 @@ spec:
         - name: data
           emptyDir: {}
         {{- end }}
+        {{- if $config.auth.enabled }}
+        - name: acl
+          secret:
+            secretName: {{ $config.auth.secretName }}
+            items:
+              - key: {{ $config.auth.aclKey }}
+                path: plain_acl.yml
+        {{- end }}
         {{- if and (eq $service "proxy") $config.tls.enabled }}
         - name: proxy-tls
           secret:
             secretName: {{ required "services.proxy.tls.secretName is required when TLS is enabled" $config.tls.secretName }}
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+              {{- if ne $config.tls.clientAuth "none" }}
+              - key: {{ $config.tls.clientCaKey }}
+                path: ca.crt
+              {{- end }}
         {{- end }}
   {{- if $stateful }}
   volumeClaimTemplates:

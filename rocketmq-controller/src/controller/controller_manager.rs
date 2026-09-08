@@ -463,7 +463,7 @@ impl ControllerManager {
         info!(
             node_id = config_snapshot.node_id,
             listen_port = config_snapshot.listen_addr.port(),
-            raft_peer_count = config_snapshot.raft_peers.len(),
+            raft_peer_count = config_snapshot.raft_member_endpoints().len(),
             security_enabled,
             "Creating controller manager"
         );

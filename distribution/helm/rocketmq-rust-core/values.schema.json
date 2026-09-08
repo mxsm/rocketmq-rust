@@ -1,5 +1,5 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "required": ["global", "services"],
   "properties": {
@@ -10,7 +10,44 @@
         "candidateVersion": {"type": "string", "pattern": "^1\\.0\\.0(?:-rc\\.[1-9][0-9]*)?$"},
         "imageRegistry": {"type": "string", "minLength": 1},
         "imagePullPolicy": {"enum": ["IfNotPresent", "Never"]},
-        "storageClassName": {"type": "string"}
+        "storageClassName": {"type": "string"},
+        "clusterDomain": {"type": "string", "pattern": "^[a-z0-9]+([.-][a-z0-9]+)*$", "maxLength": 100},
+        "clusterName": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"}
+      },
+      "additionalProperties": false
+    },
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "healthPort": {"$ref": "#/$defs/port"},
+        "shutdownTimeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 300},
+        "terminationGracePeriodSeconds": {"type": "integer", "minimum": 2, "maximum": 600},
+        "livenessStaleSeconds": {"type": "integer", "minimum": 2, "maximum": 300},
+        "startupFailureThreshold": {"type": "integer", "minimum": 1, "maximum": 240}
+      },
+      "additionalProperties": false
+    },
+    "persistence": {
+      "type": "object",
+      "properties": {
+        "whenDeleted": {"enum": ["Retain", "Delete"]},
+        "whenScaled": {"enum": ["Retain", "Delete"]}
+      },
+      "additionalProperties": false
+    },
+    "placement": {
+      "type": "object",
+      "properties": {
+        "requireSeparateHosts": {"type": "boolean"},
+        "spreadAcrossZones": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "clientNamespaceSelector": {"type": "object", "additionalProperties": {"type": "string"}}
       },
       "additionalProperties": false
     },
@@ -20,32 +57,78 @@
       "properties": {
         "namesrv": {"$ref": "#/$defs/statefulService"},
         "broker": {"$ref": "#/$defs/brokerService"},
-        "controller": {"$ref": "#/$defs/statefulService"},
+        "controller": {"$ref": "#/$defs/controllerService"},
         "proxy": {"$ref": "#/$defs/proxyService"}
       },
       "additionalProperties": false
     }
   },
   "$defs": {
-    "service": {
+    "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "resources": {
       "type": "object",
-      "required": ["enabled", "replicas", "port"],
+      "required": ["requests", "limits"],
+      "properties": {
+        "requests": {"$ref": "#/$defs/resourcePair"},
+        "limits": {"$ref": "#/$defs/resourcePair"}
+      },
+      "additionalProperties": false
+    },
+    "resourcePair": {
+      "type": "object",
+      "required": ["cpu", "memory"],
+      "properties": {
+        "cpu": {"type": "string", "pattern": "^([1-9][0-9]*m|[0-9]+(\\.[0-9]+)?)$"},
+        "memory": {"type": "string", "pattern": "^[1-9][0-9]*(Mi|Gi)$"}
+      },
+      "additionalProperties": false
+    },
+    "auth": {
+      "type": "object",
+      "required": ["enabled", "secretName", "aclKey"],
       "properties": {
         "enabled": {"type": "boolean"},
-        "replicas": {"type": "integer", "minimum": 1},
-        "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+        "secretName": {"type": "string", "pattern": "^([a-z0-9]([a-z0-9.-]*[a-z0-9])?)?$"},
+        "aclKey": {"type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*$"}
+      },
+      "additionalProperties": false
+    },
+    "service": {
+      "type": "object",
+      "required": ["enabled", "replicas", "port", "resources", "auth"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "replicas": {"type": "integer", "minimum": 1, "maximum": 9},
+        "port": {"$ref": "#/$defs/port"},
+        "resources": {"$ref": "#/$defs/resources"},
+        "auth": {"$ref": "#/$defs/auth"}
       }
     },
     "statefulService": {
       "allOf": [
         {"$ref": "#/$defs/service"},
-        {"type": "object", "required": ["storage"], "properties": {"storage": {"type": "string", "minLength": 1}}}
+        {"type": "object", "required": ["storage"], "properties": {"storage": {"type": "string", "pattern": "^[1-9][0-9]*(Mi|Gi|Ti)$"}}}
       ]
     },
     "brokerService": {
       "allOf": [
         {"$ref": "#/$defs/statefulService"},
-        {"type": "object", "required": ["controllerMode"], "properties": {"controllerMode": {"type": "boolean"}}}
+        {"type": "object", "required": ["controllerMode", "haPort", "brokerName", "minInSyncReplicas", "flushDiskType"], "properties": {
+          "controllerMode": {"type": "boolean"},
+          "haPort": {"$ref": "#/$defs/port"},
+          "brokerName": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"},
+          "minInSyncReplicas": {"type": "integer", "minimum": 1, "maximum": 9},
+          "flushDiskType": {"enum": ["SYNC_FLUSH", "ASYNC_FLUSH"]}
+        }}
+      ]
+    },
+    "controllerService": {
+      "allOf": [
+        {"$ref": "#/$defs/statefulService"},
+        {"type": "object", "required": ["raftPort", "storageBackend"], "properties": {
+          "raftPort": {"$ref": "#/$defs/port"},
+          "storageBackend": {"enum": ["RocksDB", "File"]}
+        }}
       ]
     },
     "proxyService": {
@@ -53,12 +136,27 @@
         {"$ref": "#/$defs/service"},
         {
           "type": "object",
-          "required": ["tls"],
+          "required": ["tls", "cluster"],
           "properties": {
+            "cluster": {
+              "type": "object",
+              "required": ["ioMaxInflight", "controlReserve", "commandQueueCapacity"],
+              "properties": {
+                "ioMaxInflight": {"type": "integer", "minimum": 1},
+                "controlReserve": {"type": "integer", "minimum": 1},
+                "commandQueueCapacity": {"type": "integer", "minimum": 1}
+              },
+              "additionalProperties": false
+            },
             "tls": {
               "type": "object",
-              "required": ["enabled", "secretName"],
-              "properties": {"enabled": {"type": "boolean"}, "secretName": {"type": "string"}},
+              "required": ["enabled", "secretName", "clientAuth", "clientCaKey"],
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "secretName": {"type": "string", "pattern": "^([a-z0-9]([a-z0-9.-]*[a-z0-9])?)?$"},
+                "clientAuth": {"enum": ["none", "optional", "require"]},
+                "clientCaKey": {"type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*$"}
+              },
               "additionalProperties": false
             }
           }

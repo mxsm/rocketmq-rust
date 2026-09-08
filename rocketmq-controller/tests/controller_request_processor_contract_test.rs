@@ -599,6 +599,10 @@ async fn controller_request_contract_get_metadata_info() {
         Some(harness.manager.controller_config().listen_addr.to_string().as_str())
     );
     assert_eq!(header.is_leader, Some(true));
+    assert!(
+        response.body().is_none(),
+        "ordinary Java metadata requests retain an empty body"
+    );
     let last_log_index = header.last_log_index.expect("last log index");
     let committed_log_index = header.committed_log_index.expect("committed log index");
     let applied_log_index = header.applied_log_index.expect("applied log index");
@@ -609,6 +613,44 @@ async fn controller_request_contract_get_metadata_info() {
         .contains(&harness.manager.controller_config().listen_addr.to_string())));
 
     harness.shutdown().await;
+}
+
+#[tokio::test]
+async fn controller_rollout_request_rejects_invalid_target_and_single_voter() {
+    let mut harness = ProcessorHarness::new().await;
+    for target in ["invalid", "1"] {
+        let mut request = RemotingCommand::create_remoting_command(RequestCode::ControllerGetMetadataInfo);
+        request.add_ext_field("checkQuorumForNode", target);
+        let response = harness.send(request).await;
+        assert_ne!(response.code(), ResponseCode::Success as i32);
+    }
+    harness.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "requires Java 11+ and ROCKETMQ_JAVA_CLASSPATH pointing to a Java RocketMQ distribution's lib/*"]
+async fn java_process_controller_metadata_compatibility() {
+    let classpath = std::env::var_os("ROCKETMQ_JAVA_CLASSPATH").expect("ROCKETMQ_JAVA_CLASSPATH is required");
+    let harness = ProcessorHarness::new().await;
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../scripts/java/ControllerMetadataCompatibilitySmoke.java");
+    let mut child = tokio::process::Command::new(std::env::var_os("JAVA").unwrap_or_else(|| "java".into()))
+        .arg("--class-path")
+        .arg(classpath)
+        .arg(source)
+        .arg(harness.remoting_addr.to_string())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("start Java metadata compatibility client");
+    let result = tokio::time::timeout(Duration::from_secs(45), child.wait()).await;
+    if result.is_err() {
+        child.kill().await.expect("stop timed-out Java client");
+    }
+    harness.shutdown().await;
+    assert!(result
+        .expect("Java client deadline")
+        .expect("wait for Java client")
+        .success());
 }
 
 #[tokio::test]

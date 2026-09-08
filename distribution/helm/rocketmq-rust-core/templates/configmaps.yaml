@@ -1,5 +1,7 @@
+{{- include "rocketmq-core.validate" . -}}
 {{- range $service, $config := .Values.services }}
 {{- if $config.enabled }}
+{{- $name := include "rocketmq-core.name" (dict "Release" $.Release "service" $service) }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -8,8 +10,14 @@ metadata:
   labels:
     {{- include "rocketmq-core.labels" (dict "Release" $.Release "service" $service) | nindent 4 }}
 data:
+  {{- if eq $service "proxy" }}
   service.toml: |
-    service = {{ $service | quote }}
-    workDir = "/var/lib/rocketmq"
+    {{- include "rocketmq-core.config" (dict "root" $ "service" $service "ordinal" 0) | nindent 4 }}
+  {{- else }}
+  {{- range $ordinal := until (int $config.replicas) }}
+  {{ $name }}-{{ $ordinal }}.toml: |
+    {{- include "rocketmq-core.config" (dict "root" $ "service" $service "ordinal" $ordinal) | nindent 4 }}
+  {{- end }}
+  {{- end }}
 {{- end }}
 {{- end }}

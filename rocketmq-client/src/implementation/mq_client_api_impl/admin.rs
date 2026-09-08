@@ -27,6 +27,8 @@ use serde::de::DeserializeOwned;
 
 #[cfg(feature = "admin-full")]
 mod compatibility;
+#[cfg(feature = "admin-read")]
+mod controller_rollout;
 mod metadata;
 #[cfg(feature = "admin-mutation")]
 mod supervised_mutation;

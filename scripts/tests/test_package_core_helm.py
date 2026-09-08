@@ -35,6 +35,13 @@ class PackageCoreHelmTests(unittest.TestCase):
                 chart = archive.extractfile("rocketmq-rust-core/Chart.yaml")
                 self.assertIsNotNone(chart)
                 self.assertIn("version: 1.0.0-rc.1", chart.read().decode())
+                deployment_policy = archive.extractfile("rocketmq-rust-core/files/deployment-policy.json")
+                self.assertIsNotNone(deployment_policy)
+                import json
+
+                packaged_policy = json.loads(deployment_policy.read())
+                self.assertEqual(self.packager.REQUIRED_FILES, set(packaged_policy["chart_files"]))
+                self.assertEqual("OnDelete", packaged_policy["runtime"]["stateful_update_strategy"])
             artifacts = read_json(root / "ARTIFACT_INDEX.json")["artifacts"]
             self.assertEqual({"helm-core", "helm-core-manifest"}, {entry["id"] for entry in artifacts})
 

@@ -309,6 +309,29 @@ impl ControllerMetadataCleanRequest {
 pub struct ControllerService;
 
 impl ControllerService {
+    pub async fn check_controller_rollout_with_credentials(
+        request: ControllerMetadataQueryRequest,
+        target_node_id: u64,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<rocketmq_protocol::protocol::body::controller_rollout::RolloutQuorumStatus> {
+        if target_node_id == 0 {
+            return Err(crate::client_adapter::services::errors::admin_validation_failed(
+                "targetNodeId",
+                "target node must be a nonzero Controller voter",
+            ));
+        }
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await?;
+        let result = admin
+            .check_controller_rollout(request.controller_addr, target_node_id)
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error);
+        admin.shutdown().await;
+        result
+    }
+
     pub async fn query_controller_config_by_request_with_credentials(
         request: ControllerConfigQueryRequest,
         credentials: Option<crate::core::security::AdminCredentials>,
