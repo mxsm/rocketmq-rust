@@ -17,9 +17,9 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use rocketmq_admin_core::core::AdminError;
 use rocketmq_dashboard_common::DashboardCommonError;
+use rocketmq_error::Error as CanonicalError;
 use rocketmq_error::ErrorDescriptor;
 use rocketmq_error::PublicErrorView;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::ViewValueRef;
 use rocketmq_runtime::RuntimeError;
 use serde::Serialize;
@@ -44,7 +44,7 @@ pub enum DashboardError {
         source: DashboardErrorSource,
     },
     #[error(transparent)]
-    RocketMq(#[from] RocketMQError),
+    RocketMq(#[from] CanonicalError),
     #[error(transparent)]
     Admin(#[from] AdminError),
     #[error("dashboard common error")]
@@ -237,27 +237,31 @@ impl From<DashboardHttpProjection> for DashboardErrorResponse {
     }
 }
 
-fn rocketmq_http_projection(error: &RocketMQError) -> DashboardHttpProjection {
+fn rocketmq_http_projection(error: &CanonicalError) -> DashboardHttpProjection {
     if let Some(descriptor) = metadata_io_descriptor(error) {
         return public_view_projection(PublicErrorView::descriptor_only(descriptor))
             .unwrap_or_else(DashboardHttpProjection::unknown);
     }
 
-    let context = error.context();
-    PublicErrorView::try_new(error.descriptor(), &context)
+    error
+        .public_view()
         .ok()
         .and_then(public_view_projection)
         .unwrap_or_else(DashboardHttpProjection::unknown)
 }
 
-fn metadata_io_source(error: &RocketMQError) -> Option<&RuntimeError> {
-    match error {
-        RocketMQError::IO(error) => error.get_ref()?.downcast_ref::<RuntimeError>(),
-        _ => None,
+fn metadata_io_source(error: &CanonicalError) -> Option<&RuntimeError> {
+    let mut source = error.source();
+    while let Some(current) = source {
+        if let Some(runtime) = current.downcast_ref::<RuntimeError>() {
+            return Some(runtime);
+        }
+        source = current.source();
     }
+    None
 }
 
-fn metadata_io_descriptor(error: &RocketMQError) -> Option<&'static ErrorDescriptor> {
+fn metadata_io_descriptor(error: &CanonicalError) -> Option<&'static ErrorDescriptor> {
     Some(metadata_io_source(error)?.descriptor())
 }
 
@@ -338,9 +342,15 @@ mod tests {
     use rocketmq_admin_core::core::AdminError;
     use rocketmq_dashboard_common::DashboardCommonError;
     use rocketmq_dashboard_common::DashboardEndpointKind;
+    use rocketmq_error::BROKER_MESSAGE_TOO_LARGE;
+    use rocketmq_error::BROKER_QUEUE_NOT_FOUND;
+    use rocketmq_error::CORE_INTERNAL_FAILURE;
+    use rocketmq_error::CORE_IO_FAILED;
+    use rocketmq_error::Error as CanonicalError;
     use rocketmq_error::ErrorContext;
+    use rocketmq_error::OBSERVABILITY_SUBSCRIBER_INSTALLATION_FAILED;
+    use rocketmq_error::ROUTE_TOPIC_INCONSISTENT;
     use rocketmq_error::ROUTE_TOPIC_NOT_FOUND;
-    use rocketmq_error::RocketMQError;
     use rocketmq_error::fields;
     use rocketmq_runtime::RuntimeError;
     use serde::Deserialize;
@@ -387,8 +397,9 @@ mod tests {
 
     #[tokio::test]
     async fn rocketmq_error_uses_public_view_code_message_status_and_details() {
-        let error = RocketMQError::route_not_found("TopicA");
-        let public_message = error.public_message();
+        let error = CanonicalError::new(&ROUTE_TOPIC_NOT_FOUND)
+            .with_context(ErrorContext::new().with_text(fields::TOPIC, "TopicA"));
+        let public_message = error.descriptor().public_message();
 
         let (status, body, _) = failure_response(DashboardError::from(error)).await;
 
@@ -402,11 +413,13 @@ mod tests {
 
     #[tokio::test]
     async fn rocketmq_internal_error_response_omits_diagnostic_context() {
-        let (status, body, bytes) = failure_response(DashboardError::from(RocketMQError::internal(
-            "run dashboard request",
-            std::io::Error::other("password=plain-text"),
-        )))
-        .await;
+        let error = CanonicalError::caused_by(&CORE_INTERNAL_FAILURE, std::io::Error::other("password=plain-text"))
+            .with_context(
+                ErrorContext::new()
+                    .with_text(fields::OPERATION_DIAGNOSTIC, "run dashboard request")
+                    .with_secret_presence(fields::SOURCE_PRESENT),
+            );
+        let (status, body, bytes) = failure_response(DashboardError::from(error)).await;
 
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(body.code, "core.internal.failure");
@@ -419,7 +432,9 @@ mod tests {
 
     #[tokio::test]
     async fn promoted_admin_error_preserves_the_source_descriptor_projection() {
-        let error = AdminError::from_rocketmq("query", RocketMQError::route_not_found("Orders"));
+        let source = CanonicalError::new(&ROUTE_TOPIC_NOT_FOUND)
+            .with_context(ErrorContext::new().with_text(fields::TOPIC, "Orders"));
+        let error = AdminError::from_error("query", source);
 
         let (status, body, bytes) = failure_response(DashboardError::from(error)).await;
 
@@ -552,9 +567,15 @@ mod tests {
 
     #[tokio::test]
     async fn metadata_io_saturation_uses_canonical_capacity_projection() {
-        let error = RocketMQError::IO(io::Error::other(RuntimeError::capacity(
-            rocketmq_runtime::RuntimeOperation::MetadataIo,
-        )));
+        let error = CanonicalError::caused_by(
+            &CORE_IO_FAILED,
+            RuntimeError::capacity(rocketmq_runtime::RuntimeOperation::MetadataIo),
+        )
+        .with_context(
+            ErrorContext::new()
+                .with_text(fields::OPERATION_DIAGNOSTIC, "metadata_io")
+                .with_secret_presence(fields::SOURCE_PRESENT),
+        );
 
         let (status, body, _) = failure_response(DashboardError::from(error)).await;
 
@@ -667,10 +688,11 @@ mod tests {
 
     #[tokio::test]
     async fn rocketmq_details_exclude_diagnostic_and_secret_fields() {
-        let error = RocketMQError::RouteInconsistent {
-            topic: "Orders\r\nInjected".to_string(),
-            reason: "password=plain-text C:\\private\\route".to_string(),
-        };
+        let error = CanonicalError::new(&ROUTE_TOPIC_INCONSISTENT).with_context(
+            ErrorContext::new()
+                .with_text(fields::TOPIC, "Orders\r\nInjected")
+                .with_secret_presence(fields::REASON_PRESENT),
+        );
 
         let (status, body, bytes) = failure_response(DashboardError::from(error)).await;
 
@@ -690,15 +712,20 @@ mod tests {
     async fn rocketmq_public_details_preserve_json_scalar_types() {
         let cases = [
             (
-                RocketMQError::QueueNotExist {
-                    topic: "Orders".to_string(),
-                    queue_id: -7,
-                },
+                CanonicalError::new(&BROKER_QUEUE_NOT_FOUND).with_context(
+                    ErrorContext::new()
+                        .with_text(fields::TOPIC, "Orders")
+                        .with_i64(fields::QUEUE_ID, -7),
+                ),
                 "queue_id",
                 serde_json::json!(-7),
             ),
             (
-                RocketMQError::MessageTooLarge { actual: 7, limit: 9 },
+                CanonicalError::new(&BROKER_MESSAGE_TOO_LARGE).with_context(
+                    ErrorContext::new()
+                        .with_u64(fields::ACTUAL_BYTES, 7)
+                        .with_u64(fields::LIMIT_BYTES, 9),
+                ),
                 "actual_bytes",
                 serde_json::json!(7),
             ),
@@ -709,10 +736,11 @@ mod tests {
             assert_eq!(body.details.get(field), Some(&expected));
         }
 
-        let error = RocketMQError::from(rocketmq_error::ObservabilityError::SubscriberInstallFailed {
-            attempted: true,
-            installed: false,
-        });
+        let error = CanonicalError::new(&OBSERVABILITY_SUBSCRIBER_INSTALLATION_FAILED).with_context(
+            ErrorContext::new()
+                .with_bool(fields::ATTEMPTED, true)
+                .with_bool(fields::INSTALLED, false),
+        );
         let (_, body, _) = failure_response(DashboardError::from(error)).await;
         assert!(!body.details.contains_key("attempted"));
         assert!(!body.details.contains_key("installed"));
