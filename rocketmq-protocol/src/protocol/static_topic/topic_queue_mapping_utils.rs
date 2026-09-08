@@ -1073,4 +1073,137 @@ mod tests {
 
         assert!(TopicQueueMappingUtils::find_next(&items, None, true).is_none());
     }
+
+    fn item(gen: i32, logic_offset: i64) -> LogicQueueMappingItem {
+        LogicQueueMappingItem {
+            gen,
+            logic_offset,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn find_next_returns_following_item_and_none_after_last() {
+        let items = vec![item(0, 0), item(1, 10), item(2, -1)];
+
+        assert_eq!(
+            TopicQueueMappingUtils::find_next(&items, Some(&items[0]), true),
+            Some(&items[1])
+        );
+        assert!(TopicQueueMappingUtils::find_next(&items, Some(&items[2]), true).is_none());
+        assert!(TopicQueueMappingUtils::find_next(&items, Some(&items[1]), true).is_none());
+        assert_eq!(
+            TopicQueueMappingUtils::find_next(&items, Some(&items[1]), false),
+            Some(&items[2])
+        );
+    }
+
+    #[test]
+    fn find_logic_queue_mapping_item_scans_from_end_for_covering_item() {
+        let items = vec![item(0, 0), item(1, 100), item(2, -1)];
+
+        assert_eq!(
+            TopicQueueMappingUtils::find_logic_queue_mapping_item(&items, 150, true),
+            Some(&items[1])
+        );
+        assert_eq!(
+            TopicQueueMappingUtils::find_logic_queue_mapping_item(&items, 100, true),
+            Some(&items[1])
+        );
+        assert_eq!(
+            TopicQueueMappingUtils::find_logic_queue_mapping_item(&items, 99, true),
+            Some(&items[0])
+        );
+        assert_eq!(
+            TopicQueueMappingUtils::find_logic_queue_mapping_item(&items, 150, false),
+            Some(&items[2])
+        );
+    }
+
+    #[test]
+    fn find_logic_queue_mapping_item_falls_back_to_first_non_negative_item() {
+        let items = vec![item(0, -1), item(1, 10), item(2, 20)];
+
+        assert_eq!(
+            TopicQueueMappingUtils::find_logic_queue_mapping_item(&items, 5, true),
+            Some(&items[1])
+        );
+        assert!(TopicQueueMappingUtils::find_logic_queue_mapping_item(&items[..1], 5, true).is_none());
+    }
+
+    #[test]
+    fn find_logic_queue_mapping_item_returns_none_for_empty_items() {
+        assert!(TopicQueueMappingUtils::find_logic_queue_mapping_item(&[], 0, true).is_none());
+        assert!(TopicQueueMappingUtils::find_logic_queue_mapping_item(&[], 0, false).is_none());
+    }
+
+    #[test]
+    fn get_leader_item_returns_last_item_and_rejects_empty_items() {
+        let items = vec![item(0, 0), item(1, 10)];
+
+        let leader = TopicQueueMappingUtils::get_leader_item(&items).expect("non-empty items have a leader");
+        assert_eq!(leader, items[1]);
+
+        let error = TopicQueueMappingUtils::get_leader_item(&[]).expect_err("empty items should be rejected");
+        assert_eq!(error.descriptor(), &rocketmq_error::ROUTE_TOPIC_INCONSISTENT);
+    }
+
+    #[test]
+    fn check_leader_in_target_brokers_requires_every_leader_broker_in_targets() {
+        let mapping_one = |bname: &str| {
+            TopicQueueMappingOne::new(
+                TopicQueueMappingDetail {
+                    topic_queue_mapping_info: TopicQueueMappingInfo::default(),
+                    hosted_queues: None,
+                },
+                "TopicA".to_string(),
+                bname.to_string(),
+                0,
+                vec![],
+            )
+        };
+        let mapping_ones = vec![mapping_one("broker-a"), mapping_one("broker-b")];
+        let broker_a = CheetahString::from_static_str("broker-a");
+        let broker_b = CheetahString::from_static_str("broker-b");
+
+        let complete = HashSet::from([broker_a.clone(), broker_b]);
+        assert!(TopicQueueMappingUtils::check_leader_in_target_brokers(&mapping_ones, &complete).is_ok());
+
+        let missing_b = HashSet::from([broker_a]);
+        let error = TopicQueueMappingUtils::check_leader_in_target_brokers(&mapping_ones, &missing_b)
+            .expect_err("leader broker outside target brokers should be rejected");
+        assert_eq!(error.descriptor(), &rocketmq_error::ROUTE_TOPIC_INCONSISTENT);
+        assert!(error.to_string().contains("The leader broker is not in target brokers"));
+    }
+
+    #[test]
+    fn get_mock_broker_name_prefixes_scope() {
+        let prefix = mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX;
+
+        assert_eq!(
+            TopicQueueMappingUtils::get_mock_broker_name("scope-a").as_str(),
+            format!("{prefix}scope-a")
+        );
+        assert_eq!(
+            TopicQueueMappingUtils::get_mock_broker_name(mix_all::METADATA_SCOPE_GLOBAL).as_str(),
+            format!("{prefix}{}", &mix_all::METADATA_SCOPE_GLOBAL[2..])
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Scope cannot be null")]
+    fn get_mock_broker_name_panics_on_empty_scope() {
+        TopicQueueMappingUtils::get_mock_broker_name("");
+    }
+
+    #[test]
+    fn block_seq_round_up_rounds_by_half_block() {
+        for (offset, expected) in [(0, 8), (1, 8), (4, 16), (8, 16), (11, 16), (12, 24)] {
+            assert_eq!(
+                TopicQueueMappingUtils::block_seq_round_up(offset, 8),
+                expected,
+                "offset {offset}"
+            );
+        }
+    }
 }
