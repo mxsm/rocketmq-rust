@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(feature = "simd")]
-
 /// SIMD-accelerated JSON utility for high-performance serialization and deserialization.
 ///
 /// This utility leverages SIMD instructions for faster JSON processing compared to standard
@@ -173,8 +171,8 @@ impl SimdJsonUtils {
         T: serde::Serialize,
     {
         // simd-json doesn't support pretty printing, fall back to serde_json
-        Ok(serde_json::to_string_pretty(value)
-            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?)
+        serde_json::to_string_pretty(value)
+            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))
     }
 
     /// Serialize a Rust type into a JSON byte vector (compact format) using SIMD acceleration.
@@ -219,8 +217,7 @@ impl SimdJsonUtils {
         T: serde::Serialize,
     {
         // simd-json doesn't support pretty printing, fall back to serde_json
-        Ok(serde_json::to_vec_pretty(value)
-            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?)
+        serde_json::to_vec_pretty(value).map_err(|error| crate::error::serialization_source("serialize", "JSON", error))
     }
 
     /// Serialize a Rust type into a JSON byte vector using a preallocated writer.
