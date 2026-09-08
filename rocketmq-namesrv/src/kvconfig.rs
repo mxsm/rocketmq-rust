@@ -75,9 +75,19 @@ mod tests {
         );
         table.insert(
             CheetahString::from_static_str("PROJECT_CONFIG"),
-            namespace_entries(&[("tenant-a", "project-alpha")]),
+            namespace_entries(&[("tenant-a", "project-alpha"), ("tenant-unicode", "café")]),
         );
         table
+    }
+
+    fn snapshot(wrapper: &KVConfigSerializeWrapper) -> HashMap<CheetahString, HashMap<CheetahString, CheetahString>> {
+        wrapper
+            .config_table
+            .as_ref()
+            .expect("wrapper should carry a config table")
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect()
     }
 
     #[test]
@@ -135,6 +145,7 @@ mod tests {
         let serialized = serde_json::to_string(&wrapper).expect("wrapper should serialize to JSON");
         let deserialized: KVConfigSerializeWrapper =
             serde_json::from_str(&serialized).expect("wrapper should deserialize from its JSON");
+        assert_eq!(snapshot(&deserialized), snapshot(&wrapper));
         let table = deserialized
             .config_table
             .expect("round trip should keep the config table");
@@ -258,7 +269,7 @@ mod tests {
                 .get("PROJECT_CONFIG")
                 .and_then(|namespace| namespace.get("tenant-unicode").cloned())
                 .as_deref(),
-            Some("生产")
+            Some("\u{751f}\u{4ea7}")
         );
     }
 }
