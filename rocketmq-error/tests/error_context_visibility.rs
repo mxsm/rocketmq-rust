@@ -20,8 +20,8 @@ use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::FieldValueKind;
 use rocketmq_error::FieldValueRef;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::Sensitive;
+use rocketmq_error::CORE_INTERNAL_FAILURE;
 
 const SENTINEL: &str = "Bearer token-secret secret_key=sk signature=sig password=pw\r\nsource-message";
 
@@ -173,10 +173,11 @@ fn sentinel_never_enters_context_or_safe_boundary_output() {
         assert!(!format!("{context:?}").contains(SENTINEL));
     }
 
-    let error = RocketMQError::internal("sentinel operation", std::io::Error::other(SENTINEL));
-    let descriptor = error.descriptor();
-    let context = error.context();
-    let canonical = Error::caused_by(descriptor, error).with_context(context);
+    let canonical = Error::caused_by(&CORE_INTERNAL_FAILURE, std::io::Error::other(SENTINEL)).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, "sentinel operation")
+            .with_secret_presence(fields::SOURCE_PRESENT),
+    );
     let public = canonical.public_view().expect("valid public view");
     let cli = CliErrorView::from_error(&canonical);
     assert!(!format!("{public:?}").contains(SENTINEL));

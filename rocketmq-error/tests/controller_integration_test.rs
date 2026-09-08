@@ -20,7 +20,6 @@ use rocketmq_error::fields;
 use rocketmq_error::Error;
 use rocketmq_error::ErrorContext;
 use rocketmq_error::RemotingResponseCode;
-use rocketmq_error::RocketMQError;
 use rocketmq_error::CONTROLLER_CONFIGURATION_INVALID;
 use rocketmq_error::CONTROLLER_CONSENSUS_FAILED;
 use rocketmq_error::CONTROLLER_CONSENSUS_TIMED_OUT;
@@ -66,7 +65,7 @@ fn canonical_controller_error_retains_typed_source_and_fixed_public_message() {
 }
 
 #[test]
-fn shared_facade_carrier_preserves_one_canonical_controller_allocation() {
+fn shared_error_preserves_one_canonical_controller_allocation() {
     let canonical = Arc::new(
         Error::new(&CONTROLLER_CONSENSUS_TIMED_OUT).with_context(
             ErrorContext::new()
@@ -75,10 +74,7 @@ fn shared_facade_carrier_preserves_one_canonical_controller_allocation() {
         ),
     );
     let expected = Arc::clone(&canonical);
-    let facade = RocketMQError::Shared(canonical);
-    let RocketMQError::Shared(actual) = facade else {
-        panic!("canonical Controller error must use the shared facade carrier");
-    };
+    let actual = canonical;
 
     assert!(Arc::ptr_eq(&expected, &actual));
     assert!(std::ptr::eq(actual.descriptor(), &CONTROLLER_CONSENSUS_TIMED_OUT));

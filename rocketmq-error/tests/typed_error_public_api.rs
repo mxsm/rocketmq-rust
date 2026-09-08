@@ -18,8 +18,8 @@ fn error_crate_public_api_exposes_only_typed_error_surface() {
     let context_source = include_str!("../src/context.rs");
     let core_source = include_str!("../src/error.rs");
     let removed_symbols = [
-        concat!("Legacy", "RocketMQResult"),
-        concat!("pub enum Rocket", "mqError"),
+        concat!("pub type RocketMQ", "Result"),
+        concat!("pub enum RocketMQ", "Error"),
         concat!("pub struct MQBroker", "Err"),
         concat!("pub struct Client", "Err"),
         concat!("pub struct RequestTimeout", "Err"),

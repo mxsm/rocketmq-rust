@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_error::Error;
 use rocketmq_error::FilterCompileError;
 use rocketmq_error::FilterCompileErrorKind;
 use rocketmq_error::FilterCompileSource;
 use rocketmq_error::FilterCompileStage;
-use rocketmq_error::Error;
 use rocketmq_error::PROTOCOL_FILTER_INVALID;
 
 #[test]

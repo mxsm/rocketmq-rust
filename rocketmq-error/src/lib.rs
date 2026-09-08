@@ -40,11 +40,6 @@
 //! assert_eq!(error.code().as_str(), "runtime.io.failed");
 //! ```
 //!
-//! [`RocketMQError`] remains the workspace-wide domain facade. Its `Shared`
-//! variant carries a canonical [`SharedError`], while retained domain enums
-//! preserve their explicitly owned variants and descriptor projections.
-
-mod auth_error;
 mod boundary;
 mod catalog;
 mod cli;
@@ -53,10 +48,8 @@ mod descriptor;
 mod error;
 mod field;
 mod filter_error;
-mod observability_error;
 mod projection;
 mod recovery;
-mod unified;
 mod view;
 
 // Re-export new error types as primary API
@@ -105,18 +98,9 @@ pub use filter_error::FilterCompileError;
 pub use filter_error::FilterCompileErrorKind;
 pub use filter_error::FilterCompileSource;
 pub use filter_error::FilterCompileStage;
-pub use observability_error::ObservabilityError;
 pub use projection::ProjectionSpec;
 pub use recovery::CanonicalCondition;
 pub use recovery::RecoveryHint;
-pub use unified::AuthError;
-pub use unified::ProtocolError;
-pub use unified::RocketMQError;
-pub use unified::RocketMQResult;
-pub use unified::RpcClientError;
-pub use unified::SerializationError;
-pub use unified::ServiceError as UnifiedServiceError;
-pub use unified::ToolsError;
 pub use view::DiagnosticFields;
 pub use view::DiagnosticView;
 pub use view::PublicErrorView;
