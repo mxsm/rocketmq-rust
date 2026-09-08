@@ -41,11 +41,9 @@ to acquire runtime, transport, or storage capabilities.
 ## Capability migration facades
 
 A broad historical trait may remain temporarily when multiple production
-consumers cannot move atomically, but it is a frozen migration facade:
+consumers cannot move atomically. Keep the migration scope explicit:
 
-- derive its method inventory from parsed or token-balanced source rather than
-  a handwritten count;
-- reject new methods and new consumer dependencies;
+- review method and consumer changes at the affected capability boundary;
 - assign every remaining consumer an owner, reason, and deletion condition;
 - permit removals without deprecated wrappers when the contract is internal;
 - place new behavior in one narrow capability with only the operations the use
@@ -58,27 +56,15 @@ represented by panic or a default no-op. Capability request/result types own
 durability, cancellation, deadline, and typed-error semantics so adapters do
 not infer them from a broad implementation type.
 
-Run `python scripts/message_store_capability_guard.py` when Store or Broker
-capability boundaries change. Its generated migration board is reviewed
-together with the code.
+Validate Store capability changes with the affected Rust contracts, for example
+`cargo test -p rocketmq-store --test capability_conformance_tests`. Select backend
+features when their behavior changes. The completed migration's source-text gate
+and baseline are retired.
 
-## Inventory and ownership
+## Review and ownership
 
-Run `python scripts/trait_policy_guard.py` to compare production macro and
-empty-marker sites with the generated baseline. Native `async fn` is an
-approved implementation style and is deliberately absent from the debt
-inventory. Run
-`python scripts/trait_policy_guard.py --write-baseline` only after reviewing
-every changed identity and decision.
-
-The inventory assigns existing macro sites to their owning crate with a
-migrate-on-touch decision. The Lite Pull Consumer contracts use direct native
-async traits because their callers use static dispatch; no generated local/send
-trait pair is required. `MQAdminExtInner` passed the P2.4 deletion test and was
-removed at the approved major-version boundary without replacement by another
-empty trait. A new marker with no behavior is treated as fresh policy debt, not
-as a compatible substitute.
-
-P1 async ownership work and P2 interface work use this policy directly.
-Their touched-domain inventory may decrease; any addition requires an
-explicit contract justification and baseline review.
+Review existing macro sites when changing their owning module. Native `async fn`
+is an approved implementation style; no historical identity inventory or baseline
+refresh is required. Explain dynamic dispatch, `Send` requirements, and public
+marker traits through their actual callers and invariants. Use compiler checks
+and focused behavior tests for the affected crate.

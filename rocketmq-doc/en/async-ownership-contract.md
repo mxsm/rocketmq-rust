@@ -42,4 +42,4 @@ This contract records the ownership, mutation, versioning, and shutdown rules in
 
 Business modules should receive `TaskSpawner`, `TaskGroup`, scheduled-task capabilities, or `BlockingExecutor`; they should not receive a raw runtime handle or detached-spawn capability.
 
-Temporary compatibility boundaries are listed in [`scripts/runtime-task-escape-policy.json`](../../scripts/runtime-task-escape-policy.json). Every entry records its caller, owner, termination condition, join or deadline policy, diagnostics, target capability, reason, and removal phase. Raw runtime and detached task APIs are deprecated and scheduled for the phase-3 compatibility boundary.
+Runtime escape inventories are retired; review ownership and validate cancellation/shutdown behavior.

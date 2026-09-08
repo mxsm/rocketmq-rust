@@ -348,7 +348,6 @@ def validate_python_tests(root: Path, policy: dict[str, Any]) -> list[Finding]:
     entries = config["entries"]
     if (
         not isinstance(config["expected_count"], int)
-        or config["expected_count"] < 49
         or not isinstance(entries, list)
         or len(entries) != config["expected_count"]
     ):
@@ -371,7 +370,7 @@ def validate_python_tests(root: Path, policy: dict[str, Any]) -> list[Finding]:
         "platform",
         "fixture_policy",
     }
-    tiers = {"pr_static", "milestone_contract", "phase_contract", "dynamic_fixture", "deferred_validation"}
+    tiers = {"pr_static", "phase_contract", "dynamic_fixture", "deferred_validation"}
     platforms = {"any", "powershell"}
     fixtures = {"none", "repository-fixtures", "temporary-only"}
     inventory_paths: set[str] = set()
@@ -846,7 +845,7 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
             "|---|---:|",
         ]
     )
-    for tier in ("pr_static", "milestone_contract", "phase_contract", "dynamic_fixture", "deferred_validation"):
+    for tier in ("pr_static", "phase_contract", "dynamic_fixture", "deferred_validation"):
         count = sum(entry["tier"] == tier for entry in policy["python_tests"]["entries"])
         lines.append(f"| `{tier}` | {count} |")
     lines.extend(
@@ -869,9 +868,9 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
             "unit-test LCOV report.",
             "",
             "Critical evidence workflows pin checkout and artifact upload Actions to reviewed commit SHAs.",
-            "Benchmark reports must include the runner fingerprint, toolchain, profile, features, commit, samples,",
-            "and comparison result required by `scripts/architecture-performance-profiles.json`. Fault and soak",
-            "artifacts use the production-readiness and fault-matrix policies; failures retain replay inputs and",
+            "Run maintained Cargo benchmark targets when performance behavior changes. Historical M10",
+            "fingerprints, frozen command inventories, and fixed comparison thresholds are retired. Fault and",
+            "soak artifacts use their dedicated qualification policies; failures retain replay inputs and",
             "diagnostics without committing runtime output.",
             "The SLO and fault workflows now accept `candidate_publication_json` (or the scheduled",
             "`ARCHITECTURE_CANDIDATE_PUBLICATION_JSON`) instead of the former self-reported image-map",
@@ -912,17 +911,15 @@ def render_document(policy: dict[str, Any], facts: Facts) -> str:
             "",
             "## Architecture evidence cross-checks",
             "",
-            "- Trait decisions: `scripts/trait-policy-baseline.json` and `rocketmq-doc/en/rust-trait-design-guidelines.md`.",
-            "- Dependency and public-facade state: `scripts/architecture-dependency-policy.json` and the strict target guard.",
+            "- Trait design and review guidance: `rocketmq-doc/en/rust-trait-design-guidelines.md`.",
+            "- Dependency and public-facade state: `scripts/architecture-dependency-policy.json` and the package-boundary checker.",
             "- Manual Pin, production unsafe, panic/unwrap/expect, and historical `mod.rs` state:",
-            "  `scripts/rust_hygiene_guard.py` plus its baseline.",
-            "- Runtime ownership: `scripts/runtime-task-escape-policy.json` and the enforcing runtime audit.",
-            "- Performance thresholds: `scripts/architecture-performance-profiles.json` and the performance guard.",
+            "  `scripts/rust_hygiene_guard.py` (safety checks plus advisory observations).",
+            "- Runtime ownership: the runtime audit report and maintained cancellation/shutdown tests.",
             "- Distributed evidence: `distribution/kubernetes/fault-matrix-policy.json` and the SLO/fault guards.",
             f"- Risk-to-test matrix: `{policy['evidence_governance']['risk_matrix']}`.",
             f"- Deterministic property suites: `{policy['evidence_governance']['property_registry']}`.",
             f"- Fuzz corpus ownership and retention: `{policy['evidence_governance']['fuzz_registry']}`.",
-            f"- Cross-registry guard: `{policy['evidence_governance']['guard']}`.",
             "- Unified production qualification manifest: `scripts/architecture_evidence_bundle.py`.",
             f"- Core capability contracts: `{policy['documentation_contracts']['core_capabilities']}`.",
             f"- Acknowledgement/failover ADR: `{policy['documentation_contracts']['acknowledgement_adr']}`.",

@@ -20,7 +20,7 @@
 | MCP gates | See repository `AGENTS.md` |  |  |  |
 | Format | `cargo fmt --all -- --check` |  |  |  |
 | Workspace Clippy | `cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings` |  |  |  |
-| Runtime audit | `.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` |  |  |  |
+| Runtime review report | `.\scripts\runtime-audit.ps1` |  |  |  |
 | Architecture guards | `cargo test -p rocketmq-observability --test architecture_guards` |  |  |  |
 
 ## Startup behavior

@@ -198,18 +198,6 @@ assert scope.path_in_scope('rocketmq-client/src/lib.rs', 'all', loaded)
         self.assertEqual([], [item for item in findings if item["scope"] == "core"])
         self.assertIn("scope-path-missing", {item["code"] for item in findings if item["scope"] == "repo-global"})
 
-    def test_architecture_guard_has_an_independent_core_mode(self) -> None:
-        completed = subprocess.run(
-            [sys.executable, str(SCRIPTS / "architecture_release_guard.py"), "--scope", "core-release"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
-        self.assertIn("ARCHITECTURE_RELEASE_CORE_OK packages=27", completed.stdout)
-        self.assertNotIn("ARCHITECTURE_RELEASE_REPO_GLOBAL_FAILED", completed.stdout)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-29
+- Updated: 2026-09-08 (retire historical inventory and count gates)
 - Decision owners: RocketMQ Rust maintainers
 
 ## Context
@@ -14,15 +15,18 @@ that no longer exist.
 ## Decision
 
 `scripts/architecture-debt-registry.json` is the single index for active
-architecture debt. An active entry must name an owner, reason, accepted
-decision, removal condition, release boundary, and executable evidence.
-Detailed identities may remain in their specialist machine-readable baseline,
-but that baseline must be referenced by a registry entry and remain governed
-by its non-growth guard.
+architecture debt and resolved decisions. Entries record ownership, reasons,
+removal conditions, release planning, and relevant evidence. The risk-test matrix
+continues to map those records to maintained tests.
 
-The only architecture-debt release boundary is `2.0.0`. Historical milestone
-names and open-ended values such as `long-term` or `next-major` are not valid
-removal windows.
+The central count-synchronization guard, Trait identity inventory, lint exception
+inventory, and completed Store migration gate are retired. The debt register is
+a review summary; updating historical counts or matching source tokens is not a
+prerequisite for development. Existing specialist tools keep their own supported
+inputs without duplicating their counts in the central registry.
+
+The current architecture-debt planning boundary is `2.0.0`. Maintainers review
+removal targets when the corresponding work changes.
 
 Removed internal crates, facade re-exports, old module paths, and historical
 migration evidence are not compatibility surfaces. They may be deleted or
@@ -40,13 +44,14 @@ packages merely to preserve source compatibility.
 
 ## Consequences
 
-- CI fails when a registry entry loses ownership or evidence, an ADR target is
-  missing, a resolved source check regresses, or the generated debt register
-  drifts.
+- Maintain risk ownership and relevant test evidence when changing a boundary.
+  The evidence tooling checks risk-to-test mappings; there is no central
+  exact-count or source-snapshot gate.
 - The two remaining `rocketmq-store` composition dependencies cannot grow and
   must be removed by `2.0.0`.
-- Panic, trait, allowlist, and runtime-adapter inventories remain
-  non-growth baselines and are burned down under their specialist guards.
+- Runtime, unsafe, and typed-error tooling retains its relevant regression tests.
+  Trait design and lint allowances are reviewed in source, with scoped compiler
+  and Clippy validation instead of historical inventory maintenance.
 - Public API baselines may accept deliberate breaking cleanup for `2.0.0`;
   protocol and persisted-data compatibility still require explicit golden
   tests and review.

@@ -12,20 +12,21 @@
       "fuzz/Cargo.toml"
     ]
   },
-  "package_counts": {
-    "baseline": 29,
-    "target": 29
-  },
-  "planned_packages": [],
   "package_rules": [
     {
       "id": "protocol-no-transport",
-      "callers": ["rocketmq-protocol"],
-      "forbidden_targets": ["rocketmq-transport"]
+      "callers": [
+        "rocketmq-protocol"
+      ],
+      "forbidden_targets": [
+        "rocketmq-transport"
+      ]
     },
     {
       "id": "store-api-no-backend",
-      "callers": ["rocketmq-store-api"],
+      "callers": [
+        "rocketmq-store-api"
+      ],
       "forbidden_targets": [
         "rocketmq-store",
         "rocketmq-store-local",
@@ -35,7 +36,9 @@
     },
     {
       "id": "store-api-runtime-neutral",
-      "callers": ["rocketmq-store-api"],
+      "callers": [
+        "rocketmq-store-api"
+      ],
       "forbidden_targets": [
         "rocketmq-runtime",
         "rocketmq-remoting",
@@ -47,7 +50,9 @@
     },
     {
       "id": "security-api-contract-only",
-      "callers": ["rocketmq-security-api"],
+      "callers": [
+        "rocketmq-security-api"
+      ],
       "forbidden_targets": [
         "rocketmq-protocol",
         "rocketmq-transport",
@@ -61,7 +66,10 @@
     },
     {
       "id": "foundation-runtime-error-leaf",
-      "callers": ["rocketmq-runtime", "rocketmq-error"],
+      "callers": [
+        "rocketmq-runtime",
+        "rocketmq-error"
+      ],
       "forbidden_targets": [
         "rocketmq-model",
         "rocketmq-protocol",
@@ -83,7 +91,9 @@
     },
     {
       "id": "transport-no-high-level",
-      "callers": ["rocketmq-transport"],
+      "callers": [
+        "rocketmq-transport"
+      ],
       "forbidden_targets": [
         "rocketmq-auth",
         "rocketmq-client-rust",
@@ -102,7 +112,9 @@
     },
     {
       "id": "store-backend-direction",
-      "callers": ["rocketmq-store-local"],
+      "callers": [
+        "rocketmq-store-local"
+      ],
       "forbidden_targets": [
         "rocketmq-store-rocksdb",
         "rocketmq-tieredstore",
@@ -113,12 +125,20 @@
     },
     {
       "id": "rocksdb-backend-direction",
-      "callers": ["rocketmq-store-rocksdb"],
-      "forbidden_targets": ["rocketmq-tieredstore", "rocketmq-store", "rocketmq-broker"]
+      "callers": [
+        "rocketmq-store-rocksdb"
+      ],
+      "forbidden_targets": [
+        "rocketmq-tieredstore",
+        "rocketmq-store",
+        "rocketmq-broker"
+      ]
     },
     {
       "id": "tiered-backend-direction",
-      "callers": ["rocketmq-tieredstore"],
+      "callers": [
+        "rocketmq-tieredstore"
+      ],
       "forbidden_targets": [
         "rocketmq-store-local",
         "rocketmq-store-rocksdb",
@@ -128,7 +148,9 @@
     },
     {
       "id": "store-facade-no-high-level-services",
-      "callers": ["rocketmq-store"],
+      "callers": [
+        "rocketmq-store"
+      ],
       "forbidden_targets": [
         "rocketmq-client-rust",
         "rocketmq-broker",
@@ -139,12 +161,18 @@
     },
     {
       "id": "proxy-local-no-client",
-      "callers": ["rocketmq-proxy-local"],
-      "forbidden_targets": ["rocketmq-client-rust"]
+      "callers": [
+        "rocketmq-proxy-local"
+      ],
+      "forbidden_targets": [
+        "rocketmq-client-rust"
+      ]
     },
     {
       "id": "proxy-core-no-implementations",
-      "callers": ["rocketmq-proxy-core"],
+      "callers": [
+        "rocketmq-proxy-core"
+      ],
       "forbidden_targets": [
         "rocketmq-client-rust",
         "rocketmq-broker",
@@ -202,198 +230,16 @@
         "rocketmq-proxy-cluster",
         "rocketmq-proxy-local"
       ],
-      "forbidden_targets": ["rocketmq-rust"]
+      "forbidden_targets": [
+        "rocketmq-rust"
+      ]
     }
   ],
-  "target_dag": {
-    "rocketmq-admin-cli": [
-      "rocketmq-admin-core",
-      "rocketmq-model",
-      "rocketmq-protocol",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability"
-    ],
-    "rocketmq-admin-tui": [
-      "rocketmq-admin-core",
-      "rocketmq-model",
-      "rocketmq-protocol",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability"
-    ],
-    "rocketmq-model": ["rocketmq-error"],
-    "rocketmq-protocol": ["rocketmq-model", "rocketmq-error", "rocketmq-macros"],
-    "rocketmq-security-api": ["rocketmq-model", "rocketmq-error"],
-    "rocketmq-store-api": ["rocketmq-model", "rocketmq-error", "rocketmq-security-api"],
-    "rocketmq-transport": [
-      "rocketmq-protocol",
-      "rocketmq-security-api",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-model",
-      "rocketmq-observability"
-    ],
-    "rocketmq-auth": [
-      "rocketmq-security-api",
-      "rocketmq-protocol",
-      "rocketmq-model",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability",
-      "rocketmq-transport"
-    ],
-    "rocketmq-store-local": [
-      "rocketmq-store-api",
-      "rocketmq-security-api",
-      "rocketmq-model",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability"
-    ],
-    "rocketmq-store-rocksdb": [
-      "rocketmq-store-api",
-      "rocketmq-store-local",
-      "rocketmq-security-api",
-      "rocketmq-model",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability"
-    ],
-    "rocketmq-tieredstore": [
-      "rocketmq-store-api",
-      "rocketmq-model",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability"
-    ],
-    "rocketmq-store": [
-      "rocketmq-store-api",
-      "rocketmq-store-local",
-      "rocketmq-store-rocksdb",
-      "rocketmq-tieredstore",
-      "rocketmq-security-api",
-      "rocketmq-model",
-      "rocketmq-protocol",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability"
-    ],
-    "rocketmq-runtime": [],
-    "rocketmq-error": [],
-    "rocketmq-observability": ["rocketmq-model", "rocketmq-runtime", "rocketmq-error"],
-    "rocketmq-proxy-core": [
-      "rocketmq-model",
-      "rocketmq-protocol",
-      "rocketmq-security-api",
-      "rocketmq-transport",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability"
-    ],
-    "rocketmq-proxy-cluster": [
-      "rocketmq-proxy-core",
-      "rocketmq-client-rust",
-      "rocketmq-security-api",
-      "rocketmq-model",
-      "rocketmq-protocol",
-      "rocketmq-transport",
-      "rocketmq-runtime",
-      "rocketmq-error"
-    ],
-    "rocketmq-proxy-local": [
-      "rocketmq-proxy-core",
-      "rocketmq-broker",
-      "rocketmq-store-api",
-      "rocketmq-model",
-      "rocketmq-observability",
-      "rocketmq-protocol",
-      "rocketmq-transport",
-      "rocketmq-runtime",
-      "rocketmq-error"
-    ],
-    "rocketmq-proxy": [
-      "rocketmq-proxy-core",
-      "rocketmq-proxy-cluster",
-      "rocketmq-proxy-local",
-      "rocketmq-auth",
-      "rocketmq-model",
-      "rocketmq-protocol",
-      "rocketmq-security-api",
-      "rocketmq-transport",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability"
-    ],
-    "rocketmq-client-rust": [
-      "rocketmq-model",
-      "rocketmq-protocol",
-      "rocketmq-transport",
-      "rocketmq-security-api",
-      "rocketmq-auth",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability"
-    ],
-    "rocketmq-admin-core": [
-      "rocketmq-model",
-      "rocketmq-protocol",
-      "rocketmq-security-api",
-      "rocketmq-client-rust",
-      "rocketmq-transport",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability"
-    ],
-    "rocketmq-mcp": [
-      "rocketmq-admin-core",
-      "rocketmq-security-api",
-      "rocketmq-observability",
-      "rocketmq-runtime",
-      "rocketmq-transport"
-    ],
-    "rocketmq-broker": [
-      "rocketmq-model",
-      "rocketmq-protocol",
-      "rocketmq-transport",
-      "rocketmq-security-api",
-      "rocketmq-auth",
-      "rocketmq-store-api",
-      "rocketmq-store",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability",
-      "rocketmq-filter"
-    ],
-    "rocketmq-namesrv": [
-      "rocketmq-model",
-      "rocketmq-protocol",
-      "rocketmq-transport",
-      "rocketmq-security-api",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability",
-      "rocketmq-controller"
-    ],
-    "rocketmq-controller": [
-      "rocketmq-model",
-      "rocketmq-protocol",
-      "rocketmq-transport",
-      "rocketmq-security-api",
-      "rocketmq-auth",
-      "rocketmq-store-api",
-      "rocketmq-runtime",
-      "rocketmq-error",
-      "rocketmq-observability"
-    ],
-    "rocketmq-filter": ["rocketmq-model", "rocketmq-protocol", "rocketmq-error"],
-    "rocketmq-macros": [],
-    "rocketmq-store-inspect": ["rocketmq-store-api", "rocketmq-store", "rocketmq-error"],
-    "rocketmq-dashboard-common": ["rocketmq-model", "rocketmq-error"]
-  },
   "closure_rules": [
     {
-      "callers": ["rocketmq-protocol"],
+      "callers": [
+        "rocketmq-protocol"
+      ],
       "forbidden_targets": [
         "rocketmq-common",
         "rocketmq-remoting",
@@ -409,7 +255,9 @@
       ]
     },
     {
-      "callers": ["rocketmq-transport"],
+      "callers": [
+        "rocketmq-transport"
+      ],
       "forbidden_targets": [
         "rocketmq-common",
         "rocketmq-remoting",
@@ -422,8 +270,18 @@
       ]
     },
     {
-      "callers": ["rocketmq-store-local", "rocketmq-store-rocksdb", "rocketmq-tieredstore"],
-      "forbidden_targets": ["rocketmq-common", "rocketmq-remoting", "rocketmq-store", "rocketmq-rust", "rocketmq-broker"]
+      "callers": [
+        "rocketmq-store-local",
+        "rocketmq-store-rocksdb",
+        "rocketmq-tieredstore"
+      ],
+      "forbidden_targets": [
+        "rocketmq-common",
+        "rocketmq-remoting",
+        "rocketmq-store",
+        "rocketmq-rust",
+        "rocketmq-broker"
+      ]
     },
     {
       "callers": [
@@ -432,10 +290,14 @@
         "rocketmq-proxy-core",
         "rocketmq-proxy-local"
       ],
-      "forbidden_targets": ["rocketmq-client-rust"]
+      "forbidden_targets": [
+        "rocketmq-client-rust"
+      ]
     },
     {
-      "callers": ["rocketmq-proxy-cluster"],
+      "callers": [
+        "rocketmq-proxy-cluster"
+      ],
       "forbidden_targets": [
         "rocketmq-broker",
         "rocketmq-store",
@@ -445,85 +307,6 @@
       ]
     }
   ],
-  "client_policy": {
-    "package": "rocketmq-client-rust",
-    "crate_names": ["rocketmq_client_rust", "rocketmq_client"],
-    "target_manifest_allowlist": [
-      {
-        "caller": "rocketmq-admin-core",
-        "target": "rocketmq-client-rust",
-        "kind": "normal",
-        "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/Cargo.toml",
-        "alias": "rocketmq_client_rust"
-      },
-      {
-        "caller": "rocketmq-proxy-cluster",
-        "target": "rocketmq-client-rust",
-        "kind": "normal",
-        "path": "rocketmq-proxy-cluster/Cargo.toml",
-        "alias": "rocketmq_client_rust"
-      },
-      {
-        "caller": "rocketmq-example",
-        "target": "rocketmq-client-rust",
-        "kind": "dev",
-        "path": "rocketmq-example/Cargo.toml",
-        "alias": "rocketmq_client_rust"
-      }
-    ],
-    "target_source_allowlist": [
-      {
-        "caller": "rocketmq-admin-core",
-        "path": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter.rs",
-        "aliases": ["rocketmq_client_rust"]
-      },
-      {
-        "caller": "rocketmq-admin-core",
-        "path_prefix": "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/",
-        "aliases": ["rocketmq_client_rust"]
-      },
-      {
-        "caller": "rocketmq-proxy-cluster",
-        "path_prefix": "rocketmq-proxy-cluster/src/",
-        "aliases": ["rocketmq_client_rust"]
-      },
-      {
-        "caller": "rocketmq-example",
-        "path_prefix": "rocketmq-example/examples/",
-        "aliases": ["rocketmq_client_rust"]
-      }
-    ]
-  },
-  "test_dependency_policy": {
-    "allowed_edges": [
-      {
-        "caller": "rocketmq-broker",
-        "target": "rocketmq-controller",
-        "kind": "dev",
-        "path": "rocketmq-broker/Cargo.toml",
-        "alias": "rocketmq_controller",
-        "owner": "broker",
-        "reason": "broker integration tests exercise the embedded controller bootstrap",
-        "review_by": "M12",
-        "adr": "docs/architecture-refactor-design.md#54-目标依赖-dag"
-      },
-      {
-        "caller": "rocketmq-broker",
-        "target": "rocketmq-namesrv",
-        "kind": "dev",
-        "path": "rocketmq-broker/Cargo.toml",
-        "alias": "rocketmq_namesrv",
-        "owner": "broker",
-        "reason": "broker integration tests exercise the in-process NameServer fixture",
-        "review_by": "M12",
-        "adr": "docs/architecture-refactor-design.md#54-目标依赖-dag"
-      }
-    ]
-  },
-  "target_debt": {
-    "as_of": "2026-07-28",
-    "entries": []
-  },
   "facade_rules": [
     {
       "facade": "rocketmq-store",
@@ -532,18 +315,15 @@
         "rocketmq-store-local",
         "rocketmq-store-rocksdb",
         "rocketmq-tieredstore"
-      ],
-      "remove_by": "2.0.0"
+      ]
     },
     {
       "facade": "rocketmq-proxy",
-      "canonical_packages": ["rocketmq-proxy-core", "rocketmq-proxy-cluster", "rocketmq-proxy-local"],
-      "remove_by": "2.0.0"
+      "canonical_packages": [
+        "rocketmq-proxy-core",
+        "rocketmq-proxy-cluster",
+        "rocketmq-proxy-local"
+      ]
     }
-  ],
-  "compatibility_manifest_policy": {
-    "targets": ["rocketmq-store"],
-    "rule": "compatibility-manifest-burn-down"
-  },
-  "milestone_order": ["M01", "M02", "M03", "M04", "M05", "M06", "M07", "M08", "M09", "M10", "M11", "M12"]
+  ]
 }

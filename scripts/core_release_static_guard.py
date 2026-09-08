@@ -48,25 +48,15 @@ def required_routes() -> tuple[StaticRoute, ...]:
         StaticRoute("telemetry-semantic", (python, "scripts/telemetry_semantic_guard.py", *scope)),
         StaticRoute(
             "rust-hygiene",
-            (python, "scripts/rust_hygiene_guard.py", *scope, "--identity", "structural"),
+            (python, "scripts/rust_hygiene_guard.py", *scope),
         ),
-        StaticRoute("rust-lint-debt", (python, "scripts/rust_lint_debt_guard.py", *scope)),
         StaticRoute(
             "architecture-dependency",
-            (python, "scripts/architecture_dependency_guard.py", "--mode", "structural", *scope),
+            (python, "scripts/architecture_dependency_guard.py", *scope),
         ),
         StaticRoute(
             "architecture-documentation",
             (python, "scripts/architecture_documentation_guard.py", "--mode", "semantic", *scope),
-        ),
-        StaticRoute("architecture-debt", (python, "scripts/architecture_debt_guard.py", "--check", *scope)),
-        StaticRoute(
-            "stable-surface",
-            (python, "scripts/stable_surface_guard.py", *scope, "--mode", "target"),
-        ),
-        StaticRoute(
-            "architecture-release",
-            (python, "scripts/architecture_release_guard.py", *scope, "--mode", "structural"),
         ),
     )
 

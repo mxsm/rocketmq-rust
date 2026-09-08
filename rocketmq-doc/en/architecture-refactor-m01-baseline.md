@@ -1,5 +1,8 @@
 # Architecture Refactor M01 Dependency Baseline
 
+Historical M01 snapshot. Its migration freezes, source fingerprints, and numeric
+ceilings are retired; the sections below record the original review.
+
 ## Purpose
 
 This document freezes the repository facts consumed by the M01 dependency guard. It is a migration baseline, not
@@ -18,7 +21,7 @@ architecture decision, an owner, and a removal milestone.
 | Standalone Client consumers | 3 |
 
 The original 22 root workspace packages and ten planned additions form the immutable M01 entry baseline. The
-current governed snapshot is recorded in `scripts/architecture-dependency-baseline.json`. The original additions
+Historical migration inventory retired; use the maintained architecture checks.
 were:
 
 - `rocketmq-model`
@@ -65,7 +68,7 @@ packages are `rocketmq-protocol`, `rocketmq-transport`, `rocketmq-store-api`, `r
 - `scripts/architecture-dependency-policy.json` describes the versioned roots, current 24/32 package counts, planned
   packages, all 32 target DAG entries, direct and transitive forbidden edges, Client policy, facade ledger, and
   milestone order. The facade ledger is executable: canonical owners cannot depend back on their facade.
-- `scripts/architecture-dependency-baseline.json` records the commit, workspace package names, and reviewed
+Historical migration inventory retired; use the maintained architecture checks.
   manifest/source exceptions. Client manifest entries freeze caller, target, dependency kind, normalized path,
   alias, and count. Source entries freeze a concrete relative file, alias, and occurrence count. Every exception
   has an owner and `remove_by` milestone; directory-wide source exceptions are invalid.
@@ -142,7 +145,7 @@ edges and reports `graph=normal`; dev or build dependencies never contaminate th
 
 ## ArcMut Usage Baseline
 
-`scripts/arc-mut-baseline.json` freezes 3,452 independently identified occurrences in 1,277 governed ledger
+Historical migration inventory retired; use the maintained architecture checks.
 entries. An entry groups only the same path, symbol, finding kind, and category; its `occurrences` array retains
 an independent semantic ID, token-context fingerprint, enclosing item, and evidence line for every occurrence.
 The line is diagnostic only and is deliberately excluded from identity, so inserting blank lines cannot create
@@ -198,7 +201,7 @@ foundation migration, the governed closeout baseline is:
 The closeout is a strict reduction from the frozen M01 entry (1,277 identities and 3,452 occurrences) and
 contains no new identity or occurrence. Twenty-seven existing occurrences changed token-context fingerprints
 while remaining in the same governed item; their one-to-one review record is
-`scripts/arc-mut-relocation-approvals.json`. Additional occurrences discovered during review were removed or
+Historical migration inventory retired; use the maintained architecture checks.
 folded into existing governed test items rather than approved.
 
 The initial M02 deadline for every Remoting, Runtime Foundation, and Store entry contradicted M02's first-slice
@@ -219,11 +222,11 @@ Malformed lexical input exits 2 instead of silently skipping a file.
 Run the guard and its 24-case built-in fixture matrix from the repository root:
 
 ```powershell
-python scripts/arc_mut_guard.py
-python scripts/arc_mut_guard.py --fixtures
-python scripts/arc_mut_guard.py `
-  --baseline scripts/arc-mut-baseline.json `
-  --compare-baseline scripts/arc-mut-baseline.json
+Historical migration inventory retired; use the maintained architecture checks.
+Historical migration inventory retired; use the maintained architecture checks.
+Historical migration inventory retired; use the maintained architecture checks.
+Historical migration inventory retired; use the maintained architecture checks.
+Historical migration inventory retired; use the maintained architecture checks.
 ```
 
 The default comparison rejects new, stale, moved, changed, and expired debt. A migration must first prove the
@@ -284,7 +287,7 @@ milestones must attach a focused diff or golden result instead of relying on sou
 | Runtime ownership and shutdown | `scripts/runtime-audit-baseline.json` and the enforcing runtime audit | Deterministic task, cancellation, deadline, and drain tests |
 | Error mapping and redaction | Error architecture guard and hygiene scripts | Typed mapping, severity, retry, and sensitive-output tests |
 
-The compatibility manifest ledger in `scripts/architecture-dependency-baseline.json` is executable and
+Historical migration inventory retired; use the maintained architecture checks.
 monotonic. A later milestone may remove a legacy edge or occurrence, but it cannot add one without an ADR,
 owner, removal milestone, and Human Architect approval.
 

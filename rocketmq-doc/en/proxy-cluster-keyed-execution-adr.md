@@ -88,4 +88,4 @@ remain unchanged.
 - `cargo test -p rocketmq-proxy-cluster`
 - `cargo clippy -p rocketmq-proxy-cluster --all-targets --all-features -- -D warnings`
 - `cargo bench -p rocketmq-proxy-cluster --features bench-support --bench cluster_executor -- --noplot`
-- `./scripts/runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline`
+- `./scripts/runtime-audit.ps1` (ownership review report)

@@ -1,10 +1,9 @@
 # RocketMQ Rust 1.0 API migration
 
-RocketMQ Rust 1.0 freezes the core-release Rust API at the first complete
-`1.0.0-rc.1` candidate. The freeze is structural: every public item is recorded
-by package, supported feature profile, canonical item path, kind, visibility,
-signature, and feature condition. It does not use a commit, file, or artifact
-digest as a compatibility decision.
+Review public API changes against supported callers, wire/storage contracts, and
+the affected feature combinations. The historical API snapshot and per-item
+freeze approval machinery are retired. Source compatibility changes still need
+a clear migration decision and focused tests.
 
 This guide covers the core release only. Dashboard, MCP, SRE, OpenMessaging,
 BrokerContainer, and DLedger CommitLog are not part of the 1.0 compatibility
@@ -43,8 +42,8 @@ compatibility adapters, helper attributes, fixtures, and the 13 intentional
 deprecated-use allows remain in place.
 
 Any future removal requires the complete release cycle, an explicit 2.0
-breaking window, and an individual exact reviewed post-freeze approval for
-each frozen item: `rocketmq_macros::RequestHeaderCodec` and
+breaking window, and a migration decision covering
+each affected API: `rocketmq_macros::RequestHeaderCodec` and
 `rocketmq_macros::RequestHeaderCodecV2`. This change creates no approval and
 does not announce or approve 2.0.
 
@@ -363,10 +362,10 @@ return a complete immutable policy for the request lifetime.
 
 ## Feature-profile compatibility
 
-The default API of every core library is recorded separately. The 24 public
-feature profiles in `m09_compatibility_matrix.py` are also recorded separately,
-including no-default, selected-feature, combined-feature, and all-feature
-profiles for Protocol, Transport, Store, Admin, and Proxy.
+Validate the affected default, no-default, selected-feature, and combined-feature
+behavior using the owning crate's tests. The maintained `m09_compatibility_matrix.py`
+runner remains available for full release compatibility exercises across Protocol,
+Transport, Store, Admin, and Proxy; it is not a required snapshot refresh.
 
 Notable 1.0 defaults include:
 
@@ -377,7 +376,7 @@ Notable 1.0 defaults include:
 - `rocketmq-proxy`: `cluster-mode,local-mode`.
 
 Use `--no-default-features` only when the application also selects one of the
-frozen supported profiles. An arbitrary Cargo feature power set is not an
+supported profiles. An arbitrary Cargo feature power set is not an
 implicit compatibility promise.
 
 ## Checking an application migration
@@ -385,20 +384,19 @@ implicit compatibility promise.
 Before adopting a release candidate:
 
 1. replace the direct source migrations above;
-2. select a frozen feature profile;
+2. select the required supported feature profile;
 3. run the application's normal tests against `1.0.0-rc.N`;
 4. exercise startup and shutdown so runtime ownership is verified;
 5. exercise send, pull/POP, query, and Admin paths used by the application;
 6. treat any new compiler error or default-behavior difference as a release
    candidate compatibility finding.
 
-The repository verifies its own frozen surface with:
+The repository checks intentional core exports with:
 
 ```powershell
-python scripts/public_api_snapshot.py --scope core-release --check scripts/public-api-snapshot-baseline.json --identity structural
-python scripts/stable_surface_guard.py --scope core-release --mode target
+python scripts/public_api_intent_guard.py --scope core-release
 ```
 
-The snapshot command reports additions separately from breaking changes. A
-post-freeze break is accepted only when its exact package, profile, item path,
-and change kind match a non-empty approval record.
+Review source compatibility through the affected callers and feature tests.
+Document deliberate breaking changes and migrations in the release notes;
+an exact-item snapshot or approval-ledger update is not required.

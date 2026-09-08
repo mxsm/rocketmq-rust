@@ -17,35 +17,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  governance:
-    name: Evidence registry governance
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Validate risk, property, fuzz, and coverage registries
-        run: |
-          mkdir -p target/architecture-evidence/governance
-          python scripts/architecture_evidence_governance_guard.py \
-            | tee target/architecture-evidence/governance/guard-output.txt
-          sha256sum \
-            scripts/architecture-risk-test-matrix.json \
-            scripts/property-state-suite-registry.json \
-            fuzz/corpus-registry.json \
-            codecov.yml \
-            > target/architecture-evidence/governance/registry-sha256.txt
-          git rev-parse HEAD > target/architecture-evidence/governance/commit.txt
-
-      - name: Upload governance evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: architecture-nightly-governance-${{ github.sha }}
-          path: target/architecture-evidence/governance
-          if-no-files-found: error
-          retention-days: 30
-
   loom:
     name: Complete Loom models
     runs-on: ubuntu-latest

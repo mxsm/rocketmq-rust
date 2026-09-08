@@ -65,7 +65,7 @@ class ErrorArchitectureGuardTests(unittest.TestCase):
         )
 
     def test_rejects_source_to_text_under_both_backend_roots(self):
-        expected = "source stringification requires a typed source wrapper or SOURCE_STRINGIFICATION_ALLOWLIST entry"
+        expected = "source stringification requires a typed source wrapper"
 
         for backend_root in ("rocketmq-store-rocksdb", "rocketmq-tieredstore"):
             with self.subTest(backend_root=backend_root):

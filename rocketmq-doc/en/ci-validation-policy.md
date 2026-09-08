@@ -83,9 +83,9 @@ Full-workspace all-feature integration still runs on main and scheduled/manual r
 | `container-foundation-ci.yml` | Keep static contract/tests on PRs; foundation/five-image builds and supply-chain evidence after merge/manual; isolate concurrency per PR/ref. |
 | `core-kubernetes-assets-ci.yml` | Keep path-scoped core candidate boundary checks; cancel superseded runs. |
 | `kubernetes-assets-ci.yml` | Keep path-scoped Helm/Kustomize contract validation; cancel superseded runs. |
-| `architecture-documentation.yml` | Generated evidence and governance become weekly/manual; remove property suites already run nightly and their unused native dependency installation. |
-| `architecture-nightly-evidence.yml` | Retain scheduled/manual Loom, property, Miri, and standalone coverage; cancel superseded runs. |
-| `architecture-performance-evidence.yml` | Retain existing scheduled/manual benchmark workflow; already outside PR gates. |
+| `architecture-documentation.yml` | Keep weekly/manual documentation checks; remove the cross-registry governance gate. |
+| `architecture-nightly-evidence.yml` | Retain scheduled/manual Loom, property, Miri, and standalone coverage; remove registry-governance and registry-SHA jobs. |
+| Retired M10 performance workflow | Removed frozen hardware/command inventories, fingerprints, and threshold gates; use maintained Cargo benchmarks when needed. |
 | `architecture-slo-evidence.yml` | Retain path-scoped static contracts; six-hour dynamic work was already scheduled/manual only. |
 | `kubernetes-fault-matrix.yml` | Retain path-scoped static checks; dynamic fault runs were already scheduled/manual only. |
 | `release-candidate.yml` | Retain explicit candidate preparation/build/qualification; not a routine PR gate. |
@@ -145,3 +145,15 @@ only if the development toolchain and supported minimum diverge. Cross-platform 
 coverage now surface during integration instead of blocking every PR. Platform-sensitive root changes
 can run the root workflow manually before merge; Tauri packaging, Web storage integration, and example
 platform builds have their own manual workflow entry points.
+
+## Maintained script checks (2026-09-08)
+
+The remaining root architecture checks cover actual package boundaries, production
+unsafe/runtime contracts, error handling, telemetry semantics, public API intent,
+and documentation routes. Historical ArcMut, API snapshot, M10 performance,
+release-plan, dependency-count, lint/trait, and resolved-milestone gates are retired.
+
+Dependency checks allow ordinary package/dependency changes without updating a
+snapshot. Rust hygiene fails on safety findings; panic and pin observations are
+advisory. Dedicated release, security, container, and live qualification tools
+remain available for their actual tasks.

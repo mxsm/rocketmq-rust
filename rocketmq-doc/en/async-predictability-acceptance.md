@@ -22,7 +22,7 @@ The enforcing runtime audit classifies lexical matches separately from findings 
 | Shutdown | 0 | 0 |
 | Blocking | At most 25 | 0 |
 
-The compatibility inventory is maintained in [`scripts/runtime-task-escape-policy.json`](../../scripts/runtime-task-escape-policy.json).
+Runtime escape inventories are retired; review ownership and validate cancellation/shutdown behavior.
 
 ## Validation record
 
@@ -32,7 +32,7 @@ The compatibility inventory is maintained in [`scripts/runtime-task-escape-polic
 | `cargo test -p rocketmq-runtime task_capability` | Passed: 2 tests |
 | `cargo test -p rocketmq-controller broker_role_notifier` | Passed: 4 tests |
 | `cargo test -p rocketmq-client-rust route_update` | Passed: 2 tests |
-| `python -m unittest scripts.tests.test_runtime_task_capability` | Passed: 3 tests |
+Use the maintained runtime crate tests for task ownership and shutdown behavior.
 | `.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline` | Passed; all action-required counts are zero |
 | `cargo test -p rocketmq-runtime --test service_context_scope_compile_fail` | Passed: 3 compile-fail fixtures |
 | `cargo fmt --all -- --check` | Passed |

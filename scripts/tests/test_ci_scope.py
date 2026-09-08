@@ -72,7 +72,7 @@ class CiScopeTests(unittest.TestCase):
         for path, expected in (
             ("rocketmq-broker/src/observability/service.rs", {"rust", "observability", "rocksdb"}),
             ("rocketmq-protocol/src/header.rs", {"rust", "header"}),
-            ("scripts/request-header-codec/compare_header_schema.py", {"header"}),
+            ("rocketmq-protocol/tests/fixtures/request_header_codec/schema-overrides.json", {"rust", "header"}),
             ("scripts/error_architecture_guard.py", {"errors"}),
         ):
             with self.subTest(path=path):

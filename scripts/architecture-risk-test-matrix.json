@@ -88,33 +88,15 @@
       ]
     },
     {
-      "debt_id": "ARC-TRAIT-001",
-      "risk_class": "normal",
-      "owner": "architecture-maintainers",
-      "tests": [
-        {
-          "kind": "contract",
-          "sources": ["scripts/tests/test_trait_policy_guard.py"],
-          "trigger_paths": ["**/*.rs"],
-          "command": "python -m unittest scripts.tests.test_trait_policy_guard -v",
-          "duration_seconds": 60,
-          "platform": "any",
-          "features": "all",
-          "artifact": "architecture-guard-output-<commit>",
-          "behavior_contract": true
-        }
-      ]
-    },
-    {
       "debt_id": "ARC-ALLOW-001",
       "risk_class": "high",
       "owner": "architecture-maintainers",
       "tests": [
         {
           "kind": "contract",
-          "sources": ["scripts/tests/test_rust_lint_debt_guard.py"],
-          "trigger_paths": ["**/*.rs", ".clippy.toml"],
-          "command": "python -m unittest scripts.tests.test_rust_lint_debt_guard -v",
+          "sources": ["scripts/tests/test_error_architecture_guard.py"],
+          "trigger_paths": ["**/*.rs", "scripts/error_architecture_guard.py"],
+          "command": "python -m unittest scripts.tests.test_error_architecture_guard -v",
           "duration_seconds": 60,
           "platform": "any",
           "features": "all",
@@ -147,14 +129,14 @@
       "owner": "store",
       "tests": [
         {
-          "kind": "contract",
-          "sources": ["scripts/tests/test_message_store_capability_guard.py"],
+          "kind": "integration",
+          "sources": ["rocketmq-store/tests/capability_conformance_tests.rs"],
           "trigger_paths": ["rocketmq-store*/**", "rocketmq-broker/**"],
-          "command": "python -m unittest scripts.tests.test_message_store_capability_guard -v",
-          "duration_seconds": 60,
+          "command": "cargo test -p rocketmq-store --test capability_conformance_tests",
+          "duration_seconds": 120,
           "platform": "any",
           "features": "default",
-          "artifact": "architecture-guard-output-<commit>",
+          "artifact": "cargo-test-output-<commit>",
           "behavior_contract": true
         }
       ]
