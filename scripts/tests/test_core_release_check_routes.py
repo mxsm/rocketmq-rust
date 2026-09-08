@@ -61,7 +61,7 @@ class CoreReleaseCheckRouteTests(unittest.TestCase):
         serialized = json.dumps(self.matrix).lower()
         for excluded in ("rocketmq-mcp", "rocketmq-sre", "rocketmq-dashboard"):
             self.assertNotIn(excluded, serialized)
-        for forbidden in ("sha256", "fingerprint", "architecture_dependency_guard", "architecture_release_guard"):
+        for forbidden in ("sha256", "fingerprint", "architecture_dependency_guard"):
             self.assertNotIn(forbidden, serialized)
 
     def test_route_order_and_phase_five_static_contract_are_active(self) -> None:
@@ -109,24 +109,17 @@ class CoreReleaseCheckRouteTests(unittest.TestCase):
         self.assertIn("release_evidence_guard.py", powershell)
         self.assertIn("release_evidence_guard.py", bash)
 
-    def test_ci_has_required_core_job_and_legacy_identity_steps_are_report_only(self) -> None:
+    def test_ci_runs_core_checks_without_path_level_skips(self) -> None:
         workflow = (ROOT / ".github/workflows/rocketmq-rust-ci.yaml").read_text(encoding="utf-8")
         self.assertIn("core-release-short-checks:", workflow)
         self.assertIn("run: python scripts/core_release_static_guard.py", workflow)
-        self.assertIn("run: python scripts/request-header-codec/migrate.py check", workflow)
         self.assertIn(
-            "run: python scripts/rust_hygiene_guard.py --scope core-release --identity structural",
+            "run: python scripts/rust_hygiene_guard.py --scope core-release",
             workflow,
         )
         for protected in ("rocketmq-protocol/**", "rocketmq-runtime/**", "scripts/**"):
             self.assertNotIn(f"- '{protected}'", workflow.split("jobs:", 1)[0])
-        for name in ("Check dependency baseline", "Check dependency transition", "Check architecture release package"):
-            block = workflow.split(f"- name: {name}", 1)[1].split("- name:", 1)[0]
-            self.assertIn("continue-on-error: true", block)
-        strict_target = workflow.split("- name: Run strict target and retain the debt report", 1)[1].split(
-            "- name:", 1
-        )[0]
-        self.assertIn("continue-on-error: true", strict_target)
+
 
 
 if __name__ == "__main__":

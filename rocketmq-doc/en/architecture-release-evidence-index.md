@@ -217,16 +217,15 @@ and inject `ChildServiceContext`/`TaskGroup` capabilities.
 
 ## Python architecture test inventory
 
-- Inventoried test modules: 112.
+- Inventoried test modules: 77.
 - Guard runner: `python scripts/run_architecture_tests.py --tier pr_static`.
-- Contract runner: `python scripts/run_architecture_tests.py --tier milestone_contract --tier phase_contract --tier dynamic_fixture`.
+- Contract runner: `python scripts/run_architecture_tests.py --tier phase_contract --tier dynamic_fixture`.
 
 | Tier | Modules |
 |---|---:|
-| `pr_static` | 37 |
-| `milestone_contract` | 22 |
-| `phase_contract` | 24 |
-| `dynamic_fixture` | 24 |
+| `pr_static` | 27 |
+| `phase_contract` | 23 |
+| `dynamic_fixture` | 22 |
 | `deferred_validation` | 5 |
 
 ## Evidence workflows and artifact identities
@@ -235,7 +234,6 @@ and inject `ChildServiceContext`/`TaskGroup` capabilities.
 |---|---|---|
 | fuzz | `.github/workflows/fuzz-ci.yml` | `architecture-fuzz-<target>-<commit>` |
 | miri-loom-coverage | `.github/workflows/architecture-nightly-evidence.yml` | `architecture-nightly-<kind>-<commit>` |
-| performance | `.github/workflows/architecture-performance-evidence.yml` | `architecture-performance-<commit>` |
 | fault | `.github/workflows/kubernetes-fault-matrix.yml` | `m11-11-<backend>-<commit>` |
 | six-hour-soak | `.github/workflows/architecture-slo-evidence.yml` | `m11-12-r24-<backend>-<commit>` |
 
@@ -245,9 +243,9 @@ reports libFuzzer edge coverage and retains its versioned corpus rather than pro
 unit-test LCOV report.
 
 Critical evidence workflows pin checkout and artifact upload Actions to reviewed commit SHAs.
-Benchmark reports must include the runner fingerprint, toolchain, profile, features, commit, samples,
-and comparison result required by `scripts/architecture-performance-profiles.json`. Fault and soak
-artifacts use the production-readiness and fault-matrix policies; failures retain replay inputs and
+Run maintained Cargo benchmark targets when performance behavior changes. Historical M10
+fingerprints, frozen command inventories, and fixed comparison thresholds are retired. Fault and
+soak artifacts use their dedicated qualification policies; failures retain replay inputs and
 diagnostics without committing runtime output.
 The SLO and fault workflows now accept `candidate_publication_json` (or the scheduled
 `ARCHITECTURE_CANDIDATE_PUBLICATION_JSON`) instead of the former self-reported image-map
@@ -288,17 +286,15 @@ python scripts/architecture_evidence_bundle.py validate --evidence-root <dir> \
 
 ## Architecture evidence cross-checks
 
-- Trait decisions: `scripts/trait-policy-baseline.json` and `rocketmq-doc/en/rust-trait-design-guidelines.md`.
-- Dependency and public-facade state: `scripts/architecture-dependency-policy.json` and the strict target guard.
+- Trait design and review guidance: `rocketmq-doc/en/rust-trait-design-guidelines.md`.
+- Dependency and public-facade state: `scripts/architecture-dependency-policy.json` and the package-boundary checker.
 - Manual Pin, production unsafe, panic/unwrap/expect, and historical `mod.rs` state:
-  `scripts/rust_hygiene_guard.py` plus its baseline.
-- Runtime ownership: `scripts/runtime-task-escape-policy.json` and the enforcing runtime audit.
-- Performance thresholds: `scripts/architecture-performance-profiles.json` and the performance guard.
+  `scripts/rust_hygiene_guard.py` (safety checks plus advisory observations).
+- Runtime ownership: the runtime audit report and maintained cancellation/shutdown tests.
 - Distributed evidence: `distribution/kubernetes/fault-matrix-policy.json` and the SLO/fault guards.
 - Risk-to-test matrix: `scripts/architecture-risk-test-matrix.json`.
 - Deterministic property suites: `scripts/property-state-suite-registry.json`.
 - Fuzz corpus ownership and retention: `fuzz/corpus-registry.json`.
-- Cross-registry guard: `scripts/architecture_evidence_governance_guard.py`.
 - Unified production qualification manifest: `scripts/architecture_evidence_bundle.py`.
 - Core capability contracts: `rocketmq-doc/en/core-capability-contracts.md`.
 - Acknowledgement/failover ADR: `rocketmq-doc/en/acknowledgement-failover-contract-adr.md`.

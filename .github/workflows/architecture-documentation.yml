@@ -25,6 +25,3 @@ jobs:
 
       - name: Test documentation guard
         run: python -m unittest scripts.tests.test_architecture_documentation_guard -v
-
-      - name: Validate evidence governance
-        run: python scripts/architecture_evidence_governance_guard.py

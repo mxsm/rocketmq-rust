@@ -186,7 +186,6 @@ tokio = { workspace = true, features = ["sync"] }
                 "risk_matrix": "risk.json",
                 "property_registry": "property.json",
                 "fuzz_registry": "fuzz.json",
-                "guard": "guard.py",
             },
             "documentation_contracts": {
                 "core_capabilities": "core.md",
@@ -224,7 +223,7 @@ tokio = { workspace = true, features = ["sync"] }
             workflow.parent.mkdir(parents=True)
             workflow.write_text(
                 "python scripts/run_architecture_tests.py --tier pr_static\n"
-                "python scripts/run_architecture_tests.py --tier milestone_contract "
+                "python scripts/run_architecture_tests.py "
                 "--tier phase_contract --tier dynamic_fixture\n",
                 encoding="utf-8",
             )
@@ -234,7 +233,7 @@ tokio = { workspace = true, features = ["sync"] }
                     "expected_count": 53,
                     "ci": {
                         "guards": "python scripts/run_architecture_tests.py --tier pr_static",
-                        "contracts": "python scripts/run_architecture_tests.py --tier milestone_contract "
+                        "contracts": "python scripts/run_architecture_tests.py "
                         "--tier phase_contract --tier dynamic_fixture",
                     },
                     "entries": [],

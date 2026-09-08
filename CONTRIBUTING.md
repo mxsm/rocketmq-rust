@@ -97,18 +97,15 @@ cargo test
 - Recoverable production failures use the owning typed error. Follow the error
   architecture below instead of adding `unwrap`, `expect`, or a string-only
   error path for protocol, I/O, configuration, or lifecycle failures.
-- Protocol unsafe identities (`ARC-UNSAFE-001`) and non-canonical
-  `RocketMQRuntime` use are registered no-growth risks. Resolve an unsafe
-  region by removing its active ledger entry in the same reviewed change; do
-  not rewrite the whole hygiene baseline. Update the architecture debt registry
-  and risk-test matrix when a governed risk's scope changes.
+- Explain unsafe invariants with adjacent safety comments and relevant tests.
+  Non-canonical `RocketMQRuntime` use remains a safety finding. Review changed
+  runtime ownership without maintaining source identities or historical counts.
 
 Before opening a pull request that changes these boundaries, run:
 
 ```shell
-python scripts/request-header-codec/migrate.py check
-python scripts/rust_hygiene_guard.py --scope core-release --identity structural
-python scripts/architecture_debt_guard.py --check --scope core-release
+cargo test -p rocketmq-protocol --test request_header_codec_v3_registry
+python scripts/rust_hygiene_guard.py --scope core-release
 ```
 
 ### Error architecture

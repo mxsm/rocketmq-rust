@@ -31,11 +31,11 @@ For lifecycle changes, start with focused cancellation, shutdown, resource clean
 tests. If a repository-wide runtime inventory helps the task, use the reporting mode:
 
 ```powershell
-.\scripts\runtime-audit.ps1 -SkipBaseline
+.\scripts\runtime-audit.ps1
 ```
 
-PowerShell 7 can run the same script on Unix. `scripts/runtime-audit.sh` is also reporting-only.
-Historical boundary baselines are optional audit inputs, not local completion gates.
+PowerShell and Bash wrappers both run `scripts/runtime_audit.py` to generate a review report.
+The historical boundary baselines, fingerprints, and enforcement switches are retired.
 Explain new ownership boundaries and keep production tasks owned and awaited.
 
 ## Typed errors and sensitive output

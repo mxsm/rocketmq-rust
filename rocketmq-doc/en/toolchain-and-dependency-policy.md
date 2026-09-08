@@ -46,8 +46,7 @@ exact dated toolchain.
 The current approved exception is `nightly-2026-07-05`:
 
 - [Architecture nightly evidence](../../.github/workflows/architecture-nightly-evidence.yml)
-  uses it for the mapped-write ownership tests under Miri;
-- `scripts/public_api_snapshot.py` uses it for rustdoc JSON.
+  uses it for the mapped-write ownership tests under Miri.
 
 Adding `+nightly`, an unversioned `nightly` channel, or a nightly feature to a
 production crate is prohibited. Updating the dated nightly requires regenerating

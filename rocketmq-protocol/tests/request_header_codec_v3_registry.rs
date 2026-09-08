@@ -666,7 +666,7 @@ fn registry() -> Vec<RegisteredSchema> {
 #[test]
 fn typed_registry_contains_every_migrated_v3_header_exactly_once() {
     let migration: MigrationManifest =
-        serde_json::from_str(include_str!("../../scripts/request-header-codec/migration.json"))
+        serde_json::from_str(include_str!("fixtures/request_header_codec/migration.json"))
             .expect("checked-in migration manifest");
     let expected = migration
         .entries
@@ -706,7 +706,7 @@ fn performance_corpus_headers_use_generated_direct_codecs() {
     }
 
     let corpus: serde_json::Value =
-        serde_json::from_str(include_str!("../../scripts/request-header-codec/perf-corpus-v1.json"))
+        serde_json::from_str(include_str!("fixtures/request_header_codec/perf-corpus-v1.json"))
             .expect("checked-in performance corpus");
     let registered: HashMap<_, _> = registry()
         .into_iter()
@@ -763,12 +763,11 @@ fn registered_typed_schemas_match_the_pinned_java_contract() {
     let java: JavaSchema = serde_json::from_str(include_str!("fixtures/request_header_codec/java-schema.json"))
         .expect("pinned Java schema");
     let overrides: SchemaOverrides =
-        serde_json::from_str(include_str!("../../scripts/request-header-codec/schema-overrides.json"))
+        serde_json::from_str(include_str!("fixtures/request_header_codec/schema-overrides.json"))
             .expect("schema overrides");
-    let extensions: ExtensionAllowlist = serde_json::from_str(include_str!(
-        "../../scripts/request-header-codec/extension-allowlist.json"
-    ))
-    .expect("extension allowlist");
+    let extensions: ExtensionAllowlist =
+        serde_json::from_str(include_str!("fixtures/request_header_codec/extension-allowlist.json"))
+            .expect("extension allowlist");
     let registered = registry();
 
     let mut type_ids = HashSet::new();

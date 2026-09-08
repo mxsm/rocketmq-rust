@@ -27,7 +27,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "scripts/architecture-validation-inventory.json"
-ACTIVE_TIERS = ("pr_static", "milestone_contract", "phase_contract", "dynamic_fixture")
+ACTIVE_TIERS = ("pr_static", "phase_contract", "dynamic_fixture")
 TIERS = (*ACTIVE_TIERS, "deferred_validation")
 
 

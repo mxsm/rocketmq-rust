@@ -1,27 +1,17 @@
 # Architecture Release Governance
 
-This document defines the maintained release boundary for the root Cargo
-workspace. Cargo manifests and `cargo metadata` remain the source of truth;
-the machine-readable release plan records only active resources.
+Cargo manifests and `cargo metadata` are the source of truth for package
+relationships. The former release-plan, dependency-baseline, and exact-edge
+transition gates have been retired.
 
-## Release topology
+The maintained dependency checker enforces package layering, forbidden dependency
+directions, composition-facade direction, and production cycles. Adding a valid
+dependency or package does not require a historical snapshot update.
 
-The publish order in `scripts/architecture-release-plan.json` is a
-topological order of the target dependency graph plus every unexpired,
-exactly identified transition debt edge. A package is published only after
-all internal dependencies required by the current transition state are
-available at the same release version.
+```bash
+python scripts/architecture_dependency_guard.py --scope core-release
+```
 
-The baseline and transition dependency modes are required gates. Strict
-target mode remains visible while the P2.1 and P2.2 ledger is non-empty and
-becomes required as soon as that ledger reaches zero. A transition entry
-must name one manifest edge, owner, reason, removal phase, and ISO deadline;
-directory wildcards and permanent exceptions are not valid debt.
-
-Long-term facade composition edges are recorded separately from transition
-debt. Their manifest identities must exist exactly as recorded and do not
-permit new callers, aliases, dependency kinds, or duplicate edges.
-
-Invalid JSON, a missing design source, a missing manifest, an absent Cargo
-section, or an unknown package is a structured release-guard failure. Such
-input must never produce a Python traceback.
+Use the maintained release preparation and package tools for version alignment,
+publication ordering, artifacts, and installation smoke tests. Actual release
+qualification and artifact integrity remain part of the explicit release process.

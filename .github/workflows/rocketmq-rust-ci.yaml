@@ -60,7 +60,7 @@ jobs:
   request-header-codec-contract:
     needs: check
     if: needs.check.outputs.header == 'true'
-    name: Request Header Codec Contract
+    name: Request Header Codec Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -69,23 +69,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
       - name: Use repository Rust 1.95 toolchain
         run: rustup show active-toolchain
-
-      - name: Test migration guard
-        run: python -m unittest discover -s scripts/request-header-codec/tests -p 'test_*.py'
-
-      - name: Check migration inventory and frozen legacy surface
-        if: github.event_name != 'pull_request'
-        run: python scripts/request-header-codec/migrate.py check
-
-      - name: Check pinned Java schema compatibility
-        run: python scripts/request-header-codec/compare_header_schema.py
 
       - name: Check complete V3 typed registry
         run: cargo test --locked -p rocketmq-protocol --test request_header_codec_v3_registry
@@ -109,7 +94,7 @@ jobs:
         run: python scripts/error_architecture_guard.py
 
   # =========================
-  # Architecture migration guards
+  # Maintained architecture checks
   # =========================
   architecture-guards:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -138,20 +123,8 @@ jobs:
       - name: Test architecture guards
         run: python scripts/run_architecture_tests.py --tier pr_static
 
-      - name: Check dependency policy fixtures
-        run: python scripts/architecture_dependency_guard.py --fixtures
-
-      - name: Check dependency baseline
-        continue-on-error: true
-        run: python scripts/architecture_dependency_guard.py --mode baseline
-
-      - name: Check dependency transition
-        continue-on-error: true
-        run: python scripts/architecture_dependency_guard.py --mode transition
-
-      - name: Check architecture release package
-        continue-on-error: true
-        run: python scripts/architecture_release_guard.py --scope repo-global --mode structural
+      - name: Check package dependency boundaries
+        run: python scripts/architecture_dependency_guard.py --scope core-release
 
       - name: Check generated architecture documentation
         run: python scripts/architecture_documentation_guard.py --mode semantic --scope core-release
@@ -160,28 +133,13 @@ jobs:
         run: python scripts/environment_write_guard.py
 
       - name: Check Rust hygiene
-        run: python scripts/rust_hygiene_guard.py --scope core-release --identity structural
-
-      - name: Check Trait policy inventory
-        run: python scripts/trait_policy_guard.py
-
-      - name: Check architecture performance profiles
-        run: python scripts/architecture_performance_guard.py --validate-profiles
+        run: python scripts/rust_hygiene_guard.py --scope core-release
 
       - name: Check generated metric catalog
         run: python scripts/generate_metric_catalog.py --check
 
       - name: Check telemetry semantic registry
         run: python scripts/telemetry_semantic_guard.py --scope core-release
-
-      - name: Check shared-mutation fixtures
-        run: python scripts/arc_mut_guard.py --fixtures
-
-      - name: Check shared-mutation baseline
-        run: python scripts/arc_mut_guard.py
-
-      - name: Check stable nightly and public API target
-        run: python scripts/stable_surface_guard.py --scope core-release --mode target
 
   architecture-contracts:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -200,46 +158,8 @@ jobs:
       - name: Use repository Rust 1.95 toolchain
         run: rustup show active-toolchain
 
-      - name: Test milestone, phase, and fixture contracts
-        run: python scripts/run_architecture_tests.py --tier milestone_contract --tier phase_contract --tier dynamic_fixture
-
-  architecture-target:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    name: Architecture Strict Target
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Use repository Rust 1.95 toolchain
-        run: rustup show active-toolchain
-
-      - name: Run strict target and retain the debt report
-        id: strict-target
-        continue-on-error: true
-        run: python scripts/architecture_dependency_guard.py --mode target --output target/architecture-dependency-target.json
-
-      - name: Publish strict target summary
-        if: always()
-        shell: bash
-        run: |
-          echo "### Strict architecture target" >> "$GITHUB_STEP_SUMMARY"
-          echo "Result: ${{ steps.strict-target.outcome }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "Legacy target mode is retained for trend reporting and is not a core release gate." >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload strict target report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: architecture-dependency-target
-          path: target/architecture-dependency-target.json
-          if-no-files-found: error
+      - name: Test release and fixture contracts
+        run: python scripts/run_architecture_tests.py --tier phase_contract --tier dynamic_fixture
 
   # =========================
   # Format + Clippy + Shear

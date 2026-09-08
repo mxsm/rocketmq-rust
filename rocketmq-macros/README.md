@@ -138,14 +138,14 @@ The standalone `tests/fixtures/renamed-consumer` project verifies both the V3 pa
 | [`src/request_header_custom.rs`](src/request_header_custom.rs) | Deprecated V1 parse/wrapper entry forwarding to the frozen compatibility adapter. |
 | [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | Remoting serialization derive. |
 
-No Java checkout is accessed during Cargo builds. Java schemas, golden frames, migration state, and performance
-evidence are governed by the repository's `scripts/request-header-codec` assets.
+No Java checkout is accessed during Cargo builds. Java schemas, golden frames, header registry data, and
+benchmark inputs are owned by the protocol crate's
+[compatibility fixtures](../rocketmq-protocol/tests/fixtures/request_header_codec/README.md).
 
 ## Validation
 
 ```powershell
-python scripts/request-header-codec/migrate.py check
-python scripts/request-header-codec/compare_header_schema.py
+cargo test -p rocketmq-protocol --test request_header_codec_v3_registry
 cargo test -p rocketmq-macros --lib
 cargo test -p rocketmq-protocol --test request_header_codec_v1_ui
 cargo test -p rocketmq-protocol --test request_header_codec_v1_wire_snapshot

@@ -14,35 +14,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Validate the current and target RocketMQ Rust package dependency boundaries."""
+"""Check package layering and dependency cycles without historical snapshots."""
 
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import dataclasses
-from datetime import date
-import hashlib
 import json
-import re
+from pathlib import Path
 import subprocess
 import sys
-import tempfile
 import tomllib
+from typing import Any, Iterable
 
 import core_release_scope
-from pathlib import Path
-from typing import Any, Iterable
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = ROOT / "scripts" / "architecture-dependency-policy.json"
-DEFAULT_BASELINE = ROOT / "scripts" / "architecture-dependency-baseline.json"
-CLIENT_USE_RE = re.compile(r"\b(?:use|extern\s+crate)\s+([A-Za-z_][A-Za-z0-9_]*)\b")
 
 
 class InputError(Exception):
-    """An invalid policy, baseline, metadata file, or CLI combination."""
+    """An invalid policy, metadata file, or CLI combination."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -88,373 +81,40 @@ def require_keys(value: dict[str, Any], keys: Iterable[str], label: str) -> None
 
 
 def validate_policy(policy: dict[str, Any]) -> None:
-    require_keys(
-        policy,
-        (
-            "schema_version",
-            "roots",
-            "package_counts",
-            "planned_packages",
-            "package_rules",
-            "target_dag",
-            "closure_rules",
-            "client_policy",
-            "test_dependency_policy",
-            "target_debt",
-            "facade_rules",
-            "compatibility_manifest_policy",
-            "milestone_order",
-        ),
-        "policy",
-    )
+    require_keys(policy, ("schema_version", "roots", "package_rules", "closure_rules", "facade_rules"), "policy")
     if policy["schema_version"] != 1:
-        raise InputError(f"unsupported policy schema_version: {policy['schema_version']}")
-    counts = policy["package_counts"]
-    baseline_count = counts.get("baseline")
-    target_count = counts.get("target")
-    if not isinstance(baseline_count, int) or not isinstance(target_count, int) or target_count != 29:
-        raise InputError("policy package_counts must track an integer milestone baseline and target=29")
-    planned_count = target_count - baseline_count
-    if planned_count < 0 or len(policy["planned_packages"]) != planned_count:
-        raise InputError("policy planned_packages must exactly cover target minus milestone baseline")
-    if len(set(policy["planned_packages"])) != planned_count:
-        raise InputError("policy planned_packages must contain unique package names")
-    if set(policy["planned_packages"]) - set(policy["target_dag"]):
-        raise InputError("every planned package must have a target_dag entry")
-    if len(policy["target_dag"]) != policy["package_counts"]["target"]:
-        raise InputError("target_dag must encode all 29 target workspace packages")
-
-    client_policy = policy["client_policy"]
-    require_keys(
-        client_policy,
-        ("package", "crate_names", "target_manifest_allowlist", "target_source_allowlist"),
-        "policy client_policy",
-    )
-    if set(client_policy) != {
-        "package",
-        "crate_names",
-        "target_manifest_allowlist",
-        "target_source_allowlist",
-    }:
-        raise InputError("policy client_policy contains unsupported keys")
-    client = client_policy["package"]
-    crate_names = client_policy["crate_names"]
-    if not isinstance(client, str) or not client:
-        raise InputError("policy client_policy package must be a non-empty string")
-    if (
-        not isinstance(crate_names, list)
-        or not crate_names
-        or any(not isinstance(alias, str) or not alias for alias in crate_names)
-        or len(crate_names) != len(set(crate_names))
-    ):
-        raise InputError("policy client_policy crate_names must be unique non-empty strings")
-
-    manifest_identities: set[tuple[str, str, str, str, str]] = set()
-    for index, entry in enumerate(client_policy["target_manifest_allowlist"]):
-        if not isinstance(entry, dict):
-            raise InputError(f"policy client manifest allowlist[{index}] must be an object")
-        require_keys(
-            entry,
-            ("caller", "target", "kind", "path", "alias"),
-            f"policy client manifest allowlist[{index}]",
-        )
-        if set(entry) != {"caller", "target", "kind", "path", "alias"}:
-            raise InputError(f"policy client manifest allowlist[{index}] contains unsupported keys")
-        path = entry["path"]
-        if (
-            not isinstance(entry["caller"], str)
-            or not entry["caller"]
-            or entry["target"] != client
-            or entry["kind"] not in {"normal", "dev", "build"}
-            or not isinstance(path, str)
-            or not path.endswith("Cargo.toml")
-            or "\\" in path
-            or Path(path).is_absolute()
-            or not isinstance(entry["alias"], str)
-            or not entry["alias"]
-            or entry["alias"] not in crate_names
-        ):
-            raise InputError(f"policy client manifest allowlist[{index}] is invalid")
-        identity = (entry["caller"], entry["target"], entry["kind"], path, entry["alias"])
-        if identity in manifest_identities:
-            raise InputError(f"duplicate policy client manifest allowlist identity: {identity}")
-        manifest_identities.add(identity)
-
-    source_identities: set[tuple[str, str, str, str]] = set()
-    for index, entry in enumerate(client_policy["target_source_allowlist"]):
-        if not isinstance(entry, dict):
-            raise InputError(f"policy client source allowlist[{index}] must be an object")
-        selector_keys = {"path", "path_prefix"} & set(entry)
-        if (
-            set(entry) - {"caller", "path", "path_prefix", "aliases"}
-            or selector_keys not in ({"path"}, {"path_prefix"})
-            or not {"caller", "aliases"}.issubset(entry)
-        ):
-            raise InputError(f"policy client source allowlist[{index}] contains unsupported keys")
-        selector_key = selector_keys.pop()
-        selector = entry[selector_key]
-        aliases = entry["aliases"]
-        if (
-            not isinstance(entry["caller"], str)
-            or not entry["caller"]
-            or not isinstance(selector, str)
-            or not selector
-            or (selector_key == "path_prefix" and not selector.endswith("/"))
-            or (selector_key == "path" and selector.endswith("/"))
-            or "\\" in selector
-            or Path(selector).is_absolute()
-            or not isinstance(aliases, list)
-            or not aliases
-            or any(not isinstance(alias, str) or not alias for alias in aliases)
-            or len(aliases) != len(set(aliases))
-            or not set(aliases).issubset(crate_names)
-        ):
-            raise InputError(f"policy client source allowlist[{index}] is invalid")
-        for alias in aliases:
-            identity = (entry["caller"], selector_key, selector, alias)
-            if identity in source_identities:
-                raise InputError(f"duplicate policy client source allowlist identity: {identity}")
-            source_identities.add(identity)
-
-    test_policy = policy["test_dependency_policy"]
-    require_keys(test_policy, ("allowed_edges",), "policy test_dependency_policy")
-    if set(test_policy) != {"allowed_edges"}:
-        raise InputError("policy test_dependency_policy contains unsupported keys")
-    test_identities: set[tuple[str, str, str, str, str]] = set()
-    required_test_keys = {
-        "caller",
-        "target",
-        "kind",
-        "path",
-        "alias",
-        "owner",
-        "reason",
-        "review_by",
-        "adr",
-    }
-    for index, entry in enumerate(test_policy["allowed_edges"]):
-        if not isinstance(entry, dict) or set(entry) != required_test_keys:
-            raise InputError(f"policy test dependency allowlist[{index}] has an invalid schema")
-        path = entry["path"]
-        if (
-            entry["kind"] != "dev"
-            or not all(entry[key] for key in required_test_keys)
-            or not isinstance(path, str)
-            or not path.endswith("Cargo.toml")
-            or "\\" in path
-            or Path(path).is_absolute()
-        ):
-            raise InputError(f"policy test dependency allowlist[{index}] is invalid")
-        identity = (entry["caller"], entry["target"], entry["kind"], path, entry["alias"])
-        if identity in test_identities:
-            raise InputError(f"duplicate policy test dependency identity: {identity}")
-        test_identities.add(identity)
-
-    debt = policy["target_debt"]
-    require_keys(debt, ("as_of", "entries"), "policy target_debt")
-    if set(debt) != {"as_of", "entries"}:
-        raise InputError("policy target_debt contains unsupported keys")
-    try:
-        date.fromisoformat(debt["as_of"])
-    except (TypeError, ValueError) as error:
-        raise InputError("policy target_debt as_of must be an ISO date") from error
-    required_debt_keys = {
-        "caller",
-        "target",
-        "kind",
-        "path",
-        "alias",
-        "owner",
-        "reason",
-        "remove_phase",
-        "remove_by",
-    }
-    debt_identities: set[tuple[str, str, str, str, str]] = set()
-    for index, entry in enumerate(debt["entries"]):
-        if not isinstance(entry, dict) or set(entry) != required_debt_keys:
-            raise InputError(f"policy target_debt entries[{index}] has an invalid schema")
-        if (
-            any(not isinstance(entry[key], str) for key in required_debt_keys)
-            or not all(entry[key] for key in required_debt_keys)
-            or entry["kind"] not in {"normal", "dev", "build"}
-            or entry["remove_phase"] not in {"P2.1", "P2.2"}
-            or not entry["path"].endswith("Cargo.toml")
-            or "\\" in entry["path"]
-            or Path(entry["path"]).is_absolute()
-        ):
-            raise InputError(f"policy target_debt entries[{index}] is invalid")
-        try:
-            date.fromisoformat(entry["remove_by"])
-        except (TypeError, ValueError) as error:
-            raise InputError(
-                f"policy target_debt entries[{index}] remove_by must be an ISO date"
-            ) from error
-        identity = tuple(entry[key] for key in ("caller", "target", "kind", "path", "alias"))
-        if identity in debt_identities:
-            raise InputError(f"duplicate policy target_debt identity: {identity}")
-        debt_identities.add(identity)
+        raise InputError("unsupported dependency policy schema")
+    roots = policy["roots"]
+    if not isinstance(roots, dict) or not isinstance(roots.get("standalone_manifests"), list):
+        raise InputError("standalone_manifests must be a list")
+    for path in roots["standalone_manifests"]:
+        if not isinstance(path, str) or not path or Path(path).is_absolute() or ".." in Path(path).parts:
+            raise InputError("standalone manifests must be repository-relative paths")
+    for section in ("package_rules", "closure_rules", "facade_rules"):
+        if not isinstance(policy[section], list):
+            raise InputError(f"{section} must be a list")
+        for rule in policy[section]:
+            fields = ("canonical_packages",) if section == "facade_rules" else ("callers", "forbidden_targets")
+            if not isinstance(rule, dict):
+                raise InputError(f"{section} entries must be objects")
+            for field in fields:
+                values = rule.get(field)
+                if not isinstance(values, list) or not values or any(not isinstance(v, str) or not v for v in values):
+                    raise InputError(f"{section}.{field} must contain package names")
+            label = "facade" if section == "facade_rules" else "id" if section == "package_rules" else None
+            if label is not None and (not isinstance(rule.get(label), str) or not rule[label]):
+                raise InputError(f"{section}.{label} must be non-empty")
 
 
-def validate_baseline(baseline: dict[str, Any], policy: dict[str, Any]) -> None:
-    require_keys(
-        baseline,
-        (
-            "schema_version",
-            "cargo_metadata_command",
-            "rustc_version",
-            "cargo_version",
-            "generated_output_path",
-            "workspace_packages",
-            "semantic_dependencies",
-            "manifest_exceptions",
-            "compatibility_manifest_exceptions",
-            "source_exceptions",
-        ),
-        "baseline",
-    )
-    if baseline["schema_version"] != 2:
-        raise InputError(f"unsupported baseline schema_version: {baseline['schema_version']}")
-    semantic_fields = {"package", "dependency", "kind", "optional", "features"}
-    semantic_dependencies = baseline["semantic_dependencies"]
-    if not isinstance(semantic_dependencies, list):
-        raise InputError("baseline semantic_dependencies must be a list")
-    semantic_identities: set[tuple[str, str, str, bool, tuple[str, ...]]] = set()
-    for index, entry in enumerate(semantic_dependencies):
-        if not isinstance(entry, dict) or set(entry) != semantic_fields:
-            raise InputError(f"baseline semantic_dependencies[{index}] has an invalid schema")
-        if (
-            not isinstance(entry["package"], str)
-            or not isinstance(entry["dependency"], str)
-            or not isinstance(entry["kind"], str)
-            or not isinstance(entry["optional"], bool)
-            or not isinstance(entry["features"], list)
-            or any(not isinstance(feature, str) for feature in entry["features"])
-        ):
-            raise InputError(f"baseline semantic_dependencies[{index}] is invalid")
-        identity = (
-            entry["package"],
-            entry["dependency"],
-            entry["kind"],
-            entry["optional"],
-            tuple(entry["features"]),
-        )
-        if identity in semantic_identities:
-            raise InputError(f"duplicate baseline semantic dependency: {identity}")
-        semantic_identities.add(identity)
-    for key in ("cargo_metadata_command", "rustc_version", "cargo_version", "generated_output_path"):
-        if not isinstance(baseline[key], str) or not baseline[key].strip():
-            raise InputError(f"baseline {key} must be a non-empty string")
-    for category in ("manifest_exceptions", "compatibility_manifest_exceptions", "source_exceptions"):
-        for index, exception in enumerate(baseline[category]):
-            if not exception.get("owner") or not exception.get("remove_by"):
-                raise InputError(f"baseline {category}[{index}] requires owner and remove_by")
-            path = exception.get("path")
-            if not isinstance(path, str) or not path or "\\" in path or Path(path).is_absolute():
-                raise InputError(f"baseline {category}[{index}] requires a normalized relative path")
-    manifest_identities: set[tuple[Any, ...]] = set()
-    for index, exception in enumerate(baseline["manifest_exceptions"]):
-        if exception.get("rule") is None:
-            require_keys(
-                exception,
-                ("caller", "target", "kind", "path", "alias", "count", "owner", "remove_by"),
-                f"baseline manifest_exceptions[{index}]",
-            )
-            if not isinstance(exception["count"], int) or exception["count"] < 1:
-                raise InputError(f"baseline manifest_exceptions[{index}] count must be positive")
-            identity = (
-                exception["caller"],
-                exception["target"],
-                exception["kind"],
-                exception["path"],
-                exception["alias"],
-            )
-        else:
-            require_keys(
-                exception,
-                ("rule", "caller", "target", "kind", "path", "owner", "remove_by"),
-                f"baseline manifest_exceptions[{index}]",
-            )
-            identity = (
-                exception["rule"],
-                exception["caller"],
-                exception["target"],
-                exception["kind"],
-                exception["path"],
-                exception.get("detail"),
-            )
-        if identity in manifest_identities:
-            raise InputError(f"duplicate baseline manifest exception identity: {identity}")
-        manifest_identities.add(identity)
-    source_identities: set[tuple[str, str]] = set()
-    for index, exception in enumerate(baseline["source_exceptions"]):
-        require_keys(
-            exception,
-            ("path", "alias", "count", "owner", "remove_by"),
-            f"baseline source_exceptions[{index}]",
-        )
-        if exception["path"].endswith("/"):
-            raise InputError(f"baseline source_exceptions[{index}] must identify a file, not a directory")
-        if not isinstance(exception["count"], int) or exception["count"] < 1:
-            raise InputError(f"baseline source_exceptions[{index}] count must be positive")
-        identity = (exception["path"], exception["alias"])
-        if identity in source_identities:
-            raise InputError(f"duplicate baseline source exception identity: {identity}")
-        source_identities.add(identity)
-
-    if baseline["manifest_exceptions"]:
-        raise InputError("temporary manifest exceptions were retired by PR-M09-01 and must stay empty")
-    if baseline["source_exceptions"]:
-        raise InputError("temporary Client source ledger was retired by PR-M08-03 and must stay empty")
-    compatibility_identities: set[tuple[Any, ...]] = set()
-    for index, exception in enumerate(baseline["compatibility_manifest_exceptions"]):
-        require_keys(
-            exception,
-            (
-                "rule",
-                "caller",
-                "target",
-                "kind",
-                "path",
-                "alias",
-                "count",
-                "debt_id",
-                "owner",
-                "reason",
-                "remove_by",
-                "adr",
-            ),
-            f"baseline compatibility_manifest_exceptions[{index}]",
-        )
-        if exception["rule"] != "compatibility-manifest-burn-down":
-            raise InputError(f"baseline compatibility_manifest_exceptions[{index}] has an invalid rule")
-        if exception["count"] != 1:
-            raise InputError(f"baseline compatibility_manifest_exceptions[{index}] count must be exactly one")
-        if not exception["reason"] or not exception["adr"]:
-            raise InputError(f"baseline compatibility_manifest_exceptions[{index}] requires reason and adr")
-        if exception["remove_by"] != "2.0.0":
-            raise InputError(
-                f"baseline compatibility_manifest_exceptions[{index}] has an expired removal window"
-            )
-        identity = (
-            exception["caller"],
-            exception["target"],
-            exception["kind"],
-            exception["path"],
-            exception["alias"],
-        )
-        if identity in compatibility_identities:
-            raise InputError(f"duplicate compatibility manifest exception identity: {identity}")
-        compatibility_identities.add(identity)
-
-
-def read_metadata(metadata_file: Path | None) -> dict[str, Any]:
+def read_metadata(metadata_file: Path | None, source_root: Path = ROOT) -> dict[str, Any]:
     if metadata_file is not None:
         return load_json(metadata_file, "metadata")
     completed = subprocess.run(
         ["cargo", "metadata", "--format-version", "1", "--no-deps"],
-        cwd=ROOT,
+        cwd=source_root,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     if completed.returncode != 0:
@@ -472,140 +132,6 @@ def workspace_packages(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     if len(packages) != len(members):
         raise InputError("metadata workspace_members do not resolve to unique package entries")
     return packages
-
-
-def normalized_metadata_summary(metadata: dict[str, Any], source_root: Path) -> list[dict[str, Any]]:
-    """Build a path-normalized, order-stable workspace metadata summary."""
-    summary: list[dict[str, Any]] = []
-    for package in sorted(workspace_packages(metadata), key=lambda item: item["name"]):
-        dependencies = [
-            {
-                "name": dependency.get("name"),
-                "kind": dependency.get("kind") or "normal",
-                "rename": dependency.get("rename"),
-                "target": dependency.get("target"),
-            }
-            for dependency in package.get("dependencies", [])
-        ]
-        summary.append(
-            {
-                "name": package["name"],
-                "version": package.get("version"),
-                "manifest_path": normalize_manifest_path(package.get("manifest_path", ""), source_root),
-                "dependencies": sorted(
-                    dependencies,
-                    key=lambda item: (
-                        item["name"] or "",
-                        item["kind"],
-                        item["rename"] or "",
-                        str(item["target"] or ""),
-                    ),
-                ),
-            }
-        )
-    return summary
-
-
-def normalized_metadata_sha256(metadata: dict[str, Any], source_root: Path) -> str:
-    summary = normalized_metadata_summary(metadata, source_root)
-    encoded = json.dumps(summary, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def semantic_dependency_records(
-    metadata: dict[str, Any],
-    *,
-    core_names: set[str],
-    excluded_names: set[str],
-) -> list[dict[str, Any]]:
-    """Return the readable dependency identity used by the core release gate."""
-
-    records: dict[tuple[str, str, str, bool, tuple[str, ...]], dict[str, Any]] = {}
-    for package in workspace_packages(metadata):
-        package_name = package.get("name")
-        if package_name not in core_names:
-            continue
-        for dependency in package.get("dependencies", []):
-            dependency_name = dependency.get("name")
-            if not isinstance(dependency_name, str) or dependency_name in excluded_names:
-                continue
-            kind = dependency.get("kind") or "normal"
-            optional = bool(dependency.get("optional", False))
-            features = tuple(sorted(set(dependency.get("features") or [])))
-            identity = (package_name, dependency_name, kind, optional, features)
-            records[identity] = {
-                "package": package_name,
-                "dependency": dependency_name,
-                "kind": kind,
-                "optional": optional,
-                "features": list(features),
-            }
-    return [records[identity] for identity in sorted(records)]
-
-
-def structural_findings(
-    baseline: dict[str, Any],
-    current: list[dict[str, Any]],
-) -> list[Finding]:
-    def identity(entry: dict[str, Any]) -> tuple[str, str, str, bool, tuple[str, ...]]:
-        return (
-            entry["package"],
-            entry["dependency"],
-            entry["kind"],
-            entry["optional"],
-            tuple(entry["features"]),
-        )
-
-    expected = {identity(entry) for entry in baseline["semantic_dependencies"]}
-    actual = {identity(entry) for entry in current}
-    findings: list[Finding] = []
-    for package, dependency, kind, optional, features in sorted(actual - expected):
-        findings.append(
-            Finding(
-                "semantic-dependency-added",
-                package,
-                dependency,
-                "Cargo.toml",
-                kind,
-                f"optional={optional} features={','.join(features) or '-'}",
-            )
-        )
-    for package, dependency, kind, optional, features in sorted(expected - actual):
-        findings.append(
-            Finding(
-                "semantic-dependency-removed",
-                package,
-                dependency,
-                "Cargo.toml",
-                kind,
-                f"optional={optional} features={','.join(features) or '-'}",
-            )
-        )
-    return findings
-
-
-def write_and_verify_metadata_evidence(
-    metadata: dict[str, Any], source_root: Path, baseline: dict[str, Any]
-) -> None:
-    output = ROOT / baseline["generated_output_path"]
-    summary = normalized_metadata_summary(metadata, source_root)
-    try:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(
-            json.dumps(summary, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-            newline="\n",
-        )
-        reloaded = json.loads(output.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise InputError(f"cannot generate normalized metadata evidence {output}: {error}") from error
-    encoded = json.dumps(reloaded, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    digest = hashlib.sha256(encoded).hexdigest()
-    if digest != baseline["metadata_sha256"]:
-        raise InputError(
-            "generated normalized metadata evidence hash mismatch: "
-            f"expected={baseline['metadata_sha256']} actual={digest}"
-        )
 
 
 def normalize_manifest_path(raw_path: str, source_root: Path) -> str:
@@ -682,24 +208,6 @@ def standalone_dependency_edges(source_root: Path, policy: dict[str, Any]) -> li
     return edges
 
 
-def standalone_target_package_names(source_root: Path, policy: dict[str, Any]) -> set[str]:
-    """Return standalone packages that remain part of the governed target DAG."""
-    governed = set(policy["target_dag"])
-    names: set[str] = set()
-    for relative_manifest in policy["roots"]["standalone_manifests"]:
-        manifest = source_root / relative_manifest
-        if not manifest.is_file():
-            continue
-        try:
-            data = tomllib.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
-            raise InputError(f"cannot read standalone manifest {manifest}: {error}") from error
-        name = data.get("package", {}).get("name")
-        if isinstance(name, str) and name in governed:
-            names.add(name)
-    return names
-
-
 def resolve_workspace_dependency(manifest: Path, alias: str, source_root: Path) -> str:
     """Resolve a standalone `{ workspace = true }` alias from an ancestor workspace manifest."""
     current = manifest.parent.resolve()
@@ -726,6 +234,28 @@ def resolve_workspace_dependency(manifest: Path, alias: str, source_root: Path) 
     raise InputError(f"workspace dependency {alias} referenced by {relative} has no ancestor definition")
 
 
+def source_caller(relative: str, packages: list[dict[str, Any]]) -> str:
+    normalized = relative.replace("\\", "/")
+    special = {
+        "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/": "rocketmq-admin-core",
+        "rocketmq-ai/rocketmq-mcp/": "rocketmq-mcp",
+        "rocketmq-dashboard/rocketmq-dashboard-gpui/": "rocketmq-dashboard-gpui",
+        "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/": "rocketmq-dashboard-tauri-backend",
+        "rocketmq-dashboard/rocketmq-dashboard-web/backend/": "rocketmq-dashboard-web-backend",
+        "rocketmq-example/": "rocketmq-example",
+    }
+    for prefix, name in special.items():
+        if normalized.startswith(prefix):
+            return name
+    first = normalized.split("/", 1)[0]
+    names = {item["name"] for item in packages}
+    if first in names:
+        return first
+    if first == "rocketmq-client":
+        return "rocketmq-client-rust"
+    return first
+
+
 def package_rule_findings(edges: list[Edge], policy: dict[str, Any]) -> list[Finding]:
     findings: list[Finding] = []
     for rule in policy["package_rules"]:
@@ -736,86 +266,6 @@ def package_rule_findings(edges: list[Edge], policy: dict[str, Any]) -> list[Fin
                 findings.append(
                     Finding(rule["id"], edge.caller, edge.target, edge.path, edge.kind)
                 )
-    return findings
-
-
-def target_dag_findings(
-    edges: list[Edge], policy: dict[str, Any], baseline: dict[str, Any], mode: str
-) -> list[Finding]:
-    planned = set(policy["planned_packages"])
-    compatibility_allowances = Counter(
-        (
-            item["caller"],
-            item["target"],
-            item["kind"],
-            item["path"],
-            item["alias"],
-        )
-        for item in baseline["compatibility_manifest_exceptions"]
-        for _ in range(item["count"])
-    )
-    test_allowances = Counter(
-        (item["caller"], item["target"], item["kind"], item["path"], item["alias"])
-        for item in policy["test_dependency_policy"]["allowed_edges"]
-    )
-    target_debt = {
-        (item["caller"], item["target"], item["kind"], item["path"], item["alias"]): item
-        for item in policy["target_debt"]["entries"]
-    }
-    used_allowances: Counter[tuple[str, str, str, str, str | None]] = Counter()
-    used_debt: set[tuple[str, str, str, str, str | None]] = set()
-    findings: list[Finding] = []
-    for edge in edges:
-        allowed = policy["target_dag"].get(edge.caller)
-        if allowed is None or (mode == "baseline" and edge.caller not in planned):
-            continue
-        if edge.target not in set(allowed):
-            identity = (edge.caller, edge.target, edge.kind, edge.path, edge.alias)
-            permitted = compatibility_allowances[identity] + test_allowances[identity]
-            if mode != "baseline" and used_allowances[identity] < permitted:
-                used_allowances[identity] += 1
-                continue
-            debt = target_debt.get(identity)
-            if mode == "transition" and debt is not None:
-                used_debt.add(identity)
-                if date.fromisoformat(debt["remove_by"]) < date.today():
-                    findings.append(
-                        Finding(
-                            "target-debt-expired",
-                            edge.caller,
-                            edge.target,
-                            edge.path,
-                            edge.kind,
-                            f"owner={debt['owner']} remove_phase={debt['remove_phase']} "
-                            f"remove_by={debt['remove_by']}",
-                        )
-                    )
-                continue
-            findings.append(
-                Finding(
-                    "target-dag-direct-dependency",
-                    edge.caller,
-                    edge.target,
-                    edge.path,
-                    edge.kind,
-                )
-            )
-    if mode == "transition":
-        for identity, debt in sorted(target_debt.items()):
-            if identity in used_debt:
-                continue
-            caller, target, kind, path, _alias = identity
-            findings.append(
-                Finding(
-                    "target-debt-stale",
-                    caller,
-                    target,
-                    path,
-                    kind,
-                    f"owner={debt['owner']} remove_phase={debt['remove_phase']} "
-                    f"remove_by={debt['remove_by']}",
-                )
-            )
     return findings
 
 
@@ -833,7 +283,7 @@ def facade_rule_findings(edges: list[Edge], policy: dict[str, Any]) -> list[Find
                         edge.target,
                         edge.path,
                         edge.kind,
-                        f"remove_by={rule['remove_by']}",
+                        "canonical package must not depend on its composition facade",
                     )
                 )
     return findings
@@ -930,720 +380,58 @@ def cycle_findings(edges: list[Edge]) -> list[Finding]:
     return findings
 
 
-def manifest_client_findings(
-    edges: list[Edge], mode: str, policy: dict[str, Any], baseline: dict[str, Any]
-) -> list[Finding]:
-    client = policy["client_policy"]["package"]
-    findings: list[Finding] = []
-    client_edges = [edge for edge in edges if edge.target == client and edge.caller != client]
-    actual = Counter(
-        (edge.caller, edge.target, edge.kind, edge.path, edge.alias)
-        for edge in client_edges
-    )
-    allowed = Counter(
-        (
-            entry["caller"],
-            entry["target"],
-            entry["kind"],
-            entry["path"],
-            entry["alias"],
-        )
-        for entry in policy["client_policy"]["target_manifest_allowlist"]
-    )
-    if mode == "baseline":
-        permitted = allowed + Counter(
-            (
-                item["caller"],
-                item["target"],
-                item.get("kind", "normal"),
-                item["path"],
-                item["alias"],
-            )
-            for item in baseline["manifest_exceptions"]
-            if item.get("rule") is None
-            for _ in range(item.get("count", 1))
-        )
-        for identity, count in sorted(actual.items()):
-            baseline_count = permitted[identity]
-            if count <= baseline_count:
-                continue
-            caller, target, kind, path, alias = identity
-            findings.append(
-                Finding(
-                    "client-manifest-baseline-growth",
-                    caller,
-                    target,
-                    path,
-                    kind,
-                    f"alias={alias} count={count} baseline={baseline_count}",
-                )
-            )
-        return findings
-
-    for identity, count in sorted(actual.items()):
-        permitted = allowed[identity]
-        if count <= permitted:
-            continue
-        caller, target, kind, path, alias = identity
-        findings.append(
-            Finding(
-                "client-manifest-allowlist",
-                caller,
-                target,
-                path,
-                kind,
-                f"alias={alias} count={count} allowlist={permitted}",
-            )
-        )
-    return findings
-
-
-def compatibility_manifest_findings(
-    edges: list[Edge], mode: str, policy: dict[str, Any], baseline: dict[str, Any]
-) -> list[Finding]:
-    ledger = baseline["compatibility_manifest_exceptions"]
-    targets = set(policy["compatibility_manifest_policy"]["targets"])
-    planned_identities = {(item["caller"], item["target"]) for item in ledger}
-    relevant = [
-        edge
-        for edge in edges
-        if edge.caller != edge.target
-        and (edge.target in targets or (edge.caller, edge.target) in planned_identities)
-    ]
-    actual = Counter(
-        (edge.caller, edge.target, edge.kind, edge.path, edge.alias)
-        for edge in relevant
-    )
-    expected = Counter(
-        (
-            item["caller"],
-            item["target"],
-            item["kind"],
-            item["path"],
-            item["alias"],
-        )
-        for item in ledger
-        for _ in range(item["count"])
-    )
-    findings: list[Finding] = []
-    for identity, count in sorted(actual.items()):
-        permitted = expected[identity]
-        if count <= permitted:
-            continue
-        caller, target, kind, path, alias = identity
-        findings.append(
-                Finding(
-                "compatibility-manifest-baseline-growth"
-                if mode == "baseline"
-                else "compatibility-manifest-target-growth",
-                caller,
-                target,
-                path,
-                kind,
-                f"graph=direct alias={alias} count={count} baseline={permitted}",
-            )
-        )
-    return findings
-
-
-def source_aliases_by_caller(edges: list[Edge], policy: dict[str, Any]) -> dict[str, set[str]]:
-    client = policy["client_policy"]["package"]
-    aliases: dict[str, set[str]] = {}
-    for edge in edges:
-        if edge.target == client and edge.caller != client and edge.alias:
-            aliases.setdefault(edge.caller, set()).add(edge.alias)
-    return aliases
-
-
-def source_caller(relative: str, packages: list[dict[str, Any]]) -> str:
-    normalized = relative.replace("\\", "/")
-    special = {
-        "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/": "rocketmq-admin-core",
-        "rocketmq-ai/rocketmq-mcp/": "rocketmq-mcp",
-        "rocketmq-dashboard/rocketmq-dashboard-gpui/": "rocketmq-dashboard-gpui",
-        "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/": "rocketmq-dashboard-tauri-backend",
-        "rocketmq-dashboard/rocketmq-dashboard-web/backend/": "rocketmq-dashboard-web-backend",
-        "rocketmq-example/": "rocketmq-example",
-    }
-    for prefix, name in special.items():
-        if normalized.startswith(prefix):
-            return name
-    first = normalized.split("/", 1)[0]
-    names = {item["name"] for item in packages}
-    if first in names:
-        return first
-    if first == "rocketmq-client":
-        return "rocketmq-client-rust"
-    return first
-
-
-def source_client_occurrence_allowed(
-    relative: str, caller: str, alias: str, policy: dict[str, Any]
-) -> bool:
-    return any(
-        caller == entry["caller"]
-        and (
-            relative == entry.get("path")
-            or (
-                "path_prefix" in entry
-                and relative.startswith(entry["path_prefix"])
-            )
-        )
-        and alias in entry["aliases"]
-        for entry in policy["client_policy"]["target_source_allowlist"]
-    )
-
-
-def lex_rust_code(text: str, path: Path) -> str:
-    """Mask Rust comments and literals while preserving code and line numbers."""
-    output = list(text)
-
-    def mask(start: int, end: int) -> None:
-        for position in range(start, end):
-            if output[position] not in ("\n", "\r"):
-                output[position] = " "
-
-    def quoted_end(start_quote: int, quote: str) -> int:
-        position = start_quote + 1
-        while position < len(text):
-            if text[position] == "\\":
-                position += 2
-                continue
-            if text[position] == quote:
-                return position + 1
-            if quote == "'" and text[position] in "\r\n":
-                break
-            position += 1
-        kind = "string" if quote == '"' else "character"
-        raise InputError(f"unterminated Rust {kind} literal in {path}")
-
-    position = 0
-    while position < len(text):
-        if text.startswith("//", position):
-            end = text.find("\n", position + 2)
-            end = len(text) if end == -1 else end
-            mask(position, end)
-            position = end
-            continue
-        if text.startswith("/*", position):
-            start = position
-            depth = 1
-            position += 2
-            while position < len(text) and depth:
-                if text.startswith("/*", position):
-                    depth += 1
-                    position += 2
-                elif text.startswith("*/", position):
-                    depth -= 1
-                    position += 2
-                else:
-                    position += 1
-            if depth:
-                raise InputError(f"unterminated Rust block comment in {path}")
-            mask(start, position)
-            continue
-
-        raw_match = re.match(r"(?:br|r)(#{0,255})\"", text[position:])
-        if raw_match is not None:
-            start = position
-            hashes = raw_match.group(1)
-            content_start = position + raw_match.end()
-            terminator = '"' + hashes
-            end_marker = text.find(terminator, content_start)
-            if end_marker == -1:
-                raise InputError(f"unterminated Rust raw string literal in {path}")
-            position = end_marker + len(terminator)
-            mask(start, position)
-            continue
-
-        if text.startswith('b"', position):
-            start = position
-            position = quoted_end(position + 1, '"')
-            mask(start, position)
-            continue
-        if text[position] == '"':
-            start = position
-            position = quoted_end(position, '"')
-            mask(start, position)
-            continue
-        if text.startswith("b'", position):
-            start = position
-            position = quoted_end(position + 1, "'")
-            mask(start, position)
-            continue
-        if text[position] == "'":
-            lifetime = re.match(r"'[A-Za-z_][A-Za-z0-9_]*", text[position:])
-            if lifetime is not None:
-                following = position + lifetime.end()
-                if following >= len(text) or text[following] != "'":
-                    position = following
-                    continue
-            start = position
-            position = quoted_end(position, "'")
-            mask(start, position)
-            continue
-        position += 1
-    return "".join(output)
-
-
-def source_client_findings(
-    source_root: Path,
-    packages: list[dict[str, Any]],
-    edges: list[Edge],
-    mode: str,
-    policy: dict[str, Any],
-    baseline: dict[str, Any],
-) -> list[Finding]:
-    if not source_root.exists() or not source_root.is_dir():
-        raise InputError(f"source root is not a directory: {source_root}")
-    aliases_by_caller = source_aliases_by_caller(edges, policy)
-    client_package = policy["client_policy"]["package"]
-    occurrences: list[tuple[str, str, str, int]] = []
-    ignored_parts = {".git", "target", "node_modules"}
-    for path in sorted(source_root.rglob("*.rs")):
-        if any(part in ignored_parts for part in path.parts):
-            continue
-        relative = path.relative_to(source_root).as_posix()
-        caller = source_caller(relative, packages)
-        if caller == client_package:
-            continue
-        aliases = aliases_by_caller.get(caller, set())
-        if not aliases:
-            continue
-        try:
-            source = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as error:
-            raise InputError(f"cannot read Rust source {path}: {error}") from error
-        if not any(alias in source for alias in aliases):
-            continue
-        lines = lex_rust_code(source, path).splitlines()
-        for line_number, line in enumerate(lines, start=1):
-            matched = False
-            for alias in sorted(aliases):
-                matches = list(re.finditer(rf"\b{re.escape(alias)}\s*::", line))
-                for _ in matches:
-                    occurrences.append((relative, caller, alias, line_number))
-                    matched = True
-            if not matched:
-                match = CLIENT_USE_RE.search(line)
-                if match is not None and match.group(1) in aliases:
-                    occurrences.append((relative, caller, match.group(1), line_number))
-
-    findings: list[Finding] = []
-    if mode == "baseline":
-        temporary_occurrences = [
-            occurrence
-            for occurrence in occurrences
-            if not source_client_occurrence_allowed(
-                occurrence[0], occurrence[1], occurrence[2], policy
-            )
-        ]
-        actual = Counter((path, alias) for path, _, alias, _ in temporary_occurrences)
-        expected = Counter(
-            (item["path"], item["alias"])
-            for item in baseline["source_exceptions"]
-            for _ in range(item["count"])
-        )
-        callers = {
-            (path, alias): caller
-            for path, caller, alias, _ in temporary_occurrences
-        }
-        for identity, count in sorted(actual.items()):
-            permitted = expected[identity]
-            if count <= permitted:
-                continue
-            path, alias = identity
-            findings.append(
-                Finding(
-                    "client-source-baseline-growth",
-                    callers[identity],
-                    client_package,
-                    path,
-                    "source",
-                    f"alias={alias} count={count} baseline={permitted}",
-                )
-            )
-        return findings
-
-    for relative, caller, alias, line_number in occurrences:
-        if source_client_occurrence_allowed(relative, caller, alias, policy):
-            continue
-        findings.append(
-            Finding(
-                "client-source-allowlist",
-                caller,
-                client_package,
-                f"{relative}:{line_number}",
-                "source",
-                f"alias={alias}",
-            )
-        )
-    return findings
-
-
-def validate_package_state(
-    mode: str,
-    packages: list[dict[str, Any]],
-    policy: dict[str, Any],
-    baseline: dict[str, Any],
-    enforce_target_package_state: bool,
-    standalone_names: set[str] | None = None,
-) -> list[str]:
-    names = sorted({item["name"] for item in packages} | (standalone_names or set()))
-    messages: list[str] = []
-    if mode == "baseline":
-        frozen = set(baseline["workspace_packages"])
-        planned = set(policy["planned_packages"])
-        removed = sorted(frozen - set(names))
-        unplanned = sorted(set(names) - frozen - planned)
-        if removed:
-            raise InputError(f"baseline workspace packages were removed: {', '.join(removed)}")
-        if unplanned:
-            raise InputError(f"unplanned workspace packages: {', '.join(unplanned)}")
-        if len(frozen) != policy["package_counts"]["baseline"]:
-            raise InputError(f"frozen baseline must contain {policy['package_counts']['baseline']} packages")
-    else:
-        expected = set(policy["target_dag"])
-        actual = set(names)
-        if enforce_target_package_state and actual != expected:
-            missing = sorted(expected - actual)
-            unexpected = sorted(actual - expected)
-            raise InputError(
-                "target workspace package set mismatch: "
-                f"missing={','.join(missing) or '-'} unexpected={','.join(unexpected) or '-'}"
-            )
-        if enforce_target_package_state and len(names) != policy["package_counts"]["target"]:
-            raise InputError(f"target workspace must contain {policy['package_counts']['target']} packages")
-    return messages
-
-
 def evaluate(
-    mode: str,
     metadata: dict[str, Any],
     source_root: Path,
     policy: dict[str, Any],
-    baseline: dict[str, Any],
-    enforce_target_package_state: bool = True,
-) -> tuple[list[Finding], list[str]]:
+    *,
+    scope: str = "all",
+) -> list[Finding]:
     packages = workspace_packages(metadata)
-    messages = validate_package_state(
-        mode,
-        packages,
-        policy,
-        baseline,
-        enforce_target_package_state,
-        standalone_target_package_names(source_root, policy),
-    )
     edges = dependency_edges(packages, source_root)
     edges.extend(standalone_dependency_edges(source_root, policy))
-    internal_names = {item["name"] for item in packages}
-    internal_edges = [edge for edge in edges if edge.target in internal_names]
-    normal_internal_edges = [edge for edge in internal_edges if edge.kind == "normal"]
-    findings = cycle_findings(internal_edges)
+    if scope == "core-release":
+        scope_document = core_release_scope.load_scope(source_root / "scripts/core-release-scope.json")
+        core_names = {entry["name"] for entry in core_release_scope.core_packages(scope_document)}
+        edges = [edge for edge in edges if edge.caller in core_names]
+    internal_names = {package["name"] for package in packages} | {edge.caller for edge in edges}
+    internal = [edge for edge in edges if edge.target in internal_names]
+    # Cargo permits dev-dependency cycles; they are not production dependency cycles.
+    findings = cycle_findings([edge for edge in internal if edge.kind != "dev"])
     findings.extend(package_rule_findings(edges, policy))
-    findings.extend(target_dag_findings(internal_edges, policy, baseline, mode))
-    findings.extend(facade_rule_findings(internal_edges, policy))
-    findings.extend(closure_rule_findings(normal_internal_edges, policy))
-    findings.extend(manifest_client_findings(edges, mode, policy, baseline))
-    findings.extend(compatibility_manifest_findings(edges, mode, policy, baseline))
-    findings.extend(source_client_findings(source_root, packages, edges, mode, policy, baseline))
-    if mode in {"transition", "target"}:
-        actual = Counter((edge.caller, edge.target, edge.kind, edge.path, edge.alias) for edge in edges)
-        compatibility = Counter(
-            (
-                item["caller"],
-                item["target"],
-                item["kind"],
-                item["path"],
-                item["alias"],
-            )
-            for item in baseline["compatibility_manifest_exceptions"]
-            for _ in range(item["count"])
-        )
-        tests = Counter(
-            (item["caller"], item["target"], item["kind"], item["path"], item["alias"])
-            for item in policy["test_dependency_policy"]["allowed_edges"]
-        )
-        debt = Counter(
-            (item["caller"], item["target"], item["kind"], item["path"], item["alias"])
-            for item in policy["target_debt"]["entries"]
-        )
-        active_debt = sum(min(actual[item], count) for item, count in debt.items())
-        active_compatibility = sum(min(actual[item], count) for item, count in compatibility.items())
-        active_tests = sum(min(actual[item], count) for item, count in tests.items())
-        messages.extend(
-            (
-                f"TARGET_DEBT_LEDGER active_edges={active_debt} entries={sum(debt.values())}",
-                "TARGET_COMPATIBILITY_LEDGER "
-                f"active_edges={active_compatibility} entries={sum(compatibility.values())}",
-                f"TARGET_TEST_DEPENDENCIES active_edges={active_tests} entries={sum(tests.values())}",
-            )
-        )
-    return sorted(findings, key=lambda item: item.render()), messages
-
-
-def fixture_metadata(packages: list[tuple[str, list[tuple[str, str, str | None]]]]) -> dict[str, Any]:
-    values: list[dict[str, Any]] = []
-    for name, dependencies in packages:
-        values.append(
-            {
-                "name": name,
-                "id": f"fixture:{name}",
-                "manifest_path": f"/fixture/{name}/Cargo.toml",
-                "dependencies": [
-                    {"name": target, "kind": kind, "rename": alias, "target": None}
-                    for target, kind, alias in dependencies
-                ],
-            }
-        )
-    return {"packages": values, "workspace_members": [item["id"] for item in values]}
-
-
-def run_fixtures(policy: dict[str, Any], baseline: dict[str, Any]) -> int:
-    cases = {
-        "cycle": (
-            fixture_metadata([("a", [("b", "normal", None)]), ("b", [("a", "dev", None)])]),
-            "dependency-cycle",
-        ),
-        "protocol-transport": (
-            fixture_metadata(
-                [("rocketmq-protocol", [("rocketmq-transport", "normal", None)]), ("rocketmq-transport", [])]
-            ),
-            "protocol-no-transport",
-        ),
-        "store-api-backend": (
-            fixture_metadata(
-                [("rocketmq-store-api", [("rocketmq-store-local", "build", None)]), ("rocketmq-store-local", [])]
-            ),
-            "store-api-no-backend",
-        ),
-        "proxy-local-client": (
-            fixture_metadata(
-                [
-                    ("rocketmq-proxy-local", [("rocketmq-client-rust", "dev", None)]),
-                    ("rocketmq-client-rust", []),
-                ]
-            ),
-            "proxy-local-no-client",
-        ),
-        "foundation-facade": (
-            fixture_metadata(
-                [("rocketmq-model", [("rocketmq-remoting", "normal", None)]), ("rocketmq-remoting", [])]
-            ),
-            "foundation-no-facade",
-        ),
-    }
-    failures: list[str] = []
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        source_root = Path(temp_dir)
-        clean = fixture_metadata([("rocketmq-model", []), ("rocketmq-protocol", [])])
-        findings, _ = evaluate("target", clean, source_root, policy, baseline, False)
-        if findings:
-            failures.append("clean fixture produced findings")
-        for name, (metadata, expected) in cases.items():
-            findings, _ = evaluate("target", metadata, source_root, policy, baseline, False)
-            if expected not in {finding.rule for finding in findings}:
-                failures.append(f"{name} did not produce {expected}")
-        alias_metadata = fixture_metadata(
-            [
-                ("rocketmq-broker", [("rocketmq-client-rust", "normal", "mq_client")]),
-                ("rocketmq-client-rust", []),
-            ]
-        )
-        alias_source = source_root / "rocketmq-broker" / "src" / "lib.rs"
-        alias_source.parent.mkdir(parents=True)
-        alias_source.write_text(
-            "use mq_client::producer::DefaultMQProducer;\n", encoding="utf-8", newline="\n"
-        )
-        alias_findings, _ = evaluate("target", alias_metadata, source_root, policy, baseline, False)
-        if "client-source-allowlist" not in {finding.rule for finding in alias_findings}:
-            failures.append("client-source-alias did not produce client-source-allowlist")
-    if failures:
-        for failure in failures:
-            print(f"FIXTURE_FAILURE {failure}", file=sys.stderr)
-        return 1
-    print(f"FIXTURES_OK clean=1 violations={len(cases) + 1}")
-    return 0
-
-
-def write_output(path: Path, mode: str, findings: list[Finding], messages: list[str]) -> None:
-    payload = {
-        "schema_version": 1,
-        "mode": mode,
-        "status": "compliant" if not findings else "violation",
-        "messages": messages,
-        "findings": [dataclasses.asdict(finding) for finding in findings],
-    }
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-            newline="\n",
-        )
-    except OSError as error:
-        raise InputError(f"cannot write output {path}: {error}") from error
-
-
-def write_structural_output(
-    path: Path,
-    *,
-    scope: str,
-    dependencies: list[dict[str, Any]],
-    findings: list[Finding],
-) -> None:
-    payload = {
-        "schema_version": 2,
-        "scope": scope,
-        "mode": "structural",
-        "status": "compliant" if not findings else "violation",
-        "dependencies": dependencies,
-        "findings": [dataclasses.asdict(finding) for finding in findings],
-    }
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-            newline="\n",
-        )
-    except OSError as error:
-        raise InputError(f"cannot write structural output {path}: {error}") from error
-
-
-def write_structural_baseline(
-    path: Path,
-    previous: dict[str, Any],
-    dependencies: list[dict[str, Any]],
-) -> None:
-    retained = {
-        key: value
-        for key, value in previous.items()
-        if key not in {"head", "metadata_sha256", "schema_version", "semantic_dependencies"}
-    }
-    payload = {
-        "schema_version": 2,
-        **retained,
-        "semantic_dependencies": dependencies,
-    }
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--mode",
-        choices=("baseline", "transition", "target", "structural"),
-        default="baseline",
-    )
-    parser.add_argument(
-        "--scope",
-        choices=("core-release", "repo-global", "all"),
-        default="core-release",
-    )
-    parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
-    parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
-    parser.add_argument("--metadata-file", type=Path)
-    parser.add_argument("--source-root", type=Path, default=ROOT)
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--fixtures", action="store_true")
-    parser.add_argument("--write-structural-baseline", action="store_true")
-    return parser.parse_args()
+    findings.extend(facade_rule_findings(internal, policy))
+    findings.extend(closure_rule_findings([edge for edge in internal if edge.kind == "normal"], policy))
+    return sorted(findings, key=lambda finding: finding.render())
 
 
 def main() -> int:
-    args = parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--scope", choices=("core-release", "repo-global", "all"), default="core-release")
+    parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
+    parser.add_argument("--metadata-file", type=Path)
+    parser.add_argument("--source-root", type=Path, default=ROOT)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
     try:
         policy = load_json(args.policy, "policy")
-        baseline = load_json(args.baseline, "baseline")
         validate_policy(policy)
-        if args.mode == "structural":
-            if args.scope != "core-release":
-                raise InputError("structural mode currently requires --scope core-release")
-            if args.fixtures:
-                raise InputError("--fixtures is not available in structural mode")
-            metadata = read_metadata(args.metadata_file)
-            scope_document = core_release_scope.load_scope(
-                args.source_root.resolve() / "scripts/core-release-scope.json"
-            )
-            core_names = {
-                entry["name"] for entry in core_release_scope.core_packages(scope_document)
-            }
-            excluded_names = {
-                entry["name"] for entry in core_release_scope.excluded_projects(scope_document)
-            }
-            dependencies = semantic_dependency_records(
-                metadata,
-                core_names=core_names,
-                excluded_names=excluded_names,
-            )
-            if args.write_structural_baseline:
-                write_structural_baseline(args.baseline, baseline, dependencies)
-                print(
-                    "ARCHITECTURE_DEPENDENCY_BASELINE_WRITTEN "
-                    f"scope={args.scope} dependencies={len(dependencies)}"
-                )
-                return 0
-            validate_baseline(baseline, policy)
-            findings = structural_findings(baseline, dependencies)
-            for finding in findings:
-                print(finding.render())
-            if args.output is not None:
-                write_structural_output(
-                    args.output,
-                    scope=args.scope,
-                    dependencies=dependencies,
-                    findings=findings,
-                )
-            if findings:
-                print(f"ARCHITECTURE_DEPENDENCY_GUARD_FAILED findings={len(findings)}")
-                return 1
-            print(
-                "ARCHITECTURE_DEPENDENCY_GUARD_OK "
-                f"mode=structural scope={args.scope} dependencies={len(dependencies)}"
-            )
-            return 0
-        validate_baseline(baseline, policy)
-        if args.fixtures:
-            return run_fixtures(policy, baseline)
-        metadata = read_metadata(args.metadata_file)
-        current_names = {item["name"] for item in workspace_packages(metadata)}
-        if (
-            args.mode == "baseline"
-            and args.metadata_file is None
-            and current_names == set(baseline["workspace_packages"])
-        ):
-            digest = normalized_metadata_sha256(metadata, args.source_root.resolve())
-            if digest != baseline["metadata_sha256"]:
-                raise InputError(
-                    "normalized cargo metadata SHA-256 drift: "
-                    f"expected={baseline['metadata_sha256']} actual={digest}"
-                )
-            write_and_verify_metadata_evidence(metadata, args.source_root.resolve(), baseline)
-        findings, messages = evaluate(
-            args.mode,
-            metadata,
-            args.source_root.resolve(),
-            policy,
-            baseline,
-        )
-        for message in messages:
-            print(message)
+        source_root = args.source_root.resolve()
+        metadata = read_metadata(args.metadata_file, source_root)
+        findings = evaluate(metadata, source_root, policy, scope=args.scope)
         for finding in findings:
             print(finding.render())
         if args.output is not None:
-            write_output(args.output, args.mode, findings, messages)
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(
+                json.dumps({"scope": args.scope, "findings": [dataclasses.asdict(f) for f in findings]}, indent=2) + "\n",
+                encoding="utf-8",
+            )
         if findings:
             print(f"ARCHITECTURE_DEPENDENCY_GUARD_FAILED findings={len(findings)}")
             return 1
-        print(f"ARCHITECTURE_DEPENDENCY_GUARD_OK mode={args.mode}")
+        print(f"ARCHITECTURE_DEPENDENCY_GUARD_OK scope={args.scope}")
         return 0
-    except InputError as error:
+    except (InputError, OSError, ValueError, KeyError, TypeError) as error:
         print(f"INPUT_ERROR {error}", file=sys.stderr)
         return 2
 

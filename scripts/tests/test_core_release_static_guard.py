@@ -23,7 +23,7 @@ from scripts import core_release_static_guard as guard
 
 
 class CoreReleaseStaticGuardTests(unittest.TestCase):
-    def test_required_routes_use_core_structural_and_semantic_modes(self) -> None:
+    def test_required_routes_use_core_scope_and_semantic_documentation(self) -> None:
         routes = guard.required_routes()
         commands = {route.route_id: route.argv for route in routes}
 
@@ -32,22 +32,15 @@ class CoreReleaseStaticGuardTests(unittest.TestCase):
                 "public-api-intent",
                 "telemetry-semantic",
                 "rust-hygiene",
-                "rust-lint-debt",
                 "architecture-dependency",
                 "architecture-documentation",
-                "architecture-debt",
-                "stable-surface",
-                "architecture-release",
             },
             set(commands),
         )
         for command in commands.values():
             self.assertIn("--scope", command)
             self.assertIn("core-release", command)
-        self.assertEqual("structural", commands["architecture-dependency"][commands["architecture-dependency"].index("--mode") + 1])
         self.assertEqual("semantic", commands["architecture-documentation"][commands["architecture-documentation"].index("--mode") + 1])
-        self.assertEqual("target", commands["stable-surface"][commands["stable-surface"].index("--mode") + 1])
-        self.assertEqual("structural", commands["architecture-release"][commands["architecture-release"].index("--mode") + 1])
         serialized = " ".join(argument for command in commands.values() for argument in command).lower()
         for forbidden in ("sha256", "fingerprint", "--mode baseline", "--mode transition"):
             self.assertNotIn(forbidden, serialized)

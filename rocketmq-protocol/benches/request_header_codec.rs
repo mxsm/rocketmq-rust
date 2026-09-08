@@ -53,7 +53,7 @@ use serde::Serialize;
 #[global_allocator]
 static ALLOCATOR: CountingAllocator<System> = CountingAllocator::new(System);
 
-const CORPUS_JSON: &str = include_str!("../../scripts/request-header-codec/perf-corpus-v1.json");
+const CORPUS_JSON: &str = include_str!("../tests/fixtures/request_header_codec/perf-corpus-v1.json");
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

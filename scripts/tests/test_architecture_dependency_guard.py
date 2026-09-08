@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import subprocess
 import sys
@@ -26,7 +25,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 GUARD = ROOT / "scripts" / "architecture_dependency_guard.py"
 POLICY = ROOT / "scripts" / "architecture-dependency-policy.json"
-BASELINE = ROOT / "scripts" / "architecture-dependency-baseline.json"
 
 
 def package(
@@ -66,55 +64,26 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
         self,
         fixture: dict[str, object],
         *,
-        mode: str = "target",
         source_files: dict[str, str] | None = None,
-        complete_target: bool = True,
         policy_override: dict[str, object] | None = None,
-        baseline_override: dict[str, object] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp = Path(temp_dir)
-            metadata_file = temp / "metadata.json"
-            selected_policy = policy_override or json.loads(POLICY.read_text(encoding="utf-8"))
-            if mode in {"transition", "target"} and complete_target:
-                fixture = copy.deepcopy(fixture)
-                existing = {item["name"] for item in fixture["packages"]}
-                for name in selected_policy["target_dag"]:
-                    if name not in existing:
-                        fixture["packages"].append(package(name))
-                fixture["workspace_members"] = [item["id"] for item in fixture["packages"]]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata_file = root / "metadata.json"
             metadata_file.write_text(json.dumps(fixture), encoding="utf-8")
-            source_root = temp / "source"
-            source_root.mkdir()
             for relative, content in (source_files or {}).items():
-                path = source_root / relative
+                path = root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content, encoding="utf-8")
-
             policy_path = POLICY
             if policy_override is not None:
-                policy_path = temp / "policy.json"
+                policy_path = root / "policy.json"
                 policy_path.write_text(json.dumps(policy_override), encoding="utf-8")
-            baseline_path = BASELINE
-            if baseline_override is not None:
-                baseline_path = temp / "baseline.json"
-                baseline_path.write_text(json.dumps(baseline_override), encoding="utf-8")
-
-            command = [
-                sys.executable,
-                str(GUARD),
-                "--mode",
-                mode,
-                "--policy",
-                str(policy_path),
-                "--baseline",
-                str(baseline_path),
-                "--metadata-file",
-                str(metadata_file),
-                "--source-root",
-                str(source_root),
-            ]
-            return subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
+            return subprocess.run(
+                [sys.executable, str(GUARD), "--scope", "all", "--policy", str(policy_path),
+                 "--metadata-file", str(metadata_file), "--source-root", str(root)],
+                cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False,
+            )
 
     def assert_rule(self, result: subprocess.CompletedProcess[str], rule: str) -> None:
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
@@ -123,22 +92,6 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
         self.assertIn("target=", result.stdout)
         self.assertIn("path=", result.stdout)
         self.assertIn("kind=", result.stdout)
-
-    def baseline_packages(self, extra: list[dict[str, object]] | None = None) -> list[dict[str, object]]:
-        baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
-        values = [package(name) for name in baseline["workspace_packages"]]
-        values.extend(extra or [])
-        return values
-
-    def test_clean_target_fixture_is_completed_to_exact_package_set(self) -> None:
-        result = self.run_guard(metadata([package("rocketmq-model"), package("rocketmq-protocol")]))
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn("ARCHITECTURE_DEPENDENCY_GUARD_OK mode=target", result.stdout)
-
-    def test_target_rejects_incomplete_package_set(self) -> None:
-        result = self.run_guard(metadata([package("rocketmq-model")]), complete_target=False)
-        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-        self.assertIn("target workspace package set mismatch", result.stderr)
 
     def test_cycle_is_rejected(self) -> None:
         fixture = metadata(
@@ -266,9 +219,7 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
             ]
         )
         result = self.run_guard(fixture)
-        self.assertEqual(1, result.returncode)
-        self.assertNotIn("rule=transitive-forbidden-reachability", result.stdout)
-        self.assertIn("kind=dev", result.stdout)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_transport_must_not_depend_on_high_level_service(self) -> None:
         fixture = metadata(
@@ -305,524 +256,15 @@ class ArchitectureDependencyGuardTests(unittest.TestCase):
         for caller in forbidden_callers:
             self.assertTrue(any(f"caller={caller}" in line for line in findings), result.stdout)
 
-    def test_client_manifest_allowlist_matches_the_full_edge_identity_once(self) -> None:
-        manifest = "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/Cargo.toml"
-        valid = metadata(
-            [
-                package(
-                    "rocketmq-admin-core",
-                    [dependency("rocketmq-client-rust")],
-                    manifest_path=manifest,
-                ),
-                package("rocketmq-client-rust"),
-            ]
-        )
-        self.assertNotIn("rule=client-manifest-allowlist", self.run_guard(valid).stdout)
-
-        invalid_cases = {
-            "wrong kind": package(
-                "rocketmq-admin-core",
-                [dependency("rocketmq-client-rust", kind="dev")],
-                manifest_path=manifest,
-            ),
-            "renamed alias": package(
-                "rocketmq-admin-core",
-                [dependency("rocketmq-client-rust", rename="renamed_client")],
-                manifest_path=manifest,
-            ),
-            "wrong path": package(
-                "rocketmq-admin-core",
-                [dependency("rocketmq-client-rust")],
-                manifest_path="other/Cargo.toml",
-            ),
-            "duplicate edge": package(
-                "rocketmq-admin-core",
-                [dependency("rocketmq-client-rust"), dependency("rocketmq-client-rust")],
-                manifest_path=manifest,
-            ),
-        }
-        for label, caller in invalid_cases.items():
-            with self.subTest(label=label):
-                result = self.run_guard(metadata([caller, package("rocketmq-client-rust")]))
-                self.assert_rule(result, "client-manifest-allowlist")
-
-    def test_client_source_allowlist_matches_caller_path_and_alias(self) -> None:
-        manifest = "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/Cargo.toml"
-        fixture = metadata(
-            [
-                package(
-                    "rocketmq-admin-core",
-                    [dependency("rocketmq-client-rust")],
-                    manifest_path=manifest,
-                ),
-                package("rocketmq-client-rust"),
-            ]
-        )
-        allowed = self.run_guard(
-            fixture,
-            source_files={
-                "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter.rs": (
-                    "use rocketmq_client_rust::ClientConfig;\n"
-                ),
-                "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter/consumer.rs": (
-                    "use rocketmq_client_rust::ClientConfig;\n"
-                ),
-            },
-        )
-        self.assertNotIn("rule=client-source-allowlist", allowed.stdout)
-
-        outside = self.run_guard(
-            fixture,
-            source_files={
-                "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/outside.rs": (
-                    "use rocketmq_client_rust::ClientConfig;\n"
-                )
-            },
-        )
-        self.assert_rule(outside, "client-source-allowlist")
-
-        renamed_fixture = metadata(
-            [
-                package(
-                    "rocketmq-admin-core",
-                    [dependency("rocketmq-client-rust", rename="renamed_client")],
-                    manifest_path=manifest,
-                ),
-                package("rocketmq-client-rust"),
-            ]
-        )
-        renamed = self.run_guard(
-            renamed_fixture,
-            source_files={
-                "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/src/client_adapter.rs": (
-                    "use renamed_client::ClientConfig;\n"
-                )
-            },
-        )
-        self.assert_rule(renamed, "client-source-allowlist")
-
-    def test_client_policy_schema_rejects_broadened_entries(self) -> None:
-        fixture = metadata([package("rocketmq-model")])
-        policy = json.loads(POLICY.read_text(encoding="utf-8"))
-        invalid_policies = []
-
-        extra_key = copy.deepcopy(policy)
-        extra_key["client_policy"]["unexpected"] = True
-        invalid_policies.append(("extra key", extra_key))
-
-        unknown_alias = copy.deepcopy(policy)
-        unknown_alias["client_policy"]["target_source_allowlist"][0]["aliases"] = [
-            "renamed_client"
-        ]
-        invalid_policies.append(("unknown alias", unknown_alias))
-
-        duplicate_identity = copy.deepcopy(policy)
-        duplicate_identity["client_policy"]["target_manifest_allowlist"].append(
-            copy.deepcopy(duplicate_identity["client_policy"]["target_manifest_allowlist"][0])
-        )
-        invalid_policies.append(("duplicate identity", duplicate_identity))
-
-        for label, invalid_policy in invalid_policies:
-            with self.subTest(label=label):
-                result = self.run_guard(fixture, policy_override=invalid_policy)
-                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-                self.assertIn("policy client", result.stderr)
-
-    def test_test_dependency_policy_rejects_non_dev_or_broadened_entries(self) -> None:
-        fixture = metadata([package("rocketmq-model")])
-        policy = json.loads(POLICY.read_text(encoding="utf-8"))
-
-        normal = copy.deepcopy(policy)
-        normal["test_dependency_policy"]["allowed_edges"][0]["kind"] = "normal"
-        extra_key = copy.deepcopy(policy)
-        extra_key["test_dependency_policy"]["allowed_edges"][0]["glob"] = "rocketmq-broker/**"
-
-        for label, invalid_policy in (("normal", normal), ("glob", extra_key)):
-            with self.subTest(label=label):
-                result = self.run_guard(fixture, policy_override=invalid_policy)
-                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-                self.assertIn("policy test dependency", result.stderr)
-
-    def test_client_ledger_schema_rejects_reintroduced_proxy_debt(self) -> None:
-        fixture = metadata([package("rocketmq-model")])
-        baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
-        invalid_baselines = []
-
-        manifest_debt = copy.deepcopy(baseline)
-        manifest_debt["manifest_exceptions"].append(
-            {
-                "caller": "rocketmq-proxy",
-                "target": "rocketmq-client-rust",
-                "kind": "normal",
-                "path": "rocketmq-proxy/Cargo.toml",
-                "alias": "rocketmq_client_rust",
-                "count": 1,
-                "owner": "proxy",
-                "remove_by": "M08",
-            }
-        )
-        invalid_baselines.append(
-            ("manifest debt", manifest_debt, "retired by PR-M09-01")
-        )
-
-        source_debt = copy.deepcopy(baseline)
-        source_debt["source_exceptions"].append(
-            {
-                "path": "rocketmq-proxy/src/remoting.rs",
-                "alias": "rocketmq_client_rust",
-                "count": 1,
-                "owner": "proxy",
-                "remove_by": "M08",
-            }
-        )
-        invalid_baselines.append(("source debt", source_debt, "retired by PR-M08-03"))
-
-        for label, invalid_baseline, expected in invalid_baselines:
-            with self.subTest(label=label):
-                result = self.run_guard(fixture, baseline_override=invalid_baseline)
-                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-                self.assertIn(expected, result.stderr)
-
-    def test_client_source_alias_is_detected(self) -> None:
-        fixture = metadata(
-            [
-                package("rocketmq-broker", [dependency("rocketmq-client-rust", rename="mq_client")]),
-                package("rocketmq-client-rust"),
-            ]
-        )
-        result = self.run_guard(
-            fixture,
-            source_files={"rocketmq-broker/src/lib.rs": "use mq_client::producer::DefaultMQProducer;\n"},
-        )
-        self.assert_rule(result, "client-source-allowlist")
-        self.assertIn("mq_client", result.stdout)
-
-    def test_client_alias_is_scoped_to_its_manifest_caller(self) -> None:
-        fixture = metadata(
-            [
-                package("rocketmq-broker", [dependency("rocketmq-client-rust", rename="mq_client")]),
-                package("rocketmq-model"),
-                package("rocketmq-client-rust"),
-            ]
-        )
-        result = self.run_guard(
-            fixture,
-            source_files={
-                "rocketmq-model/src/lib.rs": "mod mq_client;\nuse mq_client::LocalValue;\n",
-                "rocketmq-broker/src/lib.rs": (
-                    "// use mq_client::producer::Producer;\n"
-                    "/* use mq_client::consumer::Consumer; */\n"
-                ),
-            },
-        )
-        self.assertEqual(1, result.returncode)
-        self.assertNotIn("rule=client-source-allowlist", result.stdout)
-
-    def test_rust_lexer_ignores_literals_and_keeps_real_import(self) -> None:
-        fixture = metadata(
-            [
-                package("rocketmq-broker", [dependency("rocketmq-client-rust")]),
-                package("rocketmq-client-rust"),
-            ]
-        )
-        source = r'''
-const A: &str = "rocketmq_client_rust::fake /*";
-const B: &[u8] = b"rocketmq_client_rust::fake";
-const C: &str = r#"rocketmq_client_rust::fake"#;
-const D: &[u8] = br##"rocketmq_client_rust::fake"##;
-const CH: char = '/';
-fn lifetime<'a>(value: &'a str) -> &'a str { value }
-/* outer /* nested rocketmq_client_rust::fake */ still comment */
-use rocketmq_client_rust::producer::Producer;
-'''
-        result = self.run_guard(
-            fixture,
-            source_files={"rocketmq-broker/src/lib.rs": source},
-        )
-        source_findings = [
-            line for line in result.stdout.splitlines() if "rule=client-source-allowlist" in line
-        ]
-        self.assertEqual(1, len(source_findings), result.stdout)
-
-    def test_unclosed_rust_lexical_construct_fails_closed(self) -> None:
-        fixture = metadata(
-            [
-                package("rocketmq-broker", [dependency("rocketmq-client-rust")]),
-                package("rocketmq-client-rust"),
-            ]
-        )
-        result = self.run_guard(
-            fixture,
-            source_files={
-                "rocketmq-broker/src/lib.rs": (
-                    'const BAD: &str = "rocketmq_client_rust::unterminated;\n'
-                )
-            },
-        )
-        self.assertEqual(2, result.returncode)
-        self.assertIn("unterminated Rust", result.stderr)
-
-    def test_baseline_rejects_new_import_in_existing_consumer_directory(self) -> None:
-        fixture_packages = [item for item in self.baseline_packages() if item["name"] != "rocketmq-broker"]
-        fixture_packages.append(
-            package(
-                "rocketmq-broker",
-                [dependency("rocketmq-client-rust")],
-                manifest_path="rocketmq-broker/Cargo.toml",
-            )
-        )
-        result = self.run_guard(
-            metadata(fixture_packages),
-            mode="baseline",
-            source_files={"rocketmq-broker/src/new_dependency.rs": "use rocketmq_client_rust::ClientConfig;\n"},
-        )
-        self.assert_rule(result, "client-source-baseline-growth")
-
-    def test_baseline_rejects_source_count_growth_move_and_alias_change(self) -> None:
-        values = [item for item in self.baseline_packages() if item["name"] != "rocketmq-broker"]
-        values.append(
-            package(
-                "rocketmq-broker",
-                [dependency("rocketmq-client-rust")],
-                manifest_path="rocketmq-broker/Cargo.toml",
-            )
-        )
-        growth = self.run_guard(
-            metadata(values),
-            mode="baseline",
-            source_files={
-                "rocketmq-broker/src/broker_runtime.rs": (
-                    "use rocketmq_client_rust::One;\nuse rocketmq_client_rust::Two;\n"
-                )
-            },
-        )
-        self.assert_rule(growth, "client-source-baseline-growth")
-
-        renamed_values = [item for item in self.baseline_packages() if item["name"] != "rocketmq-broker"]
-        renamed_values.append(
-            package(
-                "rocketmq-broker",
-                [dependency("rocketmq-client-rust", rename="renamed_client")],
-                manifest_path="rocketmq-broker/Cargo.toml",
-            )
-        )
-        renamed = self.run_guard(
-            metadata(renamed_values),
-            mode="baseline",
-            source_files={"rocketmq-broker/src/moved.rs": "use renamed_client::Client;\n"},
-        )
-        self.assertEqual(1, renamed.returncode)
-        self.assertIn("rule=client-manifest-baseline-growth", renamed.stdout)
-        self.assertIn("rule=client-source-baseline-growth", renamed.stdout)
-
-    def test_baseline_rejects_second_or_renamed_manifest_edge(self) -> None:
-        values = self.baseline_packages()
-        values = [item for item in values if item["name"] != "rocketmq-broker"]
-        values.append(
-            package(
-                "rocketmq-broker",
-                [
-                    dependency("rocketmq-client-rust"),
-                    dependency("rocketmq-client-rust", kind="dev", rename="extra_client"),
-                ],
-                manifest_path="rocketmq-broker/Cargo.toml",
-            )
-        )
-        self.assert_rule(self.run_guard(metadata(values), mode="baseline"), "client-manifest-baseline-growth")
-
-    def test_compatibility_manifest_growth_fails_and_removal_passes(self) -> None:
-        reduced = self.run_guard(metadata(self.baseline_packages()), mode="baseline")
-        self.assertEqual(0, reduced.returncode, reduced.stdout + reduced.stderr)
-
-        values = [item for item in self.baseline_packages() if item["name"] != "rocketmq-broker"]
-        values.append(
-            package(
-                "rocketmq-broker",
-                [
-                    dependency("rocketmq-store"),
-                    dependency("rocketmq-store", kind="dev", rename="store_test"),
-                ],
-                manifest_path="rocketmq-broker/Cargo.toml",
-            )
-        )
-        self.assert_rule(
-            self.run_guard(metadata(values), mode="baseline"),
-            "compatibility-manifest-baseline-growth",
-        )
-
-    def test_target_compatibility_ledger_is_exact_and_only_decreases(self) -> None:
-        exact = metadata(
-            [
-                package(
-                    "rocketmq-broker",
-                    [dependency("rocketmq-store")],
-                    manifest_path="rocketmq-broker/Cargo.toml",
-                ),
-                package("rocketmq-store"),
-            ]
-        )
-        accepted = self.run_guard(exact)
-        self.assertEqual(0, accepted.returncode, accepted.stdout + accepted.stderr)
-        self.assertIn("TARGET_COMPATIBILITY_LEDGER", accepted.stdout)
-
-        for label, changed_dependency in (
-            ("renamed", dependency("rocketmq-store", rename="store_facade")),
-            ("kind", dependency("rocketmq-store", kind="dev")),
-        ):
-            with self.subTest(label=label):
-                changed = metadata(
-                    [
-                        package(
-                            "rocketmq-broker",
-                            [changed_dependency],
-                            manifest_path="rocketmq-broker/Cargo.toml",
-                        ),
-                        package("rocketmq-store"),
-                    ]
-                )
-                result = self.run_guard(changed)
-                self.assert_rule(result, "compatibility-manifest-target-growth")
-
-        duplicate = metadata(
-            [
-                package(
-                    "rocketmq-broker",
-                    [dependency("rocketmq-store"), dependency("rocketmq-store")],
-                    manifest_path="rocketmq-broker/Cargo.toml",
-                ),
-                package("rocketmq-store"),
-            ]
-        )
-        result = self.run_guard(duplicate)
-        self.assert_rule(result, "compatibility-manifest-target-growth")
-
-    def test_transition_allows_only_an_exact_unexpired_target_debt_edge(self) -> None:
-        policy = json.loads(POLICY.read_text(encoding="utf-8"))
-        policy["target_debt"]["entries"] = [
-            {
-                "caller": "rocketmq-controller",
-                "target": "rocketmq-broker",
-                "kind": "normal",
-                "path": "rocketmq-controller/Cargo.toml",
-                "alias": "rocketmq_broker",
-                "owner": "controller-fixture",
-                "reason": "fixture debt",
-                "remove_phase": "P2.1",
-                "remove_by": "2099-12-31",
-            }
-        ]
-        fixture = metadata(
-            [
-                package(
-                    "rocketmq-controller",
-                    [dependency("rocketmq-broker")],
-                    manifest_path="rocketmq-controller/Cargo.toml",
-                ),
-                package("rocketmq-broker"),
-            ]
-        )
-
-        transition = self.run_guard(
-            fixture,
-            mode="transition",
-            policy_override=policy,
-        )
-        self.assertEqual(0, transition.returncode, transition.stdout + transition.stderr)
-        self.assertIn("TARGET_DEBT_LEDGER active_edges=1 entries=1", transition.stdout)
-
-        strict = self.run_guard(fixture, policy_override=policy)
-        self.assert_rule(strict, "target-dag-direct-dependency")
-
-    def test_transition_rejects_stale_and_expired_target_debt(self) -> None:
-        policy = json.loads(POLICY.read_text(encoding="utf-8"))
-        entry = {
-            "caller": "rocketmq-controller",
-            "target": "rocketmq-broker",
-            "kind": "normal",
-            "path": "rocketmq-controller/Cargo.toml",
-            "alias": "rocketmq_broker",
-            "owner": "controller-fixture",
-            "reason": "fixture debt",
-            "remove_phase": "P2.1",
-            "remove_by": "2099-12-31",
-        }
-        policy["target_debt"]["entries"] = [entry]
-        stale = self.run_guard(
-            metadata([package("rocketmq-controller"), package("rocketmq-broker")]),
-            mode="transition",
-            policy_override=policy,
-        )
-        self.assert_rule(stale, "target-debt-stale")
-
-        expired_policy = copy.deepcopy(policy)
-        expired_policy["target_debt"]["entries"][0]["remove_by"] = "2000-01-01"
-        expired = self.run_guard(
-            metadata(
-                [
-                    package(
-                        "rocketmq-controller",
-                        [dependency("rocketmq-broker")],
-                        manifest_path="rocketmq-controller/Cargo.toml",
-                    ),
-                    package("rocketmq-broker"),
-                ]
-            ),
-            mode="transition",
-            policy_override=expired_policy,
-        )
-        self.assert_rule(expired, "target-debt-expired")
-
-    def test_test_dependency_allowlist_cannot_promote_to_normal(self) -> None:
-        accepted = metadata(
-            [
-                package(
-                    "rocketmq-broker",
-                    [dependency("rocketmq-controller", kind="dev")],
-                    manifest_path="rocketmq-broker/Cargo.toml",
-                ),
-                package("rocketmq-controller"),
-            ]
-        )
-        result = self.run_guard(accepted)
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn("TARGET_TEST_DEPENDENCIES", result.stdout)
-
-        promoted = metadata(
-            [
-                package(
-                    "rocketmq-broker",
-                    [dependency("rocketmq-controller")],
-                    manifest_path="rocketmq-broker/Cargo.toml",
-                ),
-                package("rocketmq-controller"),
-            ]
-        )
-        self.assert_rule(self.run_guard(promoted), "target-dag-direct-dependency")
-
-    def test_standalone_compatibility_growth_rename_and_kind_fail(self) -> None:
-        result = self.run_guard(
-            metadata(self.baseline_packages()),
-            mode="baseline",
-            source_files={
-                "rocketmq-example/Cargo.toml": """
-[package]
-name = "rocketmq-example"
-version = "0.1.0"
-[dev-dependencies]
-rocketmq-store = { path = "../rocketmq-store" }
-[build-dependencies]
-renamed-store = { package = "rocketmq-store", path = "../rocketmq-store" }
-""",
-            },
-        )
-        self.assert_rule(result, "compatibility-manifest-baseline-growth")
-        self.assertIn("kind=build", result.stdout)
-        self.assertIn("alias=renamed_store", result.stdout)
-
     def test_standalone_workspace_inherited_rename_resolves_for_all_kinds(self) -> None:
+        policy = json.loads(POLICY.read_text(encoding="utf-8"))
+        policy["package_rules"].append({
+            "id": "fixture-no-store", "callers": ["rocketmq-example"],
+            "forbidden_targets": ["rocketmq-store"],
+        })
         result = self.run_guard(
-            metadata(self.baseline_packages()),
-            mode="baseline",
+            metadata([package("rocketmq-store")]),
+            policy_override=policy,
             source_files={
                 "Cargo.toml": """
 [workspace]
@@ -849,24 +291,19 @@ legacy-dev = { workspace = true }
         findings = [
             line
             for line in result.stdout.splitlines()
-            if "rule=compatibility-manifest-baseline-growth" in line
+            if "rule=fixture-no-store" in line
         ]
         self.assertEqual(3, len(findings), result.stdout)
-        for kind, alias in (
-            ("normal", "legacy_normal"),
-            ("build", "legacy_build"),
-            ("dev", "legacy_dev"),
-        ):
+        for kind in ("normal", "build", "dev"):
             self.assertTrue(
-                any(f"kind={kind}" in line and f"alias={alias}" in line for line in findings),
+                any(f"kind={kind}" in line for line in findings),
                 result.stdout,
             )
         self.assertTrue(all("target=rocketmq-store" in line for line in findings), result.stdout)
 
     def test_missing_workspace_inherited_dependency_is_input_error(self) -> None:
         result = self.run_guard(
-            metadata(self.baseline_packages()),
-            mode="baseline",
+            metadata([package("rocketmq-store")]),
             source_files={
                 "Cargo.toml": "[workspace]\nmembers = []\n[workspace.dependencies]\n",
                 "rocketmq-example/Cargo.toml": """
@@ -880,37 +317,6 @@ missing-alias = { workspace = true }
         )
         self.assertEqual(2, result.returncode)
         self.assertIn("workspace dependency missing-alias", result.stderr)
-
-    def test_baseline_rejects_unknown_package(self) -> None:
-        unknown = self.run_guard(
-            metadata(self.baseline_packages([package("rocketmq-unplanned")])),
-            mode="baseline",
-        )
-        self.assertEqual(2, unknown.returncode)
-        self.assertIn("unplanned workspace packages", unknown.stderr)
-
-    def test_baseline_enforces_rules_on_current_packages(self) -> None:
-        values = [
-            item for item in self.baseline_packages() if item["name"] != "rocketmq-model"
-        ]
-        values.append(package("rocketmq-model", [dependency("rocketmq-store")]))
-        self.assert_rule(self.run_guard(metadata(values), mode="baseline"), "foundation-no-facade")
-
-    def test_all_standalone_cargo_roots_are_scanned(self) -> None:
-        fixture = metadata([package("rocketmq-model"), package("rocketmq-client-rust")])
-        result = self.run_guard(
-            fixture,
-            source_files={
-                "rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml": """
-[package]
-name = "fixture-gpui"
-version = "0.1.0"
-[dependencies]
-rocketmq-client-rust = { path = "../../rocketmq-client" }
-""",
-            },
-        )
-        self.assert_rule(result, "client-manifest-allowlist")
 
     def test_distinct_directed_cycles_are_not_collapsed_by_node_set(self) -> None:
         fixture = metadata(
@@ -933,89 +339,16 @@ rocketmq-client-rust = { path = "../../rocketmq-client" }
         cycles = [line for line in result.stdout.splitlines() if "rule=dependency-cycle" in line]
         self.assertGreaterEqual(len(cycles), 2)
 
-    def test_baseline_uses_readable_semantic_records_without_content_digest(self) -> None:
-        baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
-        self.assertEqual(2, baseline["schema_version"])
-        self.assertIn("semantic_dependencies", baseline)
-        self.assertNotIn("metadata_sha256", baseline)
-        serialized = json.dumps(baseline).lower()
-        self.assertNotIn("sha256", serialized)
-        for entry in baseline["semantic_dependencies"]:
-            self.assertEqual(
-                {"package", "dependency", "kind", "optional", "features"},
-                set(entry),
-            )
+    def test_allowed_dependency_changes_do_not_need_a_snapshot(self) -> None:
+        for dependencies in ([], [dependency("serde")], [dependency("serde", rename="serialization")]):
+            with self.subTest(dependencies=dependencies):
+                result = self.run_guard(metadata([package("new-tool", dependencies)]))
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
-    def test_live_structural_core_mode_emits_only_semantic_core_dependencies(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output = Path(temp_dir) / "dependencies.json"
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(GUARD),
-                    "--mode",
-                    "structural",
-                    "--scope",
-                    "core-release",
-                    "--output",
-                    str(output),
-                ],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-            payload = json.loads(output.read_text(encoding="utf-8"))
-        self.assertEqual(("core-release", "structural", "compliant"), (payload["scope"], payload["mode"], payload["status"]))
-        self.assertNotIn("sha256", json.dumps(payload).lower())
-        self.assertTrue(payload["dependencies"])
-        self.assertFalse(any(entry["package"] == "rocketmq-dashboard-common" for entry in payload["dependencies"]))
-        self.assertFalse(any(entry["dependency"] == "rocketmq-dashboard-common" for entry in payload["dependencies"]))
-
-    def test_policy_encodes_all_29_target_packages(self) -> None:
-        policy = json.loads(POLICY.read_text(encoding="utf-8"))
-        baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
-        expected = set(baseline["workspace_packages"]) | set(policy["planned_packages"])
-        self.assertEqual(expected, set(policy["target_dag"]))
-        self.assertEqual(29, len(policy["target_dag"]))
-
-    def test_target_dag_rejects_cluster_edges_outside_its_boundary(self) -> None:
-        for target in (
-            "rocketmq-auth",
-            "rocketmq-broker",
-            "rocketmq-store",
-        ):
-            with self.subTest(target=target):
-                fixture = metadata(
-                    [
-                        package("rocketmq-proxy-cluster", [dependency(target)]),
-                        package(target),
-                    ]
-                )
-                self.assert_rule(self.run_guard(fixture), "target-dag-direct-dependency")
-
-    def test_removed_allow_missing_override_is_rejected(self) -> None:
-        result = subprocess.run(
-            [sys.executable, str(GUARD), "--allow-missing-planned-crates"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-        self.assertIn("unrecognized arguments", result.stderr)
-
-    def test_unknown_mode_is_input_error(self) -> None:
-        result = subprocess.run(
-            [sys.executable, str(GUARD), "--mode", "unknown"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(2, result.returncode)
+    def test_dev_cycle_is_a_valid_test_seam(self) -> None:
+        fixture = metadata([package("a", [dependency("b")]), package("b", [dependency("a", kind="dev")])])
+        result = self.run_guard(fixture)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

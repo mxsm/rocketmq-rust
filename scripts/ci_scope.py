@@ -70,7 +70,7 @@ def classify(paths: list[str], members: tuple[str, ...], *, full: bool = False) 
             for path in code
         ),
         "header": full or global_config or any(
-            under(path, ("rocketmq-protocol", "rocketmq-macros", "scripts/request-header-codec"))
+            under(path, ("rocketmq-protocol", "rocketmq-macros"))
             for path in code
         ),
         "errors": full or global_config or any(

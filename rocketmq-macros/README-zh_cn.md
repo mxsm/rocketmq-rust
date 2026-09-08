@@ -125,13 +125,12 @@ struct Header {
 | [`src/request_header_custom.rs`](src/request_header_custom.rs) | 已废弃的 V1 parse/wrapper entry，转发到冻结兼容适配器。 |
 | [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | Remoting 序列化 derive。 |
 
-Cargo 构建不会访问 Java checkout。Java schema、golden frame、迁移状态和性能证据由仓库中的 `scripts/request-header-codec` 资产治理。
+Cargo 构建不会访问 Java checkout。Java schema、golden frame、请求头注册数据和基准测试输入保存在协议 crate 的[兼容性夹具目录](../rocketmq-protocol/tests/fixtures/request_header_codec/README.md)中。
 
 ## 验证
 
 ```powershell
-python scripts/request-header-codec/migrate.py check
-python scripts/request-header-codec/compare_header_schema.py
+cargo test -p rocketmq-protocol --test request_header_codec_v3_registry
 cargo test -p rocketmq-macros --lib
 cargo test -p rocketmq-protocol --test request_header_codec_v1_ui
 cargo test -p rocketmq-protocol --test request_header_codec_v1_wire_snapshot
