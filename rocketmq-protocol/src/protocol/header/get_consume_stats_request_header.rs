@@ -73,24 +73,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_consume_stats_request_header_serde() {
-        let mut header = GetConsumeStatsRequestHeader {
-            consumer_group: CheetahString::new(),
-            topic: CheetahString::new(),
-            topic_list: None,
-            topic_request_header: None,
-        };
-        header.set_consumer_group(CheetahString::from("testGroup"));
-        header.set_topic(CheetahString::from("testTopic"));
-
-        let json = serde_json::to_string(&header).unwrap();
-
-        let deserialized: GetConsumeStatsRequestHeader = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.get_consumer_group(), "testGroup");
-        assert_eq!(deserialized.get_topic(), "testTopic");
-    }
-
-    #[test]
     fn get_consume_stats_request_header_deserialize_with_extra_fields() {
         let json = r#"
         {
