@@ -680,13 +680,13 @@ mod tests {
 
     #[test]
     fn map_authz_error_preserves_admin_error_category() {
-        let invalid = map_authz_error(AuthServicerocketmq_error::Error::new(
+        let invalid = map_authz_error(AuthServiceError::new(
             AuthOperation::BuildContext,
             AuthFailureKind::InvalidInput,
         ));
         assert_eq!(invalid.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
 
-        let config = map_authz_error(AuthServicerocketmq_error::Error::new(
+        let config = map_authz_error(AuthServiceError::new(
             AuthOperation::Initialize,
             AuthFailureKind::InvalidConfiguration,
         ));
@@ -698,10 +698,7 @@ mod tests {
             std::io::Error::other("storage failed"),
         ));
         assert_eq!(storage.descriptor(), &rocketmq_error::STORAGE_READ_FAILED);
-        let crate::broker_error::from_shared(canonical) = storage else {
-            panic!("canonical storage projection must use the shared carrier")
-        };
-        let auth = std::error::Error::source(canonical.as_ref()).expect("auth facade source");
+        let auth = std::error::Error::source(storage.as_ref()).expect("auth facade source");
         assert!(auth.downcast_ref::<AuthServiceError>().is_some());
     }
 

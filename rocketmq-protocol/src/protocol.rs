@@ -230,23 +230,21 @@ pub trait RemotingDeserializable {
 
 impl<T: Serialize> RemotingSerializable for T {
     fn encode(&self) -> rocketmq_error::Result<Vec<u8>> {
-        Ok(serde_json::to_vec(self).map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?)
+        serde_json::to_vec(self).map_err(|error| crate::error::serialization_source("serialize", "JSON", error))
     }
     fn serialize_json(&self) -> rocketmq_error::Result<String> {
-        Ok(serde_json::to_string(self)
-            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?)
+        serde_json::to_string(self).map_err(|error| crate::error::serialization_source("serialize", "JSON", error))
     }
     fn serialize_json_pretty(&self) -> rocketmq_error::Result<String> {
-        Ok(serde_json::to_string_pretty(self)
-            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))?)
+        serde_json::to_string_pretty(self)
+            .map_err(|error| crate::error::serialization_source("serialize", "JSON", error))
     }
 }
 
 impl<T: serde::de::DeserializeOwned> RemotingDeserializable for T {
     type Output = T;
     fn decode(bytes: &[u8]) -> rocketmq_error::Result<Self::Output> {
-        Ok(serde_json::from_slice(bytes)
-            .map_err(|error| crate::error::serialization_source("deserialize", "JSON", error))?)
+        serde_json::from_slice(bytes).map_err(|error| crate::error::serialization_source("deserialize", "JSON", error))
     }
 }
 

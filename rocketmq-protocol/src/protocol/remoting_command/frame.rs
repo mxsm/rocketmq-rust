@@ -53,8 +53,7 @@ impl RemotingCommand {
             return Err(crate::error::serialization_encode_failed(
                 "remoting-command",
                 format!("encoded header is {header_length} bytes, exceeding the 24-bit wire limit"),
-            )
-            .into());
+            ));
         }
         let payload_length = 4usize
             .checked_add(header_length)

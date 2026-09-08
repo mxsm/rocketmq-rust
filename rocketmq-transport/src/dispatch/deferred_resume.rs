@@ -717,7 +717,7 @@ where
         }
         HandlerOutcome::Completed(Err(error)) => {
             let context = error.context();
-            let view = rocketmq_error::PublicErrorView::try_new(error.descriptor(), &context)
+            let view = rocketmq_error::PublicErrorView::try_new(error.descriptor(), context)
                 .unwrap_or_else(|_| rocketmq_error::PublicErrorView::descriptor_only(error.descriptor()));
             let command = crate::error_response::error_response(
                 view,

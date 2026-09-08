@@ -87,7 +87,6 @@ pub fn stable_error_message(error: &CanonicalError) -> String {
 #[cfg(test)]
 mod tests {
     use super::AdminErrorView;
-    use rocketmq_error::Error as CanonicalError;
 
     #[test]
     fn admin_error_view_uses_stable_code_and_redacted_context() {

@@ -31,6 +31,6 @@ mod tests {
     fn cluster_error_uses_catalog_identity_and_stable_remoting_code() {
         let cluster = cluster_not_found("TestCluster");
         assert_eq!(cluster.code(), ROUTE_CLUSTER_NOT_FOUND.code());
-        assert_eq!(cluster.projection().remoting().code.as_i32(), 9);
+        assert_eq!(cluster.projection().remoting().code.as_i32(), 211);
     }
 }

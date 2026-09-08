@@ -282,7 +282,7 @@ where
             Ok(outcome) => Ok(outcome),
             Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
                 let context = error.context();
-                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                let view = PublicErrorView::try_new(error.descriptor(), context)
                     .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
                 BrokerResponseParts::from_command(remoting_error_response(
                     view,
@@ -511,7 +511,7 @@ where
             .context
             .topics
             .select_topic_config(request_header.topic())
-            .ok_or_else(|| crate::broker_error::topic_not_found(request_header.topic().to_string()))?;
+            .ok_or_else(|| crate::broker_error::topic_not_found(request_header.topic()))?;
         let mut queue_id = request_header.queue_id;
         if queue_id < 0 {
             queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
@@ -713,7 +713,7 @@ where
             .context
             .topics
             .select_topic_config(request_header.topic())
-            .ok_or_else(|| crate::broker_error::topic_not_found(request_header.topic().to_string()))?;
+            .ok_or_else(|| crate::broker_error::topic_not_found(request_header.topic()))?;
         let mut queue_id = request_header.queue_id;
         if queue_id < 0 {
             queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
@@ -2369,7 +2369,7 @@ mod tests {
             (): (),
         ) -> impl Future<Output = Result<Self::Receipt, rocketmq_store_api::StoreError>> + Send {
             let result = self.receipt.take().ok_or_else(|| {
-                rocketmq_store_api::Storerocketmq_error::Error::new(
+                rocketmq_store_api::StoreError::new(
                     &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
                     rocketmq_store_api::StoreOperation::Append,
                 )
@@ -2606,12 +2606,9 @@ mod tests {
 
         for (descriptor, expected_code, expected_message, expected_retry) in cases {
             let mapped = map_store_api_error(
-                rocketmq_store_api::Storerocketmq_error::Error::new(
-                    descriptor,
-                    rocketmq_store_api::StoreOperation::Append,
-                )
-                .with_detail("backend-secret")
-                .with_source(std::io::Error::other("source-secret")),
+                rocketmq_store_api::StoreError::new(descriptor, rocketmq_store_api::StoreOperation::Append)
+                    .with_detail("backend-secret")
+                    .with_source(std::io::Error::other("source-secret")),
             );
 
             assert_eq!(mapped.retry, expected_retry, "descriptor {}", descriptor.code());
@@ -2677,9 +2674,7 @@ mod tests {
         ];
 
         for (descriptor, operation, expected_retry) in cases {
-            let mapped = map_store_api_error(rocketmq_store_api::Storerocketmq_error::Error::new(
-                descriptor, operation,
-            ));
+            let mapped = map_store_api_error(rocketmq_store_api::StoreError::new(descriptor, operation));
             assert_eq!(mapped.retry, expected_retry, "{} / {operation:?}", descriptor.code());
         }
     }
@@ -2697,7 +2692,7 @@ mod tests {
 
         impl std::error::Error for StoreSource {}
 
-        let store_error = rocketmq_store_api::Storerocketmq_error::Error::new(
+        let store_error = rocketmq_store_api::StoreError::new(
             &rocketmq_error::STORAGE_WRITE_FAILED,
             rocketmq_store_api::StoreOperation::Append,
         )

@@ -20,7 +20,6 @@ use rocketmq_broker::config::broker_config::BrokerConfig;
 use rocketmq_broker::config::error::BrokerConfigError;
 use rocketmq_broker::config::error::ConfigSection;
 use rocketmq_broker::config::validated::ValidatedBrokerConfig;
-use rocketmq_broker::BrokerStartupError;
 use rocketmq_broker::Builder;
 use rocketmq_observability::TelemetryRuntimeGuard;
 use rocketmq_runtime::RuntimeContext;

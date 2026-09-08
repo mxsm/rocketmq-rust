@@ -628,7 +628,7 @@ mod tests {
                     .with_secret_presence(rocketmq_error::fields::REMOTE_ADDR_PRESENT)
                     .with_secret_presence(rocketmq_error::fields::SOURCE_PRESENT);
                 Err(crate::broker_error::from_shared(Arc::new(
-                    rocketmq_error::rocketmq_error::Error::caused_by(
+                    rocketmq_error::Error::caused_by(
                         &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
                         std::io::Error::other("unavailable"),
                     )

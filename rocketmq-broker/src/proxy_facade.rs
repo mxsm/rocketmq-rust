@@ -180,7 +180,7 @@ impl ProxyBrokerFacade {
         let topic_config = self
             .runtime
             .topic_config(&topic_name)
-            .ok_or_else(|| crate::broker_error::topic_not_found(topic.to_owned()))?;
+            .ok_or_else(|| crate::broker_error::topic_not_found(topic))?;
 
         Ok(build_topic_route(&self.runtime.broker_config(), topic_config.as_ref()))
     }
@@ -190,7 +190,7 @@ impl ProxyBrokerFacade {
         let topic_config = self
             .runtime
             .topic_config(&topic_name)
-            .ok_or_else(|| crate::broker_error::topic_not_found(topic.to_owned()))?;
+            .ok_or_else(|| crate::broker_error::topic_not_found(topic))?;
         Ok(topic_config.get_topic_message_type())
     }
 
@@ -320,10 +320,7 @@ mod tests {
             embedded_dispatch_request_outcome(EmbeddedDispatchOutcome::DeadlineExceeded, Duration::from_millis(41))
                 .expect_err("deadline control must remain a Broker timeout");
 
-        assert!(matches!(
-            error,
-            crate::broker_error::timeout("embedded_broker_response", 41)
-        ));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_OPERATION_TIMED_OUT);
     }
 
     #[test]

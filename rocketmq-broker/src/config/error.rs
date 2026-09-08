@@ -46,7 +46,7 @@ impl fmt::Display for ConfigSection {
 pub enum BrokerConfigError {
     Load {
         path: PathBuf,
-        source: config::ConfigError,
+        source: Box<config::ConfigError>,
     },
 
     Invalid {
@@ -153,7 +153,7 @@ impl fmt::Debug for BrokerConfigError {
 impl std::error::Error for BrokerConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Load { source, .. } => Some(source),
+            Self::Load { source, .. } => Some(source.as_ref()),
             Self::Runtime { source, .. } => Some(source),
             Self::Contract { source, .. } => Some(source),
             _ => None,
@@ -190,5 +190,15 @@ impl BrokerConfigError {
         keys.sort();
         keys.dedup();
         Self::UnsupportedKeys { keys: keys.join(",") }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BrokerConfigError;
+
+    #[test]
+    fn broker_config_error_stays_below_the_large_result_threshold() {
+        assert!(std::mem::size_of::<BrokerConfigError>() <= 96);
     }
 }

@@ -462,7 +462,7 @@ where
                 }
                 Err(error) => {
                     let context = error.context();
-                    let view = PublicErrorView::try_new(error.descriptor(), &context)
+                    let view = PublicErrorView::try_new(error.descriptor(), context)
                         .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
                     let command = crate::error_response::error_response(
                         view,
@@ -516,7 +516,7 @@ fn apply_after_hook(
                 .map(InternalFailureOrigin::after_hook_error)
                 .unwrap_or(InternalFailureOrigin::AfterHook);
             let context = error.context();
-            let view = PublicErrorView::try_new(error.descriptor(), &context)
+            let view = PublicErrorView::try_new(error.descriptor(), context)
                 .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
             let command = crate::error_response::error_response(
                 view,

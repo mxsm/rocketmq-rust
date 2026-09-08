@@ -306,7 +306,7 @@ pub(super) enum FastFailureAwaitError {
 
 pub(super) struct FastFailureRejection {
     kind: FastFailureRejectionKind,
-    response: RemotingCommand,
+    response: Box<RemotingCommand>,
 }
 
 impl std::fmt::Debug for FastFailureRejection {
@@ -322,7 +322,10 @@ impl std::fmt::Debug for FastFailureRejection {
 
 impl FastFailureRejection {
     fn new(kind: FastFailureRejectionKind, response: RemotingCommand) -> Self {
-        Self { kind, response }
+        Self {
+            kind,
+            response: Box::new(response),
+        }
     }
 
     pub(super) const fn kind(&self) -> FastFailureRejectionKind {
@@ -330,13 +333,13 @@ impl FastFailureRejection {
     }
 
     pub(super) fn into_legacy_command(self) -> RemotingCommand {
-        self.response
+        *self.response
     }
 
     pub(super) fn into_remoting_response(mut self) -> Result<RemotingResponse, TransportContractViolation> {
         match self.response.take_body() {
-            Some(body) => RemotingResponse::bytes(self.response, body),
-            None => RemotingResponse::command(self.response),
+            Some(body) => RemotingResponse::bytes(*self.response, body),
+            None => RemotingResponse::command(*self.response),
         }
     }
 }
@@ -348,7 +351,7 @@ pub(super) fn try_admit(
 ) -> Result<FastFailureAdmission, FastFailureRejection> {
     let (task, response_rx) = service
         .try_enqueue(queue_kind, metadata.opaque, metadata.retained_bytes)
-        .map_err(|response| FastFailureRejection::new(FastFailureRejectionKind::Budget, response))?;
+        .map_err(|response| FastFailureRejection::new(FastFailureRejectionKind::Budget, *response))?;
     Ok(FastFailureAdmission {
         service: service.clone(),
         queue_kind,

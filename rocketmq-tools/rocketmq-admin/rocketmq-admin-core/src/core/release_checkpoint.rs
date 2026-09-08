@@ -183,7 +183,7 @@ impl ReleaseCheckpointSetBuilder {
 pub fn verify_checkpoint_set(manifest: &ReleaseCheckpointSetManifest) -> AdminResult<()> {
     manifest
         .validate()
-        .map_err(|error| AdminError::invalid_argument("checkpointSet", error.to_string()))
+        .map_err(|error| AdminError::invalid_argument_source("checkpointSet", error))
 }
 
 /// Verifies that every Controller/Store member produced exactly one complete
@@ -197,7 +197,7 @@ pub fn verify_checkpoint_set_restore(
     for proof in proofs {
         proof
             .validate()
-            .map_err(|error| AdminError::invalid_argument("restoreProof", error.to_string()))?;
+            .map_err(|error| AdminError::invalid_argument_source("restoreProof", error))?;
         if proof.generation != manifest.generation {
             return Err(AdminError::invalid_argument(
                 "restoreProof.generation",
@@ -231,15 +231,15 @@ pub fn verify_checkpoint_set_restore(
 }
 
 pub fn decode_checkpoint_set(bytes: &[u8]) -> AdminResult<ReleaseCheckpointSetManifest> {
-    let manifest = serde_json::from_slice(bytes)
-        .map_err(|error| AdminError::invalid_argument("checkpointSet", error.to_string()))?;
+    let manifest =
+        serde_json::from_slice(bytes).map_err(|error| AdminError::invalid_argument_source("checkpointSet", error))?;
     verify_checkpoint_set(&manifest)?;
     Ok(manifest)
 }
 
 pub fn encode_checkpoint_set(manifest: &ReleaseCheckpointSetManifest) -> AdminResult<Vec<u8>> {
     verify_checkpoint_set(manifest)?;
-    serde_json::to_vec_pretty(manifest).map_err(|error| AdminError::backend("encode checkpoint set", error.to_string()))
+    serde_json::to_vec_pretty(manifest).map_err(|error| AdminError::backend_source("encode checkpoint set", error))
 }
 
 #[cfg(test)]
@@ -375,5 +375,23 @@ mod tests {
                 1_800_000_000_000
             )
             .is_err());
+    }
+
+    #[test]
+    fn checkpoint_errors_retain_typed_sources() {
+        let decode_error = decode_checkpoint_set(b"{").expect_err("malformed JSON must fail");
+        let decode_source = std::error::Error::source(&decode_error).expect("serde source");
+        assert!(decode_source.downcast_ref::<serde_json::Error>().is_some());
+
+        let mut manifest = ReleaseCheckpointSetBuilder::new("release-7", 7, 42, 8)
+            .expect("builder")
+            .build(controller(), vec![store("broker-a")], 1_800_000_000_000)
+            .expect("complete set");
+        manifest.checkpoint_set_id.clear();
+        let validation_error = verify_checkpoint_set(&manifest).expect_err("invalid manifest must fail");
+        let validation_source = std::error::Error::source(&validation_error).expect("protocol validation source");
+        assert!(validation_source
+            .downcast_ref::<rocketmq_protocol::ProtocolContractViolation>()
+            .is_some());
     }
 }

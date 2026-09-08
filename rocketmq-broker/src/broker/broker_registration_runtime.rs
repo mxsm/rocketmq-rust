@@ -506,8 +506,6 @@ fn need_register(change_list: &[bool]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use rocketmq_error::SharedError;
-
     #[test]
     fn registration_boundary_does_not_retain_the_broker_root() {
         let source = include_str!("broker_registration_runtime.rs");
@@ -537,18 +535,11 @@ mod tests {
         assert_eq!(unavailable.descriptor().projection().remoting().code.as_i32(), 2);
         assert!(std::error::Error::source(&unavailable).is_some());
 
-        let canonical = std::sync::Arc::new(rocketmq_error::rocketmq_error::Error::new(
-            &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
-        ));
-        let coordinated = super::BrokerRegistrationError::coordination(crate::broker_error::from_shared(
-            std::sync::Arc::clone(&canonical),
-        ))
-        .into_coordination_result("broker registration coordination")
-        .expect_err("coordination failure must be returned");
-        let crate::broker_error::from_shared(shared) = coordinated else {
-            panic!("coordination must retain the underlying shared error");
-        };
-        assert!(std::sync::Arc::ptr_eq(&shared, &canonical));
+        let canonical = std::sync::Arc::new(rocketmq_error::Error::new(&rocketmq_error::TRANSPORT_CONNECTION_FAILED));
+        let coordinated = super::BrokerRegistrationError::coordination(std::sync::Arc::clone(&canonical))
+            .into_coordination_result("broker registration coordination")
+            .expect_err("coordination failure must be returned");
+        assert!(std::sync::Arc::ptr_eq(&coordinated, &canonical));
 
         let completion = super::BrokerRegistrationError::CompletionDropped
             .into_coordination_result("broker registration coordination")

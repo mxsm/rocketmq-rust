@@ -73,8 +73,7 @@ impl RemotingCommand {
             Some(body) if body.len() != body_length => Err(crate::error::serialization_encode_failed(
                 "remoting-command",
                 "explicit body length does not match the in-memory body",
-            )
-            .into()),
+            )),
             _ => self.try_fast_header_encode_inner(dst, body_length),
         };
         if result.is_err() {

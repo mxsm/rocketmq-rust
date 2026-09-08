@@ -52,6 +52,15 @@ pub(crate) fn broker_operation_failed_by(
         .with_context(ErrorContext::new().with_text(fields::OPERATION_DIAGNOSTIC, operation))
 }
 
+#[cfg(test)]
+pub(crate) fn broker_response_failed(operation: &'static str, code: i32) -> CanonicalError {
+    CanonicalError::new(&rocketmq_error::BROKER_OPERATION_FAILED).with_context(
+        ErrorContext::new()
+            .with_text(fields::OPERATION_DIAGNOSTIC, operation)
+            .with_i64(fields::BROKER_CODE, i64::from(code)),
+    )
+}
+
 pub(crate) fn broker_response_code(error: &CanonicalError) -> Option<i32> {
     error
         .diagnostic_view()

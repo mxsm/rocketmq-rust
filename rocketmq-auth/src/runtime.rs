@@ -640,9 +640,8 @@ impl AuthenticationService {
             return Ok(());
         }
 
-        let context = self.builder.build_from_remoting(command, channel_id).map_err(|error| {
+        let context = self.builder.build_from_remoting(command, channel_id).inspect_err(|_| {
             self.metrics.record_authentication_result(false);
-            error
         })?;
         self.provider.authenticate(&context).await
     }
@@ -665,9 +664,8 @@ impl AuthenticationService {
                 AuthFailureKind::Unauthenticated,
             ));
         }
-        let context = self.builder.build_from_remoting(command, channel_id).map_err(|error| {
+        let context = self.builder.build_from_remoting(command, channel_id).inspect_err(|_| {
             self.metrics.record_authentication_result(false);
-            error
         })?;
         let principal = context
             .username()
@@ -714,9 +712,8 @@ impl AuthorizationService {
         let contexts = self
             .provider
             .new_contexts_from_remoting_command(auth_context, command)
-            .map_err(|error| {
+            .inspect_err(|_| {
                 self.metrics.record_authorization_result(false);
-                error
             })?;
 
         for context in contexts {

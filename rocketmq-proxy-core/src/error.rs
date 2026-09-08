@@ -75,7 +75,7 @@ pub enum ProxyError {
     Canonical(#[source] CanonicalError),
 
     #[error("{0}")]
-    SharedCanonical(SharedError),
+    SharedCanonical(#[source] SharedError),
 
     #[error("{0}")]
     BrokerResponse(#[source] CanonicalError),
@@ -649,5 +649,20 @@ mod tests {
     fn non_broker_canonical_errors_keep_the_existing_proxy_variant() {
         let error = ProxyError::from(canonical::argument("invalid request"));
         assert!(matches!(error, ProxyError::Canonical(_)));
+    }
+
+    #[test]
+    fn shared_canonical_errors_remain_in_the_standard_source_chain() {
+        let physical = std::sync::Arc::new(CanonicalError::caused_by(
+            &CORE_INTERNAL_FAILURE,
+            std::io::Error::other("injected failure"),
+        ));
+        let proxy = ProxyError::SharedCanonical(std::sync::Arc::clone(&physical));
+
+        let source = StdError::source(&proxy).expect("shared canonical error must be a source");
+        assert_eq!(source.to_string(), physical.to_string());
+        assert!(StdError::source(source)
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .is_some());
     }
 }

@@ -164,7 +164,7 @@ pub(crate) fn immediate_outcome_from_command_result(
         Ok(None) => return Err(crate::broker_error::invariant_violated(missing_response)),
         Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
             let context = error.context();
-            let view = PublicErrorView::try_new(error.descriptor(), &context)
+            let view = PublicErrorView::try_new(error.descriptor(), context)
                 .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
             error_response(
                 view,

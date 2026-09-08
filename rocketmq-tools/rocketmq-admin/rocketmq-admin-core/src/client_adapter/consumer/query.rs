@@ -726,25 +726,25 @@ mod tests {
 
         query_consumer_connection_at("orders-consumer", proxy.clone(), |_, address| {
             fake.query_connection(address);
-            std::future::ready(Ok(connection_fixture()))
+            std::future::ready(Ok::<_, rocketmq_client_rust::ClientError>(connection_fixture()))
         })
         .await
         .expect("explicit connection query");
         query_consumer_progress_at("orders-consumer", proxy, Some(3_000), |_, address, _| {
             fake.query_progress(address);
-            std::future::ready(Ok(consume_stats_fixture()))
+            std::future::ready(Ok::<_, rocketmq_client_rust::ClientError>(consume_stats_fixture()))
         })
         .await
         .expect("explicit progress query");
         query_consumer_connection_at("orders-consumer", None, |_, address| {
             fake.query_connection(address);
-            std::future::ready(Ok(connection_fixture()))
+            std::future::ready(Ok::<_, rocketmq_client_rust::ClientError>(connection_fixture()))
         })
         .await
         .expect("discovered connection query");
         query_consumer_progress_at("orders-consumer", None, None, |_, address, _| {
             fake.query_progress(address);
-            std::future::ready(Ok(consume_stats_fixture()))
+            std::future::ready(Ok::<_, rocketmq_client_rust::ClientError>(consume_stats_fixture()))
         })
         .await
         .expect("discovered progress query");

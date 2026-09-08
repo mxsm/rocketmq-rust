@@ -141,15 +141,12 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
         if !policy.enable_pop_buffer_merge {
             return Err(crate::broker_error::client_invalid_state(
                 "buffer enabled",
-                "buffer disabled".to_string(),
+                "buffer disabled",
             ));
         }
 
         if !self.serving.load(Ordering::Acquire) {
-            return Err(crate::broker_error::client_invalid_state(
-                "serving",
-                "not serving".to_string(),
-            ));
+            return Err(crate::broker_error::client_invalid_state("serving", "not serving"));
         }
 
         let now = current_millis();
@@ -865,7 +862,7 @@ impl<MS: BrokerReadWriteStore> PopBufferMergeService<MS> {
             .commit_offsets
             .get(&lock_key)
             .map(|queue| Arc::clone(queue.get()))
-            .ok_or_else(|| crate::broker_error::storage_read_failed())?;
+            .ok_or_else(crate::broker_error::storage_read_failed)?;
 
         let mut guard = queue.lock().await;
 

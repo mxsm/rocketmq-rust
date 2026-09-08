@@ -824,7 +824,6 @@ mod tests {
     use super::AdminRequestCaller;
     use super::AdminSessionFact;
     use bytes::Bytes;
-    use rocketmq_error::SharedError;
     use rocketmq_protocol::code::request_code::RequestCode;
     use rocketmq_protocol::code::response_code::ResponseCode;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;

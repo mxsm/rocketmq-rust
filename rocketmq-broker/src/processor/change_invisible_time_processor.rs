@@ -812,7 +812,7 @@ mod tests {
     async fn dispatch_embedded<P>(
         processor: P,
         command: RemotingCommand,
-    ) -> Result<EmbeddedDispatchOutcome, TransportError>
+    ) -> std::result::Result<EmbeddedDispatchOutcome, TransportError>
     where
         P: RequestProcessor + Send + 'static,
     {

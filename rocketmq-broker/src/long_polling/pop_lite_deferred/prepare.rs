@@ -138,8 +138,10 @@ impl PopLiteDeferredService {
             .command()
             .decode_command_custom_header::<PopLiteMessageRequestHeader>()
             .map_err(PopLiteDeferredPrepareFailure::Header)?;
-        if let Err(rejection) = validate_header(&header) {
-            return Ok(PopLiteDeferredPrepareOutcome::Rejected(rejection));
+        if !header_is_valid(&header) {
+            return Ok(PopLiteDeferredPrepareOutcome::Rejected(
+                PopLiteDeferredPrepareRejection::InvalidHeader,
+            ));
         }
         let wall_now = current_millis();
         let monotonic_now = tokio::time::Instant::now();
@@ -323,11 +325,8 @@ impl PopLiteDeferredService {
     }
 }
 
-fn validate_header(header: &PopLiteMessageRequestHeader) -> Result<(), PopLiteDeferredPrepareRejection> {
-    if header.client_id.is_empty() || header.consumer_group.is_empty() || header.topic.is_empty() {
-        return Err(PopLiteDeferredPrepareRejection::InvalidHeader);
-    }
-    Ok(())
+fn header_is_valid(header: &PopLiteMessageRequestHeader) -> bool {
+    !header.client_id.is_empty() && !header.consumer_group.is_empty() && !header.topic.is_empty()
 }
 
 pub(crate) enum PopLiteDeferredPrepareRejection {

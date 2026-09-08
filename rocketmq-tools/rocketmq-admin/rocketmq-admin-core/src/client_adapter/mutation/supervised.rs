@@ -1782,11 +1782,8 @@ mod tests {
         }
     }
 
-    fn unsupported<T>() -> rocketmq_error::Result<T> {
-        Err(crate::client_adapter::services::errors::admin_validation_failed(
-            "test",
-            "unused fake operation",
-        ))
+    fn unsupported<T>() -> rocketmq_client_rust::ClientResult<T> {
+        Err(crate::client_adapter::services::errors::admin_validation_failed("test", "unused fake operation").into())
     }
 
     impl MQAdminMutationExt for CountingMutationAdmin {
@@ -1794,8 +1791,9 @@ mod tests {
             &self,
             _proxy_addr: CheetahString,
             _operation_id: CheetahString,
-        ) -> rocketmq_error::Result<rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody>
-        {
+        ) -> rocketmq_client_rust::ClientResult<
+            rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody,
+        > {
             unsupported()
         }
 
@@ -1803,12 +1801,16 @@ mod tests {
             &self,
             _proxy_addr: CheetahString,
             _operation_id: CheetahString,
-        ) -> rocketmq_error::Result<rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody>
-        {
+        ) -> rocketmq_client_rust::ClientResult<
+            rocketmq_protocol::protocol::body::proxy_drain::ProxyDrainStateResponseBody,
+        > {
             unsupported()
         }
 
-        async fn broker_config_generation(&self, _broker_addr: CheetahString) -> rocketmq_error::Result<u64> {
+        async fn broker_config_generation(
+            &self,
+            _broker_addr: CheetahString,
+        ) -> rocketmq_client_rust::ClientResult<u64> {
             unsupported()
         }
 
@@ -1817,7 +1819,7 @@ mod tests {
             broker_addr: CheetahString,
             expected_generation: u64,
             properties: HashMap<CheetahString, CheetahString>,
-        ) -> rocketmq_error::Result<ClientBrokerConfigPatchOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<ClientBrokerConfigPatchOutcome> {
             self.record_endpoint("broker_write", &broker_addr);
             self.broker_writes.fetch_add(1, Ordering::SeqCst);
             let mut state = self.broker_state.lock().expect("broker state");
@@ -1866,7 +1868,7 @@ mod tests {
             _topic: CheetahString,
             _expected_version: u64,
             _patch: ClientTopicConfigPatch,
-        ) -> rocketmq_error::Result<ClientTopicConfigPatchOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<ClientTopicConfigPatchOutcome> {
             unsupported()
         }
 
@@ -1876,7 +1878,7 @@ mod tests {
             _group: CheetahString,
             _expected_version: u64,
             _patch: ClientSubscriptionGroupConfigPatch,
-        ) -> rocketmq_error::Result<ClientSubscriptionGroupConfigPatchOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<ClientSubscriptionGroupConfigPatchOutcome> {
             unsupported()
         }
 
@@ -1884,7 +1886,7 @@ mod tests {
             &self,
             _broker_addr: CheetahString,
             _config: TopicConfig,
-        ) -> rocketmq_error::Result<()> {
+        ) -> rocketmq_client_rust::ClientResult<()> {
             unsupported()
         }
 
@@ -1892,7 +1894,7 @@ mod tests {
             &self,
             _topic_name: CheetahString,
             _cluster_name: CheetahString,
-        ) -> rocketmq_error::Result<()> {
+        ) -> rocketmq_client_rust::ClientResult<()> {
             unsupported()
         }
 
@@ -1903,7 +1905,7 @@ mod tests {
             _consumer_group: CheetahString,
             _timestamp: u64,
             _force: bool,
-        ) -> rocketmq_error::Result<HashMap<rocketmq_model::message::MessageQueue, u64>> {
+        ) -> rocketmq_client_rust::ClientResult<HashMap<rocketmq_model::message::MessageQueue, u64>> {
             unsupported()
         }
 
@@ -1911,7 +1913,7 @@ mod tests {
             &self,
             _broker_addr: CheetahString,
             _config: SubscriptionGroupConfig,
-        ) -> rocketmq_error::Result<()> {
+        ) -> rocketmq_client_rust::ClientResult<()> {
             unsupported()
         }
 
@@ -1920,7 +1922,7 @@ mod tests {
             _broker_addr: CheetahString,
             _group_name: CheetahString,
             _remove_offset: Option<bool>,
-        ) -> rocketmq_error::Result<()> {
+        ) -> rocketmq_client_rust::ClientResult<()> {
             unsupported()
         }
 
@@ -1929,7 +1931,7 @@ mod tests {
             _broker_addr: CheetahString,
             _group_names: Vec<CheetahString>,
             _clean_offset: bool,
-        ) -> rocketmq_error::Result<()> {
+        ) -> rocketmq_client_rust::ClientResult<()> {
             unsupported()
         }
 
@@ -1941,7 +1943,7 @@ mod tests {
             _mode: rocketmq_model::common::message::message_enum::MessageRequestMode,
             _pop_work_group_size: i32,
             _timeout_millis: u64,
-        ) -> rocketmq_error::Result<()> {
+        ) -> rocketmq_client_rust::ClientResult<()> {
             unsupported()
         }
 
@@ -1951,7 +1953,7 @@ mod tests {
             _client_id: CheetahString,
             _topic: CheetahString,
             _message_id: CheetahString,
-        ) -> rocketmq_error::Result<
+        ) -> rocketmq_client_rust::ClientResult<
             rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult,
         > {
             unsupported()
@@ -1963,15 +1965,18 @@ mod tests {
             _destination_group: CheetahString,
             _topic: CheetahString,
             _offline: bool,
-        ) -> rocketmq_error::Result<()> {
+        ) -> rocketmq_client_rust::ClientResult<()> {
             unsupported()
         }
 
-        async fn mutation_cluster_info(&self) -> rocketmq_error::Result<ClusterInfo> {
+        async fn mutation_cluster_info(&self) -> rocketmq_client_rust::ClientResult<ClusterInfo> {
             Ok(self.cluster_info.clone())
         }
 
-        async fn mutation_topic_route(&self, _topic: CheetahString) -> rocketmq_error::Result<Option<TopicRouteData>> {
+        async fn mutation_topic_route(
+            &self,
+            _topic: CheetahString,
+        ) -> rocketmq_client_rust::ClientResult<Option<TopicRouteData>> {
             Ok(Some(self.route.clone()))
         }
 
@@ -1979,7 +1984,7 @@ mod tests {
             &self,
             _broker_addr: CheetahString,
             _topic: CheetahString,
-        ) -> rocketmq_error::Result<TopicConfig> {
+        ) -> rocketmq_client_rust::ClientResult<TopicConfig> {
             unsupported()
         }
 
@@ -1987,7 +1992,7 @@ mod tests {
             &self,
             _broker_addrs: HashSet<CheetahString>,
             _topic: CheetahString,
-        ) -> rocketmq_error::Result<()> {
+        ) -> rocketmq_client_rust::ClientResult<()> {
             unsupported()
         }
 
@@ -1995,7 +2000,7 @@ mod tests {
             &self,
             _broker_addr: CheetahString,
             _topics: Vec<CheetahString>,
-        ) -> rocketmq_error::Result<()> {
+        ) -> rocketmq_client_rust::ClientResult<()> {
             unsupported()
         }
 
@@ -2004,11 +2009,11 @@ mod tests {
             _namesrv_addrs: HashSet<CheetahString>,
             _cluster_name: Option<CheetahString>,
             _topic: CheetahString,
-        ) -> rocketmq_error::Result<()> {
+        ) -> rocketmq_client_rust::ClientResult<()> {
             unsupported()
         }
 
-        async fn mutation_name_server_addresses(&self) -> rocketmq_error::Result<Vec<CheetahString>> {
+        async fn mutation_name_server_addresses(&self) -> rocketmq_client_rust::ClientResult<Vec<CheetahString>> {
             unsupported()
         }
 
@@ -2017,7 +2022,7 @@ mod tests {
             _topic: CheetahString,
             _value: CheetahString,
             _cluster_wide: bool,
-        ) -> rocketmq_error::Result<()> {
+        ) -> rocketmq_client_rust::ClientResult<()> {
             self.order_writes.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -2025,12 +2030,12 @@ mod tests {
         async fn mutation_order_topic_config(
             &self,
             _topic: CheetahString,
-        ) -> rocketmq_error::Result<Option<CheetahString>> {
+        ) -> rocketmq_client_rust::ClientResult<Option<CheetahString>> {
             self.order_reads.fetch_add(1, Ordering::SeqCst);
             Ok(self.order_config.lock().expect("order config").clone())
         }
 
-        async fn delete_order_topic_config(&self, _topic: CheetahString) -> rocketmq_error::Result<()> {
+        async fn delete_order_topic_config(&self, _topic: CheetahString) -> rocketmq_client_rust::ClientResult<()> {
             self.order_writes.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -2042,7 +2047,8 @@ mod tests {
             _topic: CheetahString,
             _timestamp: u64,
             _force: bool,
-        ) -> rocketmq_error::Result<Vec<rocketmq_protocol::protocol::admin::rollback_stats::RollbackStats>> {
+        ) -> rocketmq_client_rust::ClientResult<Vec<rocketmq_protocol::protocol::admin::rollback_stats::RollbackStats>>
+        {
             unsupported()
         }
 
@@ -2050,7 +2056,7 @@ mod tests {
             &self,
             _topic: CheetahString,
             _message_id: CheetahString,
-        ) -> rocketmq_error::Result<MessageExt> {
+        ) -> rocketmq_client_rust::ClientResult<MessageExt> {
             unsupported()
         }
 
@@ -2062,7 +2068,7 @@ mod tests {
             _consumer_group: CheetahString,
             _topic: CheetahString,
             _timestamp: i64,
-        ) -> rocketmq_error::Result<Vec<rocketmq_client_rust::MutationConsumerOffsetPreview>> {
+        ) -> rocketmq_client_rust::ClientResult<Vec<rocketmq_client_rust::MutationConsumerOffsetPreview>> {
             self.record_endpoint("offset", &broker_addr);
             self.preview_calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.preview_rows.lock().expect("preview rows").clone())
@@ -2076,7 +2082,7 @@ mod tests {
             queue_id: i32,
             _expected_offset: i64,
             new_offset: i64,
-        ) -> rocketmq_error::Result<rocketmq_client_rust::ConditionalConsumerOffsetOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::ConditionalConsumerOffsetOutcome> {
             self.reset_calls.fetch_add(1, Ordering::SeqCst);
             self.offsets.lock().expect("offsets").insert(queue_id, new_offset);
             Ok(rocketmq_client_rust::ConditionalConsumerOffsetOutcome {
@@ -2091,10 +2097,10 @@ mod tests {
             _consumer_group: CheetahString,
             _topic: CheetahString,
             queue_id: i32,
-        ) -> rocketmq_error::Result<i64> {
+        ) -> rocketmq_client_rust::ClientResult<i64> {
             self.verify_calls.fetch_add(1, Ordering::SeqCst);
             if self.offset_fail_postread.load(Ordering::SeqCst) && self.reset_calls.load(Ordering::SeqCst) > 0 {
-                return Err(canonical_connection_failure("test offset postread failure"));
+                return Err(canonical_connection_failure("test offset postread failure").into());
             }
             self.offsets
                 .lock()
@@ -2103,6 +2109,7 @@ mod tests {
                 .copied()
                 .ok_or_else(|| {
                     crate::client_adapter::services::errors::admin_validation_failed("test", "offset was not applied")
+                        .into()
                 })
         }
 
@@ -2110,7 +2117,7 @@ mod tests {
             &self,
             broker_addr: CheetahString,
             _topic: CheetahString,
-        ) -> rocketmq_error::Result<rocketmq_client_rust::MutationTopicConfigState> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationTopicConfigState> {
             self.record_endpoint("topic", &broker_addr);
             self.topic_reads.fetch_add(1, Ordering::SeqCst);
             Ok(self.topic_state.lock().expect("topic state").clone())
@@ -2122,7 +2129,7 @@ mod tests {
             _topic: CheetahString,
             expected_state: ClientExpectedState,
             replacement: ClientTopicConfig,
-        ) -> rocketmq_error::Result<rocketmq_client_rust::MutationStateCasOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationStateCasOutcome> {
             self.topic_writes.fetch_add(1, Ordering::SeqCst);
             let mut current = self.topic_state.lock().expect("topic state");
             if self.topic_dirty.load(Ordering::SeqCst) {
@@ -2178,7 +2185,7 @@ mod tests {
             &self,
             broker_addr: CheetahString,
             _group: CheetahString,
-        ) -> rocketmq_error::Result<rocketmq_client_rust::MutationSubscriptionGroupConfigState> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationSubscriptionGroupConfigState> {
             self.record_endpoint("group", &broker_addr);
             self.group_reads.fetch_add(1, Ordering::SeqCst);
             Ok(self.group_state.lock().expect("group state").clone())
@@ -2190,7 +2197,7 @@ mod tests {
             _group: CheetahString,
             expected_state: ClientExpectedState,
             replacement: ClientSubscriptionGroupConfig,
-        ) -> rocketmq_error::Result<rocketmq_client_rust::MutationStateCasOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationStateCasOutcome> {
             self.group_writes.fetch_add(1, Ordering::SeqCst);
             let mut current = self.group_state.lock().expect("group state");
             if self.group_dirty.load(Ordering::SeqCst) {
@@ -2237,14 +2244,15 @@ mod tests {
         async fn broker_mutation_config_state(
             &self,
             broker_addr: CheetahString,
-        ) -> rocketmq_error::Result<ClientBrokerMutationConfigState> {
+        ) -> rocketmq_client_rust::ClientResult<ClientBrokerMutationConfigState> {
             self.record_endpoint("broker", &broker_addr);
             self.broker_reads.fetch_add(1, Ordering::SeqCst);
             if self.broker_fail_postread.load(Ordering::SeqCst) && self.broker_writes.load(Ordering::SeqCst) > 0 {
                 return Err(crate::client_adapter::services::errors::admin_validation_failed(
                     "test",
                     "test postread failure",
-                ));
+                )
+                .into());
             }
             Ok(*self.broker_state.lock().expect("broker state"))
         }
@@ -2254,13 +2262,13 @@ mod tests {
             broker_addr: CheetahString,
             _topic: CheetahString,
             _consumer_group: CheetahString,
-        ) -> rocketmq_error::Result<Option<ClientMessageRequestMode>> {
+        ) -> rocketmq_client_rust::ClientResult<Option<ClientMessageRequestMode>> {
             self.record_endpoint("request_mode", &broker_addr);
             self.request_mode_reads.fetch_add(1, Ordering::SeqCst);
             if self.request_mode_fail_postread.load(Ordering::SeqCst)
                 && self.request_mode_writes.load(Ordering::SeqCst) > 0
             {
-                return Err(canonical_connection_failure("test request-mode postread failure"));
+                return Err(canonical_connection_failure("test request-mode postread failure").into());
             }
             Ok(*self.request_mode.lock().expect("request mode"))
         }
@@ -2272,7 +2280,7 @@ mod tests {
             _consumer_group: CheetahString,
             expected: ClientExpectedMessageRequestMode,
             replacement: ClientMessageRequestMode,
-        ) -> rocketmq_error::Result<rocketmq_client_rust::MutationMessageRequestModeOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationMessageRequestModeOutcome> {
             self.request_mode_writes.fetch_add(1, Ordering::SeqCst);
             let mut current = self.request_mode.lock().expect("request mode");
             if self.request_mode_dirty.load(Ordering::SeqCst) {
@@ -2322,7 +2330,7 @@ mod tests {
             expected: ClientExpectedMessageRequestMode,
             replacement: ClientMessageRequestMode,
             timeout_millis: u64,
-        ) -> rocketmq_error::Result<rocketmq_client_rust::MutationMessageRequestModeOutcome> {
+        ) -> rocketmq_client_rust::ClientResult<rocketmq_client_rust::MutationMessageRequestModeOutcome> {
             self.request_mode_timeouts
                 .lock()
                 .expect("request mode timeouts")

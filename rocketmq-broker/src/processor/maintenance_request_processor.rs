@@ -311,7 +311,7 @@ impl MaintenanceRequestProcessor {
 }
 
 fn maintenance_permission_denied() -> SharedError {
-    crate::broker_error::permission_denied("privileged maintenance".to_owned())
+    crate::broker_error::permission_denied("privileged maintenance")
 }
 
 impl RequestProcessor for MaintenanceRequestProcessor {

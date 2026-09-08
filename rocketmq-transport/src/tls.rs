@@ -49,21 +49,19 @@ use crate::codec::remoting_command_codec::FrameLimits;
 use crate::connection::Connection;
 use crate::error_helpers::configuration_invalid;
 #[cfg(feature = "tls")]
+use crate::error_helpers::configuration_invalid_caused_by;
+#[cfg(feature = "tls")]
 use crate::error_helpers::connection_failed;
 #[cfg(feature = "tls")]
 use crate::error_helpers::connection_failed_for_remote;
 #[cfg(feature = "tls")]
 use crate::error_helpers::connection_failed_without_source;
 #[cfg(feature = "tls")]
-#[cfg(feature = "tls")]
 use crate::error_helpers::TransportStage;
 
 const TLS_HANDSHAKE_MAGIC_CODE: u8 = 0x16;
 #[cfg(feature = "tls")]
 const TLS_RELOAD_POLL_INTERVAL: Duration = Duration::from_secs(5);
-#[cfg(not(feature = "tls"))]
-pub const TLS_DISABLED_ERROR_REASON: &str = "rocketmq-transport was compiled without the tls feature";
-
 /// A canonical connection paired with the result of TLS negotiation.
 pub struct NegotiatedConnection {
     connection: Connection,
@@ -641,13 +639,9 @@ pub fn build_client_config(
                 "tls.client.keyPath",
                 effective_config.client.key_password.as_deref(),
             )?;
-            builder.with_client_auth_cert(certs, key).map_err(|error| {
-                config_error(
-                    "tls.client.certificate",
-                    cert_path,
-                    format!("failed to configure client certificate: {error}"),
-                )
-            })
+            builder
+                .with_client_auth_cert(certs, key)
+                .map_err(|error| config_error_source("tls.client.certificate", error))
         }
         (None, None) => Ok(builder.with_no_client_auth()),
         _ => Err(config_error(
@@ -723,7 +717,7 @@ pub fn build_server_acceptor_exact_with_alpn(
     let mut server_config = server_builder
         .with_client_cert_verifier(verifier)
         .with_single_cert(certs, key)
-        .map_err(|error| config_error("tls.server.certificate", "<configured>", error.to_string()))?;
+        .map_err(|error| config_error_source("tls.server.certificate", error))?;
     server_config.alpn_protocols = alpn_protocols.to_vec();
 
     Ok(tokio_rustls::TlsAcceptor::from(StdArc::new(server_config)))
@@ -760,13 +754,10 @@ fn build_client_cert_verifier(
             } else {
                 builder
             };
-            builder.build().map(|verifier| verifier as StdArc<_>).map_err(|error| {
-                config_error(
-                    "tls.server.trustCertPath",
-                    trust_path,
-                    format!("failed to build client certificate verifier: {error}"),
-                )
-            })
+            builder
+                .build()
+                .map(|verifier| verifier as StdArc<_>)
+                .map_err(|error| config_error_source("tls.server.trustCertPath", error))
         }
     }
 }
@@ -782,14 +773,9 @@ fn generate_self_signed_certificate() -> Result<
     use tokio_rustls::rustls::pki_types::PrivateKeyDer;
     use tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer;
 
-    let rcgen::CertifiedKey { cert, signing_key } = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
-        .map_err(|error| {
-        config_error(
-            "tls.test.mode.enable",
-            "true",
-            format!("failed to generate self-signed test certificate: {error}"),
-        )
-    })?;
+    let rcgen::CertifiedKey { cert, signing_key } =
+        rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+            .map_err(|error| config_error_source("tls.test.mode.enable", error))?;
     let certs = vec![cert.der().clone()];
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
     Ok((certs, key))
@@ -814,7 +800,7 @@ fn load_native_root_store() -> Result<tokio_rustls::rustls::RootCertStore, rocke
     for cert in cert_result.certs {
         root_store
             .add(cert)
-            .map_err(|error| config_error("tls.root_certificates", "native-certs", error.to_string()))?;
+            .map_err(|error| config_error_source("tls.root_certificates", error))?;
         added_roots += 1;
     }
 
@@ -840,9 +826,7 @@ fn load_root_store_from_pem(
 ) -> Result<tokio_rustls::rustls::RootCertStore, rocketmq_error::SharedError> {
     let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
     for cert in load_certificates(path, key)? {
-        root_store
-            .add(cert)
-            .map_err(|error| config_error(key, path, format!("failed to add root certificate: {error}")))?;
+        root_store.add(cert).map_err(|error| config_error_source(key, error))?;
     }
 
     if root_store.is_empty() {
@@ -857,11 +841,10 @@ pub fn load_certificates(
     path: &str,
     key: &'static str,
 ) -> Result<Vec<tokio_rustls::rustls::pki_types::CertificateDer<'static>>, rocketmq_error::SharedError> {
-    let file = fs::File::open(path)
-        .map_err(|error| config_error(key, path, format!("failed to open certificate file: {error}")))?;
+    let file = fs::File::open(path).map_err(|error| config_error_source(key, error))?;
     let certs = tokio_rustls::rustls::pki_types::CertificateDer::pem_reader_iter(file)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| config_error(key, path, format!("failed to read PEM certificates: {error}")))?;
+        .map_err(|error| config_error_source(key, error))?;
 
     if certs.is_empty() {
         return Err(config_error(key, path, "no PEM certificates were found"));
@@ -890,14 +873,7 @@ impl PrivateKeyLoader {
         use zeroize::Zeroizing;
 
         let path = path.as_ref();
-        let safe_path = path.to_string_lossy();
-        let pem = Zeroizing::new(fs::read(path).map_err(|error| {
-            config_error(
-                key,
-                safe_path.as_ref(),
-                format!("failed to open private key file: {error}"),
-            )
-        })?);
+        let pem = Zeroizing::new(fs::read(path).map_err(|error| config_error_source(key, error))?);
 
         if pem
             .windows(b"-----BEGIN ENCRYPTED PRIVATE KEY-----".len())
@@ -906,24 +882,19 @@ impl PrivateKeyLoader {
             let password = password.ok_or_else(|| {
                 config_error(
                     key,
-                    safe_path.as_ref(),
+                    "<configured>",
                     "password is required for encrypted PKCS#8 private key",
                 )
             })?;
             let password = Zeroizing::new(password.as_bytes().to_vec());
-            let pem_text = std::str::from_utf8(pem.as_slice())
-                .map_err(|_| config_error(key, safe_path.as_ref(), "encrypted private key PEM is not UTF-8"))?;
-            let (_, encrypted_document) = pkcs8::SecretDocument::from_pem(pem_text)
-                .map_err(|_| config_error(key, safe_path.as_ref(), "invalid encrypted PKCS#8 PEM"))?;
+            let pem_text = std::str::from_utf8(pem.as_slice()).map_err(|error| config_error_source(key, error))?;
+            let (_, encrypted_document) =
+                pkcs8::SecretDocument::from_pem(pem_text).map_err(|error| config_error_source(key, error))?;
             let encrypted = EncryptedPrivateKeyInfoRef::try_from(encrypted_document.as_bytes())
-                .map_err(|_| config_error(key, safe_path.as_ref(), "invalid encrypted PKCS#8 payload"))?;
-            let decrypted = encrypted.decrypt(password.as_slice()).map_err(|_| {
-                config_error(
-                    key,
-                    safe_path.as_ref(),
-                    "encrypted PKCS#8 private key decryption failed",
-                )
-            })?;
+                .map_err(|error| config_error_source(key, error))?;
+            let decrypted = encrypted
+                .decrypt(password.as_slice())
+                .map_err(|error| config_error_source(key, error))?;
             return Ok(tokio_rustls::rustls::pki_types::PrivateKeyDer::Pkcs8(
                 tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(decrypted.as_bytes().to_vec()),
             ));
@@ -931,10 +902,10 @@ impl PrivateKeyLoader {
 
         match tokio_rustls::rustls::pki_types::PrivateKeyDer::pem_reader_iter(Cursor::new(pem.as_slice())).next() {
             Some(Ok(private_key)) => Ok(private_key),
-            Some(Err(_)) => Err(config_error(key, safe_path.as_ref(), "failed to read PEM private key")),
+            Some(Err(error)) => Err(config_error_source(key, error)),
             None => Err(config_error(
                 key,
-                safe_path.as_ref(),
+                "<configured>",
                 "no supported PEM private key was found",
             )),
         }
@@ -959,13 +930,8 @@ fn parse_server_name(
         return Ok(tokio_rustls::rustls::pki_types::ServerName::IpAddress(ip_addr.into()));
     }
 
-    tokio_rustls::rustls::pki_types::ServerName::try_from(value.to_string()).map_err(|error| {
-        config_error(
-            "tls.server_name",
-            server_name,
-            format!("invalid TLS server name: {error}"),
-        )
-    })
+    tokio_rustls::rustls::pki_types::ServerName::try_from(value.to_string())
+        .map_err(|error| config_error_source("tls.server_name", error))
 }
 
 #[cfg(feature = "tls")]
@@ -1058,6 +1024,11 @@ pub fn tls_disabled_error() -> SharedError {
 #[cfg(feature = "tls")]
 fn config_error(key: &'static str, _value: impl Into<String>, _reason: impl Into<String>) -> SharedError {
     configuration_invalid(key)
+}
+
+#[cfg(feature = "tls")]
+fn config_error_source(key: &'static str, source: impl std::error::Error + Send + Sync + 'static) -> SharedError {
+    configuration_invalid_caused_by(key, source)
 }
 
 #[cfg(test)]
@@ -1289,7 +1260,10 @@ mod tests {
     #[test]
     fn pem_loader_rejects_missing_certificate_file() {
         let error = load_certificates("missing.pem", "tls.server.certPath").expect_err("missing cert path should fail");
-        assert!(error.to_string().contains("missing.pem"));
+        let source = std::error::Error::source(error.as_ref()).expect("missing certificate retains its I/O source");
+        assert!(source.downcast_ref::<std::io::Error>().is_some());
+        assert!(!error.to_string().contains("missing.pem"));
+        assert!(!format!("{error:?}").contains("missing.pem"));
     }
 
     #[cfg(feature = "tls")]

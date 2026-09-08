@@ -220,8 +220,6 @@ mod tests {
     use std::error::Error as StdError;
     use std::fs;
 
-    use rocketmq_error::SharedError;
-
     use super::read_checkpoint;
 
     #[test]

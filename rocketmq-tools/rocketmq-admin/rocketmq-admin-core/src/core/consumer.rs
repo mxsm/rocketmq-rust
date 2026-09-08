@@ -89,7 +89,7 @@ impl ExactConsumerGroupEnrichmentRequest {
             .map(|group| {
                 let group = required("consumerGroup", group)?;
                 validate_subscription_group_name(&group)
-                    .map_err(|error| crate::core::AdminError::invalid_argument("consumerGroup", error.to_string()))?;
+                    .map_err(|error| crate::core::AdminError::invalid_argument_source("consumerGroup", error))?;
                 Ok(group)
             })
             .collect::<AdminResult<Vec<_>>>()?;
@@ -829,7 +829,7 @@ fn validate_batch_consumer_group(value: impl Into<String>) -> AdminResult<String
         ));
     }
     validate_subscription_group_name(&value)
-        .map_err(|error| crate::core::AdminError::invalid_argument("consumerGroup", error.to_string()))?;
+        .map_err(|error| crate::core::AdminError::invalid_argument_source("consumerGroup", error))?;
     Ok(value)
 }
 
@@ -1558,6 +1558,16 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn consumer_group_validation_retains_typed_sources() {
+        let error =
+            ExactConsumerGroupEnrichmentRequest::try_new(["group.with.dot"]).expect_err("illegal group name must fail");
+        let source = std::error::Error::source(&error).expect("protocol validation source");
+        assert!(source
+            .downcast_ref::<rocketmq_protocol::ProtocolContractViolation>()
+            .is_some());
     }
 
     #[test]

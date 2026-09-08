@@ -490,7 +490,7 @@ where
         &self,
         request_header: &PullMessageRequestHeader,
         response: &RemotingCommand,
-    ) -> Result<SubscriptionDataResult, RemotingCommand> {
+    ) -> Result<SubscriptionDataResult, Box<RemotingCommand>> {
         let subscription_data = FilterAPI::build(
             request_header.topic.as_ref(),
             request_header
@@ -500,11 +500,11 @@ where
             request_header.expression_type.clone(),
         );
         if subscription_data.is_err() {
-            return Err(Self::error_response(
+            return Err(Box::new(Self::error_response(
                 response.clone(),
                 ResponseCode::SubscriptionParseFailed,
                 "parse the consumer's subscription failed",
-            ));
+            )));
         }
         let subscription_data = subscription_data.unwrap();
         self.context.consumers().compensate_subscribe_data(
@@ -521,11 +521,11 @@ where
                 request_header.sub_version as u64,
             );
             if consumer_filter_data.is_none() {
-                return Err(Self::error_response(
+                return Err(Box::new(Self::error_response(
                     response.clone(),
                     ResponseCode::SubscriptionParseFailed,
                     "parse the consumer's subscription failed",
-                ));
+                )));
             }
             consumer_filter_data
         } else {
@@ -546,7 +546,7 @@ where
         subscription_group_config: &SubscriptionGroupConfig,
         response: &RemotingCommand,
         response_header: &mut PullMessageResponseHeader,
-    ) -> Result<SubscriptionDataResult, RemotingCommand> {
+    ) -> Result<SubscriptionDataResult, Box<RemotingCommand>> {
         let consumer_group_info = self
             .context
             .consumers()
@@ -556,14 +556,14 @@ where
                 "the consumer's group info not exist, group: {}",
                 request_header.consumer_group.as_str()
             );
-            return Err(Self::error_response(
+            return Err(Box::new(Self::error_response(
                 response.clone(),
                 ResponseCode::SubscriptionNotExist,
                 format!(
                     "the consumer's group info not exist {}",
                     FAQUrl::suggest_todo(FAQUrl::SAME_GROUP_DIFFERENT_TOPIC),
                 ),
-            ));
+            )));
         }
         let consumer_group_info = consumer_group_info.unwrap();
 
@@ -571,7 +571,7 @@ where
             && consumer_group_info.get_message_model() == MessageModel::Broadcasting
         {
             response_header.forbidden_type = Some(ForbiddenType::BROADCASTING_DISABLE_FORBIDDEN);
-            return Err(Self::error_response_with_header(
+            return Err(Box::new(Self::error_response_with_header(
                 response.clone(),
                 ResponseCode::NoPermission,
                 format!(
@@ -579,7 +579,7 @@ where
                     request_header.consumer_group.as_str(),
                 ),
                 response_header.clone(),
-            ));
+            )));
         }
 
         let read_forbidden = self.context.subscription_groups().get_forbidden(
@@ -589,7 +589,7 @@ where
         );
         if read_forbidden {
             response_header.forbidden_type = Some(ForbiddenType::SUBSCRIPTION_FORBIDDEN);
-            return Err(Self::error_response_with_header(
+            return Err(Box::new(Self::error_response_with_header(
                 response.clone(),
                 ResponseCode::NoPermission,
                 format!(
@@ -598,7 +598,7 @@ where
                     request_header.topic
                 ),
                 response_header.clone(),
-            ));
+            )));
         }
 
         let subscription_data = consumer_group_info.find_subscription_data(request_header.topic.as_ref());
@@ -607,14 +607,14 @@ where
                 "the consumer's subscription not exist, group: {}, topic:{}",
                 request_header.consumer_group, request_header.topic
             );
-            return Err(Self::error_response(
+            return Err(Box::new(Self::error_response(
                 response.clone(),
                 ResponseCode::SubscriptionNotExist,
                 format!(
                     "the consumer's subscription not exist {}",
                     FAQUrl::suggest_todo(FAQUrl::SAME_GROUP_DIFFERENT_TOPIC),
                 ),
-            ));
+            )));
         }
         let subscription_data = subscription_data.unwrap();
 
@@ -623,11 +623,11 @@ where
                 "The broker's subscription is not latest, group: {} {}",
                 request_header.consumer_group, subscription_data.sub_string
             );
-            return Err(Self::error_response(
+            return Err(Box::new(Self::error_response(
                 response.clone(),
                 ResponseCode::SubscriptionNotExist,
                 "the consumer's subscription not latest",
-            ));
+            )));
         }
 
         let consumer_filter_data = if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
@@ -636,11 +636,11 @@ where
                 .filters()
                 .get_consumer_filter_data(request_header.topic.as_ref(), request_header.consumer_group.as_ref());
             if consumer_filter_data.is_none() {
-                return Err(Self::error_response(
+                return Err(Box::new(Self::error_response(
                     response.clone(),
                     ResponseCode::FilterDataNotExist,
                     "The broker's consumer filter data is not exist!Your expression may be wrong!",
-                ));
+                )));
             }
             if consumer_filter_data.as_ref().unwrap().client_version() < request_header.sub_version as u64 {
                 warn!(
@@ -650,11 +650,11 @@ where
                     consumer_filter_data.as_ref().unwrap().client_version(),
                     request_header.sub_version,
                 );
-                return Err(Self::error_response(
+                return Err(Box::new(Self::error_response(
                     response.clone(),
                     ResponseCode::FilterDataNotLatest,
                     "the consumer's consumer filter data not latest",
-                ));
+                )));
             }
             consumer_filter_data
         } else {
@@ -1090,7 +1090,7 @@ where
             consumer_filter_data,
         } = match subscription_result {
             Ok(result) => result,
-            Err(err_response) => return pull_command(err_response),
+            Err(err_response) => return pull_command(*err_response),
         };
 
         if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str()))

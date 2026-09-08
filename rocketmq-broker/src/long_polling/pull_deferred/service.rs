@@ -468,7 +468,9 @@ impl PullDeferredService {
             ));
         }
         if self.expiry_margins.recovery().is_zero() || self.expiry_margins.write().is_zero() {
-            return Err(PullDeferredPrepareError::InvalidExpiryMargins { candidate });
+            return Err(PullDeferredPrepareError::InvalidExpiryMargins {
+                candidate: Box::new(candidate),
+            });
         }
         let deadline = match PullWaitDeadline::checked(
             candidate.timing.suspend_wall_millis,
@@ -484,7 +486,10 @@ impl PullDeferredService {
                 ));
             }
             Err(source) => {
-                return Err(PullDeferredPrepareError::Deadline { source, candidate });
+                return Err(PullDeferredPrepareError::Deadline {
+                    source,
+                    candidate: Box::new(candidate),
+                });
             }
         };
         let key = PullCriteriaKey::from_criteria(&candidate.criteria);
@@ -496,18 +501,26 @@ impl PullDeferredService {
                 ));
             }
             Err(source) => {
-                return Err(PullDeferredPrepareError::Index { source, candidate });
+                return Err(PullDeferredPrepareError::Index {
+                    source,
+                    candidate: Box::new(candidate),
+                });
             }
         };
         let retained_size = match try_retained_size(&candidate) {
             Ok(size) => size,
             Err(PullRetainedSizeError::Overflow) => {
                 drop(reservation);
-                return Err(PullDeferredPrepareError::RetainedSizeOverflow { candidate });
+                return Err(PullDeferredPrepareError::RetainedSizeOverflow {
+                    candidate: Box::new(candidate),
+                });
             }
             Err(PullRetainedSizeError::Contract(source)) => {
                 drop(reservation);
-                return Err(PullDeferredPrepareError::Contract { source, candidate });
+                return Err(PullDeferredPrepareError::Contract {
+                    source,
+                    candidate: Box::new(candidate),
+                });
             }
         };
         let permit = match self.admission.try_reserve(retained_size) {
@@ -563,7 +576,7 @@ impl PullDeferredService {
                     PullDeferredRegisterRejection::PreTake {
                         kind: PullDeferredRegisterRejectionKind::Responder,
                         prepared: Box::new(prepared),
-                        responder: Some(outcome),
+                        responder: Some(Box::new(outcome)),
                     },
                 )));
             }
@@ -587,7 +600,10 @@ impl PullDeferredService {
             Ok(DeferredExpiryOutcome::Attached) => {}
             Ok(outcome) => {
                 return Ok(PullDeferredRegisterOutcome::Rejected(Box::new(
-                    PullDeferredRegisterRejection::Expiry { outcome, parts },
+                    PullDeferredRegisterRejection::Expiry {
+                        outcome: Box::new(outcome),
+                        parts: Box::new(parts),
+                    },
                 )));
             }
             Err(violation) => {
@@ -1237,7 +1253,7 @@ pub(crate) enum PullCandidateBuildErrorKind {
 
 pub(crate) struct PullCandidateBuildError {
     kind: PullCandidateBuildErrorKind,
-    fallback: RemotingResponse,
+    fallback: Box<RemotingResponse>,
     source: Option<rocketmq_error::Error>,
 }
 
@@ -1247,7 +1263,11 @@ impl PullCandidateBuildError {
         fallback: RemotingResponse,
         source: Option<rocketmq_error::Error>,
     ) -> Self {
-        Self { kind, fallback, source }
+        Self {
+            kind,
+            fallback: Box::new(fallback),
+            source,
+        }
     }
 
     pub(crate) const fn kind(&self) -> PullCandidateBuildErrorKind {
@@ -1255,7 +1275,7 @@ impl PullCandidateBuildError {
     }
 
     pub(crate) fn into_fallback(self) -> RemotingResponse {
-        self.fallback
+        *self.fallback
     }
 }
 
@@ -1340,22 +1360,22 @@ impl PullDeferredPrepareRejection {
 pub(crate) enum PullDeferredPrepareError {
     Build(PullCandidateBuildError),
     InvalidExpiryMargins {
-        candidate: PullSuspensionCandidate,
+        candidate: Box<PullSuspensionCandidate>,
     },
     Deadline {
         source: PullWaitDeadlineError,
-        candidate: PullSuspensionCandidate,
+        candidate: Box<PullSuspensionCandidate>,
     },
     Index {
         source: PullIndexOperationalError,
-        candidate: PullSuspensionCandidate,
+        candidate: Box<PullSuspensionCandidate>,
     },
     RetainedSizeOverflow {
-        candidate: PullSuspensionCandidate,
+        candidate: Box<PullSuspensionCandidate>,
     },
     Contract {
         source: TransportContractViolation,
-        candidate: PullSuspensionCandidate,
+        candidate: Box<PullSuspensionCandidate>,
     },
 }
 
@@ -1378,7 +1398,7 @@ impl PullDeferredPrepareError {
             | Self::Deadline { candidate, .. }
             | Self::Index { candidate, .. }
             | Self::RetainedSizeOverflow { candidate }
-            | Self::Contract { candidate, .. } => candidate.into_fallback(),
+            | Self::Contract { candidate, .. } => (*candidate).into_fallback(),
         }
     }
 }
@@ -1435,11 +1455,11 @@ pub(crate) enum PullDeferredRegisterRejection {
     PreTake {
         kind: PullDeferredRegisterRejectionKind,
         prepared: Box<PreparedPullRegistration>,
-        responder: Option<DeferredResponderOutcome>,
+        responder: Option<Box<DeferredResponderOutcome>>,
     },
     Expiry {
-        outcome: DeferredExpiryOutcome,
-        parts: DeferredParts,
+        outcome: Box<DeferredExpiryOutcome>,
+        parts: Box<DeferredParts>,
     },
     RegistryRejected,
 }

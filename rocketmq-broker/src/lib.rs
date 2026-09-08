@@ -14,7 +14,6 @@
 
 #![allow(dead_code)]
 #![allow(incomplete_features)]
-#![allow(clippy::result_large_err)]
 #![recursion_limit = "512"]
 
 pub use broker_bootstrap::BrokerBootstrap;

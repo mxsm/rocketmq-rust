@@ -184,7 +184,7 @@ where
             Ok(outcome) => Ok(outcome),
             Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
                 let context = error.context();
-                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                let view = PublicErrorView::try_new(error.descriptor(), context)
                     .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
                 BrokerResponseParts::from_command(remoting_error_response(
                     view,

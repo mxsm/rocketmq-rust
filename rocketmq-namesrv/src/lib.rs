@@ -22,7 +22,6 @@
 //! TLS support is enabled by default with `tls`. Optional features include
 //! `embedded-controller` and the `observability`, `otel-*`, and `otlp-*` integrations.
 
-#![allow(clippy::result_large_err)]
 #![recursion_limit = "512"]
 
 pub use self::config::NamesrvConfig;

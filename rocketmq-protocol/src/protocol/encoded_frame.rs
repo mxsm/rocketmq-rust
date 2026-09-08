@@ -110,8 +110,7 @@ impl EncodedFrameHead {
             return Err(crate::error::serialization_encode_failed(
                 "remoting-command-file-body",
                 "command must not contain an in-memory body when an external body length is supplied",
-            )
-            .into());
+            ));
         }
         let (prefix, header) = encode_header_segments(&mut command, body_len)?;
         validate_announced_payload_len(&prefix, header.len(), body_len)?;
@@ -151,8 +150,7 @@ fn encode_header_segments(command: &mut RemotingCommand, body_len: usize) -> Res
         return Err(crate::error::serialization_encode_failed(
             "remoting-command",
             "encoded header omitted the RocketMQ frame prefix",
-        )
-        .into());
+        ));
     }
     let prefix_bytes = encoded_header.split_to(FRAME_PREFIX_BYTES);
     let header = encoded_header.freeze();
@@ -163,8 +161,7 @@ fn encode_header_segments(command: &mut RemotingCommand, body_len: usize) -> Res
                 "encoded header is {} bytes, exceeding the 24-bit wire limit",
                 header.len()
             ),
-        )
-        .into());
+        ));
     }
     let mut prefix = [0_u8; FRAME_PREFIX_BYTES];
     prefix.copy_from_slice(&prefix_bytes);
@@ -173,8 +170,7 @@ fn encode_header_segments(command: &mut RemotingCommand, body_len: usize) -> Res
         return Err(crate::error::serialization_encode_failed(
             "remoting-command",
             "fast header encoder produced an inconsistent header length",
-        )
-        .into());
+        ));
     }
     Ok((prefix, header))
 }
@@ -191,7 +187,6 @@ fn checked_payload_len(header_len: usize, body_len: usize) -> Result<i32> {
             "remoting-command",
             format!("encoded payload is {payload_len} bytes, exceeding the signed 32-bit wire limit"),
         )
-        .into()
     })
 }
 
@@ -202,8 +197,7 @@ fn validate_announced_payload_len(prefix: &[u8; FRAME_PREFIX_BYTES], header_len:
         return Err(crate::error::serialization_encode_failed(
             "remoting-command",
             "fast header encoder produced inconsistent wire lengths",
-        )
-        .into());
+        ));
     }
     Ok(())
 }

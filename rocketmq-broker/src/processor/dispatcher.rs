@@ -398,7 +398,7 @@ where
         {
             let error = crate::broker_error::authentication_failed("Broker maintenance API is disabled or unavailable");
             let context = error.context();
-            let view = PublicErrorView::try_new(error.descriptor(), &context)
+            let view = PublicErrorView::try_new(error.descriptor(), context)
                 .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
             let response = error_response(
                 view,
@@ -415,7 +415,7 @@ where
                 BrokerAuthState::Unconfigured => {
                     let error = crate::broker_error::authentication_failed("Broker authentication is not configured");
                     let context = error.context();
-                    let view = PublicErrorView::try_new(error.descriptor(), &context)
+                    let view = PublicErrorView::try_new(error.descriptor(), context)
                         .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
                     let response = error_response(
                         view,
@@ -575,7 +575,7 @@ where
             Ok(outcome) => Ok(outcome),
             Err(error) => {
                 let context = error.context();
-                let view = PublicErrorView::try_new(error.descriptor(), &context)
+                let view = PublicErrorView::try_new(error.descriptor(), context)
                     .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
                 let response = error_response(
                     view,
@@ -598,7 +598,7 @@ fn map_request_header_error(
     match result {
         Err(error) if error.descriptor() == &rocketmq_error::PROTOCOL_HEADER_INVALID => {
             let context = error.context();
-            let view = PublicErrorView::try_new(error.descriptor(), &context)
+            let view = PublicErrorView::try_new(error.descriptor(), context)
                 .unwrap_or_else(|_| PublicErrorView::descriptor_only(error.descriptor()));
             let response = error_response(
                 view,
