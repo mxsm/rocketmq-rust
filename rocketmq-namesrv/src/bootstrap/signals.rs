@@ -48,3 +48,82 @@ pub(super) async fn wait(shutdown_rx: &mut watch::Receiver<bool>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::future::pending;
+    use std::pin::pin;
+
+    use tokio::sync::oneshot;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn relay_broadcasts_shutdown_when_the_signal_completes() {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (signal_tx, signal_rx) = oneshot::channel::<()>();
+        signal_tx
+            .send(())
+            .expect("shutdown signal receiver should still be alive");
+
+        relay(
+            shutdown_tx,
+            async {
+                signal_rx.await.expect("shutdown signal sender should not be dropped");
+            },
+            CancellationToken::new(),
+        )
+        .await;
+
+        assert!(*shutdown_rx.borrow(), "relay should broadcast the shutdown signal");
+    }
+
+    #[tokio::test]
+    async fn relay_cancelled_before_the_signal_leaves_the_value_unchanged() {
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        relay(shutdown_tx, pending::<()>(), cancellation).await;
+
+        assert!(!*shutdown_rx.borrow(), "a cancelled relay must not broadcast shutdown");
+        assert!(
+            shutdown_rx.changed().await.is_err(),
+            "a returning relay drops the sender, closing the channel"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_returns_immediately_when_shutdown_already_broadcast() {
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(true);
+
+        assert!(
+            futures::poll!(pin!(wait(&mut shutdown_rx))).is_ready(),
+            "wait should not suspend when the current value is already true"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_suspends_until_shutdown_is_broadcast() {
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let mut waiter = pin!(wait(&mut shutdown_rx));
+
+        assert!(
+            futures::poll!(waiter.as_mut()).is_pending(),
+            "wait should suspend while the value is still false"
+        );
+
+        shutdown_tx.send(true).expect("waiter keeps a receiver alive");
+        waiter.await;
+    }
+
+    #[tokio::test]
+    async fn wait_returns_when_the_sender_is_dropped_without_a_change() {
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        drop(shutdown_tx);
+
+        wait(&mut shutdown_rx).await;
+
+        assert!(!*shutdown_rx.borrow(), "a closed channel keeps its last value");
+    }
+}
