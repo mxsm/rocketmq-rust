@@ -23,8 +23,8 @@
 - Keep GPUI-specific rendering, window behavior, event handling, and view state in this project.
 - Put reusable Dashboard models, client contracts, and UI-independent service logic in
   `../rocketmq-dashboard-common/` when practical; do not duplicate shared domain behavior in views.
-- The direct repository path dependencies are `rocketmq-dashboard-common` and `rocketmq-observability`. A change
-  to either must follow the root instructions for that crate and must revalidate this standalone consumer.
+- The direct repository path dependencies are `rocketmq-dashboard-common` and `rocketmq-observability`.
+  Revalidate this consumer when their API, features, or shared behavior changes affect it.
 - Changes to shared RocketMQ crates consumed through those dependencies may also require GPUI revalidation. Use
   the current manifests and the root shared-code rules to determine the actual consumer scope.
 - Do not modify the Tauri or Web Dashboard implementations merely to mirror a GPUI change unless the user asks
@@ -75,8 +75,7 @@ cargo test test_name
 cargo test --bin rocketmq-dashboard-gpui test_name
 ```
 
-- Run `cargo test` when behavior is broad, shared state changes, startup/shutdown changes, or the final validation
-  profile requires it.
+- Select broader tests when shared state or startup/shutdown changes affect multiple behaviors.
 - For visual, focus, input, window, or platform behavior that automated tests cannot prove, perform a manual
   `cargo run` smoke test on a supported graphical environment and report the platform and scenarios checked.
 
@@ -84,15 +83,17 @@ cargo test --bin rocketmq-dashboard-gpui test_name
 
 Run all commands from `rocketmq-dashboard/rocketmq-dashboard-gpui/`.
 
-Before PR submission or final handoff for Rust code, manifest, build-script, or dependency changes, run the full
-project profile used by `.github/workflows/dashboard-gpui-ci.yml`:
+For routine changes, format intended files, compile the affected target, and select relevant behavior tests:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo check --all-targets --all-features
-cargo test
+cargo check
+cargo test test_name
 ```
+
+A relevant test build can replace `cargo check`. Use `cargo clippy --no-deps -- -D warnings`
+when useful; add targets/features only when affected. The complete profile in
+`.github/workflows/dashboard-gpui-ci.yml` belongs to CI or a platform integration task, not every handoff.
 
 On Linux, compilation requires the native UI/build dependencies used by CI:
 
@@ -102,8 +103,8 @@ sudo apt-get install clang cmake make ninja-build pkg-config protobuf-compiler \
   libxkbcommon-dev libxkbcommon-x11-dev
 ```
 
-- GUI execution is not a substitute for the non-interactive validation profile, and the validation profile does
-  not replace a manual smoke test when the change is inherently visual or OS-specific.
+- For visual or OS-specific changes, add the focused graphical smoke test needed to verify that behavior.
+  If the required platform is unavailable, report the untested scenario and continue independent work.
 
 ## Build script and generated artifacts
 

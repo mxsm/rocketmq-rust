@@ -20,14 +20,15 @@ This file applies to `rocketmq-ai/rocketmq-sre/ui/`.
 - Never display credentials, tokens, message bodies, ACL/TLS material, or whole configurations.
 - Do not commit `dist/`, logs, or local environment files.
 
-## Validation
+## Development validation
 
-Run from this directory:
+Reuse installed dependencies; run `npm ci` only when missing or when the lockfile changes.
+Select checks for the actual change from this directory:
 
-```bash
-npm ci
-npm run check:api
-npm run lint
-npm run test -- --run
-npm run build
-```
+- `npm run check:api` for OpenAPI or API-client changes.
+- `npm run lint` for changed frontend code.
+- `npm run test -- --run` with the relevant existing test filter for behavior changes.
+- `npm run build` for TypeScript, routes, shared UI, or build configuration changes.
+
+The full list belongs to broad frontend integration/CI, not every small edit. Instruction-only changes
+need only document checks. Preserve the Control Plane and sensitive-data boundaries above.
