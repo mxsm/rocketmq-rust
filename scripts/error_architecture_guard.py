@@ -498,7 +498,6 @@ def check_error_and_model_public_surface() -> list[Finding]:
     forbidden = {
         "RocketmqError": "legacy RocketmqError must not re-enter core public error code",
         "RocketMqError": "legacy RocketMqError spelling must not re-enter core public error code",
-        "rocketmq_error::Result": "old rocketmq_error::Result alias must not be used",
         "anyhow::Result": "rocketmq-error/model must not expose public anyhow Result",
         "anyhow::Error": "rocketmq-error/model must not expose anyhow Error",
     }
@@ -717,11 +716,11 @@ def check_required_mapping_adapters() -> list[Finding]:
         / "src"
         / "error"
         / "dashboard_error.rs": [
-            "PublicErrorView::try_new(error.descriptor(), &context)",
+            ".public_view()",
+            "metadata_io_source(error)",
             "for field in view.fields()",
             "view.projection().http().status.as_u16()",
             "DashboardErrorResponse::from(projection)",
-            "descriptor_by_code(code)",
             "DashboardHttpProjection::unknown",
             "config_source",
             "internal_source",
@@ -740,7 +739,7 @@ def check_required_mapping_adapters() -> list[Finding]:
             "CliVerbosity::Verbose",
             ".output(verbosity)",
             "output.exit_code().as_i32()",
-            "RocketMQError::validation_failed",
+            "crate::errors::argument_invalid",
         ],
         ROOT / "rocketmq-tools" / "rocketmq-admin" / "rocketmq-admin-cli" / "src" / "main.rs": [
             "render_cli_error(&error, verbosity)",
@@ -757,7 +756,7 @@ def check_required_mapping_adapters() -> list[Finding]:
             "PublicErrorView::try_new(error.descriptor(), &context)",
             "public.code().as_str()",
             "public.message()",
-            "public.fields()",
+            "fn render_public_context(view: &PublicErrorView<'_>)",
         ],
         ROOT
         / "rocketmq-tools"
@@ -862,7 +861,7 @@ def check_proxy_remoting_boundary() -> list[Finding]:
             findings.append(Finding(path, line_number, message))
     source = "\n".join(line for _, line in iter_non_test_lines(path))
     for token in (
-        "source @ ProxyError::RocketMQ(_) => upstream_failure_response",
+        "source @ ProxyError::Canonical(_) | source @ ProxyError::SharedCanonical(_) =>",
         "local =>",
         "PublicErrorView::try_new(local.descriptor(), &context)",
     ):
@@ -1007,21 +1006,21 @@ def check_cli_boundary() -> list[Finding]:
 def check_client_callback_boundary() -> list[Finding]:
     required_tokens = {
         ROOT / "rocketmq-client" / "src" / "consumer" / "pull_callback.rs": [
-            "fn on_exception(&mut self, e: RocketMQError)",
-            "fn broker_response_code(error: &RocketMQError)",
-            "RocketMQError::BrokerOperationFailed",
+            "fn on_exception(&mut self, e: ClientError)",
+            "fn broker_response_code(error: &ClientError)",
+            "error.broker_response_code()",
         ],
         ROOT / "rocketmq-client" / "src" / "consumer" / "pop_callback.rs": [
-            "fn on_error(&mut self, e: RocketMQError)",
-            "fn broker_response_code(error: &RocketMQError)",
-            "RocketMQError::BrokerOperationFailed",
+            "fn on_error(&mut self, e: ClientError)",
+            "fn broker_response_code(error: &ClientError)",
+            "error.broker_response_code()",
         ],
         ROOT / "rocketmq-client" / "src" / "producer" / "request_callback.rs": [
-            "Option<&RocketMQError>",
+            "Option<&ClientError>",
         ],
         ROOT / "rocketmq-client" / "src" / "producer" / "request_response_future.rs": [
-            "type RequestCause = Arc<RocketMQError>",
-            "pub fn set_cause(&self, cause: RocketMQError)",
+            "type RequestCause = Arc<ClientError>",
+            "pub fn set_cause(&self, cause: ClientError)",
         ],
     }
     findings: list[Finding] = []
@@ -1035,12 +1034,11 @@ def check_client_callback_boundary() -> list[Finding]:
                 findings.append(Finding(path, 1, f"required client callback boundary token missing: {needle}"))
 
     forbidden = {
-        "downcast_ref::<RocketMQError>": "client callback error paths must use typed RocketMQError directly",
-        "downcast_ref::<rocketmq_error::RocketMQError>": "client callback error paths must use typed RocketMQError directly",
+        "RocketMQError": "client callback error paths must use ClientError directly",
         "broker_response_code(error: &(dyn": "client broker response code lookup must not downcast dyn Error",
         "type RequestCause = Arc<dyn": "request future cause must store RocketMQError directly",
-        "Option<&dyn std::error::Error>": "request callback must expose RocketMQError directly",
-        "Box<dyn std::error::Error + Send>": "pull/pop callbacks must expose RocketMQError directly",
+        "Option<&dyn std::error::Error>": "request callback must expose ClientError directly",
+        "Box<dyn std::error::Error + Send>": "pull/pop callbacks must expose ClientError directly",
     }
     guarded_paths = list(required_tokens)
     return [*findings, *scan_forbidden_terms(guarded_paths, forbidden)]
@@ -1131,11 +1129,11 @@ def check_error_descriptor_contract() -> list[Finding]:
             "pub struct DiagnosticView<'a>",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_descriptor_catalog.rs": [
-            "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 128",
+            "EXPECTED_DESCRIPTOR_SNAPSHOTS.len(), 135",
             "descriptor_catalog_snapshot_is_exact",
         ],
         ROOT / "rocketmq-error" / "tests" / "error_context_redaction.rs": [
-            "rocketmq_error_exposes_public_message_and_redacted_context",
+            "canonical_error_exposes_only_catalog_message_and_safe_context",
             "source_present=<redacted>",
             "view.fields().count()",
         ],
