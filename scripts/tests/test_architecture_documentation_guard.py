@@ -52,13 +52,14 @@ class ArchitectureDocumentationGuardTest(unittest.TestCase):
         for record in payload["documents"]:
             self.assertEqual({"path", "sections", "link_targets", "commands"}, set(record))
 
-    def test_documentation_workflow_provisions_property_suite_native_dependencies(self) -> None:
+    def test_ci_routes_test_inventory_and_coverage_match_current_workflows(self) -> None:
         root = Path(__file__).resolve().parents[2]
-        workflow = (root / ".github/workflows/architecture-documentation.yml").read_text(encoding="utf-8")
-
-        self.assertIn("Install native build dependencies", workflow)
-        self.assertIn("clang llvm libclang-dev", workflow)
-        self.assertIn("protobuf-compiler", workflow)
+        policy = guard.load_json(root / guard.POLICY_RELATIVE)
+        facts = guard.collect_facts(root, policy)
+        findings = guard.validate_routes(root, policy, facts)
+        findings.extend(guard.validate_python_tests(root, policy))
+        findings.extend(guard.validate_coverage(root, policy))
+        self.assertEqual([], findings)
 
     def test_observability_cache_key_is_normalized_for_feature_lists(self) -> None:
         root = Path(__file__).resolve().parents[2]
@@ -169,16 +170,6 @@ tokio = { workspace = true, features = ["sync"] }
     def test_generated_document_is_deterministic(self) -> None:
         policy = {
             "root": {"commands": []},
-            "implementation_baseline": {
-                "id": "architecture-implementation-2026-07-29-v1",
-                "generator": "scripts/architecture_implementation_baseline.py",
-                "output": "target/architecture-optimization/baseline/current/baseline.json",
-                "historical_review_commit": "8e01ee9ac0bfbd14528939160cd7c2b2fb6d01e4",
-                "planning_snapshot_commit": "071fb7dfc835f828a79eabdfca1225c14123a093",
-                "historical_difference": "Historical facts are separate.",
-                "commands": ["cargo metadata --format-version 1 --no-deps"],
-                "required_evidence": ["target/baseline.json"],
-            },
             "candidate_record": {
                 "commit": "d88a973131ce4f57d01a65def8ecb7944a45ba21",
                 "markdown": "rocketmq-doc/en/architecture-candidates/2026-08-01-d88a97313.md",
@@ -220,32 +211,8 @@ tokio = { workspace = true, features = ["sync"] }
 
         self.assertEqual(first, second)
         self.assertIn("rocketmq-runtime", first)
-        self.assertIn("architecture-implementation-2026-07-29-v1", first)
         self.assertIn("d88a973131ce4f57d01a65def8ecb7944a45ba21", first)
         self.assertIn("Production certified: no", first)
-
-    def test_implementation_baseline_rejects_unversioned_id_and_unsafe_paths(self) -> None:
-        policy = {
-            "implementation_baseline": {
-                "id": "current",
-                "generator": "../generator.py",
-                "output": "C:/outside/baseline.json",
-                "historical_review_commit": "invalid",
-                "planning_snapshot_commit": "invalid",
-                "historical_difference": "Historical facts are separate.",
-                "commands": [],
-                "required_evidence": ["../outside.json"],
-            }
-        }
-
-        findings = guard.validate_implementation_baseline(Path("."), policy)
-
-        codes = {finding.code for finding in findings}
-        self.assertIn("implementation-baseline-id", codes)
-        self.assertIn("implementation-baseline-commit", codes)
-        self.assertIn("implementation-baseline-path", codes)
-        self.assertIn("implementation-baseline-commands", codes)
-        self.assertIn("implementation-baseline-evidence", codes)
 
     def test_python_test_inventory_fails_when_a_discovered_file_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

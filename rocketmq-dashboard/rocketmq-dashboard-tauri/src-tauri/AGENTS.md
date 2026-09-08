@@ -7,13 +7,12 @@ This file applies to `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/`.
 - This is a standalone Rust Cargo project.
 - Do not rely on root workspace validation for this directory.
 
-## Mandatory validation
-Run from `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` before PR submission or final handoff for Rust code changes:
+## Development validation
 
-```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-```
+From this standalone Cargo root, use `cargo fmt --all -- --check` and `cargo check`,
+plus focused tests for changed behavior. A relevant test build can replace the separate compile check.
+Select `cargo clippy --no-deps -- -D warnings` when useful; add only affected features/targets.
+Full-suite validation belongs to the corresponding integration or CI task.
 
 ## Test policy
 - Run only the affected tests by default.
@@ -28,4 +27,5 @@ cargo test
 ```
 
 ## Cross-project rule
-If shared Rust crates referenced by this project are modified, validate those shared crates in the repository root as needed.
+Validate shared crates and this consumer when their API, feature, or behavior changes affect it;
+local internal changes do not automatically add other standalone profiles.

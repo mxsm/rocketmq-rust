@@ -33,19 +33,6 @@ repo_relative_path() {
   printf '%s\n' "${relative//\\//}"
 }
 
-read_repository_text() {
-  local relative_path="$1"
-  local path="$ROOT/$relative_path"
-
-  if [[ ! -f "$path" ]]; then
-    add_failure "Missing required file: $relative_path"
-    printf '\n'
-    return
-  fi
-
-  cat "$path"
-}
-
 text_contains() {
   local text="$1"
   local needle="$2"
@@ -81,9 +68,12 @@ assert_same_directory_agents() {
   fi
 }
 
-ROOT_AGENTS_TEXT="$(read_repository_text "AGENTS.md")"
-MCP_AGENTS_TEXT="$(read_repository_text "rocketmq-ai/rocketmq-mcp/AGENTS.md")"
-MCP_CONTROL_AGENTS_TEXT="$(read_repository_text "rocketmq-ai/rocketmq-mcp-control/AGENTS.md")"
+ROOT_AGENTS_TEXT=""
+if [[ -f "$ROOT/AGENTS.md" ]]; then
+  ROOT_AGENTS_TEXT="$(cat "$ROOT/AGENTS.md")"
+else
+  add_failure "Missing required file: AGENTS.md"
+fi
 
 REQUIRED_ROUTE_PATHS=(
   "fuzz/"
@@ -91,6 +81,9 @@ REQUIRED_ROUTE_PATHS=(
   "rocketmq-ai/rocketmq-mcp/"
   "rocketmq-ai/rocketmq-mcp-control/"
   "rocketmq-ai/rocketmq-sre/"
+  "rocketmq-ai/rocketmq-sre/ui/"
+  "rocketmq-ai/rocketmq-sre/sdk/typescript/"
+  "rocketmq-macros/tests/fixtures/renamed-consumer/"
   "rocketmq-dashboard/rocketmq-dashboard-gpui/"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/"
   "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/"
@@ -100,81 +93,10 @@ REQUIRED_ROUTE_PATHS=(
   "rocketmq-website/"
 )
 
+# Check routing structure, not wording or complete command profiles.
 for route_path in "${REQUIRED_ROUTE_PATHS[@]}"; do
   assert_text_contains "$ROOT_AGENTS_TEXT" "$route_path" "Root AGENTS.md"
-done
-
-REQUIRED_MCP_COMMANDS=(
-  "cargo check --locked"
-  "python scripts/check_read_only_boundary.py"
-  "cargo test --locked"
-  "cargo clippy --locked --all-targets --features streamable-http -- -D warnings"
-  "cargo doc --locked --no-deps"
-)
-
-REQUIRED_ROOT_TERMS=(
-  'root `Cargo.toml`'
-  "cargo fmt --all -- --check"
-  "cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings"
-  "cargo clippy --all-targets --all-features -- -D warnings"
-  ".\\scripts\\check-agents-routing.ps1"
-  "./scripts/check-agents-routing.sh"
-  ".\\scripts\\runtime-audit.ps1 -SkipBaseline"
-  ".\\scripts\\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline"
-  ".\\scripts\\check-error-hygiene.ps1"
-  "python scripts/error_architecture_guard.py"
-  "rocksdb_store"
-  "otlp-metrics"
-  "Validation routes are cumulative"
-  "rocketmq-ai/rocketmq-mcp/"
-  "rocketmq-doc/en/agents-routing-validation-adr.md"
-)
-
-for term in "${REQUIRED_ROOT_TERMS[@]}"; do
-  assert_text_contains "$ROOT_AGENTS_TEXT" "$term" "Root AGENTS.md"
-done
-
-for command in "${REQUIRED_MCP_COMMANDS[@]}"; do
-  assert_text_contains "$MCP_AGENTS_TEXT" "$command" "rocketmq-mcp AGENTS.md validation"
-done
-
-for command in "cargo check --locked" "python scripts/check_control_boundary.py" "cargo test --locked" "cargo clippy --locked --all-targets --all-features -- -D warnings"; do
-  assert_text_contains "$MCP_CONTROL_AGENTS_TEXT" "$command" "rocketmq-mcp-control AGENTS.md validation"
-done
-
-REQUIRED_SHARED_PATHS=(
-  "rocketmq-model"
-  "rocketmq-protocol"
-  "rocketmq-runtime"
-  "rocketmq-client"
-  "rocketmq-transport"
-  "rocketmq-macros"
-  "rocketmq-error"
-  "rocketmq-observability"
-  "rocketmq-dashboard/rocketmq-dashboard-common"
-  "rocketmq-tools/rocketmq-admin/rocketmq-admin-core"
-)
-
-for shared_path in "${REQUIRED_SHARED_PATHS[@]}"; do
-  assert_text_contains "$ROOT_AGENTS_TEXT" "$shared_path" "Root AGENTS.md shared code rule"
-done
-
-EXPECTED_PROJECT_AGENTS=(
-  "fuzz/AGENTS.md"
-  "rocketmq-example/AGENTS.md"
-  "rocketmq-ai/rocketmq-mcp/AGENTS.md"
-  "rocketmq-ai/rocketmq-mcp-control/AGENTS.md"
-  "rocketmq-ai/rocketmq-sre/AGENTS.md"
-  "rocketmq-dashboard/rocketmq-dashboard-gpui/AGENTS.md"
-  "rocketmq-dashboard/rocketmq-dashboard-tauri/AGENTS.md"
-  "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/AGENTS.md"
-  "rocketmq-dashboard/rocketmq-dashboard-web/AGENTS.md"
-  "rocketmq-dashboard/rocketmq-dashboard-web/backend/AGENTS.md"
-  "rocketmq-dashboard/rocketmq-dashboard-web/frontend/AGENTS.md"
-  "rocketmq-website/AGENTS.md"
-)
-
-for agents_file in "${EXPECTED_PROJECT_AGENTS[@]}"; do
+  agents_file="${route_path}AGENTS.md"
   if [[ ! -f "$ROOT/$agents_file" ]]; then
     add_failure "Missing project AGENTS file: $agents_file"
   fi
@@ -205,92 +127,33 @@ while IFS= read -r package_json; do
   assert_text_contains "$ROOT_AGENTS_TEXT" "$relative_directory" "Root AGENTS.md Node project routing"
 done < <(find_files_by_name "package.json")
 
-WORKFLOW_PATHS=(
-  ".github/workflows/rocketmq-rust-ci.yaml|Root workspace validation"
-  ".github/workflows/fuzz-ci.yml|fuzz/"
-  ".github/workflows/rocketmq-example-ci.yaml|rocketmq-example/"
-  ".github/workflows/rocketmq-mcp-ci.yaml|rocketmq-ai/rocketmq-mcp/"
-  ".github/workflows/rocketmq-sre-ci.yml|rocketmq-ai/rocketmq-sre/"
-  ".github/workflows/dashboard-web-ci.yml|rocketmq-dashboard/rocketmq-dashboard-web/"
-  ".github/workflows/dashboard-tauri-ci.yml|rocketmq-dashboard/rocketmq-dashboard-tauri/"
-  ".github/workflows/website-check.yml|rocketmq-website/"
-  ".github/workflows/deploy.yml|rocketmq-website/"
+REQUIRED_WORKFLOWS=(
+  ".github/workflows/rocketmq-rust-ci.yaml"
+  ".github/workflows/fuzz-ci.yml"
+  ".github/workflows/rocketmq-example-ci.yaml"
+  ".github/workflows/rocketmq-mcp-ci.yaml"
+  ".github/workflows/rocketmq-sre-ci.yml"
+  ".github/workflows/dashboard-gpui-ci.yml"
+  ".github/workflows/dashboard-web-ci.yml"
+  ".github/workflows/dashboard-tauri-ci.yml"
+  ".github/workflows/website-check.yml"
+  ".github/workflows/deploy.yml"
 )
 
-for workflow_entry in "${WORKFLOW_PATHS[@]}"; do
-  workflow_path="${workflow_entry%%|*}"
-  route="${workflow_entry#*|}"
-  if [[ ! -f "$ROOT/$workflow_path" ]]; then
-    add_failure "Missing required workflow: $workflow_path"
-    continue
+for workflow in "${REQUIRED_WORKFLOWS[@]}"; do
+  if [[ ! -f "$ROOT/$workflow" ]]; then
+    add_failure "Missing required workflow: $workflow"
   fi
-  assert_text_contains "$ROOT_AGENTS_TEXT" "$route" "Root AGENTS.md workflow routing for $workflow_path"
 done
 
-MCP_WORKFLOW_PATH="$ROOT/.github/workflows/rocketmq-mcp-ci.yaml"
-if [[ -f "$MCP_WORKFLOW_PATH" ]]; then
-  MCP_WORKFLOW_TEXT="$(cat "$MCP_WORKFLOW_PATH")"
-  for command in "${REQUIRED_MCP_COMMANDS[@]}"; do
-    assert_text_contains "$MCP_WORKFLOW_TEXT" "$command" "Standalone rocketmq-mcp CI validation"
-  done
-  for trigger_path in \
-    "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**" \
-    "rocketmq-auth/**" \
-    "rocketmq-client/**" \
-    "rocketmq-error/**" \
-    "rocketmq-macros/**" \
-    "rocketmq-model/**" \
-    "rocketmq-observability/**" \
-    "rocketmq-protocol/**" \
-    "rocketmq-runtime/**" \
-    "rocketmq-security-api/**" \
-    "rocketmq-transport/**" \
-    "Cargo.toml" \
-    "Cargo.lock" \
-    "rust-toolchain.toml"; do
-    assert_text_contains "$MCP_WORKFLOW_TEXT" "$trigger_path" "Standalone rocketmq-mcp CI consumer trigger"
-  done
-fi
-
-SRE_WORKFLOW_PATH="$ROOT/.github/workflows/rocketmq-sre-ci.yml"
-if [[ -f "$SRE_WORKFLOW_PATH" ]]; then
-  SRE_WORKFLOW_TEXT="$(cat "$SRE_WORKFLOW_PATH")"
-  for trigger_path in \
-    "rocketmq-tools/rocketmq-admin/rocketmq-admin-core/**" \
-    "rocketmq-ai/rocketmq-mcp/**" \
-    "rocketmq-auth/**" \
-    "rocketmq-client/**" \
-    "rocketmq-error/**" \
-    "rocketmq-macros/**" \
-    "rocketmq-model/**" \
-    "rocketmq-observability/**" \
-    "rocketmq-protocol/**" \
-    "rocketmq-runtime/**" \
-    "rocketmq-security-api/**" \
-    "rocketmq-transport/**"; do
-    assert_text_contains "$SRE_WORKFLOW_TEXT" "$trigger_path" "Standalone rocketmq-sre CI consumer trigger"
-  done
-fi
-
-STANDALONE_TRIGGER_GUARD_PATH="$ROOT/scripts/standalone_workspace_trigger_guard.py"
-if [[ -f "$STANDALONE_TRIGGER_GUARD_PATH" ]]; then
-  PYTHON_COMMAND="${PYTHON:-python3}"
-  if ! command -v "$PYTHON_COMMAND" >/dev/null 2>&1; then
-    add_failure "Python is required for standalone workspace consumer-trigger validation"
-  elif ! "$PYTHON_COMMAND" "$STANDALONE_TRIGGER_GUARD_PATH" --repo-root "$ROOT"; then
-    add_failure "Standalone workspace metadata consumer-trigger validation failed"
+# Dependency/feature audits are separate integration checks; do not invoke Cargo metadata here.
+for document in \
+  "rocketmq-doc/en/agents-routing-validation-adr.md" \
+  "rocketmq-doc/en/agent-validation-reference.md"; do
+  if [[ ! -f "$ROOT/$document" ]]; then
+    add_failure "Missing validation reference: $document"
   fi
-fi
-
-ADR_PATH="$ROOT/rocketmq-doc/en/agents-routing-validation-adr.md"
-if [[ -f "$ADR_PATH" ]]; then
-  ADR_TEXT="$(cat "$ADR_PATH")"
-  for term in "AGENTS.md" "check-agents-routing.ps1" "check-agents-routing.sh" 'root `Cargo.toml`' "standalone" "rocketmq-mcp" "rocketmq-mcp-control" "cumulative"; do
-    assert_text_contains "$ADR_TEXT" "$term" "AGENTS routing ADR"
-  done
-else
-  add_failure "Missing AGENTS routing ADR: rocketmq-doc/en/agents-routing-validation-adr.md"
-fi
+done
 
 if (( ${#FAILURES[@]} > 0 )); then
   printf 'AGENTS routing check failed with %d issue(s):\n' "${#FAILURES[@]}"

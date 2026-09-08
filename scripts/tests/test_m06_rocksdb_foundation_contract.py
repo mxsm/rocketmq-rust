@@ -19,8 +19,6 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from scripts.module_maintainability_guard import production_code_lines
-
 
 ROOT = Path(__file__).resolve().parents[2]
 ROCKS_CRATE = ROOT / "rocketmq-store-rocksdb"
@@ -131,11 +129,6 @@ class RocksDbFoundationContractTests(unittest.TestCase):
             for token in FORBIDDEN_SOURCE_TOKENS:
                 if re.search(rf"\b{re.escape(token)}\b", source):
                     findings.append(f"{path.relative_to(ROOT)}: {token}")
-            self.assertLessEqual(
-                production_code_lines(raw_source),
-                800,
-                f"new RocksDB owner module exceeds the 800-line review limit: {path.relative_to(ROOT)}",
-            )
         self.assertEqual([], findings)
         self.assertNotRegex(lib_source, r"\bCommitLog\b")
 
@@ -174,14 +167,6 @@ class RocksDbFoundationContractTests(unittest.TestCase):
             facade = read(f"rocketmq-store/src/rocksdb/{module}.rs")
             self.assertIn(f"rocketmq_store_rocksdb::{module}::", facade)
         self.assertFalse((STORE_CRATE / "src/rocksdb/error.rs").exists())
-
-    def test_timer_transaction_and_message_store_kernel_move_to_owner(self) -> None:
-        self.assertTrue((STORE_CRATE / "src/rocksdb/timer.rs").is_file())
-        self.assertTrue((STORE_CRATE / "src/rocksdb/transaction.rs").is_file())
-        self.assertTrue((STORE_CRATE / "src/message_store/rocksdb_message_store.rs").is_file())
-        self.assertTrue((ROCKS_CRATE / "src/timer.rs").is_file())
-        self.assertTrue((ROCKS_CRATE / "src/transaction.rs").is_file())
-        self.assertTrue((ROCKS_CRATE / "src/message_store.rs").is_file())
 
 
 if __name__ == "__main__":

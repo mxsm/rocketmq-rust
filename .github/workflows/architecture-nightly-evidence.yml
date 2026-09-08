@@ -12,6 +12,10 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_PROFILE_TEST_DEBUG: "false"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   governance:
     name: Evidence registry governance

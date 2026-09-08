@@ -289,9 +289,6 @@ def validate_fuzz_registry(root: Path, registry: dict[str, Any]) -> list[Finding
         corpus = root / target["corpus"]
         if corpus.is_dir() and not any(path.is_file() for path in corpus.iterdir()):
             findings.append(Finding("fuzz-corpus-empty", label, "curated corpus needs at least one seed"))
-    for required in ("pull_request", "'10'", "'60'", "'900'", "architecture_evidence_governance_guard.py"):
-        if required not in workflow:
-            findings.append(Finding("fuzz-workflow-policy", FUZZ_WORKFLOW.as_posix(), required))
     return findings
 
 

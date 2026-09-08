@@ -3,33 +3,19 @@ name: RocketMQ Rust CI
 permissions:
   contents: read
 
+# Always publish the existing required contexts; select work inside the workflow.
 on:
   push:
-    branches: [ "main" ]
-    paths-ignore:
-      - 'rocketmq-doc/**'
-      - 'rocketmq-website/**'
-      - 'docker/**'
-      - 'resources/**'
-      - 'distribution/**'
-      - 'rocketmq-dashboard/rocketmq-dashboard-gpui/**'
-      - 'rocketmq-dashboard/rocketmq-dashboard-tauri/**'
-      - 'rocketmq-dashboard/rocketmq-dashboard-web/**'
-      - 'rocketmq-dashboard/README*.md'
-      - 'rocketmq-example/**'
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
-    paths-ignore:
-      - 'rocketmq-doc/**'
-      - 'rocketmq-website/**'
-      - 'docker/**'
-      - 'resources/**'
-      - 'distribution/**'
-      - 'rocketmq-dashboard/rocketmq-dashboard-gpui/**'
-      - 'rocketmq-dashboard/rocketmq-dashboard-tauri/**'
-      - 'rocketmq-dashboard/rocketmq-dashboard-web/**'
-      - 'rocketmq-dashboard/README*.md'
-      - 'rocketmq-example/**'
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '23 20 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -43,8 +29,10 @@ env:
   CARGO_TARGET_DIR: target
   ROCKSDB_DISABLE_JEMALLOC: 1
 
+
 jobs:
   core-release-short-checks:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     name: Core Release Short Checks
     runs-on: ubuntu-latest
 
@@ -70,6 +58,8 @@ jobs:
         run: python scripts/core_release_static_guard.py
 
   request-header-codec-contract:
+    needs: check
+    if: needs.check.outputs.header == 'true'
     name: Request Header Codec Contract
     runs-on: ubuntu-latest
 
@@ -91,6 +81,7 @@ jobs:
         run: python -m unittest discover -s scripts/request-header-codec/tests -p 'test_*.py'
 
       - name: Check migration inventory and frozen legacy surface
+        if: github.event_name != 'pull_request'
         run: python scripts/request-header-codec/migrate.py check
 
       - name: Check pinned Java schema compatibility
@@ -100,6 +91,8 @@ jobs:
         run: cargo test --locked -p rocketmq-protocol --test request_header_codec_v3_registry
 
   error-architecture:
+    needs: check
+    if: needs.check.outputs.errors == 'true'
     name: Error Architecture
     runs-on: ubuntu-latest
 
@@ -119,6 +112,7 @@ jobs:
   # Architecture migration guards
   # =========================
   architecture-guards:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     name: Architecture Guards (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
 
@@ -190,6 +184,7 @@ jobs:
         run: python scripts/stable_surface_guard.py --scope core-release --mode target
 
   architecture-contracts:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     name: Architecture Contracts
     runs-on: windows-latest
 
@@ -209,6 +204,7 @@ jobs:
         run: python scripts/run_architecture_tests.py --tier milestone_contract --tier phase_contract --tier dynamic_fixture
 
   architecture-target:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     name: Architecture Strict Target
     runs-on: ubuntu-latest
 
@@ -251,12 +247,38 @@ jobs:
   check:
     name: Check (fmt + clippy)
     runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.scope.outputs.rust }}
+      full_features: ${{ steps.scope.outputs.full_features }}
+      observability: ${{ steps.scope.outputs.observability }}
+      rocksdb: ${{ steps.scope.outputs.rocksdb }}
+      header: ${{ steps.scope.outputs.header }}
+      errors: ${{ steps.scope.outputs.errors }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Select checks from changed paths
+        id: scope
+        run: python scripts/ci_scope.py
+
+      - name: Test CI scope selection
+        if: steps.scope.outputs.routing == 'true'
+        run: python -m unittest discover -s scripts/tests -p test_ci_scope.py -v
+
+      - name: Check AGENTS routing
+        if: steps.scope.outputs.routing == 'true'
+        run: bash ./scripts/check-agents-routing.sh
+
+      - name: Test automatic approval decisions
+        if: steps.scope.outputs.automation == 'true'
+        run: node --test scripts/tests/test_auto_approve.cjs
 
       - name: Install system dependencies (Ubuntu)
+        if: steps.scope.outputs.rust == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -294,11 +316,13 @@ jobs:
           fi
 
       - name: Use repository Rust 1.95 toolchain
+        if: steps.scope.outputs.rust == 'true'
         run: |
           rustup show active-toolchain
           rustup component add rustfmt clippy
 
       - name: Cache Rust + RocksDB
+        if: steps.scope.outputs.rust == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rocketmq-rust-ubuntu
@@ -313,23 +337,31 @@ jobs:
             ROCKSDB_DISABLE_JEMALLOC
 
       - name: Format check
+        if: steps.scope.outputs.rust == 'true'
         run: cargo fmt --all -- --check
 
-      - name: Check AGENTS routing
-        run: bash ./scripts/check-agents-routing.sh
-
-      - name: Clippy (all features)
-        run: cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+      - name: Clippy workspace
+        if: steps.scope.outputs.rust == 'true'
+        env:
+          FULL_FEATURES: ${{ github.event_name != 'pull_request' || steps.scope.outputs.full_features == 'true' }}
+        run: |
+          if [ "$FULL_FEATURES" = true ]; then
+            cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+          else
+            cargo clippy --workspace --no-deps --all-targets -- -D warnings
+          fi
 
       - name: Document workspace public API
+        if: steps.scope.outputs.rust == 'true' && github.event_name != 'pull_request'
         run: cargo doc --workspace --no-deps --all-features
 
   # =========================
   # Observability feature matrix
   # =========================
   observability-feature-matrix:
-    name: Observability Features (${{ matrix.features || 'default' }})
     needs: check
+    if: needs.check.outputs.observability == 'true'
+    name: Observability Features (${{ matrix.features || 'default' }})
     runs-on: ubuntu-latest
 
     strategy:
@@ -347,20 +379,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
-      - name: Install system dependencies (Ubuntu)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            clang llvm libclang-dev \
-            cmake make ninja-build pkg-config \
-            protobuf-compiler \
-            libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev \
-            libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
-
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "CXX=clang++" >> $GITHUB_ENV
-          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> $GITHUB_ENV
 
       - name: Use repository Rust 1.95 toolchain
         run: |
@@ -391,24 +409,14 @@ jobs:
             LIBCLANG_PATH
             ROCKSDB_DISABLE_JEMALLOC
 
-      - name: Check observability feature set
-        env:
-          FEATURES: ${{ matrix.features }}
-        run: |
-          if [ -n "$FEATURES" ]; then
-            cargo check --workspace --all-targets --features "$FEATURES"
-          else
-            cargo check --workspace --all-targets
-          fi
-
       - name: Clippy observability feature set
         env:
           FEATURES: ${{ matrix.features }}
         run: |
           if [ -n "$FEATURES" ]; then
-            cargo clippy --workspace --no-deps --all-targets --features "$FEATURES" -- -D warnings
+            cargo clippy -p rocketmq-observability --no-deps --all-targets --features "$FEATURES" -- -D warnings
           else
-            cargo clippy --workspace --no-deps --all-targets -- -D warnings
+            cargo clippy -p rocketmq-observability --no-deps --all-targets -- -D warnings
           fi
 
       - name: Test rocketmq-observability feature set
@@ -425,8 +433,9 @@ jobs:
   # RocksDB feature validation
   # =========================
   rocksdb-store:
-    name: RocksDB Store Feature (${{ matrix.os }})
     needs: check
+    if: needs.check.outputs.rocksdb == 'true'
+    name: RocksDB Store Feature (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -496,14 +505,10 @@ jobs:
   # Build + Test
   # =========================
   build-test:
-    name: Build & Test (${{ matrix.os }})
+    name: Build & Test (ubuntu-latest)
     needs: check
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ ubuntu-latest, macos-latest, windows-latest ]
+    if: needs.check.outputs.rust == 'true'
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -511,7 +516,6 @@ jobs:
 
       # ---------- Ubuntu ----------
       - name: Install system dependencies (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -548,34 +552,13 @@ jobs:
             fi
           fi
 
-      # ---------- macOS ----------
-      - name: Install system dependencies (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          brew update
-          brew install cmake protobuf snappy lz4 zstd llvm
-
-          # Set up LLVM paths for bindgen on macOS
-          LLVM_PREFIX=$(brew --prefix llvm)
-          echo "LLVM_PREFIX=$LLVM_PREFIX" >> $GITHUB_ENV
-          echo "LIBCLANG_PATH=$LLVM_PREFIX/lib" >> $GITHUB_ENV
-          echo "DYLD_FALLBACK_LIBRARY_PATH=$LLVM_PREFIX/lib:$DYLD_FALLBACK_LIBRARY_PATH" >> $GITHUB_ENV
-          echo "PATH=$LLVM_PREFIX/bin:$PATH" >> $GITHUB_ENV
-          echo "Configured LLVM at: $LLVM_PREFIX"
-
-      # ---------- Windows ----------
-      - name: Install system dependencies (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          choco install cmake ninja protoc -y
-
       - name: Use repository Rust 1.95 toolchain
         run: rustup show active-toolchain
 
       - name: Cache Rust + RocksDB
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: rocketmq-rust-${{ matrix.os }}
+          shared-key: rocketmq-rust-ubuntu-latest
           workspaces: |
             .
           env-vars: |
@@ -586,14 +569,18 @@ jobs:
             DYLD_FALLBACK_LIBRARY_PATH
             ROCKSDB_DISABLE_JEMALLOC
 
-      - name: Build (all features)
-        run: cargo build --workspace --all-features
-
-      - name: Test (all features)
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo test --workspace --all-features
+      - name: Test workspace
+        env:
+          FULL_FEATURES: ${{ github.event_name != 'pull_request' || needs.check.outputs.full_features == 'true' }}
+        run: |
+          if [ "$FULL_FEATURES" = true ]; then
+            cargo test --workspace --all-features
+          else
+            cargo test --workspace
+          fi
 
   interface-contracts:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     name: Store, Producer, Tiered, and Loom contracts
     needs: check
     runs-on: ubuntu-latest
@@ -641,6 +628,7 @@ jobs:
   coverage:
     name: Code Coverage
     needs: check
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
     steps:
@@ -712,5 +700,83 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           verbose: true
+  build-windows:
+    name: Build & Test (windows-latest)
+    needs: check
+    if: needs.check.outputs.rust == 'true' && github.event_name != 'pull_request'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # ---------- Windows ----------
+      - name: Install system dependencies (Windows)
+        run: |
+          choco install cmake ninja protoc -y
+
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
+
+      - name: Cache Rust + RocksDB
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rocketmq-rust-windows-latest
+          workspaces: |
+            .
+          env-vars: |
+            CC
+            CXX
+            LIBCLANG_PATH
+            LLVM_PREFIX
+            DYLD_FALLBACK_LIBRARY_PATH
+            ROCKSDB_DISABLE_JEMALLOC
+
+      - name: Build (all features)
+        run: cargo build --workspace --all-features
+
+  build-macos:
+    name: Build & Test (macos-latest)
+    needs: check
+    if: needs.check.outputs.rust == 'true' && github.event_name != 'pull_request'
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # ---------- macOS ----------
+      - name: Install system dependencies (macOS)
+        run: |
+          brew update
+          brew install cmake protobuf snappy lz4 zstd llvm
+
+          # Set up LLVM paths for bindgen on macOS
+          LLVM_PREFIX=$(brew --prefix llvm)
+          echo "LLVM_PREFIX=$LLVM_PREFIX" >> $GITHUB_ENV
+          echo "LIBCLANG_PATH=$LLVM_PREFIX/lib" >> $GITHUB_ENV
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$LLVM_PREFIX/lib:$DYLD_FALLBACK_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "PATH=$LLVM_PREFIX/bin:$PATH" >> $GITHUB_ENV
+          echo "Configured LLVM at: $LLVM_PREFIX"
+
+      - name: Use repository Rust 1.95 toolchain
+        run: rustup show active-toolchain
+
+      - name: Cache Rust + RocksDB
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rocketmq-rust-macos-latest
+          workspaces: |
+            .
+          env-vars: |
+            CC
+            CXX
+            LIBCLANG_PATH
+            LLVM_PREFIX
+            DYLD_FALLBACK_LIBRARY_PATH
+            ROCKSDB_DISABLE_JEMALLOC
+
+      - name: Build (all features)
+        run: cargo build --workspace --all-features

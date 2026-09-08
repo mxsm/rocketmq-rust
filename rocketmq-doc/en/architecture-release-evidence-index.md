@@ -10,8 +10,9 @@ commit SHA; this document does not claim that a scheduled or release run succeed
 
 - Formal Rust toolchain and MSRV: `1.95.0`.
 - Root workspace packages: 28.
-- Root final gates: `cargo fmt --all -- --check`, strict workspace Clippy, all-feature tests, and
-  `cargo doc --workspace --no-deps --all-features`.
+- Full integration checks: `cargo fmt --all -- --check`, workspace Clippy, all-feature tests, and
+  `cargo doc --workspace --no-deps --all-features`. Routine PR work is selected by changed paths;
+  see the [CI validation policy](ci-validation-policy.md) for feature and platform routing.
 
 | Package | Workspace path |
 |---|---|
@@ -55,31 +56,17 @@ commit SHA; this document does not claim that a scheduled or release run succeed
 This acceptance covers the code/system phase. Target-hardware performance comparison, the six-hour
 soak, complete disaster recovery, Docker images, and real external adapters remain later V1 evidence.
 
-## Current implementation baseline
-
-- Baseline ID: `architecture-implementation-2026-07-29-v1`.
-- Generator: `python scripts/architecture_implementation_baseline.py`.
-- Local artifact: `target/architecture-optimization/baseline/current/baseline.json` (generated, not committed).
-- Historical review input: `8e01ee9ac0bfbd14528939160cd7c2b2fb6d01e4`.
-- Planning snapshot input: `071fb7dfc835f828a79eabdfca1225c14123a093`.
-- Distinction: The historical review and planning snapshot remain planning inputs; this manifest records the current implementation worktree independently.
-
-The manifest records the current commit, dirty state, normalized Cargo metadata, toolchains,
-hardware/filesystem facts, project routes, commands, and evidence checksums. A dirty manifest
-is explicitly ineligible as a clean release candidate. Later performance and fault artifacts
-must reference this baseline ID or a deliberately versioned successor.
-
 ## Standalone Cargo validation matrix
 
 | Project | Owner | Toolchain | Manifest | Required commands | Workflow |
 |---|---|---|---|---|---|
 | fuzz | Fuzz and production input maintainers | `nightly-2026-07-05` | `fuzz/Cargo.toml` | `cargo +nightly-2026-07-05 check --locked --manifest-path fuzz/Cargo.toml --all-targets --all-features` | `.github/workflows/fuzz-ci.yml` |
 | example | Examples maintainers | `1.95.0` | `rocketmq-example/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets -- -D warnings`<br>`cargo test`<br>`cargo build --examples` | `.github/workflows/rocketmq-example-ci.yaml` |
-| rocketmq-mcp | RocketMQ MCP maintainers | `1.95.0` | `rocketmq-ai/rocketmq-mcp/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo check --locked`<br>`python scripts/check_read_only_boundary.py`<br>`cargo test --locked`<br>`cargo test --locked --all-features`<br>`cargo clippy --locked --all-targets --features streamable-http -- -D warnings`<br>`cargo doc --locked --no-deps` | `.github/workflows/rocketmq-mcp-ci.yaml` |
-| rocketmq-sre | RocketMQ AI SRE maintainers | `1.95.0` | `rocketmq-ai/rocketmq-sre/Cargo.toml` | `cargo fmt -p rocketmq-sre-contracts -p rocketmq-sre-core -p rocketmq-sre-model-gateway -p rocketmq-sre-control-plane -p rocketmq-sre-connector -p rocketmq-sre-executor -p rocketmq-sre-execution-agent -p rocketmq-sre-probe -p rocketmq-sre-eval -p rocketmq-sre-client -p rocketmq-sre-cli -- --check`<br>`cargo check --locked --workspace`<br>`cargo test --locked --workspace --all-features`<br>`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`<br>`cargo doc --locked --workspace --no-deps`<br>`python scripts/check_source_layout.py`<br>`python scripts/check_execution_dependency_boundary.py` | `.github/workflows/rocketmq-sre-ci.yml` |
-| dashboard-gpui | Dashboard GPUI maintainers | `1.95.0` | `rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets --all-features -- -D warnings`<br>`cargo check --all-targets --all-features`<br>`cargo test` | `.github/workflows/dashboard-gpui-ci.yml` |
+| rocketmq-mcp | RocketMQ MCP maintainers | `1.95.0` | `rocketmq-ai/rocketmq-mcp/Cargo.toml` | `cargo fmt --all -- --check`<br>`python scripts/check_read_only_boundary.py`<br>`cargo test --locked`<br>`cargo test --locked --all-features`<br>`cargo clippy --locked --all-targets --features streamable-http -- -D warnings`<br>`cargo doc --locked --no-deps` | `.github/workflows/rocketmq-mcp-ci.yaml` |
+| rocketmq-sre | RocketMQ AI SRE maintainers | `1.95.0` | `rocketmq-ai/rocketmq-sre/Cargo.toml` | `cargo fmt -p rocketmq-sre-contracts -p rocketmq-sre-core -p rocketmq-sre-model-gateway -p rocketmq-sre-control-plane -p rocketmq-sre-connector -p rocketmq-sre-executor -p rocketmq-sre-execution-agent -p rocketmq-sre-probe -p rocketmq-sre-eval -p rocketmq-sre-client -p rocketmq-sre-cli -- --check`<br>`cargo test --locked --workspace --all-features`<br>`cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`<br>`cargo doc --locked --workspace --no-deps`<br>`python scripts/check_source_layout.py`<br>`python scripts/check_execution_dependency_boundary.py` | `.github/workflows/rocketmq-sre-ci.yml` |
+| dashboard-gpui | Dashboard GPUI maintainers | `1.95.0` | `rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets --all-features -- -D warnings`<br>`cargo test` | `.github/workflows/dashboard-gpui-ci.yml` |
 | dashboard-tauri-backend | Dashboard Tauri maintainers | `1.95.0` | `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets --all-features -- -D warnings`<br>`cargo test --all-features` | `.github/workflows/dashboard-tauri-ci.yml` |
-| dashboard-web-backend | Dashboard Web backend maintainers | `1.95.0` | `rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets --all-features -- -D warnings`<br>`cargo build --all-targets --all-features`<br>`cargo test` | `.github/workflows/dashboard-web-ci.yml` |
+| dashboard-web-backend | Dashboard Web backend maintainers | `1.95.0` | `rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml` | `cargo fmt --all -- --check`<br>`cargo clippy --all-targets --all-features -- -D warnings`<br>`cargo test` | `.github/workflows/dashboard-web-ci.yml` |
 
 ## Shared crate to standalone consumer edges
 
@@ -230,16 +217,16 @@ and inject `ChildServiceContext`/`TaskGroup` capabilities.
 
 ## Python architecture test inventory
 
-- Inventoried test modules: 119.
+- Inventoried test modules: 112.
 - Guard runner: `python scripts/run_architecture_tests.py --tier pr_static`.
 - Contract runner: `python scripts/run_architecture_tests.py --tier milestone_contract --tier phase_contract --tier dynamic_fixture`.
 
 | Tier | Modules |
 |---|---:|
-| `pr_static` | 39 |
-| `milestone_contract` | 26 |
+| `pr_static` | 37 |
+| `milestone_contract` | 22 |
 | `phase_contract` | 24 |
-| `dynamic_fixture` | 25 |
+| `dynamic_fixture` | 24 |
 | `deferred_validation` | 5 |
 
 ## Evidence workflows and artifact identities

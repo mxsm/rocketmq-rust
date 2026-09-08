@@ -203,29 +203,22 @@ mistaken for a pass.
 
 ## Evidence execution boundary
 
-Pull requests use the lightweight candidate record validated by
-`scripts/architecture_candidate_guard.py`. The record binds a Git commit, OS,
-Rust toolchain, the exact static command, its pass status, and an empty
-known-failure list. It deliberately rejects SHA-256 inventories, image digests,
-signatures, and promotion state because those fields are meaningful only after
-real artifacts and a production-like environment exist.
+Pull requests use the affected checks described in the
+[CI validation policy](ci-validation-policy.md). Record the relevant command results
+in the PR; no separate candidate JSON, fixed commit, fingerprint, or empty
+historical-failure ledger is required for routine development.
 
-The latest accepted code/system record is
+The historical accepted code/system record is
 [d88a973131ce4f57d01a65def8ecb7944a45ba21](architecture-candidates/2026-08-01-d88a97313.md),
 with its [machine-readable companion](architecture-candidates/2026-08-01-d88a97313.json).
 It records a `93.5 / 100` code/system assessment and is not production certification;
 the six-hour soak, target-hardware comparison, complete disaster recovery, Docker
 images, and real external adapters remain deferred V1 evidence.
 
-```powershell
-python scripts/architecture_candidate_guard.py `
-  --record scripts/tests/fixtures/architecture-candidate/pass.json
-python scripts/run_architecture_tests.py --tier pr_static
-```
-
 The six-hour sampler runs only on the dedicated
-`self-hosted,linux,x64,rocketmq-architecture-evidence` runner. Pull requests execute
-the static contract job only. The dynamic workflow generates cryptographically
+`self-hosted,linux,x64,rocketmq-architecture-evidence` runner. Scheduled or manually
+selected integration runs own the broader architecture contract suites. The dynamic
+workflow generates cryptographically
 random, run-scoped test credentials, authenticates and preloads immutable image
 digests, and never uploads those credential manifests.
 

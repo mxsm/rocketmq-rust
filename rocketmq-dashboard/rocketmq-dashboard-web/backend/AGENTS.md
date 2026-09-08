@@ -14,16 +14,11 @@ This file applies to `rocketmq-dashboard/rocketmq-dashboard-web/backend/`.
 - Keep Axum handlers thin; put orchestration in services and reusable logic in common.
 - Prefer explicit error mapping through the local dashboard error and API response model.
 
-## Validation
-Run from this directory before PR submission or final handoff for Rust code changes:
+## Development validation
 
-```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-```
+From this directory, use `cargo fmt --all -- --check` and `cargo check` for the affected code;
+run a focused `cargo test <test_name>` for behavior changes. Tests that compile the changed target
+can replace the separate check.
 
-For compile-scope backend changes, also run:
-
-```bash
-cargo build --all-targets --all-features
-```
+Use `cargo clippy --no-deps -- -D warnings` and additional features/targets when relevant.
+Full-target/all-feature builds belong to backend integration or CI, not every local handoff.

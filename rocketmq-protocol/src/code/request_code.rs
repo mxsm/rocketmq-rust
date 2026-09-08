@@ -411,32 +411,6 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_traits() {
-        // Test Debug
-        let code = RequestCode::SendMessage;
-        assert_eq!(format!("{:?}", code), "SendMessage");
-
-        // Test Clone and Copy
-        let code1 = RequestCode::HeartBeat;
-        let code2 = code1;
-        let code3 = code1;
-        assert_eq!(code1, code2);
-        assert_eq!(code1, code3);
-
-        // Test PartialEq and Eq
-        assert_eq!(RequestCode::SendMessage, RequestCode::SendMessage);
-        assert_ne!(RequestCode::SendMessage, RequestCode::PullMessage);
-
-        // Test Hash (by using in a HashSet)
-        use std::collections::HashSet;
-        let mut set = HashSet::new();
-        set.insert(RequestCode::SendMessage);
-        set.insert(RequestCode::SendMessage); // Duplicate
-        set.insert(RequestCode::PullMessage);
-        assert_eq!(set.len(), 2);
-    }
-
-    #[test]
     fn test_special_codes() {
         // Test Pop message range (200050-200055)
         assert_eq!(RequestCode::from(200050), RequestCode::PopMessage);

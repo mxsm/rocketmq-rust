@@ -2,302 +2,142 @@
 
 ## Scope and precedence
 
-- This file applies to the whole repository unless a deeper `AGENTS.md` overrides it.
-- Follow the nearest `AGENTS.md` for files under standalone projects and dashboard subdirectories.
-- Direct user instructions in the current conversation take precedence over repository instructions.
-- If repository instructions conflict, follow the more specific instruction and report the conflict in the final response.
+- Direct user instructions take precedence over repository and skill guidance.
+- Root engineering rules apply throughout the repository. The nearest `AGENTS.md` selects local commands
+  and exceptions; its validation profile replaces the root fallback rather than accumulating full profiles.
+- Apply only instructions relevant to the files and behavior being changed. Resolve routine choices within
+  the authorized scope and continue; ask only when missing information materially changes the outcome.
+- If an instruction actually blocks authorized work, identify its file and explain the specific conflict.
 
-## Repository boundaries
+## Repository map
 
-- The repository root is the main Cargo workspace. The source of truth is the root `Cargo.toml` `[workspace].members` list.
-- Root workspace validation does not cover standalone Cargo projects or Node/Vite/Docusaurus projects.
+The root `Cargo.toml` `[workspace].members` list owns the main Cargo workspace. Standalone Cargo and
+Node projects require their own commands. Consult the matching local guide when working in these paths:
 
-| Path | Role | Instruction owner |
-|---|---|---|
-| `rocketmq-dashboard/rocketmq-dashboard-common/` | Root workspace member and shared dashboard crate | This file |
-| `rocketmq-example/` | Standalone Cargo project | `rocketmq-example/AGENTS.md` |
-| `rocketmq-macros/tests/fixtures/renamed-consumer/` | Standalone compile fixture for renamed codec dependencies | Its local `AGENTS.md` |
-| `rocketmq-ai/rocketmq-mcp/` | Standalone Rust MCP server | Its local `AGENTS.md` |
-| `rocketmq-ai/rocketmq-mcp-control/` | Standalone isolated MCP control foundation | Its local `AGENTS.md` |
-| `rocketmq-ai/rocketmq-sre/` | Standalone AI SRE Rust workspace and UI | Its local `AGENTS.md` |
-| `rocketmq-ai/rocketmq-sre/ui/` | Standalone React/TypeScript/Vite AI SRE frontend | Its local `AGENTS.md` |
-| `rocketmq-ai/rocketmq-sre/sdk/typescript/` | Standalone read-only AI SRE TypeScript SDK | Its local `AGENTS.md` |
-| `rocketmq-dashboard/rocketmq-dashboard-gpui/` | Standalone Cargo project | Its local `AGENTS.md` |
-| `rocketmq-dashboard/rocketmq-dashboard-tauri/` | Standalone Node/Vite/Tauri frontend | Its local `AGENTS.md` |
-| `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` | Standalone Rust backend | Its local `AGENTS.md` |
-| `rocketmq-dashboard/rocketmq-dashboard-web/` | Web Dashboard container, not a Cargo workspace root | Its local `AGENTS.md` |
-| `rocketmq-dashboard/rocketmq-dashboard-web/backend/` | Standalone Rust backend | Its local `AGENTS.md` |
-| `rocketmq-dashboard/rocketmq-dashboard-web/frontend/` | Standalone React/TypeScript/Vite frontend | Its local `AGENTS.md` |
-| `rocketmq-website/` | Standalone Docusaurus site | `rocketmq-website/AGENTS.md` |
+| Path | Role / local guide |
+| --- | --- |
+| `rocketmq-dashboard/rocketmq-dashboard-common/` | Root workspace member; this guide |
+| `fuzz/` | [Fuzz targets](fuzz/AGENTS.md) |
+| `rocketmq-example/` | [Standalone examples](rocketmq-example/AGENTS.md) |
+| `rocketmq-macros/tests/fixtures/renamed-consumer/` | [Renamed dependency fixture](rocketmq-macros/tests/fixtures/renamed-consumer/AGENTS.md) |
+| `rocketmq-ai/rocketmq-mcp/` | [Read-only MCP](rocketmq-ai/rocketmq-mcp/AGENTS.md) |
+| `rocketmq-ai/rocketmq-mcp-control/` | [Isolated mutation control](rocketmq-ai/rocketmq-mcp-control/AGENTS.md) |
+| `rocketmq-ai/rocketmq-sre/` | [Standalone SRE workspace](rocketmq-ai/rocketmq-sre/AGENTS.md) |
+| `rocketmq-ai/rocketmq-sre/ui/` | [SRE frontend](rocketmq-ai/rocketmq-sre/ui/AGENTS.md) |
+| `rocketmq-ai/rocketmq-sre/sdk/typescript/` | [Read-only TypeScript SDK](rocketmq-ai/rocketmq-sre/sdk/typescript/AGENTS.md) |
+| `rocketmq-dashboard/rocketmq-dashboard-gpui/` | [Standalone native dashboard](rocketmq-dashboard/rocketmq-dashboard-gpui/AGENTS.md) |
+| `rocketmq-dashboard/rocketmq-dashboard-tauri/` | [Tauri frontend](rocketmq-dashboard/rocketmq-dashboard-tauri/AGENTS.md) |
+| `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` | [Tauri backend](rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/AGENTS.md) |
+| `rocketmq-dashboard/rocketmq-dashboard-web/` | [Web dashboard boundary](rocketmq-dashboard/rocketmq-dashboard-web/AGENTS.md) |
+| `rocketmq-dashboard/rocketmq-dashboard-web/backend/` | [Web backend](rocketmq-dashboard/rocketmq-dashboard-web/backend/AGENTS.md) |
+| `rocketmq-dashboard/rocketmq-dashboard-web/frontend/` | [Web frontend](rocketmq-dashboard/rocketmq-dashboard-web/frontend/AGENTS.md) |
+| `rocketmq-website/` | [Docusaurus site](rocketmq-website/AGENTS.md) |
 
 ## Working agreement
 
-- Before editing, inspect the relevant files, the nearest `AGENTS.md`, and `git status --short`.
-- Treat existing uncommitted changes as user work. Do not overwrite, revert, or reformat unrelated changes.
-- Keep the change scoped to the request; avoid unrelated refactors, dependency updates, and configuration churn.
-- Prefer `rg` and `rg --files` for search. If unavailable, use the fastest local equivalent.
-- Follow existing module structure, naming, error handling, and test style before introducing a new pattern.
-- Use patch-style edits for manual changes. Generated files and formatter output may be produced by their normal tools.
-- If a required local command is unavailable, use the documented installation or CI-equivalent path when one exists.
-  Do not change project dependencies or configuration merely to bypass missing tooling.
-- Add or update a focused test for behavior changes when practical; the test should fail without the change.
-- Do not create commits, branches, pull requests, releases, or remote changes unless the user asks.
+- Before editing, inspect relevant files, the nearest guide, and `git status --short`.
+- Preserve existing user changes. Do not overwrite, revert, or reformat unrelated work.
+- Keep changes scoped. Follow existing modules, naming, error handling, and test style; avoid incidental
+  refactors, dependency upgrades, and configuration churn.
+- Prefer `rg` / `rg --files` and patch-style manual edits. Use normal generators and formatters for their outputs.
+- Complete authorized implementation and necessary verification without repeated permission requests.
+  Do not create commits, branches, PRs, releases, or remote changes unless the user asks.
+- Missing optional tools or unrelated historical failures should not block independent work. Use a documented
+  setup path when needed; do not change dependencies or lint/CI settings just to bypass a failure.
 
-## Rust engineering guardrails
+## Rust engineering
 
-### Toolchain, compatibility, and API design
+- Respect the selected toolchain, MSRV, `rustfmt.toml`, and `.clippy.toml`. Toolchain changes must keep affected
+  manifests and CI aligned. Preserve each project's edition: the root defaults to Rust 2021, while
+  `rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/` uses Rust 2024; `fuzz/` remains Rust 2021.
+- Keep the repository's Apache 2.0 header on new Rust files.
+- Keep features additive and optional dependencies explicitly gated. Preserve default behavior and test
+  the changed feature combinations; `--all-features` does not replace feature-absence tests.
+- Treat public APIs, request/response codes, headers, Serde fields/defaults, and persisted layouts as
+  compatibility surfaces. Semantic changes need an explicit decision and migration approach.
+- Prefer enums, config/request structs, builders, and newtypes over ambiguous booleans, numeric modes,
+  or long positional APIs. Keep modules private and exports intentional; preserve needed compatibility
+  through narrow wrappers.
+- Document non-obvious public invariants and applicable `# Errors`, `# Panics`, and `# Safety` contracts.
+  Use exhaustive matches for project-owned, compatibility-sensitive enums.
+- Scope new lint allowances narrowly and give a reason. No broad warning suppression.
+  Prefer native async trait methods; do not add `#[async_trait]`.
+- Roughly 500/800 effective lines are module review signals, not size gates. Split by behavior when useful;
+  do not split unrelated code just to satisfy a count. Comments should explain invariants and decisions.
+- Use typed errors for recoverable input, I/O, network, storage, protocol, and lifecycle failures.
+  Do not add `todo!`, `unimplemented!`, or recoverable-path panic/unwrap/expect. Production panic facades
+  require a documented invariant or a fallible compatibility API; tests may use assertions and unwraps.
+- Keep unsafe regions minimal with an immediately preceding `// SAFETY:` explanation.
+  Safe wrappers establish their own invariants; caller obligations require an unsafe API and safety contract.
+- Own background work through `ServiceContext`, `TaskGroup`, or an established lifecycle owner.
+  Shutdown cancels and awaits owned work. Route blocking work through `BlockingExecutor` or an established
+  top-level boundary; do not add detached tasks, ad hoc runtimes, nested `block_on`, or raw `spawn_blocking`.
+  Explain any new ownership boundary in the change, without requiring a fingerprint/baseline ceremony.
+- Never hold synchronous lock guards across `.await`. Keep lock scopes and hot-path allocations small.
+- Prefer `#[tracing::instrument(skip_all, ...)]` with explicit, low-cardinality fields; attach existing spans
+  at call sites only intentionally. Never log credentials, ACL/TLS material, tokens, message bodies, or
+  entire request/config objects; avoid unsampled per-message spans.
+- Preserve the security and product boundaries defined in local MCP, MCP-control, SRE, and dashboard guides.
+  Lighter development checks do not change runtime authorization, audit, or protocol behavior.
 
-- Use the repository toolchain and respect `rustfmt.toml` and `.clippy.toml`. Do not relax lint, formatting,
-  feature, or CI configuration merely to make a change pass.
-- Prefer clear, idiomatic Rust over clever abstractions. New Rust source files must keep the repository's Apache 2.0 copyright-header style.
-- Treat `rust-version` as the MSRV and `rust-toolchain.toml` as the repository toolchain selection. Changes
-  to either must keep root and standalone manifests, `.clippy.toml`, and CI aligned.
-- Do not normalize editions across projects. The root workspace defaults to Rust 2021;
-  `rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/` explicitly uses Rust 2024. Follow each standalone Cargo
-  project's local edition and toolchain rules; `fuzz/` intentionally remains Rust 2021.
-- Keep Cargo features additive and explicit. Preserve documented default behavior, gate optional dependencies
-  with their owning feature, and validate the exact changed feature combinations.
-- Treat public crate APIs, request/response codes and headers, Serde field names/defaults, and persisted record
-  layouts as compatibility surfaces. Do not remove, renumber, or change their semantics without an explicit
-  compatibility decision and migration plan.
-- Prefer enums, request/config structs, builders, and newtypes over positional booleans, ambiguous `Option`
-  values, numeric modes, or long public parameter lists. Preserve unavoidable legacy signatures through narrow
-  wrappers.
-- Keep modules private by default and expose intentional public API through narrow visibility or explicit re-exports.
-- Public APIs must explain non-obvious invariants. Add `# Errors`, `# Panics`, and `# Safety` sections when
-  applicable, and add examples when they clarify why or how the API is used.
-- Prefer exhaustive matches for project-owned enums and compatibility-sensitive behavior. Use wildcard arms
-  only when intentionally grouping future or irrelevant cases.
-- Any new `#[allow(...)]` must be scoped to the narrowest item and include a reason. Do not add crate- or
-  module-wide `allow(warnings)` or broad Clippy-group suppression.
-- Prefer native `async fn` methods in traits. `#[allow(async_fn_in_trait)]` is permitted when required by the
-  lint for an intentional public async trait API; do not add `#[async_trait]`.
-- Treat roughly 500 lines of code as a module review signal and avoid extending high-touch modules beyond roughly
-  800 lines of code without a strong local reason. For this guideline, exclude comments, attributes/annotations,
-  blank lines, and `use` imports. Do not split unrelated legacy modules solely to meet a number.
-- Keep comments focused on invariants, ordering, error handling, protocol compatibility, or concurrency assumptions; do not restate the code.
+## Development validation
 
-### Errors, unsafe code, async ownership, and tracing
+- Default completion means the affected code compiles, relevant behavior is verified, and intended Rust
+  files pass a package-scoped format check. For behavior changes, reuse or add focused regression coverage.
+- Select the smallest useful target and actual feature set. A test or Clippy run that compiles the affected
+  target can satisfy the compilation check; do not repeat `cargo check` solely to complete a checklist.
+- After relevant checks pass, finish the task. Broaden or repeat only for new edits, failures, or a concrete
+  unresolved risk. Do not add tests that merely restate constants or mirror low-impact implementation details.
+- Keep async tests deterministic with synchronization or virtual time, avoiding sleeps, fixed ports, and
+  external services where practical.
+- Do not run a mutating workspace-wide formatter while unrelated Rust files are dirty.
+- No SHA, file hash, fingerprint, fixed checkout, clean-worktree, historical-baseline, or score requirement
+  is part of routine development. Do not demand all historical findings be cleared before delivering a fix.
+- Report actual results. Address regressions caused by this change; briefly record unrelated failures,
+  missing optional tooling, and untested scope without claiming a pass or expanding into unrelated repairs.
+- Do not kill unrelated Cargo/rustc processes. Allow relevant work to finish within a reasonable task timeout.
+- Pure documentation/instruction changes need only relevant document/script checks. Run Rustdoc or example
+  checks when executable examples or public documentation links could break; website content uses its guide.
 
-- Do not add `todo!`, `unimplemented!`, or panic/unwrap/expect for recoverable input, I/O, network, storage,
-  protocol, or runtime-lifecycle failures in production paths. Return the project's typed error instead.
-- In production paths, permit panic/unwrap/expect only for a documented invariant or an existing compatibility
-  facade backed by a fallible API. Document public panic conditions under `# Panics`. Tests may use these
-  constructs when they make failures clearer.
-- Keep every new or modified `unsafe` region minimal. Place a `// SAFETY:` comment immediately before each
-  `unsafe` block or `unsafe impl`, documenting the invariants that make it sound.
-- A safe wrapper around unsafe operations must establish the required invariants itself. If callers must uphold
-  them, expose an `unsafe fn` or unsafe trait and document its `# Safety` contract.
-- New production background work must be owned by an injected `ServiceContext`, parent `TaskGroup`, or another
-  established lifecycle owner. Shutdown must cancel and await owned work.
-- Route blocking work through the established `BlockingExecutor` or an existing audit-approved top-level
-  boundary. Do not add detached `tokio::spawn`, ad hoc runtimes, nested `block_on`, or raw `spawn_blocking`.
-  A new exception is a runtime-baseline architecture change, not a local code comment.
-- Do not hold synchronous mutex or RwLock guards across `.await`; keep lock scope and hot-path allocations small.
-- Prefer `#[tracing::instrument(skip_all, ...)]` with explicit low-cardinality, non-sensitive fields. Use
-  call-site `.instrument(...)` only when intentionally binding an existing observation/request span to a future.
-- Never record credentials, ACL/TLS material, message bodies, tokens, or whole request/config objects. Avoid
-  per-message hot-loop spans unless sampling and overhead are intentional.
-
-## Validation policy
-
-- Validation routes are cumulative: run every profile, project rule, and specialized gate whose trigger matches.
-- During iteration, use the smallest useful formatter, check, and test scope. Full workspace validation commands
-  are final/pre-PR gates, not requirements after every small edit.
-- Before PR submission or final handoff of Rust code, complete a successful format check and applicable Clippy pass for every affected Cargo project.
-- Do not run a mutating workspace-wide formatter while unrelated dirty Rust files are present. Format only
-  intended files while iterating, then use the non-mutating final checks below.
-- A command counts as passed only if it completed with exit code zero. If a required baseline already fails,
-  report the exact pre-existing findings, prove the change introduced no new findings, and do not describe the
-  passed.
-- Rust validation can be slow because of workspace locks and native dependencies. Let relevant commands finish
-  unless they clearly fail or exceed the chosen timeout, and never kill unrelated Cargo or rustc processes.
-- Documentation-only changes do not require Cargo validation unless they affect generated Rust, build
-  configuration, executable examples, or documented Rust commands that need verification.
-
-### Root workspace Rust profile
-
-Run from the repository root. Repeat the format check for every affected root-workspace package, replacing
-`<package>` with its Cargo package name:
+Root-workspace commands to select from (replace placeholders; these are not an all-targets checklist):
 
 ```bash
 cargo fmt -p <package> -- --check
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo check -p <package>
+cargo test -p <package> <test_name>
 ```
 
-Do not use `cargo fmt --all -- --check` for root-workspace changes. Package-scoped format checks for every affected
-package, together with the workspace Clippy command, form the final root-workspace profile.
+When useful for the change, run `cargo clippy -p <package> --no-deps -- -D warnings` with the affected
+features/targets. A routine final response or PR preparation does not automatically require full-workspace
+Clippy, all features, or every specialized suite. Existing CI runs retain their actual requirements.
 
-### Standalone Cargo fallback profile
+For a standalone Cargo project without more specific commands, use `cargo fmt --all -- --check`,
+`cargo check`, and a focused `cargo test <test_name>` from its root, selecting only relevant work as above.
 
-Follow the nearest local `AGENTS.md`. When it does not define a different profile, run from that standalone Cargo root:
+## Shared changes and integration
 
-```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-```
+- Use current manifests to identify consumers when APIs, features, wire/storage contracts, or shared behavior
+  change. Validate the directly affected consumers and scenarios; a local internal edit does not automatically
+  trigger all standalone projects or fuzz targets.
+- Runtime ownership changes need relevant cancellation/shutdown/resource tests. Error mapping changes need
+  relevant error/redaction tests. RocksDB and telemetry changes need their affected feature combinations.
+- Full-workspace Clippy, feature matrices, metadata consumer audits, long fuzzing, interoperability,
+  performance, and deployment/fault tests belong to the corresponding integration, CI, or release task.
+  Select them when the task requires that evidence.
+- See [validation reference](rocketmq-doc/en/agent-validation-reference.md) only when choosing specialist or
+  integration checks; its command lists are not cumulative local gates.
+- For changes to project layout, AGENTS routing, or the routing scripts, run the lightweight
+  `.\scripts\check-agents-routing.ps1` or `bash ./scripts/check-agents-routing.sh`, plus `git diff --check`.
+  The checker covers paths and instruction/workflow existence, not command wording or source identity.
+  See the [routing ADR](rocketmq-doc/en/agents-routing-validation-adr.md).
+- Keep paired Markdown/HTML artifacts aligned. Do not commit build output, audit artifacts, logs, coverage,
+  Node build directories, or other temporary validation output.
 
-## Validation router
+## Project skills and reporting
 
-| Changed area | Run from | Required final validation | Additional validation or scope |
-|---|---|---|---|
-| Root workspace Rust crates and `rocketmq-dashboard/rocketmq-dashboard-common/` | Repository root | Root workspace Rust profile plus applicable focused tests for behavior changes | Apply every matching specialized gate below |
-| `rocketmq-example/` | `rocketmq-example/` | Follow `rocketmq-example/AGENTS.md` | Revalidate when any repository path dependency in its `Cargo.toml` changes, especially client, model, protocol, transport, runtime, error, observability, or admin-core |
-| `rocketmq-ai/rocketmq-sre/` | Its standalone workspace root | Follow `rocketmq-ai/rocketmq-sre/AGENTS.md` | Include every SRE Cargo member and the execution dependency boundary |
-| `rocketmq-ai/rocketmq-sre/ui/` | Its project root | Follow its local `AGENTS.md` | Include OpenAPI, routes, shared UI, and package metadata changes |
-| `rocketmq-ai/rocketmq-sre/sdk/typescript/` | Its project root | Follow its local `AGENTS.md` | Preserve the fixed read-only SDK and local-only draft boundary |
-| `rocketmq-dashboard/rocketmq-dashboard-gpui/` | Its project root | Follow its `AGENTS.md` | Revalidate for `rocketmq-dashboard-common/` or shared dashboard behavior changes |
-| `rocketmq-dashboard/rocketmq-dashboard-tauri/` frontend | Its project root | Follow its `AGENTS.md` | Include shared frontend config, shell behavior, and package metadata changes |
-| `rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/` | Its Cargo root | Follow its `AGENTS.md` | Revalidate when a root path dependency used by the backend changes |
-| `rocketmq-dashboard/rocketmq-dashboard-web/backend/` | Its Cargo root | Follow its `AGENTS.md` | Include dashboard-common, admin-core, client/model/protocol/transport/error, and API contract changes |
-| `rocketmq-dashboard/rocketmq-dashboard-web/frontend/` | Its project root | Follow its `AGENTS.md` | Include API contract, routing, shared UI, and package metadata changes |
-| `rocketmq-website/` | Its project root | Follow `rocketmq-website/AGENTS.md` | Include Docusaurus config, navigation, generated-doc commands, and package metadata changes |
-| `AGENTS.md`, `**/AGENTS.md`, `**/Cargo.toml`, `**/package.json`, `.github/workflows/**` | Repository root | AGENTS routing drift control below plus `git diff --check` | This row is additive; also run the owning project profile when build configuration or behavior changes |
-
-## Specialized gates
-
-### Runtime ownership and blocking
-
-If production changes touch `tokio::spawn`, `JoinSet`, `std::thread`, runtime creation, `block_on`,
-`spawn_blocking`, scheduler loops, shutdown paths, `TaskGroup`, `ScheduledTaskGroup`, `RuntimeOwner`,
-`ServiceContext`, or `BlockingExecutor`, run:
-
-```powershell
-.\scripts\runtime-audit.ps1 -SkipBaseline -EnforceBoundaryBaseline
-```
-
-On Unix, run the same PowerShell script with PowerShell 7 (`pwsh`). `scripts/runtime-audit.sh` is reporting-only
-and is not an equivalent enforcing gate.
-
-Treat changes to `scripts/runtime-audit-baseline.json` as architecture changes: explain the ownership decision,
-keep the baseline update scoped, and rerun the enforcing command.
-
-### Typed error architecture
-
-If changes touch `rocketmq-error`, public error mapping, remoting/gRPC/HTTP/CLI exits,
-retry/severity/redaction/observability metadata, or sensitive debug fields, run the platform-appropriate guard:
-
-```powershell
-.\scripts\check-error-hygiene.ps1
-```
-
-```bash
-python scripts/error_architecture_guard.py
-```
-
-### Observability feature matrix
-
-If changes touch `rocketmq-observability`, telemetry feature flags, broker observability wiring, or relevant
-`Cargo.toml` feature definitions, run the affected subset of `.github/workflows/rocketmq-rust-ci.yaml`. Cover the
-applicable `cargo check`, Clippy, and `cargo test -p rocketmq-observability` combinations for `observability`,
-`otlp-metrics`, `otel-metrics,prometheus`, `otlp-traces`, `otlp-logs`, and combined OTLP/Prometheus features.
-
-### RocksDB store feature
-
-If changes touch `rocksdb_store` behavior in `rocketmq-store` or `rocketmq-broker`, run:
-
-```bash
-cargo clippy -p rocketmq-store --features rocksdb_store --all-targets -- -D warnings
-cargo clippy -p rocketmq-broker --features rocksdb_store --all-targets -- -D warnings
-cargo test -p rocketmq-store --features rocksdb_store --test rocksdb_foundation_tests
-cargo test -p rocketmq-store --features rocksdb_store --test rocksdb_store_semantics_tests
-cargo test -p rocketmq-broker --features rocksdb_store rocksdb
-cargo test -p rocketmq-broker --features rocksdb_store pop_consumer
-```
-
-### RocketMQ MCP
-
-If changes touch `rocketmq-ai/rocketmq-mcp/`, its feature definitions, or a shared public API it consumes,
-run the mandatory profile in `rocketmq-ai/rocketmq-mcp/AGENTS.md` from the MCP project root.
-
-Preserve the MCP deny-by-default boundary: default tools remain read-only/diagnostic; `dangerous-tools` requires
-compile-time and runtime opt-in, confirmation, and audit; Streamable HTTP remains authenticated by default;
-stdio writes protocol frames only to stdout; and sensitive output remains sanitized.
-
-### RocketMQ MCP control
-
-If changes touch `rocketmq-ai/rocketmq-mcp-control/`, run the mandatory profile in its local `AGENTS.md` from
-the standalone project root. Preserve the isolated control boundary: HTTPS and OAuth are mandatory, the default
-build has no mutation adapter, `write-tools` contains only the mutation adapter, and no production mutation tool
-is registered until a separately reviewed operation implementation exists.
-
-## Testing policy
-
-- Prefer the smallest effective scope: named test, module test, package test, then broader integration tests.
-- Broaden tests when a change affects shared infrastructure, feature flags, public cross-crate APIs, wire/storage compatibility, or multiple crates.
-- Add regression coverage for bug fixes and externally visible coverage for new behavior.
-- Prefer whole-value or DTO equality when it has meaningful semantics instead of copying field-by-field assertions.
-- Do not add tests that only restate constants or negative tests for behavior that no longer exists.
-- Keep async/concurrency tests deterministic: prefer explicit synchronization or Tokio virtual time over
-  arbitrary sleeps, and avoid fixed ports or external network dependencies when practical.
-- For feature-gated behavior, test the exact changed feature set; `--all-features` alone may not exercise the same conditional compilation path.
-
-Examples:
-
-```bash
-cargo test -p rocketmq-model
-cargo test -p rocketmq-client-rust --lib
-cargo test -p rocketmq-transport some_test_name
-```
-
-## Shared code and cross-project validation
-
-If a shared crate changes, inspect standalone `Cargo.toml` path dependencies and validate every affected consumer. Common shared paths include:
-
-- `rocketmq-model`
-- `rocketmq-protocol`
-- `rocketmq-runtime`
-- `rocketmq-client`
-- `rocketmq-transport`
-- `rocketmq-macros`
-- `rocketmq-error`
-- `rocketmq-observability`
-- `rocketmq-dashboard/rocketmq-dashboard-common`
-- `rocketmq-tools/rocketmq-admin/rocketmq-admin-core`
-
-Changes to `rocketmq-broker`, `rocketmq-controller`, `rocketmq-protocol`, or `rocketmq-store-local` must also
-revalidate the standalone `fuzz/` project because those crates are direct path dependencies.
-
-Do not infer consumer scope from directory names alone; use the current manifests.
-
-## Documentation and generated artifacts
-
-- Changes under `rocketmq-website/` are website changes, not plain Markdown-only changes; follow `rocketmq-website/AGENTS.md`.
-- For public API or Rustdoc changes, run relevant doctests or `cargo doc` for the affected package when examples, links, or feature-gated items could break.
-- Do not commit build output, local logs, runtime audit artifacts under `target/`, coverage output, or Node build directories.
-- For paired Markdown/HTML reports, verify both outputs remain aligned with their source data or generator.
-
-## AGENTS routing drift control
-
-Run when changing project boundaries, validation commands, workflow routes, package manifests, routing scripts, the routing ADR, or any `AGENTS.md`.
-
-Windows PowerShell:
-
-```powershell
-.\scripts\check-agents-routing.ps1
-```
-
-Unix Bash:
-
-```bash
-bash ./scripts/check-agents-routing.sh
-```
-
-The PowerShell and Bash scripts are equivalent and must stay aligned. They verify required standalone routes,
-local instruction files, critical workflow presence, Node/Docusaurus projects, shared-code paths, and specialized
-guard commands. The design is documented in `rocketmq-doc/en/agents-routing-validation-adr.md`.
-
-## Project-local agent assets
-
-- Use `.agents/skills/rocketmq-rust-issue-generator/` when drafting or publishing GitHub issues.
-- Use `.agents/skills/rocketmq-rust-pr-submitter/` when preparing or publishing PR titles, commit messages, and PR bodies.
-- Use `.agents/skills/rust-doc-comment-generator/` for substantial Rustdoc/comment generation.
-- Use `.agents/skills/translate-it-doc-en-zh/` for English-to-Chinese technical documentation translation.
-- Keep duplicated `.agents/skills/**` and `.claude/skills/**` copies aligned.
-
-## Final response expectations
-
-- Summarize changed files and intent.
-- List every validation command run and its result.
-- If required validation was skipped or failed, explain why and identify the remaining risk.
-- Mention pre-existing unrelated worktree changes only when they matter to the task.
+- Use the relevant project skill for issue generation, PR preparation, substantial Rustdoc, or English-to-Chinese
+  translation under `.agents/skills/`. Read only the skill needed for the task; keep edited duplicate
+  `.agents/skills/**` and `.claude/skills/**` copies aligned.
+- Keep the final response concise: what changed, relevant validation results, and any material limitation.
+  Include command details needed to reproduce a failure; summarize routine successful checks.
+  Mention unrelated worktree changes only when they matter.

@@ -31,6 +31,7 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/rocketmq-sre-ci.yml"
+      - '!**/AGENTS.md'
   pull_request:
     branches: ["main"]
     paths:
@@ -58,11 +59,16 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/rocketmq-sre-ci.yml"
+      - '!**/AGENTS.md'
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
   CI: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   rust:
@@ -103,12 +109,6 @@ jobs:
         with:
           workspaces: rocketmq-ai/rocketmq-sre -> target
 
-      - name: Check metadata
-        run: cargo metadata --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked --no-deps
-
-      - name: Check workspace
-        run: cargo check --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked --workspace
-
       - name: Check Rust 2024 source layout
         run: python rocketmq-ai/rocketmq-sre/scripts/check_source_layout.py
 
@@ -141,7 +141,7 @@ jobs:
         # Live S3 and model-provider qualifications require separately injected credentials.
         run: |
           cargo test --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked \
-            -p rocketmq-sre-control-plane -- --include-ignored \
+            -p rocketmq-sre-control-plane -- --ignored \
             --skip evidence::blob::tests::s3_compatible_https_live_round_trip_uses_external_secret_references \
             --skip models::service::live_deepseek::deepseek_answers_one_evidence_cited_conversational_metric_query \
             --skip models::service::live_deepseek::deepseek_responses_produces_persisted_read_only_sre_diagnosis \
@@ -164,6 +164,7 @@ jobs:
         run: cargo clippy --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Rustdoc
+        if: github.event_name != 'pull_request'
         run: cargo doc --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked --workspace --no-deps
 
       - name: Check capability catalog
@@ -177,18 +178,6 @@ jobs:
           python scripts/telemetry_semantic_guard.py
           python -m unittest scripts.tests.test_telemetry_semantic_guard -v
 
-  msrv:
-    name: Rust 1.95 MSRV
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Rust 1.95
-        uses: dtolnay/rust-toolchain@1.95.0
-
-      - name: Check workspace
-        run: cargo check --manifest-path rocketmq-ai/rocketmq-sre/Cargo.toml --locked --workspace
 
   ui:
     name: Read-only UI

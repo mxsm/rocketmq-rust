@@ -25,18 +25,14 @@ This file applies to `rocketmq-dashboard/rocketmq-dashboard-web/frontend/`.
 - Preserve Java Dashboard operational flows where practical: Topic, Consumer, Producer, Broker/Cluster, Message, DLQMessage, MessageTrace, Proxy, OPS, and ACL.
 - Do not copy the old Java visual style directly.
 
-## Validation
-Run from this directory before PR submission or final handoff for frontend changes:
+## Development validation
 
-```bash
-npm ci
-npm run build
-```
-
-For iteration when dependencies are already installed:
+Reuse installed dependencies. Run `npm ci` only when dependencies are missing or the lockfile changes.
+For changes to rendered content, TypeScript, routes, or build configuration, run from this directory:
 
 ```bash
 npm run build
 ```
 
+Select existing focused tests for behavior changes. Instruction-only edits do not require a Node build.
 After significant UI changes, inspect the local app in the in-app browser when a dev server is available.

@@ -49,20 +49,17 @@ This file applies to `rocketmq-ai/rocketmq-mcp-control/`.
   its own durable audit pair.
 - Prefer native async trait methods where object safety is not required; do not add `async_trait`.
 
-## Mandatory validation
+## Development validation
 
-Run from this directory with `INSTA_UPDATE=no` and `RUST_MIN_STACK` unset:
+From this directory, keep `INSTA_UPDATE=no` and `RUST_MIN_STACK` unset when running tests.
+Use `cargo fmt --all -- --check`, `cargo check --locked` and focused `cargo test --locked <test_name>`
+cases for changed behavior; a relevant test build can replace the separate compile check.
 
-```bash
-cargo fmt --all -- --check
-cargo check --locked
-cargo check --locked --features write-tools
-python scripts/check_control_boundary.py
-cargo test --locked
-cargo test --locked --features write-tools
-cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo doc --locked --no-deps --all-features
-```
+Run `python scripts/check_control_boundary.py` when the mutation adapter, registered operations,
+authorization, audit, redaction, or dependency boundary changes. Include `--features write-tools`
+for changes to the adapter and verify the default no-mutation-dependency behavior when feature wiring changes.
+Snapshots that specify protocol behavior must be reviewed when intentionally changed, not blindly updated.
 
-Also run the repository AGENTS routing guard, the query MCP read-only boundary and contract snapshot checks, and
-the root strict Clippy profile required by the root `AGENTS.md` before final handoff.
+For control-service integration, select the broader default/write-tools suites, Clippy, or Rustdoc
+checks required by that scope. Do not automatically add query MCP snapshots or root strict Clippy;
+validate those consumers only when the change actually affects them.

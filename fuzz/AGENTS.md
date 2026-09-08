@@ -3,7 +3,7 @@
 ## Scope
 
 This file owns the standalone `fuzz/` Cargo project. Root repository
-instructions remain cumulative.
+engineering rules apply; the local commands below replace the root validation fallback.
 
 ## Toolchain and targets
 
@@ -24,20 +24,24 @@ instructions remain cumulative.
   route. `.github/workflows/fuzz-ci.yml` owns short nightly and longer weekly
   execution, corpus/crash retention, and commit-bound evidence artifacts.
 
-## Validation
+## Development validation
 
-Run from `fuzz/`:
+When a harness or the interface/behavior it consumes changes, check that target with its matching feature.
+For example, from `fuzz/`:
+
+```bash
+cargo +nightly-2026-07-05 check --locked --bin protocol_decode --features protocol_decode
+```
+
+The other target/feature pairs have the same name: `raw_broker_config`, `controller_snapshot`,
+and `store_recovery_record`. A local internal edit in a path dependency does not automatically require
+every fuzz target to rebuild.
+
+For changes spanning the harness feature setup, or a fuzz integration task, use:
 
 ```bash
 cargo +nightly-2026-07-05 check --locked --all-targets --all-features
 ```
 
-When `Cargo.toml` or `Cargo.lock` changes, also run:
-
-```bash
-cargo audit --file Cargo.lock
-```
-
-Changes to the root path dependencies `rocketmq-broker`,
-`rocketmq-controller`, `rocketmq-protocol`, or `rocketmq-store-local` require
-the fixed-nightly build check.
+Choose `cargo audit --file Cargo.lock` for dependency/security review when relevant. Long fuzzing and
+CI evidence collection remain in the fuzz workflow, not the normal development completion condition.

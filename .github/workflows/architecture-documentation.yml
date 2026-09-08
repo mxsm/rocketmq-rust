@@ -1,87 +1,16 @@
 name: Architecture documentation
 
 on:
-  push:
-    branches: [ "main" ]
-    paths:
-      - ".github/workflows/**"
-      - "Cargo.toml"
-      - "README.md"
-      - "rust-toolchain.toml"
-      - "fuzz/Cargo.toml"
-      - "rocketmq-example/Cargo.toml"
-      - "rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml"
-      - "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.toml"
-      - "rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml"
-      - "rocketmq-doc/en/architecture-major-version-migration.md"
-      - "rocketmq-doc/en/core-capability-contracts.md"
-      - "rocketmq-doc/en/acknowledgement-failover-contract-adr.md"
-      - "rocketmq-doc/en/regional-disaster-recovery-adr.md"
-      - "rocketmq-doc/en/architecture-release-evidence-index.md"
-      - "distribution/config/ack-failover-evidence-schema.json"
-      - "rocketmq-store-api/src/**"
-      - "rocketmq-runtime/src/**"
-      - "rocketmq-error/src/**"
-      - "rocketmq-security-api/src/**"
-      - "scripts/architecture-validation-inventory.json"
-      - "scripts/architecture-risk-test-matrix.json"
-      - "scripts/property-state-suite-registry.json"
-      - "scripts/run_property_state_suites.py"
-      - "scripts/architecture_evidence_governance_guard.py"
-      - "scripts/tests/test_architecture_evidence_governance_guard.py"
-      - "rocketmq-protocol/tests/remoting_wire_golden.rs"
-      - "rocketmq-store-local/tests/storage_layout_golden.rs"
-      - "rocketmq-controller/src/openraft/state_machine.rs"
-      - "rocketmq-broker/tests/config_contract.rs"
-      - "rocketmq-filter/src/filter/filter_sql_filter.rs"
-      - "rocketmq-proxy-cluster/src/cluster_behavior_tests.rs"
-      - "rocketmq-runtime/tests/resource_budget_tree.rs"
-      - "fuzz/corpus-registry.json"
-      - "codecov.yml"
-      - "scripts/architecture_documentation_guard.py"
-      - "scripts/tests/test_architecture_documentation_guard.py"
-  pull_request:
-    branches: [ "main" ]
-    paths:
-      - ".github/workflows/**"
-      - "Cargo.toml"
-      - "README.md"
-      - "rust-toolchain.toml"
-      - "fuzz/Cargo.toml"
-      - "rocketmq-example/Cargo.toml"
-      - "rocketmq-dashboard/rocketmq-dashboard-gpui/Cargo.toml"
-      - "rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri/Cargo.toml"
-      - "rocketmq-dashboard/rocketmq-dashboard-web/backend/Cargo.toml"
-      - "rocketmq-doc/en/architecture-major-version-migration.md"
-      - "rocketmq-doc/en/core-capability-contracts.md"
-      - "rocketmq-doc/en/acknowledgement-failover-contract-adr.md"
-      - "rocketmq-doc/en/regional-disaster-recovery-adr.md"
-      - "rocketmq-doc/en/architecture-release-evidence-index.md"
-      - "distribution/config/ack-failover-evidence-schema.json"
-      - "rocketmq-store-api/src/**"
-      - "rocketmq-runtime/src/**"
-      - "rocketmq-error/src/**"
-      - "rocketmq-security-api/src/**"
-      - "scripts/architecture-validation-inventory.json"
-      - "scripts/architecture-risk-test-matrix.json"
-      - "scripts/property-state-suite-registry.json"
-      - "scripts/run_property_state_suites.py"
-      - "scripts/architecture_evidence_governance_guard.py"
-      - "scripts/tests/test_architecture_evidence_governance_guard.py"
-      - "rocketmq-protocol/tests/remoting_wire_golden.rs"
-      - "rocketmq-store-local/tests/storage_layout_golden.rs"
-      - "rocketmq-controller/src/openraft/state_machine.rs"
-      - "rocketmq-broker/tests/config_contract.rs"
-      - "rocketmq-filter/src/filter/filter_sql_filter.rs"
-      - "rocketmq-proxy-cluster/src/cluster_behavior_tests.rs"
-      - "rocketmq-runtime/tests/resource_budget_tree.rs"
-      - "fuzz/corpus-registry.json"
-      - "codecov.yml"
-      - "scripts/architecture_documentation_guard.py"
-      - "scripts/tests/test_architecture_documentation_guard.py"
+  workflow_dispatch:
+  schedule:
+    - cron: '41 20 * * 0'
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   documentation:
@@ -91,12 +20,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Install native build dependencies
-        run: >-
-          sudo apt-get update &&
-          sudo apt-get install -y
-          clang llvm libclang-dev cmake make ninja-build pkg-config protobuf-compiler
-
       - name: Validate architecture documentation
         run: python scripts/architecture_documentation_guard.py --check
 
@@ -105,6 +28,3 @@ jobs:
 
       - name: Validate evidence governance
         run: python scripts/architecture_evidence_governance_guard.py
-
-      - name: Execute deterministic property and state suites
-        run: python scripts/run_property_state_suites.py

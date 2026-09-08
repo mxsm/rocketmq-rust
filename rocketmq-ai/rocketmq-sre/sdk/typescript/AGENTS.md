@@ -20,12 +20,9 @@ more specific.
 
 ## Validation
 
-Run from this directory:
-
-```powershell
-npm ci
-npm test
-```
+From this directory, run `npm test` for SDK behavior/type changes. Reuse installed dependencies;
+run `npm ci` only when dependencies are missing or the lockfile changes. Instruction-only edits
+do not need a Node build. This package does not inherit the parent SRE Cargo validation profile.
 
 Build output under `dist/` and dependencies under `node_modules/` are local
 artifacts and must not be committed.

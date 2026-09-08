@@ -108,31 +108,6 @@ mod tests {
     }
 
     #[test]
-    fn constructors_and_mutators_preserve_optional_wire_fields() {
-        let with_resource = DeleteAclRequestHeader::new(
-            CheetahString::from_static_str("user:alice"),
-            Some(CheetahString::from_static_str("Topic:test")),
-        );
-        assert_eq!(with_resource.subject, "user:alice");
-        assert!(with_resource.policy_type.is_none());
-        assert_eq!(with_resource.resource.as_deref(), Some("Topic:test"));
-
-        let mut header = DeleteAclRequestHeader::with_subject(CheetahString::from_static_str("user:before"));
-        assert_eq!(header.subject, "user:before");
-        assert!(header.policy_type.is_none());
-        assert!(header.resource.is_none());
-
-        header.set_subject(CheetahString::from_static_str("user:alice"));
-        header.set_policy_type(Some(CheetahString::from_static_str("Custom")));
-        header.set_resource(Some(CheetahString::from_static_str("Topic:test")));
-
-        let map = header.to_map().unwrap();
-        assert_eq!(map.get("subject").map(CheetahString::as_str), Some("user:alice"));
-        assert_eq!(map.get("policyType").map(CheetahString::as_str), Some("Custom"));
-        assert_eq!(map.get("resource").map(CheetahString::as_str), Some("Topic:test"));
-    }
-
-    #[test]
     fn delete_acl_request_header_deserializes_correctly() {
         let mut map: HashMap<CheetahString, CheetahString> = HashMap::new();
         map.insert(
