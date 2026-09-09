@@ -54,7 +54,7 @@ impl<'de> Deserialize<'de> for ConsumeType {
             type Value = ConsumeType;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a string representing TopicFilterType")
+                formatter.write_str("a string representing ConsumeType")
             }
 
             fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
@@ -65,10 +65,10 @@ impl<'de> Deserialize<'de> for ConsumeType {
                     "CONSUME_ACTIVELY" => Ok(ConsumeType::ConsumeActively),
                     "CONSUME_PASSIVELY" => Ok(ConsumeType::ConsumePassively),
                     "CONSUME_POP" => Ok(ConsumeType::ConsumePop),
-                    _ => Err(serde::de::Error::unknown_variant(
-                        value,
-                        &["ConsumeActively", "ConsumePassively", "ConsumePop"],
-                    )),
+                    _ => Err(E::custom(format_args!(
+                        "ConsumeType: {}",
+                        E::unknown_variant(value, &["CONSUME_ACTIVELY", "CONSUME_PASSIVELY", "CONSUME_POP"])
+                    ))),
                 }
             }
         }
@@ -128,10 +128,17 @@ mod tests {
         for json in ["\"CONSUME_UNKNOWN\"", "\"PULL\""] {
             let message = serde_json::from_str::<ConsumeType>(json).unwrap_err().to_string();
             assert!(message.contains("unknown variant"), "{message}");
-            for variant in ["ConsumeActively", "ConsumePassively", "ConsumePop"] {
+            assert!(message.contains("ConsumeType"), "{message}");
+            for variant in ["CONSUME_ACTIVELY", "CONSUME_PASSIVELY", "CONSUME_POP"] {
                 assert!(message.contains(variant), "{message}");
             }
         }
+    }
+
+    #[test]
+    fn invalid_type_error_names_consume_type() {
+        let error = serde_json::from_str::<ConsumeType>("1").unwrap_err().to_string();
+        assert!(error.contains("a string representing ConsumeType"), "{error}");
     }
 
     #[test]
