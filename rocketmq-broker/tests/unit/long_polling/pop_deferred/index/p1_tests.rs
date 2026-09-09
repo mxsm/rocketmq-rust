@@ -385,7 +385,7 @@ fn ordered_selection_filters_and_reserves_only_the_bounded_merge_prefix() {
 
 #[test]
 fn reserve_next_matching_prevents_millisecond_boundary_time_inversion() {
-    let index = PopCriteriaIndex::<i32>::new(PopCriteriaLimits::default());
+    let index = PopCriteriaIndex::<i32>::new(PopCriteriaLimits::new(nonzero(2), nonzero(2)));
     let criteria = Arc::new(PopMatchCriteria::new(None, None));
 
     let born_time = 1000;
