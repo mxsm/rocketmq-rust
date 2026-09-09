@@ -145,6 +145,10 @@ impl RequestPolicy for NameServerTransportPolicy {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use rocketmq_security_api::{evaluate_request, Action, Principal, RequestContext, Resource, SecurityRequestView};
+
     use super::*;
 
     #[test]
@@ -154,9 +158,30 @@ mod tests {
             (RequestCode::RegisterBroker, NameServerRequestClass::BrokerControl),
             (RequestCode::UnregisterBroker, NameServerRequestClass::BrokerControl),
             (RequestCode::BrokerHeartbeat, NameServerRequestClass::BrokerControl),
+            (RequestCode::GetKvConfig, NameServerRequestClass::AdminRead),
+            (RequestCode::QueryDataVersion, NameServerRequestClass::AdminRead),
+            (RequestCode::GetBrokerMemberGroup, NameServerRequestClass::AdminRead),
             (RequestCode::GetBrokerClusterInfo, NameServerRequestClass::AdminRead),
+            (
+                RequestCode::GetAllTopicListFromNameserver,
+                NameServerRequestClass::AdminRead,
+            ),
+            (RequestCode::GetKvlistByNamespace, NameServerRequestClass::AdminRead),
+            (RequestCode::GetTopicsByCluster, NameServerRequestClass::AdminRead),
+            (RequestCode::GetSystemTopicListFromNs, NameServerRequestClass::AdminRead),
+            (RequestCode::GetUnitTopicList, NameServerRequestClass::AdminRead),
+            (RequestCode::GetHasUnitSubTopicList, NameServerRequestClass::AdminRead),
+            (
+                RequestCode::GetHasUnitSubUnunitTopicList,
+                NameServerRequestClass::AdminRead,
+            ),
             (RequestCode::GetNamesrvConfig, NameServerRequestClass::AdminRead),
             (RequestCode::PutKvConfig, NameServerRequestClass::AdminWrite),
+            (RequestCode::DeleteKvConfig, NameServerRequestClass::AdminWrite),
+            (RequestCode::WipeWritePermOfBroker, NameServerRequestClass::AdminWrite),
+            (RequestCode::AddWritePermOfBroker, NameServerRequestClass::AdminWrite),
+            (RequestCode::DeleteTopicInNamesrv, NameServerRequestClass::AdminWrite),
+            (RequestCode::RegisterTopicInNamesrv, NameServerRequestClass::AdminWrite),
             (RequestCode::UpdateNamesrvConfig, NameServerRequestClass::AdminWrite),
         ];
         for (request, class) in expected {
@@ -168,5 +193,69 @@ mod tests {
     fn classifier_fails_closed_for_unknown_or_foreign_codes() {
         assert_eq!(classify_namesrv_request(RequestCode::Unknown), None);
         assert_eq!(classify_namesrv_request(RequestCode::SendMessage), None);
+    }
+
+    #[test]
+    fn request_classes_have_stable_metric_labels() {
+        for (class, label) in [
+            (NameServerRequestClass::RouteRead, "route-read"),
+            (NameServerRequestClass::BrokerControl, "broker-control"),
+            (NameServerRequestClass::AdminRead, "admin-read"),
+            (NameServerRequestClass::AdminWrite, "admin-write"),
+        ] {
+            assert_eq!(class.as_str(), label);
+        }
+    }
+
+    #[test]
+    fn transport_policy_allows_nameserver_codes_and_denies_foreign_or_unknown_codes() {
+        let fields = HashMap::new();
+        let principal = Principal::new("namesrv-client");
+        for (code, allowed) in [
+            (RequestCode::GetRouteinfoByTopic.to_i32(), true),
+            (RequestCode::RegisterBroker.to_i32(), true),
+            (RequestCode::GetNamesrvConfig.to_i32(), true),
+            (RequestCode::UpdateNamesrvConfig.to_i32(), true),
+            (RequestCode::PullMessage.to_i32(), false),
+            (i32::MAX, false),
+        ] {
+            let view = SecurityRequestView::new(code, 1, &fields, None, None);
+            assert_eq!(
+                NameServerTransportPolicy.evaluate_ingress(view).unwrap(),
+                if allowed {
+                    IngressDecision::AllowToContinue
+                } else {
+                    IngressDecision::Deny
+                },
+                "ingress code {code}"
+            );
+            let context = RequestContext::new(view, Some(&principal), Resource::topic("topic"), Action::Publish);
+            assert_eq!(
+                evaluate_request(&NameServerTransportPolicy, &context),
+                if allowed {
+                    AuthorizationDecision::Allow
+                } else {
+                    AuthorizationDecision::Deny(AuthorizationDenial::PermissionDenied)
+                },
+                "authenticated code {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn unauthenticated_requests_are_denied_before_policy_evaluation() {
+        struct MustNotEvaluate;
+        impl RequestPolicy for MustNotEvaluate {
+            fn evaluate_authenticated(&self, _: AuthenticatedRequestContext<'_>) -> AuthorizationDecision {
+                panic!("missing identity must be rejected before invoking the policy");
+            }
+        }
+
+        let fields = HashMap::new();
+        let view = SecurityRequestView::new(RequestCode::GetRouteinfoByTopic.to_i32(), 1, &fields, None, None);
+        let context = RequestContext::new(view, None, Resource::topic("topic"), Action::Publish);
+        let denied = AuthorizationDecision::Deny(AuthorizationDenial::SubjectUnknown);
+        assert_eq!(evaluate_request(&NameServerTransportPolicy, &context), denied);
+        assert_eq!(evaluate_request(&MustNotEvaluate, &context), denied);
     }
 }
