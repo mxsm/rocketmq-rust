@@ -195,7 +195,9 @@ mod tests {
         let error =
             StaticTopicPlanRequest::try_new("TopicA", 4, ["broker-a".to_string()], [30_000], Some(4)).unwrap_err();
 
-        assert!(error.to_string().contains("greater than existing queue count"));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+        assert_eq!(error.field(), Some("queueCount"));
+        assert_eq!(error.to_string(), "core.argument.invalid: Argument is invalid");
     }
 
     #[test]
