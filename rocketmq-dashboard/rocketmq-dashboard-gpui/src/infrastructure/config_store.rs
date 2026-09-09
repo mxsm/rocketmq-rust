@@ -581,7 +581,7 @@ impl AtomicReplaceFailure {
 
 impl fmt::Debug for AtomicReplaceFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let restore_kind = match self {
+        let restore_kind: Option<io::ErrorKind> = match self {
             #[cfg(windows)]
             Self::Recovery { restore, .. } => Some(restore.kind()),
             Self::Io(_) => None,

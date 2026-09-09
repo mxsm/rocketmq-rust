@@ -262,7 +262,7 @@ impl CommitLogInternalMessageWriteHandle {
             && self.store_runtime_state.broker_role() != BrokerRole::Slave);
         let prepared = match message_encoder_pool::prepare_message_with_pool(&msg, &self.message_store_config) {
             Ok(prepared) => prepared,
-            Err(result) => return result.with_execution_evidence(crate::AppendExecutionEvidence::NotAppended),
+            Err(status) => return PutMessageResult::rejected_before_append(status),
         };
         let mut result = self
             .append_port

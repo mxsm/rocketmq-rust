@@ -2,9 +2,9 @@
 schema_version: "rocketmq-sre.capability-catalog.v1"
 source:
   path: "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/commands/catalog.rs"
-  revision: "sha256:7205cf868650f438cb0c4544f0c7507cdefbb5b978dbf2b670c3695b95f01983"
-  domains: 18
-  actions: 102
+  revision: "sha256:a076560ad40c4958f1ff991e2064099f57ff96336db556fcac6da4dcc3b5cb14"
+  domains: 17
+  actions: 100
   component_surfaces: 14
 component_source_surfaces:
   - component: "NameServer"
@@ -964,42 +964,6 @@ capabilities:
     domain: "Controller"
     title: "Clean Controller Metadata"
     description: "Clean broker metadata from a controller."
-    legacy_risk: "dangerous"
-    sre_class: "R3"
-    exposure: "admin_rpc"
-    source_path: "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/commands/catalog.rs"
-    source_symbol: "command_catalog"
-    supported_versions: [">=1.0.0"]
-    maturity:
-      implemented_local: true
-      queryable: false
-      observable: false
-      diagnosable: false
-      plannable: false
-      executable: false
-    execution_supported: false
-  - id: "container.add_broker"
-    domain: "Container"
-    title: "Add Broker To Container"
-    description: "Add a broker to the specified broker container using a broker config path."
-    legacy_risk: "dangerous"
-    sre_class: "R3"
-    exposure: "admin_rpc"
-    source_path: "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/commands/catalog.rs"
-    source_symbol: "command_catalog"
-    supported_versions: [">=1.0.0"]
-    maturity:
-      implemented_local: true
-      queryable: false
-      observable: false
-      diagnosable: false
-      plannable: false
-      executable: false
-    execution_supported: false
-  - id: "container.remove_broker"
-    domain: "Container"
-    title: "Remove Broker From Container"
-    description: "Remove a broker identity from the specified broker container."
     legacy_risk: "dangerous"
     sre_class: "R3"
     exposure: "admin_rpc"

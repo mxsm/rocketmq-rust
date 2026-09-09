@@ -36,6 +36,7 @@ use rocketmq_store_local::commit_log::append::prepared_payload::PreparedPayload;
 use tracing::error;
 
 use crate::base::message_result::PutMessageResult;
+use crate::base::message_status_enum::PutMessageStatus;
 use crate::base::put_message_context::PutMessageContext;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::log_file::commit_log::CRC32_RESERVED_LEN;
@@ -85,10 +86,10 @@ impl MessageEncoderPool {
         &self,
         message: &MessageExtBrokerInner,
         config: &Arc<MessageStoreConfig>,
-    ) -> Result<PreparedPayload, PutMessageResult> {
+    ) -> Result<PreparedPayload, PutMessageStatus> {
         let (encode_result, bytes) = self.encode_message(message, config);
         if let Some(result) = encode_result {
-            return Err(result);
+            return Err(result.put_message_status());
         }
         let crc_trailer_bytes = if config.enabled_append_prop_crc {
             CRC32_RESERVED_LEN as usize
@@ -97,7 +98,7 @@ impl MessageEncoderPool {
         };
         PreparedPayload::try_single(bytes.freeze(), crc_trailer_bytes).ok_or_else(|| {
             error!("Message encoder produced an invalid CommitLog frame");
-            PutMessageResult::new_default(crate::base::message_status_enum::PutMessageStatus::MessageIllegal)
+            PutMessageStatus::MessageIllegal
         })
     }
 
@@ -118,10 +119,10 @@ impl MessageEncoderPool {
         batch: &MessageExtBatch,
         context: &mut PutMessageContext,
         config: &Arc<MessageStoreConfig>,
-    ) -> Result<PreparedPayload, PutMessageResult> {
-        let bytes = self.encode_message_batch(batch, context, config).ok_or_else(|| {
-            PutMessageResult::new_default(crate::base::message_status_enum::PutMessageStatus::MessageIllegal)
-        })?;
+    ) -> Result<PreparedPayload, PutMessageStatus> {
+        let bytes = self
+            .encode_message_batch(batch, context, config)
+            .ok_or(PutMessageStatus::MessageIllegal)?;
         let crc_trailer_bytes = if config.enabled_append_prop_crc {
             CRC32_RESERVED_LEN as usize
         } else {
@@ -129,7 +130,7 @@ impl MessageEncoderPool {
         };
         PreparedPayload::try_batch(bytes.freeze(), crc_trailer_bytes).ok_or_else(|| {
             error!("Batch encoder produced an invalid CommitLog frame partition");
-            PutMessageResult::new_default(crate::base::message_status_enum::PutMessageStatus::MessageIllegal)
+            PutMessageStatus::MessageIllegal
         })
     }
 
@@ -168,7 +169,7 @@ pub fn encode_message_with_pool(
 pub fn prepare_message_with_pool(
     message: &MessageExtBrokerInner,
     config: &Arc<MessageStoreConfig>,
-) -> Result<PreparedPayload, PutMessageResult> {
+) -> Result<PreparedPayload, PutMessageStatus> {
     ENCODER_POOL.with(|pool| pool.prepare_message(message, config))
 }
 
@@ -188,7 +189,7 @@ pub fn prepare_message_batch_with_pool(
     batch: &MessageExtBatch,
     context: &mut PutMessageContext,
     config: &Arc<MessageStoreConfig>,
-) -> Result<PreparedPayload, PutMessageResult> {
+) -> Result<PreparedPayload, PutMessageStatus> {
     ENCODER_POOL.with(|pool| pool.prepare_message_batch(batch, context, config))
 }
 
@@ -201,6 +202,55 @@ pub fn generate_key_with_pool(message: &MessageExtBrokerInner) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
+    use cheetah_string::CheetahString;
+    use rocketmq_model::common::message::MessageTrait;
+
+    #[test]
+    fn prepare_message_preserves_encoder_rejection_statuses_and_reuse() {
+        let config = Arc::new(MessageStoreConfig {
+            max_message_size: 1024,
+            ..MessageStoreConfig::default()
+        });
+        let pool = MessageEncoderPool::new();
+        let mut message = MessageExtBrokerInner::default();
+        message.set_topic(CheetahString::from_static_str("TopicTest"));
+        message.set_body(Bytes::from(vec![0; 1025]));
+        assert_eq!(
+            pool.prepare_message(&message, &config).unwrap_err(),
+            PutMessageStatus::MessageIllegal
+        );
+
+        message.set_body(Bytes::from_static(b"valid"));
+        assert!(pool.prepare_message(&message, &config).is_ok());
+
+        message.put_property(
+            CheetahString::from_static_str("key"),
+            CheetahString::from("x".repeat(i16::MAX as usize)),
+        );
+        assert_eq!(
+            pool.prepare_message(&message, &config).unwrap_err(),
+            PutMessageStatus::PropertiesSizeExceeded
+        );
+    }
+
+    #[test]
+    fn prepare_message_batch_rejects_missing_and_empty_payloads() {
+        let config = Arc::new(MessageStoreConfig::default());
+        let pool = MessageEncoderPool::new();
+        let mut batch = MessageExtBatch::default();
+        let mut context = PutMessageContext::default();
+        assert_eq!(
+            pool.prepare_message_batch(&batch, &mut context, &config).unwrap_err(),
+            PutMessageStatus::MessageIllegal
+        );
+
+        batch.message_ext_broker_inner.set_body(Bytes::new());
+        assert_eq!(
+            pool.prepare_message_batch(&batch, &mut context, &config).unwrap_err(),
+            PutMessageStatus::MessageIllegal
+        );
+    }
 
     #[test]
     fn test_encoder_pool_reuse() {

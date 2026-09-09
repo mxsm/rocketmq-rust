@@ -104,8 +104,8 @@ COMPONENT_SURFACES = (
         "Runtime",
         "rocketmq-runtime/src/diagnostics.rs",
         "RuntimeDiagnosticsViewV1",
-        "mcp_system_resource_only",
-        "add authenticated component-local diagnostics adapters",
+        "protected_component_endpoints",
+        "production-verify TLS termination, token rotation, and multi-replica endpoint discovery",
     ),
     ComponentSurface(
         "Observability",
@@ -319,8 +319,9 @@ def render(commands: list[Command], revision: str) -> str:
 
 
 def source_revision() -> str:
-    """Return a commit-independent revision for the exact catalog source."""
-    return f"sha256:{hashlib.sha256(CATALOG_SOURCE.read_bytes()).hexdigest()}"
+    """Return a commit-independent revision with normalized source line endings."""
+    source = CATALOG_SOURCE.read_text(encoding="utf-8").encode("utf-8")
+    return f"sha256:{hashlib.sha256(source).hexdigest()}"
 
 
 def validate_component_surfaces() -> list[str]:
@@ -365,9 +366,9 @@ def main() -> int:
 
     commands = parse_commands(CATALOG_SOURCE.read_text(encoding="utf-8"))
     domains = {command.domain for command in commands}
-    if len(commands) != 102 or len(domains) != 18:
+    if len(commands) != 100 or len(domains) != 17:
         print(
-            f"expected 102 commands across 18 domains, found {len(commands)} across {len(domains)}",
+            f"expected 100 commands across 17 domains, found {len(commands)} across {len(domains)}",
             file=sys.stderr,
         )
         return 1
