@@ -186,7 +186,9 @@ pub(crate) fn normalize_nonstandard_offset_table_keys(input: &str) -> String {
             continue;
         }
 
-        let string_end = consume_string_end(&chars, index);
+        let Some(string_end) = consume_string_end(&chars, index) else {
+            return input.to_owned();
+        };
         output.extend(chars[index..=string_end].iter());
         let key = chars[index + 1..string_end].iter().collect::<String>();
         index = string_end + 1;
@@ -215,7 +217,9 @@ pub(crate) fn normalize_nonstandard_offset_table_keys(input: &str) -> String {
 
         output.push('{');
         index += 1;
-        let (normalized_map, next_index) = normalize_object_key_map_body(&chars, index);
+        let Some((normalized_map, next_index)) = normalize_object_key_map_body(&chars, index) else {
+            return input.to_owned();
+        };
         output.push_str(&normalized_map);
         index = next_index;
     }
@@ -240,7 +244,7 @@ pub(crate) fn append_message_queue_object_key(output: &mut String, queue: &Messa
     Ok(())
 }
 
-fn normalize_object_key_map_body(chars: &[char], mut index: usize) -> (String, usize) {
+fn normalize_object_key_map_body(chars: &[char], mut index: usize) -> Option<(String, usize)> {
     let mut output = String::new();
     let mut expecting_key = true;
     let mut nested_value_depth = 0usize;
@@ -252,17 +256,17 @@ fn normalize_object_key_map_body(chars: &[char], mut index: usize) -> (String, u
             match current {
                 '}' => {
                     output.push('}');
-                    return (output, index + 1);
+                    return Some((output, index + 1));
                 }
                 '{' => {
-                    let object_end = consume_balanced_object_end(chars, index);
+                    let object_end = consume_balanced_object_end(chars, index)?;
                     let raw_key = chars[index..=object_end].iter().collect::<String>();
                     append_json_string(&mut output, &raw_key);
                     index = object_end + 1;
                     expecting_key = false;
                 }
                 '"' => {
-                    let string_end = consume_string_end(chars, index);
+                    let string_end = consume_string_end(chars, index)?;
                     output.extend(chars[index..=string_end].iter());
                     index = string_end + 1;
                     expecting_key = false;
@@ -277,7 +281,7 @@ fn normalize_object_key_map_body(chars: &[char], mut index: usize) -> (String, u
 
         match current {
             '"' => {
-                let string_end = consume_string_end(chars, index);
+                let string_end = consume_string_end(chars, index)?;
                 output.extend(chars[index..=string_end].iter());
                 index = string_end + 1;
             }
@@ -289,7 +293,7 @@ fn normalize_object_key_map_body(chars: &[char], mut index: usize) -> (String, u
             '}' => {
                 if nested_value_depth == 0 {
                     output.push('}');
-                    return (output, index + 1);
+                    return Some((output, index + 1));
                 }
                 nested_value_depth -= 1;
                 output.push('}');
@@ -312,7 +316,7 @@ fn normalize_object_key_map_body(chars: &[char], mut index: usize) -> (String, u
         }
     }
 
-    (output, index)
+    Some((output, index))
 }
 
 fn append_json_string(output: &mut String, value: &str) {
@@ -339,7 +343,7 @@ fn append_json_string(output: &mut String, value: &str) {
     output.push('"');
 }
 
-fn consume_string_end(chars: &[char], start: usize) -> usize {
+fn consume_string_end(chars: &[char], start: usize) -> Option<usize> {
     let mut index = start + 1;
     let mut escaped = false;
     while index < chars.len() {
@@ -348,14 +352,14 @@ fn consume_string_end(chars: &[char], start: usize) -> usize {
         } else if chars[index] == '\\' {
             escaped = true;
         } else if chars[index] == '"' {
-            return index;
+            return Some(index);
         }
         index += 1;
     }
-    chars.len().saturating_sub(1)
+    None
 }
 
-fn consume_balanced_object_end(chars: &[char], start: usize) -> usize {
+fn consume_balanced_object_end(chars: &[char], start: usize) -> Option<usize> {
     let mut depth = 0usize;
     let mut index = start;
     let mut in_string = false;
@@ -378,7 +382,7 @@ fn consume_balanced_object_end(chars: &[char], start: usize) -> usize {
                 '}' => {
                     depth -= 1;
                     if depth == 0 {
-                        return index;
+                        return Some(index);
                     }
                 }
                 _ => {}
@@ -387,12 +391,40 @@ fn consume_balanced_object_end(chars: &[char], start: usize) -> usize {
         index += 1;
     }
 
-    chars.len().saturating_sub(1)
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_rejects_unterminated_strings_without_panicking() {
+        for body in [
+            "\"",
+            "{\"offsetTable",
+            "{\"offsetTable\":{{\"topic\":\"unfinished",
+            "{\"offsetTable\":{{\"topic\":\"topic\"",
+            "{\"offsetTable\":{\"",
+            "{\"offsetTable\":{\"key\":\"value",
+            "{\"offsetTable\":{\"key\":\"value\\",
+        ] {
+            assert!(ConsumeStats::decode(body.as_bytes()).is_err(), "{body:?}");
+            assert!(ConsumeStats::decode_strict(body.as_bytes()).is_err(), "{body:?}");
+            assert_eq!(normalize_nonstandard_offset_table_keys(body), body);
+        }
+    }
+
+    #[test]
+    fn decode_preserves_standard_json_and_rejects_unrelated_malformed_input() {
+        let decoded = ConsumeStats::decode(br#"{"offsetTable":{},"consumeTps":1.5}"#).unwrap();
+        assert!(decoded.get_offset_table().is_empty());
+        assert_eq!(decoded.get_consume_tps(), 1.5);
+        for body in [r#"{"offsetTable":{},"consumeTps":}"#, r#"{"offsetTable":{},}"#] {
+            assert_eq!(normalize_nonstandard_offset_table_keys(body), body);
+            assert!(ConsumeStats::decode(body.as_bytes()).is_err());
+        }
+    }
 
     fn create_offset_wrapper(broker: i64, consumer: i64, pull: i64) -> OffsetWrapper {
         let mut wrapper = OffsetWrapper::new();
