@@ -382,3 +382,53 @@ fn ordered_selection_filters_and_reserves_only_the_bounded_merge_prefix() {
     drop(leases);
     assert_eq!(index.snapshot(), PopIndexSnapshot::default());
 }
+
+#[test]
+fn reserve_next_matching_prevents_millisecond_boundary_time_inversion() {
+    let index = PopCriteriaIndex::<i32>::new(PopCriteriaLimits::default());
+    let criteria = Arc::new(PopMatchCriteria::new(None, None));
+
+    let born_time = 1000;
+    let poll_time = 15000;
+
+    let topic = CheetahString::from_static_str("TopicA");
+    let group = CheetahString::from_static_str("GroupA");
+
+    // First waiter arrives
+    let monotonic_1 = tokio::time::Instant::now();
+    let LongPollingDeadlineOutcome::Pending(deadline_1) =
+        LongPollingDeadline::checked(born_time, poll_time, 1000, monotonic_1).unwrap()
+    else {
+        panic!("expected pending deadline");
+    };
+
+    let key_1 = PopCriteriaKey::from_parts(&topic, &group, 0);
+    let _lease_1 = index
+        .reserve(key_1)
+        .expect("reserved")
+        .publish(1, deadline_1, Arc::clone(&criteria));
+
+    // Second waiter arrives slightly later, crossing the millisecond wall-clock boundary
+    let monotonic_2 = monotonic_1 + std::time::Duration::from_micros(500);
+    let LongPollingDeadlineOutcome::Pending(deadline_2) =
+        LongPollingDeadline::checked(born_time, poll_time, 1001, monotonic_2).unwrap()
+    else {
+        panic!("expected pending deadline");
+    };
+
+    let key_2 = PopCriteriaKey::from_parts(&topic, &group, 0);
+    let _lease_2 = index
+        .reserve(key_2)
+        .expect("reserved")
+        .publish(2, deadline_2, Arc::clone(&criteria));
+
+    let arrival = PopArrival::new(topic.clone(), group.clone(), 0);
+
+    let selected = index
+        .reserve_next_matching(&arrival, PopSelectionOrder::Oldest, NonZeroUsize::new(2).unwrap())
+        .into_candidate()
+        .expect("found candidate");
+
+    // The first waiter should be strictly prioritized despite the time jitter
+    assert_eq!(selected.id(), 1);
+}
