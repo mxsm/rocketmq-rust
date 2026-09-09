@@ -15,9 +15,9 @@
 use std::io::Read;
 use std::sync::{Arc, Mutex, Weak};
 
+use crate::ingress::grpc::service::ExecutionGuards;
 use bytes::Bytes;
 use rocketmq_proxy_core::error::canonical;
-use rocketmq_proxy_core::ingress::grpc::service::ExecutionGuards;
 use rocketmq_proxy_core::proto::v2;
 use rocketmq_proxy_core::{GrpcConfig, ProxyError, ProxyResult};
 use rocketmq_runtime::ResourcePermit;
@@ -291,7 +291,7 @@ pub(super) fn validate_request(request: &v2::SendMessageRequest, config: &GrpcCo
 pub(super) fn retained_input_bytes(request: &v2::SendMessageRequest, config: &GrpcConfig) -> ProxyResult<usize> {
     // Include the shared Tonic backing allocation, gzip header copies, protobuf
     // containers and allocator slack. This bounds retained input, not allocator RSS.
-    let wire = rocketmq_proxy_core::ingress::grpc::service::admission::estimated_protobuf_retained_bytes(request)
+    let wire = crate::ingress::grpc::service::admission::estimated_protobuf_retained_bytes(request)
         .saturating_sub(std::mem::size_of_val(request));
     if wire > config.max_decoding_message_size {
         return Err(canonical::argument("send request exceeds the decoding limit").into());

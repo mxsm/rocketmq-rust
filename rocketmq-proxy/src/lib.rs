@@ -30,6 +30,7 @@ mod context;
 mod dependency_health;
 mod error;
 mod grpc;
+pub mod ingress;
 #[cfg(feature = "local-mode")]
 mod local;
 mod message;
@@ -63,6 +64,7 @@ pub use config::RuntimeConfig;
 pub use config::SessionConfig;
 pub use context::GrpcTransportContext;
 pub use context::ProxyContext;
+pub use context::ProxyContextExt;
 pub use context::ResolvedAddressScheme;
 pub use context::ResolvedEndpoint;
 pub use dependency_health::{
@@ -181,6 +183,7 @@ pub use session::TrackedReceiptHandle;
 pub use session::VerifyMessageReport;
 pub use status::ProxyPayloadStatus;
 pub use status::ProxyStatusMapper;
+pub use status::ProxyStatusMapperExt;
 
 /// Default gRPC port used by the proxy runtime.
 pub const DEFAULT_PROXY_GRPC_PORT: u16 = rocketmq_proxy_core::DEFAULT_PROXY_GRPC_PORT;

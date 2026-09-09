@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Compatibility path for gRPC ingress.
+use rocketmq_proxy_core::ProxyMessage;
 
-pub use crate::ingress::grpc::*;
+// Producer gRPC ingress planning.
+
+const TRANSACTION_PREPARED_PROPERTY: &str = "TRAN_MSG";
+
+pub fn is_transaction_message(message: &ProxyMessage) -> bool {
+    message.property(TRANSACTION_PREPARED_PROPERTY).is_some()
+}

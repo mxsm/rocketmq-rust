@@ -3004,6 +3004,7 @@ mod tests {
 
     use super::*;
     use crate::base::backend_ops::BackendOps;
+    use crate::base::backend_read_ops::BackendReadOps;
     use crate::base::memory_lock_manager::MemoryLockCategory;
     use crate::config::message_store_config::LinuxMemoryLockMode;
     use crate::config::message_store_config::LinuxStorageProfile;

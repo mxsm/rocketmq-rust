@@ -24,11 +24,11 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_proxy_core::error::canonical;
-use rocketmq_proxy_core::EmbeddedDispatchOutcome;
 use rocketmq_proxy_core::ProxyError;
 use rocketmq_proxy_core::ProxyRemotingBackend;
 use rocketmq_proxy_core::ProxyServiceFuture;
-use rocketmq_proxy_core::RemotingResponse;
+use rocketmq_transport::api::EmbeddedDispatchOutcome;
+use rocketmq_transport::api::RemotingResponse;
 
 use crate::cluster::RocketmqClusterClient;
 
@@ -44,6 +44,8 @@ impl ClusterRemotingBackend {
 }
 
 impl ProxyRemotingBackend for ClusterRemotingBackend {
+    type Response = EmbeddedDispatchOutcome;
+
     fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
         Box::pin(async move {
             let opaque = request.opaque();

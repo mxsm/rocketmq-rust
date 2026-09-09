@@ -14,7 +14,8 @@
 
 //! Compatibility exports for Proxy request context contracts.
 
-pub use rocketmq_proxy_core::context::GrpcTransportContext;
+mod ingress;
+pub use ingress::{GrpcTransportContext, ProxyContextExt};
 pub use rocketmq_proxy_core::context::ResolvedAddressScheme;
 pub use rocketmq_proxy_core::context::ResolvedEndpoint;
 

@@ -32,6 +32,7 @@ observability = ["rocketmq-client-rust/observability-metrics", "rocketmq-observa
 observability-traces = ["rocketmq-client-rust/observability"]
 
 [dependencies]
+rocketmq-transport = { workspace = true }
 rocketmq-client-rust = { workspace = true, features = ["admin-mutation"] }
 rocketmq-error = { workspace = true }
 rocketmq-model = { workspace = true }

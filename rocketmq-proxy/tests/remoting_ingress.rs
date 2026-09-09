@@ -622,12 +622,9 @@ async fn request_code_not_supported_over_remoting_integration_returns_compatible
     let response = receive_remoting_response(&mut connection).await;
     assert_eq!(response.code(), ResponseCode::RequestCodeNotSupported as i32);
     assert_eq!(response.opaque(), opaque);
-    assert!(
-        response
-            .remark()
-            .is_some_and(|remark| remark.contains("does not support request code 3001")),
-        "unsupported response should explain proxy remoting coverage, got {:?}",
-        response.remark()
+    assert_eq!(
+        response.remark().map(|remark| remark.as_str()),
+        Some(rocketmq_error::PROTOCOL_REQUEST_UNSUPPORTED.public_message())
     );
 
     let _ = shutdown_tx.send(());

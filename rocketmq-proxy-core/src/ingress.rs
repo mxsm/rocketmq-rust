@@ -17,5 +17,4 @@
 //! Ingress may depend on [`crate::contracts`]; the contracts module must remain
 //! independent from this module.
 
-pub mod grpc;
 pub mod remoting;

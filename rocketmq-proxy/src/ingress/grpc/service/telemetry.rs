@@ -15,10 +15,10 @@
 // Telemetry command gRPC ingress.
 
 use crate::proto::v2;
-use crate::session::TelemetryCommandKind;
 use crate::status::ProxyStatusMapper;
-use crate::ClientSessionRegistry;
-use crate::ProxyError;
+use rocketmq_proxy_core::session::TelemetryCommandKind;
+use rocketmq_proxy_core::ClientSessionRegistry;
+use rocketmq_proxy_core::ProxyError;
 
 pub fn send_reconnect_endpoints<C>(
     sessions: &ClientSessionRegistry<C>,

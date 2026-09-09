@@ -14,7 +14,7 @@
 
 use std::net::SocketAddr;
 
-use rocketmq_proxy_core::GrpcTransportContext;
+use crate::context::GrpcTransportContext;
 #[cfg(feature = "tls")]
 use rocketmq_proxy_core::VerifiedTlsIdentity;
 use tonic::Request;

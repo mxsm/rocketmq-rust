@@ -14,13 +14,13 @@
 
 use std::collections::HashMap;
 
-use rocketmq_proxy_core::ingress::grpc::adapter::build_send_message_request_with_config;
+use rocketmq_proxy::ingress::grpc::adapter::build_send_message_request_with_config;
 use rocketmq_proxy_core::proto::v2;
 use rocketmq_proxy_core::GrpcConfig;
 use rocketmq_proxy_core::ProxyContext;
 
 fn context() -> ProxyContext {
-    ProxyContext::from_grpc_request("SendMessage", &tonic::Request::new(())).expect("gRPC context")
+    ProxyContext::for_internal_client("SendMessage", "timer-admission")
 }
 
 fn delay_request(deliver_ms: u64) -> v2::SendMessageRequest {
@@ -57,7 +57,7 @@ fn timer_admission_enforces_configured_proxy_horizon() {
     let error = build_send_message_request_with_config(&config, &context(), &delay_request(now_ms + 2_000))
         .expect_err("delivery beyond the Proxy horizon must fail");
 
-    assert!(error.to_string().contains("exceeds the configured maximum"));
+    assert_eq!(error.descriptor(), &rocketmq_error::PROXY_DELIVERY_TIME_INVALID);
 }
 
 #[test]
@@ -71,5 +71,5 @@ fn timer_admission_rejects_unsupported_precision_without_panicking() {
     let error = build_send_message_request_with_config(&config, &context(), &delay_request(now_ms + 1_000))
         .expect_err("zero precision must fail");
 
-    assert!(error.to_string().contains("precision"));
+    assert_eq!(error.descriptor(), &rocketmq_error::PROXY_DELIVERY_TIME_INVALID);
 }

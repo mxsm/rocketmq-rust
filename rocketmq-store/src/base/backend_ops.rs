@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base::backend_read_ops::BackendReadOps;
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -28,10 +29,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rocketmq_model::common::boundary_type::BoundaryType;
 use rocketmq_model::common::broker::broker_role::BrokerRole;
 use rocketmq_model::common::message::message_batch::MessageExtBatch;
-use rocketmq_model::common::message::message_ext::MessageExt;
 use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_runtime::common::system_clock::SystemClock;
@@ -48,18 +47,14 @@ use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::flush_manager::SyncFlushRuntimeInfo;
-use crate::base::get_message_result::GetMessageResult;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
-use crate::base::query_message_request::QueryMessageRequest;
-use crate::base::query_message_result::QueryMessageResult;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::FlushProgress;
-use crate::filter::ArcMessageFilter;
 use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::write_lease::ControllerWriteLeaseState;
@@ -281,7 +276,7 @@ pub struct MessageStoreShutdownReport {
 /// Broker consumers must use the narrow capability ports. This adapter is
 /// crate-private and exists only to share concrete backend implementation.
 #[trait_variant::make(Send)]
-pub trait BackendOps: Send + Sync + 'static {
+pub trait BackendOps: BackendReadOps + Send + Sync + 'static {
     /// Load previously stored messages.
     ///
     /// Returns true if successful, false otherwise.
@@ -368,28 +363,6 @@ pub trait BackendOps: Send + Sync + 'static {
         Ok(TimerRecallStatus::Unsupported)
     }
 
-    /// Query messages belonging to a topic at a queue starting from given offset.
-    ///
-    /// # Parameters
-    /// * `group` - Consumer group that launches this query
-    /// * `topic` - Topic to query
-    /// * `queue_id` - Queue ID to query
-    /// * `offset` - Logical offset to start from
-    /// * `max_msg_nums` - Maximum count of messages to query
-    /// * `message_filter` - Message filter used to screen desired messages
-    ///
-    /// # Returns
-    /// Matched messages
-    async fn get_message(
-        &self,
-        group: &CheetahString,
-        topic: &CheetahString,
-        queue_id: i32,
-        offset: i64,
-        max_msg_nums: i32,
-        message_filter: Option<ArcMessageFilter>,
-    ) -> Option<GetMessageResult>;
-
     /*    /// Asynchronous get message
     async fn get_message_async(
          &self,
@@ -400,18 +373,6 @@ pub trait BackendOps: Send + Sync + 'static {
          max_msg_nums: i32,
          message_filter: &dyn MessageFilter,
      ) -> Result<GetMessageResult, StoreError>;*/
-
-    /// Get message with size constraint
-    async fn get_message_with_size_limit(
-        &self,
-        group: &CheetahString,
-        topic: &CheetahString,
-        queue_id: i32,
-        offset: i64,
-        max_msg_nums: i32,
-        max_total_msg_size: i32,
-        message_filter: Option<ArcMessageFilter>,
-    ) -> Option<GetMessageResult>;
 
     /*    /// Asynchronous get message with size constraint
     async fn get_message_with_size_limit_async(
@@ -425,75 +386,14 @@ pub trait BackendOps: Send + Sync + 'static {
         message_filter: &dyn MessageFilter,
     ) -> Result<GetMessageResult, StoreError>;*/
 
-    /// Get maximum offset of the topic queue.
-    fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
-
-    /// Get maximum offset of the topic queue.
-    fn get_max_offset_in_queue_committed(&self, topic: &CheetahString, queue_id: i32, committed: bool) -> i64;
-
-    /// Get the minimum offset of the topic queue.
-    fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
-
     /// Get the timer message store.
     fn get_timer_message_store(&self) -> Option<&Arc<TimerMessageStore>>;
 
     /// Set the timer message store.
     fn set_timer_message_store(&mut self, timer_message_store: Arc<TimerMessageStore>);
 
-    /// Get the offset of the message in the commit log (physical offset).
-    fn get_commit_log_offset_in_queue(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64;
-
-    /// Look up the physical offset of the message by timestamp.
-    fn get_offset_in_queue_by_time(&self, topic: &CheetahString, queue_id: i32, timestamp: i64) -> i64;
-
-    /// Look up the physical offset of the message by timestamp with boundary type.
-    fn get_offset_in_queue_by_time_with_boundary(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        timestamp: i64,
-        boundary_type: BoundaryType,
-    ) -> i64;
-
-    /// Look up the logical offset by timestamp, allowing asynchronous tiered-store fallback.
-    async fn get_offset_in_queue_by_time_async(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        timestamp: i64,
-    ) -> Result<i64, StoreError>;
-
-    /// Look up the logical offset by timestamp with boundary type, allowing asynchronous
-    /// tiered-store fallback.
-    async fn get_offset_in_queue_by_time_with_boundary_async(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        timestamp: i64,
-        boundary_type: BoundaryType,
-    ) -> Result<i64, StoreError>;
-
-    /// Look up the message by given commit log offset.
-    fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt>;
-
-    /// Look up the message by given commit log offset and size.
-    fn look_message_by_offset_with_size(&self, commit_log_offset: i64, size: i32) -> Option<MessageExt>;
-
-    /// Get one message from the specified commit log offset.
-    fn select_one_message_by_offset(&self, commit_log_offset: i64) -> Option<SelectMappedBufferResult>;
-
-    /// Get one message from the specified commit log offset and message size.
-    fn select_one_message_by_offset_with_size(
-        &self,
-        commit_log_offset: i64,
-        msg_size: i32,
-    ) -> Option<SelectMappedBufferResult>;
-
     /// Get the running information of this store.
     fn get_running_data_info(&self) -> String;
-
-    /// Get timing message count for a topic.
-    fn get_timing_message_count(&self, topic: &CheetahString) -> i64;
 
     /// Message store runtime information.
     fn get_runtime_info(&self) -> HashMap<String, String>;
@@ -506,32 +406,12 @@ pub trait BackendOps: Send + Sync + 'static {
     /// Get the minimum commit log offset.
     fn get_min_phy_offset(&self) -> i64;
 
-    /// Get the store time of the earliest message in the given queue.
-    fn get_earliest_message_time(&self, topic: &CheetahString, queue_id: i32) -> i64;
-
-    /// Get the store time of the earliest message in this store.
-    fn get_earliest_message_time_store(&self) -> i64;
-
     /*    /// Asynchronous get the store time of the earliest message in this store.
     async fn get_earliest_message_time_async(
         &self,
         topic: &str,
         queue_id: i32,
     ) -> Result<i64, StoreError>;*/
-
-    /// Get the store time of the message specified.
-    fn get_message_store_timestamp(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64;
-
-    /// Asynchronous get the store time of the message specified.
-    async fn get_message_store_timestamp_async(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        consume_queue_offset: i64,
-    ) -> Result<i64, StoreError>;
-
-    /// Get the total number of the messages in the specified queue.
-    fn get_message_total_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Get the raw commit log data starting from the given offset.
     fn get_commit_log_data(&self, offset: i64) -> Option<SelectMappedBufferResult>;
@@ -550,19 +430,6 @@ pub trait BackendOps: Send + Sync + 'static {
 
     /// Execute file deletion manually.
     fn execute_delete_files_manually(&self);
-
-    /// Query messages by given key.
-    async fn query_message(
-        &self,
-        topic: &CheetahString,
-        key: &CheetahString,
-        max_num: i32,
-        begin: i64,
-        end: i64,
-    ) -> Option<QueryMessageResult>;
-
-    /// Query messages while preserving the optional index type and continuation cursor.
-    async fn query_message_with_options(&self, request: &QueryMessageRequest) -> Option<QueryMessageResult>;
 
     /// Update HA master address.
     async fn update_ha_master_address(&self, new_addr: &str);
@@ -587,18 +454,6 @@ pub trait BackendOps: Send + Sync + 'static {
 
     /// Clean expired consume queues.
     fn clean_expired_consumer_queue(&self);
-
-    /// Check if the given message is in the page cache.
-    fn check_in_mem_by_consume_offset(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        consume_offset: i64,
-        batch_size: i32,
-    ) -> bool;
-
-    /// Check if the given message is in store.
-    fn check_in_store_by_consume_offset(&self, topic: &CheetahString, queue_id: i32, consume_offset: i64) -> bool;
 
     /// Get number of the bytes that have been stored in commit log and not yet dispatched.
     fn dispatch_behind_bytes(&self) -> i64;

@@ -16,15 +16,15 @@ use crate::ingress::grpc::service::producer::is_transaction_message;
 use crate::proto::v2;
 // Transaction gRPC ingress planning.
 
-use crate::ClientSessionRegistry;
-use crate::EndTransactionPlan;
-use crate::EndTransactionRequest;
-use crate::PreparedTransactionRegistration;
-use crate::ProxyContextWithPrincipal;
-use crate::ProxyError;
-use crate::ProxyResult;
-use crate::SendMessagePlan;
-use crate::SendMessageRequest;
+use rocketmq_proxy_core::ClientSessionRegistry;
+use rocketmq_proxy_core::EndTransactionPlan;
+use rocketmq_proxy_core::EndTransactionRequest;
+use rocketmq_proxy_core::PreparedTransactionRegistration;
+use rocketmq_proxy_core::ProxyContextWithPrincipal;
+use rocketmq_proxy_core::ProxyError;
+use rocketmq_proxy_core::ProxyResult;
+use rocketmq_proxy_core::SendMessagePlan;
+use rocketmq_proxy_core::SendMessageRequest;
 
 pub fn track_prepared_transactions<C, P>(
     sessions: &ClientSessionRegistry<C>,
