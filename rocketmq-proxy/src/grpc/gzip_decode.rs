@@ -164,10 +164,7 @@ impl GzipDecodePool {
                     .as_mut()
                     .and_then(|lease| lease.slot.as_mut())
                     .ok_or_else(|| ProxyError::invalid_metadata("gzip decode slot is unavailable"))?;
-                let end = used
-                    .checked_add(config.max_message_body_size)
-                    .unwrap_or(usize::MAX)
-                    .min(slot.arena.len());
+                let end = used.saturating_add(config.max_message_body_size).min(slot.arena.len());
                 let start = used;
                 let mut decoder = flate2::read::GzDecoder::new(input_body.as_ref());
                 while used < end {

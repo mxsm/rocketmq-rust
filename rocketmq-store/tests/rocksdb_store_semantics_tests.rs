@@ -33,6 +33,7 @@ use rocketmq_model::common::message::MessageTrait;
 use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_store::BrokerAdminStore;
 use rocketmq_store::BrokerReadStore;
+use rocketmq_store::BrokerReplicationStore;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::DispatchRequest;
