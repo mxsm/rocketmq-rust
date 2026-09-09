@@ -1,299 +1,120 @@
 ---
-sidebar_position: 3
-title: Storage
+title: "Storage composition, durability and recovery"
 ---
-# Storage
 
-RocketMQ-Rust employs a high-performance storage mechanism designed for reliable message persistence and fast retrieval.
+The Store turns Broker write/read requests into primary-log operations and the derived structures needed to serve them. Its central design distinction is between accepting bytes, satisfying a durability policy, and making those bytes visible through a particular read view.
 
-## Storage Architecture
+## Composition and ownership
 
-```mermaid
-graph TB
-    subgraph Broker["Broker Storage"]
-        CommitLog[CommitLog]
-        CQ1[ConsumeQueue 0]
-        CQ2[ConsumeQueue 1]
-        CQ3[ConsumeQueue 2]
-        Index[IndexFile]
-    end
-
-    Incoming[Incoming Messages]
-    Incoming --> CommitLog
-
-    CommitLog --> CQ1
-    CommitLog --> CQ2
-    CommitLog --> CQ3
-    CommitLog --> Index
-
-    Query[Query Requests]
-    Query --> CQ1
-    Query --> CQ2
-    Query --> CQ3
-    Query --> Index
-
-    style CommitLog fill:#f96,stroke:#333,stroke-width:2px
-```
-
-## CommitLog
-
-The CommitLog is the core storage file that stores all messages sequentially.
-
-### Characteristics
-
-- **Sequential writes**: All messages are written in append-only mode
-- **Fixed size**: Each CommitLog file has a fixed size (default 1GB)
-- **Rolling**: When full, a new CommitLog file is created
-- **No deletes**: Messages are deleted only after expiration
-
-### CommitLog Structure
-
-```text
-CommitLog File (1GB each)
-
-┌────────────────────────────────────────────────────┐
-│ [Message 1][Message 2][Message 3]...[Message N]    │
-│  ↑                                                 │
-│  Sequential append writes                          │
-└────────────────────────────────────────────────────┘
-
-File naming: 00000000000000000000, 00000000000000001000, ...
-```
-
-### Message Format in CommitLog
-
-```rust
-pub struct CommitLogMessage {
-    // Total message size (4 bytes)
-    total_size: u32,
-
-    // Magic code (4 bytes) - for file integrity check
-    magic_code: u32,
-
-    // Message body CRC32 (4 bytes)
-    body_crc: u32,
-
-    // Queue ID (4 bytes)
-    queue_id: u32,
-
-    // Message flag (4 bytes)
-    flag: u32,
-
-    // Message properties
-    properties: ByteBuffer,
-
-    // Message body
-    body: ByteBuffer,
-}
-```
-
-### Sequential Write Performance
-
-Sequential writes to CommitLog provide excellent performance:
-
-```text
-Traditional random I/O:  ~10,000   ops/sec
-Sequential I/O (SSD):    ~100,000+ ops/sec
-Sequential I/O (HDD):    ~50,000+  ops/sec
-```
-
-## ConsumeQueue
-
-ConsumeQueue is an index structure for fast message consumption.
-
-### ConsumeQueue Structure
-
-Each topic queue has its own ConsumeQueue:
-
-```text
-ConsumeQueue for Topic:OrderEvents, Queue:0
-
-┌─────────────────────────────────────────────┐
-│ Entry Size: 20 bytes                        │
-├─────────────────────────────────────────────┤
-│ [CommitLog Offset][Size][Tags Hash]         │
-│ [8 bytes         ][4B  ][8 bytes  ]         │
-│                                             │
-│ Example:                                    │
-│ [0x00000000][0x0064][0x12345678]            │
-│ [0x00000064][0x0080][0x87654321]            │
-│ [0x000000E4][0x0050][0xABCDEF12]            │
-└─────────────────────────────────────────────┘
-```
-
-### Purpose
-
-1. **Fast lookup**: Quickly locate messages by offset
-2. **Memory mapped**: Can be memory-mapped for fast access
-3. **Small size**: Each entry is only 20 bytes
-4. **Filtering**: Supports tag-based filtering
-
-### Reading Messages
+`rocketmq-store-api` defines executor-neutral capabilities and values. `rocketmq-store-local` provides local CommitLog, mapped-file, recovery, derived-view, timer and HA primitives. `rocketmq-store` composes a Broker-facing implementation through `StoreFactory` and `StorePorts`. Optional RocksDB and tiered components participate in that composition.
 
 ```mermaid
-sequenceDiagram
-    participant C as Consumer
-    participant CQ as ConsumeQueue
-    participant CL as CommitLog
-
-    C->>CQ: Request message at offset 0
-    CQ-->>C: Return [CommitLog Offset: 1000, Size: 200]
-    C->>CL: Read 200 bytes at offset 1000
-    CL-->>C: Return message data
+flowchart TB
+    Broker["Broker lifecycle owner"] --> Factory["StoreFactory / StorePorts"]
+    Factory --> Ports["Narrow read / write / admin / replication capabilities"]
+    Factory --> Log["Primary CommitLog"]
+    Log --> Dispatch["Dispatch and recovery replay"]
+    Dispatch --> CQ["ConsumeQueue"]
+    Dispatch --> Index["Key index"]
+    Dispatch --> Timer["Timer / transaction metadata"]
+    Dispatch -.-> Secondary["Optional RocksDB / tiered integration"]
+    CQ --> Reads["Queue reads resolve physical log positions"]
+    Index --> Queries["Key queries resolve physical log positions"]
+    Log --> Flush["Local durable watermark"]
+    Log --> Replication["Replica progress and acknowledgement policy"]
 ```
 
-## IndexFile
+The composition root owns lifecycle. Request processors receive the narrow capability they need instead of a mutable handle to the whole backend. The Store is a Broker component, not a separate server that users must start.
 
-IndexFile provides fast message lookup by key.
+The normal integration sequence is validated configuration, `StoreFactory::open`, initialization, load/recovery, startup, then graceful shutdown. Opening the composition alone is not evidence that recovery succeeded or background services started.
 
-### IndexFile Structure
+## Primary log and derived structures
 
-```text
-IndexFile
+CommitLog contains encoded message records at physical byte ranges. ConsumeQueue maps a Topic/queue's logical offsets to those physical records. A key index supports lookup by message key. Timer, transaction and optional secondary components maintain state needed by their own operations.
 
-┌─────────────────────────────────────────────┐
-│ Hash Slots (5 million slots)                │
-│ ↓                                           │
-│ [Slot 0] → [Head Index] → ...               │
-│ [Slot 1] → [Head Index] → ...               │
-│ [Slot 2] → [Head Index] → ...               │
-│ ...                                         │
-│                                             │
-│ Each Index Entry (20 bytes):                │
-│ - Key Hash (4 bytes)                        │
-│ - CommitLog Offset (8 bytes)                │
-│ - Time Diff (4 bytes)                       │
-│ - Next Index Offset (4 bytes)               │
-└─────────────────────────────────────────────┘
+This organization avoids placing a complete independent message body in every read index. It also creates progress differences: an append can be accepted while one derived view lags. Queue reads and key queries need not observe identical progress at every instant.
+
+RocksDB mode currently keeps the local file CommitLog and moves consume-queue, index and selected timer/transaction metadata into RocksDB-backed services. It is not a claim that all primary message bytes move into RocksDB. Tiered integration is optional secondary dispatch and does not strengthen the primary acknowledgement.
+
+## Read an append receipt as a contract
+
+`AppendReceipt` combines the append status, optional appended range, appended watermark, durable watermark and reached `Durability`. It validates that these fields do not contradict one another.
+
+For an accepted half-open byte range `[start, end)`:
+
+- The appended watermark covers `end`.
+- The durable watermark cannot exceed the appended watermark.
+- Local durability requires the durable watermark to cover the entire range.
+- Replicated durability requires a validated replication decision covering the range; it cannot be asserted by constructing a plain receipt with a stronger enum value.
+
+| Durability | Contract |
+| --- | --- |
+| `Memory` | The primary log accepted bytes without a durable-write guarantee for the full range |
+| `Local` | The local durable watermark covers the complete appended range |
+| `Replicated` | The configured replica acknowledgement condition was also satisfied |
+
+`AppendStatus::is_accepted` includes `PutOk`, `FlushDiskTimeout`, `FlushReplicaTimeout` and `ReplicaUnavailable`. Those accepted outcomes still differ in the guarantee they reached. Invalid input, unavailable storage or other rejected outcomes must not be represented as a successful appended range.
+
+The Broker maps store outcomes into send responses. A producer timeout or a non-success flush/replica status can therefore leave an uncertain write outcome. Retrying requires duplicate-tolerant business processing.
+
+## Watermarks are not interchangeable
+
+```mermaid
+flowchart LR
+    A["Appended watermark: accepted primary-log bytes"]
+    D["Durable watermark: locally persisted primary-log prefix"]
+    R["Replica observations: member, authority and progress"]
+    C["Derived cursor: engine + source epoch + durable prefix"]
+    A -->|"Flush advances independently"| D
+    A -->|"Replication observes the log"| R
+    A -->|"Dispatch builds a read view"| C
+    D --> Decision["Acknowledgement decision"]
+    R --> Decision
+    C --> Visibility["Read-view visibility / recovery resume"]
 ```
 
-### Usage
+Only compare positions in the same coordinate system and source generation. A Consumer Group's logical queue offset is not a CommitLog byte offset. A derived cursor's `next_offset` is the exclusive durable primary-log position completed by one engine, qualified by a source epoch.
 
-```rust
-// Query messages by key
-let messages = broker.query_message_by_key("OrderEvents", "order_12345")?;
+Derived replay classifies a record as already committed or a contiguous advance. A source-epoch mismatch, physical gap or partial overlap violates the cursor contract. The typed cursor/checkpoint prevents an arbitrary number from silently becoming valid progress for a different log generation.
 
-// Returns all messages with key "order_12345"
-```
+Derived progress does not upgrade `Memory` to `Local` or `Replicated`. There is also no universal rule that every derived structure must be equally caught up before all read operations can work; inspect the view used by the operation.
 
-## Flush Strategies
+## Replication and write authority
 
-RocketMQ supports different flush strategies to balance performance and reliability.
+`AckPolicy` distinguishes local durability, a configured replica count, and all members of the current in-sync set. Replica counts include the local leader and use unique eligible members. Controller-aware contracts also carry master/sync-set epochs and write authority.
 
-### ASYNC_FLUSH (Default)
+The decision must match the current authority and acknowledgement condition. A connected replica, stale observation or outdated role is not sufficient evidence for a stronger receipt. Controller-issued lease durations become process-local monotonic deadlines in the Broker; they are not interchangeable with remote wall-clock timestamps.
 
-- Messages are written to OS page cache
-- Returns immediately
-- Background thread flushes to disk
-- **Performance**: Highest
-- **Reliability**: May lose messages on system failure
+These contracts make HA reasoning explicit, but the deployed topology and failure scenario determine the result users can rely on. A one-Broker LocalFile tutorial does not exercise replica acknowledgement or failover.
 
-### SYNC_FLUSH
+## File leases and asynchronous transfer
 
-- Messages are written to OS page cache
-- Forces flush to disk before returning
-- **Performance**: Lower
-- **Reliability**: No message loss
+Read results can expose leased message buffers or file regions. A lease keeps the underlying file available while a transport writer still references it. Cleanup must respect outstanding leases; a request timeout does not automatically mean that every reference has been released.
 
-```text
-Pseudo configuration flow:
-1. Build broker storage config
-2. Set flush mode to SYNC_FLUSH for stronger durability
-3. Apply config and restart/reload broker
-```
+Transport's portable file path uses bounded blocking I/O. Optional Linux sendfile requires eligible plaintext regions and capability checks; TLS uses portable reads through its record layer. These implementation choices change transfer cost, not the Store's acknowledgement policy.
 
-## File Deletion
+## Recovery, shutdown and failure limits
 
-RocketMQ automatically deletes expired files to free disk space.
+Load/recovery determines usable primary-log records, handles the selected normal/abnormal recovery path, and reconciles compatible derived state and checkpoints. A dirty tail or interrupted derived update must be interpreted according to its format and engine contract.
 
-### Deletion Policy
+Graceful shutdown stops admission and background activity in order, flushes according to the component path, and reports final progress, outstanding leases and pending file-retirement replay. Inspect `MessageStoreShutdownReport` alongside the runtime report. A generic task report cannot infer that all storage obligations completed.
 
-Files are deleted when any of these conditions are met:
+| Failure window | What to investigate |
+| --- | --- |
+| Accepted before required local flush | The acknowledged policy and recovered durable prefix |
+| Local durability before required replica progress | Replica policy, authority and remote observations |
+| Primary record available while derived view lags | That engine's cursor, replay and visibility |
+| Writer still retains a file region | Lease ownership and retirement progress |
+| Business effect completed before consumer progress persists | Application replay/idempotency, separate from Store append recovery |
 
-1. **Disk space low**: Disk usage exceeds threshold (default 85%)
-2. **Time-based**: Files older than default (72 hours)
-3. **Manual**: Triggered by admin command
+Do not use store-directory deletion as routine recovery. Backend/layout changes, restore operations and retention changes require their own procedures and data consequences. Existing data is evidence when investigating a failure.
 
-```text
-Pseudo retention policy:
-- delete_when = DiskFull
-- file_reserved_time = 72h
-```
+## Features and tradeoffs
 
-## Memory Mapping
+Default Store features select LocalFile and fast loading. Enabling `safe-load` only selects sequential loading when `fast-load` is absent; when neither is enabled, the local primitive's policy still permits parallel loading. `ROCKETMQ_SAFE_LOAD=true` can force the safe path.
 
-ConsumeQueue and IndexFile use memory-mapped files for fast access:
+`rocksdb_store`, tiered storage, extended timer timeline, observability and Linux `io_uring` add separate conditions. Compiling a platform feature does not prove that the host supports it. Throughput comparisons must keep backend, durability, message size, hardware and workload fixed; there is no universal performance number for this composition.
 
-```text
-Pseudo mmap flow:
-1. Create memory map from file descriptor
-2. Read offset and size fields from mapped region
-3. Use offset/size to locate message bytes
-```
+Continue with [message lifecycle](message-lifecycle.md), [delivery and retry](../guides/delivery-and-retry.md), or [deployment overview](../deployment/overview.md).
 
-### Benefits
-
-- Zero-copy I/O
-- Fast access to frequently read data
-- OS manages paging
-
-## Storage Performance
-
-### Write Performance
-
-```text
-Type                | Throughput    | Latency
---------------------|---------------|--------------
-Single Thread       | 100K+ msg/s   | < 1ms
-Multi Thread        | 500K+ msg/s   | < 5ms
-Batch Send          | 1M+   msg/s   | < 10ms
-```
-
-### Read Performance
-
-```text
-Operation           | Latency
---------------------|--------------
-Sequential Read     | < 1ms
-Random Read (mmap)  | < 1ms
-Index Lookup        | < 1ms
-```
-
-## Storage Configuration
-
-```toml
-[broker]
-# CommitLog file size (1GB default)
-commit_log_file_size = 1073741824
-
-# ConsumeQueue file size (30MB default)
-consume_queue_file_size = 31457280
-
-# Flush disk type: ASYNC_FLUSH or SYNC_FLUSH
-flush_disk_type = "ASYNC_FLUSH"
-
-# Delete policy
-delete_when = "DiskFull"
-file_reserved_time = 72  # hours
-
-# Maximum disk usage ratio
-disk_max_used_space_ratio = 85
-
-# Minimum free disk space (GB)
-disk_space_warning_level_ratio = 90
-```
-
-## Best Practices
-
-1. **Use SSDs**: Significantly improves random read performance
-2. **Monitor disk usage**: Set up alerts for disk space
-3. **Choose appropriate flush mode**: Balance performance vs reliability
-4. **Separate CommitLog and ConsumeQueue**: Use different disks if possible
-5. **Regular backups**: Implement backup strategy for critical data
-6. **Configure retention**: Set appropriate file retention time
-
-## Next Steps
-
-- [Producer](../category/producer) - Learn about sending messages
-- [Consumer](../category/consumer) - Learn about consuming messages
-- [Configuration](../category/configuration) - Configure storage settings
+Sources: [Store composition](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store/README.md), [append contracts](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store-api/src/lib.rs), [derived progress](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store-api/src/progress.rs), [HA contracts](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store-api/src/ha_contract.rs), [local primitives](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store-local/README.md).
