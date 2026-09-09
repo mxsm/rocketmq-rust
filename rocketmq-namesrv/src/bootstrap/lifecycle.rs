@@ -198,3 +198,143 @@ impl Drop for InFlightRequestGuard {
         self.tracker.notify.notify_waiters();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_states_have_stable_encodings_and_names() {
+        for (value, state, name) in [
+            (0, RuntimeState::Created, "Created"),
+            (1, RuntimeState::Initialized, "Initialized"),
+            (2, RuntimeState::Running, "Running"),
+            (3, RuntimeState::ShuttingDown, "ShuttingDown"),
+            (4, RuntimeState::Stopped, "Stopped"),
+        ] {
+            assert_eq!(RuntimeState::from_u8(value), Some(state));
+            assert_eq!(state.name(), name);
+            assert_eq!(state.to_string(), name);
+        }
+        for value in 5..=u8::MAX {
+            assert_eq!(RuntimeState::from_u8(value), None);
+        }
+    }
+
+    #[test]
+    fn lifecycle_transitions_allow_startup_and_shutdown_but_never_restart() {
+        use RuntimeState::*;
+        let states = [Created, Initialized, Running, ShuttingDown, Stopped];
+        let allowed = [
+            [false, true, false, true, true],
+            [false, false, true, true, true],
+            [false, false, false, true, false],
+            [false, false, false, false, true],
+            [false, false, false, false, false],
+        ];
+        for (row, source) in states.iter().enumerate() {
+            for (column, target) in states.iter().enumerate() {
+                assert_eq!(
+                    source.can_transition_to(*target),
+                    allowed[row][column],
+                    "{source} -> {target}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_the_last_request_wakes_drain_and_counts_completions() {
+        let tracker = Arc::new(InFlightRequestTracker::default());
+        assert_eq!(tracker.active.load(Ordering::Acquire), 0);
+        let first = tracker.enter();
+        let second = tracker.enter();
+        assert_eq!(tracker.active.load(Ordering::Acquire), 2);
+        let mut drain = std::pin::pin!(tracker.drain(Duration::from_secs(10)));
+        assert!(futures::poll!(&mut drain).is_pending());
+
+        drop(first);
+        assert_eq!(tracker.active.load(Ordering::Acquire), 1);
+        assert_eq!(tracker.completed.load(Ordering::Acquire), 1);
+        assert!(futures::poll!(&mut drain).is_pending());
+        drop(second);
+        let std::task::Poll::Ready(report) = futures::poll!(&mut drain) else {
+            panic!("the last guard must wake the pending drain");
+        };
+        assert!(report.is_healthy());
+        assert_eq!(report.completed, 2);
+        assert_eq!(tracker.active.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn idle_drain_is_immediate_and_preserves_completed_count() {
+        let tracker = Arc::new(InFlightRequestTracker::default());
+        drop(tracker.enter());
+        let std::task::Poll::Ready(report) = futures::poll!(std::pin::pin!(tracker.drain(Duration::ZERO))) else {
+            panic!("idle drain must not wait");
+        };
+        assert!(report.is_healthy());
+        assert_eq!(report.completed, 1);
+    }
+
+    #[tokio::test]
+    async fn drain_timeout_reports_the_remaining_request() {
+        let tracker = Arc::new(InFlightRequestTracker::default());
+        let guard = tracker.enter();
+        let report = tracker.drain(Duration::ZERO).await;
+        assert!(report.timed_out);
+        assert_eq!(report.remaining, 1);
+        assert_eq!(report.completed, 0);
+        assert_eq!(report.timeout_ms, 0);
+        drop(guard);
+        assert!(tracker.drain(Duration::ZERO).await.is_healthy());
+    }
+
+    #[test]
+    fn drain_health_requires_no_timeout_and_no_remaining_requests() {
+        for (timed_out, remaining, healthy) in [(false, 0, true), (true, 0, false), (false, 1, false), (true, 1, false)]
+        {
+            let report = NameServerInFlightDrainReport {
+                timed_out,
+                remaining,
+                ..Default::default()
+            };
+            assert_eq!(report.is_healthy(), healthy);
+        }
+    }
+
+    #[test]
+    fn shutdown_health_includes_deadline_drain_and_component_results() {
+        assert!(NameServerShutdownReport::default().is_healthy());
+        assert!(!NameServerShutdownReport {
+            deadline_expired: true,
+            ..Default::default()
+        }
+        .is_healthy());
+        assert!(!NameServerShutdownReport {
+            in_flight: NameServerInFlightDrainReport {
+                remaining: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .is_healthy());
+
+        for healthy in [true, false] {
+            let mut nested = ShutdownReport::new("root", Duration::ZERO);
+            nested.failed = usize::from(!healthy);
+            for report in [
+                NameServerShutdownReport {
+                    root: Some(nested),
+                    ..Default::default()
+                },
+                NameServerShutdownReport {
+                    auth_runtime_healthy: Some(healthy),
+                    ..Default::default()
+                },
+            ] {
+                assert_eq!(report.is_healthy(), healthy);
+            }
+        }
+    }
+}
