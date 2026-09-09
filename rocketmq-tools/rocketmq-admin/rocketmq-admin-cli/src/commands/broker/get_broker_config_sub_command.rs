@@ -125,6 +125,7 @@ fn broker_addr_for_section(section: &BrokerConfigSection) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
 
     #[test]
     fn test_no_master_placeholder_check() {
@@ -210,11 +211,15 @@ mod tests {
             key_pattern: Some("[".to_string()),
         };
 
-        let err = cmd.request();
-        assert!(err.is_err());
-
-        let err_msg = format!("{}", err.unwrap_err());
-        assert!(err_msg.contains("invalid key regex pattern"));
+        let error = cmd.request().expect_err("invalid key regex must be rejected");
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+        assert!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<regex::Error>())
+                .is_some()
+        );
+        assert_eq!(error.to_string(), "core.argument.invalid: Argument is invalid");
     }
 
     #[test]

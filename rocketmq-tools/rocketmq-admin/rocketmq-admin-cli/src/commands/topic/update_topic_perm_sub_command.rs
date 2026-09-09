@@ -158,14 +158,12 @@ mod tests {
             perm: "6".to_string(),
         };
 
-        let result = command.execute(None, crate::commands::test_client_runtime()).await;
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Either brokerAddr (-b) or clusterName (-c) must be provided")
-        );
+        let error = command
+            .execute(None, crate::commands::test_client_runtime())
+            .await
+            .expect_err("a broker or cluster target is required");
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+        assert_eq!(error.to_string(), "core.argument.invalid: Argument is invalid");
     }
 
     #[tokio::test]
@@ -181,9 +179,12 @@ mod tests {
             perm: "6".to_string(),
         };
 
-        let result = command.execute(None, crate::commands::test_client_runtime()).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid topic name"));
+        let error = command
+            .execute(None, crate::commands::test_client_runtime())
+            .await
+            .expect_err("an invalid topic must be rejected");
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+        assert_eq!(error.to_string(), "core.argument.invalid: Argument is invalid");
     }
 
     #[test]
