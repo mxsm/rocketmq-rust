@@ -43,6 +43,7 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::get_abort_file;
 use rocketmq_store::get_store_path_consume_queue;
 use rocketmq_store::BrokerReadStore;
+use rocketmq_store::BrokerReplicationStore;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::FlushDiskType;

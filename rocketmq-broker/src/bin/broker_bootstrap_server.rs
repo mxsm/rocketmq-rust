@@ -677,9 +677,11 @@ mod tests {
         let security =
             SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(SecurityBootstrapProfile::SecureEnforced));
         for (authentication, authorization) in [(false, false), (true, false), (false, true)] {
-            let mut config = BrokerConfig::default();
-            config.authentication_enabled = authentication;
-            config.authorization_enabled = authorization;
+            let config = BrokerConfig {
+                authentication_enabled: authentication,
+                authorization_enabled: authorization,
+                ..Default::default()
+            };
             let error = validate_broker_security(
                 &security,
                 &config,

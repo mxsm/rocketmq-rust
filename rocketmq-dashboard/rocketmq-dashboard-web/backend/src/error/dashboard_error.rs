@@ -468,39 +468,48 @@ mod tests {
                 StatusCode::BAD_REQUEST,
                 "core.argument.invalid",
                 "Argument is invalid",
+                serde_json::json!({}),
             ),
             (
                 AdminError::session_closed(),
                 StatusCode::CONFLICT,
                 "client.lifecycle.not_started",
                 "Client is not started",
+                serde_json::json!({}),
             ),
             (
                 AdminError::target_drift("mutation", "token=secret C:\\private\\target"),
                 StatusCode::CONFLICT,
                 "client.lifecycle.invalid_state",
                 "Client state is invalid",
+                serde_json::json!({}),
             ),
             (
                 AdminError::target_limit("query", "password=plain-text"),
                 StatusCode::BAD_REQUEST,
                 "core.argument.invalid",
                 "Argument is invalid",
+                serde_json::json!({}),
             ),
             (
                 AdminError::unavailable("query", "password=plain-text"),
                 StatusCode::SERVICE_UNAVAILABLE,
                 "client.component.unavailable",
                 "Client component is unavailable",
+                serde_json::json!({ "client_role": "admin" }),
             ),
         ];
 
-        for (error, expected_status, expected_code, expected_message) in cases {
+        for (error, expected_status, expected_code, expected_message, expected_details) in cases {
             let (status, body, bytes) = failure_response(DashboardError::from(error)).await;
             assert_eq!(status, expected_status);
             assert_eq!(body.code, expected_code);
             assert_eq!(body.message, expected_message);
-            assert!(body.details.is_empty());
+            assert_eq!(
+                serde_json::to_value(&body.details).expect("serialize public details"),
+                expected_details,
+                "unexpected public details for {expected_code}"
+            );
             let serialized = String::from_utf8(bytes).expect("UTF-8 JSON");
             assert!(!serialized.contains("plain-text"));
             assert!(!serialized.contains("token=secret"));
