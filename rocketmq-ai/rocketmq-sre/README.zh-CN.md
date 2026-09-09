@@ -33,6 +33,8 @@ server DTO，也不复用普通 RocketMQ Dashboard 的 session 和 mutation 接�
 规则和类型化契约始终是安全决策的权威依据。模型可以解释 Evidence 和提出计划，
 但不能绕过能力、策略、审批、凭据、lease、fencing 或验证边界。
 
+执行能力按部署配置启用：Execution Agent 的动作开关默认全部关闭，只有配置完整的驱动才会注册。Control Plane 的计划、审批和执行协调已实现，但 MCP、Connector 以及 Rust/TypeScript SDK 的查询边界仍为只读。具体实现和启用条件见各 crate 的 README。
+
 ## 架构
 
 ```mermaid
@@ -148,17 +150,17 @@ DeepSeek API key；两类环境变量都会在清理时删除。
 
 | Crate | 职责 |
 | --- | --- |
-| `rocketmq-sre-contracts` | 版本化 domain、wire、持久化、Evidence、Incident、计划、执行和扩展契约；不依赖网络、异步运行时、数据库或 RocketMQ 实现 |
-| `rocketmq-sre-core` | Incident 协调、确定性 domain service 和 descriptor registry |
-| `rocketmq-sre-model-gateway` | 规范 Model IR、Provider profile、协议 adapter、路由、streaming、预算、fallback 和 Critic 支持 |
-| `rocketmq-sre-control-plane` | 产品 API 与服务 composition root、持久化、集群接入、诊断、治理和运维工作流 |
-| `rocketmq-sre-connector` | 经过身份认证的 MCP client、能力握手、schema 校验、Evidence 转换和数据源健康状态 |
-| `rocketmq-sre-executor` | 不持有目标凭据的受监督执行日志、策略/审批强制执行、分派、验证、回滚和恢复 |
-| `rocketmq-sre-execution-agent` | 隔离的类型化目标 adapter、凭据分离、lease、fencing、幂等性和效果协调 |
-| `rocketmq-sre-probe` | 仅用于专用合成 Topic 与 Group 的受限 producer/consumer 探针 |
-| `rocketmq-sre-eval` | Schema 导出、覆盖率校验、确定性评估和验收工具 |
-| `rocketmq-sre-client` | 仅支持状态、集群、Incident、巡检、计划和 OpenAPI 固定查询的只读 Rust client |
-| `rocketmq-sre-cli` | 只读运维命令，以及仅在本地进行的类型化 Plan 与 Runbook 草稿校验 |
+| [`rocketmq-sre-contracts`](crates/rocketmq-sre-contracts/README.md) | 版本化 domain、wire、持久化、Evidence、Incident、计划、执行和扩展契约；不依赖网络、异步运行时、数据库或 RocketMQ 实现 |
+| [`rocketmq-sre-core`](crates/rocketmq-sre-core/README.md) | Incident 协调、确定性 domain service 和 descriptor registry |
+| [`rocketmq-sre-model-gateway`](crates/rocketmq-sre-model-gateway/README.md) | 规范 Model IR、Provider profile、协议 adapter、路由、streaming、预算、fallback 和 Critic 支持 |
+| [`rocketmq-sre-control-plane`](crates/rocketmq-sre-control-plane/README.md) | 产品 API 与服务 composition root、持久化、集群接入、诊断、治理和运维工作流 |
+| [`rocketmq-sre-connector`](crates/rocketmq-sre-connector/README.md) | 经过身份认证的 MCP client、能力握手、schema 校验、Evidence 转换和数据源健康状态 |
+| [`rocketmq-sre-executor`](crates/rocketmq-sre-executor/README.md) | 不持有目标凭据的受监督执行日志、策略/审批强制执行、分派、验证、回滚和恢复 |
+| [`rocketmq-sre-execution-agent`](crates/rocketmq-sre-execution-agent/README.md) | 隔离的类型化目标 adapter、凭据分离、lease、fencing、幂等性和效果协调 |
+| [`rocketmq-sre-probe`](crates/rocketmq-sre-probe/README.md) | 仅用于专用合成 Topic 与 Group 的受限 producer/consumer 探针 |
+| [`rocketmq-sre-eval`](crates/rocketmq-sre-eval/README.md) | Schema 导出、覆盖率校验、确定性评估和验收工具 |
+| [`rocketmq-sre-client`](crates/rocketmq-sre-client/README.md) | 仅支持状态、集群、Incident、巡检、计划和 OpenAPI 固定查询的只读 Rust client |
+| [`rocketmq-sre-cli`](crates/rocketmq-sre-cli/README.md) | 只读运维命令，以及仅在本地进行的类型化 Plan 与 Runbook 草稿校验 |
 
 项目还包含以下目录：
 

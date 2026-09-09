@@ -14,6 +14,10 @@ capability and telemetry coverage views consumed by the separate AI SRE UI.
 - Drive the `Pending` through read-only ready, degraded, rejected, and
   offboarded lifecycle.
 - Make repeated onboarding and handshakes idempotent.
+- Compose Evidence, conversations, incidents, inspections, SLOs, forecasts,
+  knowledge, fleet, release/DR, governance and postmortem workflows.
+- Persist supervised plans, policy/approval decisions and execution lineage;
+  coordinate explicit Executor requests without holding target credentials.
 - Offboard through a tombstone and identity revocation while retaining history.
 - Route bounded diagnosis prompts through the provider-neutral Model Gateway,
   with reference-only credentials and limited availability fallback.
@@ -21,11 +25,22 @@ capability and telemetry coverage views consumed by the separate AI SRE UI.
   fallback chain, rationale, stable error, correlation ID, incident, diagnosis
   revision, invocation purpose, and repair parent invocation.
 
-## Read-only boundary
+## Evidence and execution boundaries
 
-Effective cluster access is always `read_only`. The service contains no
-RocketMQ Admin mutation client, approval workflow, Executor integration, or
-automatic remediation path. Models receive only bounded, sanitized evidence
+Connector cluster access remains `read_only`, and this service contains no
+RocketMQ Admin mutation driver. The current Control Plane also implements
+persisted plans, policy and Critic evaluation, human approval, supervised
+execution coordination, and bounded automation workflows. Target effects are
+delegated to the separate Executor and Execution Agent boundary.
+
+`ROCKETMQ_SRE_EXECUTOR_URL` and `ROCKETMQ_SRE_CONTROL_PLANE_EXECUTOR_TOKEN`
+must be supplied together to configure the Executor client. Their absence
+does not grant an alternate execution path. Execution requires an executable
+descriptor, validated authority, and applicable policy/approval checks.
+See [supervised_execution](src/supervised_execution), [automation](src/automation)
+and [configuration](src/config.rs).
+
+Models receive only bounded, sanitized evidence
 summaries and eligible human-validated knowledge; they never receive MCP,
 RocketMQ, or executor credentials and cannot call MCP directly. Invalid,
 policy-denied, safety-refused, or unavailable model results retain the stable

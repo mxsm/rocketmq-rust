@@ -75,16 +75,14 @@ Create a store with the in-memory provider, dispatch one message, drain the
 dispatcher on shutdown, and fetch the message by queue offset:
 
 ```rust
-use bytes::Bytes;
-use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::StoreError;
 use rocketmq_tieredstore::{
     TieredDispatchRequest, TieredDispatcher, TieredLifecycle, TieredMessageFetcher,
     TieredStorageLevel, TieredStore, TieredStoreConfig,
 };
 
-async fn example() -> Result<(), StoreError> {
-    let runtime = RuntimeContext::from_current("tieredstore-readme");
+async fn example(parent_task_group: TaskGroup) -> Result<(), StoreError> {
     let Some(store) = TieredStore::new(
         TieredStoreConfig {
             storage_level: TieredStorageLevel::Force,
@@ -92,7 +90,7 @@ async fn example() -> Result<(), StoreError> {
             max_pending_tasks: 16,
             ..TieredStoreConfig::default()
         },
-        runtime.root_group().clone(),
+        parent_task_group,
     )?
     else {
         return Ok(());
@@ -101,7 +99,7 @@ async fn example() -> Result<(), StoreError> {
     store.load().await?;
     store.start().await?;
 
-    let body = Bytes::from_static(b"hello-tieredstore");
+    let body = b"hello-tieredstore".to_vec();
     store
         .dispatcher()
         .dispatch(TieredDispatchRequest {
@@ -116,7 +114,7 @@ async fn example() -> Result<(), StoreError> {
             uniq_key: Some("example-uniq".to_owned()),
             offset_id: None,
             sys_flag: 0,
-            body: Some(body),
+            body: Some(body.into()),
         })
         .await?;
 
@@ -141,12 +139,11 @@ cargo run -p rocketmq-tieredstore --example basic_memory_tieredstore
 Use the default POSIX provider for local durable tiered data:
 
 ```rust
-use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::StoreError;
 use rocketmq_tieredstore::{TieredStorageLevel, TieredStore, TieredStoreConfig};
 
-# async fn open() -> Result<(), StoreError> {
-let runtime = RuntimeContext::from_current("tieredstore-readme");
+# async fn open(parent_task_group: TaskGroup) -> Result<(), StoreError> {
 let Some(store) = TieredStore::new(
     TieredStoreConfig {
         storage_level: TieredStorageLevel::Force,
@@ -154,7 +151,7 @@ let Some(store) = TieredStore::new(
         store_path_root_dir: "./store/tieredstore".into(),
         ..TieredStoreConfig::default()
     },
-    runtime.root_group().clone(),
+    parent_task_group,
 )? else {
     return Ok(());
 };
@@ -163,14 +160,26 @@ let Some(store) = TieredStore::new(
 # }
 ```
 
+These functions take a `TaskGroup` derived from an application's `RuntimeOwner` child scope.
+After store shutdown, the application awaits its owned tasks and shuts down the owner.
+`TieredStore::new` returns `Ok(None)` for disabled, invalid or unsupported configurations;
+do not treat every `None` as successful initialization. Use `TieredProviderOpenPlan` and
+`TieredStoreFactory` to separate deterministic validation from provider I/O.
+
+Storage levels also control `TieredReadPolicy`: `NotInDisk` selects tiered reads when local data
+is missing; `NotInMem` selects tiered reads when local data is not memory-resident; `Force` prefers
+tiered reads. Explicit `force_local` / `remote_only` contexts override that selection.
+Level names alone do not define when local messages are deleted.
+
 ## Feature Flags
 
 | Feature | Default | Description |
 | --- | --- | --- |
-| `posix-provider` | yes | Enables the POSIX file provider. |
-| `memory-provider` | yes | Enables the in-memory provider used by tests and examples. |
+| `posix-provider` | yes | Compatibility flag; the POSIX provider is currently compiled unconditionally. |
+| `memory-provider` | yes | Compatibility flag; the memory provider is currently compiled unconditionally. |
 | `serde` | yes | Enables JSON metadata serialization and deserialization. |
-| `rocketmq-store-integration` | no | Enables integration surface used by `rocketmq-store`. |
+| `rocketmq-store-integration` | no | Compatibility marker; the store adapter is selected by `rocketmq-store/tieredstore`. |
+| `otel-metrics` | no | Enables tiered-store metric instruments. |
 
 The default feature set is `["posix-provider", "memory-provider", "serde"]`.
 
@@ -286,7 +295,7 @@ Useful checks while working on this crate:
 ```bash
 cargo test -p rocketmq-tieredstore --lib
 cargo test -p rocketmq-tieredstore --test posix_persistence_tests
-cargo clippy -p rocketmq-tieredstore --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-tieredstore -- --check
 ```
 
 Run the benchmark target when working on segment IO, dispatch throughput, or

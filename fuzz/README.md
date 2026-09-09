@@ -24,7 +24,7 @@ invoking `RemotingCommand::decode`.
 | `rocketmq_overlong_ext_field.hex` | ROCKETMQ binary extension-field parser rejects a value length that exceeds the retained payload. |
 | `json_unterminated_ext_field.hex` | Complete JSON envelope ends inside an extension-field string; the JSON fast parser and Serde fallback reject it after the declared frame is consumed. |
 
-Run targets locally with the repository-pinned nightly. Before running, set `CARGO_TARGET_DIR`,
+Run targets from `fuzz/` with the repository-pinned nightly. Install `cargo-fuzz` before invoking these commands. Before running, set `CARGO_TARGET_DIR`,
 `TEMP`, and `TMP` to local directories outside the repository with sufficient free space.
 
 ```powershell

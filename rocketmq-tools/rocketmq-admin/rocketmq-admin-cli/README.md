@@ -55,8 +55,8 @@ Future TUI or GUI adapters should depend on `rocketmq-admin-core`, not on
 - Confirmation helpers for dangerous operations and `--yes` support on common
   arguments.
 - Progress bar and spinner helpers for long-running operations.
-- Integration with `rocketmq-admin-core`, `rocketmq-remoting`,
-  `rocketmq-common`, and the shared admin RPC stack.
+- Integration with `rocketmq-admin-core`, `rocketmq-transport`,
+  `rocketmq-model`, and the shared admin RPC stack.
 
 ## Quick Start
 
@@ -211,12 +211,11 @@ cargo run -p rocketmq-admin-cli -- --help
 cargo run -p rocketmq-admin-cli -- show
 ```
 
-For Rust behavior changes inside this workspace, also run the required root
-workspace checks:
+Select additional package checks from the repository root for Rust behavior changes:
 
 ```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-admin-cli -- --check
+cargo clippy -p rocketmq-admin-cli --no-deps -- -D warnings
 ```
 
 ## Design Boundaries
@@ -238,7 +237,7 @@ cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
   service, and operation layer.
 - [`rocketmq-admin-tui`](../rocketmq-admin-tui): terminal UI adapter built on
   the core services.
-- [`rocketmq-remoting`](../../../rocketmq-remoting): RocketMQ remoting protocol
+- [`rocketmq-transport`](../../../rocketmq-transport): RocketMQ remoting protocol
   and transport foundation used by admin operations.
 
 ## License

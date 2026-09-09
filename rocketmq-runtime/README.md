@@ -369,8 +369,9 @@ The [broker](../rocketmq-broker/src/bin/broker_bootstrap_server.rs),
 [controller](../rocketmq-controller/src/bin/controller_bootstrap.rs) entrypoints
 build runtime owners and use service lifecycle deadlines. Other consumers
 include `rocketmq-client`, `rocketmq-transport`, `rocketmq-store`,
-`rocketmq-auth`, `rocketmq-observability`, and admin tools. Client fallback
-runtimes and store compatibility helpers retain explicit adapter boundaries;
+`rocketmq-auth`, `rocketmq-observability`, and admin tools. ClientRuntime requires
+an injected application-owned child scope and never creates a fallback runtime.
+Store compatibility helpers retain explicit adapter boundaries;
 this list does not imply that every call site uses an identical ownership path.
 Standalone applications follow their local host-runtime and validation guides.
 

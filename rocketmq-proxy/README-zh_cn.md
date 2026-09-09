@@ -17,7 +17,7 @@ proxy、auth、client、broker、remoting 集成面的贡献者。
 ## 能力概览
 
 - 面向 Apache RocketMQ v2 `MessagingService` 协议的 gRPC Proxy 运行时。
-- Cluster 模式通过 `rocketmq-client-rust` 和 `rocketmq-remoting` 访问
+- Cluster 模式通过 `rocketmq-client-rust` 和 `rocketmq-transport` 访问
   NameServer 与 Broker 节点。
 - Local 模式启动内嵌 Broker 支撑的服务管理器，适用于开发、集成测试和单
   进程部署。
@@ -35,7 +35,7 @@ proxy、auth、client、broker、remoting 集成面的贡献者。
 
 运行时由 `ProxyRuntimeBuilder` 组装：
 
-- `ProxyRuntime` 负责进程生命周期并启动 gRPC server。
+- `ProxyRuntime` 在应用注入的子作用域中管理服务，并启动 gRPC server。
 - `ProxyGrpcService` 实现生成的 v2 `MessagingService` server。
 - `ProxyRemotingDispatcher` 在启用 remoting 入口时，将选定 request code
   适配到同一套 processor 模型。
@@ -48,7 +48,7 @@ proxy、auth、client、broker、remoting 集成面的贡献者。
 
 ### gRPC
 
-生成的 gRPC service 来自 [`proto/service.proto`](proto/service.proto)，当前实现：
+生成的 gRPC service 来自 [`service.proto`](../rocketmq-proxy-core/proto/service.proto)，当前实现：
 
 | RPC | 用途 |
 | --- | --- |
@@ -176,7 +176,7 @@ TOML 示例：
 
 ```toml
 mode = "cluster"
-enableAclRpcHookForClusterMode = true
+enableAclRpcHookForClusterMode = false
 
 [grpc]
 listenAddr = "0.0.0.0:8081"
@@ -272,15 +272,14 @@ aclFileWatchEnabled = false
 
 运行时可以嵌入到测试、工具或更高层服务中，并按需定制：
 
-```rust
-use rocketmq_proxy::{ProxyConfig, ProxyRuntime};
+```rust,no_run
+use rocketmq_proxy::{ProxyConfig, ProxyResult, ProxyRuntime};
+use rocketmq_observability::TelemetryHandle;
+use rocketmq_runtime::ChildServiceContext;
 
-#[tokio::main]
-async fn main() -> rocketmq_proxy::ProxyResult<()> {
-    let config = ProxyConfig::default();
-
-    ProxyRuntime::builder(config)
-        .build()
+async fn run_proxy(config: ProxyConfig, context: ChildServiceContext) -> ProxyResult<()> {
+    ProxyRuntime::builder(config, context, TelemetryHandle::noop())
+        .build()?
         .serve()
         .await
 }
@@ -294,7 +293,6 @@ backend。
 
 ```text
 rocketmq-proxy/
-  proto/                 Apache RocketMQ v2 protobuf 定义
   src/bin/               rocketmq-proxy-rust 二进制入口
   src/bootstrap.rs       ProxyRuntime 与 ProxyRuntimeBuilder
   src/config.rs          runtime、cluster、local、session、remoting、auth 配置
@@ -316,7 +314,12 @@ rocketmq-proxy/
 | `observability` | 启用 `rocketmq-observability` OpenTelemetry 指标集成。 |
 | `tieredstore` | 将 tiered-store 支持传递给 broker 和 store 依赖。 |
 
-默认 feature set 为空。
+默认启用 `cluster-mode` 和 `local-mode`。
+
+
+配置与协议契约位于 `rocketmq-proxy-core`，集群桥接位于 `rocketmq-proxy-cluster`，本地 Broker 门面位于 `rocketmq-proxy-local`。本 crate 的相应模块保留组合与兼容导出。构建 protobuf 需要可用的 `protoc`（或设置 `PROTOC`）。默认启用 `cluster-mode` 和 `local-mode`；仅集群构建使用 `--no-default-features --features cluster-mode`。选择未编译的模式会报配置错误。
+
+应用拥有 RuntimeOwner，并负责在上述异步函数返回后关闭它。`build()` 返回 Result。可选 `tls` 仍需运行时证书配置；`otel-traces`、`otel-logs` 和 `otlp-*` 提供信号/导出器支持；`tieredstore` 同时启用本地模式。
 
 ## 验证
 
@@ -331,8 +334,8 @@ cargo clippy -p rocketmq-proxy --all-targets --all-features -- -D warnings
 如果修改了仓库范围 Rust 代码，需要在根目录运行 workspace 验证：
 
 ```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-proxy -- --check
+cargo clippy -p rocketmq-proxy --no-deps -- -D warnings
 ```
 
 ## License

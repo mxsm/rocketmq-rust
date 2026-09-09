@@ -195,7 +195,7 @@ Run from the workspace root:
 ```bash
 cargo test -p rocketmq-error
 cargo fmt -p rocketmq-error -- --check
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo clippy -p rocketmq-error --no-deps -- -D warnings
 ```
 
 Focused catalog and association suites:

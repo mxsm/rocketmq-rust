@@ -314,7 +314,7 @@ actor 的兼容 `blocking_*` 配置不会替换共享通道策略。
 [Controller](../rocketmq-controller/src/bin/controller_bootstrap.rs) 入口构建运行时所有者，
 并使用服务生命周期截止时间。其他使用方包括 `rocketmq-client`、`rocketmq-transport`、
 `rocketmq-store`、`rocketmq-auth`、`rocketmq-observability` 和管理工具。
-客户端回退运行时及存储兼容辅助工具保留明确的适配边界；上述列表不表示所有调用点都使用
+ClientRuntime 必须注入应用拥有的子作用域，不会创建回退运行时；存储兼容辅助 API 保留显式适配边界；上述列表不表示所有调用点都使用
 完全相同的所有权路径。独立应用遵循各自的宿主运行时与验证指南。
 
 ## 特性与验证

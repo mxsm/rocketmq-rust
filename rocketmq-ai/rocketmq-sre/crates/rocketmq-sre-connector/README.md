@@ -29,6 +29,9 @@ wire responses into canonical Evidence.
 
 ## Read-only boundary
 
+- Both MCP and Admin reads cross the private [ReadGateway](src/read_gateway.rs),
+  which owns common authorization, admission, deadline/cancellation, bounded
+  output and typed audit policy. Adapters do not bypass this boundary.
 - MCP is consumed only through Streamable HTTP; this crate does not import the
   MCP server crate or its Rust DTOs.
 - The Admin dependency enables only `read-client-adapter`; the dependency graph

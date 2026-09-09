@@ -37,7 +37,7 @@ CLI 层刻意保持轻量：
 - 提供 table、JSON 和 YAML formatter 基础设施。
 - 为危险操作提供 confirmation helpers，并在 common args 上支持 `--yes`。
 - 为长时间操作提供 progress bar 和 spinner helpers。
-- 集成 `rocketmq-admin-core`、`rocketmq-remoting`、`rocketmq-common` 和共享 admin RPC stack。
+- 集成 `rocketmq-admin-core`、`rocketmq-transport`、`rocketmq-model` 和共享 admin RPC stack。
 
 ## 快速开始
 
@@ -186,11 +186,11 @@ cargo run -p rocketmq-admin-cli -- --help
 cargo run -p rocketmq-admin-cli -- show
 ```
 
-如果修改了 workspace 内 Rust 行为，还应运行根工作区要求的检查：
+修改 Rust 行为时，从仓库根目录按需选择本包检查：
 
 ```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-admin-cli -- --check
+cargo clippy -p rocketmq-admin-cli --no-deps -- -D warnings
 ```
 
 ## 设计边界
@@ -205,7 +205,7 @@ cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 
 - [`rocketmq-admin-core`](../rocketmq-admin-core)：可复用 admin request、service 和 operation layer。
 - [`rocketmq-admin-tui`](../rocketmq-admin-tui)：基于 core services 构建的 terminal UI adapter。
-- [`rocketmq-remoting`](../../../rocketmq-remoting)：admin operations 使用的 RocketMQ remoting protocol 和 transport foundation。
+- [`rocketmq-transport`](../../../rocketmq-transport)：admin operations 使用的 RocketMQ remoting protocol 和 transport foundation。
 
 ## 许可证
 

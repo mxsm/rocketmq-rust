@@ -46,7 +46,7 @@ The crate does not select a cloud SDK. A service supplies
 `AsyncModelTransport` with its owned lifecycle. `HttpModelTransport` supplies
 the reusable reqwest/rustls pool, explicit root certificates, optional client
 identity, absolute-deadline enforcement, and bounded JSON reads. It disables
-redirects and ambient proxies, rejects plaintext non-loopback endpoints by
+redirects and disables ambient proxies by default (explicitly configurable), rejects plaintext non-loopback endpoints by
 default, and never includes endpoint, payload, or credential material in
 errors or `Debug` output.
 
@@ -67,7 +67,7 @@ volume with Vault Agent templates or the Vault CSI provider. It does not use a
 Vault token or vendor SDK. The gateway workload receives read-only access only
 to one canonical render root; Vault Agent or CSI remains the sole writer.
 
-```rust
+```rust,no_run
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -82,7 +82,7 @@ let secrets = ExternalSecretManagerProvider::new(
     "rocketmq-sre/models",
     Duration::from_secs(30),
 );
-# Ok::<(), rocketmq_sre_model_gateway::ProviderError>(())
+# Ok::<(), rocketmq_sre_model_gateway::ProviderStatusOutcome>(())
 ```
 
 For the reference
@@ -138,6 +138,12 @@ Bedrock credential material uses a secret-manager value with this JSON shape:
 ```
 
 This JSON is never part of a provider profile or log record.
+
+## Build prerequisites
+
+The crate uses the standalone SRE workspace toolchain. Its build script uses
+`protoc-bin-vendored` to generate the Provider SPI contract; a separately
+installed system `protoc` is not required for this crate.
 
 ## Provider SPI
 

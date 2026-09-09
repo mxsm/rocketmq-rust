@@ -30,7 +30,7 @@ expression, and bitset utilities for higher-level crates.
 subscription expression
         |
         v
-FilterFactory -> SqlFilter -> SQL runtime parser -> Expression tree
+FilterRegistrySnapshot -> SqlFilter -> SQL runtime parser -> Expression tree
                                                   |
 message properties -> MessageEvaluationContext ---+
                                                   |
@@ -40,8 +40,7 @@ message properties -> MessageEvaluationContext ---+
 consumer filter metadata -> BloomFilterData -> BloomFilter -> BitsArray / raw bytes
 ```
 
-`FilterFactory` registers the default `SQL92` filter at static initialization time and allows additional filters to be
-registered by type. `SqlFilter` delegates parsing to the SQL runtime and returns object-safe expression instances that
+`FilterRegistryBuilder` validates registrations and builds immutable `FilterRegistrySnapshot` values. Duplicate types and a registry without SQL92 are rejected. Compiled filters retain their registry ownership; changing the legacy global `FilterFactory` does not modify an existing Broker snapshot. `SqlFilter` delegates parsing to the SQL runtime and returns object-safe expression instances that
 can be cached by callers. `MessageEvaluationContext` supplies string properties for evaluation, while the runtime
 coerces numeric and boolean literals where the SQL expression requires them.
 
@@ -62,6 +61,9 @@ coerces numeric and boolean literals where the SQL expression requires them.
 | [`src/utils/bloom_filter.rs`](src/utils/bloom_filter.rs) | Bloom filter implementation compatible with RocketMQ filtering metadata. |
 | [`src/utils/bloom_filter_data.rs`](src/utils/bloom_filter_data.rs) | Serializable Bloom filter metadata model. |
 | [`benches/sql_filter_benchmark.rs`](benches/sql_filter_benchmark.rs) | Criterion benchmarks for SQL and Bloom filter hot paths. |
+
+
+The legacy global `FilterFactory` is lazily initialized. `get_sql_filter` panics if SQL92 has been removed; `try_get_sql_filter` provides a fallback. Prefer an explicit registry for service composition. See [registry.rs](src/filter/registry.rs).
 
 ## Requirements
 
@@ -91,10 +93,10 @@ Compile and evaluate a SQL92-style subscription expression:
 
 ```rust
 use rocketmq_filter::expression::{MessageEvaluationContext, Value};
-use rocketmq_filter::filter::{Filter, FilterFactory};
+use rocketmq_filter::filter::{Filter, SqlFilter};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let filter = FilterFactory::get_sql_filter();
+    let filter = SqlFilter::new();
     let expression = filter.try_compile("color = 'blue' AND retries >= 3")?;
 
     let mut context = MessageEvaluationContext::new();
@@ -117,10 +119,33 @@ offset, and SQL92 source classification are stable and redaction-safe. Compilati
 Custom `Filter` implementations provide the same structured method directly:
 
 ```rust
+use std::sync::Arc;
+use rocketmq_filter::filter::{Filter, FilterCompileError, FilterRegistryBuilder};
+use rocketmq_filter::expression::{Expression, MessageEvaluationContext, Value};
+use rocketmq_filter::filter::SqlFilter;
+
+#[derive(Debug)]
+struct CustomFilter;
+
 impl Filter for CustomFilter {
     fn try_compile(&self, expression: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
-        // Compile the custom expression and return typed, redaction-safe failures.
+        SqlFilter::new().try_compile(expression)
     }
+
+    fn of_type(&self) -> &str {
+        "CUSTOM_SQL92"
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut builder = FilterRegistryBuilder::with_sql92();
+    builder.register(Arc::new(CustomFilter))?;
+    let registry = builder.build()?;
+    let expression = registry.compile("CUSTOM_SQL92", "color = 'blue'")?;
+    let mut context = MessageEvaluationContext::new();
+    context.put("color", "blue");
+    assert_eq!(expression.evaluate(&context)?, Value::Boolean(true));
+    Ok(())
 }
 ```
 
@@ -181,11 +206,10 @@ cargo test -p rocketmq-filter --lib
 cargo test -p rocketmq-filter --benches --no-run
 ```
 
-Workspace-level Rust validation is run from the repository root when Rust code changes:
-
+Select additional checks for this crate from the repository root:
 ```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-filter -- --check
+cargo clippy -p rocketmq-filter --no-deps -- -D warnings
 ```
 
 ## Benchmarks
