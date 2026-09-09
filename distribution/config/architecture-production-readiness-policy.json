@@ -155,9 +155,20 @@
           {
             "path": "rocketmq-proxy/src/bootstrap.rs",
             "required_markers": [
-              "verify_cluster_route_and_security",
+              "ProxyAuthRuntime::from_proxy_config_with_metadata_service",
+              ".start(health_source, &service_context, lifecycle.clone())",
               "remaining_listeners",
-              "lifecycle.mark_ready"
+              ".mark_ready()"
+            ]
+          },
+          {
+            "path": "rocketmq-proxy/src/dependency_health.rs",
+            "required_markers": [
+              "source.readiness_check()",
+              "initial?;",
+              "lifecycle.set_dependency_readiness",
+              "DependencyReadiness::Ready",
+              "DependencyReadiness::Degraded"
             ]
           }
         ]
@@ -176,7 +187,7 @@
             "path": "rocketmq-ai/rocketmq-mcp/src/main.rs",
             "required_markers": [
               "prepare_mcp_bootstrap",
-              "McpApp::bootstrap_validated_typed",
+              "McpApp::bootstrap_validated(bootstrap_handoff, service_context)",
               "start_lifecycle",
               "mark_ready()"
             ]
