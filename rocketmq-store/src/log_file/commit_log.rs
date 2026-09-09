@@ -1105,9 +1105,8 @@ impl CommitLog {
     }
 
     /// Handle HA service validation and calculate need_ack_nums
-    /// Returns (need_ack_nums, should_continue) where should_continue indicates if processing can
-    /// continue
-    fn handle_ha_service(&self, curr_offset: u64, need_handle_ha: bool) -> Result<i32, PutMessageResult> {
+    /// Returns the required acknowledgement count or a rejection status before append.
+    fn handle_ha_service(&self, curr_offset: u64, need_handle_ha: bool) -> Result<i32, PutMessageStatus> {
         let mut need_ack_nums = self.message_store_config.in_sync_replicas;
 
         if !need_handle_ha {
@@ -1116,16 +1115,14 @@ impl CommitLog {
 
         let ha_service = self.store_context.ha_service().ok_or_else(|| {
             error!("HA Service is None");
-            PutMessageResult::rejected_before_append(PutMessageStatus::UnknownError)
+            PutMessageStatus::UnknownError
         })?;
 
         if self.broker_config.enable_controller_mode {
             if ha_service.in_sync_replicas_nums(curr_offset as i64)
                 < self.message_store_config.min_in_sync_replicas as i32
             {
-                return Err(PutMessageResult::rejected_before_append(
-                    PutMessageStatus::InSyncReplicasNotEnough,
-                ));
+                return Err(PutMessageStatus::InSyncReplicasNotEnough);
             }
             if self.message_store_config.all_ack_in_sync_state_set {
                 need_ack_nums = mix_all::ALL_ACK_IN_SYNC_STATE_SET;
@@ -1138,9 +1135,7 @@ impl CommitLog {
                 .min(ha_service.in_sync_replicas_nums(curr_offset as i64));
             need_ack_nums = self.calc_need_ack_nums(in_sync_replicas);
             if need_ack_nums > in_sync_replicas {
-                return Err(PutMessageResult::rejected_before_append(
-                    PutMessageStatus::InSyncReplicasNotEnough,
-                ));
+                return Err(PutMessageStatus::InSyncReplicasNotEnough);
             }
             if self.message_store_config.all_ack_in_sync_state_set {
                 need_ack_nums = mix_all::ALL_ACK_IN_SYNC_STATE_SET;
@@ -1201,7 +1196,7 @@ impl CommitLog {
         let need_handle_ha = self.need_handle_ha(&msg_batch.message_ext_broker_inner);
         let need_ack_nums = match self.handle_ha_service(curr_offset, need_handle_ha) {
             Ok(ack_nums) => ack_nums,
-            Err(result) => return result.with_execution_evidence(crate::AppendExecutionEvidence::NotAppended),
+            Err(status) => return PutMessageResult::rejected_before_append(status),
         };
         msg_batch.message_ext_broker_inner.version = MessageVersion::V1;
         let auto_message_version_on_topic_len = self.message_store_config.auto_message_version_on_topic_len;
@@ -1215,7 +1210,7 @@ impl CommitLog {
             &self.message_store_config,
         ) {
             Ok(prepared) => prepared,
-            Err(result) => return result.with_execution_evidence(crate::AppendExecutionEvidence::NotAppended),
+            Err(status) => return PutMessageResult::rejected_before_append(status),
         };
         let sequenced = self
             .append_runtime
@@ -1281,7 +1276,7 @@ impl CommitLog {
         let need_handle_ha = self.need_handle_ha(&msg);
         let need_ack_nums = match self.handle_ha_service(curr_offset, need_handle_ha) {
             Ok(ack_nums) => ack_nums,
-            Err(result) => return result.with_execution_evidence(crate::AppendExecutionEvidence::NotAppended),
+            Err(status) => return PutMessageResult::rejected_before_append(status),
         };
 
         let need_assign_offset = !(self.message_store_config.duplication_enable
@@ -1289,7 +1284,7 @@ impl CommitLog {
 
         let prepared = match message_encoder_pool::prepare_message_with_pool(&msg, &self.message_store_config) {
             Ok(prepared) => prepared,
-            Err(result) => return result.with_execution_evidence(crate::AppendExecutionEvidence::NotAppended),
+            Err(status) => return PutMessageResult::rejected_before_append(status),
         };
         let sequenced = self
             .append_runtime
@@ -3089,6 +3084,22 @@ mod tests {
             .wire_owned_root_dependencies()
             .expect("commit-log tests should wire owned Store capabilities");
         store
+    }
+
+    #[tokio::test]
+    async fn ha_validation_preserves_missing_service_rejection_and_bypass() {
+        let root = tempfile::tempdir().unwrap();
+        let store = new_test_message_store(root.path(), BrokerRole::SyncMaster, false);
+        let commit_log = store.get_commit_log();
+
+        assert_eq!(
+            commit_log.handle_ha_service(0, false),
+            Ok(commit_log.message_store_config.in_sync_replicas)
+        );
+        assert_eq!(
+            commit_log.handle_ha_service(0, true),
+            Err(PutMessageStatus::UnknownError)
+        );
     }
 
     fn new_test_mapped_file(root: &Path, offset: u64, file_size: u64) -> DefaultMappedFile {
