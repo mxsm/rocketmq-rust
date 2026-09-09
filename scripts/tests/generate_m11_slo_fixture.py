@@ -44,11 +44,8 @@ def write_json(path: Path, value: dict[str, object]) -> None:
     )
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
-    args = parser.parse_args()
-    root = args.root.resolve()
+def generate_fixture(root: Path) -> int:
+    """Refresh synthetic evidence against the supplied repository's release assets."""
     fixture = root / "scripts/tests/fixtures/m11-slo/pass"
     fault_path = fixture / "artifacts/fault-run.json"
     run_path = fixture / "run.json"
@@ -78,7 +75,15 @@ def main() -> int:
     for artifact in run["artifacts"]:
         artifact["sha256"] = raw_file_sha256(fixture / artifact["path"])
     write_json(run_path, run)
-    print(f"generated {len(fault['scenarios'])} embedded fault scenarios")
+    return len(fault["scenarios"])
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
+    args = parser.parse_args()
+    scenario_count = generate_fixture(args.root.resolve())
+    print(f"generated {scenario_count} embedded fault scenarios")
     return 0
 
 

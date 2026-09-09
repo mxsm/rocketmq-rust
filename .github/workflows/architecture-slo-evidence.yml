@@ -20,6 +20,7 @@ on:
       - "scripts/telemetry-semantic-registry.json"
       - "scripts/verify_service_image_publication.py"
       - "scripts/tests/test_architecture_slo_guard.py"
+      - "scripts/tests/generate_m11_slo_fixture.py"
       - "scripts/tests/test_service_image_publication_verifier.py"
       - "scripts/tests/test_m11_dynamic_evidence.py"
       - "scripts/tests/fixtures/m11-slo/**"
@@ -43,6 +44,7 @@ on:
       - "scripts/telemetry-semantic-registry.json"
       - "scripts/verify_service_image_publication.py"
       - "scripts/tests/test_architecture_slo_guard.py"
+      - "scripts/tests/generate_m11_slo_fixture.py"
       - "scripts/tests/test_service_image_publication_verifier.py"
       - "scripts/tests/test_m11_dynamic_evidence.py"
       - "scripts/tests/fixtures/m11-slo/**"
@@ -91,9 +93,6 @@ jobs:
         shell: bash
         run: |
           python scripts/architecture_slo_guard.py --policy-only
-          python scripts/architecture_slo_guard.py \
-            --evidence scripts/tests/fixtures/m11-slo/pass \
-            --allow-fixture
           python -m unittest scripts.tests.test_architecture_slo_guard -v
 
       - name: Validate PowerShell entrypoint without dynamic execution

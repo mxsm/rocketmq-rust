@@ -24,6 +24,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from scripts.tests.generate_m11_slo_fixture import generate_fixture
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GUARD = REPO_ROOT / "scripts" / "architecture_slo_guard.py"
@@ -55,6 +57,8 @@ class ArchitectureSloGuardTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
         shutil.copytree(REPO_ROOT / FIXTURE, self.root / FIXTURE)
+        # Bind synthetic evidence to this test's assets before injecting violations.
+        generate_fixture(self.root)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -100,6 +104,13 @@ class ArchitectureSloGuardTests(unittest.TestCase):
             "--evidence", str(FIXTURE), expect_success=False
         )
         self.assertIn("--allow-fixture", result.stderr)
+
+    def test_stale_policy_hash_is_rejected(self) -> None:
+        self.mutate_run(lambda run: run.update(policy_sha256="0" * 64))
+        result = self.run_guard(
+            "--evidence", str(FIXTURE), "--allow-fixture", expect_success=False
+        )
+        self.assertIn("policy_sha256 does not match", result.stderr)
 
     def test_non_dynamic_production_evidence_is_rejected(self) -> None:
         self.mutate_run(lambda run: run.update(fixture=False))
