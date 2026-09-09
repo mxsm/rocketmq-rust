@@ -60,7 +60,7 @@ impl<'de> Deserialize<'de> for MessageModel {
             type Value = MessageModel;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a string representing TopicFilterType")
+                formatter.write_str("a string representing MessageModel")
             }
 
             fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
@@ -70,10 +70,10 @@ impl<'de> Deserialize<'de> for MessageModel {
                 match value {
                     "BROADCASTING" => Ok(MessageModel::Broadcasting),
                     "CLUSTERING" => Ok(MessageModel::Clustering),
-                    _ => Err(serde::de::Error::unknown_variant(
-                        value,
-                        &["BROADCASTING", "CLUSTERING"],
-                    )),
+                    _ => Err(E::custom(format_args!(
+                        "MessageModel: {}",
+                        E::unknown_variant(value, &["BROADCASTING", "CLUSTERING"])
+                    ))),
                 }
             }
         }
@@ -125,8 +125,12 @@ mod tests {
     #[test]
     fn deserialize_message_model_invalid() {
         let json = "\"INVALID\"";
-        let deserialized: Result<MessageModel, _> = serde_json::from_str(json);
-        assert!(deserialized.is_err());
+        let error = serde_json::from_str::<MessageModel>(json).unwrap_err().to_string();
+        for fragment in ["MessageModel", "unknown variant", "BROADCASTING", "CLUSTERING"] {
+            assert!(error.contains(fragment), "{error}");
+        }
+        let error = serde_json::from_str::<MessageModel>("1").unwrap_err().to_string();
+        assert!(error.contains("a string representing MessageModel"), "{error}");
     }
 
     #[test]

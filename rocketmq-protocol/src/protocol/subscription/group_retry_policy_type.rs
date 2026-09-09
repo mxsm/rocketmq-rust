@@ -50,7 +50,7 @@ impl<'de> Deserialize<'de> for GroupRetryPolicyType {
             type Value = GroupRetryPolicyType;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a string representing GroupRetryPolicyTypeVisitor")
+                formatter.write_str("a string representing GroupRetryPolicyType")
             }
 
             fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
@@ -60,7 +60,10 @@ impl<'de> Deserialize<'de> for GroupRetryPolicyType {
                 match value {
                     "EXPONENTIAL" => Ok(GroupRetryPolicyType::Exponential),
                     "CUSTOMIZED" => Ok(GroupRetryPolicyType::Customized),
-                    _ => Err(serde::de::Error::unknown_variant(value, &["Exponential", "Customized"])),
+                    _ => Err(E::custom(format_args!(
+                        "GroupRetryPolicyType: {}",
+                        E::unknown_variant(value, &["EXPONENTIAL", "CUSTOMIZED"])
+                    ))),
                 }
             }
         }
@@ -83,6 +86,17 @@ mod group_retry_policy_type_tests {
             assert_eq!(serde_json::from_str::<GroupRetryPolicyType>(json).unwrap(), policy);
         }
 
-        assert!(serde_json::from_str::<GroupRetryPolicyType>("\"UNKNOWN\"").is_err());
+        let error = serde_json::from_str::<GroupRetryPolicyType>("\"UNKNOWN\"")
+            .unwrap_err()
+            .to_string();
+        for fragment in ["GroupRetryPolicyType", "unknown variant", "EXPONENTIAL", "CUSTOMIZED"] {
+            assert!(error.contains(fragment), "{error}");
+        }
+        assert!(!error.contains("Visitor"), "{error}");
+        let error = serde_json::from_str::<GroupRetryPolicyType>("1")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("a string representing GroupRetryPolicyType"), "{error}");
+        assert!(!error.contains("Visitor"), "{error}");
     }
 }
