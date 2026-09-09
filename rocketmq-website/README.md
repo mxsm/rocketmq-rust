@@ -1,214 +1,83 @@
-# RocketMQ-Rust Website
+# RocketMQ-Rust website
 
-Official documentation website for RocketMQ-Rust, built with Docusaurus 3.9.2.
+[简体中文](README-zh_cn.md) · [Documentation authoring](DOCUMENTATION.md)
 
-## 🚀 Tech Stack
+This directory contains the RocketMQ-Rust documentation site. It is a standalone Node project using Docusaurus 3.9, React 18, TypeScript, and Mermaid. English is the default language; Simplified Chinese has the same document IDs under its translation directory.
 
-- **Framework**: [Docusaurus 3.9.2](https://docusaurus.io/)
-- **Language**: TypeScript
-- **Node Version**: v24.13.0 (see `.nvmrc`)
-- **Styling**: CSS Modules + Custom CSS
+## Develop locally
 
-## 📋 Prerequisites
+Use Node.js 24.13.0 from `.nvmrc` and npm. The website workflows use the Node 24 release line. `package.json` contains a broader minimum engine declaration; it is not a claim that every older Node release is exercised by this project's workflows.
 
-- Node.js v24.13.0 or higher
-- npm or yarn package manager
-
-## 🛠️ Installation
+Run commands from `rocketmq-website/`:
 
 ```bash
-# Install dependencies
-npm install
+node --version
+npm --version
+npm ci
+npm run start
 ```
 
-## 💻 Development
+`npm ci` installs the versions in `package-lock.json`. Reuse installed dependencies during normal editing; reinstall when dependencies are missing or the lockfile changes. The development server uses `http://localhost:3000/` by default and prints its actual address. Stop it with Ctrl+C.
 
-### Start Development Server
+To work on Chinese pages:
 
 ```bash
-# Start English version (default)
-npm run start
-
-# Start Chinese version
 npm run start:zh
 ```
 
-The website will be available at:
+The Chinese locale uses `/zh-CN/`. A development server serves the selected locale; use a full build to inspect both languages together.
 
-- **English**: http://localhost:3000/
-- **Chinese**: http://localhost:3000/zh-CN/
-
-### Build for Production
+## Build and preview
 
 ```bash
-# Build all locales
 npm run build
+npm run serve
+```
 
-# Build specific locale
+The build includes both configured locales and writes static output to `build/`. The preview command prints the address it serves. Locale-specific builds are also available:
+
+```bash
 npm run build -- --locale en
 npm run build -- --locale zh-CN
 ```
 
-### Clear Cache
+Use `npm run clear` when generated Docusaurus data is stale. Do not commit `build/`, `.docusaurus/`, or `node_modules/`. Website builds do not build or test the Rust message services.
 
-```bash
-npm run clear
-```
+## Content layout
 
-## 🌍 Internationalization (i18n)
+| Location | Purpose |
+| --- | --- |
+| `docs/` | English documentation |
+| `i18n/zh-CN/docusaurus-plugin-content-docs/current/` | Complete Chinese counterparts with matching IDs |
+| `i18n/zh-CN/code.json` | Translatable component text |
+| `i18n/zh-CN/docusaurus-theme-classic/` | Navigation and footer translations |
+| `sidebars.ts` | Explicit documentation navigation |
+| `releases/` | Release-note blog source |
+| `src/` | Pages, components, theme customizations, and styles |
+| `static/` | Images and other static assets |
+| `docusaurus.config.ts` | Site URL, plugins, locale, search, and version display |
 
-This website supports two languages:
+Read [the writing guide](DOCUMENTATION.md) before adding a tutorial, design explanation, operational guide, or reference page. It explains bilingual files, source-based claims, reproducible examples, diagrams, and preservation of existing URLs. Add navigation for pages that contain useful content; avoid publishing empty placeholders.
 
-- **English** (default): `/`
-- **简体中文**: `/zh-CN/`
+## Version and release scope
 
-### Translation Files Structure
+The current documentation is labeled **Next**. The root Cargo source version and the website package version serve different purposes; neither identifies a published downloadable release by itself. Use the project's [GitHub releases](https://github.com/mxsm/rocketmq-rust/releases) for published artifacts and version-specific release information.
 
-```
-i18n/
-├── en/
-│   ├── code.json                     # UI translations
-│   ├── docusaurus-theme-classic/    # Theme translations
-│   └── docusaurus-plugin-content-docs/
-└── zh-CN/
-    ├── code.json
-    ├── docusaurus-theme-classic/
-    │   ├── navbar.json               # Navbar translations
-    │   └── footer.json               # Footer translations
-    └── docusaurus-plugin-content-docs/
-        └── current/                  # Translated docs
-```
+Do not mix current source APIs with dependency versions copied from an older tutorial. The source tree, examples, and published release instructions must identify which version they describe.
 
-### Adding Translations
+## Deployment configuration
 
-1. **UI Text**: Edit `i18n/{locale}/code.json`
-2. **Navbar/Footer**: Edit files in `i18n/{locale}/docusaurus-theme-classic/`
-3. **Documentation**: Add/edit files in `i18n/{locale}/docusaurus-plugin-content-docs/current/`
+The existing site configuration uses:
 
-## 📁 Project Structure
+- Site URL: `https://rocketmqrust.com`, base URL `/`.
+- GitHub owner/project: `mxsm/rocketmq-rust`.
+- Deployment branch: `gh-pages`.
+- English and Simplified Chinese locales.
 
-```
-rocketmq-website/
-├── docs/                    # Documentation source files (English)
-│   ├── author.md
-│   ├── introduction.md
-│   ├── getting-started/
-│   ├── architecture/
-│   ├── producer/
-│   ├── consumer/
-│   ├── configuration/
-│   ├── contributing/
-│   └── faq/
-├── releases/                # Release notes
-│   └── 2024-01-28-v0.1.0.md → 2025-12-07-v0.7.0.md
-├── i18n/                    # Internationalization files
-│   ├── en/                  # English translations
-│   └── zh-CN/               # Chinese translations
-├── src/                     # Custom React components
-│   ├── components/          # UI components
-│   ├── css/                 # Custom styles
-│   ├── pages/               # Custom pages
-│   └── theme/               # Theme customization
-├── static/                  # Static assets (images, CNAME, etc.)
-├── .docusaurus/             # Build output (auto-generated)
-├── docusaurus.config.ts     # Docusaurus configuration
-├── sidebars.ts              # Sidebar configuration
-├── package.json             # Dependencies and scripts
-└── tsconfig.json            # TypeScript configuration
-```
+The repository's [deployment workflow](../.github/workflows/deploy.yml) describes the automated publishing process. `npm run deploy` is a publishing action, not a local preview command. Normal documentation editing only needs local development or static preview.
 
-For detailed structure, see [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md).
+## Contribution and maintenance
 
-## 🎨 Customization
+Keep English and Chinese content aligned, preserve existing routes, and describe the limits of examples that have not been run. Documentation does not require new metadata validators, file fingerprints, or approval gates. Use the existing build when rendered content or configuration changes, and report the checks actually performed.
 
-### Theme Colors
-
-Edit `src/css/custom.css` to customize theme colors and styles.
-
-### Components
-
-Custom React components are located in `src/components/`:
-
-- `HomepageFeatures.tsx` - Homepage feature cards
-- `DeveloperStyleHero.tsx` - Developer-style hero section
-- `AnnouncementBanner.tsx` - Site-wide announcement banner
-- `DevWarningBanner.tsx` - Development environment warning
-- `OrbBackground.tsx` - Animated orb background effects
-- `SimpleOrb.tsx` - Simple orb component
-
-## 📝 Writing Documentation
-
-1. Create/edit markdown files in `docs/` directory
-2. Add category metadata with `_category_.json` files
-3. For Chinese translation, create corresponding files in `i18n/zh-CN/docusaurus-plugin-content-docs/current/`
-
-### Document Frontmatter Example
-
-```markdown
----
-sidebar_position: 1
-title: Your Title
-description: Your description
----
-
-# Your Content
-```
-
-## 🚢 Deployment
-
-The website is configured for GitHub Pages deployment:
-
-```bash
-npm run deploy
-```
-
-Configuration:
-
-- Organization: `apache`
-- Project: `rocketmq-rust`
-- Branch: `gh-pages`
-
-## 📚 Additional Resources
-
-- [Docusaurus Documentation](https://docusaurus.io/docs)
-- [RocketMQ-Rust Repository](https://github.com/mxsm/rocketmq-rust)
-- [Project Structure](./PROJECT_STRUCTURE.md)
-- [Quick Start Guide](QUICKSTART.md)
-
-## 🤝 Contributing
-
-Contributions are welcome! Please read our [Contributing Guide](../CONTRIBUTING.md) before submitting a pull request.
-
-### Help with Translations
-
-If you'd like to help translate the documentation, please:
-
-1. Check existing translation files in `i18n/zh-CN/`
-2. Submit an issue or pull request with your translations
-3. See our [GitHub Issues](https://github.com/mxsm/rocketmq-rust/issues/new/choose) for translation requests
-
-## 📄 License
-
-This project is licensed under the same license as RocketMQ-Rust. See the [LICENSE](../LICENSE-APACHE) files in the root directory.
-
-## 📧 Contact
-
-- GitHub: https://github.com/mxsm/rocketmq-rust
-- Issues: https://github.com/mxsm/rocketmq-rust/issues
-
----
-
-Built with ❤️ using [Docusaurus](https://docusaurus.io/)
-
-Licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
-
-## Links
-
-- [RocketMQ-Rust GitHub](https://github.com/mxsm/rocketmq-rust)
-- [Apache RocketMQ](https://rocketmq.apache.org/)
-- [Docusaurus Documentation](https://docusaurus.io/docs)
-
-## Support
-
-- GitHub Issues: https://github.com/mxsm/rocketmq-rust/issues
-- Mailing: mxsm@apache.org
+See [the project contribution guide](../CONTRIBUTING.md), [issues](https://github.com/mxsm/rocketmq-rust/issues), and [discussions](https://github.com/mxsm/rocketmq-rust/discussions) for contributions and questions.

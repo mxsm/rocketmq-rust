@@ -1,214 +1,83 @@
 # RocketMQ-Rust 网站
 
-RocketMQ-Rust 的官方文档网站，使用 Docusaurus 3.9.2 构建。
+[English](README.md) · [文档写作指南](DOCUMENTATION-zh-CN.md)
 
-## 🚀 技术栈
+本目录是 RocketMQ-Rust 文档网站，属于独立 Node 工程，使用 Docusaurus 3.9、React 18、TypeScript 和 Mermaid。英文为默认语言，简体中文在对应翻译目录中使用相同文档 ID。
 
-- **框架**: [Docusaurus 3.9.2](https://docusaurus.io/)
-- **语言**: TypeScript
-- **Node 版本**: v24.13.0 (参见 `.nvmrc`)
-- **样式**: CSS Modules + 自定义 CSS
+## 本地开发
 
-## 📋 前置要求
+使用 `.nvmrc` 中的 Node.js 24.13.0 和 npm。网站工作流采用 Node 24 系列；`package.json` 的最低 engine 声明范围更宽，并不代表本项目工作流验证了所有更早的 Node 版本。
 
-- Node.js v24.13.0 或更高版本
-- npm 或 yarn 包管理器
-
-## 🛠️ 安装
+从 `rocketmq-website/` 目录运行：
 
 ```bash
-# 安装依赖
-npm install
+node --version
+npm --version
+npm ci
+npm run start
 ```
 
-## 💻 开发
+`npm ci` 按 `package-lock.json` 安装依赖。日常编辑复用已安装依赖，缺少依赖或 lockfile 变化时再安装。开发服务器默认使用 `http://localhost:3000/`，终端会输出实际地址，按 Ctrl+C 停止。
 
-### 启动开发服务器
+编写中文页面时运行：
 
 ```bash
-# 启动英文版本（默认）
-npm run start
-
-# 启动中文版本
 npm run start:zh
 ```
 
-网站将在以下地址可用：
+中文使用 `/zh-CN/` 前缀。开发服务器服务选定语言；需要同时查看两种语言时，使用完整构建。
 
-- **英文**: http://localhost:3000/
-- **中文**: http://localhost:3000/zh-CN/
-
-### 生产构建
+## 构建与预览
 
 ```bash
-# 构建所有语言版本
 npm run build
+npm run serve
+```
 
-# 构建特定语言版本
+构建包含配置的两种语言，静态输出写入 `build/`。预览命令会打印服务地址，也可以单独构建某种语言：
+
+```bash
 npm run build -- --locale en
 npm run build -- --locale zh-CN
 ```
 
-### 清理缓存
+Docusaurus 生成数据过时时使用 `npm run clear`。不要提交 `build/`、`.docusaurus/` 或 `node_modules/`。网站构建不会构建或测试 Rust 消息服务。
 
-```bash
-npm run clear
-```
+## 内容位置
 
-## 🌍 国际化 (i18n)
+| 位置 | 用途 |
+| --- | --- |
+| `docs/` | 英文文档 |
+| `i18n/zh-CN/docusaurus-plugin-content-docs/current/` | 同 ID 的完整中文文档 |
+| `i18n/zh-CN/code.json` | 可翻译组件文本 |
+| `i18n/zh-CN/docusaurus-theme-classic/` | 导航与页脚翻译 |
+| `sidebars.ts` | 显式文档导航 |
+| `releases/` | 发布说明博客源文件 |
+| `src/` | 页面、组件、主题定制和样式 |
+| `static/` | 图片与其他静态资源 |
+| `docusaurus.config.ts` | 网站地址、插件、语言、搜索及版本显示 |
 
-本网站支持两种语言：
+新增教程、技术设计、操作指南或参考页前，阅读[写作指南](DOCUMENTATION-zh-CN.md)，了解双语文件、技术来源、完整示例、图示和保留 URL 的方法。已有实质内容的页面再加入导航，不发布空白占位页。
 
-- **English** (默认): `/`
-- **简体中文**: `/zh-CN/`
+## 文档版本与发布范围
 
-### 翻译文件结构
+当前文档标记为 **Next**。根 Cargo 源码版本与网站 package 版本含义不同，任一数值都不能单独表示存在对应的已发布下载版本。已发布发行物和特定版本信息见项目的 [GitHub releases](https://github.com/mxsm/rocketmq-rust/releases)。
 
-```
-i18n/
-├── en/
-│   ├── code.json                     # UI 文本翻译
-│   ├── docusaurus-theme-classic/    # 主题翻译
-│   └── docusaurus-plugin-content-docs/
-└── zh-CN/
-    ├── code.json
-    ├── docusaurus-theme-classic/
-    │   ├── navbar.json               # 导航栏翻译
-    │   └── footer.json               # 页脚翻译
-    └── docusaurus-plugin-content-docs/
-        └── current/                  # 翻译后的文档
-```
+不要把当前源码 API 与旧教程中的依赖版本混用。源码、示例和发行版安装说明需要明确它们描述的版本。
 
-### 添加翻译
+## 部署配置
 
-1. **UI 文本**: 编辑 `i18n/{locale}/code.json`
-2. **导航栏/页脚**: 编辑 `i18n/{locale}/docusaurus-theme-classic/` 中的文件
-3. **文档**: 在 `i18n/{locale}/docusaurus-plugin-content-docs/current/` 中添加/编辑文件
+现有网站配置使用：
 
-## 📁 项目结构
+- 网站地址：`https://rocketmqrust.com`，base URL 为 `/`。
+- GitHub 所有者/项目：`mxsm/rocketmq-rust`。
+- 部署分支：`gh-pages`。
+- 英文与简体中文两种语言。
 
-```
-rocketmq-website/
-├── docs/                    # 文档源文件（英文）
-│   ├── author.md
-│   ├── introduction.md
-│   ├── getting-started/
-│   ├── architecture/
-│   ├── producer/
-│   ├── consumer/
-│   ├── configuration/
-│   ├── contributing/
-│   └── faq/
-├── releases/                # 版本发布说明
-│   └── 2024-01-28-v0.1.0.md → 2025-12-07-v0.7.0.md
-├── i18n/                    # 国际化文件
-│   ├── en/                  # 英文翻译
-│   └── zh-CN/               # 中文翻译
-├── src/                     # 自定义 React 组件
-│   ├── components/          # UI 组件
-│   ├── css/                 # 自定义样式
-│   ├── pages/               # 自定义页面
-│   └── theme/               # 主题定制
-├── static/                  # 静态资源（图片、CNAME 等）
-├── .docusaurus/             # 构建输出（自动生成）
-├── docusaurus.config.ts     # Docusaurus 配置
-├── sidebars.ts              # 侧边栏配置
-├── package.json             # 依赖和脚本
-└── tsconfig.json            # TypeScript 配置
-```
+仓库的[部署工作流](../.github/workflows/deploy.yml)描述自动发布过程。`npm run deploy` 会执行发布，不是本地预览命令。日常文档编辑使用本地开发或静态预览即可。
 
-详细结构请参见 [PROJECT_STRUCTURE_zh-CN.md](./PROJECT_STRUCTURE_zh-CN.md)。
+## 贡献与维护
 
-## 🎨 自定义
+保持中英文一致、保留原有路由，并说明未运行示例的适用限制。文档编写不需要新增元数据校验器、文件指纹或审批门禁。修改正文或配置时使用已有构建，并如实报告实际完成的检查。
 
-### 主题颜色
-
-编辑 `src/css/custom.css` 来自定义主题颜色和样式。
-
-### 组件
-
-自定义 React 组件位于 `src/components/`：
-
-- `HomepageFeatures.tsx` - 首页特性卡片
-- `DeveloperStyleHero.tsx` - 开发者风格的 Hero 区块
-- `AnnouncementBanner.tsx` - 全站公告横幅
-- `DevWarningBanner.tsx` - 开发环境警告横幅
-- `OrbBackground.tsx` - 动画球体背景效果
-- `SimpleOrb.tsx` - 简单球体组件
-
-## 📝 编写文档
-
-1. 在 `docs/` 目录中创建/编辑 Markdown 文件
-2. 使用 `_category_.json` 文件添加分类元数据
-3. 对于中文翻译，在 `i18n/zh-CN/docusaurus-plugin-content-docs/current/` 中创建对应文件
-
-### 文档 Frontmatter 示例
-
-```markdown
----
-sidebar_position: 1
-title: 你的标题
-description: 你的描述
----
-
-# 你的内容
-```
-
-## 🚢 部署
-
-网站配置为部署到 GitHub Pages：
-
-```bash
-npm run deploy
-```
-
-配置信息：
-
-- 组织: `apache`
-- 项目: `rocketmq-rust`
-- 分支: `gh-pages`
-
-## 📚 其他资源
-
-- [Docusaurus 文档](https://docusaurus.io/docs)
-- [RocketMQ-Rust 仓库](https://github.com/mxsm/rocketmq-rust)
-- [项目结构](./PROJECT_STRUCTURE_zh-CN.md)
-- [快速开始指南](QUICKSTART_zh-CN.md)
-
-## 🤝 贡献
-
-欢迎贡献！在提交 Pull Request 之前，请阅读我们的[贡献指南](../CONTRIBUTING.md)。
-
-### 帮助翻译
-
-如果您想帮助翻译文档，请：
-
-1. 检查 `i18n/zh-CN/` 中现有的翻译文件
-2. 提交包含您翻译的 Issue 或 Pull Request
-3. 查看我们的 [GitHub Issues](https://github.com/mxsm/rocketmq-rust/issues/new/choose) 了解翻译需求
-
-## 📄 许可证
-
-本项目与 RocketMQ-Rust 使用相同的许可证。详情请参见根目录中的 [LICENSE](../LICENSE-APACHE) 文件。
-
-## 📧 联系方式
-
-- GitHub: https://github.com/mxsm/rocketmq-rust
-- Issues: https://github.com/mxsm/rocketmq-rust/issues
-
----
-
-使用 [Docusaurus](https://docusaurus.io/) 用 ❤️ 构建
-
-基于 Apache License 2.0 许可。详情请参见 [LICENSE](LICENSE)。
-
-## 链接
-
-- [RocketMQ-Rust GitHub](https://github.com/mxsm/rocketmq-rust)
-- [Apache RocketMQ](https://rocketmq.apache.org/)
-- [Docusaurus 文档](https://docusaurus.io/docs)
-
-## 支持
-
-- GitHub Issues: https://github.com/mxsm/rocketmq-rust/issues
-- 邮件列表: general@mxsm.apache.org
+参与贡献或提问可查看[项目贡献指南](../CONTRIBUTING.md)、[Issues](https://github.com/mxsm/rocketmq-rust/issues)和[Discussions](https://github.com/mxsm/rocketmq-rust/discussions)。
