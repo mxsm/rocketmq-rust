@@ -6,6 +6,11 @@ profile with `-f values-dev-single.yaml`, `-f values-production-default-ha.yaml`
 The single-node profile is for development. Production profiles require separate
 hosts for replicas; configure storage classes and resources for the target cluster.
 
+The chart defaults to `securityProfile: production` and enables authentication and
+authorization for every service. Production rejects an override that disables
+service authentication. `values-dev-single.yaml` explicitly selects development
+and disables authentication for its local test deployment.
+
 Every StatefulSet ordinal gets its own complete TOML configuration and stable DNS
 identity. Peer addresses are internal Kubernetes addresses. Processes run without
 a shell, with retained PVCs and HTTP startup, readiness, liveness, and drain probes.
@@ -16,6 +21,26 @@ Clients need matching ACL credentials; a TLS Proxy image must include the `tls`
 feature. Secret contents are never Helm values. Mounted Secret updates do not
 reload credentials or certificates automatically; restart the affected processes
 after rotation. See `values.yaml` for key names and mount options.
+
+The default auth Secret names are `rocketmq-namesrv-auth`, `rocketmq-broker-auth`,
+`rocketmq-controller-auth`, and `rocketmq-proxy-auth`. Create the Secrets for the
+enabled services before installing the release, or override their names. Each
+contains `plain_acl.yml`. Broker and Proxy Secrets also contain `inner-client.json`
+with the Java-compatible `accessKey`, `secretKey`, and optional `securityToken`
+fields. Grant those inner-client identities the required cluster permissions in
+the receiving services' ACL files. Keep the credential values in Secrets.
+
+The chart mounts the inner credentials and sets
+`ROCKETMQ_INNER_CLIENT_CREDENTIALS_FILE`. Missing, malformed, or incomplete mounted
+credentials fail initialization. Proxy enables its cluster ACL signer when auth is
+enabled; it refuses to start with an invalid signer configuration. Existing inline
+`innerClientAuthenticationCredentials` retain precedence for non-chart deployments.
+
+The chart's `securityProfile` selects authentication defaults. The process-level
+`ROCKETMQ_SECURITY_PROFILE=secure-enforced` also requires its existing bootstrap
+materials and now rejects disabled authentication or authorization in Broker,
+Controller, and Proxy, matching NameServer. Select TLS explicitly for the traffic
+that requires encryption; the Proxy TLS preset configures its gRPC listener.
 
 Configuration changes update Pod-template checksums. NameServer, Broker, and
 Controller use `OnDelete`, so a Helm upgrade does not automatically restart them.

@@ -1,3 +1,5 @@
+securityProfile: production
+
 global:
   candidateVersion: "1.0.0"
   imageRegistry: "ghcr.io/mxsm/rocketmq-rust"
@@ -36,7 +38,7 @@ services:
     resources:
       requests: {cpu: 100m, memory: 256Mi}
       limits: {cpu: "1", memory: 512Mi}
-    auth: {enabled: false, secretName: "", aclKey: plain_acl.yml}
+    auth: {enabled: true, secretName: rocketmq-namesrv-auth, aclKey: plain_acl.yml, credentialsKey: inner-client.json}
   broker:
     enabled: true
     replicas: 1
@@ -50,7 +52,7 @@ services:
     resources:
       requests: {cpu: 500m, memory: 1Gi}
       limits: {cpu: "2", memory: 2Gi}
-    auth: {enabled: false, secretName: "", aclKey: plain_acl.yml}
+    auth: {enabled: true, secretName: rocketmq-broker-auth, aclKey: plain_acl.yml, credentialsKey: inner-client.json}
   controller:
     enabled: false
     replicas: 3
@@ -61,7 +63,7 @@ services:
     resources:
       requests: {cpu: 250m, memory: 512Mi}
       limits: {cpu: "1", memory: 1Gi}
-    auth: {enabled: false, secretName: "", aclKey: plain_acl.yml}
+    auth: {enabled: true, secretName: rocketmq-controller-auth, aclKey: plain_acl.yml, credentialsKey: inner-client.json}
   proxy:
     enabled: false
     replicas: 1
@@ -69,7 +71,7 @@ services:
     resources:
       requests: {cpu: 250m, memory: 512Mi}
       limits: {cpu: "2", memory: 1Gi}
-    auth: {enabled: false, secretName: "", aclKey: plain_acl.yml}
+    auth: {enabled: true, secretName: rocketmq-proxy-auth, aclKey: plain_acl.yml, credentialsKey: inner-client.json}
     cluster:
       ioMaxInflight: 256
       controlReserve: 32

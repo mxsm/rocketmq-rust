@@ -56,6 +56,7 @@ pub use crate::config::TcpKeepaliveConfig;
 pub use crate::config::TlsClientAuth;
 pub use crate::config::TlsClientConfig;
 pub use crate::config::TlsConfig;
+pub use crate::config::TlsConfigError;
 pub use crate::config::TlsMode;
 pub use crate::config::TlsServerConfig;
 pub use crate::config_support::network_util::NetworkUtil;

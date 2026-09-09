@@ -221,7 +221,10 @@ fn apply_to_snapshot(
             "listenPort" => server_config.listen_port = parse_config_value(key, value)?,
             "bindAddress" => server_config.bind_address = value.to_string(),
             key if is_tls_config_key(key) => {
-                server_config.tls_config.apply_java_property(key, value.as_str());
+                server_config
+                    .tls_config
+                    .try_apply_java_property(key, value.as_str())
+                    .map_err(|error| crate::namesrv_error::invalid_configuration_source(key, error))?;
             }
             "connectTimeoutMillis" => {
                 let timeout_millis = parse_config_value::<u64>(key, value)?;

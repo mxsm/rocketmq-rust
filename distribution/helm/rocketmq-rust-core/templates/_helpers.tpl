@@ -59,6 +59,9 @@ rocketmqrust.com/distribution: unofficial-community
 {{- end -}}
 {{- range $service, $config := .Values.services -}}
 {{- if $config.enabled -}}
+{{- if and (eq $.Values.securityProfile "production") (not $config.auth.enabled) -}}
+{{- fail (printf "production profile requires services.%s.auth.enabled=true" $service) -}}
+{{- end -}}
 {{- $requestCpu := include "rocketmq-core.cpuMillis" $config.resources.requests.cpu | float64 -}}
 {{- $limitCpu := include "rocketmq-core.cpuMillis" $config.resources.limits.cpu | float64 -}}
 {{- $requestMemory := include "rocketmq-core.memoryMi" $config.resources.requests.memory | int64 -}}

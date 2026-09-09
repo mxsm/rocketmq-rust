@@ -329,6 +329,15 @@ fn validate_proxy_security(
     prometheus_bind_addr: Option<std::net::SocketAddr>,
     probe_bind_addr: Option<std::net::SocketAddr>,
 ) -> ProxyResult<SecurityBootstrapOutcome> {
+    if security_bootstrap.requires_authentication()
+        && (!config.auth.authentication_enabled || !config.auth.authorization_enabled)
+    {
+        return Err(canonical::configuration_invalid(
+            "proxy.auth",
+            "secure-enforced Proxy requires both authenticationEnabled and authorizationEnabled",
+        )
+        .into());
+    }
     if !security_bootstrap.is_enabled() {
         return security_bootstrap.validate(&[]).map_err(proxy_security_provider_error);
     }
@@ -604,6 +613,19 @@ fn print_config(config: &ProxyConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secure_profile_rejects_disabled_request_protection_before_material_loading() {
+        let security =
+            SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(SecurityBootstrapProfile::SecureEnforced));
+        for (authentication, authorization) in [(false, false), (true, false), (false, true)] {
+            let mut config = ProxyConfig::default();
+            config.auth.authentication_enabled = authentication;
+            config.auth.authorization_enabled = authorization;
+            let error = validate_proxy_security(&security, &config, None, None).unwrap_err();
+            assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
+        }
+    }
 
     #[test]
     fn runtime_termination_errors_preserve_the_runtime_source() {

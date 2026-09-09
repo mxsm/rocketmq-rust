@@ -48,6 +48,9 @@ const ACCESS_KEY: &str = "AccessKey";
 const SECURITY_TOKEN: &str = "SecurityToken";
 const SIGNATURE: &str = "Signature";
 
+/// Optional mounted JSON credentials used when inline inner-client credentials are absent.
+pub const INNER_CLIENT_CREDENTIALS_FILE_ENV: &str = "ROCKETMQ_INNER_CLIENT_CREDENTIALS_FILE";
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct AclClientRpcHook {
     access_key: CheetahString,
@@ -89,10 +92,34 @@ impl AclClientRpcHook {
     }
 
     pub fn from_auth_config(config: &AuthConfig) -> AuthServiceResult<Option<Self>> {
-        Self::from_credentials_json(
+        if config.inner_client_authentication_credentials.trim().is_empty() {
+            if let Some(path) = std::env::var_os(INNER_CLIENT_CREDENTIALS_FILE_ENV) {
+                return Self::from_required_credentials_file(Path::new(&path), config.signature_algorithm).map(Some);
+            }
+        }
+        let signer = Self::from_credentials_json(
             config.inner_client_authentication_credentials.as_str(),
             config.signature_algorithm,
-        )
+        )?;
+        if signer.is_none() && !config.inner_client_authentication_credentials.trim().is_empty() {
+            return Err(AuthServiceError::new(
+                AuthOperation::Initialize,
+                AuthFailureKind::InvalidConfiguration,
+            ));
+        }
+        Ok(signer)
+    }
+
+    /// Loads an explicitly configured Secret file; missing or empty credentials fail startup.
+    pub fn from_required_credentials_file(
+        path: impl AsRef<Path>,
+        signature_algorithm: SignatureAlgorithm,
+    ) -> AuthServiceResult<Self> {
+        let content = fs::read_to_string(path).map_err(|error| {
+            AuthServiceError::with_source(AuthOperation::LoadSecret, AuthFailureKind::Unavailable, error)
+        })?;
+        Self::from_credentials_json(&content, signature_algorithm)?
+            .ok_or_else(|| AuthServiceError::new(AuthOperation::Initialize, AuthFailureKind::InvalidConfiguration))
     }
 
     pub fn from_credentials_json(
@@ -274,6 +301,28 @@ mod tests {
 
     fn remote_addr() -> SocketAddr {
         "127.0.0.1:9876".parse().unwrap()
+    }
+
+    #[test]
+    fn required_secret_file_rejects_missing_malformed_and_incomplete_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("inner-client.json");
+        assert!(AclClientRpcHook::from_required_credentials_file(&path, SignatureAlgorithm::HmacSha1).is_err());
+        for invalid in [
+            "",
+            "not-json",
+            r#"{"accessKey":"inner"}"#,
+            r#"{"accessKey":"inner","secretKey":" "}"#,
+        ] {
+            std::fs::write(&path, invalid).unwrap();
+            let error =
+                AclClientRpcHook::from_required_credentials_file(&path, SignatureAlgorithm::HmacSha1).unwrap_err();
+            assert!(!error.to_string().contains("not-json"));
+        }
+        std::fs::write(&path, r#"{"accessKey":"inner","secretKey":"mounted-secret"}"#).unwrap();
+        let signer = AclClientRpcHook::from_required_credentials_file(&path, SignatureAlgorithm::HmacSha1).unwrap();
+        assert_eq!(signer.access_key().as_str(), "inner");
+        assert!(!format!("{signer:?}").contains("mounted-secret"));
     }
 
     #[test]

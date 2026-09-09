@@ -282,6 +282,11 @@ fn validate_broker_security(
     observability_config: &rocketmq_observability::ObservabilityConfig,
     probe_bind_addr: Option<SocketAddr>,
 ) -> Result<SecurityBootstrapOutcome> {
+    if security_bootstrap.requires_authentication()
+        && (!broker_config.authentication_enabled || !broker_config.authorization_enabled)
+    {
+        anyhow::bail!("secure-enforced Broker requires both authenticationEnabled and authorizationEnabled");
+    }
     if !security_bootstrap.is_enabled() {
         return security_bootstrap.validate(&[]).map_err(anyhow::Error::from);
     }
@@ -666,6 +671,28 @@ fn print_tieredstore_startup_info(message_store_config: &MessageStoreConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secure_profile_rejects_disabled_request_protection_before_material_loading() {
+        let security =
+            SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(SecurityBootstrapProfile::SecureEnforced));
+        for (authentication, authorization) in [(false, false), (true, false), (false, true)] {
+            let mut config = BrokerConfig::default();
+            config.authentication_enabled = authentication;
+            config.authorization_enabled = authorization;
+            let error = validate_broker_security(
+                &security,
+                &config,
+                &MessageStoreConfig::default(),
+                &build_broker_telemetry_bootstrap_config(&config).observability,
+                None,
+            )
+            .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("requires both authenticationEnabled and authorizationEnabled"));
+        }
+    }
 
     #[test]
     fn disabled_security_bootstrap_allows_default_broker_listeners() {

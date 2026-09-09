@@ -752,7 +752,7 @@ fn default_service_manager_and_backend(
             if !config.auth.cluster_name.trim().is_empty() {
                 cluster_config.broker_cluster_name = config.auth.cluster_name.clone();
             }
-            let signer = build_cluster_acl_signer(config).map(|signer| signer.into_outbound_signer());
+            let signer = build_cluster_acl_signer(config)?.map(|signer| signer.into_outbound_signer());
             let cluster_context = service_context.component("cluster-backend");
             let client = Arc::new(RocketmqClusterClient::new(
                 cluster_config,
