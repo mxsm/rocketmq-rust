@@ -20,7 +20,7 @@ topic route metadata、broker member group、写权限、KV 配置、运行时�
 | Broker 与 topic 管理 | Cluster info、broker member group、topic 注册/删除、按 cluster 查询 topic list、unit-topic list 和写权限更新。 |
 | KV 配置 | 通过 `KVConfigManager` 支持 KV namespace 的 put/get/delete/list 和磁盘持久化。 |
 | 运行时配置 | `GetNamesrvConfig` 和 `UpdateNamesrvConfig` 支持 Java-properties payload，并对敏感路径和 home 设置保留固定黑名单。 |
-| Cluster test 模式 | 本地无 route data 时，可通过 `DefaultMQAdminExtImpl` 回查 product environment。 |
+| Cluster test 模式 | 本地无 route data 时，可通过 `TransportClusterTestRouteLookup` 回查 product environment。 |
 | 内嵌 controller | 编译时启用 `embedded-controller` feature，并设置 `enableControllerInNamesrv=true`，才会初始化 `rocketmq-controller`；默认依赖图不包含 Controller，同时会检查监听地址冲突。 |
 | 可观测性 | 可选 `observability` feature 记录 route request 数量/延迟、broker registration 和 active broker gauge。 |
 
@@ -164,29 +164,36 @@ Rust 风格字段名。
 
 在测试或上层服务中可以使用 `bootstrap::Builder` 嵌入 NameServer：
 
-```rust
-use rocketmq_common::common::server::config::ServerConfig;
-use rocketmq_namesrv::bootstrap::Builder;
-use rocketmq_namesrv::NamesrvConfig;
+```rust,no_run
+use rocketmq_namesrv::{bootstrap::Builder, NamesrvConfig};
+use rocketmq_observability::TelemetryHandle;
+use rocketmq_runtime::RuntimeOwner;
+use rocketmq_transport::api::ServerConfig;
 
-async fn run_namesrv() -> rocketmq_namesrv::NameServerResult<()> {
-    let namesrv_config = NamesrvConfig {
-        rocketmq_home: "/opt/rocketmq".to_string(),
-        ..NamesrvConfig::default()
-    };
-
-    let server_config = ServerConfig {
-        listen_port: 9876,
-        bind_address: "0.0.0.0".to_string(),
-        ..ServerConfig::default()
-    };
-
-    Builder::new()
-        .set_name_server_config(namesrv_config)
-        .set_server_config(server_config)
-        .build()
-        .boot()
-        .await
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let owner = RuntimeOwner::new()?;
+    let context = owner.root_context().component("namesrv");
+    let result = owner.block_on(async {
+        Builder::new(context, TelemetryHandle::noop())
+            .set_name_server_config(NamesrvConfig {
+                rocketmq_home: "/opt/rocketmq".to_string(),
+                ..NamesrvConfig::default()
+            })
+            .set_server_config(ServerConfig {
+                listen_port: 9876,
+                bind_address: "0.0.0.0".to_string(),
+                ..ServerConfig::default()
+            })
+            .build()
+            .boot()
+            .await
+    });
+    let report = owner.shutdown_runtime_blocking()?;
+    result?;
+    if !report.is_healthy() {
+        return Err(std::io::Error::other("runtime shutdown incomplete").into());
+    }
+    Ok(())
 }
 ```
 
@@ -213,7 +220,10 @@ async fn run_namesrv() -> rocketmq_namesrv::NameServerResult<()> {
 
 | Feature | 作用 |
 | ------- | ---- |
-| `observability` | 通过 `rocketmq-observability/otel-metrics` 启用 NameServer metrics。 |
+| `observability` | 启用 NameServer 指标和跟踪。 |
+
+
+默认 feature 为 `tls`。`embedded-controller` 为可选控制器集成；`otel-metrics`、`otel-traces`、`otel-logs` 可分别选择信号，`otlp-metrics`、`otlp-traces`、`otlp-logs` 选择对应导出器。导出器仍需运行时配置。Cluster-test 回退使用传输客户端和有界缓存，不依赖完整 Admin SDK。
 
 ## 验证
 
@@ -237,8 +247,8 @@ cargo test -p rocketmq-namesrv --lib
 如果修改 Rust 代码，需要在仓库根目录执行 workspace 级验证：
 
 ```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-namesrv -- --check
+cargo clippy -p rocketmq-namesrv --no-deps -- -D warnings
 ```
 
 ## Benchmark

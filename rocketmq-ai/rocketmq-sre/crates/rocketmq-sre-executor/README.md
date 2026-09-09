@@ -51,6 +51,17 @@ internal workload routes. `ROCKETMQ_SRE_EXECUTOR_VERIFICATION_POLL_SECONDS`
 controls the production verification interval and is restricted to 1–60
 seconds; the default is 5 seconds.
 
+The Axum listener is an internal HTTP endpoint behind the deployment's mTLS
+identity proxy. Production middleware validates the exact workload identity
+from `x-forwarded-client-cert` and the separate bearer token; the listener
+itself does not terminate TLS. Restrict direct access to the listener and
+have the trusted proxy replace incoming identity headers.
+
+[ExecutorConfig](src/config.rs) requires PostgreSQL, Lease Authority and Agent
+endpoints, workload tokens and the Executor subject. Starting this service
+alone does not enable an Agent action; the Agent registry and execution
+authority must independently admit it.
+
 ## Validation
 
 Run from `rocketmq-ai/rocketmq-sre/` with a non-system target directory:

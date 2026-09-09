@@ -33,9 +33,34 @@ operations, and arbitrary Kubernetes patches do not exist in the protocol or
 registry.
 
 The service listens on `8095` by default. `/healthz` is liveness only;
-`/readyz` requires the PostgreSQL effect ledger. The production Agent starts
-with an empty registry until action-specific milestones install reviewed
-handlers.
+`/readyz` requires the PostgreSQL effect ledger. The production registry is
+empty with all action settings disabled. Startup now registers reviewed
+handlers when explicit enablement and required configuration are present;
+compiling the crate does not enable them.
+
+| Handler | Enable setting suffix (`ROCKETMQ_SRE_AGENT_`) |
+| --- | --- |
+| Allowlisted Broker configuration | `ENABLE_BROKER_CONFIG` |
+| Allowlisted Topic configuration | `ENABLE_TOPIC_CONFIG` |
+| Allowlisted Subscription Group configuration | `ENABLE_SUBSCRIPTION_GROUP_CONFIG` |
+| Logger level with TTL | `ENABLE_LOGGER_TTL` |
+| One-unit Proxy scale-out | `ENABLE_PROXY_SCALE_OUT` |
+| Proxy image canary | `ENABLE_PROXY_IMAGE_CANARY` |
+| Credential rotation with overlap | `ENABLE_CREDENTIAL_ROTATION` |
+| One Proxy restart | `ENABLE_PROXY_RESTART` |
+| One telemetry collector restart | `ENABLE_TELEMETRY_COLLECTOR_RESTART` |
+
+All enable settings default to false. Depending on the handler, startup also
+requires target allowlists, dedicated credentials, verification endpoints or
+Kubernetes configuration. [config.rs](src/config.rs) validates these combinations;
+[api.rs](src/api.rs) constructs drivers and registers the selected handlers.
+Lease, fence, idempotency and effect-ledger checks apply to every dispatch.
+
+The Axum listener is an internal HTTP endpoint behind an enforcing mTLS
+identity proxy. Middleware checks `x-forwarded-client-cert` and the separate
+Executor bearer token; the Agent listener itself does not terminate TLS.
+Restrict listener access to the proxy and replace untrusted identity headers
+there. The explicit development profile relaxes this identity check.
 
 ## Validation
 

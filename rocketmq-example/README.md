@@ -9,11 +9,11 @@ This project is not part of the root Cargo workspace. Run all commands from
 
 - Stable Rust 1.95.0, using the pinned repository toolchain.
 - A running RocketMQ name server and broker.
-- Default name server address used by examples: `127.0.0.1:9876`.
+- Ordinary examples use `127.0.0.1:9876`; the interop example supports environment overrides.
 - Create topics and subscription groups before running examples. The examples do
   not create broker resources automatically.
 
-Example topic setup with RocketMQ `mqadmin`:
+Run these setup commands from a RocketMQ distribution, or replace `bin\mqadmin.cmd` with its absolute path. They cover a subset of topics; provision the topic and group listed for each selected example as well.
 
 ```powershell
 bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t BasicSendTestTopic -r 4 -w 4
@@ -68,6 +68,23 @@ bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_r
 | Lite pull | `consumer-lite-pull` | `cargo run --example consumer-lite-pull` | `LitePullConsumerTestTopic` | Polls messages and commits offsets manually. |
 | Request/reply responder | `consumer-request-reply` | `cargo run --example consumer-request-reply` | `RequestSendTestTopic` | Sends reply messages for request producer examples. |
 
+## Interoperability and lifecycle
+
+`cargo run --example request-code-smoke` sends and consumes a bounded message
+set, verifies received bodies, and prints `INTEROP_OK` on success. It defaults
+to one message on `RustExampleRequestCodeSmokeTopic`.
+`ROCKETMQ_NAMESRV_ADDR`, `ROCKETMQ_TOPIC`, `ROCKETMQ_CONSUMER_GROUP` and
+other overrides are defined in its [source](examples/interop/request_code_smoke.rs).
+
+Before consuming, `pop-consumer` calls the Admin API
+`set_consumer_request_mode` to change the selected Topic/Group to POP. It
+requires that administrative permission and does not restore the previous
+request mode on exit.
+
+The shared [support module](examples/support/mod.rs) creates the RuntimeOwner,
+telemetry guard and shared ClientRuntime, then closes client runtime,
+RuntimeOwner and telemetry after the example returns.
+
 ## Validation
 
 Build an individual example:
@@ -88,11 +105,11 @@ rocketmq-example/examples/broker_observability.yaml
 Merge those fields into a complete broker configuration when testing OTLP,
 Prometheus, tracing, or logs locally.
 
-Required validation after changing this project:
+Select format and static checks for the changed example:
 
 ```powershell
-cargo fmt --all
-cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo clippy --example producer-delay-send -- -D warnings
 ```
 
 ## Project Structure

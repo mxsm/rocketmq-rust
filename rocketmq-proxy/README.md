@@ -19,7 +19,7 @@ integration surface.
 
 - gRPC proxy runtime for the Apache RocketMQ v2 `MessagingService` protocol.
 - Cluster mode that talks to NameServer and broker nodes through
-  `rocketmq-client-rust` and `rocketmq-remoting`.
+  `rocketmq-client-rust` and `rocketmq-transport`.
 - Local mode that starts an embedded broker-backed service manager for
   development, integration tests, and single-process deployments.
 - Optional remoting ingress for common RocketMQ client request codes.
@@ -38,7 +38,7 @@ integration surface.
 
 The runtime is assembled by `ProxyRuntimeBuilder`:
 
-- `ProxyRuntime` owns the process lifecycle and starts the gRPC server.
+- `ProxyRuntime` runs its services in the application's injected child scope and starts the gRPC server.
 - `ProxyGrpcService` implements the generated v2 `MessagingService` server.
 - `ProxyRemotingDispatcher` adapts selected remoting request codes to the same
   processor model when remoting ingress is enabled.
@@ -51,7 +51,7 @@ The runtime is assembled by `ProxyRuntimeBuilder`:
 
 ### gRPC
 
-The generated gRPC service is built from [`proto/service.proto`](proto/service.proto)
+The generated gRPC service is built from [`service.proto`](../rocketmq-proxy-core/proto/service.proto)
 and currently implements:
 
 | RPC | Purpose |
@@ -182,7 +182,7 @@ Example TOML:
 
 ```toml
 mode = "cluster"
-enableAclRpcHookForClusterMode = true
+enableAclRpcHookForClusterMode = false
 
 [grpc]
 listenAddr = "0.0.0.0:8081"
@@ -279,15 +279,14 @@ Sensitive embedded credentials are redacted from `ProxyAuthConfig` debug output.
 The runtime can be embedded and customized in tests, tools, or higher-level
 servers:
 
-```rust
-use rocketmq_proxy::{ProxyConfig, ProxyRuntime};
+```rust,no_run
+use rocketmq_proxy::{ProxyConfig, ProxyResult, ProxyRuntime};
+use rocketmq_observability::TelemetryHandle;
+use rocketmq_runtime::ChildServiceContext;
 
-#[tokio::main]
-async fn main() -> rocketmq_proxy::ProxyResult<()> {
-    let config = ProxyConfig::default();
-
-    ProxyRuntime::builder(config)
-        .build()
+async fn run_proxy(config: ProxyConfig, context: ChildServiceContext) -> ProxyResult<()> {
+    ProxyRuntime::builder(config, context, TelemetryHandle::noop())
+        .build()?
         .serve()
         .await
 }
@@ -301,7 +300,6 @@ backend.
 
 ```text
 rocketmq-proxy/
-  proto/                 Apache RocketMQ v2 protobuf definitions
   src/bin/               rocketmq-proxy-rust binary entry point
   src/bootstrap.rs       ProxyRuntime and ProxyRuntimeBuilder
   src/config.rs          Runtime, cluster, local, session, remoting, auth config
@@ -323,7 +321,12 @@ rocketmq-proxy/
 | `observability` | Enables integration with `rocketmq-observability` OpenTelemetry metrics. |
 | `tieredstore` | Propagates tiered-store support to broker and store dependencies. |
 
-The default feature set is intentionally empty.
+The default features are `cluster-mode` and `local-mode`. A cluster-only build uses `--no-default-features --features cluster-mode` and excludes the local Broker backend. Selecting a mode that was not compiled returns a configuration error.
+
+
+Configuration and protocol contracts live in `rocketmq-proxy-core`, the cluster bridge in `rocketmq-proxy-cluster`, and the local Broker facade in `rocketmq-proxy-local`. This crate retains composition and compatibility exports. Building protobuf requires `protoc` on PATH or `PROTOC`.
+
+The caller owns the RuntimeOwner and closes it after the async function returns. `build()` is fallible. Optional `tls` requires runtime certificate configuration; `otel-traces`, `otel-logs` and `otlp-*` provide signal/exporter support. `tieredstore` also enables local mode.
 
 ## Validation
 
@@ -335,11 +338,10 @@ cargo test -p rocketmq-proxy --test grpc_ingress --test remoting_ingress
 cargo clippy -p rocketmq-proxy --all-targets --all-features -- -D warnings
 ```
 
-For repository-wide Rust changes, run the workspace validation from the root:
-
+Select additional checks for this crate:
 ```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-proxy -- --check
+cargo clippy -p rocketmq-proxy --no-deps -- -D warnings
 ```
 
 ## License

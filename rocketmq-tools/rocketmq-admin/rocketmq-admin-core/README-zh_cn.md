@@ -25,42 +25,49 @@ CLI / TUI / MCP / Dashboard / Example
           RocketMQ Client SDK
 ```
 
-始终可用的 `core` 模块不导入 RocketMQ Client、Common 或 Remoting。SDK 类型和协议映射只存在于
-`client_adapter`，并通过 `client-adapter` feature 显式启用。
+默认构建提供管理契约及共享的模型、协议、错误和安全类型，不引入可选的 Client/Transport 适配器依赖。
+SDK 集成由特性控制；完整 `client-adapter` 提供 CLI/TUI 使用的会话和服务，
+较窄的读取与变更适配器提供各自的能力边界。
 
 ## Features
 
 | Feature | 默认开启 | 作用 |
 |---|---:|---|
+| `read-client-adapter` | 否 | 只读 SDK 适配能力。 |
+| `mutation-client-adapter` | 否 | 变更 SDK 适配能力。 |
 | `client-adapter` | 否 | 启用基于 RocketMQ Client 的 `AdminSession` 和 adapter 实现。 |
 | `rocksdb-export` | 否 | 为确实需要的管理工具启用本地 RocksDB 元数据导出。 |
 
 只使用 contract 的 consumer 保持默认配置：
 
 ```toml
+[dependencies]
 rocketmq-admin-core = { path = "rocketmq-tools/rocketmq-admin/rocketmq-admin-core" }
 ```
 
 需要真实 RPC 能力的 consumer 显式启用 adapter：
 
 ```toml
-rocketmq-admin-core = {
-    path = "rocketmq-tools/rocketmq-admin/rocketmq-admin-core",
-    features = ["client-adapter"],
-}
+[dependencies.rocketmq-admin-core]
+path = "rocketmq-tools/rocketmq-admin/rocketmq-admin-core"
+features = ["client-adapter"]
 ```
 
 ## 显式会话生命周期
 
-`AdminSession` 拥有 Client SDK handle。调用方必须显式关闭会话；Drop 不会启动脱离所有权的清理任务。
+`AdminSession` 拥有 Client SDK handle。调用方必须显式关闭会话；Drop 不会启动脱离所有权的清理任务。以下示例需要 `client-adapter`。
+传入由应用持有的 `Arc<ClientRuntime>`；所有会话关闭后，再关闭共享客户端运行时及其
+`RuntimeOwner`。参见[客户端生命周期示例](../../../rocketmq-client/README-zh_cn.md)。
 
-```rust
+```rust,no_run
 use rocketmq_admin_core::core::AdminResult;
 use rocketmq_admin_core::client_adapter::AdminBuilder;
 use rocketmq_admin_core::core::topic::ListTopicsRequest;
 use rocketmq_admin_core::core::topic::TopicAdmin;
 
-async fn list_topics() -> AdminResult<()> {
+async fn list_topics(
+    client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+) -> AdminResult<()> {
     let mut session = AdminBuilder::new(client_runtime.clone())
         .namesrv_addr("127.0.0.1:9876")
         .instance_name("admin-core-example")
@@ -99,8 +106,8 @@ rocketmq-admin-core/
 ## 边界规则
 
 - request/result model 和校验属于 `core`。
-- Client/Common/Remoting import 只允许位于 `client_adapter`。
-- 不向 consumer 暴露 `DefaultMQAdminExt`、原始 RPC hook 或 Client runtime 类型。
+- SDK 和传输集成遵循适配器特性边界。
+- 核心请求/结果契约不暴露 SDK 门面或原始钩子；完整适配器显式导出 `ClientRuntime` 类型供应用注入生命周期。
 - 命令解析和渲染属于 CLI/TUI crate。
 - 每个已启动的 `AdminSession` 在成功与失败路径都必须显式关闭。
 
@@ -109,9 +116,10 @@ rocketmq-admin-core/
 ## 本地验证
 
 ```bash
-cargo fmt --all -- --check
+cargo fmt -p rocketmq-admin-core -- --check
 cargo test -p rocketmq-admin-core --features client-adapter
-cargo clippy -p rocketmq-admin-core --all-targets --all-features -- -D warnings
+cargo check -p rocketmq-admin-core --no-default-features
+cargo check -p rocketmq-admin-core --no-default-features --features read-client-adapter
 ```
 
 校验只在本地执行。临时日志、报告和一次性校验脚本应存入 `target/` 等已忽略目录，不提交到仓库。
@@ -120,7 +128,7 @@ cargo clippy -p rocketmq-admin-core --all-targets --all-features -- -D warnings
 
 - [`rocketmq-admin-cli`](../rocketmq-admin-cli)
 - [`rocketmq-admin-tui`](../rocketmq-admin-tui)
-- [`rocketmq-mcp`](../../rocketmq-mcp)
+- [`rocketmq-mcp`](../../../rocketmq-ai/rocketmq-mcp)
 - [`rocketmq-client`](../../../rocketmq-client)
 
 ## License

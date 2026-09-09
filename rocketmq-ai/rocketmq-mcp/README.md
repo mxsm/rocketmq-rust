@@ -35,6 +35,7 @@ Optional features:
 - `observability`: enables in-process metrics and traces without selecting a remote exporter.
 - `otlp`: enables metrics, traces, and logs through the implemented OTLP gRPC exporter.
 - `change-planning`: registers non-mutating change planning Tools and still requires runtime policy.
+- `auth`: feature marker enabled by `streamable-http`; it is not a switch to bypass HTTP authentication.
 
 ## Safety Boundary
 
@@ -95,9 +96,7 @@ cargo build --locked --release --features streamable-http,otlp
 
 Start from the checked-in example:
 
-```bash
-conf/mcp.example.toml
-```
+[`conf/mcp.example.toml`](conf/mcp.example.toml).
 
 Important fields:
 
@@ -371,7 +370,7 @@ provide guidance only: they neither execute Tools nor create cache, session, or 
 ## Troubleshooting
 
 - `streamable-http transport requires the streamable-http feature`: rebuild or run with `--features streamable-http`.
-- HTTP token configuration error: set the selected development-token or OAuth JWT key environment variable. Production mode must not use `ROCKETMQ_MCP_HTTP_TOKEN`.
+- HTTP authentication configuration error: set the referenced token environment variable for `development-token`. For `oauth-jwt`, configure the HTTPS issuer/JWKS endpoint, audience and scopes; `jwt_key_env` is compatibility-only and does not provide an OAuth key fallback.
 - HTTP `401`: check the access-token signature, expiry, issuer, audience, and `Authorization: Bearer <token>` header.
 - HTTP `403`: check token scopes, role claims, `rocketmq_clusters`, `permissions.example.toml`, and browser origin policy.
 - HTTP `429`: raise `security.rate_limit_per_minute` only after reviewing client retry behavior.

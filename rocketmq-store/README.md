@@ -5,7 +5,7 @@
 
 `rocketmq-store` is the storage layer for the
 [rocketmq-rust](https://github.com/mxsm/rocketmq-rust) workspace. It provides
-the broker-facing `MessageStore` boundary, local file based CommitLog and
+the broker-facing `BrokerStorePort` boundary, local file based CommitLog and
 ConsumeQueue storage, RocksDB-backed metadata storage, index building, timer
 message support, POP checkpoint models, HA replication services, store
 statistics, and optional tiered storage and observability integrations.
@@ -18,14 +18,23 @@ performance in the Rust implementation.
 
 ## Architecture
 
-![rocketmq-store architecture](../resources/store-architecture.svg)
+![RocketMQ storage composition](../resources/store-composition-architecture.png)
+
+```text
+Broker lifecycle -> StoreFactory -> StorePorts
+                      |              -> narrow read / write / admin / replication capabilities
+                      -> rocketmq-store-local: CommitLog, mapped files, derived structures
+                      -> rocketmq-store-rocksdb: optional RocksDB metadata
+                      -> rocketmq-tieredstore: optional secondary storage
+Contracts and durability receipts: rocketmq-store-api
+```
 
 The store is organized around a few stable boundaries:
 
-- **`MessageStore` trait**: the broker-facing API for lifecycle, message writes,
+- **`BrokerStorePort` trait**: the broker-facing API for lifecycle, message writes,
   reads, offset lookup, key query, commit-log access, HA metadata, cleanup, and
   runtime information.
-- **`OwnedMessageStore`**: feature-gated exclusive composition root that owns
+- **`StorePorts`**: feature-gated exclusive composition root that owns
   `LocalFileMessageStore` or `RocksDBMessageStore`.
 - **Local file store**: the default implementation built around CommitLog,
   mapped files, ConsumeQueue, index files, checkpoints, flush services, and
@@ -79,37 +88,45 @@ rocketmq-store = { path = "../rocketmq-store" }
 
 Create and start a local file message store:
 
-```rust
-use std::sync::Arc;
+```rust,no_run
+use std::future::Future;
+use rocketmq_runtime::ChildServiceContext;
+use rocketmq_store::{
+    BrokerStorePort, MessageStoreShutdownReport, StoreFactory, StoreFactoryConfig,
+};
 
-use cheetah_string::CheetahString;
-use dashmap::DashMap;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::config::TopicConfig;
-use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::config::message_store_config::MessageStoreConfig;
-use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
-
-async fn start_store() -> Result<(), rocketmq_store::store_error::StoreError> {
-    let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
-    let mut store = LocalFileMessageStore::new(
-        Arc::new(MessageStoreConfig::default()),
-        Arc::new(BrokerConfig::default()),
-        topic_table,
-        None,
-        false,
-    );
-    store.wire_owned_root_dependencies()?;
-
-    store.init().await?;
-    if store.load().await {
+async fn run_store(
+    config: StoreFactoryConfig,
+    service_context: ChildServiceContext,
+    shutdown: impl Future<Output = ()>,
+) -> Result<MessageStoreShutdownReport, Box<dyn std::error::Error>> {
+    let (mut store, _timer_store) = StoreFactory::open(config, service_context)?.into_parts();
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        store.init().await?;
+        if !store.load().await {
+            return Err(std::io::Error::other("store recovery failed").into());
+        }
         store.start().await?;
-    }
-
-    store.shutdown().await;
-    Ok(())
+        shutdown.await;
+        Ok(())
+    }.await;
+    let shutdown_result = store.shutdown_gracefully().await;
+    result?;
+    Ok(shutdown_result?)
 }
 ```
+
+Validate configuration with `StoreFactoryConfig::try_new`, supplying `MessageStoreConfig`,
+`StoreRuntimeConfig`, the topic table, optional statistics manager, batch-arrival notification setting
+and `StoreTelemetry`. `None` means deterministic configuration validation failed before backend opening;
+`StoreFactory::open` performs composition. Import APIs from the crate root: the former
+`base::message_store::MessageStore` and `OwnedMessageStore` are no longer public entrypoints.
+
+This function takes an application-owned child scope and returns the detailed shutdown report.
+The caller inspects final flush progress, outstanding leases and pending file-retirement replay,
+then shuts down the runtime owner. Shared business consumers should receive narrow capabilities
+such as `BrokerReadStore`, `BrokerWriteStore` or `BrokerReplicationStore`, while the lifecycle owns
+the mutable composition root.
 
 Enable RocksDB-backed metadata storage when building or testing RocksDB paths:
 
@@ -123,7 +140,7 @@ cargo build -p rocketmq-store --features rocksdb_store
 | --- | --- | --- |
 | `local_file_store` | yes | Enables the default local file message store. |
 | `fast-load` | yes | Enables optimized parallel CommitLog loading. |
-| `safe-load` | no | Keeps the safe sequential loading path available for fallback scenarios. |
+| `safe-load` | no | Selects sequential loading only when `fast-load` is absent. |
 | `rocksdb_store` | no | Enables RocksDB modules and `RocksDBMessageStore`. |
 | `rocksdb-store` | no | Compatibility alias for `rocksdb_store`. |
 | `data_store` | no | Compatibility feature that enables `local_file_store`. |
@@ -134,11 +151,21 @@ cargo build -p rocketmq-store --features rocksdb_store
 
 The default feature set is `["local_file_store", "fast-load"]`.
 
+
+When both loading features are enabled, `fast-load` wins. Use
+`--no-default-features --features local_file_store,safe-load` for sequential loading.
+With neither loading feature, `rocketmq-store-local` still defaults to parallel loading.
+`ROCKETMQ_SAFE_LOAD=true` forces the safe path.
+
+
+`extended_timeline` enables the RocksDB-backed extended timer timeline; `test-support` exposes test helpers.
+Baseline timer modules do not require either feature. `io_uring` also depends on Linux and runtime capability checks.
+
 ## Core API Surface
 
 | Area | Important Types |
 | --- | --- |
-| Store boundary | `MessageStore`, `OwnedMessageStore`, `LocalFileMessageStore`, `RocksDBMessageStore` |
+| Store boundary | `BrokerStorePort`, `StorePorts`, `LocalFileMessageStore`, `RocksDBMessageStore` |
 | Configuration | `MessageStoreConfig`, `FlushDiskType`, `StoreType`, store path helpers |
 | Write path | `CommitLog`, `DefaultAppendMessageCallback`, `PutMessageResult`, `AppendMessageResult` |
 | Read path | `GetMessageResult`, `SelectMappedBufferResult`, `QueryMessageResult` |
@@ -183,7 +210,7 @@ RocksDB-backed services:
   backup scheduling
 
 This gives the broker a concrete RocksDB boundary without changing the shared
-`MessageStore` API.
+`BrokerStorePort` API.
 
 ## Reliability and Recovery
 
@@ -226,7 +253,7 @@ Useful checks while working on this crate:
 cargo test -p rocketmq-store --lib
 cargo test -p rocketmq-store --test commitlog_recovery_tests
 cargo test -p rocketmq-store --features rocksdb_store --test rocksdb_foundation_tests
-cargo clippy -p rocketmq-store --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-store -- --check
 ```
 
 Benchmark targets are available for focused storage performance work:
@@ -237,8 +264,7 @@ cargo bench -p rocketmq-store --bench mapped_buffer_bench
 cargo bench -p rocketmq-store --features rocksdb_store --bench rocksdb_store
 ```
 
-Run broader workspace validation when store API, recovery behavior,
-feature-gated storage paths, or broker-facing semantics change.
+When shared storage contracts change, validate the affected broker/backend consumers and feature combinations.
 
 ## Design Boundaries
 
@@ -246,8 +272,8 @@ feature-gated storage paths, or broker-facing semantics change.
 - The local file store is the default production path in the workspace.
 - RocksDB support is feature-gated and models metadata storage while still
   reusing the local file CommitLog path.
-- Timer, tiered storage, RocksDB, and observability paths are intentionally
-  feature-gated so the default store remains focused.
+- Tiered storage, RocksDB, the extended timer timeline and telemetry integrations are optional;
+  the basic timer model and lifecycle remain part of the store.
 - Many APIs are broker-internal and optimized for RocketMQ semantics rather than
   a general-purpose embedded database interface.
 

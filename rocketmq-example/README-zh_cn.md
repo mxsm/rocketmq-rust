@@ -9,10 +9,10 @@
 
 - Stable Rust 1.95.0，使用仓库固定的工具链。
 - 已启动 RocketMQ Namesrv 和 Broker。
-- 示例默认 Namesrv 地址为 `127.0.0.1:9876`。
+- 常规示例默认 Namesrv 地址为 `127.0.0.1:9876`；互操作示例允许环境变量覆盖。
 - 运行示例前先创建 topic 和 consumer group。示例本身不自动创建 broker 资源。
 
-使用 RocketMQ `mqadmin` 创建 topic 示例：
+下面命令在 RocketMQ 发行包目录执行，或将 `bin\mqadmin.cmd` 替换为其绝对路径。它们是部分 Topic 的配置示例；运行其他示例前，也需创建表中对应的 Topic 和消费组。
 
 ```powershell
 bin\mqadmin.cmd updateTopic -n 127.0.0.1:9876 -c DefaultCluster -t BasicSendTestTopic -r 4 -w 4
@@ -67,6 +67,21 @@ bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_r
 | Lite Pull | `consumer-lite-pull` | `cargo run --example consumer-lite-pull` | `LitePullConsumerTestTopic` | 主动 poll 消息并手动提交 offset。 |
 | Request/reply responder | `consumer-request-reply` | `cargo run --example consumer-request-reply` | `RequestSendTestTopic` | 为 request producer 示例发送 reply 消息。 |
 
+## 互操作与运行时行为
+
+`cargo run --example request-code-smoke` 发送并消费有限数量的消息，校验收到的消息体，
+成功时输出 `INTEROP_OK`。默认 Topic 为 `RustExampleRequestCodeSmokeTopic`，
+默认发送 1 条消息；`ROCKETMQ_NAMESRV_ADDR`、`ROCKETMQ_TOPIC`、
+`ROCKETMQ_CONSUMER_GROUP` 等变量可覆盖配置，详见
+[源码](examples/interop/request_code_smoke.rs)。
+
+`pop-consumer` 在消费前通过 Admin API 调用 `set_consumer_request_mode`，
+把对应 Topic/Group 切换为 POP；需要相应管理权限，退出时不会自动恢复请求模式。
+这与仅收发消息的示例不同。
+
+公共 [support 模块](examples/support/mod.rs) 创建 RuntimeOwner、遥测 guard 和共享
+ClientRuntime，在示例返回后关闭客户端运行时、RuntimeOwner 和遥测。
+
 ## 验证
 
 构建单个示例：
@@ -75,12 +90,18 @@ bin\mqadmin.cmd updateSubGroup -n 127.0.0.1:9876 -c DefaultCluster -g consumer_r
 cargo build --example producer-delay-send
 ```
 
-修改该项目后必须执行：
+按修改范围选择格式和静态检查：
 
 ```powershell
-cargo fmt --all
-cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo clippy --example producer-delay-send -- -D warnings
 ```
+
+## 可观测性配置
+
+[broker_observability.yaml](examples/broker_observability.yaml) 是 Broker 的
+结构化配置片段。测试 OTLP、Prometheus、跟踪或日志时，将相关字段合并到完整 Broker
+配置，并为 Broker 构建启用对应的遥测 exporter features。
 
 ## 项目结构
 
@@ -89,7 +110,8 @@ rocketmq-example/
 |-- examples/
 |   |-- consumer/
 |   |-- interop/
-|   `-- producer/
+|   |-- producer/
+|   `-- broker_observability.yaml
 |-- Cargo.toml
 |-- README.md
 `-- README-zh_cn.md

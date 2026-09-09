@@ -9,7 +9,7 @@ through `TuiAdminFacade`.
 
 The crate is designed for operators who want a searchable, keyboard-driven
 management surface without reimplementing CLI parsing or RocketMQ RPC logic.
-It currently exposes 102 facade-backed admin commands across 18 RocketMQ
+It currently exposes 100 facade-backed admin commands across 17 RocketMQ
 management domains.
 
 [中文文档](README-zh_cn.md)
@@ -44,8 +44,8 @@ requests, validation, RPC orchestration, and structured results stay in
   - safe commands run directly;
   - mutating commands require typing `confirm`;
   - dangerous commands require typing the target value when available.
-- Background command execution through a separate Tokio runtime so terminal
-  rendering and input handling remain responsive.
+- Command futures run on the application's Tokio `LocalSet`, alongside the UI event loop.
+  The process owns a `RuntimeOwner` and an injected shared client runtime.
 - Progress updates for long-running workflows such as monitoring and message
   pull operations.
 - Structured result rendering as tables, key/value rows, JSON, text, or
@@ -93,7 +93,6 @@ tests. Current coverage:
 | Cluster | 3 | cluster list, broker names, send-message RT diagnostics. |
 | Connection | 2 | consumer and producer connection inspection. |
 | Consumer | 8 | config, running info, progress, monitoring, subscription group, consume mode. |
-| Container | 2 | add and remove broker in broker container. |
 | Controller | 5 | config, metadata, elect master, clean metadata. |
 | Export | 6 | configs, metrics, metadata, RocksDB metadata, RocksDB RPC export, POP records. |
 | HA | 2 | HA status and sync-state-set query. |
@@ -177,19 +176,18 @@ For Rust changes in this crate, run:
 cargo test -p rocketmq-admin-tui
 ```
 
-For root workspace Rust changes, also run the repository-required checks from
-the workspace root:
+For relevant Rust changes, select package-scoped checks from the repository root:
 
 ```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-admin-tui -- --check
+cargo clippy -p rocketmq-admin-tui --no-deps -- -D warnings
 ```
 
 ## Related Crates
 
 - [`rocketmq-admin-core`](../rocketmq-admin-core) - reusable admin request, service, and result layer.
 - [`rocketmq-admin-cli`](../rocketmq-admin-cli) - command-line adapter that shares the same core layer.
-- [`rocketmq-remoting`](../../../rocketmq-remoting) - RocketMQ remoting protocol and RPC types.
+- [`rocketmq-transport`](../../../rocketmq-transport) - RocketMQ remoting protocol and RPC types.
 - [`rocketmq-client`](../../../rocketmq-client) - RocketMQ client APIs used by admin services.
 
 ## License

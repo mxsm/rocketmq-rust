@@ -20,24 +20,24 @@ After the first successful login, the administrator must change the password bef
 
 ## Database Location
 
-The authentication database is stored in the application config directory as `dashboard.db`.
+Authentication and saved NameServer/Proxy configuration share `dashboard.db` in the application config directory for `com.rocketmqrust.dashboard`. On Linux, `XDG_CONFIG_HOME` overrides `~/.config`.
 
 ### Windows
 
 ```text
-C:\Users\<YourUsername>\AppData\Roaming\com.rocketmq-rust.dashboard\dashboard.db
+C:\Users\<YourUsername>\AppData\Roaming\com.rocketmqrust.dashboard\dashboard.db
 ```
 
 ### macOS
 
 ```text
-~/Library/Application Support/com.rocketmq-rust.dashboard/dashboard.db
+~/Library/Application Support/com.rocketmqrust.dashboard/dashboard.db
 ```
 
 ### Linux
 
 ```text
-~/.config/rocketmq-rust-dashboard/dashboard.db
+~/.config/com.rocketmqrust.dashboard/dashboard.db
 ```
 
 ## Schema
@@ -67,10 +67,10 @@ This is intentional for the first version to keep the design simple and reduce l
 
 ## Resetting Local Authentication
 
-If you need to reset the local administrator account:
+Deleting this shared database resets the administrator and saved NameServer/Proxy configuration. To reset all of this local state:
 
 1. Stop the application.
-2. Delete `dashboard.db`.
+2. Back up `dashboard.db`, then remove it.
 3. Restart the application.
 4. Sign in with `admin` and the bootstrap password source described above.
 

@@ -9,6 +9,9 @@ This crate provides the foundational building blocks for different UI implementa
 - **Data Models**: Shared data structures (brokers, topics, consumer groups)
 - **API Traits**: `DashboardClient` trait for RocketMQ API clients
 - **Service Layer**: Business logic for dashboard operations
+- **Configuration contracts**: normalized NameServer selections, Proxy addresses,
+  history, topic, consumer and producer models. Concrete persistence and client
+  runtime ownership belong to the consuming application.
 - **Admin Facade**: optional `admin` feature with `DashboardAdminFacade`,
   `DashboardAdminProvider`, shared admin error codes, list wrappers, and mutation
   result models. This feature is a protocol-free adapter contract; concrete
@@ -37,7 +40,7 @@ rocketmq-dashboard-common = { path = "../rocketmq-dashboard-common", features = 
 cargo test -p rocketmq-dashboard-common
 
 # Format and lint
-cargo fmt -p rocketmq-dashboard-common
+cargo fmt -p rocketmq-dashboard-common -- --check
 cargo clippy -p rocketmq-dashboard-common --all-targets -- -D warnings
 ```
 

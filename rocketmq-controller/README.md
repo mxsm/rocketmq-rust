@@ -39,13 +39,13 @@ The binary requires a non-empty `rocketmqHome` value after configuration loading
 | Path | Purpose |
 |------|---------|
 | [`src/bin/controller_bootstrap.rs`](src/bin/controller_bootstrap.rs) | Binary entry point, logger setup, CLI/config loading, manager lifecycle, single-node bootstrap, and shutdown signal handling. |
-| [`src/cli.rs`](src/cli.rs) | Clap-based CLI model and config-file loading through `rocketmq-common`'s config parser. |
-| [`src/config.rs`](src/config.rs) | Re-exports the shared `ControllerConfig`, `RaftPeer`, and `StorageBackendType` from `rocketmq-common`. |
+| [`src/cli.rs`](src/cli.rs) | Clap-based CLI model and config-file loading through the `config` crate's config parser. |
+| [`src/config.rs`](src/config.rs) | Owns `ControllerConfig`, peer/address validation and storage settings, re-exported at the crate root. |
 | [`src/controller`](src/controller) | Controller trait implementations, `ControllerManager`, OpenRaft controller wrapper, heartbeat manager, and housekeeping service. |
 | [`src/openraft`](src/openraft) | OpenRaft node manager, gRPC network, log store, state machine, storage bridge, and generated raft service glue. |
 | [`src/processor`](src/processor) | Controller request processor and domain processors for broker, topic, and metadata operations. |
 | [`src/manager`](src/manager) | Replica information manager, broker replica metadata, and sync-state models. |
-| [`src/metadata`](src/metadata) | Broker, topic, config, and replica metadata stores. |
+| [`src/openraft/state_machine.rs`](src/openraft/state_machine.rs) | Broker, topic, config, and replica metadata stores. |
 | [`src/heartbeat`](src/heartbeat) | Broker identity, live-info tracking, and default heartbeat manager. |
 | [`src/event`](src/event) | Replicated controller event models and event serialization. |
 | [`src/storage`](src/storage) | Storage backend abstraction, default RocksDB backend, opt-in file backend, and in-memory backend for tests. |
@@ -83,8 +83,7 @@ cargo build -p rocketmq-controller --bin rocketmq-controller-rust --release --fe
 ## Configuration
 
 The CLI loads TOML, JSON, YAML, and other formats supported by the `config` crate. Current file loading deserializes
-directly into `ControllerConfig`, so a config file should provide the full set of required fields instead of relying on
-partial overrides.
+directly into this crate's `ControllerConfig`. Its Serde defaults allow partial files; omitted fields retain their configured defaults.
 
 Use camelCase field names:
 
@@ -103,7 +102,7 @@ isProcessReadEvent = false
 notifyBrokerRoleChanged = true
 scanInactiveMasterInterval = 5000
 raftScanWaitTimeoutMs = 1000
-configBlackList = "configBlackList;configStorePath"
+configBlackList = "configBlackList;configStorePath;maintenanceCheckpointRoot"
 
 nodeId = 1
 listenAddr = "127.0.0.1:60109"
@@ -192,42 +191,39 @@ cargo run -p rocketmq-controller --example three_node_cluster -- --node-id 3
 
 Create and manage a controller directly from Rust:
 
-```rust
-use rocketmq_controller::config::{ControllerConfig, RaftPeer};
-use rocketmq_controller::manager::ControllerManager;
-use rocketmq_error::Result;
+```rust,no_run
+use std::{future::Future, sync::Arc};
+use rocketmq_controller::{ControllerConfig, ControllerManager, ControllerResult};
 use rocketmq_observability::TelemetryHandle;
-use rocketmq_runtime::RuntimeContext;
-use rocketmq_rust::ArcMut;
+use rocketmq_runtime::ChildServiceContext;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let listen_addr = "127.0.0.1:9878".parse().unwrap();
-    let config = ControllerConfig::new_node(1, listen_addr)
-        .with_raft_peers(vec![RaftPeer {
-            id: 1,
-            addr: listen_addr,
-        }])
-        .with_storage_path("/tmp/rocketmq-controller/node-1");
-
-    let runtime = RuntimeContext::from_current("controller");
-    let manager = ArcMut::new(
-        ControllerManager::new(
-            config,
-            runtime.service_context("controller"),
-            TelemetryHandle::noop(),
-        )
-        .await?,
+async fn run_controller(
+    config: ControllerConfig,
+    context: ChildServiceContext,
+    shutdown: impl Future<Output = ()>,
+) -> ControllerResult<()> {
+    let manager = Arc::new(
+        ControllerManager::new(config, context, TelemetryHandle::noop()).await?,
     );
-    if !manager.clone().initialize().await? {
-        return Err(rocketmq_error::Error::new(&rocketmq_error::CONTROLLER_INTERNAL_FAILURE));
-    }
-
-    manager.clone().start().await?;
-    manager.shutdown().await?;
-    Ok(())
+    let result = async {
+        if !manager.initialize().await? {
+            return Err(rocketmq_error::Error::new(
+                &rocketmq_error::CONTROLLER_INTERNAL_FAILURE,
+            ));
+        }
+        manager.start().await?;
+        shutdown.await;
+        Ok(())
+    }.await;
+    let shutdown_result = manager.shutdown().await;
+    result?;
+    shutdown_result
 }
 ```
+
+The application supplies its owned `ChildServiceContext` and closes the RuntimeOwner after the controller stops. This function does not perform the binary's automatic cluster bootstrap; a new cluster needs an explicit `controller().initialize_cluster(...)` call. When authentication, authorization or maintenance is enabled, use a constructor accepting `ControllerSecurity`.
+
+`raftListenAddr`, `raftPeerEndpoints` and `controllerPeerEndpoints` support separate bind and advertised endpoints. Do not mix the endpoint lists with legacy `raftPeers`/`controllerPeers`.
 
 ## Feature Flags
 
@@ -239,6 +235,9 @@ async fn main() -> Result<()> {
 | `metrics-otlp` | No | Enables OTLP metrics export support. |
 | `metrics-prometheus` | No | Enables Prometheus metrics export support. |
 | `debug` | No | Reserved debug feature flag for controller builds. |
+
+Additional flags include `dev-single` (enables `storage-file`), `otel-traces`, `otel-logs`,
+`otlp-traces` and `otlp-logs`. Exporter features still require matching runtime configuration.
 
 ## Examples
 
@@ -262,11 +261,10 @@ cargo test -p rocketmq-controller --examples --no-run
 cargo test -p rocketmq-controller --test controller_failover_slo
 ```
 
-Workspace-level Rust validation is required from the repository root when Rust code changes:
-
+Select additional checks for this crate from the repository root:
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-controller -- --check
+cargo clippy -p rocketmq-controller --no-deps -- -D warnings
 ```
 
 ## Failover qualification

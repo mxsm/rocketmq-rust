@@ -31,9 +31,17 @@ network or Executor access.
 
 This crate is test and development infrastructure. The development issuer is
 not a production identity provider, its fixture key must not enter production
-images, and the crate performs no RocketMQ mutation or real model-provider
-request. The Phase 01 evaluator has no MCP, RocketMQ, Connector, Control Plane,
-Kubernetes, or Executor client.
+images. Deterministic evaluators perform no RocketMQ mutation or real
+model-provider request. The Phase 01 evaluator has no MCP, RocketMQ,
+Connector, Control Plane, Kubernetes, or Executor client.
+
+The package also includes `phase3-schema-export`, `phase01-model-mock` and
+`diagnostic-pack-qualification`. The last binary has an explicit `run` mode
+that contacts configured Control Plane endpoints and PostgreSQL; the entire
+crate must not be described as offline-only. Its `export-manifest` mode
+generates the qualification manifest locally. Use the
+[diagnostic qualification guide](../../README.md#diagnostic-qualification)
+for its isolated live environment and evidence requirements.
 
 ## Validation
 

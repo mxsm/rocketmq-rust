@@ -20,6 +20,14 @@ transitions and the lifecycle of registered extension descriptors.
 - Replay saved evidence fixtures for topology, consumers, producers, brokers,
   message paths, telemetry, and deployment drift.
 
+## Additional domain rules
+
+The current crate also owns pure policy and approval rules, canonical plan
+hashing, action/compensation and execution state machines, autonomy eligibility,
+change calendars, fleet quotas, correlation, SLO/health analysis, prediction
+and postmortem rules. These evaluate typed inputs without performing target
+operations. See [src/lib.rs](src/lib.rs) for the public surface.
+
 ## Runtime boundary
 
 The crate depends only on `rocketmq-sre-contracts` at runtime. It has no

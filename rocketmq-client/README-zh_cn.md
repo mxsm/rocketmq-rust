@@ -1,350 +1,156 @@
-# rocketmq-client-rust
-
-> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+# RocketMQ Rust Client
 
 [English](README.md) | [简体中文](README-zh_cn.md)
 
-[RocketMQ-Rust](../README-zh_cn.md) 的异步 producer、consumer、admin、路由、ACL 和 trace 支持 crate。
+`rocketmq-client-rust` 提供生产者、事务生产者、Push Consumer、Lite Pull Consumer
+和可选 Admin API。消息领域类型位于 [rocketmq-model](../rocketmq-model)，协议类型位于
+[rocketmq-protocol](../rocketmq-protocol)，网络通信由 [rocketmq-transport](../rocketmq-transport) 实现。
 
-`rocketmq-client-rust` 是 RocketMQ-Rust 应用和服务使用的客户端 crate。它提供现代异步 producer 和 consumer API，
-在可行处保持 Java 兼容的命名和行为，并支持 request-reply、事务 producer、push 与 lite-pull 消费模型、admin facade、
-ACL hook、路由管理、延迟容错、消息轨迹以及面向热路径的 benchmark。
+## 依赖与运行时所有权
 
-## 能力边界
-
-| 领域 | 提供能力 |
-|------|----------|
-| Producer | `DefaultMQProducer`，支持同步发送、callback 发送、oneway 发送、队列选择、批量发送、自动批量、request-reply、recall、重试、压缩和异步 backpressure 控制。 |
-| 事务消息 | `TransactionMQProducer`，支持 `TransactionListener`、本地事务执行、broker checkback 和事务发送结果。 |
-| Push Consumer | `DefaultMQPushConsumer`，支持并发/顺序 listener、订阅过滤、rebalance strategy、集群/广播模型、offset store 和 consume hook。 |
-| Lite Pull Consumer | `DefaultLitePullConsumer`，支持显式 `poll`、zero-copy polling、手动分配、pause/resume、seek、commit、broker offset 查询、自动提交和队列变更 listener。 |
-| Admin API | `DefaultMQAdminExt` 及相关 trait，用于 topic、broker、cluster、route、stats、consumer、producer 和 auth 相关管理操作。 |
-| 路由与容错 | NameServer 路由发现、client instance 管理、heartbeat、broker latency detection、队列 selector 和分配策略。 |
-| 安全与租户 | ACL RPC hook、session credentials、TLS 开关、namespace 支持、access-channel 配置和 Java 风格 client config 字段。 |
-| 可观测性 | 可选 trace dispatcher、OpenTelemetry trace feature、OpenTelemetry metrics feature 和 OTLP trace exporter 集成。 |
-
-## 架构
-
-![rocketmq-client-rust architecture](../resources/client-architecture.svg)
-
-应用侧通过 producer、consumer、lite-pull、transaction 和 admin facade 使用客户端能力。这些 facade 共享
-`MQClientInstance`，由它围绕 broker remoting 路径统一管理 client 注册、路由刷新、heartbeat、pull/rebalance 服务、
-`MQClientAPIImpl`、hook、ACL 签名、trace dispatch、latency fault strategy 和 offset store。
-
-该 crate 为常见概念保留 Java 风格命名，同时通过 Rust async API、
-`rocketmq_client_rust::ClientError` 和 `rocketmq_client_rust::ClientResult<T>` 暴露类型化错误。
-Client facade 在内部保留共享的规范 `rocketmq_error::Error`，因此 callback 与 retry coordinator
-不会丢失 descriptor 标识和类型化 source。
-
-## Crate 结构
-
-| 模块 | 职责 |
-|------|------|
-| [`src/producer.rs`](src/producer.rs) | Producer facade、事务 producer、selector、callback、send result 和 batching 内部实现。 |
-| [`src/consumer.rs`](src/consumer.rs) | Push consumer、lite pull consumer、listener、rebalance strategy、offset、pop/pull result 和 callback。 |
-| [`src/admin.rs`](src/admin.rs) | Admin extension facade 和异步 admin trait。 |
-| [`src/base`](src/base) | 共享 client 配置、validator、query result model 和 admin trait。 |
-| [`src/factory`](src/factory) | `MQClientInstance` 生命周期、路由刷新、heartbeat、producer/consumer 注册和 broker 连接。 |
-| [`src/implementation`](src/implementation) | 面向 remoting command 的底层 client API 实现。 |
-| [`src/common`](src/common) | ACL 工具、session credentials、NameServer access config 和 admin result 辅助能力。 |
-| [`src/hook`](src/hook) | Send、consume、end-transaction、namespace 和 forbidden-check hook context。 |
-| [`src/latency`](src/latency) | Broker latency fault strategy 和 service detector 抽象。 |
-| [`src/trace`](src/trace) | 异步 trace dispatcher、trace hook、trace model 和 trace 编码。 |
-| [`src/legacy.rs`](src/legacy.rs) | 已废弃 Java 时代 API 的兼容 shim，并给出明确替代建议。 |
-
-## 环境要求
-
-- Stable Rust `1.95.0`，使用仓库固定的工具链。
-- 真实 producer、consumer 和 admin 流量需要可访问的 RocketMQ NameServer。
-- 除非通过 admin API 创建 topic，否则 broker 侧需要提前准备目标 topic。
-
-## 安装
-
-在当前 workspace 内使用：
+以下配置适用于仓库中与这些 crate 同级的应用；外部项目需要调整路径：
 
 ```toml
 [dependencies]
-rocketmq-client-rust = { path = "../rocketmq-client" }
+rocketmq-client-rust = { path = "../rocketmq-client", default-features = false }
+rocketmq-model = { path = "../rocketmq-model" }
+rocketmq-runtime = { path = "../rocketmq-runtime" }
+rocketmq-observability = { path = "../rocketmq-observability" }
+tokio = { version = "1", features = ["signal"] }
 ```
 
-外部项目使用：
+应用创建 `RuntimeOwner`，将 `ChildServiceContext` 和 `TelemetryHandle` 注入
+`ClientRuntime::try_new`。生产者、消费者和 Admin 会话共享 `Arc<ClientRuntime>`；
+客户端不会自动创建回退运行时。先关闭各个客户端门面，再关闭共享 ClientRuntime，
+最后关闭 RuntimeOwner。关闭报告需要由应用检查。
 
-```toml
-[dependencies]
-rocketmq-client-rust = "1.0.0"
-```
+公开类型从 crate 根或 `prelude` 导入；内部模块不是受支持的导入路径。
 
-可选可观测性 feature：
+## 生产者示例
 
-```toml
-[dependencies]
-rocketmq-client-rust = { version = "1.0.0", features = ["observability", "otlp-traces"] }
-```
+准备运行中的 NameServer、Broker 和 `TopicTest`，然后运行：
 
-## 快速开始
+```rust,no_run
+use rocketmq_client_rust::{ClientResult, ClientRuntime, ClientRuntimeConfig, DefaultMQProducer};
+use rocketmq_model::common::message::message_single::Message;
+use rocketmq_observability::TelemetryRuntimeGuard;
+use rocketmq_runtime::RuntimeOwner;
 
-### Producer
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let owner = RuntimeOwner::new()?;
+    let telemetry = TelemetryRuntimeGuard::noop();
+    let client_runtime = ClientRuntime::try_new(
+        owner.root_context().component("example-client"),
+        ClientRuntimeConfig::default(),
+        telemetry.handle(),
+    )?;
 
-```rust
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_client_rust::ClientResult;
-use rocketmq_rust::rocketmq;
-
-#[rocketmq::main]
-async fn main() -> ClientResult<()> {
-    rocketmq_common::log::init_logger()?;
-
-    let mut producer = DefaultMQProducer::builder(client_runtime.clone())
-        .producer_group("example_producer_group")
-        .name_server_addr("127.0.0.1:9876")
-        .build();
-
-    producer.start().await?;
-
-    let message = Message::builder()
-        .topic("TopicTest")
-        .tags("TagA")
-        .body_slice(b"Hello RocketMQ")
-        .build_unchecked();
-
-    let result = producer.send_with_timeout(message, 2000).await?;
-    println!("send result: {:?}", result);
-
-    producer.shutdown().await;
+    let (result, client_report) = owner.block_on(async {
+        let mut producer = DefaultMQProducer::builder(client_runtime.clone())
+            .producer_group("example_producer_group")
+            .name_server_addr("127.0.0.1:9876")
+            .build();
+        let result: ClientResult<()> = async {
+            producer.start().await?;
+            let message = Message::new("TopicTest", b"Hello RocketMQ");
+            let result = producer.send_with_timeout(message, 2000).await?;
+            println!("send result: {result:?}");
+            Ok(())
+        }.await;
+        producer.shutdown().await;
+        (result, client_runtime.shutdown().await)
+    });
+    let runtime_report = owner.shutdown_runtime_blocking()?;
+    result?;
+    if !client_report.is_healthy() || !runtime_report.is_healthy() {
+        return Err(std::io::Error::other("client shutdown did not complete cleanly").into());
+    }
     Ok(())
 }
 ```
 
-### Push Consumer
+## Push Consumer 示例
 
-```rust
-use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
-use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_client_rust::ClientResult;
-use rocketmq_rust::rocketmq;
+下面的完整异步函数接收应用拥有的客户端运行时。调用方应在所属 RuntimeOwner 上执行它，
+并在函数返回后关闭共享 ClientRuntime 和 RuntimeOwner。
 
-#[rocketmq::main]
-async fn main() -> ClientResult<()> {
-    rocketmq_common::log::init_logger()?;
+```rust,no_run
+use std::sync::Arc;
+use rocketmq_client_rust::{
+    ClientResult, ClientRuntime, ConsumeConcurrentlyContext, ConsumeConcurrentlyStatus,
+    DefaultMQPushConsumer, MessageListenerConcurrently, MQPushConsumer,
+};
+use rocketmq_model::common::message::message_ext::MessageExt;
 
-    let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
-        .consumer_group("example_consumer_group")
-        .name_server_addr("127.0.0.1:9876")
-        .build();
+struct Listener;
 
-    consumer.subscribe("TopicTest", "*").await?;
-    consumer.register_message_listener_concurrently(PrintListener);
-    consumer.start().await?;
-
-    let _ = tokio::signal::ctrl_c().await;
-    consumer.shutdown().await;
-    Ok(())
-}
-
-struct PrintListener;
-
-impl MessageListenerConcurrently for PrintListener {
+impl MessageListenerConcurrently for Listener {
     fn consume_message(
         &self,
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
     ) -> ClientResult<ConsumeConcurrentlyStatus> {
-        for message in messages {
-            println!("received: {:?}", message);
-        }
+        println!("received {} messages", messages.len());
         Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
     }
 }
-```
 
-## 常用用法
-
-### 批量 Producer
-
-```rust
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_common::common::message::message_single::Message;
-
-let mut producer = DefaultMQProducer::builder(client_runtime.clone())
-    .producer_group("batch_producer_group")
-    .name_server_addr("127.0.0.1:9876")
-    .build();
-
-producer.start().await?;
-
-let messages = vec![
-    Message::builder().topic("TopicTest").tags("TagA").body_slice(b"batch-0").build_unchecked(),
-    Message::builder().topic("TopicTest").tags("TagA").body_slice(b"batch-1").build_unchecked(),
-];
-
-let result = producer.send_batch(messages).await?;
-println!("batch result: {:?}", result);
-```
-
-### 事务 Producer
-
-```rust
-use std::any::Any;
-use rocketmq_client_rust::producer::local_transaction_state::LocalTransactionState;
-use rocketmq_client_rust::producer::transaction_listener::TransactionListener;
-use rocketmq_client_rust::producer::transaction_mq_producer::TransactionMQProducer;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::MessageTrait;
-
-struct TxListener;
-
-impl TransactionListener for TxListener {
-    fn execute_local_transaction(
-        &self,
-        _msg: &dyn MessageTrait,
-        _arg: Option<&(dyn Any + Send + Sync)>,
-    ) -> LocalTransactionState {
-        LocalTransactionState::CommitMessage
-    }
-
-    fn check_local_transaction(&self, _msg: &MessageExt) -> LocalTransactionState {
-        LocalTransactionState::CommitMessage
-    }
+async fn consume_until_interrupt(
+    client_runtime: Arc<ClientRuntime>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut consumer = DefaultMQPushConsumer::builder(client_runtime)
+        .consumer_group("example_consumer_group")
+        .name_server_addr("127.0.0.1:9876")
+        .build();
+    let result = async {
+        consumer.subscribe("TopicTest", "*").await?;
+        consumer.register_message_listener_concurrently(Listener);
+        consumer.start().await?;
+        tokio::signal::ctrl_c().await?;
+        Ok(())
+    }.await;
+    consumer.shutdown().await;
+    result
 }
-
-let mut producer = TransactionMQProducer::builder(client_runtime.clone())
-    .producer_group("transaction_producer_group")
-    .name_server_addr("127.0.0.1:9876")
-    .transaction_listener(TxListener)
-    .build();
-
-producer.start().await?;
-
-let message = Message::builder()
-    .topic("TransactionTopic")
-    .tags("TagA")
-    .body_slice(b"transaction message")
-    .build_unchecked();
-
-let result = producer.send_message_in_transaction::<(), _>(message, None).await?;
-println!("transaction result: {}", result);
 ```
 
-### Lite Pull Consumer
+## 消费 API 与消息所有权
 
-```rust
-use rocketmq_client_rust::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
-use rocketmq_client_rust::consumer::lite_pull_consumer::LitePullConsumer;
+- Push Consumer 支持并发或顺序监听器，以及 Tag 和 SQL92 订阅；Broker 必须支持所选过滤能力。
+- Lite Pull Consumer 提供轮询和位点管理。零拷贝轮询返回拥有所有权的
+  `Arc<MessageExt>`，可以保留到下一次轮询之后；消息存活期间底层数据仍被引用。
+  返回独立消息值的普通轮询路径会克隆消息。
+- 事务生产者、请求应答和队列选择的可运行示例位于 [rocketmq-example](../rocketmq-example)。
 
-let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
-    .consumer_group("lite_pull_group")
-    .name_server_addr("127.0.0.1:9876")
-    .pull_batch_size(32)
-    .auto_commit(true)
-    .build()?;
+## Cargo features
 
-consumer.start().await?;
-consumer.subscribe("TopicTest").await?;
+| Feature | 行为 |
+| --- | --- |
+| `admin-full` | 包的默认 feature，组合 Admin 查询和修改能力。根工作区依赖会禁用默认 features，具体消费者显式选择。 |
+| `admin-read` / `admin-mutation` | 分别启用查询或修改 API；编译可用性不代表运行时权限。 |
+| `observability` | 启用客户端跟踪集成。 |
+| `observability-metrics` | 启用客户端指标集成。 |
+| `otlp-traces` | 启用 OTLP 跟踪导出支持，仍需运行时配置。 |
+| `nameserver-dns-discovery` | 启用可选 DNS 发现支持。 |
+| `test-support` | 提供测试和基准所需的辅助 API。 |
 
-let messages = consumer.poll_zero_copy().await;
-for message in &messages {
-    println!("message body: {:?}", message.get_body());
-}
+本 crate 没有名为 `tls` 的 feature。TLS 由传输 crate 的编译 feature 和连接配置共同控制；
+需要时应用必须确保依赖图启用了 `rocketmq-transport/tls`。默认客户端传输依赖启用 SOCKS，
+不会单独启用 TLS。
 
-consumer.shutdown().await;
-```
+## 验证
 
-消息只在 poll 作用域内处理时，优先使用 `poll_zero_copy()` 或 `poll_with_timeout_zero_copy()`。需要把 owned
-`MessageExt` 保存到作用域之外时，使用 `poll()` 或 `poll_with_timeout()`。
-
-### ACL Hook
-
-```rust
-use rocketmq_client_rust::AclClientRPCHook;
-use rocketmq_client_rust::SessionCredentials;
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use std::sync::Arc;
-
-let credentials = SessionCredentials::with_token("access-key", "secret-key", "security-token");
-let rpc_hook = Arc::new(AclClientRPCHook::new(credentials));
-
-let producer = DefaultMQProducer::builder(client_runtime.clone())
-    .producer_group("acl_producer_group")
-    .name_server_addr("127.0.0.1:9876")
-    .rpc_hook(rpc_hook)
-    .build();
-```
-
-## 示例
-
-在 workspace 根目录运行示例：
+从仓库根目录按修改范围选择：
 
 ```bash
-cargo run -p rocketmq-client-rust --example producer
-cargo run -p rocketmq-client-rust --example consumer
-cargo run -p rocketmq-client-rust --example simple-producer
-cargo run -p rocketmq-client-rust --example simple-batch-producer
-cargo run -p rocketmq-client-rust --example callback-batch-producer
-cargo run -p rocketmq-client-rust --example request-producer
-cargo run -p rocketmq-client-rust --example request-callback-producer
-cargo run -p rocketmq-client-rust --example transaction-producer
-cargo run -p rocketmq-client-rust --example broadcast-consumer
-cargo run -p rocketmq-client-rust --example pop-consumer
+cargo fmt -p rocketmq-client-rust -- --check
+cargo check -p rocketmq-client-rust
+cargo test -p rocketmq-client-rust <test_name>
+cargo bench -p rocketmq-client-rust --bench client_hot_path_benchmark --features test-support
 ```
 
-顺序消息示例：
+网络示例需要真实集群。编译通过不能证明消息投递、重试、事务或故障恢复行为。
 
-```bash
-cargo run -p rocketmq-client-rust --example ordermessage-producer
-cargo run -p rocketmq-client-rust --example ordermessage-consumer
-cargo run -p rocketmq-client-rust --example hash-selector-producer
-cargo run -p rocketmq-client-rust --example random-selector-producer
-```
+## License
 
-声明过的示例文件位于 [`examples`](examples)。
-
-## Feature Flags
-
-| Feature | 用途 |
-|---------|------|
-| `observability` | 通过 `rocketmq-observability/otel-traces` 启用客户端 trace 集成。 |
-| `observability-metrics` | 通过 `rocketmq-observability/otel-metrics` 启用客户端 metrics 集成。 |
-| `otlp-traces` | 组合 `observability` 和 `rocketmq-observability/otlp-traces`，启用 OTLP trace exporter。 |
-
-## 校验
-
-Client 相关常用校验：
-
-```bash
-cargo test -p rocketmq-client-rust --lib
-cargo test -p rocketmq-client-rust --test public_api_exports_test
-cargo test -p rocketmq-client-rust --examples --no-run
-```
-
-工作区级校验在仓库根目录运行：
-
-```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
-```
-
-## Benchmarks
-
-Client 热路径 benchmark：
-
-```bash
-cargo bench -p rocketmq-client-rust --bench client_hot_path_benchmark
-cargo bench -p rocketmq-client-rust --bench produce_accumulator_benchmark
-cargo bench -p rocketmq-client-rust --bench concurrent_optimization_benchmark
-cargo bench -p rocketmq-client-rust --bench oneway_benchmark
-cargo bench -p rocketmq-client-rust --bench select_queue_benchmark
-cargo bench -p rocketmq-client-rust --bench message_util_bench
-cargo bench -p rocketmq-client-rust --bench thread_local_index_bench
-```
-
-对比 benchmark baseline 时，应保持相同 toolchain、feature set、broker topology 和 NameServer route setup。
-
-## 许可证
-
-RocketMQ-Rust 使用 Apache License 2.0。详见 [../LICENSE-APACHE](../LICENSE-APACHE)。
+[Apache License 2.0](../LICENSE-APACHE).

@@ -5,8 +5,8 @@
 `rocketmq-admin-tui` 是 RocketMQ Rust 的交互式终端管理面板。它使用 Ratatui 和 crossterm 构建终端体验，所有 RocketMQ 管理能力都通过
 `TuiAdminFacade` 委托给 `rocketmq-admin-core`。
 
-该 crate 面向希望通过可搜索、键盘驱动界面管理 RocketMQ 的运维和开发用户，同时避免重复实现 CLI 解析或 RocketMQ RPC 逻辑。当前命令目录包含 18 个
-RocketMQ 管理域，共 102 个 facade-backed 管理命令。
+该 crate 面向希望通过可搜索、键盘驱动界面管理 RocketMQ 的运维和开发用户，同时避免重复实现 CLI 解析或 RocketMQ RPC 逻辑。当前命令目录包含 17 个
+RocketMQ 管理域，共 100 个 facade-backed 管理命令。
 
 [English](README.md)
 
@@ -37,7 +37,7 @@ TUI 负责交互、状态、布局和渲染。核心管理请求、校验、RPC 
   - safe 命令直接执行；
   - mutating 命令需要输入 `confirm`；
   - dangerous 命令在可用时需要输入目标值。
-- 后台命令通过独立 Tokio runtime 执行，避免阻塞终端渲染和输入处理。
+- 后台命令与 UI 事件循环运行在应用的 Tokio `LocalSet` 上；进程持有 `RuntimeOwner` 并注入共享客户端运行时。
 - 长时间工作流支持进度更新，例如 monitoring 和 message pull。
 - 支持以 table、key/value、JSON、text、operation summary 渲染结构化结果，并支持纵向和横向滚动。
 - 边界测试确保 `rocketmq-admin-tui -> rocketmq-admin-core`，并拒绝依赖 CLI adapter。
@@ -80,7 +80,6 @@ TUI 启动时不强制要求 NameServer 地址。执行需要访问集群的命�
 | Cluster | 3 | cluster list、broker names、send-message RT 诊断。 |
 | Connection | 2 | consumer 和 producer connection 检查。 |
 | Consumer | 8 | config、running info、progress、monitoring、subscription group、consume mode。 |
-| Container | 2 | broker container 中的 add/remove broker。 |
 | Controller | 5 | config、metadata、elect master、clean metadata。 |
 | Export | 6 | configs、metrics、metadata、RocksDB metadata、RocksDB RPC export、POP records。 |
 | HA | 2 | HA status 和 sync-state-set query。 |
@@ -157,18 +156,18 @@ rocketmq-admin-tui/
 cargo test -p rocketmq-admin-tui
 ```
 
-如果修改了 root workspace 内的 Rust 代码，还需要在 workspace 根目录运行仓库要求的检查：
+修改 Rust 代码时，从仓库根目录按需选择本包检查：
 
 ```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-admin-tui -- --check
+cargo clippy -p rocketmq-admin-tui --no-deps -- -D warnings
 ```
 
 ## 相关 Crates
 
 - [`rocketmq-admin-core`](../rocketmq-admin-core) - 可复用 admin request、service 和 result 层。
 - [`rocketmq-admin-cli`](../rocketmq-admin-cli) - 复用同一个 core 层的命令行适配器。
-- [`rocketmq-remoting`](../../../rocketmq-remoting) - RocketMQ remoting 协议和 RPC 类型。
+- [`rocketmq-transport`](../../../rocketmq-transport) - RocketMQ remoting 协议和 RPC 类型。
 - [`rocketmq-client`](../../../rocketmq-client) - admin service 使用的 RocketMQ client API。
 
 ## License

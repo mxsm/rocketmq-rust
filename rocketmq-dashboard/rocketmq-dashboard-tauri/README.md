@@ -4,6 +4,10 @@ A RocketMQ-Rust desktop dashboard built with Tauri, React, and Rust.
 
 ## Features
 
+- Live cluster, broker, topic, consumer, producer and message inspection, with
+  explicit topic/consumer administration and message actions
+- Saved NameServer and Proxy address configuration (Proxy entries do not control
+  Proxy server processes)
 - Native desktop packaging with a web UI
 - Rust backend and React frontend
 - Local embedded authentication with SQLite
@@ -22,11 +26,13 @@ On first startup the application bootstraps a local administrator account:
 
 After the first successful login, the user must change the password before entering the dashboard.
 
-Authentication data is stored in:
+Authentication and saved NameServer/Proxy configuration share `dashboard.db` in
+Tauri's application configuration directory (identifier `com.rocketmqrust.dashboard`):
 
-- Windows: `%APPDATA%\com.rocketmq-rust.dashboard\dashboard.db`
-- macOS: `~/Library/Application Support/com.rocketmq-rust.dashboard/dashboard.db`
-- Linux: `~/.config/rocketmq-rust-dashboard/dashboard.db`
+- Windows: `%APPDATA%\com.rocketmqrust.dashboard\dashboard.db`
+- macOS: `~/Library/Application Support/com.rocketmqrust.dashboard/dashboard.db`
+- Linux: `$XDG_CONFIG_HOME/com.rocketmqrust.dashboard/dashboard.db`, or
+  `~/.config/com.rocketmqrust.dashboard/dashboard.db` when unset
 
 For more detail, see [doc/AUTH_CONFIG.md](./doc/AUTH_CONFIG.md).
 
@@ -40,8 +46,11 @@ For more detail, see [doc/AUTH_CONFIG.md](./doc/AUTH_CONFIG.md).
 
 ### Install
 
+From the repository root:
+
 ```bash
-npm install
+cd rocketmq-dashboard/rocketmq-dashboard-tauri
+npm ci
 ```
 
 ### Run in development mode
@@ -92,12 +101,13 @@ Frontend:
 npm run build
 ```
 
-## Reset local auth
+## Reset local state
 
-To reset the local administrator account:
+Deleting `dashboard.db` resets the administrator **and saved NameServer/Proxy
+configuration**. To reset all of this local state:
 
 1. Stop the application.
-2. Delete `dashboard.db` from the application config directory.
+2. Back up `dashboard.db`, then remove it from the application config directory.
 3. Restart the application.
 4. Sign in again with the bootstrap password source.
 

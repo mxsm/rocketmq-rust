@@ -21,9 +21,12 @@ The Web backend is a standalone Cargo project and is not added to the root works
 
 ## Backend Development
 
+The directory changes below start from the repository root. The backend contains
+both the HTTP server and a storage utility; select the server with `--bin`.
+
 ```powershell
-cd D:\Github\Rust\rocketmq-rust\rocketmq-dashboard\rocketmq-dashboard-web\backend
-cargo run
+cd rocketmq-dashboard/rocketmq-dashboard-web/backend
+cargo run --bin rocketmq-dashboard-web-backend
 ```
 
 Default backend address:
@@ -100,8 +103,8 @@ not in the repository or dashboard configuration response.
 Optional pool controls are `DASHBOARD_WEB_DB_MIN_CONNECTIONS`,
 `DASHBOARD_WEB_DB_MAX_CONNECTIONS`, `DASHBOARD_WEB_DB_CONNECT_TIMEOUT_MS`,
 `DASHBOARD_WEB_DB_ACQUIRE_TIMEOUT_MS`, `DASHBOARD_WEB_DB_IDLE_TIMEOUT_SECS`,
-and `DASHBOARD_WEB_DB_MAX_LIFETIME_SECS`. All values must be positive and the
-minimum may not exceed the maximum.
+and `DASHBOARD_WEB_DB_MAX_LIFETIME_SECS`. Timeouts and the maximum must be positive. The minimum may be zero and may not
+exceed the maximum.
 
 Storage-aware readiness is exposed through `GET /api/health/ready`; `GET
 /api/health/live` only reports process liveness, and `GET /api/health` remains
@@ -143,7 +146,7 @@ the complete URL from `DASHBOARD_WEB_DATABASE_URL_FILE`, mounted as the
 are supplied from the deployment platform:
 
 ```powershell
-cd D:\Github\Rust\rocketmq-rust\rocketmq-dashboard\rocketmq-dashboard-web\deploy
+cd rocketmq-dashboard/rocketmq-dashboard-web/deploy
 $env:DASHBOARD_WEB_DATABASE_URL_SECRET_FILE='C:\secure\rocketmq-dashboard-mysql.url'
 $env:DASHBOARD_WEB_MYSQL_CA_FILE='C:\secure\mysql-ca.pem'
 docker compose --profile mysql up --build -d
@@ -175,7 +178,7 @@ for the release gate and known limitations.
 ## Frontend Development
 
 ```powershell
-cd D:\Github\Rust\rocketmq-rust\rocketmq-dashboard\rocketmq-dashboard-web\frontend
+cd rocketmq-dashboard/rocketmq-dashboard-web/frontend
 npm install
 npm run dev
 ```
@@ -201,14 +204,14 @@ proxies `/api` to the backend inside the cluster.
 Backend:
 
 ```powershell
-cd D:\Github\Rust\rocketmq-rust\rocketmq-dashboard\rocketmq-dashboard-web\backend
+cd rocketmq-dashboard/rocketmq-dashboard-web/backend
 cargo build --release
 ```
 
 Frontend:
 
 ```powershell
-cd D:\Github\Rust\rocketmq-rust\rocketmq-dashboard\rocketmq-dashboard-web\frontend
+cd rocketmq-dashboard/rocketmq-dashboard-web/frontend
 npm install
 npm run build
 ```
@@ -265,4 +268,4 @@ docker compose -f docker-compose.storage-test.yml down -v --remove-orphans
 
 - Move the mature Tauri admin manager internals into reusable common/admin implementation modules beyond the current shared facade contract.
 - Move ACL and DLQ operations from Web-only code into the shared common admin facade once GPUI/Tauri need the same surface.
-- Add browser E2E tests once live admin behavior is wired.
+- Expand browser E2E coverage for the implemented admin workflows.

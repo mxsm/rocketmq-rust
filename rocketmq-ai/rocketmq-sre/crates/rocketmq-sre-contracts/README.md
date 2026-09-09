@@ -16,7 +16,13 @@ descriptors.
 - Describe evidence sources, diagnostic packs, actions, providers, and
   integrations without binding them to an implementation.
 
-## Phase 00 boundary
+The current contract surface also covers Action Plans, approvals, policy,
+execution requests/results, leases and fencing, verification, autonomy,
+Connector inventory, fleet/governance, releases/DR, notifications and FinOps.
+These are serializable contracts, not implementations of those services. The
+public exports are listed in [src/lib.rs](src/lib.rs).
+
+## Dependency boundary
 
 This crate is deliberately data-only. It has no networking, async runtime,
 database, model SDK, or RocketMQ implementation dependency. It performs no I/O

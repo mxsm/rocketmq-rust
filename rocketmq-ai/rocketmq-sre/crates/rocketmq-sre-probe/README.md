@@ -38,6 +38,7 @@ resource triple. All three values must be set together and must retain the
 `SRE_PROBE_` / `SRE_PROBE_G_` namespaces.
 
 ```powershell
+$env:ROCKETMQ_NAMESRV_ADDR='127.0.0.1:9876'
 $env:ROCKETMQ_SRE_PROBE_TOPIC='SRE_PROBE_PHASE2'
 $env:ROCKETMQ_SRE_PROBE_PRODUCER_GROUP='SRE_PROBE_G_P_PHASE2'
 $env:ROCKETMQ_SRE_PROBE_CONSUMER_GROUP='SRE_PROBE_G_C_ACK'
@@ -48,7 +49,8 @@ $env:ROCKETMQ_SRE_PROBE_DURATION_SECONDS='30'
 cargo run --locked -p rocketmq-sre-probe -- run send-consume-ack
 ```
 
-For `proxy-path`, set `ROCKETMQ_SRE_PROBE_PROXY_ADDR` to the dedicated
+Without `ROCKETMQ_NAMESRV_ADDR`, the executable uses `namesrv:9876`, suitable
+for the development container network. For `proxy-path`, set `ROCKETMQ_SRE_PROBE_PROXY_ADDR` to the dedicated
 RocketMQ remoting-compatible Proxy endpoint. The command prints one canonical
 Evidence envelope. A failed or timed-out probe still emits status and cleanup
 metadata and never initiates a cluster change.

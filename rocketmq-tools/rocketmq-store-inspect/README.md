@@ -1,121 +1,63 @@
-# Rocketmq-rust cli
+# rocketmq-store-inspect
 
-## Overview
+Offline CommitLog inspection, downgrade checks and multipath consolidation for RocketMQ-Rust.
+The Cargo package is `rocketmq-store-inspect`; its executable is `rocketmq-cli-rust`.
+This tool operates on local files and does not connect to a running cluster.
 
-Provide some command-line tools to read data from RocketMQ files.
+## Build and help
 
-The CLI also contains offline safety commands for Rust Broker upgrades. Stop the
-Broker before running either command; both commands require the Store lock.
-
-## Getting Started
-
-### Requirements
-
-1. Stable Rust `1.95.0`, using the pinned repository toolchain.
-
-## Run rocketmq-rust cli
-
-**Run the following command to see usage：**
-
-- **windows platform**
-
-  ```cmd
-  cargo run --bin rocketmq-cli-rust -- --help
-  
-  RocketMQ CLI(Rust)
-  
-  Usage: rocketmq-cli-rust.exe <COMMAND>
-  
-  Commands:
-    read-message-log  read message log file
-    help              Print this message or the help of the given subcommand(s)
-  
-  Options:
-    -h, --help     Print help
-    -V, --version  Print version
-    
-  
-  cargo run --bin rocketmq-cli-rust help read-message-log
-  read message log file
-  
-  Usage: rocketmq-cli-rust.exe read-message-log [OPTIONS]
-  
-  Options:
-    -c, --config <FILE>  message log file path
-    -f, --from <FROM>    The number of data started to be read, default to read from the beginning. start from 0
-    -t, --to <TO>        The position of the data for ending the reading, defaults to reading until the end of the file.
-    -h, --help           Print help
-    -V, --version        Print version
-  ```
-
-- **Linux platform**
-
-  ```shell
-  $ cargo run --bin rocketmq-cli-rust -- --help
-  
-  RocketMQ CLI(Rust)
-  
-  Usage: rocketmq-cli-rust <COMMAND>
-  
-  Commands:
-    read-message-log  read message log file
-    help              Print this message or the help of the given subcommand(s)
-  
-  Options:
-    -h, --help     Print help
-    -V, --version  Print version
-    
-  
-  $ cargo run --bin rocketmq-cli-rust help read-message-log
-  read message log file
-  
-  Usage: rocketmq-cli-rust read-message-log [OPTIONS]
-  
-  Options:
-    -c, --config <FILE>  message log file path
-    -f, --from <FROM>    The number of data started to be read, default to read from the beginning. start from 0
-    -t, --to <TO>        The position of the data for ending the reading, defaults to reading until the end of the file.
-    -h, --help           Print help
-    -V, --version        Print version$ cargo run --bin rocketmq-namesrv-rust -- --help
-  
-  ```
-
-### read-message-log Command
-
-example for **`read-message-log`** (Linux platform)
+Use the repository's [pinned toolchain](../../rust-toolchain.toml), from the workspace root:
 
 ```bash
-$ ./rocketmq-cli-rust read-message-log -c /mnt/c/Users/ljbmx/store/commitlog/00000000000000000000 -f 0 -t 2
-file size: 1073741824B
-+----------------------------------+
-| message_id                       |
-+----------------------------------+
-| AC16B00100002A9F0000000000000000 |
-+----------------------------------+
-| AC16B00100002A9F000000000000032A |
-+----------------------------------+
+cargo build -p rocketmq-store-inspect --bin rocketmq-cli-rust
+cargo run -p rocketmq-store-inspect --bin rocketmq-cli-rust -- --help
+cargo run -p rocketmq-store-inspect --bin rocketmq-cli-rust -- read-message-log --help
+cargo run -p rocketmq-store-inspect --bin rocketmq-cli-rust -- downgrade-preflight --help
+cargo run -p rocketmq-store-inspect --bin rocketmq-cli-rust -- consolidate-multipath --help
 ```
 
-### downgrade-preflight Command
+Cargo adds `.exe` on Windows. Commands after `cargo run` require the `--` separator.
+The tool also supports `--version` and `--verbose` diagnostics.
 
-Inspect Rust-owned Store formats before starting an older Rust Broker binary:
+## Read message IDs
 
-```shell
+```bash
+rocketmq-cli-rust read-message-log -c /data/commitlog/00000000000000000000 -f 0 -t 2
+```
+
+The command displays file size and a table with `message_id` and `client_message_id`.
+It skips message bodies and scans records sequentially. `--to 2` limits scanning to the first
+two records. The current `--from` comparison uses a counter incremented before filtering:
+both `0` and `1` include the first record, while `2` starts at the second.
+These are record counters, not byte offsets.
+
+Use a stable copy or a stopped store for consistent inspection. This reader does not acquire
+the Broker's exclusive Store lock and is not a corruption or checksum certification tool:
+truncated or invalid frame sizes can end the scan without a complete integrity report.
+See [the reader](src/content_show.rs) and the shared [record inspector](../../rocketmq-store/src/inspection.rs).
+
+## Downgrade preflight
+
+Stop the Broker first. This command acquires the exclusive Store lock and evaluates
+Rust-owned storage formats against the requested target version:
+
+```bash
 rocketmq-cli-rust downgrade-preflight \
   --target-version 0.9.0 \
   --config /etc/rocketmq-rust/broker.toml \
   --output downgrade-report.json
 ```
 
-The command exits with code `2` when the downgrade is unsafe. A denied result is
-a startup fence, not a warning. Keep the 1.0 tool available until the rollback
-window has closed.
+It writes a structured report to `--output`, or stdout when no output file is given.
+A denied downgrade exits with code `2`; other failures use typed CLI error codes.
+An allowed report concerns the inspected storage formats and is not evidence that a complete
+cluster rollback has been qualified. Keep a compatible inspection tool through the rollback window.
 
-### consolidate-multipath Command
+## Consolidate multipath CommitLog
 
-Consolidate a stopped Broker's multipath CommitLog into a new single root:
+Run against a stopped Broker and specify the actual Store root whose lock fences that Broker:
 
-```shell
+```bash
 rocketmq-cli-rust consolidate-multipath \
   --source-root /data-a/commitlog \
   --source-root /data-b/commitlog \
@@ -124,6 +66,20 @@ rocketmq-cli-rust consolidate-multipath \
   --store-root /var/lib/rocketmq-rust/store
 ```
 
-The destination must not exist. The tool validates segment ownership,
-continuity, frame structure, byte equality, and available space before it
-atomically publishes the destination. Source files are never modified.
+The target must not exist; its parent and the Store root must exist.
+The tool validates segment ownership, continuity, frame structure and free space,
+copies into staging, checks byte equality, synchronizes files and publishes the new destination
+with a rename. It leaves source files intact and prints a JSON report.
+See [consolidation](src/multipath_consolidate.rs) for the exact supported layout checks.
+
+## Source and validation
+
+[CLI arguments](src/command_line.rs), [entrypoint](src/bin/rocketmq_cli.rs),
+[downgrade policy](src/downgrade_preflight.rs) and [tests](tests).
+
+```bash
+cargo fmt -p rocketmq-store-inspect -- --check
+cargo test -p rocketmq-store-inspect
+```
+
+[Apache License 2.0](../../LICENSE-APACHE).

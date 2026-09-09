@@ -55,16 +55,14 @@ rocketmq-tieredstore = { path = "../rocketmq-tieredstore" }
 使用 memory provider 创建 store、分发一条消息、通过 shutdown drain dispatcher，然后按 queue offset 读取消息：
 
 ```rust
-use bytes::Bytes;
-use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::StoreError;
 use rocketmq_tieredstore::{
     TieredDispatchRequest, TieredDispatcher, TieredLifecycle, TieredMessageFetcher,
     TieredStorageLevel, TieredStore, TieredStoreConfig,
 };
 
-async fn example() -> Result<(), StoreError> {
-    let runtime = RuntimeContext::from_current("tieredstore-readme");
+async fn example(parent_task_group: TaskGroup) -> Result<(), StoreError> {
     let Some(store) = TieredStore::new(
         TieredStoreConfig {
             storage_level: TieredStorageLevel::Force,
@@ -72,7 +70,7 @@ async fn example() -> Result<(), StoreError> {
             max_pending_tasks: 16,
             ..TieredStoreConfig::default()
         },
-        runtime.root_group().clone(),
+        parent_task_group,
     )?
     else {
         return Ok(());
@@ -81,7 +79,7 @@ async fn example() -> Result<(), StoreError> {
     store.load().await?;
     store.start().await?;
 
-    let body = Bytes::from_static(b"hello-tieredstore");
+    let body = b"hello-tieredstore".to_vec();
     store
         .dispatcher()
         .dispatch(TieredDispatchRequest {
@@ -96,7 +94,7 @@ async fn example() -> Result<(), StoreError> {
             uniq_key: Some("example-uniq".to_owned()),
             offset_id: None,
             sys_flag: 0,
-            body: Some(body),
+            body: Some(body.into()),
         })
         .await?;
 
@@ -121,12 +119,11 @@ cargo run -p rocketmq-tieredstore --example basic_memory_tieredstore
 使用默认 POSIX provider 保存本地持久化 tiered data：
 
 ```rust
-use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store_api::StoreError;
 use rocketmq_tieredstore::{TieredStorageLevel, TieredStore, TieredStoreConfig};
 
-# async fn open() -> Result<(), StoreError> {
-let runtime = RuntimeContext::from_current("tieredstore-readme");
+# async fn open(parent_task_group: TaskGroup) -> Result<(), StoreError> {
 let Some(store) = TieredStore::new(
     TieredStoreConfig {
         storage_level: TieredStorageLevel::Force,
@@ -134,7 +131,7 @@ let Some(store) = TieredStore::new(
         store_path_root_dir: "./store/tieredstore".into(),
         ..TieredStoreConfig::default()
     },
-    runtime.root_group().clone(),
+    parent_task_group,
 )? else {
     return Ok(());
 };
@@ -143,14 +140,25 @@ let Some(store) = TieredStore::new(
 # }
 ```
 
+这些函数接收由应用 `RuntimeOwner` 子作用域派生的 `TaskGroup`。
+应用负责在存储关闭后等待任务退出并关闭所有者。`TieredStore::new` 返回 `Ok(None)`
+不仅可能表示已禁用，还可能表示配置无效或提供程序不受支持；不能将其一律视为初始化成功。
+需要区分配置校验与 I/O 的调用方可使用 `TieredProviderOpenPlan` 和 `TieredStoreFactory`。
+
+存储级别还用于 `TieredReadPolicy`：`NotInDisk` 在本地数据缺失时读取分层存储，
+`NotInMem` 在本地数据不驻留内存时读取分层存储，`Force` 优先读取分层存储。
+显式的 `force_local` / `remote_only` 上下文覆盖该选择；
+不能仅依据级别名称推断消息何时从本地删除。
+
 ## Feature Flags
 
 | Feature | 默认 | 说明 |
 | --- | --- | --- |
-| `posix-provider` | 是 | 启用 POSIX file provider。 |
-| `memory-provider` | 是 | 启用测试和示例使用的 in-memory provider。 |
+| `posix-provider` | 是 | 兼容特性；当前 POSIX 提供程序始终编译。 |
+| `memory-provider` | 是 | 兼容特性；当前内存提供程序始终编译。 |
 | `serde` | 是 | 启用 JSON metadata 序列化与反序列化。 |
-| `rocketmq-store-integration` | 否 | 启用 `rocketmq-store` 使用的集成边界。 |
+| `rocketmq-store-integration` | 否 | 兼容标记；存储适配器由 `rocketmq-store/tieredstore` 选择。 |
+| `otel-metrics` | 否 | 启用分层存储指标工具。 |
 
 默认 feature set 为 `["posix-provider", "memory-provider", "serde"]`。
 
@@ -251,7 +259,7 @@ rocketmq-tieredstore/
 ```bash
 cargo test -p rocketmq-tieredstore --lib
 cargo test -p rocketmq-tieredstore --test posix_persistence_tests
-cargo clippy -p rocketmq-tieredstore --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-tieredstore -- --check
 ```
 
 当处理 segment IO、dispatch throughput 或 fetch performance 时可运行 benchmark：

@@ -27,7 +27,7 @@
 subscription expression
         |
         v
-FilterFactory -> SqlFilter -> SQL runtime parser -> Expression tree
+FilterRegistrySnapshot -> SqlFilter -> SQL runtime parser -> Expression tree
                                                   |
 message properties -> MessageEvaluationContext ---+
                                                   |
@@ -37,7 +37,7 @@ message properties -> MessageEvaluationContext ---+
 consumer filter metadata -> BloomFilterData -> BloomFilter -> BitsArray / raw bytes
 ```
 
-`FilterFactory` 在静态初始化时注册默认 `SQL92` filter，并允许按类型注册额外 filter。`SqlFilter` 将解析工作委托给
+`FilterRegistryBuilder` 校验注册项并构建不可变快照；旧全局 `FilterFactory` 在首次使用时延迟初始化。`SqlFilter` 将解析工作委托给
 SQL runtime，返回 object-safe 的表达式实例，调用方可以缓存编译后的表达式。`MessageEvaluationContext` 提供消息属性，
 运行时会在 SQL 表达式需要时对字符串属性进行数字和布尔类型转换。
 
@@ -58,6 +58,9 @@ SQL runtime，返回 object-safe 的表达式实例，调用方可以缓存编�
 | [`src/utils/bloom_filter.rs`](src/utils/bloom_filter.rs) | 与 RocketMQ 过滤元数据兼容的 Bloom filter 实现。 |
 | [`src/utils/bloom_filter_data.rs`](src/utils/bloom_filter_data.rs) | 可序列化的 Bloom filter 元数据模型。 |
 | [`benches/sql_filter_benchmark.rs`](benches/sql_filter_benchmark.rs) | SQL 和 Bloom filter 热路径 Criterion benchmark。 |
+
+
+Broker 使用 `FilterRegistryBuilder` 构建的不可变注册表快照。重复类型以及缺少 SQL92 的注册表会被拒绝。编译结果保留快照所有权。旧全局 `FilterFactory` 延迟初始化；修改它不会改变已有 Broker 快照。`get_sql_filter` 在 SQL92 被移除时会 panic，`try_get_sql_filter` 提供回退。
 
 ## 环境要求
 
@@ -87,10 +90,10 @@ rocketmq-filter = "1.0.0"
 
 ```rust
 use rocketmq_filter::expression::{MessageEvaluationContext, Value};
-use rocketmq_filter::filter::{Filter, FilterFactory};
+use rocketmq_filter::filter::{Filter, SqlFilter};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let filter = FilterFactory::get_sql_filter();
+    let filter = SqlFilter::new();
     let expression = filter.try_compile("color = 'blue' AND retries >= 3")?;
 
     let mut context = MessageEvaluationContext::new();
@@ -112,10 +115,33 @@ SQL92 source 分类均为稳定且可安全脱敏的元数据；编译失败统�
 自定义 `Filter` 实现直接提供同一个结构化方法：
 
 ```rust
+use std::sync::Arc;
+use rocketmq_filter::filter::{Filter, FilterCompileError, FilterRegistryBuilder};
+use rocketmq_filter::expression::{Expression, MessageEvaluationContext, Value};
+use rocketmq_filter::filter::SqlFilter;
+
+#[derive(Debug)]
+struct CustomFilter;
+
 impl Filter for CustomFilter {
     fn try_compile(&self, expression: &str) -> Result<Box<dyn Expression>, FilterCompileError> {
-        // 编译自定义表达式，并返回类型化、可安全脱敏的失败信息。
+        SqlFilter::new().try_compile(expression)
     }
+
+    fn of_type(&self) -> &str {
+        "CUSTOM_SQL92"
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut builder = FilterRegistryBuilder::with_sql92();
+    builder.register(Arc::new(CustomFilter))?;
+    let registry = builder.build()?;
+    let expression = registry.compile("CUSTOM_SQL92", "color = 'blue'")?;
+    let mut context = MessageEvaluationContext::new();
+    context.put("color", "blue");
+    assert_eq!(expression.evaluate(&context)?, Value::Boolean(true));
+    Ok(())
 }
 ```
 
@@ -178,8 +204,8 @@ cargo test -p rocketmq-filter --benches --no-run
 如果修改 Rust 代码，需要在仓库根目录执行 workspace 级验证：
 
 ```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-filter -- --check
+cargo clippy -p rocketmq-filter --no-deps -- -D warnings
 ```
 
 ## Benchmark

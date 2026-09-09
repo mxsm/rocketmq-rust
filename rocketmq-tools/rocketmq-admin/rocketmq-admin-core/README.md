@@ -27,44 +27,51 @@ CLI / TUI / MCP / Dashboard / Example
           RocketMQ Client SDK
 ```
 
-The always-available `core` module does not import RocketMQ Client, Common, or
-Remoting. SDK types and protocol mapping are confined to `client_adapter`,
-which is enabled explicitly with the `client-adapter` feature.
+The default build exposes admin-owned contracts with shared model, protocol, error and security types,
+without the optional Client/Transport adapter dependencies. SDK integration is feature-gated.
+The full `client-adapter` provides the session/services used by CLI and TUI; narrower read and
+mutation adapters expose their own capability boundaries.
 
 ## Features
 
 | Feature | Default | Purpose |
 |---|---:|---|
+| `read-client-adapter` | No | Read-only SDK adapter capabilities. |
+| `mutation-client-adapter` | No | Mutation SDK adapter capabilities. |
 | `client-adapter` | No | Enables the RocketMQ Client-backed `AdminSession` and adapter implementations. |
 | `rocksdb-export` | No | Enables direct local RocksDB metadata export for the admin tools that need it. |
 
 Contract-only consumers can use the default build:
 
 ```toml
+[dependencies]
 rocketmq-admin-core = { path = "rocketmq-tools/rocketmq-admin/rocketmq-admin-core" }
 ```
 
 Runtime consumers enable the adapter explicitly:
 
 ```toml
-rocketmq-admin-core = {
-    path = "rocketmq-tools/rocketmq-admin/rocketmq-admin-core",
-    features = ["client-adapter"],
-}
+[dependencies.rocketmq-admin-core]
+path = "rocketmq-tools/rocketmq-admin/rocketmq-admin-core"
+features = ["client-adapter"]
 ```
 
 ## Explicit Session Lifecycle
 
 An `AdminSession` owns its Client SDK handle. Callers must close it explicitly;
-dropping a session never starts detached cleanup work.
+dropping a session never starts detached cleanup work. The example requires `client-adapter`.
+Pass an application-owned `Arc<ClientRuntime>`; after all sessions close, shut down that shared
+runtime and its `RuntimeOwner`. See the [client lifecycle example](../../../rocketmq-client/README.md).
 
-```rust
+```rust,no_run
 use rocketmq_admin_core::core::AdminResult;
 use rocketmq_admin_core::client_adapter::AdminBuilder;
 use rocketmq_admin_core::core::topic::ListTopicsRequest;
 use rocketmq_admin_core::core::topic::TopicAdmin;
 
-async fn list_topics() -> AdminResult<()> {
+async fn list_topics(
+    client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+) -> AdminResult<()> {
     let mut session = AdminBuilder::new(client_runtime.clone())
         .namesrv_addr("127.0.0.1:9876")
         .instance_name("admin-core-example")
@@ -104,9 +111,9 @@ this API, so no compatibility facade is retained.
 ## Boundary Rules
 
 - Keep request/result models and validation in `core`.
-- Keep Client/Common/Remoting imports in `client_adapter`.
-- Do not expose `DefaultMQAdminExt`, raw RPC hooks, or Client runtime types to
-  consumers.
+- Keep SDK and transport integration behind the adapter feature boundaries.
+- Keep SDK facades and raw hooks out of core request/result contracts. The full adapter
+  intentionally re-exports `ClientRuntime` types for application lifecycle injection.
 - Keep command parsing and rendering in CLI/TUI crates.
 - Close every started `AdminSession` on both success and failure paths.
 
@@ -115,9 +122,10 @@ this API, so no compatibility facade is retained.
 ## Local Validation
 
 ```bash
-cargo fmt --all -- --check
+cargo fmt -p rocketmq-admin-core -- --check
 cargo test -p rocketmq-admin-core --features client-adapter
-cargo clippy -p rocketmq-admin-core --all-targets --all-features -- -D warnings
+cargo check -p rocketmq-admin-core --no-default-features
+cargo check -p rocketmq-admin-core --no-default-features --features read-client-adapter
 ```
 
 Validation is local. Generated logs, reports, and one-off validation scripts
@@ -127,7 +135,7 @@ belong under ignored local output such as `target/`, not in the repository.
 
 - [`rocketmq-admin-cli`](../rocketmq-admin-cli)
 - [`rocketmq-admin-tui`](../rocketmq-admin-tui)
-- [`rocketmq-mcp`](../../rocketmq-mcp)
+- [`rocketmq-mcp`](../../../rocketmq-ai/rocketmq-mcp)
 - [`rocketmq-client`](../../../rocketmq-client)
 
 ## License

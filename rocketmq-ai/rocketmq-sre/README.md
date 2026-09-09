@@ -37,6 +37,8 @@ Rules and typed contracts remain authoritative for safety decisions. A model
 can explain evidence and propose a plan, but it cannot bypass capability,
 policy, approval, credential, lease, fencing, or verification boundaries.
 
+Execution is enabled by deployment configuration: every Execution Agent action switch defaults to false, and only fully configured drivers are registered. Control Plane planning, approval and execution coordination are implemented; MCP, Connector and Rust/TypeScript SDK query boundaries remain read-only. Individual crate READMEs describe the current implementation and enablement conditions.
+
 ## Architecture
 
 ```mermaid
@@ -186,17 +188,17 @@ cleared during cleanup.
 
 | Crate | Responsibility |
 | --- | --- |
-| `rocketmq-sre-contracts` | Versioned domain, wire, persistence, Evidence, Incident, plan, execution, and extension contracts; independent of networking, async runtimes, databases, and RocketMQ implementations |
-| `rocketmq-sre-core` | Incident coordination, deterministic domain services, and descriptor registry |
-| `rocketmq-sre-model-gateway` | Canonical model IR, provider profiles, protocol adapters, routing, streaming, budgets, fallback, and Critic support |
-| `rocketmq-sre-control-plane` | Product API and service composition root, persistence, onboarding, diagnostics, governance, and operator workflows |
-| `rocketmq-sre-connector` | Authenticated MCP client, capability handshake, schema validation, evidence conversion, and data-source health |
-| `rocketmq-sre-executor` | Supervised execution journal, policy/approval enforcement, dispatch, verification, rollback, and recovery without target credentials |
-| `rocketmq-sre-execution-agent` | Isolated typed target adapters, credential separation, leases, fencing, idempotency, and effect reconciliation |
-| `rocketmq-sre-probe` | Bounded producer/consumer probe for dedicated synthetic topics and groups |
-| `rocketmq-sre-eval` | Schema export, coverage validation, deterministic evaluations, and acceptance utilities |
-| `rocketmq-sre-client` | Fixed read-only Rust client for status, cluster, Incident, inspection, plan, and OpenAPI queries |
-| `rocketmq-sre-cli` | Read-only operator commands and local-only typed Plan and Runbook draft validation |
+| [`rocketmq-sre-contracts`](crates/rocketmq-sre-contracts/README.md) | Versioned domain, wire, persistence, Evidence, Incident, plan, execution, and extension contracts; independent of networking, async runtimes, databases, and RocketMQ implementations |
+| [`rocketmq-sre-core`](crates/rocketmq-sre-core/README.md) | Incident coordination, deterministic domain services, and descriptor registry |
+| [`rocketmq-sre-model-gateway`](crates/rocketmq-sre-model-gateway/README.md) | Canonical model IR, provider profiles, protocol adapters, routing, streaming, budgets, fallback, and Critic support |
+| [`rocketmq-sre-control-plane`](crates/rocketmq-sre-control-plane/README.md) | Product API and service composition root, persistence, onboarding, diagnostics, governance, and operator workflows |
+| [`rocketmq-sre-connector`](crates/rocketmq-sre-connector/README.md) | Authenticated MCP client, capability handshake, schema validation, evidence conversion, and data-source health |
+| [`rocketmq-sre-executor`](crates/rocketmq-sre-executor/README.md) | Supervised execution journal, policy/approval enforcement, dispatch, verification, rollback, and recovery without target credentials |
+| [`rocketmq-sre-execution-agent`](crates/rocketmq-sre-execution-agent/README.md) | Isolated typed target adapters, credential separation, leases, fencing, idempotency, and effect reconciliation |
+| [`rocketmq-sre-probe`](crates/rocketmq-sre-probe/README.md) | Bounded producer/consumer probe for dedicated synthetic topics and groups |
+| [`rocketmq-sre-eval`](crates/rocketmq-sre-eval/README.md) | Schema export, coverage validation, deterministic evaluations, and acceptance utilities |
+| [`rocketmq-sre-client`](crates/rocketmq-sre-client/README.md) | Fixed read-only Rust client for status, cluster, Incident, inspection, plan, and OpenAPI queries |
+| [`rocketmq-sre-cli`](crates/rocketmq-sre-cli/README.md) | Read-only operator commands and local-only typed Plan and Runbook draft validation |
 
 Additional project areas include:
 

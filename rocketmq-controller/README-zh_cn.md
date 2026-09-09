@@ -37,13 +37,13 @@ storage、snapshot，以及可选 metrics exporter。
 | 路径 | 说明 |
 |------|------|
 | [`src/bin/controller_bootstrap.rs`](src/bin/controller_bootstrap.rs) | 二进制入口，负责日志初始化、CLI/配置加载、manager 生命周期、单节点引导和关闭信号处理。 |
-| [`src/cli.rs`](src/cli.rs) | 基于 Clap 的 CLI 模型，并通过 `rocketmq-common` 的配置解析器加载配置文件。 |
-| [`src/config.rs`](src/config.rs) | 从 `rocketmq-common` 复用并导出 `ControllerConfig`、`RaftPeer` 和 `StorageBackendType`。 |
+| [`src/cli.rs`](src/cli.rs) | 基于 Clap 的 CLI 模型，并通过 the `config` crate 的配置解析器加载配置文件。 |
+| [`src/config.rs`](src/config.rs) | 定义本 crate 拥有的 `ControllerConfig`、节点地址校验和存储配置，并从 crate 根导出。 |
 | [`src/controller`](src/controller) | Controller trait 实现、`ControllerManager`、OpenRaft controller wrapper、心跳管理器和 housekeeping service。 |
 | [`src/openraft`](src/openraft) | OpenRaft node manager、gRPC network、log store、state machine、storage bridge 和生成的 raft service glue。 |
 | [`src/processor`](src/processor) | Controller 请求处理器，以及 broker、topic、metadata 操作的领域处理器。 |
 | [`src/manager`](src/manager) | 副本信息管理器、Broker 副本元数据和 sync-state 模型。 |
-| [`src/metadata`](src/metadata) | Broker、Topic、Config 和 Replica metadata store。 |
+| [`src/openraft/state_machine.rs`](src/openraft/state_machine.rs) | Broker、Topic、Config 和 Replica metadata store。 |
 | [`src/heartbeat`](src/heartbeat) | Broker identity、live-info 跟踪和默认心跳管理器。 |
 | [`src/event`](src/event) | 复制的 Controller 事件模型和事件序列化。 |
 | [`src/storage`](src/storage) | Storage backend 抽象、默认 RocksDB backend、可选 File backend 和测试用内存 backend。 |
@@ -81,7 +81,7 @@ cargo build -p rocketmq-controller --bin rocketmq-controller-rust --release --fe
 ## 配置
 
 CLI 可加载 TOML、JSON、YAML 以及 `config` crate 支持的其它格式。当前文件加载会直接反序列化为 `ControllerConfig`，
-因此配置文件应提供完整必需字段，不应依赖部分字段覆盖默认值。
+配置类型具有 Serde 默认值，允许仅覆盖部分字段，其余字段使用默认值。
 
 请使用 camelCase 字段名：
 
@@ -100,7 +100,7 @@ isProcessReadEvent = false
 notifyBrokerRoleChanged = true
 scanInactiveMasterInterval = 5000
 raftScanWaitTimeoutMs = 1000
-configBlackList = "configBlackList;configStorePath"
+configBlackList = "configBlackList;configStorePath;maintenanceCheckpointRoot"
 
 nodeId = 1
 listenAddr = "127.0.0.1:60109"
@@ -189,42 +189,39 @@ cargo run -p rocketmq-controller --example three_node_cluster -- --node-id 3
 
 在 Rust 代码中直接创建和管理 Controller：
 
-```rust
-use rocketmq_controller::config::{ControllerConfig, RaftPeer};
-use rocketmq_controller::manager::ControllerManager;
-use rocketmq_error::Result;
+```rust,no_run
+use std::{future::Future, sync::Arc};
+use rocketmq_controller::{ControllerConfig, ControllerManager, ControllerResult};
 use rocketmq_observability::TelemetryHandle;
-use rocketmq_runtime::RuntimeContext;
-use rocketmq_rust::ArcMut;
+use rocketmq_runtime::ChildServiceContext;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let listen_addr = "127.0.0.1:9878".parse().unwrap();
-    let config = ControllerConfig::new_node(1, listen_addr)
-        .with_raft_peers(vec![RaftPeer {
-            id: 1,
-            addr: listen_addr,
-        }])
-        .with_storage_path("/tmp/rocketmq-controller/node-1");
-
-    let runtime = RuntimeContext::from_current("controller");
-    let manager = ArcMut::new(
-        ControllerManager::new(
-            config,
-            runtime.service_context("controller"),
-            TelemetryHandle::noop(),
-        )
-        .await?,
+async fn run_controller(
+    config: ControllerConfig,
+    context: ChildServiceContext,
+    shutdown: impl Future<Output = ()>,
+) -> ControllerResult<()> {
+    let manager = Arc::new(
+        ControllerManager::new(config, context, TelemetryHandle::noop()).await?,
     );
-    if !manager.clone().initialize().await? {
-        return Err(rocketmq_error::Error::new(&rocketmq_error::CONTROLLER_INTERNAL_FAILURE));
-    }
-
-    manager.clone().start().await?;
-    manager.shutdown().await?;
-    Ok(())
+    let result = async {
+        if !manager.initialize().await? {
+            return Err(rocketmq_error::Error::new(
+                &rocketmq_error::CONTROLLER_INTERNAL_FAILURE,
+            ));
+        }
+        manager.start().await?;
+        shutdown.await;
+        Ok(())
+    }.await;
+    let shutdown_result = manager.shutdown().await;
+    result?;
+    shutdown_result
 }
 ```
+
+应用必须注入自己拥有的 `ChildServiceContext`，并在 Controller 关闭后关闭 RuntimeOwner。此函数不会执行二进制入口中的自动集群初始化；新集群需要显式调用 `controller().initialize_cluster(...)`。启用认证、授权或维护功能时，应使用接收 `ControllerSecurity` 的构造函数。
+
+配置模型具有 Serde 默认值，允许仅提供部分字段。`raftListenAddr`、`raftPeerEndpoints` 和 `controllerPeerEndpoints` 支持本地绑定与公布地址分离；不要混用新 endpoint 列表和旧 `raftPeers`/`controllerPeers`。
 
 ## Feature Flags
 
@@ -236,6 +233,9 @@ async fn main() -> Result<()> {
 | `metrics-otlp` | 否 | 启用 OTLP metrics export 支持。 |
 | `metrics-prometheus` | 否 | 启用 Prometheus metrics export 支持。 |
 | `debug` | 否 | Controller 构建预留的 debug feature flag。 |
+
+Additional flags include `dev-single` (enables `storage-file`), `otel-traces`, `otel-logs`,
+`otlp-traces` and `otlp-logs`. Exporter features still require matching runtime configuration.
 
 ## Examples
 
@@ -259,11 +259,11 @@ cargo test -p rocketmq-controller --examples --no-run
 cargo test -p rocketmq-controller --test controller_failover_slo
 ```
 
-当修改 Rust 代码时，需要从仓库根目录执行 workspace 级验证：
+修改相关 Rust 代码时，从仓库根目录选择包级检查：
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-controller -- --check
+cargo clippy -p rocketmq-controller --no-deps -- -D warnings
 ```
 
 ## 故障切换资格验证

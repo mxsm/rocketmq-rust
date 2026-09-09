@@ -23,7 +23,7 @@ the `bootstrap::Builder` API for tests and service composition.
 | Broker and topic admin | Cluster info, broker member groups, topic registration/deletion, topic lists by cluster, unit-topic lists, and write-permission updates. |
 | KV configuration | Put/get/delete/list KV config namespaces with on-disk persistence through `KVConfigManager`. |
 | Runtime configuration | `GetNamesrvConfig` and `UpdateNamesrvConfig` support Java-properties payloads; keys are classified as live, restart-required, or unsupported. |
-| Cluster test mode | Optional product-environment route fallback via `DefaultMQAdminExtImpl` when local route data is missing. |
+| Cluster test mode | Optional product-environment route fallback via `TransportClusterTestRouteLookup` when local route data is missing. |
 | Embedded controller | Compile with `--features embedded-controller` and set `enableControllerInNamesrv=true` to initialize `rocketmq-controller`, with conflict checks against the NameServer listen address. The default dependency graph excludes Controller. |
 | Observability | Low-cardinality metrics cover request admission, route, registration, mutation, expiry, unregister, KV, security, and connection state. |
 
@@ -178,29 +178,36 @@ are rejected rather than being reported as applied.
 Use `bootstrap::Builder` when embedding the NameServer in tests or higher-level
 services:
 
-```rust
-use rocketmq_common::common::server::config::ServerConfig;
-use rocketmq_namesrv::bootstrap::Builder;
-use rocketmq_namesrv::NamesrvConfig;
+```rust,no_run
+use rocketmq_namesrv::{bootstrap::Builder, NamesrvConfig};
+use rocketmq_observability::TelemetryHandle;
+use rocketmq_runtime::RuntimeOwner;
+use rocketmq_transport::api::ServerConfig;
 
-async fn run_namesrv() -> rocketmq_namesrv::NameServerResult<()> {
-    let namesrv_config = NamesrvConfig {
-        rocketmq_home: "/opt/rocketmq".to_string(),
-        ..NamesrvConfig::default()
-    };
-
-    let server_config = ServerConfig {
-        listen_port: 9876,
-        bind_address: "0.0.0.0".to_string(),
-        ..ServerConfig::default()
-    };
-
-    Builder::new()
-        .set_name_server_config(namesrv_config)
-        .set_server_config(server_config)
-        .build()
-        .boot()
-        .await
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let owner = RuntimeOwner::new()?;
+    let context = owner.root_context().component("namesrv");
+    let result = owner.block_on(async {
+        Builder::new(context, TelemetryHandle::noop())
+            .set_name_server_config(NamesrvConfig {
+                rocketmq_home: "/opt/rocketmq".to_string(),
+                ..NamesrvConfig::default()
+            })
+            .set_server_config(ServerConfig {
+                listen_port: 9876,
+                bind_address: "0.0.0.0".to_string(),
+                ..ServerConfig::default()
+            })
+            .build()
+            .boot()
+            .await
+    });
+    let report = owner.shutdown_runtime_blocking()?;
+    result?;
+    if !report.is_healthy() {
+        return Err(std::io::Error::other("runtime shutdown incomplete").into());
+    }
+    Ok(())
 }
 ```
 
@@ -228,7 +235,10 @@ shutdown future.
 
 | Feature | Purpose |
 | ------- | ------- |
-| `observability` | Enables NameServer metrics through `rocketmq-observability/otel-metrics`. |
+| `observability` | Enables NameServer metrics and traces. |
+
+
+The default feature is `tls`. `embedded-controller` opts into Controller integration; `otel-metrics`, `otel-traces` and `otel-logs` select signals, while `otlp-metrics`, `otlp-traces` and `otlp-logs` select exporters. Exporters require runtime configuration. Cluster-test fallback uses a transport client and bounded cache, without the full Admin SDK.
 
 ## Validation
 
@@ -249,11 +259,10 @@ For changes spanning multiple library areas, run the crate's full library test s
 cargo test -p rocketmq-namesrv --lib
 ```
 
-Workspace-level Rust validation is run from the repository root when Rust code changes:
-
+Select additional checks for this crate from the repository root:
 ```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-namesrv -- --check
+cargo clippy -p rocketmq-namesrv --no-deps -- -D warnings
 ```
 
 ## Benchmarks

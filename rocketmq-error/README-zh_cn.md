@@ -184,7 +184,7 @@ assert_eq!(public.fields().count(), 0);
 ```bash
 cargo test -p rocketmq-error
 cargo fmt -p rocketmq-error -- --check
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+cargo clippy -p rocketmq-error --no-deps -- -D warnings
 ```
 
 聚焦 catalog 与 association 测试：
