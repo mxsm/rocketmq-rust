@@ -285,7 +285,7 @@ async fn collect_batch(
     while requests.len() < batch_size {
         tokio::select! {
             biased;
-            _ = shutdown_token.cancelled(), if !shutdown_token.is_cancelled() => {
+            _ = shutdown_token.cancelled(), if !rx.is_closed() => {
                 rx.close();
             }
             request = tokio::time::timeout_at(deadline, rx.recv()) => match request {
@@ -324,5 +324,118 @@ mod tests {
 
         assert_eq!(batch.len(), 2);
         assert_eq!(rx.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn batch_collection_returns_at_deadline_with_the_channel_open() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        tx.send(request(1)).await.unwrap();
+        let cancellation = CancellationToken::new();
+        let batch = collect_batch(request(0), &mut rx, &cancellation, 8, Duration::ZERO).await;
+
+        assert_eq!(batch.iter().map(|r| r.header.broker_id).collect::<Vec<_>>(), vec![0, 1]);
+        assert!(!tx.is_closed());
+    }
+
+    #[tokio::test]
+    async fn batch_collection_stops_when_the_sender_closes() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        tx.send(request(1)).await.unwrap();
+        let cancellation = CancellationToken::new();
+        let mut collecting = std::pin::pin!(collect_batch(
+            request(0),
+            &mut rx,
+            &cancellation,
+            8,
+            Duration::from_secs(10)
+        ));
+        assert!(futures::poll!(&mut collecting).is_pending());
+        drop(tx);
+        let std::task::Poll::Ready(batch) = futures::poll!(&mut collecting) else {
+            panic!("closed channel must not wait for the batch deadline");
+        };
+        assert_eq!(batch.iter().map(|r| r.header.broker_id).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[tokio::test]
+    async fn cancelled_batch_closes_the_receiver_and_drains_buffered_requests() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        for index in 1..4 {
+            tx.send(request(index)).await.unwrap();
+        }
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let batch = collect_batch(request(0), &mut rx, &cancellation, 8, Duration::ZERO).await;
+
+        assert_eq!(
+            batch.iter().map(|r| r.header.broker_id).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
+        assert!(rx.is_closed());
+        assert!(tx.is_closed());
+        assert!(rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_collection_wakes_and_closes_the_receiver() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let cancellation = CancellationToken::new();
+        {
+            let mut collecting = std::pin::pin!(collect_batch(
+                request(0),
+                &mut rx,
+                &cancellation,
+                8,
+                Duration::from_secs(10)
+            ));
+            assert!(futures::poll!(&mut collecting).is_pending());
+            cancellation.cancel();
+            let std::task::Poll::Ready(batch) = futures::poll!(&mut collecting) else {
+                panic!("cancellation must wake collection without waiting for the deadline");
+            };
+            assert_eq!(batch.iter().map(|r| r.header.broker_id).collect::<Vec<_>>(), vec![0]);
+        }
+        assert!(tx.is_closed());
+        assert!(rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_single_request_batch_leaves_buffered_requests_untouched() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        tx.send(request(1)).await.unwrap();
+        let batch = collect_batch(
+            request(0),
+            &mut rx,
+            &CancellationToken::new(),
+            1,
+            Duration::from_secs(10),
+        )
+        .await;
+
+        assert_eq!(batch.iter().map(|r| r.header.broker_id).collect::<Vec<_>>(), vec![0]);
+        assert_eq!(rx.try_recv().unwrap().header.broker_id, 1);
+    }
+
+    #[test]
+    fn pending_keys_separate_brokers_and_registration_generations() {
+        let explicit = request(1);
+        let generation = BrokerGeneration {
+            registration_epoch: 1,
+            heartbeat_generation: 2,
+        };
+        let guarded =
+            BrokerUnregistrationRequest::channel_guarded(explicit.header.clone(), "channel".into(), generation);
+        let next_generation = BrokerUnregistrationRequest::channel_guarded(
+            explicit.header.clone(),
+            "channel".into(),
+            BrokerGeneration {
+                registration_epoch: 2,
+                ..generation
+            },
+        );
+        assert_eq!(explicit.pending_key(), request(1).pending_key());
+        assert_ne!(explicit.pending_key(), request(2).pending_key());
+        assert_ne!(explicit.pending_key(), guarded.pending_key());
+        assert_ne!(guarded.pending_key(), next_generation.pending_key());
     }
 }
