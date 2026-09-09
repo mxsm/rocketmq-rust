@@ -12,16 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("cargo:rerun-if-changed=proto/definition.proto");
-    println!("cargo:rerun-if-changed=proto/service.proto");
-
-    let network_bindings = std::env::var_os("CARGO_FEATURE_GRPC_BINDINGS").is_some();
-    tonic_prost_build::configure()
-        .build_client(network_bindings)
-        .build_server(network_bindings)
-        .bytes(".apache.rocketmq.v2.Message.body")
-        .compile_protos(&["proto/service.proto"], &["proto"])?;
-
-    Ok(())
+#[must_use]
+pub fn estimated_protobuf_retained_bytes<M: prost::Message>(message: &M) -> usize {
+    std::mem::size_of_val(message).saturating_add(message.encoded_len())
 }

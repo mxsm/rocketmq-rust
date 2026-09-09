@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::context::ProxyContextExt as _;
+use crate::status::ProxyStatusMapperExt as _;
 use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -54,15 +56,15 @@ use crate::proto::v2;
 use crate::session::ClientSessionRegistry;
 use crate::status::ProxyStatusMapper;
 
+use crate::ingress::grpc::service::admission::estimated_protobuf_retained_bytes;
+use crate::ingress::grpc::service::consumer;
+use crate::ingress::grpc::service::housekeeping;
+use crate::ingress::grpc::service::telemetry;
+use crate::ingress::grpc::service::topic;
+use crate::ingress::grpc::service::transaction;
+use crate::ingress::grpc::service::ExecutionGuards;
+use crate::ingress::grpc::service::ReapSchedule;
 use rocketmq_proxy_core::effective_settings;
-use rocketmq_proxy_core::ingress::grpc::service::admission::estimated_protobuf_retained_bytes;
-use rocketmq_proxy_core::ingress::grpc::service::consumer;
-use rocketmq_proxy_core::ingress::grpc::service::housekeeping;
-use rocketmq_proxy_core::ingress::grpc::service::telemetry;
-use rocketmq_proxy_core::ingress::grpc::service::topic;
-use rocketmq_proxy_core::ingress::grpc::service::transaction;
-use rocketmq_proxy_core::ingress::grpc::service::ExecutionGuards;
-use rocketmq_proxy_core::ingress::grpc::service::ReapSchedule;
 use rocketmq_proxy_core::ServerSettingsPolicy;
 use rocketmq_proxy_core::SettingsBackoffPolicy;
 use rocketmq_proxy_core::SettingsPolicyProvider;
@@ -2869,7 +2871,10 @@ mod tests {
             .await
             .expect_err("invalid timeout metadata should fail ingress");
         assert_eq!(status.code(), tonic::Code::InvalidArgument);
-        assert!(status.message().contains("grpc-timeout"));
+        assert_eq!(
+            status.message(),
+            rocketmq_error::PROXY_METADATA_INVALID.public_message()
+        );
     }
 
     #[tokio::test]

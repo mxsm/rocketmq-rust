@@ -443,7 +443,7 @@ async fn query_route_integration_rejects_invalid_grpc_timeout_before_business_lo
         .await
         .expect_err("invalid timeout metadata should fail ingress");
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
-    assert!(error.message().contains("grpc-timeout"));
+    assert_eq!(error.message(), rocketmq_error::PROXY_METADATA_INVALID.public_message());
 
     let _ = shutdown_tx.send(());
     let serve_result = server_task.await.expect("server task should join");
@@ -1162,7 +1162,7 @@ where
 
         match wait_for_server_ready(listen_addr, &mut server_task).await {
             Ok(()) => return (listen_addr, shutdown_tx, server_task),
-            Err(startup_error) if is_address_in_use_startup_error(&startup_error) => {
+            Err(startup_error) if is_address_in_use_startup_error(startup_error.as_ref()) => {
                 last_bind_error = Some(startup_error);
             }
             Err(startup_error) => {
@@ -1345,13 +1345,16 @@ struct TestTlsIdentity {
 async fn wait_for_server_ready(
     listen_addr: SocketAddr,
     server_task: &mut tokio::task::JoinHandle<rocketmq_proxy::ProxyResult<()>>,
-) -> Result<(), String> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for _ in 0..20 {
         if server_task.is_finished() {
             let result = server_task.await.expect("server task should join during startup");
             return match result {
-                Ok(()) => Err(format!("proxy runtime exited before becoming ready on {listen_addr}")),
-                Err(error) => Err(error.to_string()),
+                Ok(()) => Err(std::io::Error::other(format!(
+                    "proxy runtime exited before becoming ready on {listen_addr}"
+                ))
+                .into()),
+                Err(error) => Err(error.into()),
             };
         }
 
@@ -1360,8 +1363,11 @@ async fn wait_for_server_ready(
             if server_task.is_finished() {
                 let result = server_task.await.expect("server task should join during startup");
                 return match result {
-                    Ok(()) => Err(format!("proxy runtime exited before becoming ready on {listen_addr}")),
-                    Err(error) => Err(error.to_string()),
+                    Ok(()) => Err(std::io::Error::other(format!(
+                        "proxy runtime exited before becoming ready on {listen_addr}"
+                    ))
+                    .into()),
+                    Err(error) => Err(error.into()),
                 };
             }
             return Ok(());
@@ -1370,9 +1376,11 @@ async fn wait_for_server_ready(
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 
-    Err(format!(
-        "timed out waiting for proxy runtime to accept connections on {listen_addr}"
-    ))
+    Err(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        format!("timed out waiting for proxy runtime to accept connections on {listen_addr}"),
+    )
+    .into())
 }
 
 fn reserve_loopback_addr() -> SocketAddr {
@@ -1423,12 +1431,19 @@ fn message_type_name(value: i32) -> String {
     .to_owned()
 }
 
-fn is_address_in_use_startup_error(startup_error: &str) -> bool {
-    startup_error.contains("failed to bind")
-        && (startup_error.contains("Address already in use")
-            || startup_error.contains("(os error 48)")
-            || startup_error.contains("(os error 98)")
-            || startup_error.contains("(os error 10048)"))
+fn is_address_in_use_startup_error(mut error: &(dyn std::error::Error + 'static)) -> bool {
+    loop {
+        if error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::AddrInUse)
+        {
+            return true;
+        }
+        let Some(source) = error.source() else {
+            return false;
+        };
+        error = source;
+    }
 }
 
 async fn connect_with_retry(addr: SocketAddr) -> MessagingServiceClient<tonic::transport::Channel> {

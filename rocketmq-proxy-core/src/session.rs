@@ -29,11 +29,11 @@ use tokio_util::sync::CancellationToken;
 use crate::context::ProxyContextWithPrincipal;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
-use crate::ingress::grpc::service::admission::estimated_protobuf_retained_bytes;
 use crate::proto::v2;
 use crate::receipt_renewal::ReceiptRenewalMetricsSnapshot;
 use crate::receipt_renewal::ReceiptRenewalSchedule;
 use crate::receipt_renewal::ReceiptRenewalToken;
+use crate::retained_message::estimated_protobuf_retained_bytes;
 use crate::ResourceIdentity;
 use crate::SettingsBackoffPolicy;
 
@@ -1745,15 +1745,22 @@ mod tests {
     }
 
     fn context(client_id: &'static str) -> ProxyContext {
-        let mut request = tonic::Request::new(());
-        request
-            .metadata_mut()
-            .insert("x-mq-client-id", tonic::metadata::MetadataValue::from_static(client_id));
-        request.metadata_mut().insert(
-            "x-mq-channel-id",
-            tonic::metadata::MetadataValue::from_static("channel-a"),
-        );
-        ProxyContext::from_grpc_request("Test", &request).expect("context should be constructed")
+        let context = ProxyContext::for_internal_client("Test", client_id);
+        ProxyContext::from_metadata(
+            "Test",
+            crate::context::ProxyRequestMetadata {
+                request_id: context.request_id().to_owned(),
+                remote_addr: None,
+                local_addr: None,
+                client_id: Some(client_id.to_owned()),
+                language: None,
+                client_version: None,
+                namespace: None,
+                connection_id: Some("channel-a".to_owned()),
+                deadline_at: None,
+                received_at: context.received_at(),
+            },
+        )
     }
 
     fn tracked_handle(client_id: &str, message_id: &str, receipt_handle: &str) -> ReceiptHandleRegistration {

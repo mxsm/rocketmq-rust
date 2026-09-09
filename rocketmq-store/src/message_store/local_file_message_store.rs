@@ -119,6 +119,7 @@ use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
 use crate::base::backend_ops::StoreHealthRecorder;
+use crate::base::backend_read_ops::BackendReadOps;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::commit_log_dispatcher::MessageIndexRuntimeHandle;
 use crate::base::dispatch_request::DispatchRequest;
@@ -134,6 +135,7 @@ use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::base::transient_store_pool::TransientStorePool;
+use crate::capability::ConsumeQueueStatistics;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::LinuxMemoryLockMode;
 use crate::config::message_store_config::MessageStoreConfig;
@@ -923,62 +925,6 @@ impl BackendOps for LocalFileMessageStore {
         }
     }
 
-    async fn get_message(
-        &self,
-        group: &CheetahString,
-        topic: &CheetahString,
-        queue_id: i32,
-        offset: i64,
-        max_msg_nums: i32,
-        message_filter: Option<ArcMessageFilter>,
-    ) -> Option<GetMessageResult> {
-        self.read_messages(group, topic, queue_id, offset, max_msg_nums, message_filter)
-            .await
-    }
-
-    async fn get_message_with_size_limit(
-        &self,
-        group: &CheetahString,
-        topic: &CheetahString,
-        queue_id: i32,
-        offset: i64,
-        max_msg_nums: i32,
-        max_total_msg_size: i32,
-        message_filter: Option<ArcMessageFilter>,
-    ) -> Option<GetMessageResult> {
-        self.read_messages_with_size_limit(
-            group,
-            topic,
-            queue_id,
-            offset,
-            max_msg_nums,
-            max_total_msg_size,
-            message_filter,
-        )
-        .await
-    }
-
-    fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
-        self.get_max_offset_in_queue_committed(topic, queue_id, true)
-    }
-
-    fn get_max_offset_in_queue_committed(&self, topic: &CheetahString, queue_id: i32, committed: bool) -> i64 {
-        if committed {
-            let queue = self.consume_queue_store.find_or_create_consume_queue(topic, queue_id);
-            let queue = queue.read();
-            queue.get_max_offset_in_queue()
-        } else {
-            self.consume_queue_store
-                .get_max_offset(topic, queue_id)
-                .unwrap_or_default()
-        }
-    }
-
-    #[inline]
-    fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
-        self.consume_queue_store.get_min_offset_in_queue(topic, queue_id)
-    }
-
     #[inline]
     fn get_timer_message_store(&self) -> Option<&Arc<TimerMessageStore>> {
         self.timer_message_store.as_ref()
@@ -989,115 +935,8 @@ impl BackendOps for LocalFileMessageStore {
         self.timer_message_store = Some(timer_message_store);
     }
 
-    fn get_commit_log_offset_in_queue(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64 {
-        self.get_consume_queue(topic, queue_id)
-            .and_then(|consume_queue| {
-                consume_queue
-                    .read()
-                    .get(consume_queue_offset)
-                    .map(|cq_unit| cq_unit.pos)
-            })
-            .unwrap_or_default()
-    }
-
-    fn get_offset_in_queue_by_time(&self, topic: &CheetahString, queue_id: i32, timestamp: i64) -> i64 {
-        self.get_offset_in_queue_by_time_with_boundary(topic, queue_id, timestamp, BoundaryType::Lower)
-    }
-
-    fn get_offset_in_queue_by_time_with_boundary(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        timestamp: i64,
-        boundary_type: BoundaryType,
-    ) -> i64 {
-        self.consume_queue_store
-            .get_offset_in_queue_by_time(topic, queue_id, timestamp, boundary_type)
-    }
-
-    async fn get_offset_in_queue_by_time_async(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        timestamp: i64,
-    ) -> Result<i64, StoreError> {
-        self.get_offset_in_queue_by_time_with_boundary_async(topic, queue_id, timestamp, BoundaryType::Lower)
-            .await
-    }
-
-    async fn get_offset_in_queue_by_time_with_boundary_async(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        timestamp: i64,
-        boundary_type: BoundaryType,
-    ) -> Result<i64, StoreError> {
-        #[cfg(feature = "tieredstore")]
-        if let Some(tiered_store) = self.tiered_store.as_ref() {
-            let local_range_missing = self.should_try_tiered_offset_by_time(topic, queue_id, timestamp);
-            if tiered_store.should_try_offset_by_time(local_range_missing) {
-                if let Some(offset) = tiered_store
-                    .offset_by_time(topic, queue_id, timestamp, boundary_type)
-                    .await?
-                {
-                    return Ok(offset);
-                }
-            }
-        }
-
-        Ok(self.get_offset_in_queue_by_time_with_boundary(topic, queue_id, timestamp, boundary_type))
-    }
-
-    fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt> {
-        if let Some(sbr) = self.commit_log.get_message(commit_log_offset, 4) {
-            let size = sbr.get_buffer().get_i32();
-            self.look_message_by_offset_with_size(commit_log_offset, size)
-        } else {
-            None
-        }
-    }
-
-    fn look_message_by_offset_with_size(&self, commit_log_offset: i64, size: i32) -> Option<MessageExt> {
-        let sbr = self.commit_log.get_message(commit_log_offset, size);
-        if let Some(sbr) = sbr {
-            if let Some(mut value) = sbr.get_bytes() {
-                MessageDecoder::decode(&mut value, true, false, false, false, false)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
-    fn select_one_message_by_offset(&self, commit_log_offset: i64) -> Option<SelectMappedBufferResult> {
-        let sbr = self.commit_log.get_message(commit_log_offset, 4);
-        if let Some(sbr) = sbr {
-            let size = sbr.get_buffer().get_i32();
-            self.commit_log.get_message(commit_log_offset, size)
-        } else {
-            None
-        }
-    }
-
-    fn select_one_message_by_offset_with_size(
-        &self,
-        commit_log_offset: i64,
-        msg_size: i32,
-    ) -> Option<SelectMappedBufferResult> {
-        self.commit_log.get_message(commit_log_offset, msg_size)
-    }
-
     fn get_running_data_info(&self) -> String {
         format!("{}", self.store_stats_service)
-    }
-
-    fn get_timing_message_count(&self, topic: &CheetahString) -> i64 {
-        if let Some(timer_message_store) = self.timer_message_store.as_ref() {
-            timer_message_store.timer_metrics.get_timing_count(topic)
-        } else {
-            0
-        }
     }
 
     fn get_runtime_info(&self) -> HashMap<String, String> {
@@ -1815,36 +1654,6 @@ impl BackendOps for LocalFileMessageStore {
         self.commit_log.get_min_offset()
     }
 
-    fn get_earliest_message_time(&self, topic: &CheetahString, queue_id: i32) -> i64 {
-        if let Some(logic_queue) = self.get_consume_queue(topic, queue_id) {
-            if let Some(cq) = logic_queue.read().get_earliest_unit_and_store_time() {
-                return cq.1;
-            }
-        }
-        -1
-    }
-
-    fn get_earliest_message_time_store(&self) -> i64 {
-        let min_phy_offset = self.get_min_phy_offset();
-
-        //Rust not support DLedgerCommitLog
-        /*if (this.getCommitLog() instanceof DLedgerCommitLog) {
-            minPhyOffset += DLedgerEntry.BODY_OFFSET;
-        }*/
-
-        let mut size = MessageDecoder::MESSAGE_STORE_TIMESTAMP_POSITION + 8;
-        match self.broker_config.broker_ip1.to_string().parse::<IpAddr>() {
-            Ok(result) if result.is_ipv6() => {
-                size = MessageDecoder::MESSAGE_STORE_TIMESTAMP_POSITION + 20;
-            }
-            Ok(_) => {}
-            Err(error) => {
-                warn!("failed to parse broker_ip1 when computing earliest message time: {error}");
-            }
-        }
-        self.commit_log.pickup_store_timestamp(min_phy_offset, size as i32)
-    }
-
     /*    async fn get_earliest_message_time_async(
         &self,
         topic: &str,
@@ -1852,42 +1661,6 @@ impl BackendOps for LocalFileMessageStore {
     ) -> Result<i64, StoreError> {
 
     }*/
-
-    fn get_message_store_timestamp(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64 {
-        if let Some(logic_queue) = self.get_consume_queue(topic, queue_id) {
-            if let Some(cq) = logic_queue.read().get_cq_unit_and_store_time(consume_queue_offset) {
-                return cq.1;
-            }
-        }
-        -1
-    }
-
-    async fn get_message_store_timestamp_async(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        consume_queue_offset: i64,
-    ) -> Result<i64, StoreError> {
-        if let Some(logic_queue) = self.get_consume_queue(topic, queue_id) {
-            if let Some(cq) = logic_queue.read().get_cq_unit_and_store_time(consume_queue_offset) {
-                return Ok(cq.1);
-            }
-        }
-        #[cfg(feature = "tieredstore")]
-        if let Some(tiered_store) = self.tiered_store.as_ref() {
-            return tiered_store
-                .message_timestamp(topic, queue_id, consume_queue_offset)
-                .await;
-        }
-        Ok(-1)
-    }
-
-    fn get_message_total_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
-        if let Some(logic_queue) = self.get_consume_queue(topic, queue_id) {
-            return logic_queue.read().get_message_total_in_queue();
-        }
-        0
-    }
 
     fn get_commit_log_data(&self, offset: i64) -> Option<SelectMappedBufferResult> {
         if self.shutdown.load(Ordering::Acquire) {
@@ -1916,24 +1689,6 @@ impl BackendOps for LocalFileMessageStore {
 
     fn execute_delete_files_manually(&self) {
         self.clean_commit_log_service.execute_delete_files_manually()
-    }
-
-    async fn query_message(
-        &self,
-        topic: &CheetahString,
-        key: &CheetahString,
-        max_num: i32,
-        begin_timestamp: i64,
-        end_timestamp: i64,
-    ) -> Option<QueryMessageResult> {
-        self.query_messages(topic, key, max_num, begin_timestamp, end_timestamp)
-            .await
-    }
-
-    async fn query_message_with_options(&self, request: &QueryMessageRequest) -> Option<QueryMessageResult> {
-        let key = request.legacy_backend_key();
-        self.query_messages(&request.topic, &key, request.max_num, request.begin, request.end)
-            .await
     }
 
     async fn update_ha_master_address(&self, new_addr: &str) {
@@ -2008,38 +1763,6 @@ impl BackendOps for LocalFileMessageStore {
     fn clean_expired_consumer_queue(&self) {
         let min_commit_log_offset = self.get_min_phy_offset();
         self.consume_queue_store.clean_expired_sync(min_commit_log_offset);
-    }
-
-    fn check_in_mem_by_consume_offset(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        consume_offset: i64,
-        batch_size: i32,
-    ) -> bool {
-        let consume_queue = self.consume_queue_store.find_or_create_consume_queue(topic, queue_id);
-        let consume_queue = consume_queue.read();
-        let first_cqitem = consume_queue.get(consume_offset);
-        let Some(cq) = first_cqitem.as_ref() else {
-            return false;
-        };
-        let start_offset_py = cq.pos;
-        if batch_size <= 1 {
-            let size = cq.size;
-            return self.check_in_mem_by_commit_offset(start_offset_py, size);
-        }
-        let Some(last_cqitem) = consume_queue.get(consume_offset + batch_size as i64) else {
-            let size = cq.size;
-            return self.check_in_mem_by_commit_offset(start_offset_py, size);
-        };
-        let end_offset_py = last_cqitem.pos;
-        let size = (end_offset_py - start_offset_py) + last_cqitem.size as i64;
-        self.check_in_mem_by_commit_offset(start_offset_py, size as i32)
-    }
-
-    fn check_in_store_by_consume_offset(&self, topic: &CheetahString, queue_id: i32, consume_offset: i64) -> bool {
-        let commit_log_offset = self.get_commit_log_offset_in_queue(topic, queue_id, consume_offset);
-        commit_log_offset >= self.commit_log.get_min_offset()
     }
 
     #[inline]

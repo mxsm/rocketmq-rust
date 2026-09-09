@@ -23,7 +23,6 @@ use rocketmq_model::result::SendStatus;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
-use rocketmq_transport::api::EmbeddedDispatchOutcome;
 
 use crate::proto::v2;
 use crate::status::ProxyPayloadStatus;
@@ -35,12 +34,14 @@ use crate::ProxyServiceFuture;
 /// an embedded broker or another provider, but Core does not depend on those
 /// implementations.
 pub trait ProxyRemotingBackend: Send + Sync {
+    type Response: Send;
+
     /// Processes a canonical command through the channel-free Broker boundary.
     ///
     /// Local and remote implementations both return the affine dispatch result;
     /// remote providers wrap their response command in a `RemotingResponse`
     /// without introducing a reverse response-to-command adapter.
-    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome>;
+    fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, Self::Response>;
 }
 
 /// Stable operations recognized by the Remoting ingress.

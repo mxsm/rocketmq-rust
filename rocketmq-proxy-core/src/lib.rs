@@ -22,11 +22,6 @@ pub mod context;
 pub mod contracts;
 pub mod drain;
 pub mod error;
-#[deprecated(
-    since = "1.1.0",
-    note = "use rocketmq_proxy_core::ingress::grpc; this compatibility path will be removed in 2.0.0"
-)]
-pub mod grpc;
 pub mod identity;
 pub mod ingress;
 pub mod message;
@@ -38,6 +33,7 @@ pub mod receipt_renewal;
     note = "use rocketmq_proxy_core::ingress::remoting; this compatibility path will be removed in 2.0.0"
 )]
 pub mod remoting;
+pub mod retained_message;
 #[deprecated(
     since = "1.1.0",
     note = "use rocketmq_proxy_core::contracts; this compatibility path will be removed in 2.0.0"
@@ -51,10 +47,8 @@ pub use config::GrpcConfig;
 pub use config::GrpcTlsClientAuth;
 pub use config::GrpcTlsConfig;
 pub use config::ProxyMode;
-pub use config::RemotingConfig;
 pub use config::RuntimeConfig;
 pub use config::SessionConfig;
-pub use context::GrpcTransportContext;
 pub use context::ProxyContext;
 pub use context::ProxyContextWithPrincipal;
 pub use context::ResolvedAddressScheme;
@@ -79,8 +73,6 @@ pub use message::ProxyMessage;
 pub use message::ProxyMessageExt;
 pub use processor::*;
 pub use receipt_renewal::ReceiptRenewalMetricsSnapshot;
-pub use rocketmq_transport::api::EmbeddedDispatchOutcome;
-pub use rocketmq_transport::api::RemotingResponse;
 pub use session::build_lite_subscription_sync_request;
 pub use session::ClaimedReceiptHandle;
 pub use session::ClientSession;

@@ -30,6 +30,7 @@ fn representative_generated_message_preserves_wire_shape() {
     );
 }
 
+#[cfg(feature = "grpc-bindings")]
 #[test]
 fn generated_client_and_server_api_are_available_from_core() {
     fn accept_client(_: Option<v2::messaging_service_client::MessagingServiceClient<tonic::transport::Channel>>) {}

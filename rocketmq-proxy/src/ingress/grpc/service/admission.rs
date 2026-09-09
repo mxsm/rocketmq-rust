@@ -31,11 +31,11 @@ use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::RuntimeError;
 
-use crate::error::canonical;
 use crate::proto::v2;
-use crate::ProxyError;
-use crate::ProxyResult;
-use crate::RuntimeConfig;
+use rocketmq_proxy_core::error::canonical;
+use rocketmq_proxy_core::ProxyError;
+use rocketmq_proxy_core::ProxyResult;
+use rocketmq_proxy_core::RuntimeConfig;
 
 /// Admission-control permits shared by the neutral gRPC handlers.
 #[derive(Clone)]
@@ -275,10 +275,7 @@ impl ExecutionGuards {
     }
 }
 
-#[must_use]
-pub fn estimated_protobuf_retained_bytes<M: prost::Message>(message: &M) -> usize {
-    std::mem::size_of_val(message).saturating_add(message.encoded_len())
-}
+pub use rocketmq_proxy_core::retained_message::estimated_protobuf_retained_bytes;
 
 fn execution_budget(
     root: &ResourceBudget,

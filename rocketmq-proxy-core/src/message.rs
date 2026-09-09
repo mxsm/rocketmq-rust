@@ -92,7 +92,8 @@ impl ProxyMessage {
         self.body.take()
     }
 
-    pub(crate) fn retained_bytes(&self) -> usize {
+    /// Estimates owned storage retained by this message for ingress admission accounting.
+    pub fn retained_bytes(&self) -> usize {
         let property_table_bytes = self
             .properties
             .capacity()
@@ -239,7 +240,8 @@ impl ProxyMessageExt {
         self.prepared_transaction_offset
     }
 
-    pub(crate) fn retained_bytes(&self) -> usize {
+    /// Estimates owned storage retained by this message for ingress admission accounting.
+    pub fn retained_bytes(&self) -> usize {
         std::mem::size_of_val(self)
             .saturating_add(self.message.retained_bytes())
             .saturating_add(self.broker_name.capacity())

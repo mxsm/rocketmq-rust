@@ -47,6 +47,7 @@ use crate::base::backend_ops::BackendOps;
 use crate::base::backend_ops::MessageStoreShutdownReport;
 use crate::base::backend_ops::PutMessagePreflight;
 use crate::base::backend_ops::StateMachineVersionView;
+use crate::base::backend_read_ops::BackendReadOps;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::get_message_result::GetMessageResult;
@@ -59,6 +60,7 @@ use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::base::transient_store_pool::TransientStorePool;
+use crate::capability::ConsumeQueueStatistics;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::filter::ArcMessageFilter;
 use crate::filter::MessageFilter;
@@ -152,48 +154,35 @@ macro_rules! delegate_store_async {
     };
 }
 
-macro_rules! message_store_methods {
-    () => {
-    async fn load(&mut self) -> bool {
-        delegate_store_async!(self, load())
+impl BackendReadOps for StorePorts {
+    fn is_message_in_cold_area(
+        &self,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        queue_offset: i64,
+    ) -> bool {
+        delegate_store!(self, is_message_in_cold_area(group, topic, queue_id, queue_offset))
     }
 
-    async fn start(&mut self) -> Result<(), StoreError> {
-        delegate_store_async!(self, start())
+    fn pickup_store_timestamp(&self, offset: i64, size: i32) -> i64 {
+        delegate_store!(self, pickup_store_timestamp(offset, size))
     }
 
-    async fn init(&mut self) -> Result<(), StoreError> {
-        delegate_store_async!(self, init())
+    fn lmq_queue_offset(&self, topic: &CheetahString) -> i64 {
+        delegate_store!(self, lmq_queue_offset(topic))
     }
 
-    async fn shutdown_gracefully(&mut self) -> Result<MessageStoreShutdownReport, StoreError> {
-        delegate_store_async!(self, shutdown_gracefully())
+    fn contains_lmq(&self, topic: &CheetahString) -> bool {
+        delegate_store!(self, contains_lmq(topic))
     }
 
-    async fn shutdown(&mut self) {
-        if let Err(error) = self.shutdown_gracefully().await {
-            tracing::warn!(error = %error, "message store shutdown failed");
-        }
+    fn get_lmq_topic_names(&self) -> Vec<CheetahString> {
+        delegate_store!(self, get_lmq_topic_names())
     }
 
-    async fn destroy_gracefully(&mut self) -> Result<bool, StoreError> {
-        delegate_store_async!(self, destroy_gracefully())
-    }
-
-    fn destroy(&mut self) {
-        delegate_store!(self, destroy());
-    }
-
-    async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {
-        delegate_store_async!(self, put_message(msg))
-    }
-
-    async fn put_messages(&mut self, message_ext_batch: MessageExtBatch) -> PutMessageResult {
-        delegate_store_async!(self, put_messages(message_ext_batch))
-    }
-
-    fn recall_extended_timer(&self, request: &TimerRecallRequest) -> Result<TimerRecallStatus, StoreError> {
-        delegate_store!(self, recall_extended_timer(request))
+    fn consume_queue_statistics(&self) -> ConsumeQueueStatistics {
+        delegate_store!(self, consume_queue_statistics())
     }
 
     async fn get_message(
@@ -245,14 +234,6 @@ macro_rules! message_store_methods {
 
     fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
         delegate_store!(self, get_min_offset_in_queue(topic, queue_id))
-    }
-
-    fn get_timer_message_store(&self) -> Option<&Arc<TimerMessageStore>> {
-        delegate_store!(self, get_timer_message_store())
-    }
-
-    fn set_timer_message_store(&mut self, timer_message_store: Arc<TimerMessageStore>) {
-        delegate_store!(self, set_timer_message_store(timer_message_store));
     }
 
     fn get_commit_log_offset_in_queue(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64 {
@@ -324,24 +305,8 @@ macro_rules! message_store_methods {
         )
     }
 
-    fn get_running_data_info(&self) -> String {
-        delegate_store!(self, get_running_data_info())
-    }
-
     fn get_timing_message_count(&self, topic: &CheetahString) -> i64 {
         delegate_store!(self, get_timing_message_count(topic))
-    }
-
-    fn get_runtime_info(&self) -> HashMap<String, String> {
-        delegate_store!(self, get_runtime_info())
-    }
-
-    fn get_max_phy_offset(&self) -> i64 {
-        delegate_store!(self, get_max_phy_offset())
-    }
-
-    fn get_min_phy_offset(&self) -> i64 {
-        delegate_store!(self, get_min_phy_offset())
     }
 
     fn get_earliest_message_time(&self, topic: &CheetahString, queue_id: i32) -> i64 {
@@ -372,6 +337,107 @@ macro_rules! message_store_methods {
         delegate_store!(self, get_message_total_in_queue(topic, queue_id))
     }
 
+    async fn query_message(
+        &self,
+        topic: &CheetahString,
+        key: &CheetahString,
+        max_num: i32,
+        begin: i64,
+        end: i64,
+    ) -> Option<QueryMessageResult> {
+        delegate_store_async!(self, query_message(topic, key, max_num, begin, end))
+    }
+
+    async fn query_message_with_options(&self, request: &QueryMessageRequest) -> Option<QueryMessageResult> {
+        delegate_store_async!(self, query_message_with_options(request))
+    }
+
+    fn check_in_mem_by_consume_offset(
+        &self,
+        topic: &CheetahString,
+        queue_id: i32,
+        consume_offset: i64,
+        batch_size: i32,
+    ) -> bool {
+        delegate_store!(
+            self,
+            check_in_mem_by_consume_offset(topic, queue_id, consume_offset, batch_size)
+        )
+    }
+
+    fn check_in_store_by_consume_offset(&self, topic: &CheetahString, queue_id: i32, consume_offset: i64) -> bool {
+        delegate_store!(self, check_in_store_by_consume_offset(topic, queue_id, consume_offset))
+    }
+}
+
+macro_rules! message_store_methods {
+    () => {
+    async fn load(&mut self) -> bool {
+        delegate_store_async!(self, load())
+    }
+
+    async fn start(&mut self) -> Result<(), StoreError> {
+        delegate_store_async!(self, start())
+    }
+
+    async fn init(&mut self) -> Result<(), StoreError> {
+        delegate_store_async!(self, init())
+    }
+
+    async fn shutdown_gracefully(&mut self) -> Result<MessageStoreShutdownReport, StoreError> {
+        delegate_store_async!(self, shutdown_gracefully())
+    }
+
+    async fn shutdown(&mut self) {
+        if let Err(error) = self.shutdown_gracefully().await {
+            tracing::warn!(error = %error, "message store shutdown failed");
+        }
+    }
+
+    async fn destroy_gracefully(&mut self) -> Result<bool, StoreError> {
+        delegate_store_async!(self, destroy_gracefully())
+    }
+
+    fn destroy(&mut self) {
+        delegate_store!(self, destroy());
+    }
+
+    async fn put_message(&mut self, msg: MessageExtBrokerInner) -> PutMessageResult {
+        delegate_store_async!(self, put_message(msg))
+    }
+
+    async fn put_messages(&mut self, message_ext_batch: MessageExtBatch) -> PutMessageResult {
+        delegate_store_async!(self, put_messages(message_ext_batch))
+    }
+
+    fn recall_extended_timer(&self, request: &TimerRecallRequest) -> Result<TimerRecallStatus, StoreError> {
+        delegate_store!(self, recall_extended_timer(request))
+    }
+
+    fn get_timer_message_store(&self) -> Option<&Arc<TimerMessageStore>> {
+        delegate_store!(self, get_timer_message_store())
+    }
+
+    fn set_timer_message_store(&mut self, timer_message_store: Arc<TimerMessageStore>) {
+        delegate_store!(self, set_timer_message_store(timer_message_store));
+    }
+
+    fn get_running_data_info(&self) -> String {
+        delegate_store!(self, get_running_data_info())
+    }
+
+    fn get_runtime_info(&self) -> HashMap<String, String> {
+        delegate_store!(self, get_runtime_info())
+    }
+
+    fn get_max_phy_offset(&self) -> i64 {
+        delegate_store!(self, get_max_phy_offset())
+    }
+
+    fn get_min_phy_offset(&self) -> i64 {
+        delegate_store!(self, get_min_phy_offset())
+    }
+
     fn get_commit_log_data(&self, offset: i64) -> Option<SelectMappedBufferResult> {
         delegate_store!(self, get_commit_log_data(offset))
     }
@@ -392,21 +458,6 @@ macro_rules! message_store_methods {
 
     fn execute_delete_files_manually(&self) {
         delegate_store!(self, execute_delete_files_manually());
-    }
-
-    async fn query_message(
-        &self,
-        topic: &CheetahString,
-        key: &CheetahString,
-        max_num: i32,
-        begin: i64,
-        end: i64,
-    ) -> Option<QueryMessageResult> {
-        delegate_store_async!(self, query_message(topic, key, max_num, begin, end))
-    }
-
-    async fn query_message_with_options(&self, request: &QueryMessageRequest) -> Option<QueryMessageResult> {
-        delegate_store_async!(self, query_message_with_options(request))
     }
 
     async fn update_ha_master_address(&self, new_addr: &str) {
@@ -431,23 +482,6 @@ macro_rules! message_store_methods {
 
     fn clean_expired_consumer_queue(&self) {
         delegate_store!(self, clean_expired_consumer_queue());
-    }
-
-    fn check_in_mem_by_consume_offset(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        consume_offset: i64,
-        batch_size: i32,
-    ) -> bool {
-        delegate_store!(
-            self,
-            check_in_mem_by_consume_offset(topic, queue_id, consume_offset, batch_size)
-        )
-    }
-
-    fn check_in_store_by_consume_offset(&self, topic: &CheetahString, queue_id: i32, consume_offset: i64) -> bool {
-        delegate_store!(self, check_in_store_by_consume_offset(topic, queue_id, consume_offset))
     }
 
     fn dispatch_behind_bytes(&self) -> i64 {

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(test)]
+use crate::context::ProxyContextExt as _;
 use std::collections::HashMap;
 use std::net::IpAddr;
 // gRPC wire/domain adapters.
@@ -30,56 +32,56 @@ use rocketmq_protocol::protocol::route::route_data_view::QueueData;
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_runtime::common::time_utils::current_millis;
 
-use crate::config::GrpcConfig;
-use crate::context::ProxyContext;
-use crate::context::ResolvedAddressScheme;
-use crate::context::ResolvedEndpoint;
-use crate::contracts::ProxyTopicMessageType;
-use crate::error::canonical;
-use crate::error::ProxyError;
-use crate::error::ProxyResult;
-use crate::identity::ResourceIdentity;
-use crate::message::ProxyMessage;
-use crate::message::ProxyMessageExt;
-use crate::processor::AckMessagePlan;
-use crate::processor::AckMessageRequest;
-use crate::processor::AckMessageResultEntry;
-use crate::processor::ChangeInvisibleDurationPlan;
-use crate::processor::ChangeInvisibleDurationRequest;
-use crate::processor::ConsumerFilterExpression;
-use crate::processor::EndTransactionPlan;
-use crate::processor::EndTransactionRequest;
-use crate::processor::ForwardMessageToDeadLetterQueuePlan;
-use crate::processor::ForwardMessageToDeadLetterQueueRequest;
-use crate::processor::GetOffsetPlan;
-use crate::processor::GetOffsetRequest;
-use crate::processor::MessageQueueTarget;
-use crate::processor::PullMessagePlan;
-use crate::processor::PullMessageRequest;
-use crate::processor::QueryAssignmentPlan;
-use crate::processor::QueryAssignmentRequest;
-use crate::processor::QueryOffsetPlan;
-use crate::processor::QueryOffsetPolicy;
-use crate::processor::QueryOffsetRequest;
-use crate::processor::QueryRoutePlan;
-use crate::processor::QueryRouteRequest;
-use crate::processor::RecallMessagePlan;
-use crate::processor::RecallMessageRequest;
-use crate::processor::ReceiveMessagePlan;
-use crate::processor::ReceiveMessageRequest;
-use crate::processor::ReceiveTarget;
-use crate::processor::ReceivedMessage;
-use crate::processor::SendMessageEntry;
-use crate::processor::SendMessagePlan;
-use crate::processor::SendMessageRequest;
-use crate::processor::SendMessageResultEntry;
-use crate::processor::TransactionResolution;
-use crate::processor::TransactionSource;
-use crate::processor::UpdateOffsetPlan;
-use crate::processor::UpdateOffsetRequest;
 use crate::proto::v2;
 use crate::status::ProxyPayloadStatus;
 use crate::status::ProxyStatusMapper;
+use rocketmq_proxy_core::config::GrpcConfig;
+use rocketmq_proxy_core::context::ProxyContext;
+use rocketmq_proxy_core::context::ResolvedAddressScheme;
+use rocketmq_proxy_core::context::ResolvedEndpoint;
+use rocketmq_proxy_core::contracts::ProxyTopicMessageType;
+use rocketmq_proxy_core::error::canonical;
+use rocketmq_proxy_core::error::ProxyError;
+use rocketmq_proxy_core::error::ProxyResult;
+use rocketmq_proxy_core::identity::ResourceIdentity;
+use rocketmq_proxy_core::message::ProxyMessage;
+use rocketmq_proxy_core::message::ProxyMessageExt;
+use rocketmq_proxy_core::processor::AckMessagePlan;
+use rocketmq_proxy_core::processor::AckMessageRequest;
+use rocketmq_proxy_core::processor::AckMessageResultEntry;
+use rocketmq_proxy_core::processor::ChangeInvisibleDurationPlan;
+use rocketmq_proxy_core::processor::ChangeInvisibleDurationRequest;
+use rocketmq_proxy_core::processor::ConsumerFilterExpression;
+use rocketmq_proxy_core::processor::EndTransactionPlan;
+use rocketmq_proxy_core::processor::EndTransactionRequest;
+use rocketmq_proxy_core::processor::ForwardMessageToDeadLetterQueuePlan;
+use rocketmq_proxy_core::processor::ForwardMessageToDeadLetterQueueRequest;
+use rocketmq_proxy_core::processor::GetOffsetPlan;
+use rocketmq_proxy_core::processor::GetOffsetRequest;
+use rocketmq_proxy_core::processor::MessageQueueTarget;
+use rocketmq_proxy_core::processor::PullMessagePlan;
+use rocketmq_proxy_core::processor::PullMessageRequest;
+use rocketmq_proxy_core::processor::QueryAssignmentPlan;
+use rocketmq_proxy_core::processor::QueryAssignmentRequest;
+use rocketmq_proxy_core::processor::QueryOffsetPlan;
+use rocketmq_proxy_core::processor::QueryOffsetPolicy;
+use rocketmq_proxy_core::processor::QueryOffsetRequest;
+use rocketmq_proxy_core::processor::QueryRoutePlan;
+use rocketmq_proxy_core::processor::QueryRouteRequest;
+use rocketmq_proxy_core::processor::RecallMessagePlan;
+use rocketmq_proxy_core::processor::RecallMessageRequest;
+use rocketmq_proxy_core::processor::ReceiveMessagePlan;
+use rocketmq_proxy_core::processor::ReceiveMessageRequest;
+use rocketmq_proxy_core::processor::ReceiveTarget;
+use rocketmq_proxy_core::processor::ReceivedMessage;
+use rocketmq_proxy_core::processor::SendMessageEntry;
+use rocketmq_proxy_core::processor::SendMessagePlan;
+use rocketmq_proxy_core::processor::SendMessageRequest;
+use rocketmq_proxy_core::processor::SendMessageResultEntry;
+use rocketmq_proxy_core::processor::TransactionResolution;
+use rocketmq_proxy_core::processor::TransactionSource;
+use rocketmq_proxy_core::processor::UpdateOffsetPlan;
+use rocketmq_proxy_core::processor::UpdateOffsetRequest;
 
 const PROPERTY_DLQ_ORIGIN_MESSAGE_ID: &str = "DLQ_ORIGIN_MESSAGE_ID";
 const PROPERTY_DLQ_ORIGIN_TOPIC: &str = "DLQ_ORIGIN_TOPIC";
@@ -235,7 +237,7 @@ pub fn build_ack_message_request(request: &v2::AckMessageRequest) -> ProxyResult
         .entries
         .iter()
         .map(|entry| {
-            Ok(crate::processor::AckMessageEntry {
+            Ok(rocketmq_proxy_core::processor::AckMessageEntry {
                 message_id: validate_non_empty_string("entries.messageId", entry.message_id.as_str())?,
                 receipt_handle: validate_non_empty_string("entries.receiptHandle", entry.receipt_handle.as_str())?,
                 lite_topic: entry
@@ -1781,7 +1783,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::message::ProxyMessageExt;
+    use rocketmq_proxy_core::message::ProxyMessageExt;
 
     fn grpc_context() -> ProxyContext {
         ProxyContext::from_grpc_request("SendMessage", &tonic::Request::new(())).expect("gRPC context")

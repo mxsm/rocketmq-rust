@@ -16,19 +16,19 @@ use std::time::Duration;
 
 // Consumer gRPC ingress planning.
 
-use crate::AckMessagePlan;
-use crate::AckMessageRequest;
-use crate::ChangeInvisibleDurationPlan;
-use crate::ChangeInvisibleDurationRequest;
-use crate::ClientSessionRegistry;
-use crate::ClientSettingsSnapshot;
-use crate::ProxyContextWithPrincipal;
-use crate::ProxyResult;
-use crate::ReceiptHandleRegistration;
-use crate::ReceiveMessagePlan;
-use crate::ReceiveMessageRequest;
-use crate::ResourceIdentity;
-use crate::SessionConfig;
+use rocketmq_proxy_core::AckMessagePlan;
+use rocketmq_proxy_core::AckMessageRequest;
+use rocketmq_proxy_core::ChangeInvisibleDurationPlan;
+use rocketmq_proxy_core::ChangeInvisibleDurationRequest;
+use rocketmq_proxy_core::ClientSessionRegistry;
+use rocketmq_proxy_core::ClientSettingsSnapshot;
+use rocketmq_proxy_core::ProxyContextWithPrincipal;
+use rocketmq_proxy_core::ProxyResult;
+use rocketmq_proxy_core::ReceiptHandleRegistration;
+use rocketmq_proxy_core::ReceiveMessagePlan;
+use rocketmq_proxy_core::ReceiveMessageRequest;
+use rocketmq_proxy_core::ResourceIdentity;
+use rocketmq_proxy_core::SessionConfig;
 
 const POP_RECEIPT_HANDLE_PROPERTY: &str = "POP_CK";
 

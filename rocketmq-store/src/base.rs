@@ -17,6 +17,7 @@ use memmap2::MmapMut;
 pub mod allocate_mapped_file_service;
 pub mod append_message_callback;
 pub(crate) mod backend_ops;
+pub(crate) mod backend_read_ops;
 pub mod commit_log_dispatcher;
 pub mod compaction_append_msg_callback;
 pub mod dispatch_request;

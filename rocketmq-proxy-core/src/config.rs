@@ -16,14 +16,12 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use rocketmq_transport::api::ProxyProtocolConfig;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::error::canonical;
 use crate::ProxyResult;
 use crate::DEFAULT_PROXY_GRPC_PORT;
-use crate::DEFAULT_PROXY_REMOTING_PORT;
 
 /// Backend mode selected by the Proxy composition layer.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -190,43 +188,6 @@ fn grpc_tls_config_error(key: &'static str, reason: &'static str) -> crate::Prox
     canonical::configuration_invalid(key, reason).into()
 }
 
-/// Normalized RocketMQ remoting ingress configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct RemotingConfig {
-    pub enabled: bool,
-    pub listen_addr: String,
-    pub proxy_protocol: ProxyProtocolConfig,
-}
-
-impl Default for RemotingConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            listen_addr: format!("0.0.0.0:{DEFAULT_PROXY_REMOTING_PORT}"),
-            proxy_protocol: ProxyProtocolConfig::default(),
-        }
-    }
-}
-
-impl RemotingConfig {
-    pub fn validate(&self) -> ProxyResult<()> {
-        self.socket_addr()?;
-        self.proxy_protocol.validate()?;
-        Ok(())
-    }
-
-    pub fn socket_addr(&self) -> ProxyResult<SocketAddr> {
-        self.listen_addr.parse().map_err(|error| {
-            canonical::configuration_parse_failed_with_source("proxy.remoting.listen_addr", error).into()
-        })
-    }
-
-    pub fn listen_port(&self) -> ProxyResult<u16> {
-        Ok(self.socket_addr()?.port())
-    }
-}
-
 /// Runtime admission limits consumed by neutral Proxy services.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
@@ -333,7 +294,6 @@ mod tests {
     #[test]
     fn ingress_defaults_preserve_public_ports() {
         assert_eq!(GrpcConfig::default().listen_port().expect("gRPC port"), 8081);
-        assert_eq!(RemotingConfig::default().listen_port().expect("remoting port"), 8080);
     }
 
     #[test]
@@ -368,12 +328,12 @@ mod tests {
         };
 
         let error = config.validate().expect_err("certificate-only TLS must fail");
-        assert!(error.to_string().contains("privateKeyPath"), "{error}");
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
 
         config.certificate_path.clear();
         config.private_key_path = "server.key".to_owned();
         let error = config.validate().expect_err("key-only TLS must fail");
-        assert!(error.to_string().contains("certificatePath"), "{error}");
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
     }
 
     #[test]
@@ -387,7 +347,7 @@ mod tests {
         };
 
         let error = config.validate().expect_err("mTLS without client CA must fail");
-        assert!(error.to_string().contains("clientCaPath"), "{error}");
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
     }
 
     #[test]

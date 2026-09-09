@@ -36,7 +36,7 @@ use crate::processor::MessagingProcessor;
 use crate::proto::v2::messaging_service_server::MessagingServiceServer;
 
 #[doc(hidden)]
-pub type ProxyGrpcServerShutdownReport = rocketmq_proxy_core::ingress::grpc::server::GrpcServerShutdownReport;
+pub type ProxyGrpcServerShutdownReport = crate::ingress::grpc::server::GrpcServerShutdownReport;
 
 pub async fn serve<P, F>(
     config: Arc<ProxyConfig>,
@@ -192,7 +192,7 @@ where
     }
     #[cfg(feature = "tls")]
     let tls_task_group = task_group.clone();
-    let shutdown_report = rocketmq_proxy_core::ingress::grpc::server::serve_with_lifecycle_and_ready(
+    let shutdown_report = crate::ingress::grpc::server::serve_with_lifecycle_and_ready(
         &grpc_config,
         shutdown,
         task_group,

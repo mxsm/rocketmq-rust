@@ -739,6 +739,8 @@ impl LocalRemotingBackend {
 }
 
 impl ProxyRemotingBackend for LocalRemotingBackend {
+    type Response = EmbeddedDispatchOutcome;
+
     fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
         Box::pin(async move { self.client.process_remoting(request).await })
     }

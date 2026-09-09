@@ -15,8 +15,7 @@
 //! Logical reads and queue metadata projections. Backend objects stay inside Store.
 
 use super::*;
-use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
-use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
+use crate::base::backend_read_ops::BackendReadOps;
 
 /// Backend queue inventory used by Broker administration.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -25,25 +24,8 @@ pub struct ConsumeQueueStatistics {
     pub consume_queues: i32,
 }
 
-fn local_queue_store(store: &impl BackendOps) -> Option<&ConsumeQueueStore> {
-    BackendOps::get_queue_store(store).downcast_ref::<ConsumeQueueStore>()
-}
-
-pub(super) fn consume_queue_statistics(store: &impl BackendOps) -> ConsumeQueueStatistics {
-    let Some(store) = local_queue_store(store) else {
-        return ConsumeQueueStatistics::default();
-    };
-    let table = store.get_consume_queue_table();
-    let consume_queues = table.lock().values().map(|queues| queues.len() as i32).sum();
-    ConsumeQueueStatistics {
-        lite_queues: store.get_lmq_num(),
-        consume_queues,
-    }
-}
-
 /// Broker message-read and logical-offset capability set.
 pub trait BrokerReadStore: BackendAccess {
-    /// Tests cold-data admission without exposing the CommitLog service.
     fn is_message_in_cold_area(
         &self,
         group: &CheetahString,
@@ -51,37 +33,28 @@ pub trait BrokerReadStore: BackendAccess {
         queue_id: i32,
         queue_offset: i64,
     ) -> bool {
-        BackendOps::get_commit_log(self.backend())
-            .get_cold_data_check_service()
-            .is_msg_in_cold_area(group, topic, queue_id, queue_offset)
+        BackendReadOps::is_message_in_cold_area(self.backend(), group, topic, queue_id, queue_offset)
     }
 
-    /// Reads a physical record's store timestamp, retaining the backend's missing-record sentinel.
     fn pickup_store_timestamp(&self, offset: i64, size: i32) -> i64 {
-        BackendOps::get_commit_log(self.backend()).pickup_store_timestamp(offset, size)
+        BackendReadOps::pickup_store_timestamp(self.backend(), offset, size)
     }
 
-    /// Reads a lightweight queue offset, falling back to the ordinary queue index.
     fn get_lmq_max_offset(&self, topic: &CheetahString) -> i64 {
-        if let Some(store) = local_queue_store(self.backend()) {
-            let offset = store.get_lmq_queue_offset(&format!("{topic}-0"));
-            if offset > 0 {
-                return offset;
-            }
+        let offset = BackendReadOps::lmq_queue_offset(self.backend(), topic);
+        if offset > 0 {
+            offset
+        } else {
+            self.get_max_offset_in_queue(topic, 0)
         }
-        self.get_max_offset_in_queue(topic, 0)
     }
 
     fn is_lmq_exist(&self, topic: &CheetahString) -> bool {
-        local_queue_store(self.backend()).is_some_and(|store| store.is_lmq_exist(topic.as_str()))
-            || self.get_max_offset_in_queue(topic, 0) > 0
+        BackendReadOps::contains_lmq(self.backend(), topic) || self.get_max_offset_in_queue(topic, 0) > 0
     }
 
-    /// Lists known lightweight queues; backends without this index return an empty list.
     fn get_lmq_topic_names(&self) -> Vec<CheetahString> {
-        local_queue_store(self.backend())
-            .map(|store| store.get_lmq_topic_names())
-            .unwrap_or_default()
+        BackendReadOps::get_lmq_topic_names(self.backend())
     }
 
     fn get_message(
@@ -93,7 +66,7 @@ pub trait BrokerReadStore: BackendAccess {
         max_msg_nums: i32,
         message_filter: Option<ArcMessageFilter>,
     ) -> impl Future<Output = Option<GetMessageResult>> + Send {
-        BackendOps::get_message(
+        BackendReadOps::get_message(
             self.backend(),
             group,
             topic,
@@ -115,7 +88,7 @@ pub trait BrokerReadStore: BackendAccess {
         max_total_msg_size: i32,
         message_filter: Option<ArcMessageFilter>,
     ) -> impl Future<Output = Option<GetMessageResult>> + Send {
-        BackendOps::get_message_with_size_limit(
+        BackendReadOps::get_message_with_size_limit(
             self.backend(),
             group,
             topic,
@@ -135,30 +108,30 @@ pub trait BrokerReadStore: BackendAccess {
         begin: i64,
         end: i64,
     ) -> impl Future<Output = Option<QueryMessageResult>> + Send {
-        BackendOps::query_message(self.backend(), topic, key, max_num, begin, end)
+        BackendReadOps::query_message(self.backend(), topic, key, max_num, begin, end)
     }
 
     fn query_message_with_options(
         &self,
         request: &QueryMessageRequest,
     ) -> impl Future<Output = Option<QueryMessageResult>> + Send {
-        BackendOps::query_message_with_options(self.backend(), request)
+        BackendReadOps::query_message_with_options(self.backend(), request)
     }
 
     fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
-        BackendOps::get_max_offset_in_queue(self.backend(), topic, queue_id)
+        BackendReadOps::get_max_offset_in_queue(self.backend(), topic, queue_id)
     }
 
     fn get_max_offset_in_queue_committed(&self, topic: &CheetahString, queue_id: i32, committed: bool) -> i64 {
-        BackendOps::get_max_offset_in_queue_committed(self.backend(), topic, queue_id, committed)
+        BackendReadOps::get_max_offset_in_queue_committed(self.backend(), topic, queue_id, committed)
     }
 
     fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
-        BackendOps::get_min_offset_in_queue(self.backend(), topic, queue_id)
+        BackendReadOps::get_min_offset_in_queue(self.backend(), topic, queue_id)
     }
 
     fn get_commit_log_offset_in_queue(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64 {
-        BackendOps::get_commit_log_offset_in_queue(self.backend(), topic, queue_id, consume_queue_offset)
+        BackendReadOps::get_commit_log_offset_in_queue(self.backend(), topic, queue_id, consume_queue_offset)
     }
 
     fn get_offset_in_queue_by_time_async(
@@ -167,11 +140,11 @@ pub trait BrokerReadStore: BackendAccess {
         queue_id: i32,
         timestamp: i64,
     ) -> impl Future<Output = Result<i64, crate::store_error::StoreError>> + Send {
-        BackendOps::get_offset_in_queue_by_time_async(self.backend(), topic, queue_id, timestamp)
+        BackendReadOps::get_offset_in_queue_by_time_async(self.backend(), topic, queue_id, timestamp)
     }
 
     fn get_offset_in_queue_by_time(&self, topic: &CheetahString, queue_id: i32, timestamp: i64) -> i64 {
-        BackendOps::get_offset_in_queue_by_time(self.backend(), topic, queue_id, timestamp)
+        BackendReadOps::get_offset_in_queue_by_time(self.backend(), topic, queue_id, timestamp)
     }
 
     fn get_offset_in_queue_by_time_with_boundary(
@@ -181,7 +154,13 @@ pub trait BrokerReadStore: BackendAccess {
         timestamp: i64,
         boundary_type: BoundaryType,
     ) -> i64 {
-        BackendOps::get_offset_in_queue_by_time_with_boundary(self.backend(), topic, queue_id, timestamp, boundary_type)
+        BackendReadOps::get_offset_in_queue_by_time_with_boundary(
+            self.backend(),
+            topic,
+            queue_id,
+            timestamp,
+            boundary_type,
+        )
     }
 
     fn get_offset_in_queue_by_time_with_boundary_async(
@@ -191,7 +170,7 @@ pub trait BrokerReadStore: BackendAccess {
         timestamp: i64,
         boundary_type: BoundaryType,
     ) -> impl Future<Output = Result<i64, crate::store_error::StoreError>> + Send {
-        BackendOps::get_offset_in_queue_by_time_with_boundary_async(
+        BackendReadOps::get_offset_in_queue_by_time_with_boundary_async(
             self.backend(),
             topic,
             queue_id,
@@ -201,15 +180,15 @@ pub trait BrokerReadStore: BackendAccess {
     }
 
     fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt> {
-        BackendOps::look_message_by_offset(self.backend(), commit_log_offset)
+        BackendReadOps::look_message_by_offset(self.backend(), commit_log_offset)
     }
 
     fn look_message_by_offset_with_size(&self, commit_log_offset: i64, size: i32) -> Option<MessageExt> {
-        BackendOps::look_message_by_offset_with_size(self.backend(), commit_log_offset, size)
+        BackendReadOps::look_message_by_offset_with_size(self.backend(), commit_log_offset, size)
     }
 
     fn select_one_message_by_offset(&self, commit_log_offset: i64) -> Option<SelectMappedBufferResult> {
-        BackendOps::select_one_message_by_offset(self.backend(), commit_log_offset)
+        BackendReadOps::select_one_message_by_offset(self.backend(), commit_log_offset)
     }
 
     fn select_one_message_by_offset_with_size(
@@ -217,11 +196,11 @@ pub trait BrokerReadStore: BackendAccess {
         commit_log_offset: i64,
         msg_size: i32,
     ) -> Option<SelectMappedBufferResult> {
-        BackendOps::select_one_message_by_offset_with_size(self.backend(), commit_log_offset, msg_size)
+        BackendReadOps::select_one_message_by_offset_with_size(self.backend(), commit_log_offset, msg_size)
     }
 
     fn get_timing_message_count(&self, topic: &CheetahString) -> i64 {
-        BackendOps::get_timing_message_count(self.backend(), topic)
+        BackendReadOps::get_timing_message_count(self.backend(), topic)
     }
 
     fn get_max_phy_offset(&self) -> i64 {
@@ -233,15 +212,15 @@ pub trait BrokerReadStore: BackendAccess {
     }
 
     fn get_earliest_message_time(&self, topic: &CheetahString, queue_id: i32) -> i64 {
-        BackendOps::get_earliest_message_time(self.backend(), topic, queue_id)
+        BackendReadOps::get_earliest_message_time(self.backend(), topic, queue_id)
     }
 
     fn get_earliest_message_time_store(&self) -> i64 {
-        BackendOps::get_earliest_message_time_store(self.backend())
+        BackendReadOps::get_earliest_message_time_store(self.backend())
     }
 
     fn get_message_store_timestamp(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64 {
-        BackendOps::get_message_store_timestamp(self.backend(), topic, queue_id, consume_queue_offset)
+        BackendReadOps::get_message_store_timestamp(self.backend(), topic, queue_id, consume_queue_offset)
     }
 
     fn get_message_store_timestamp_async(
@@ -250,11 +229,11 @@ pub trait BrokerReadStore: BackendAccess {
         queue_id: i32,
         consume_queue_offset: i64,
     ) -> impl Future<Output = Result<i64, crate::store_error::StoreError>> + Send {
-        BackendOps::get_message_store_timestamp_async(self.backend(), topic, queue_id, consume_queue_offset)
+        BackendReadOps::get_message_store_timestamp_async(self.backend(), topic, queue_id, consume_queue_offset)
     }
 
     fn get_message_total_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
-        BackendOps::get_message_total_in_queue(self.backend(), topic, queue_id)
+        BackendReadOps::get_message_total_in_queue(self.backend(), topic, queue_id)
     }
 
     fn now(&self) -> u64 {
@@ -268,11 +247,11 @@ pub trait BrokerReadStore: BackendAccess {
         consume_offset: i64,
         batch_size: i32,
     ) -> bool {
-        BackendOps::check_in_mem_by_consume_offset(self.backend(), topic, queue_id, consume_offset, batch_size)
+        BackendReadOps::check_in_mem_by_consume_offset(self.backend(), topic, queue_id, consume_offset, batch_size)
     }
 
     fn check_in_store_by_consume_offset(&self, topic: &CheetahString, queue_id: i32, consume_offset: i64) -> bool {
-        BackendOps::check_in_store_by_consume_offset(self.backend(), topic, queue_id, consume_offset)
+        BackendReadOps::check_in_store_by_consume_offset(self.backend(), topic, queue_id, consume_offset)
     }
 
     fn dispatch_behind_bytes(&self) -> i64 {
@@ -389,6 +368,7 @@ mod tests {
     use super::*;
     use crate::config::store_runtime_config::StoreRuntimeConfig;
     use crate::message_store::local_file_message_store::LocalFileMessageStore;
+    use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
     use rocketmq_model::common::config::TopicConfig;
 
     fn read_lmq(store: &impl BrokerReadStore, topic: &CheetahString) -> (i64, bool, Vec<CheetahString>) {
@@ -422,15 +402,17 @@ mod tests {
         store.wire_owned_root_dependencies().unwrap();
         let topic = CheetahString::from_static_str("%LMQ%parent%child");
         assert_eq!(read_lmq(&store, &topic), (0, false, Vec::new()));
-        let queue_store = local_queue_store(&store).unwrap();
+        let queue_store = BackendOps::get_queue_store(&store)
+            .downcast_ref::<crate::queue::local_file_consume_queue_store::ConsumeQueueStore>()
+            .unwrap();
         queue_store.increase_lmq_offset(&format!("{topic}-0"), 7);
         assert_eq!(read_lmq(&store, &topic), (7, true, vec![topic.clone()]));
-        let counts = consume_queue_statistics(&store);
+        let counts = BackendReadOps::consume_queue_statistics(&store);
         assert_eq!(counts.lite_queues, 1);
         assert_eq!(counts.consume_queues, 1);
         let queue = BrokerReadStore::find_consume_queue(&store, &CheetahString::from("ordinary"), 2).unwrap();
         assert_eq!(queue.read().get_queue_id(), 2);
-        assert_eq!(consume_queue_statistics(&store).consume_queues, 2);
+        assert_eq!(BackendReadOps::consume_queue_statistics(&store).consume_queues, 2);
         assert_eq!(BrokerReadStore::pickup_store_timestamp(&store, 0, 0), -1);
     }
 }

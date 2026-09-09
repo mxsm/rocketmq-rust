@@ -19,7 +19,7 @@ use std::net::SocketAddr;
 use tonic::Request;
 use tonic::Status;
 
-use crate::GrpcTransportContext;
+use crate::context::GrpcTransportContext;
 
 /// Creates an interceptor that records the listening address for every ingress request.
 pub fn ingress_context_interceptor(local_addr: SocketAddr) -> impl tonic::service::Interceptor + Clone {

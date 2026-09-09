@@ -14,7 +14,7 @@
 
 //! Compatibility facade for the Core-owned gRPC protocol adapter.
 
-pub use rocketmq_proxy_core::ingress::grpc::adapter::*;
+pub use crate::ingress::grpc::adapter::*;
 
 use crate::config::ProxyConfig;
 use crate::processor::QueryAssignmentRequest;
@@ -27,7 +27,7 @@ pub fn build_query_route_request(
     config: &ProxyConfig,
     request: &v2::QueryRouteRequest,
 ) -> ProxyResult<QueryRouteRequest> {
-    rocketmq_proxy_core::ingress::grpc::adapter::build_query_route_request(&config.grpc, request)
+    crate::ingress::grpc::adapter::build_query_route_request(&config.grpc, request)
 }
 
 /// Adapts the legacy aggregate configuration to the Core gRPC configuration.
@@ -35,5 +35,5 @@ pub fn build_query_assignment_request(
     config: &ProxyConfig,
     request: &v2::QueryAssignmentRequest,
 ) -> ProxyResult<QueryAssignmentRequest> {
-    rocketmq_proxy_core::ingress::grpc::adapter::build_query_assignment_request(&config.grpc, request)
+    crate::ingress::grpc::adapter::build_query_assignment_request(&config.grpc, request)
 }

@@ -28,7 +28,7 @@ use rocketmq_runtime::ScheduledTaskSnapshot;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
 
-use crate::SessionConfig;
+use rocketmq_proxy_core::SessionConfig;
 
 #[derive(Clone, Debug)]
 pub struct GrpcHousekeepingRunReport {

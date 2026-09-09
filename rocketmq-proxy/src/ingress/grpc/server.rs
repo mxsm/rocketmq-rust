@@ -23,11 +23,11 @@ use rocketmq_runtime::TaskGroup;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
-use crate::error::canonical;
 use crate::ingress::grpc::service::GrpcHousekeepingRunReport;
-use crate::GrpcConfig;
-use crate::ProxyError;
-use crate::ProxyResult;
+use rocketmq_proxy_core::error::canonical;
+use rocketmq_proxy_core::GrpcConfig;
+use rocketmq_proxy_core::ProxyError;
+use rocketmq_proxy_core::ProxyResult;
 
 #[derive(Debug, Clone)]
 pub struct GrpcServerShutdownReport {
