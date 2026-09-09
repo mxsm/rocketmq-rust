@@ -1,0 +1,22 @@
+[broker]
+namesrvAddr = "127.0.0.1:9876"
+brokerIp1 = "127.0.0.1"
+listenPort = 10911
+storePathRootDir = "./.rocketmq-doc-demo/broker"
+autoCreateTopicEnable = false
+autoCreateSubscriptionGroup = false
+
+[broker.brokerServerConfig]
+bindAddress = "127.0.0.1"
+
+[broker.brokerIdentity]
+brokerName = "docs-broker"
+brokerClusterName = "DocsCluster"
+brokerId = 0
+
+[store]
+storeType = "LocalFile"
+brokerRole = "ASYNC_MASTER"
+storePathRootDir = "./.rocketmq-doc-demo/store"
+haListenAddress = "127.0.0.1"
+haListenPort = 10912

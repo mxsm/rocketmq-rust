@@ -1,6 +1,6 @@
 {
   "version.label": {
-    "message": "最新",
+    "message": "Next（开发中）",
     "description": "The label for version current"
   },
   "sidebar.docsSidebar.category.Getting Started": {
@@ -34,5 +34,13 @@
   "sidebar.docsSidebar.category.Release Notes": {
     "message": "发布说明",
     "description": "The label for category 'Release Notes' in sidebar 'docsSidebar'"
+  },
+  "sidebar.docsSidebar.category.Application Guides": {
+    "message": "应用指南",
+    "description": "The label for category 'Application Guides' in sidebar 'docsSidebar'"
+  },
+  "sidebar.docsSidebar.category.Operations": {
+    "message": "运维",
+    "description": "The label for category 'Operations' in sidebar 'docsSidebar'"
   }
 }

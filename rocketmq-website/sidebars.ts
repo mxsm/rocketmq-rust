@@ -3,6 +3,7 @@ import type { SidebarsConfig } from '@docusaurus/plugin-content-docs';
 const sidebars: SidebarsConfig = {
   docsSidebar: [
     'introduction',
+    'overview/capability-matrix',
     {
       type: 'category',
       label: 'Getting Started',
@@ -10,6 +11,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'getting-started/installation',
+        'getting-started/local-source',
         'getting-started/quick-start',
         'getting-started/basic-concepts',
       ],
@@ -47,6 +49,20 @@ const sidebars: SidebarsConfig = {
         'consumer/pull-consumer',
         'consumer/message-filtering',
       ],
+    },
+    {
+      type: 'category',
+      label: 'Application Guides',
+      collapsible: true,
+      collapsed: true,
+      items: ['guides/delivery-and-retry'],
+    },
+    {
+      type: 'category',
+      label: 'Operations',
+      collapsible: true,
+      collapsed: true,
+      items: ['operations/first-diagnosis'],
     },
     {
       type: 'category',

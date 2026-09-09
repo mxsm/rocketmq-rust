@@ -1,190 +1,99 @@
 ---
-sidebar_position: 2
-title: Quick Start
+title: "Send and consume your first messages"
 ---
 
-# Quick Start
+This tutorial connects the [local Rust services](local-source.md) to one matched producer/LitePull application. You will create a Topic and Consumer Group, send five messages, process them, and commit the group's offsets. All commands run from the repository root.
 
-This guide will help you create your first RocketMQ-Rust producer and consumer in just a few minutes.
+## Before sending
 
-## Step 1: Start RocketMQ Server
-
-First, ensure you have a RocketMQ server running. If you don't have one, use Docker:
+The NameServer and Broker must be running with the tutorial configuration. Confirm `DocsCluster` and `docs-broker` using `cluster clusterList` as shown in local setup. Build the example before starting its one-minute consumer window:
 
 ```bash
-# Start nameserver
-docker run -d -p 9876:9876 --name rmqnamesrv apache/rocketmq:nameserver
-
-# Start broker
-docker run -d -p 10911:10911 -p 10909:10909 --name rmqbroker \
-  -e "NAMESRV_ADDR=rmqnamesrv:9876" \
-  --link rmqnamesrv:rmqnamesrv \
-  apache/rocketmq:broker
+cargo build --manifest-path rocketmq-website/examples/first-message/Cargo.toml
 ```
 
-## Step 2: Create a Producer
+| Setting | Value |
+| --- | --- |
+| NameServer | `127.0.0.1:9876` |
+| Topic | `DocsFirstMessage` |
+| Consumer Group | `docs_first_message_consumer` |
+| Producer Group | `docs_first_message_producer` |
+| Read/write queues | Four of each on the tutorial Broker |
+| Subscription | All messages in the Topic |
 
-Create a new Rust project:
+The executable uses these constants in [its complete source](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-website/examples/first-message/src/main.rs). Both commands use the same checkout and Topic. The larger `rocketmq-example` collection has independent demonstrations with different built-in Topics.
+
+## 1. Create the Topic and Consumer Group
+
+Set the NameServer in this terminal before running the admin commands. In PowerShell:
+
+```powershell
+$env:NAMESRV_ADDR = "127.0.0.1:9876"
+```
+
+In a Unix shell:
 
 ```bash
-cargo new rocketmq-producer
-cd rocketmq-producer
+export NAMESRV_ADDR=127.0.0.1:9876
 ```
 
-Add RocketMQ to your `Cargo.toml`:
+The current `clusterList` and `updateSubGroup` subcommands use the environment and do not accept `-n`. The Topic and progress commands below accept their own `-n` option; it is not a global CLI flag.
 
-```toml
-[dependencies]
-rocketmq-client-rust = "0.8"
-rocketmq-common = "0.8"
-rocketmq-error = "0.8"
-tokio = { version = "1", features = ["full"] }
-```
-
-Create `src/main.rs`:
-
-```rust
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_common::common::message::message_single::Message;
-use rocketmq_client_rust::ClientResult;
-
-#[tokio::main]
-async fn main() -> ClientResult<()> {
-    let mut producer = DefaultMQProducer::builder()
-        .producer_group("producer_group_1")
-        .name_server_addr("localhost:9876")
-        .build();
-
-    producer.start().await?;
-
-    let message = Message::builder()
-        .topic("TopicTest")
-        .tags("TagA")
-        .body("Hello, RocketMQ-Rust!")
-        .build()?;
-
-    let result = producer.send_with_timeout(message, 3_000).await?;
-    println!("Message sent: {:?}", result);
-
-    producer.shutdown().await;
-    Ok(())
-}
-```
-
-## Step 3: Create a Consumer
-
-Create another Rust project:
+These two commands change cluster metadata. Use them against the dedicated local cluster:
 
 ```bash
-cargo new rocketmq-consumer
-cd rocketmq-consumer
+cargo run -p rocketmq-admin-cli -- topic updateTopic -t DocsFirstMessage -c DocsCluster -r 4 -w 4 -n 127.0.0.1:9876
+cargo run -p rocketmq-admin-cli -- consumer updateSubGroup -g docs_first_message_consumer -c DocsCluster
 ```
 
-Add dependencies to `Cargo.toml`:
+`updateTopic` creates or updates Topic configuration. `updateSubGroup` creates or updates Consumer Group configuration. Do not reuse existing application resource names: rerunning an update is a configuration operation, not merely a query.
 
-```toml
-[dependencies]
-rocketmq-client-rust = "0.8"
-rocketmq-common = "0.8"
-rocketmq-error = "0.8"
-tokio = { version = "1", features = ["full"] }
-```
-
-Create `src/main.rs`:
-
-```rust
-use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
-use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_client_rust::ClientResult;
-
-struct MyListener;
-
-impl MessageListenerConcurrently for MyListener {
-    fn consume_message(
-        &self,
-        messages: &[&MessageExt],
-        _context: &ConsumeConcurrentlyContext,
-    ) -> ClientResult<ConsumeConcurrentlyStatus> {
-        for msg in &messages {
-            println!("Received message: {:?}", msg);
-        }
-        Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
-    }
-}
-
-#[tokio::main]
-async fn main() -> ClientResult<()> {
-    let mut consumer = DefaultMQPushConsumer::builder()
-        .consumer_group("consumer_group_1")
-        .name_server_addr("localhost:9876")
-        .consume_thread_min(1)
-        .consume_thread_max(1)
-        .build();
-
-    consumer.subscribe("TopicTest", "*").await?;
-    consumer.register_message_listener_concurrently(MyListener);
-    consumer.start().await?;
-
-    println!("Consumer started. Press Ctrl+C to exit.");
-
-    let _ = tokio::signal::ctrl_c().await;
-    consumer.shutdown().await;
-
-    Ok(())
-}
-```
-
-## Step 4: Run and Test
-
-1. Start the consumer:
-
-    ```bash
-    cargo run
-    ```
-
-2. In another terminal, start the producer:
-
-    ```bash
-    cargo run
-    ```
-
-You should see the consumer receive the message sent by the producer!
-
-## Next Steps
-
-Congratulations! You've created your first RocketMQ-Rust application. Continue learning:
-
-- [Basic Concepts](./basic-concepts) - Learn about topics, messages, and queues
-- [Producer Guide](../category/producer) - Advanced producer features
-- [Consumer Guide](../category/consumer) - Advanced consumer features
-
-## Common Issues
-
-### Connection Refused
-
-Make sure the RocketMQ server is running:
+Inspect the resulting route with this read-only command:
 
 ```bash
-docker ps
+cargo run -p rocketmq-admin-cli -- topic topicRoute -t DocsFirstMessage -n 127.0.0.1:9876
 ```
 
-### No Messages Received
+The route should identify `docs-broker` and advertise `127.0.0.1:10911` with readable and writable queues. If no route is returned immediately, allow the Broker's route registration to propagate and query again. An unreachable returned address is a Broker advertisement problem, even if the NameServer is reachable.
 
-Check that:
+## 2. Start the consumer
 
-1. The topic names match between producer and consumer
-2. The consumer is started before the producer sends messages
-3. The nameserver address is correct
-
-### Build Errors
-
-Ensure you're using a recent version of Rust:
+Open a third terminal, leaving both services running:
 
 ```bash
-rustc --version  # Should be 1.70.0 or later
+cargo run --manifest-path rocketmq-website/examples/first-message/Cargo.toml -- consume
 ```
+
+Wait for `CONSUMER_STARTED`. The application subscribes before startup, polls with a one-second timeout, and waits up to 60 seconds for at least five messages. Empty polls are normal while no eligible data is available.
+
+For a new group without stored progress, `ConsumeFromFirstOffset` allows reading existing data. For an existing group, stored offsets take precedence. The setting does not force historical replay.
+
+## 3. Send from another terminal
+
+Within the consumer's 60-second window:
+
+```bash
+cargo run --manifest-path rocketmq-website/examples/first-message/Cargo.toml -- produce
+```
+
+The producer sends five small messages with a three-second timeout per call. It prints `SEND 0` through `SEND 4`, the returned status, message ID and queue offset. Missing results and non-`SendOk` statuses are treated as errors. An error terminates the command after cleanup.
+
+The consumer prints `RECEIVED id=...` and `OFFSET_COMMIT_REQUESTED received=...`. Message IDs, batching and receive order vary. Count can exceed five if earlier messages remain on the Topic. After processing a nonempty batch, the application commits progress and exits when its total reaches at least five.
+
+This output demonstrates the tutorial's application path; it does not establish global ordering, exactly-once business execution, replication, or crash durability. The example prints message IDs and counts instead of logging message bodies.
+
+## 4. Understand the result
+
+The producer's return concerns sending. The consumer's print concerns application processing. `commit_all` concerns the group's consumption progress. None of those operations is automatically part of a transaction with an external database. In current LitePull, `commit_all` updates client offset-store state separately from persistence and can log per-queue errors internally. `OFFSET_COMMIT_REQUESTED` therefore reports the call returning, not a durable Broker acknowledgement. See [the commit semantics](../consumer/pull-consumer.md).
+
+The sample treats printing each ID as completed processing, then commits. Replace that step with successful business processing before using the pattern in an application. If processing fails halfway through a batch, do not blindly commit the entire batch; define retry, idempotency and the contiguous progress you can safely advance.
+
+The application owns one `RuntimeOwner`, creates an `Arc<ClientRuntime>` beneath it, and passes that client runtime into the facade builder. It closes the producer/consumer, the shared client runtime, the runtime owner, and telemetry before returning. Keep that lifecycle when adapting the example.
+
+## Repeat or diagnose
+
+For another run, start the consumer and then send another five messages. Reusing the group normally resumes its committed progress. If old unconsumed data exists, the consumer may finish from that data before the new producer runs; this demonstration does not correlate a unique run ID.
+
+If the consumer times out, use [first diagnosis](../operations/first-diagnosis.md): check the returned Broker address, matching Topic/group, queue assignment and stored progress. Do not delete the store or reset offsets as the first response.
+
+Read [producer overview](../producer/overview.md), [LitePull consumption](../consumer/pull-consumer.md), and [delivery and retry](../guides/delivery-and-retry.md) before expanding the example.

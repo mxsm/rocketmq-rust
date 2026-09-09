@@ -1,206 +1,54 @@
 ---
-sidebar_position: 1
-title: 消费者概览
+title: "选择消费者模型"
 ---
 
-> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+选择消费者时，需要考虑应用如何接收任务、控制并发和确认进度。这些模型共享发现与传输基础设施，但确认语义不能直接互换。
 
-# 消费者概览
+## 模型比较
 
-RocketMQ-Rust 提供两种消费方式：
+| 模型 | 应用接口 | 进度或确认方式 | 适用起点 |
+| --- | --- | --- | --- |
+| LitePull | 显式轮询循环 | 队列偏移量，自动或由应用控制提交 | 应用自行控制批次与处理流程 |
+| Push | 客户端调用并发或有序监听器 | 监听器结果进入消费/重试路径 | 使用回调的应用 |
+| POP | 接收带 receipt/不可见状态的消息 | 基于 receipt 的 ACK 与可见性处理 | 按 POP 重试与 receipt 生命周期设计的应用 |
+| Classic Pull 兼容接口 | 显式指定队列/偏移量发起拉取 | 应用管理队列位置及兼容偏移量操作 | 维护已有 Classic Pull 集成 |
 
-- `DefaultMQPushConsumer`：回调驱动，适合实时消费。
-- `DefaultLitePullConsumer`：轮询驱动，适合批处理与回放控制。
+第一条消息教程使用 [LitePull](pull-consumer.md)。[Push 消费](push-consumer.md)说明回调，[客户端源码](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-client/src/consumer)包含 POP 和 Classic Pull 接口。
 
-## 消费模型
+Push 是面向应用的编程模型。普通 Push 路径由客户端执行拉取/长轮询并分派消息，不代表 Broker 会主动新建连接来调用业务代码。
 
-### 推模式消费者
+Classic Pull facade 已弃用。由运行时支撑的 builder 提供兼容路径，而 detached 构造不会初始化可运行客户端。新应用应根据需求选择支持的编程模型，不应直接复制旧构造方式。
 
-```rust
-use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
+## 消费者组与队列分配
 
-let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
-    .consumer_group("push_group")
-    .name_server_addr("localhost:9876")
-    .build();
+在基于偏移量的集群消费中，同一消费者组的成员协作分配队列。实例数超过可分配队列数，不会继续增加队列级并行度。需要各自接收完整消息流的独立应用，应使用不同消费者组。
 
-consumer.subscribe("TopicTest", "*").await?;
-consumer.start().await?;
-```
+同组成员应保持一致的订阅和兼容的消费模型。组名不是消息过滤器；主题、命名空间、组、表达式与队列所有权共同影响实例可见的数据。
 
-### 拉模式消费者
+成员或路由变化会触发再平衡并改变分配。应用可能在所有权切换附近完成处理，之后又看到同一消息。业务副作用应具备幂等性，并区分当前分配的工作与之前仍在途的处理。
 
-```rust
-use rocketmq_client_rust::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
-use rocketmq_client_rust::consumer::lite_pull_consumer::LitePullConsumer;
+## 处理成功与消费进度
 
-let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
-    .consumer_group("pull_group")
-    .name_server_addr("localhost:9876")
-    .auto_commit(true)
-    .build();
+基于偏移量的消费者按队列记录位置，不是在整个主题上维护一个总顺序。新组的起始位置策略用于没有可用已存储位置的情况，不会覆盖已有组的进度。
 
-consumer.start().await?;
-consumer.subscribe("TopicTest").await?;
+对 LitePull 而言，轮询将消息交给应用代码，不能证明外部数据库更新完成。自动提交跟随客户端进度；如果应用在轮询后启动异步业务工作，进度推进时业务可能尚未结束。需要关注该区别时，从显式处理后再提交开始。
 
-loop {
-    let messages = consumer.poll_with_timeout(1_000).await;
-    for msg in messages {
-        process_message(&msg);
-    }
-}
-```
+对 Push 而言，仅在回调所代表的工作完成后返回成功结果。先确认，再将未跟踪任务投递给另一个执行器，会使确认与业务效果脱离。
 
-## 创建推消费者
+对 POP 而言，需要保留并使用本次投递对应的 receipt。不可见时间到期后，未确认消息可能再次具备投递条件。延长不可见时间、重试业务操作和确认是独立动作；过期 receipt 不能用作通用消息标识。
 
-```rust
-use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
-use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_error::RocketMQResult;
+这些模型可以支持重试，也可能重复投递，但都不会独立创建与应用存储之间的原子事务。参见[投递与重试](../guides/delivery-and-retry.md)。
 
-struct MyListener;
+## 运行时、压力与关闭
 
-impl MessageListenerConcurrently for MyListener {
-    fn consume_message(
-        &self,
-        messages: &[&MessageExt],
-        _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
-        for msg in messages {
-            println!("Received message: {:?}", msg.msg_id());
-        }
-        Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
-    }
-}
+将应用持有的 `Arc<ClientRuntime>` 传入所选 builder。启动前配置订阅和监听器，在仍持有工作期间保持应用运行。限制工作线程并发和保留批次数量，避免缓慢的下游依赖让客户端变成无界内存队列。
 
-#[tokio::main]
-async fn main() -> RocketMQResult<()> {
-    let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
-        .consumer_group("my_consumer_group")
-        .name_server_addr("localhost:9876")
-        .consume_thread_min(2)
-        .consume_thread_max(10)
-        .build();
+LitePull 零拷贝路径返回应用持有的 `Arc<MessageExt>`。保留这些值会使底层数据继续存活。零拷贝改变复制与所有权成本，不会消除内存统计或业务背压需求。
 
-    consumer.subscribe("TopicTest", "*").await?;
-    consumer.register_message_listener_concurrently(MyListener);
-    consumer.start().await?;
+停止时，先停止接收新业务工作，按重试策略处理已接收任务，再先关闭消费者，后关闭共享客户端运行时和运行时所有者。中断不应让未完成工作被静默记为消费成功。
 
-    let _ = tokio::signal::ctrl_c().await;
-    consumer.shutdown().await;
-    Ok(())
-}
-```
+## 后续阅读
 
-## 配置要点
+通过[快速开始](../getting-started/quick-start.md)运行完整配套应用，再阅读 [LitePull](pull-consumer.md) 中的偏移量与轮询说明。仅选择主题中部分消息时，阅读[消息过滤](message-filtering.md)。收不到消息时，[首次诊断](../operations/first-diagnosis.md)从路由、订阅和队列分配开始排查。
 
-### 推模式配置
-
-```rust
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-
-let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
-    .consumer_group("my_consumer_group")
-    .name_server_addr("localhost:9876")
-    .consume_thread_min(2)
-    .consume_thread_max(20)
-    .pull_batch_size(32)
-    .pull_interval(0)
-    .consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset)
-    .message_model(MessageModel::Clustering)
-    .max_reconsume_times(3)
-    .build();
-```
-
-### 拉模式配置
-
-```rust
-let consumer = DefaultLitePullConsumer::builder(client_runtime.clone())
-    .consumer_group("my_pull_group")
-    .name_server_addr("localhost:9876")
-    .pull_batch_size(32)
-    .pull_threshold_for_queue(1_000)
-    .pull_threshold_for_all(10_000)
-    .auto_commit(false)
-    .auto_commit_interval_millis(5_000)
-    .build();
-```
-
-## 消息过滤
-
-### Tag 过滤
-
-```rust
-consumer.subscribe("OrderEvents", "order_created || order_paid").await?;
-```
-
-### SQL 过滤
-
-```rust
-use rocketmq_client_rust::consumer::message_selector::MessageSelector;
-
-let selector = MessageSelector::by_sql("region = 'us-west' AND amount > 100");
-consumer
-    .subscribe_with_selector("OrderEvents", Some(selector))
-    .await?;
-```
-
-## 重试处理
-
-```rust
-impl MessageListenerConcurrently for MyListener {
-    fn consume_message(
-        &self,
-        messages: &[&MessageExt],
-        _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
-        for msg in messages {
-            if msg.reconsume_times() >= 3 {
-                eprintln!("Max retries exceeded: {:?}", msg.msg_id());
-                continue;
-            }
-
-            if let Err(e) = process_message_safe(msg) {
-                eprintln!("Process failed: {:?}", e);
-                return Ok(ConsumeConcurrentlyStatus::ReconsumeLater);
-            }
-        }
-
-        Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
-    }
-}
-```
-
-## 性能调优
-
-```rust
-let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
-    .consumer_group("perf_group")
-    .name_server_addr("localhost:9876")
-    .consume_thread_min(4)
-    .consume_thread_max(32)
-    .pull_batch_size(64)
-    .pull_threshold_for_queue(2_000)
-    .pull_threshold_for_topic(20_000)
-    .build();
-```
-
-## 最佳实践
-
-1. 在线事件处理优先推模式，批处理与回放优先拉模式。
-2. 监听逻辑保持幂等，适配至少一次投递语义。
-3. 线程数和阈值参数以真实流量压测结果为准。
-4. 优先使用服务端过滤，减少无效消息传输。
-5. 明确最大重试次数，并配置死信处理链路。
-
-## 下一步
-
-- [推消费者](./push-consumer) - 深入了解推模式消费
-- [拉取消费者](./pull-consumer) - 深入了解拉模式消费
-- [消息过滤](./message-filtering) - 学习高级过滤能力
+来源：[客户端 API 概览](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md)、[Classic Pull facade](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/default_mq_pull_consumer.rs)。
