@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::error::Error as _;
 
 use rocketmq_observability::{
     LogsExporter, MetricsExporter, ObservabilityConfig, ObservabilityOverrides, OtlpProtocol, TraceExporter,
@@ -410,7 +411,7 @@ fn shared_validation_requires_canonical_prometheus_configuration() {
 }
 
 #[test]
-fn invalid_trace_sample_ratio_environment_reports_only_the_variable_name() {
+fn invalid_trace_sample_ratio_environment_retains_only_the_variable_name_in_diagnostics() {
     for invalid_value in ["-0.1", "1.1", "NaN", "inf"] {
         let environment = rocketmq_observability::TelemetryEnvironmentValues {
             trace_sample_ratio: Some(invalid_value.into()),
@@ -427,10 +428,10 @@ fn invalid_trace_sample_ratio_environment_reports_only_the_variable_name() {
             },
         )
         .expect_err("invalid trace sample ratio should fail");
-        let message = error.to_string();
+        let detail = invalid_configuration_detail(&error);
 
-        assert!(message.contains("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO"));
-        assert!(!message.contains(invalid_value));
+        assert!(detail.contains("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO"));
+        assert!(!detail.contains(invalid_value));
     }
 
     for invalid_value in ["", "   ", "secret-value"] {
@@ -439,7 +440,7 @@ fn invalid_trace_sample_ratio_environment_reports_only_the_variable_name() {
             ..rocketmq_observability::TelemetryEnvironmentValues::default()
         };
 
-        let message = rocketmq_observability::resolve_telemetry_values(
+        let error = rocketmq_observability::resolve_telemetry_values(
             "rocketmq-broker",
             rocketmq_observability::TelemetryBootstrapConfig::default(),
             &rocketmq_observability::ObservabilityOverrides::default(),
@@ -448,19 +449,18 @@ fn invalid_trace_sample_ratio_environment_reports_only_the_variable_name() {
                 trace_sample_ratio_env: Some("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO"),
             },
         )
-        .expect_err("empty or non-numeric trace sample ratio should fail")
-        .to_string();
+        .expect_err("empty or non-numeric trace sample ratio should fail");
 
         assert_eq!(
-            message,
-            "invalid observability config: ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO must be a floating-point number"
+            invalid_configuration_detail(&error),
+            "ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO must be a floating-point number"
         );
     }
 }
 
 #[cfg(any(unix, windows))]
 #[test]
-fn non_utf8_trace_sample_ratio_reports_only_the_variable_name() {
+fn non_utf8_trace_sample_ratio_retains_only_the_variable_name_in_diagnostics() {
     #[cfg(unix)]
     let invalid_value = {
         use std::os::unix::ffi::OsStringExt;
@@ -476,7 +476,7 @@ fn non_utf8_trace_sample_ratio_reports_only_the_variable_name() {
         ..rocketmq_observability::TelemetryEnvironmentValues::default()
     };
 
-    let message = rocketmq_observability::resolve_telemetry_values(
+    let error = rocketmq_observability::resolve_telemetry_values(
         "rocketmq-broker",
         rocketmq_observability::TelemetryBootstrapConfig::default(),
         &rocketmq_observability::ObservabilityOverrides::default(),
@@ -485,10 +485,25 @@ fn non_utf8_trace_sample_ratio_reports_only_the_variable_name() {
             trace_sample_ratio_env: Some("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO"),
         },
     )
-    .expect_err("non-UTF-8 trace sample ratio should fail")
-    .to_string();
+    .expect_err("non-UTF-8 trace sample ratio should fail");
 
-    assert!(message.contains("ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO"));
+    assert_eq!(
+        invalid_configuration_detail(&error),
+        "ROCKETMQ_BROKER_TRACE_SAMPLE_RATIO must contain valid UTF-8"
+    );
+}
+
+fn invalid_configuration_detail(error: &rocketmq_observability::ObservabilityError) -> &str {
+    assert_eq!(error.descriptor(), &rocketmq_error::OBSERVABILITY_CONFIGURATION_INVALID);
+    assert_eq!(
+        error.to_string(),
+        "observability.configuration.invalid: Observability configuration is invalid"
+    );
+    error
+        .source()
+        .and_then(|source| source.downcast_ref::<rocketmq_observability::ObservabilityFailureDetail>())
+        .expect("configuration error retains typed diagnostic detail")
+        .detail()
 }
 
 #[test]

@@ -174,9 +174,19 @@ mod tests {
 
         let error = init_otlp_tracer_provider(&config).expect_err("invalid OTLP endpoint must fail");
 
+        assert_eq!(error.descriptor(), &rocketmq_error::OBSERVABILITY_INITIALIZATION_FAILED);
+        assert_eq!(
+            error.operation(),
+            crate::error::ObservabilityOperation::InitializeTraces
+        );
+        assert_eq!(
+            error.to_string(),
+            "observability.initialization.failed: Observability initialization failed"
+        );
         for output in [error.to_string(), format!("{error:?}")] {
             assert!(!output.contains(ENDPOINT_CANARY));
-            assert!(output.contains("OTLP trace exporter could not be built"));
+            assert!(!output.contains("OTLP trace exporter could not be built"));
+            assert!(output.contains("observability.initialization.failed"));
         }
     }
 }
