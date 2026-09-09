@@ -699,7 +699,8 @@ mod tests {
     fn topic_cluster_query_request_rejects_blank_topic() {
         let err = TopicClusterQueryRequest::try_new("   ").unwrap_err();
 
-        assert!(err.to_string().contains("topic name must not be empty"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+        assert_eq!(err.to_string(), "core.argument.invalid: Argument is invalid");
     }
 
     #[test]
@@ -716,7 +717,8 @@ mod tests {
     fn topic_route_query_request_rejects_blank_topic() {
         let err = TopicRouteQueryRequest::try_new("   ").unwrap_err();
 
-        assert!(err.to_string().contains("topic name must not be empty"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+        assert_eq!(err.to_string(), "core.argument.invalid: Argument is invalid");
     }
 
     #[test]
@@ -738,7 +740,8 @@ mod tests {
     fn topic_status_query_request_rejects_blank_topic() {
         let err = TopicStatusQueryRequest::try_new("   ").unwrap_err();
 
-        assert!(err.to_string().contains("topic name must not be empty"));
+        assert_eq!(err.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+        assert_eq!(err.to_string(), "core.argument.invalid: Argument is invalid");
     }
 
     #[test]
