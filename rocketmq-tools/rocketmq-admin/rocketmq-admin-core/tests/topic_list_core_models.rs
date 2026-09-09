@@ -42,5 +42,6 @@ fn update_topic_list_request_rejects_empty_topic_config_list() {
     )
     .unwrap_err();
 
-    assert!(error.to_string().contains("topicConfigs must not be empty"));
+    assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+    assert_eq!(error.to_string(), "core.argument.invalid: Argument is invalid");
 }
