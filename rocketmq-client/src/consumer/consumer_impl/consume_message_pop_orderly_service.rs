@@ -819,9 +819,7 @@ impl ConsumeRequest {
         }
         // A receipt may expire while queued or waiting for the queue lock.
         for msg in msgs.iter() {
-            let Some(extra) = msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK)) else {
-                return None;
-            };
+            let extra = msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))?;
             let parts = rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil::split(&extra);
             use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
             let (Ok(pop_time), Ok(invisible)) = (
