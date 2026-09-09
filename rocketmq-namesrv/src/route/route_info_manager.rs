@@ -2057,15 +2057,15 @@ mod tests {
     use rocketmq_transport::test_support::session_id_for_test;
     use rocketmq_transport::test_support::LocalChannelHarness;
 
+    use super::*;
+    use crate::bootstrap::Builder;
+
     fn expect_found<T>(result: RouteResult<TopicRouteLookupOutcome<T>>, expectation: &str) -> T {
         match result.expect(expectation) {
             TopicRouteLookupOutcome::Found(value) => value,
             TopicRouteLookupOutcome::NotFound => panic!("{expectation}"),
         }
     }
-
-    use super::*;
-    use crate::bootstrap::Builder;
 
     #[test]
     fn min_broker_notification_request_keeps_factory_defaults() {
@@ -2088,6 +2088,143 @@ mod tests {
 
     fn test_route_manager() -> (crate::bootstrap::NameServerBootstrap, Arc<RouteInfoManager>) {
         test_route_manager_with_config(crate::NamesrvConfig::default())
+    }
+
+    #[test]
+    fn management_queries_return_empty_views_for_a_fresh_manager() {
+        let (_bootstrap, manager) = test_route_manager();
+        assert!(manager.get_all_topics().is_empty());
+        let info = manager.get_all_cluster_info();
+        assert_eq!(info.broker_addr_table, Some(HashMap::new()));
+        assert_eq!(info.cluster_addr_table, Some(HashMap::new()));
+        let system = manager.get_system_topic_list();
+        assert!(system.topic_list.is_empty());
+        assert_eq!(system.broker_addr, None);
+        assert!(manager.get_unit_topics().topic_list.is_empty());
+        assert!(manager.get_has_unit_sub_topic_list().topic_list.is_empty());
+        assert!(manager.get_has_unit_sub_ununit_topic_list().topic_list.is_empty());
+
+        let error = manager.get_topics_by_cluster("missing").unwrap_err();
+        assert_eq!(error.code(), rocketmq_error::ROUTE_CLUSTER_NOT_FOUND.code());
+        let group = manager
+            .get_broker_member_group("cluster".into(), "missing".into())
+            .unwrap();
+        assert_eq!(group.cluster, "cluster");
+        assert_eq!(group.broker_name, "missing");
+        assert!(group.broker_addrs.is_empty());
+    }
+
+    #[test]
+    fn management_topic_queries_filter_by_cluster_and_include_all_registered_topics() {
+        let (_bootstrap, manager) = test_route_manager();
+        for (cluster, broker, topic) in [
+            ("cluster-a", "broker-a1", "topic-a1"),
+            ("cluster-a", "broker-a2", "topic-a2"),
+            ("cluster-b", "broker-b", "topic-b"),
+        ] {
+            manager.cluster_addr_table.add_broker(cluster.into(), broker.into());
+            manager.broker_addr_table.insert(
+                broker.into(),
+                BrokerData::new(
+                    cluster.into(),
+                    broker.into(),
+                    HashMap::from([(mix_all::MASTER_ID, "127.0.0.1:10911".into())]),
+                    None,
+                ),
+            );
+            manager.register_topic(topic.into(), vec![QueueData::new(broker.into(), 4, 4, 6, 0)]);
+        }
+
+        let mut topics = manager.get_all_topics();
+        topics.sort();
+        assert_eq!(
+            topics,
+            vec![CheetahString::from("topic-a1"), "topic-a2".into(), "topic-b".into()]
+        );
+        let mut cluster_a = manager.get_topics_by_cluster("cluster-a").unwrap();
+        cluster_a.sort();
+        assert_eq!(cluster_a, vec![CheetahString::from("topic-a1"), "topic-a2".into()]);
+        assert_eq!(
+            manager.get_topics_by_cluster("cluster-b").unwrap(),
+            vec![CheetahString::from("topic-b")]
+        );
+    }
+
+    #[test]
+    fn management_cluster_and_member_queries_include_registered_brokers() {
+        let (_bootstrap, manager) = test_route_manager();
+        let cluster = CheetahString::from("cluster");
+        let broker = CheetahString::from("broker");
+        let addresses = HashMap::from([(mix_all::MASTER_ID, CheetahString::from("127.0.0.1:10911"))]);
+        let data = BrokerData::new(cluster.clone(), broker.clone(), addresses.clone(), None);
+        manager.cluster_addr_table.add_broker(cluster.clone(), broker.clone());
+        manager.broker_addr_table.insert(broker.clone(), data.clone());
+
+        let group = manager
+            .get_broker_member_group(cluster.clone(), broker.clone())
+            .unwrap();
+        assert_eq!(group.cluster, cluster);
+        assert_eq!(group.broker_name, broker);
+        assert_eq!(group.broker_addrs, addresses);
+        let info = manager.get_all_cluster_info();
+        assert_eq!(info.broker_addr_table, Some(HashMap::from([(broker.clone(), data)])));
+        assert_eq!(
+            info.cluster_addr_table,
+            Some(HashMap::from([(cluster.clone(), HashSet::from([broker.clone()]))]))
+        );
+        let mut system = manager.get_system_topic_list();
+        system.topic_list.sort();
+        assert_eq!(system.topic_list, vec![broker.clone(), cluster.clone()]);
+        assert_eq!(system.broker_addr, addresses.get(&mix_all::MASTER_ID).cloned());
+    }
+
+    #[test]
+    fn management_unit_queries_distinguish_all_flag_combinations() {
+        use rocketmq_model::common::TopicSysFlag;
+
+        let (_bootstrap, manager) = test_route_manager();
+        manager.cluster_addr_table.add_broker("cluster".into(), "broker".into());
+        manager.broker_addr_table.insert(
+            "broker".into(),
+            BrokerData::new(
+                "cluster".into(),
+                "broker".into(),
+                HashMap::from([(mix_all::MASTER_ID, "127.0.0.1:10911".into())]),
+                None,
+            ),
+        );
+        for (topic, unit, unit_sub) in [
+            ("plain", false, false),
+            ("unit", true, false),
+            ("sub", false, true),
+            ("both", true, true),
+        ] {
+            manager.register_topic(
+                topic.into(),
+                vec![QueueData::new(
+                    "broker".into(),
+                    4,
+                    4,
+                    6,
+                    TopicSysFlag::build_sys_flag(unit, unit_sub),
+                )],
+            );
+        }
+
+        let mut units = manager.get_unit_topics();
+        units.topic_list.sort();
+        assert_eq!(units.topic_list, vec![CheetahString::from("both"), "unit".into()]);
+        assert_eq!(units.broker_addr, None);
+        let mut subscriptions = manager.get_has_unit_sub_topic_list();
+        subscriptions.topic_list.sort();
+        assert_eq!(
+            subscriptions.topic_list,
+            vec![CheetahString::from("both"), "sub".into()]
+        );
+        assert_eq!(subscriptions.broker_addr, None);
+        let nonunit_subscriptions = manager.get_has_unit_sub_ununit_topic_list();
+        assert_eq!(nonunit_subscriptions.topic_list, vec![CheetahString::from("sub")]);
+        assert_eq!(nonunit_subscriptions.broker_addr, None);
     }
 
     fn test_route_manager_with_config(
