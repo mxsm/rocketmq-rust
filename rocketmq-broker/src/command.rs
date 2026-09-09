@@ -58,20 +58,20 @@ pub enum ConfigFileFormat {
 /// RocketMQ Broker command line arguments
 ///
 /// Supports the same command line options as the Java implementation:
-/// - `-c, --configFile`: Broker config properties file
+/// - `-c, --configFile`: Broker configuration file (TOML or Java properties)
 /// - `-p, --printConfigItem`: Print all config items and exit
 /// - `-m, --printImportantConfig`: Print important config items and exit
 /// - `-n, --namesrvAddr`: Name server address list (optional)
 #[derive(Parser, Debug)]
 #[command(
     author = "mxsm",
-    version = "0.2.0",
+    version,
     about = "RocketMQ Broker Server (Rust)",
     long_about = "Apache RocketMQ Broker Server implemented in Rust\n\
                   For more information: https://github.com/mxsm/rocketmq-rust"
 )]
 pub struct Args {
-    /// Broker config properties file path
+    /// Broker configuration file path (TOML or Java properties)
     ///
     /// If not specified, will try to load from:
     ///
