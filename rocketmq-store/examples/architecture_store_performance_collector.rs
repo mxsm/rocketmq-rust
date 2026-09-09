@@ -71,6 +71,7 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::BrokerReadStore;
+use rocketmq_store::BrokerReplicationStore;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::FlushDiskType;
