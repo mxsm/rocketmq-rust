@@ -18,7 +18,7 @@ use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Deserialize, Serialize, Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EpochEntry {
     #[serde(default)]
@@ -27,6 +27,12 @@ pub struct EpochEntry {
     start_offset: i64,
     #[serde(default = "EpochEntry::default_end_offset")]
     end_offset: i64,
+}
+
+impl Default for EpochEntry {
+    fn default() -> Self {
+        Self::new(0, 0)
+    }
 }
 
 impl EpochEntry {
@@ -145,6 +151,27 @@ mod tests {
     use cheetah_string::CheetahString;
 
     use super::*;
+
+    #[test]
+    fn epoch_entry_default_matches_constructor_and_missing_wire_fields() {
+        let expected = EpochEntry::new(0, 0);
+        assert_eq!(expected.get_end_offset(), i64::MAX);
+        assert_eq!(EpochEntry::default(), expected);
+        assert_eq!(serde_json::from_str::<EpochEntry>("{}").unwrap(), expected);
+        assert_eq!(
+            serde_json::to_value(&expected).unwrap(),
+            serde_json::json!({
+                "epoch": 0, "startOffset": 0, "endOffset": i64::MAX
+            })
+        );
+        for end_offset in [0, 42] {
+            let value = serde_json::json!({"endOffset": end_offset});
+            assert_eq!(
+                serde_json::from_value::<EpochEntry>(value).unwrap(),
+                EpochEntry::with_end_offset(0, 0, end_offset)
+            );
+        }
+    }
 
     #[test]
     fn epoch_entry_and_cache_accessors_update_all_fields() {
