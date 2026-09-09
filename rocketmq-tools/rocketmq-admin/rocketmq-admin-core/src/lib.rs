@@ -24,23 +24,11 @@
 pub mod core;
 
 #[cfg(any(feature = "read-client-adapter", feature = "mutation-client-adapter"))]
-pub(crate) trait IntoCanonicalError {
-    fn into_canonical_error(self) -> rocketmq_error::Error;
-}
+#[path = "client_adapter/error_conversion.rs"]
+mod error_conversion;
 
 #[cfg(any(feature = "read-client-adapter", feature = "mutation-client-adapter"))]
-impl IntoCanonicalError for rocketmq_error::Error {
-    fn into_canonical_error(self) -> rocketmq_error::Error {
-        self
-    }
-}
-
-#[cfg(any(feature = "read-client-adapter", feature = "mutation-client-adapter"))]
-impl IntoCanonicalError for rocketmq_client_rust::ClientError {
-    fn into_canonical_error(self) -> rocketmq_error::Error {
-        self.into_error()
-    }
-}
+pub(crate) use error_conversion::IntoCanonicalError;
 
 #[cfg(feature = "read-client-adapter")]
 pub(crate) fn canonical_http_status(error: &rocketmq_error::Error) -> u16 {
