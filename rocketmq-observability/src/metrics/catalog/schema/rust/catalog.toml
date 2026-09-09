@@ -1029,3 +1029,11 @@ kind = "Counter"
 unit = "{response}"
 labels = ["REASON"]
 source = "Remoting"
+
+[[metric]]
+index = 222
+symbol = "TRANSPORT_DEFERRED_TERMINAL_TOTAL"
+kind = "Counter"
+unit = "{response}"
+labels = ["REQUEST_CODE_BUCKET", "REASON"]
+source = "Remoting"

@@ -96,6 +96,15 @@
       "redaction": "none"
     },
     {
+      "id": "code",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
       "id": "component",
       "cardinality": "bounded",
       "privacy": "operational",
@@ -384,6 +393,15 @@
       "redaction": "none"
     },
     {
+      "id": "mode",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
       "id": "node_id",
       "cardinality": "bounded",
       "privacy": "operational",
@@ -412,6 +430,15 @@
     },
     {
       "id": "operation_kind",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "outcome",
       "cardinality": "bounded",
       "privacy": "operational",
       "max_distinct": 10000,
@@ -529,6 +556,15 @@
     },
     {
       "id": "request_code",
+      "cardinality": "bounded",
+      "privacy": "operational",
+      "max_distinct": 10000,
+      "max_value_bytes": 256,
+      "default_enabled": true,
+      "redaction": "none"
+    },
+    {
+      "id": "request_code_bucket",
       "cardinality": "bounded",
       "privacy": "operational",
       "max_distinct": 10000,
@@ -3469,8 +3505,11 @@
       "catalog": "rust",
       "family": "request",
       "stability": "stable",
-      "attributes": [],
-      "cardinality_budget": 1,
+      "attributes": [
+        "code",
+        "outcome"
+      ],
+      "cardinality_budget": 10000,
       "privacy": "operational",
       "sampling": {
         "strategy": "aggregate"
@@ -6065,6 +6104,207 @@
       "attributes": [
         "backend",
         "state"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_transport_request_duration_seconds",
+      "source_symbol": "TRANSPORT_REQUEST_DURATION_SECONDS",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "s",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "code",
+        "outcome"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_transport_response_total",
+      "source_symbol": "TRANSPORT_RESPONSE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{response}",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "mode",
+        "result"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_transport_deferred_inflight",
+      "source_symbol": "TRANSPORT_DEFERRED_INFLIGHT",
+      "signal_type": "metric",
+      "kind": "up_down_counter",
+      "unit": "{request}",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "watermark-lag",
+      "stability": "stable",
+      "attributes": [
+        "code"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_transport_deferred_retained_bytes",
+      "source_symbol": "TRANSPORT_DEFERRED_RETAINED_BYTES",
+      "signal_type": "metric",
+      "kind": "up_down_counter",
+      "unit": "By",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "connection-bytes",
+      "stability": "stable",
+      "attributes": [
+        "code"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_transport_response_queue_wait_seconds",
+      "source_symbol": "TRANSPORT_RESPONSE_QUEUE_WAIT_SECONDS",
+      "signal_type": "metric",
+      "kind": "histogram",
+      "unit": "s",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [],
+      "cardinality_budget": 1,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_transport_response_duplicate_total",
+      "source_symbol": "TRANSPORT_RESPONSE_DUPLICATE_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{response}",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "code"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_transport_response_abandoned_total",
+      "source_symbol": "TRANSPORT_RESPONSE_ABANDONED_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{response}",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "reason"
+      ],
+      "cardinality_budget": 10000,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_transport_deferred_terminal_total",
+      "source_symbol": "TRANSPORT_DEFERRED_TERMINAL_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{response}",
+      "owner": "remoting",
+      "catalog": "rust",
+      "family": "request",
+      "stability": "stable",
+      "attributes": [
+        "request_code_bucket",
+        "reason"
       ],
       "cardinality_budget": 10000,
       "privacy": "operational",
