@@ -713,14 +713,14 @@ struct PopIndexRecord<I> {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct PopOrderKey {
-    deadline: tokio::time::Instant,
+    deadline: u64,
     sequence: u64,
 }
 
 impl<I> PopIndexRecord<I> {
     const fn order_key(&self) -> PopOrderKey {
         PopOrderKey {
-            deadline: self.deadline.protocol_at(),
+            deadline: self.deadline.protocol_millis(),
             sequence: self.sequence,
         }
     }
@@ -838,7 +838,7 @@ where
             fanout_key,
             id,
             order: PopOrderKey {
-                deadline: deadline.protocol_at(),
+                deadline: deadline.protocol_millis(),
                 sequence: self.sequence,
             },
             membership: Arc::clone(&self.membership),
