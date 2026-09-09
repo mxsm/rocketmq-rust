@@ -1,11 +1,16 @@
+securityProfile: development
 services:
   namesrv:
+    auth: {enabled: false, secretName: ""}
     enabled: true
   broker:
+    auth: {enabled: false, secretName: ""}
     enabled: true
     replicas: 1
     controllerMode: false
   controller:
+    auth: {enabled: false, secretName: ""}
     enabled: false
   proxy:
+    auth: {enabled: false, secretName: ""}
     enabled: false

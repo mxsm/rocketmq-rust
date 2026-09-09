@@ -22,5 +22,6 @@ pub use socket_options::TcpKeepaliveConfig;
 pub use tls_config::TlsClientAuth;
 pub use tls_config::TlsClientConfig;
 pub use tls_config::TlsConfig;
+pub use tls_config::TlsConfigError;
 pub use tls_config::TlsMode;
 pub use tls_config::TlsServerConfig;

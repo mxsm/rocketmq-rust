@@ -44,6 +44,37 @@ class CoreHelmRuntimeTests(unittest.TestCase):
                     self.assertEqual("/drainz", container["lifecycle"]["preStop"]["httpGet"]["path"])
                     self.assertGreater(pod["terminationGracePeriodSeconds"], int(env["ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS"]["value"]))
 
+    def test_production_enables_auth_and_mounts_inner_client_secrets(self):
+        for profile, documents in self.profiles.items():
+            if "production" not in profile:
+                continue
+            for service, _, _, config in configurations(documents):
+                auth = config["broker"] if service == "broker" else config.get("auth", config)
+                self.assertTrue(auth["authenticationEnabled"])
+                self.assertTrue(auth["authorizationEnabled"])
+                self.assertEqual("/etc/rocketmq/acl/plain_acl.yml", auth["aclFile"])
+                if service == "proxy":
+                    self.assertTrue(config["enableAclRpcHookForClusterMode"])
+            for workload in [d for d in documents if d["kind"] in ("StatefulSet", "Deployment")]:
+                service = workload["metadata"]["labels"]["app.kubernetes.io/component"]
+                if service not in ("broker", "proxy"):
+                    continue
+                pod = workload["spec"]["template"]["spec"]
+                env = {item["name"]: item.get("value") for item in pod["containers"][0]["env"]}
+                self.assertEqual("/etc/rocketmq/acl/inner-client.json", env["ROCKETMQ_INNER_CLIENT_CREDENTIALS_FILE"])
+                acl = next(v["secret"] for v in pod["volumes"] if v["name"] == "acl")
+                self.assertIn({"key": "inner-client.json", "path": "inner-client.json"}, acl["items"])
+
+    def test_production_rejects_authentication_downgrade(self):
+        for override in ("securityProfile=null", "services.broker.auth.credentialsKey=null"):
+            with self.subTest(override=override), self.assertRaises(subprocess.CalledProcessError):
+                render("values-production-default-ha.yaml", self.helm, override)
+        for service in ("namesrv", "broker", "proxy"):
+            with self.subTest(service=service), self.assertRaises(subprocess.CalledProcessError):
+                render("values-production-proxy-tls.yaml", self.helm, f"services.{service}.auth.enabled=false")
+        with self.assertRaises(subprocess.CalledProcessError):
+            render("values-production-controller-ha.yaml", self.helm, "services.controller.auth.enabled=false")
+
     def test_controller_membership_and_broker_replication_are_real(self):
         documents = self.profiles["values-production-controller-ha.yaml"]
         configs = list(configurations(documents))

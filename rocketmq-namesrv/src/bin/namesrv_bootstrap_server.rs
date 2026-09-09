@@ -696,7 +696,7 @@ fn load_durable_desired_snapshot(
                 client_config.maintenance.idle_scan_interval =
                     (parsed > 0).then(|| std::time::Duration::from_millis(parsed));
             }
-            key if is_tls_config_key(key) => server_config.tls_config.apply_java_property(key, value.as_str()),
+            key if is_tls_config_key(key) => server_config.tls_config.try_apply_java_property(key, value.as_str())?,
             _ => bail!("unknown durable NameServer configuration key '{key}'"),
         }
     }
@@ -720,7 +720,7 @@ fn resolve_startup_log_filter(
 fn apply_tls_properties_from_file(server_config: &mut ServerConfig, config_file: PathBuf) -> Result<()> {
     let content = std::fs::read_to_string(&config_file)
         .with_context(|| format!("Failed to read TLS properties from {:?}", config_file))?;
-    server_config.tls_config.apply_java_properties_str(&content);
+    server_config.tls_config.try_apply_java_properties_str(&content)?;
     Ok(())
 }
 
@@ -1032,6 +1032,17 @@ mod tests {
     use rocketmq_protocol::code::request_code::RequestCode;
 
     use super::*;
+
+    #[test]
+    fn tls_properties_reject_invalid_policy_without_partial_updates() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("tls.properties");
+        std::fs::write(&path, "tls.server.mode=disabled\ntls.server.need.client.auth=reqiure").unwrap();
+        let mut server = ServerConfig::default();
+        let original = server.tls_config.clone();
+        assert!(apply_tls_properties_from_file(&mut server, path).is_err());
+        assert_eq!(server.tls_config, original);
+    }
 
     #[test]
     #[ignore = "requires CORE_HELM_CONFIG_DIR exported by scripts/core_helm_configs.py"]

@@ -104,6 +104,11 @@ impl SecurityBootstrap {
         matches!(self, Self::Enabled(_))
     }
 
+    /// Reports whether the selected profile requires request authentication and authorization.
+    pub const fn requires_authentication(&self) -> bool {
+        matches!(self, Self::Enabled(config) if matches!(config.profile, SecurityBootstrapProfile::SecureEnforced))
+    }
+
     /// Validates enabled security bootstrap or records that it was intentionally disabled.
     ///
     /// # Errors

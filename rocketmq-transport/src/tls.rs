@@ -200,11 +200,11 @@ impl TlsServerRuntime {
             let build_config = base_config.clone();
             let initial = blocking
                 .spawn_io("transport.tls.initialize", move || {
-                    let effective = effective_tls_config(&build_config);
-                    build_server_acceptor(&effective)
+                    let effective = effective_tls_config(&build_config)?;
+                    Ok::<_, SharedError>(build_server_acceptor_exact(&effective))
                 })
                 .await
-                .map_err(|source| connection_failed(TransportStage::EndpointValidation, source))?;
+                .map_err(|source| connection_failed(TransportStage::EndpointValidation, source))??;
             match initial {
                 Ok(initial) => acceptor.store(Some(StdArc::new(VersionedTlsAcceptor {
                     generation: 1,
@@ -372,12 +372,12 @@ impl TlsServerRuntime {
         let acceptor = self
             .blocking
             .spawn_io("transport.tls.reload", move || {
-                let effective = effective_tls_config(&base_config);
+                let effective = effective_tls_config(&base_config)?;
                 let _snapshot = file_snapshot(&effective.watched_server_paths());
                 if mode == TlsMode::Disabled {
                     Ok(None)
                 } else {
-                    build_server_acceptor(&effective).map(Some)
+                    build_server_acceptor_exact(&effective).map(Some)
                 }
             })
             .await
@@ -468,11 +468,15 @@ impl TlsServerRuntime {
             let initial_config = base_config.clone();
             let mut previous_snapshot = match blocking
                 .spawn_io("transport.tls.reload.snapshot", move || {
-                    file_snapshot(&effective_tls_config(&initial_config).watched_server_paths())
+                    effective_tls_config(&initial_config).map(|config| file_snapshot(&config.watched_server_paths()))
                 })
                 .await
             {
-                Ok(snapshot) => snapshot,
+                Ok(Ok(snapshot)) => snapshot,
+                Ok(Err(error)) => {
+                    warn!(%error, "invalid initial TLS reload configuration");
+                    Vec::new()
+                }
                 Err(error) => {
                     warn!(?error, "failed to inspect initial TLS reload snapshot");
                     Vec::new()
@@ -488,15 +492,19 @@ impl TlsServerRuntime {
                 let reload_config = base_config.clone();
                 let current_snapshot = match blocking
                     .spawn_io("transport.tls.reload", move || {
-                        let effective_config = effective_tls_config(&reload_config);
+                        let effective_config = effective_tls_config(&reload_config)?;
                         let paths = effective_config.watched_server_paths();
                         let current_snapshot = file_snapshot(&paths);
-                        let acceptor = build_server_acceptor(&effective_config);
-                        (current_snapshot, acceptor)
+                        let acceptor = build_server_acceptor_exact(&effective_config);
+                        Ok::<_, SharedError>((current_snapshot, acceptor))
                     })
                     .await
                 {
-                    Ok(value) => value,
+                    Ok(Ok(value)) => value,
+                    Ok(Err(error)) => {
+                        warn!(%error, "invalid TLS reload configuration; keeping previous acceptor");
+                        continue;
+                    }
                     Err(error) => {
                         warn!(?error, "TLS reload blocking work failed");
                         continue;
@@ -612,7 +620,7 @@ pub fn build_client_config(
         }
     }
 
-    let effective_config = effective_tls_config(tls_config);
+    let effective_config = effective_tls_config(tls_config)?;
     let protocol_versions = configured_protocol_versions(&effective_config)?;
     let client_builder = match protocol_versions.as_deref() {
         Some(versions) => tokio_rustls::rustls::ClientConfig::builder_with_protocol_versions(versions),
@@ -652,9 +660,11 @@ pub fn build_client_config(
     }
 }
 
-#[cfg(feature = "tls")]
-pub fn build_server_acceptor(tls_config: &TlsConfig) -> Result<tokio_rustls::TlsAcceptor, rocketmq_error::SharedError> {
-    let effective_config = effective_tls_config(tls_config);
+#[cfg(all(feature = "tls", any(test, feature = "test-support")))]
+pub(crate) fn build_server_acceptor(
+    tls_config: &TlsConfig,
+) -> Result<tokio_rustls::TlsAcceptor, rocketmq_error::SharedError> {
+    let effective_config = effective_tls_config(tls_config)?;
 
     build_server_acceptor_exact(&effective_config)
 }
@@ -981,20 +991,28 @@ fn configured_protocol_versions(
 }
 
 #[cfg(feature = "tls")]
-fn effective_tls_config(base_config: &TlsConfig) -> TlsConfig {
+fn effective_tls_config(base_config: &TlsConfig) -> Result<TlsConfig, SharedError> {
     let mut effective_config = base_config.clone();
     let enable = effective_config.enable;
     let server_mode = effective_config.server.mode;
     let config_file = effective_config.config_file.clone();
 
-    if let Ok(content) = fs::read_to_string(&config_file) {
-        effective_config.apply_java_properties_str(&content);
-        effective_config.enable = enable;
-        effective_config.server.mode = server_mode;
-        effective_config.config_file = config_file;
+    match fs::read_to_string(&config_file) {
+        Ok(content) => {
+            effective_config
+                .try_apply_java_properties_str(&content)
+                .map_err(|source| config_error_source("tls.config.file", source))?;
+            effective_config.enable = enable;
+            effective_config.server.mode = server_mode;
+            effective_config.config_file = config_file;
+        }
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && (config_file.is_empty() || config_file == crate::config::tls_config::DEFAULT_TLS_CONFIG_FILE) => {}
+        Err(error) => return Err(config_error_source("tls.config.file", error)),
     }
 
-    effective_config
+    Ok(effective_config)
 }
 
 #[cfg(feature = "tls")]
@@ -1034,6 +1052,43 @@ fn config_error_source(key: &'static str, source: impl std::error::Error + Send 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "tls")]
+    #[tokio::test]
+    async fn invalid_tls_policy_fails_startup_and_preserves_a_live_reload_generation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("tls.properties");
+        let context = rocketmq_runtime::RuntimeContext::from_current("strict-tls-policy");
+        let service = context.service_context("tls");
+        let config = TlsConfig {
+            config_file: path.to_string_lossy().into_owned(),
+            test_mode_enable: true,
+            ..Default::default()
+        };
+        fs::write(&path, "tls.server.need.client.auth=reqiure").unwrap();
+        let result = TlsServerRuntime::initialize_with_service_context(config.clone(), &service).await;
+        assert!(
+            result.is_err(),
+            "invalid explicit policy must fail even in permissive mode"
+        );
+        fs::write(&path, "tls.server.need.client.auth=none").unwrap();
+        let runtime = TlsServerRuntime::initialize_with_service_context(config, &service)
+            .await
+            .unwrap();
+        let generation = runtime.active_generation();
+        assert!(generation > 0);
+        fs::write(&path, "tls.server.need.client.auth=reqiure").unwrap();
+        assert!(runtime.reload_now_with_report().await.is_err());
+        assert_eq!(runtime.active_generation(), generation);
+        fs::remove_file(&path).unwrap();
+        assert!(runtime.reload_now_with_report().await.is_err());
+        assert_eq!(runtime.active_generation(), generation);
+        assert!(runtime
+            .shutdown_gracefully(Duration::from_secs(1))
+            .await
+            .unwrap()
+            .is_healthy());
+    }
 
     #[cfg(feature = "tls")]
     #[tokio::test]
@@ -1088,7 +1143,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(error.to_string().contains("tls-initialize"));
+        assert_eq!(error.descriptor(), &rocketmq_error::TRANSPORT_CONNECTION_FAILED);
     }
 
     #[cfg(feature = "tls")]
@@ -1116,7 +1171,7 @@ mod tests {
             ..Default::default()
         };
 
-        let effective = effective_tls_config(&base);
+        let effective = effective_tls_config(&base).expect("valid TLS properties");
 
         assert!(effective.enable);
         assert_eq!(effective.server.mode, TlsMode::Enforcing);
@@ -1162,7 +1217,7 @@ mod tests {
             Ok(_) => panic!("missing certs should fail"),
             Err(error) => error,
         };
-        assert!(error.to_string().contains("tls.server.certPath"));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
     }
 
     #[cfg(feature = "tls")]
@@ -1183,7 +1238,7 @@ mod tests {
 
         config.protocols = Some("TLSv1.1".to_string());
         let error = configured_protocol_versions(&config).expect_err("unsupported protocols should fail");
-        assert!(error.to_string().contains("tls.protocols"));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
     }
 
     #[cfg(feature = "tls")]

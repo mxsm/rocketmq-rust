@@ -420,6 +420,11 @@ fn validate_controller_security(
     prometheus_bind_addr: Option<SocketAddr>,
     probe_bind_addr: Option<SocketAddr>,
 ) -> Result<SecurityBootstrapOutcome> {
+    if security_bootstrap.requires_authentication()
+        && (!controller_config.authentication_enabled || !controller_config.authorization_enabled)
+    {
+        anyhow::bail!("secure-enforced Controller requires both authenticationEnabled and authorizationEnabled");
+    }
     if !security_bootstrap.is_enabled() {
         return security_bootstrap.validate(&[]).map_err(anyhow::Error::from);
     }
@@ -766,6 +771,21 @@ fn parse_auto_initialize_cluster_flag(raw: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secure_profile_rejects_disabled_request_protection_before_material_loading() {
+        let security =
+            SecurityBootstrap::Enabled(SecurityBootstrapConfig::new(SecurityBootstrapProfile::SecureEnforced));
+        for (authentication, authorization) in [(false, false), (true, false), (false, true)] {
+            let mut config = ControllerConfig::default();
+            config.authentication_enabled = authentication;
+            config.authorization_enabled = authorization;
+            let error = validate_controller_security(&security, &config, None, None).unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("requires both authenticationEnabled and authorizationEnabled"));
+        }
+    }
 
     #[test]
     fn telemetry_shutdown_aggregate_retains_both_typed_failures_with_fixed_display() {

@@ -21,6 +21,19 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 
+pub(crate) const DEFAULT_TLS_CONFIG_FILE: &str = "/etc/rocketmq/tls.properties";
+
+/// Invalid explicit TLS configuration, without retaining the supplied value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum TlsConfigError {
+    #[error("tls.server.mode must be disabled, permissive, or enforcing")]
+    ServerMode,
+    #[error("tls.server.need.client.auth must be none, optional, require, or required")]
+    ClientAuth,
+    #[error("{0} must be true or false")]
+    Boolean(&'static str),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TlsMode {
     Disabled,
@@ -30,6 +43,16 @@ pub enum TlsMode {
 }
 
 impl TlsMode {
+    /// Parses explicit configuration without the Java-compatible fallback in `FromStr`.
+    pub fn parse_strict(value: &str) -> Result<Self, TlsConfigError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "disabled" => Ok(Self::Disabled),
+            "permissive" => Ok(Self::Permissive),
+            "enforcing" => Ok(Self::Enforcing),
+            _ => Err(TlsConfigError::ServerMode),
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             TlsMode::Disabled => "disabled",
@@ -73,7 +96,7 @@ impl<'de> Deserialize<'de> for TlsMode {
         D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        Ok(TlsMode::from_str(&value).unwrap_or_default())
+        TlsMode::parse_strict(&value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -86,6 +109,16 @@ pub enum TlsClientAuth {
 }
 
 impl TlsClientAuth {
+    /// Parses explicit configuration without weakening an unknown client-auth policy.
+    pub fn parse_strict(value: &str) -> Result<Self, TlsConfigError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Ok(Self::None),
+            "optional" => Ok(Self::Optional),
+            "require" | "required" => Ok(Self::Require),
+            _ => Err(TlsConfigError::ClientAuth),
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             TlsClientAuth::None => "none",
@@ -129,7 +162,7 @@ impl<'de> Deserialize<'de> for TlsClientAuth {
         D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        Ok(TlsClientAuth::from_str(&value).unwrap_or_default())
+        TlsClientAuth::parse_strict(&value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -173,6 +206,48 @@ impl Default for TlsConfig {
 }
 
 impl TlsConfig {
+    /// Applies one explicit property, rejecting invalid TLS policies before mutation.
+    pub fn try_apply_java_property(&mut self, key: &str, value: &str) -> Result<(), TlsConfigError> {
+        let normalized = strip_matching_quotes(strip_inline_comment(value.trim()).trim());
+        match key.trim() {
+            "tls.enable" | "tlsEnable" => self.enable = parse_bool_strict(normalized, "tls.enable")?,
+            "tls.test.mode.enable" | "tlsTestModeEnable" => {
+                self.test_mode_enable = parse_bool_strict(normalized, "tls.test.mode.enable")?;
+            }
+            "tls.server.authClient" | "tlsServerAuthClient" => {
+                self.server.auth_client = parse_bool_strict(normalized, "tls.server.authClient")?;
+            }
+            "tls.client.authServer" | "tlsClientAuthServer" => {
+                self.client.auth_server = parse_bool_strict(normalized, "tls.client.authServer")?;
+            }
+            "tls.server.mode" | "tlsServerMode" => {
+                self.server.mode = TlsMode::parse_strict(normalized)?;
+            }
+            "tls.server.need.client.auth" | "tlsServerNeedClientAuth" => {
+                self.server.need_client_auth = TlsClientAuth::parse_strict(normalized)?;
+            }
+            _ => self.apply_java_property(key, value),
+        }
+        Ok(())
+    }
+
+    /// Applies an entire properties snapshot atomically after validating its TLS policies.
+    pub fn try_apply_java_properties_str(&mut self, content: &str) -> Result<(), TlsConfigError> {
+        let mut candidate = self.clone();
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+                continue;
+            }
+            if let Some((key, value)) = split_property(line) {
+                candidate.try_apply_java_property(key, value)?;
+            }
+        }
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Java-compatible legacy parser. Explicit startup/reload configuration uses the fallible API.
     pub fn apply_java_property(&mut self, key: &str, value: &str) {
         let value = strip_matching_quotes(strip_inline_comment(value.trim()).trim());
         match key.trim() {
@@ -370,6 +445,16 @@ fn parse_bool(value: &str, default: bool) -> bool {
     value.parse::<bool>().unwrap_or(default)
 }
 
+fn parse_bool_strict(value: &str, key: &'static str) -> Result<bool, TlsConfigError> {
+    if value.eq_ignore_ascii_case("true") {
+        Ok(true)
+    } else if value.eq_ignore_ascii_case("false") {
+        Ok(false)
+    } else {
+        Err(TlsConfigError::Boolean(key))
+    }
+}
+
 fn non_empty(value: &str) -> Option<String> {
     if value.is_empty() {
         None
@@ -436,13 +521,57 @@ fn push_optional_entry(entries: &mut Vec<(&'static str, String)>, key: &'static 
 
 mod defaults {
     pub fn tls_config_file() -> String {
-        "/etc/rocketmq/tls.properties".to_string()
+        super::DEFAULT_TLS_CONFIG_FILE.to_string()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_tls_policy_rejects_typos_without_weakening_a_snapshot() {
+        for invalid in ["enforcng", "", "false"] {
+            assert!(serde_json::from_value::<TlsMode>(serde_json::json!(invalid)).is_err());
+            assert!(serde_json::from_value::<TlsClientAuth>(serde_json::json!(invalid)).is_err());
+        }
+        assert_eq!(
+            serde_json::from_str::<TlsClientAuth>("\" REQUIRED \"").unwrap(),
+            TlsClientAuth::Require
+        );
+        let mut config = TlsConfig::default();
+        config.server.mode = TlsMode::Enforcing;
+        config.server.need_client_auth = TlsClientAuth::Require;
+        let original = config.clone();
+        for key in [
+            "tls.enable",
+            "tls.test.mode.enable",
+            "tls.server.authClient",
+            "tls.client.authServer",
+        ] {
+            assert_eq!(
+                config.try_apply_java_property(key, "flase"),
+                Err(TlsConfigError::Boolean(key))
+            );
+            assert_eq!(config, original);
+        }
+        assert_eq!(
+            config.try_apply_java_properties_str("tls.server.mode=disabled\ntls.server.need.client.auth=reqiure"),
+            Err(TlsConfigError::ClientAuth)
+        );
+        assert_eq!(config, original);
+        assert_eq!(
+            config.try_apply_java_property("tlsServerMode", "enforcng"),
+            Err(TlsConfigError::ServerMode)
+        );
+        assert_eq!(config, original);
+        config
+            .try_apply_java_properties_str(
+                "tls.server.mode=\"Enforcing\" # comment\ntls.server.need.client.auth=required",
+            )
+            .unwrap();
+        assert_eq!(config, original);
+    }
 
     #[test]
     fn tls_mode_parse_defaults_to_permissive_like_java() {

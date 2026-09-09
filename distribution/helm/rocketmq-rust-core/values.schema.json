@@ -1,8 +1,9 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["global", "services"],
+  "required": ["securityProfile", "global", "services"],
   "properties": {
+    "securityProfile": {"enum": ["production", "development"]},
     "global": {
       "type": "object",
       "required": ["candidateVersion", "imageRegistry", "imagePullPolicy"],
@@ -85,11 +86,12 @@
     },
     "auth": {
       "type": "object",
-      "required": ["enabled", "secretName", "aclKey"],
+      "required": ["enabled", "secretName", "aclKey", "credentialsKey"],
       "properties": {
         "enabled": {"type": "boolean"},
         "secretName": {"type": "string", "pattern": "^([a-z0-9]([a-z0-9.-]*[a-z0-9])?)?$"},
-        "aclKey": {"type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*$"}
+        "aclKey": {"type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*$"},
+        "credentialsKey": {"type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*$"}
       },
       "additionalProperties": false
     },

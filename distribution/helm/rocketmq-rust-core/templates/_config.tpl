@@ -81,6 +81,7 @@ inSyncReplicas = {{ $config.minInSyncReplicas }}
 minInSyncReplicas = {{ $config.minInSyncReplicas }}
 {{- else if eq $service "proxy" -}}
 mode = "cluster"
+enableAclRpcHookForClusterMode = {{ $config.auth.enabled }}
 
 [grpc]
 listenAddr = "0.0.0.0:{{ $config.port }}"

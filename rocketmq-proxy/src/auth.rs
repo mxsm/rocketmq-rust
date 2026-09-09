@@ -63,8 +63,6 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_security_api::Action;
 use rocketmq_security_api::AuthorizationDecision;
 use tonic::Request;
-#[cfg(feature = "cluster-mode")]
-use tracing::warn;
 
 use crate::config::ProxyAuthConfig;
 #[cfg(feature = "cluster-mode")]
@@ -91,34 +89,29 @@ use crate::service::MetadataService;
 use crate::service::ResourceIdentity;
 
 #[cfg(feature = "cluster-mode")]
-pub(crate) fn build_cluster_acl_signer(config: &ProxyConfig) -> Option<AclClientRpcHook> {
+pub(crate) fn build_cluster_acl_signer(config: &ProxyConfig) -> ProxyResult<Option<AclClientRpcHook>> {
     if !config.enable_acl_rpc_hook_for_cluster_mode {
-        return None;
+        return Ok(None);
     }
-
     let auth_config = config.auth.to_auth_config();
-    match AclClientRpcHook::from_auth_config(&auth_config) {
-        Ok(Some(rpc_hook)) => return Some(rpc_hook),
-        Ok(None) => {}
-        Err(error) => {
-            warn!("Skipping proxy cluster ACL RPC hook from inner credentials: {error}");
-            return None;
-        }
+    if let Some(signer) = AclClientRpcHook::from_auth_config(&auth_config).map_err(|error| {
+        canonical::configuration_invalid_with_source("proxy.auth.innerClientAuthenticationCredentials", error)
+    })? {
+        return Ok(Some(signer));
     }
-
     let rocketmq_home = EnvUtils::get_rocketmq_home();
     let tools_file = Path::new(&rocketmq_home).join(ACL_CONF_TOOLS_FILE.trim_start_matches('/'));
-    match AclClientRpcHook::from_tools_file(&tools_file, auth_config.signature_algorithm) {
-        Ok(Some(rpc_hook)) => Some(rpc_hook),
-        Ok(None) => None,
-        Err(error) => {
-            warn!(
-                "Skipping proxy cluster ACL RPC hook from {}: {error}",
-                tools_file.display()
-            );
-            None
-        }
-    }
+    let signer = AclClientRpcHook::from_tools_file(&tools_file, auth_config.signature_algorithm)
+        .map_err(|error| {
+            canonical::configuration_invalid_with_source("proxy.auth.innerClientAuthenticationCredentials", error)
+        })?
+        .ok_or_else(|| {
+            canonical::configuration_invalid(
+                "proxy.enableAclRpcHookForClusterMode",
+                "enabled cluster ACL signing requires inner-client credentials",
+            )
+        })?;
+    Ok(Some(signer))
 }
 
 /// Authenticated identity and authorization trust decision issued by this crate.
@@ -1120,6 +1113,28 @@ mod tests {
 
     #[cfg(feature = "cluster-mode")]
     #[test]
+    fn enabled_cluster_signing_rejects_malformed_credentials() {
+        for credentials in [
+            "invalid-secret",
+            r#"{"accessKey":"inner"}"#,
+            r#"{"accessKey":"inner","secretKey":" "}"#,
+        ] {
+            let config = ProxyConfig {
+                enable_acl_rpc_hook_for_cluster_mode: true,
+                auth: ProxyAuthConfig {
+                    inner_client_authentication_credentials: credentials.to_owned(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let error = build_cluster_acl_signer(&config).unwrap_err();
+            assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
+            assert!(!error.to_string().contains("invalid-secret"));
+        }
+    }
+
+    #[cfg(feature = "cluster-mode")]
+    #[test]
     fn build_cluster_acl_signer_uses_enabled_proxy_inner_credentials() {
         let config = ProxyConfig {
             enable_acl_rpc_hook_for_cluster_mode: true,
@@ -1130,7 +1145,9 @@ mod tests {
             },
             ..ProxyConfig::default()
         };
-        let signer = build_cluster_acl_signer(&config).expect("enabled credentials should build signer");
+        let signer = build_cluster_acl_signer(&config)
+            .expect("valid signer config")
+            .expect("enabled credentials should build signer");
         assert_eq!(signer.access_key().as_str(), "inner");
     }
 

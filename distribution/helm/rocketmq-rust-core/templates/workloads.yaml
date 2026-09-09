@@ -89,6 +89,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            {{- if and $config.auth.enabled (or (eq $service "broker") (eq $service "proxy")) }}
+            - name: ROCKETMQ_INNER_CLIENT_CREDENTIALS_FILE
+              value: "/etc/rocketmq/acl/inner-client.json"
+            {{- end }}
             - name: ROCKETMQ_HEALTH_BIND_ADDR
               value: "0.0.0.0:{{ $.Values.runtime.healthPort }}"
             - name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS
@@ -179,6 +183,10 @@ spec:
             items:
               - key: {{ $config.auth.aclKey }}
                 path: plain_acl.yml
+              {{- if or (eq $service "broker") (eq $service "proxy") }}
+              - key: {{ $config.auth.credentialsKey }}
+                path: inner-client.json
+              {{- end }}
         {{- end }}
         {{- if and (eq $service "proxy") $config.tls.enabled }}
         - name: proxy-tls
