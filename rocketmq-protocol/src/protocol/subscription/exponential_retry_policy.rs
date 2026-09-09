@@ -74,8 +74,13 @@ impl ExponentialRetryPolicy {
 impl RetryPolicy for ExponentialRetryPolicy {
     fn next_delay_duration(&self, reconsume_times: i32) -> i64 {
         let reconsume_times = reconsume_times.clamp(0, 32) as u32;
-        let delay = self.initial * self.multiplier.pow(reconsume_times);
-        delay.min(self.max) as i64
+        // Saturate instead of overflowing: a product only reaches `u64::MAX` when the exact value
+        // would exceed it, so the cap below still yields the right answer, and a zero `initial`
+        // keeps a zero delay because `0.saturating_mul(_)` is `0`.
+        let delay = self
+            .initial
+            .saturating_mul(self.multiplier.saturating_pow(reconsume_times));
+        delay.min(self.max).min(i64::MAX as u64) as i64
     }
 }
 
@@ -121,5 +126,24 @@ mod exponential_retry_policy_tests {
 
         let uncapped_max = ExponentialRetryPolicy::new(1, u64::MAX, 2);
         assert_eq!(uncapped_max.next_delay_duration(100), 1_i64 << 32);
+    }
+
+    #[test]
+    fn next_delay_duration_saturates_instead_of_overflowing() {
+        // `multiplier.pow` overflows on its own well before the multiplication.
+        let exponentiation_overflow = ExponentialRetryPolicy::new(1_000, 5_000, 10);
+        assert_eq!(exponentiation_overflow.next_delay_duration(32), 5_000);
+
+        // The exponentiation fits, the multiplication by `initial` does not.
+        let multiplication_overflow = ExponentialRetryPolicy::new(u64::MAX, 7_200_000, 2);
+        assert_eq!(multiplication_overflow.next_delay_duration(1), 7_200_000);
+
+        // A zero `initial` keeps a zero delay even when the exponentiation saturates.
+        let zero_initial = ExponentialRetryPolicy::new(0, 5_000, 10);
+        assert_eq!(zero_initial.next_delay_duration(32), 0);
+
+        // A `max` above `i64::MAX` must not produce a negative delay.
+        let above_i64_max = ExponentialRetryPolicy::new(u64::MAX, u64::MAX, u64::MAX);
+        assert_eq!(above_i64_max.next_delay_duration(32), i64::MAX);
     }
 }
