@@ -3,81 +3,87 @@
 [![Crates.io](https://img.shields.io/crates/v/rocketmq-runtime.svg)](https://crates.io/crates/rocketmq-runtime)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../LICENSE-APACHE)
 
-`rocketmq-runtime` is the shared Tokio runtime substrate for the
-[rocketmq-rust](https://github.com/mxsm/rocketmq-rust) workspace. It defines
-the project runtime ownership model, structured task lifecycle model,
-scheduled task model, bounded blocking execution model, and shutdown reporting
-surface used by RocketMQ components.
-
-The crate does not replace Tokio. It standardizes how RocketMQ components own
-or borrow Tokio runtimes, how long-running tasks are tracked, how periodic work
-is scheduled, how blocking work is isolated from async worker threads, and how
-shutdown can be verified.
+`rocketmq-runtime` is the shared runtime substrate for the
+[rocketmq-rust](https://github.com/mxsm/rocketmq-rust) workspace. It builds on
+Tokio to provide runtime ownership, tracked service and operation tasks,
+periodic scheduling, bounded blocking execution, resource budgets, metadata
+persistence, and shutdown diagnostics.
 
 [中文文档](README-zh_cn.md)
 
-## Target Thread Model
+## Runtime Model
 
-RocketMQ Rust uses Tokio as the only async runtime. Runtime ownership and task
-lifecycle are explicit:
-
-- application entrypoints create a `RuntimeOwner`; migration and test harnesses
-  may bind a `RuntimeContext` to the current Tokio runtime;
-- broker, namesrv, proxy, controller, and admin tool entrypoints derive their
-  component `ChildServiceContext` from the runtime owner;
-- every service receives a `ChildServiceContext`;
-- every long-running task is spawned through a `TaskGroup`;
-- every periodic task is registered through a `ScheduledTaskGroup`;
-- blocking work goes through `BlockingExecutor` unless it is a dedicated
-  long-running OS thread by design;
-- shutdown always produces a `ShutdownReport`.
+Production entrypoints own a `RuntimeOwner`. Libraries receive a
+`ChildServiceContext` or a narrower capability such as `TaskSpawner`; they do
+not discover or construct an independent runtime. The task ownership tree
+tracks work through shutdown. The resource-budget tree accounts for explicitly
+reserved resources; it is separate from the task tree.
 
 ```mermaid
 flowchart TD
     Entry["Application entrypoint"] --> Owner["RuntimeOwner"]
-    Entry --> Current["RuntimeContext (migration/test)"]
     Owner --> Root["RootServiceContext"]
-    Root --> GroupRoot["Root TaskGroup"]
-    Root --> Blocking["BlockingExecutor"]
-    Root --> Diagnostics["RuntimeDiagnostics"]
     Root --> Service["ChildServiceContext"]
-    Current --> Service
-    Service --> Group["Service TaskGroup"]
-    Group --> Scheduled["ScheduledTaskGroup"]
-    Group --> Workers["service / worker / IO tasks"]
-    Blocking --> Reaper["blocking reaper task group"]
-    Root --> Report["ShutdownReport"]
+    Service --> Group["Component TaskGroup"]
+    Group --> Tasks["Service and operation tasks"]
+    Service --> Scheduled["ScheduledTaskGroup"]
+    Scheduled --> Jobs["Tracked drivers and runs"]
+    Root --> Blocking["Shared blocking lanes and global admission budget"]
+    Service -.-> Blocking
+    Owner --> Resources["RuntimeResources / process budget"]
+    Resources --> Budgets["Component resource budgets and permits"]
+    Group --> Report["ShutdownReport"]
     Blocking --> Report
+    Service --> Diagnostics["Diagnostics snapshot / sanitized V1 view"]
 ```
+
+This is the production composition path. `RuntimeContext` is a migration and
+test harness for an existing Tokio runtime. Compatibility executors and
+dedicated thread helpers retain their own explicit ownership boundaries.
 
 ## Core Architecture
 
 | Type | Responsibility |
 | --- | --- |
-| `RuntimeConfig` | Configures Tokio worker threads, blocking-thread limit, thread name, optional worker stack size, keep-alive, shutdown timeout, IO/time drivers, and blocking policy. |
-| `RuntimeOwner` | Owns a dedicated Tokio multi-thread runtime and exposes a root service context. It separates async task shutdown from blocking runtime shutdown. |
-| `RuntimeContext` | Migration and test harness for a current Tokio runtime. Production composition roots use `RuntimeOwner`; libraries receive `ChildServiceContext`. |
-| `RuntimeHandle` | Lightweight wrapper around `tokio::runtime::Handle`; it is handle access, not lifecycle ownership. |
-| `ChildServiceContext` | Per-service view containing runtime handle, service task group, blocking executor, and diagnostics. |
-| `TaskGroup` | Structured task scope with task metadata, cancellation, shutdown, abort, child groups, and health reporting. |
-| `ScheduledTaskGroup` | Runs fixed-delay and fixed-rate jobs under a task group and records schedule metrics. |
-| `BlockingExecutor` | Bounded `spawn_blocking` gateway with queue timeout, task timeout, and still-running reaper tracking. |
-| `ShutdownReport` | Serializable shutdown evidence for task completion, cancellation, aborts, leaks, panics, timeouts, detached tasks, and blocking tasks. |
-| `RocketMQRuntime` | Legacy compatibility wrapper. Production composition roots use `RuntimeOwner`; libraries receive `ChildServiceContext`; `RuntimeContext` is only a migration and test harness. |
+| `RuntimeConfig` | Worker threads, blocking-thread limit, thread name and stack size, keep-alive, shutdown timeout, IO/time drivers, and per-lane blocking policies. |
+| `RuntimeOwner` / `RuntimeOwnerPlan` | Validate configuration, build and own a Tokio multi-thread runtime, expose the root context, and coordinate shutdown. |
+| `RootServiceContext` | Non-cloneable root with no public constructor; derives component contexts and exposes shared resources and diagnostics. |
+| `ChildServiceContext` / `TaskSpawner` | Component capabilities for owned work. A spawner exposes task submission and cancellation access without raw runtime access. |
+| `TaskGroup` / `OperationContext` | Track component tasks and provide operation-local cancellation, deadlines, and bounded waits. An operation does not create a new task group. |
+| `ScheduledTaskGroup` | Run periodic jobs with explicit overlap behavior and schedule metrics. |
+| `BlockingExecutor` | Admit short blocking work through a bounded lane and retain its capacity until the closure actually exits. |
+| `RuntimeResources` / `ResourceBudget` | Share the process budget and derive component limits for count, retained bytes, and optional rate control. |
+| `ResourcePermit` / `BudgetedQueue` | Carry RAII reservations through queued or in-flight work and apply explicit overload policies. |
+| `MetadataIoActor` | Own bounded metadata snapshots, coalesce queued generations, and report durable completion. |
+| `ServiceLifecycle` / `ShutdownDeadline` | Coordinate readiness, liveness, shutdown requests, and a shared absolute shutdown deadline. |
+| `ShutdownReport` | Serializable evidence of completion, cancellation, aborts, failures, panics, timeouts, and remaining work. |
+| `RuntimeDiagnosticsSnapshot` / `RuntimeDiagnosticsViewV1` | Internal runtime details and a bounded, sanitized operational view. |
 
-## Runtime Ownership
+`RuntimeHandle` is an internal implementation type, not a public integration
+entrypoint. Common ownership types are also available from
+`rocketmq_runtime::prelude`.
 
-Use `RuntimeOwner` when a component owns a dedicated Tokio runtime:
+## Runtime Ownership And Quick Start
+
+Use `RuntimeOwner::new()?` for the default profile. For a named or customized
+profile, call `RuntimeOwner::plan(config)?.build()?`. Planning validates
+configuration without discovering system resources or starting Tokio;
+building performs memory-limit discovery and runtime construction.
+
+This finite example registers a service and immediately exercises its
+cooperative shutdown path:
 
 ```rust
 use rocketmq_runtime::{RuntimeConfig, RuntimeOwner};
 
-fn main() -> rocketmq_runtime::RuntimeResult<()> {
-    let owner = RuntimeOwner::new(RuntimeConfig::broker_default())?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let owner = RuntimeOwner::plan(RuntimeConfig::broker_default())?.build()?;
     let broker = owner.root_context().component("broker");
+    let cancellation = broker.task_group().cancellation_token();
 
     broker.spawn_service("heartbeat", async move {
-        // tracked service loop
+        cancellation.cancelled().await;
+        // Finish any ordered asynchronous cleanup here.
     })?;
 
     let report = owner.shutdown_runtime_blocking()?;
@@ -86,202 +92,359 @@ fn main() -> rocketmq_runtime::RuntimeResult<()> {
 }
 ```
 
+A real entrypoint runs its startup and service future through
+`owner.block_on(...)`, then consumes the owner outside the async context to
+shut down the runtime. See the [broker entrypoint](../rocketmq-broker/src/bin/broker_bootstrap_server.rs)
+for integration with `ServiceLifecycle` and a shared shutdown deadline.
+
+The error channels are intentional:
+
+- `RuntimeContractViolation` identifies invalid caller configuration or an
+  invariant violation, including failures from `plan()`.
+- `RuntimeResult<T>` contains `RuntimeError` for operational failures such as
+  runtime construction, I/O, capacity, or timeout failures.
+- Normal outcomes such as `ScheduledTaskRegistrationOutcome::AlreadyPresent`,
+  `BudgetRejection`, and metadata target conflicts have their own types.
+
+There is no automatic conversion from `RuntimeContractViolation` to
+`RuntimeError`. The example's application-level error type accepts both;
+applications can instead define an explicit startup error enum.
+
+`RuntimeConfig::for_parallelism` derives worker and blocking-lane limits from
+the supplied CPU parallelism. The default uses
+`std::thread::available_parallelism()`, with a fallback of four workers.
+`with_max_blocking_threads` validates an override and caps lane concurrency.
+
 Use `RuntimeContext::try_from_current` only in migration or test harnesses
-that already run inside `#[tokio::main]` or a test runtime. It can shut down
-tracked RocketMQ tasks, but it does not own or close the host Tokio runtime.
+already running inside Tokio. It shuts down registered RocketMQ work without
+owning or closing the host runtime. Its resource budget is a permissive test
+budget, not the production memory-discovery path.
 
-### Legacy Compatibility Boundary
+## Task Scopes And Cancellation
 
-`RocketMQRuntime` is retained only for legacy synchronous APIs that still need
-to pass around an owned Tokio runtime. Production composition roots use
-`RuntimeOwner`, libraries receive `ChildServiceContext`, and `RuntimeContext`
-is only a migration and test harness. Runtime audit classifies remaining
-`RocketMQRuntime` references as either runtime primitives or explicit
-compatibility adapters so new unclassified legacy runtime use cannot grow
-unnoticed.
+Create long-lived component scopes through `component(...)`. Use
+`ChildServiceContext::try_component(...)` to receive a creation error during
+shutdown or poisoning; `component(...)` returns a closed scope if the parent
+no longer accepts children. Validate dynamic names with `ScopeId::try_new`;
+string literals have a static-name conversion.
 
-`RocketMQRuntime` and all of its public methods remain available, deprecated
-1.x API. Its removal is intended only for a future 2.0 source-compatibility
-boundary; it has not happened, and this crate does not claim a 2.0 release.
-Any future removal remains subject to the full release cycle, a 2.0 breaking
-window, and exact, reviewed post-freeze repository-owner approval for every
-affected frozen public item. This change creates no approval record and does
-not authorize a removal.
-Migrate construction to `RuntimeOwner::new(RuntimeConfig { .. })?`, inject a
-`ChildServiceContext` instead of exposing a raw Tokio runtime or handle, move
-periodic callbacks to `ScheduledTaskGroup` with an explicit overlap policy,
-and consume the `ShutdownReport` returned by the owner shutdown APIs. The
-full per-method migration is in the [1.0 API migration guide](../rocketmq-doc/en/release/1.0/api-migration.md).
+Cloning a context or task group shares the same owner and cancellation token.
+Creating a child gives it independent cancellation: parent cancellation
+propagates downward, while child cancellation does not cancel its parent or
+siblings. Dropping a context handle is not a graceful shutdown protocol;
+active tasks can keep their group alive.
 
-`RuntimeOwner` intentionally separates two phases:
+| Submission API | Cancellation behavior |
+| --- | --- |
+| `spawn` / `spawn_service` | Tracks the future. The service must observe its cancellation signal and perform ordered cleanup itself. |
+| `spawn_cancellable_service` | Drops the service future when the owner is cancelled. Use when immediate future cancellation is safe. |
+| `spawn_operation` | Keeps work under a fixed component owner and observes both owner cancellation and the operation's cancellation/deadline. |
+| `spawn_draining_operation` | Accepted work can continue after owner cancellation; operation cancellation/deadline and task-group shutdown still bound it. |
+| `spawn_with_handle` | Returns a join handle for a specific task while retaining group tracking. |
 
-1. `shutdown_tasks().await`: cancel, close, wait, abort, and report tracked
-   RocketMQ tasks.
-2. `shutdown_runtime_blocking(self)`: release the owned Tokio runtime outside
-   an async runtime context.
+For bounded requests or restartable work, use `OperationContext` instead of
+creating a component group for every operation. `close_admission()` stops new
+operation tasks; `wait()` drains registered tasks; `cancel_and_wait()` also
+requests cancellation. The waits require the operation's original component
+owner and abort unfinished work at their deadline.
 
-This avoids calling Tokio runtime shutdown APIs from inside async shutdown
-paths and keeps ownership boundaries explicit.
+`TaskGroup::cancel()` only broadcasts cancellation. Use `shutdown(...)` or
+`shutdown_until(...)` to close task admission and wait for shutdown evidence.
 
-## TaskGroup Model
-
-`TaskGroup` is the core structured-concurrency primitive for long-running
-RocketMQ work. It uses `CancellationToken`, `TaskTracker`, `AbortHandle`, task
-metadata, and child task groups.
-
-Lifecycle states:
+### TaskGroup Invariants
 
 | State | Meaning |
 | --- | --- |
 | `Open` | New tasks and child groups can be registered. |
-| `Closing` | Shutdown has started; new task registration is rejected. |
-| `Closed` | The group has been closed and cancellation has been broadcast. |
-| `ShutdownCompleted` | Shutdown reporting completed and the report can be reused idempotently. |
-| `Poisoned` | A tracked task panicked while the group was open. |
+| `Closing` | Shutdown has started; new registration is rejected. |
+| `Closed` | The tracker is closed and cancellation has been broadcast. |
+| `ShutdownCompleted` | The shutdown report is cached for repeated calls; it need not be healthy. |
+| `Poisoned` | A tracked task panicked while the group was open; new registration is rejected. |
 
-Important invariants:
-
-- task metadata is inserted before spawning the future, so shutdown cannot miss
-  a task that is already visible to Tokio;
-- `spawn_gate` serializes spawn/child creation with shutdown transitions;
-- children are stored as a `Vec<TaskGroup>` guarded by `Mutex`, avoiding
-  recursive `DashMap<TaskGroupId, TaskGroup>` type expansion;
-- child group identity is `TaskGroupId`; names are labels, so repeated names
-  such as `remoting.connection` are allowed;
-- `spawn_with_handle` is available for integrations that must await a specific
-  task, while the task still remains tracked by the group;
-- `DetachedTaskPolicy::AbortOnShutdown` lets compatibility tasks remain
-  detached during normal operation but still be aborted during shutdown.
+Task metadata is registered before submission to Tokio. A spawn gate
+serializes registration with shutdown transitions. The
+[child registry](src/task_group/registry.rs) uses weak references keyed by
+`TaskGroupId`; dropping the last group reference unregisters the child.
+Names are labels, so multiple groups can share a name without sharing identity.
 
 ## Scheduled Tasks
 
-`ScheduledTaskGroup` is used for periodic work that must be visible to the
-runtime lifecycle. It supports:
+Derive a scheduler with `context.scheduled_tasks("maintenance")` and select
+the registration method matching the desired overlap behavior:
 
-- `FixedDelay`: wait `period` after each run completes;
-- `FixedRateNoOverlap`: tick on a fixed cadence and skip runs while the
-  previous run is still active;
-- `FixedRateAllowOverlap`: tick on a fixed cadence and allow overlapping runs.
+| Mode | Behavior |
+| --- | --- |
+| `FixedDelay` | Run the callback, then wait `period` after completion. |
+| `FixedRateNoOverlap` | Attempt a run each driver cycle; skip when the previous run is still active. |
+| `FixedRateAllowOverlap` | Start a run each driver cycle without waiting for previous runs. There is no separate concurrent-run limit. |
 
-Each schedule records active runs, completed runs, skips, overlaps, failures,
-drift, elapsed time, and max elapsed time. Scheduled drivers and scheduled runs
-are spawned through the underlying `TaskGroup`, so shutdown drains or aborts
-them like any other tracked task.
+The fixed-rate drivers currently sleep for `period` between submission
+attempts. Their expected tick measures drift; it does not schedule an
+absolute-time catch-up loop. Do not rely on strict wall-clock alignment or
+missed-tick compensation.
+
+- `initial_delay` defaults to zero, allowing the first run immediately.
+- `max_run_time` bounds an individual callback by dropping its future on
+  timeout. External side effects still need an appropriate cancellation contract.
+- Controlled fixed-delay callbacks return `ScheduledTaskControl::Stop` to end
+  their driver.
+- Duplicate names return `AlreadyPresent` without replacing the driver or
+  metrics. `clear_completed()` clears registrations only when the scheduler's
+  group has no active tasks.
+- Drivers and runs belong to the scheduler's task group. Ordinary runs may
+  finish during shutdown; operation-aware registrations also observe their
+  operation's cancellation and deadline.
+
+Snapshots record active runs, run completions, skips, overlaps, failures,
+drift, and elapsed time. Close the scheduler through `shutdown(timeout)` or
+its owning group. `ScheduledTaskConfig::shutdown_timeout` is not currently
+read by the scheduler; the actual shutdown call supplies the budget.
 
 ## Blocking Work
 
-`BlockingExecutor` is the common gateway for short blocking IO and bounded CPU
-work. It protects Tokio worker threads by controlling how `spawn_blocking` is
-used:
+Use the executors supplied by a `ChildServiceContext`:
 
-- `max_concurrency` limits concurrent blocking operations;
-- `queue_timeout` rejects work that cannot acquire a permit in time;
-- `task_timeout` reports timeout to the caller without pretending the blocking
-  closure has stopped;
-- timed-out blocking tasks remain tracked as `TimedOutStillRunning`;
-- a detached reaper awaits the real `JoinHandle` completion and removes the
-  task from the snapshot.
+| Accessor | Lane | Typical work |
+| --- | --- | --- |
+| `storage_io()` | `StorageIo` | Short storage and filesystem operations. |
+| `metadata_io()` | `MetadataIo` | Metadata persistence. |
+| `cpu_crypto()` | `CpuCrypto` | Bounded CPU or cryptographic work. |
 
-Long-running blocking loops should not use the Tokio blocking pool. They should
-be implemented as dedicated OS threads or domain-specific services with their
-own shutdown protocol.
+Managed lanes share one global admission budget per runtime owner, bounded by
+`RuntimeConfig::max_blocking_threads`. Each lane has its own concurrency
+ceiling and queue bound. Idle capacity can be borrowed; a waiting lane's
+reservation is protected from new borrowers. Cloning an executor or deriving
+a context shares this capacity rather than creating another pool.
 
-## Shutdown Semantics
+`max_queue_depth` rejects submissions when the admission queue is full.
+`queue_timeout` bounds waiting for execution capacity; `task_timeout` bounds
+the caller's wait after admission. `spawn_until` and `spawn_io_until` also cap
+both phases with one absolute deadline. These methods require an active
+Tokio context; call them from the owning runtime's work.
 
-Normal shutdown follows this order:
+Timeout or cancellation does not stop an already-running blocking closure.
+The closure retains its admission permit until it exits. A completion guard
+inside the closure removes its task record on exit; there is no separate
+reaper task. Cancelling a queued submission removes its queued record, while
+an abandoned running submission is recorded as `TimedOutStillRunning` until
+completion. See the [executor implementation](src/blocking/executor.rs).
 
-1. close the task group and reject new spawns;
-2. broadcast cancellation;
-3. shut down child groups;
-4. wait for tracked tasks within the timeout;
-5. abort remaining tracked tasks;
-6. merge `BlockingExecutor` snapshot data;
-7. return `ShutdownReport`.
+`BlockingKind::LongRunning` is rejected. Long-running blocking loops need a
+dedicated OS-thread or domain-service owner with a stop and join protocol.
+`BlockingExecutor::new(policy, owner_group)` remains an isolated compatibility
+constructor: it creates an independent budget, and the group argument does
+not enroll it in the managed root lanes.
 
-`shutdown_now` is the synchronous compatibility path used by `Drop` or sync
-teardown code. It closes the group, cancels tasks, aborts tracked work, and
-returns a report without awaiting async task completion.
+## Resource Budgets And Queues
 
-`ShutdownReport::is_healthy()` is the main correctness gate. A report is
-unhealthy when it contains leaked tasks, panics, timeouts, still-running
-blocking tasks, still-running detached tasks, or unhealthy child reports.
+`RuntimeOwner` owns `RuntimeResources`; child contexts share its process
+budget. Derive narrower limits with `context.process_budget().child(...)`.
+Do not create an independent `ResourceBudgetTree` in each component when a
+shared process limit is required.
 
-## Component Migration Rules
+The owner detects a memory limit from `ROCKETMQ_PROCESS_MEMORY_LIMIT_BYTES`,
+Linux cgroup limits, or host physical memory. Supply an explicit
+`ProcessMemoryLimit` through `RuntimeOwnerPlan::with_memory_limit` when needed.
+These limits account for resources admitted through the budget APIs; they do
+not automatically limit every process allocation or resident-memory usage.
 
-New RocketMQ code should follow these rules:
+`ResourceBudget` checks count, retained bytes, and optional rate limits along
+the ancestor chain. A `ResourcePermit` retains count and byte reservations
+until dropped. `BudgetClass::Control` can use configured control reserves;
+data work cannot consume that reserved capacity. Same-tree permit rebinding
+keeps common-ancestor accounting while moving ownership between components.
 
-- do not create ad hoc Tokio runtimes inside business crates;
-- do not call raw `tokio::spawn` for long-running service work;
-- derive a `ChildServiceContext` and spawn through its `TaskGroup`;
-- wrap periodic loops in `ScheduledTaskGroup`;
-- route file IO, RocksDB calls, DNS resolution, and other short blocking work
-  through `BlockingExecutor`;
-- keep long-running blocking loops outside Tokio blocking pools;
-- return or log `ShutdownReport` during component shutdown;
-- do not rely on `Drop` for graceful shutdown; `Drop` may only cancel or abort
-  work as an emergency cleanup path;
-- keep diagnostics and benchmark tooling as validation artifacts rather than
-  production-critical runtime dependencies.
+`BudgetedQueue` supports `Reject`, `WaitUntilDeadline`, `CoalesceLatest`,
+`DropStale`, and `CloseSlowConsumer`. Select a policy matching whether work
+can wait, be replaced, or be discarded. `push_until` waits for capacity only
+with `WaitUntilDeadline` and preserves the rejected item in its outcome.
 
-## Workspace Integration
+The dequeue API determines the accounting lifetime:
 
-The unified model is the production entrypoint for broker, namesrv, proxy,
-controller, client fallback runtime, remoting, store, tieredstore, common
-statistics helpers, observability lifecycle, and admin tools. Standalone
-dashboard applications keep their host runtime boundary documented unless
-their runtime owner, admin session, diagnostics API, or UI contract changes.
+- `try_pop()` / `recv()` return the item and release its permit at dequeue.
+- `try_pop_budgeted()` / `recv_budgeted()` return a `BudgetedItem` retaining
+  the permit during processing. `into_parts()` transfers the permit explicitly;
+  `into_item()` releases it.
 
-Compatibility adapters that intentionally remain include the deprecated
-`RocketMQRuntime`, client fallback runtime, store static blocking executor,
-foundation service task helper, and dedicated OS-thread services with explicit
-stop and join behavior.
+See [resource-budget tests](tests/resource_budget_tree.rs) for ancestor
+limits, control reserves, overload handling, and permit transfer examples.
 
-## Diagnostics And Benchmarks
+## Metadata Persistence
 
-Runtime diagnostics are intentionally kept behind the runtime abstraction. The
-default production path should not require Tokio unstable features, console
-subscribers, or runtime metrics exporters.
+Start the actor with `MetadataIoConfig::default().into_plan()?.start(&context)?`.
+It owns a tracked coordinator and uses the context's shared `MetadataIo`
+blocking lane. Configure actor admission with `max_pending_operations` and
+`max_pending_bytes`; configure the managed lane through
+`RuntimeConfig::blocking_lane_policies.metadata_io`. The actor's compatibility
+`blocking_*` settings do not replace that shared lane policy.
 
-Benchmark and audit artifacts should be used as evidence for changes, not as
-hard-coded performance claims. The expected validation loop is:
+`submit` and `submit_next` accept immutable snapshots without waiting for
+durability. Match `MetadataIoAdmissionOutcome`: `Accepted` provides a receipt;
+`TargetConflict` returns the request when a resource already has pending work
+for a different target. Wait for persistence through the receipt's
+`wait_until`, or use `submit_durable` / `submit_next_durable` and match the
+durable-generation or target-conflict outcome.
 
-1. scan spawn, runtime, blocking, and shutdown sites;
-2. classify findings as production, compatibility, test, benchmark, or
-   tool-only;
-3. collect baseline task lifecycle and shutdown behavior;
-4. migrate to runtime primitives;
-5. rerun targeted tests, runtime audit scripts, and Criterion benchmarks.
+Queued generations for the same logical resource can coalesce; a newer durable
+generation can satisfy an earlier waiter. A local write uses a temporary file,
+file synchronization, atomic replacement, and parent-directory synchronization
+on supported platforms before advancing durable generation. A wait timeout
+does not prove that the underlying filesystem operation has stopped.
 
-Useful local checks:
+Call `stop_admission()` to reject new snapshots, then
+`shutdown_until(MetadataDeadline)` to drain accepted work. Inspect the returned
+`MetadataIoShutdownReport` for unfinished generations as well as the runtime's
+task shutdown report. See [metadata I/O tests](tests/metadata_io_actor.rs).
+
+## Service Lifecycle And Shutdown
+
+`ServiceLifecycle` exposes `Starting`, `Ready`, `Draining`, `Stopped`, and
+`Failed` states. Start it under a component context, mark readiness after
+startup, and publish dependency readiness separately. Maintenance can suspend
+readiness without marking the process dead. Liveness checks lifecycle state
+and progress freshness, not whether a business port is open.
+
+With `ServiceLifecycle::from_env`, `ROCKETMQ_HEALTH_BIND_ADDR` enables the
+optional probe server with `/readyz`, `/livez`, and `/drainz`.
+`ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS` and `ROCKETMQ_LIVENESS_STALE_SECONDS`
+configure its shutdown and progress windows. Without a probe bind address,
+shutdown coordination still works. The lifecycle shutdown timeout defaults
+to 45 seconds; `RuntimeConfig` independently defaults to 30 seconds.
+
+The first shutdown request freezes a `ShutdownDeadline`; repeated pre-stop or
+signal requests cannot extend it. Pass that deadline through component
+shutdown and `owner.shutdown_runtime_blocking_until(deadline)`.
+
+Task-group shutdown closes registration and broadcasts cancellation, then
+starts child shutdowns concurrently with waiting for the group's own tasks.
+Unfinished tracked tasks are aborted when the deadline expires. Reports are
+cached at group level; the owner additionally merges its blocking-lane snapshots.
+
+| API | Scope and guarantee |
+| --- | --- |
+| `owner.shutdown_tasks().await` / `shutdown_tasks_until(deadline).await` | Close and wait for tracked tasks, retaining the Tokio runtime. |
+| `owner.shutdown_runtime_blocking()` / `shutdown_runtime_blocking_until(deadline)` | Consume the owner, shut down tracked tasks, then release Tokio within the remaining budget. Call outside a Tokio context; a separate task-shutdown call is not required. |
+| `TaskGroup::shutdown_now()` | Cancel and abort immediately without awaiting asynchronous completion. |
+| `owner.shutdown_background()` | Return immediate task-shutdown evidence and ask Tokio to shut down in the background. |
+| `RuntimeOwner::drop` | Emergency cleanup if explicit shutdown was omitted; not a graceful-shutdown protocol. |
+
+`ShutdownReport::is_healthy()` requires zero `leaked`, `failed`, `panicked`,
+`timed_out`, `blocking_still_running`, and `detached_still_running` counts,
+and healthy child reports. An `aborted` count alone does not make the report
+unhealthy. An immediate-shutdown report is not proof that all futures completed
+their cleanup. Blocking snapshots are point-in-time evidence and do not
+terminate closures that outlive a deadline.
+
+## Diagnostics
+
+`diagnostics_snapshot()` exposes internal details such as runtime/group
+identity and blocking task names. For authenticated operational APIs, prefer
+`diagnostics_view_v1(RuntimeComponent::...)`: its versioned view aggregates
+bounded task-kind and lane summaries without raw IDs, names, arguments, or
+configuration objects. Authentication remains the caller's responsibility.
+
+`RuntimeDiagnosticsViewOptions` controls summary bounds and the long-running
+threshold; omitted summaries set `truncated`. These diagnostics do not require
+Tokio unstable features or a console subscriber, and do not replace application
+health checks or performance measurements.
+
+## Compatibility And Workspace Integration
+
+`RocketMQRuntime` remains deprecated but available in 1.x. Migrate construction
+to `RuntimeOwner::plan(config)?.build()?`, inject `ChildServiceContext`, select
+an explicit scheduling overlap policy, and inspect shutdown reports. Future
+removal belongs to a 2.0 compatibility boundary and remains subject to the
+release and owner-approval requirements in the
+[API migration guide](../rocketmq-doc/en/release/1.0/api-migration.md).
+
+`RuntimeContext` is a migration/test harness. Other retained helpers include
+`TokioExecutorService`, `ScheduledExecutorService`, `FuturesExecutorService`,
+`TaskScheduler`, and `ActorRuntime`; they have separate adapter or dedicated
+thread responsibilities and are not all deprecated. New services should use
+the ownership and capability APIs described above.
+
+The [broker](../rocketmq-broker/src/bin/broker_bootstrap_server.rs),
+[NameServer](../rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs),
+[proxy](../rocketmq-proxy/src/bin/rocketmq-proxy-rust.rs), and
+[controller](../rocketmq-controller/src/bin/controller_bootstrap.rs) entrypoints
+build runtime owners and use service lifecycle deadlines. Other consumers
+include `rocketmq-client`, `rocketmq-transport`, `rocketmq-store`,
+`rocketmq-auth`, `rocketmq-observability`, and admin tools. Client fallback
+runtimes and store compatibility helpers retain explicit adapter boundaries;
+this list does not imply that every call site uses an identical ownership path.
+Standalone applications follow their local host-runtime and validation guides.
+
+## Features And Validation
+
+The crate inherits its edition and minimum Rust version from the
+[workspace manifest](../Cargo.toml). Default crate features are empty;
+`async_fs` enables the Tokio filesystem helpers in `common::file_utils`.
+The core ownership, blocking, budget, and metadata APIs do not require it.
+
+For task-lifecycle changes, start with package-scoped checks:
 
 ```bash
-cargo test -p rocketmq-runtime --test task_group_concurrency_model
-cargo test -p rocketmq-runtime --all-targets --all-features
-cargo clippy -p rocketmq-runtime --all-targets --all-features -- -D warnings
+cargo fmt -p rocketmq-runtime -- --check
+cargo test -p rocketmq-runtime --test runtime_model
 ```
 
-Run the full workspace validation when changes affect public runtime behavior:
+Select additional checks for the behavior being changed, rather than running
+every suite for every edit:
 
-```bash
-cargo fmt --all
-cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
-```
+| Area | Test target or command |
+| --- | --- |
+| Internal units, error channels, diagnostics, service lifecycle | `cargo test -p rocketmq-runtime --lib` |
+| Resource limits and queue behavior | `cargo test -p rocketmq-runtime --test resource_budget_tree` |
+| Shared process-budget ownership | `cargo test -p rocketmq-runtime --test runtime_resource_ownership` |
+| Metadata persistence and fault handling | `cargo test -p rocketmq-runtime --test metadata_io_actor` |
+| Public scope restrictions | `cargo test -p rocketmq-runtime --test service_context_scope_compile_fail` |
+| Shutdown or budget interleavings | `task_group_shutdown_loom` or `resource_budget_loom` via `cargo test -p rocketmq-runtime --test <target>` |
+| Migration or large-future submission | `runtime_migration_fixture` or `task_submission_stack` via the same test command |
+| Optional filesystem helpers | `cargo test -p rocketmq-runtime --features async_fs common::file_utils` |
+
+When useful, run `cargo clippy -p rocketmq-runtime --no-deps -- -D warnings`
+with the affected targets/features. Validate directly affected consumers when
+shared behavior changes; follow standalone projects' local guides where
+applicable. Feature-enabled checks do not replace feature-absence coverage.
+
+For README edits, check local links and compile/run the fenced Rust examples.
+`cargo test --doc` covers crate Rustdoc, not standalone README code blocks;
+test those explicitly with `rustdoc --test` and the built crate's `--extern`
+and dependency search path. Keep both language versions aligned.
+
+Full-workspace checks, runtime audits, Loom models, and Criterion benchmarks
+belong to changes that need that evidence or the relevant CI/integration task.
+Benchmarks provide measurements for a specific run, not hard-coded performance
+guarantees. See [repository validation guidance](../AGENTS.md).
 
 ## Crate Layout
 
 ```text
 rocketmq-runtime/
-  src/config.rs           runtime and blocking policy configuration
-  src/owner.rs            owned Tokio runtime lifecycle
-  src/context.rs          borrowed runtime context and service context factory
-  src/service_context.rs  per-service runtime view
-  src/handle.rs           Tokio handle wrapper
-  src/task_group.rs       structured task tracking and shutdown
-  src/scheduled.rs        scheduled task groups and schedule metrics
-  src/blocking.rs         bounded blocking executor and reaper tracking
-  src/diagnostics.rs      runtime diagnostics facade
-  src/shutdown_report.rs  serializable shutdown evidence
-  src/legacy.rs           legacy RocketMQRuntime compatibility wrapper
+  src/public_api.rs        deliberate ownership and diagnostics exports
+  src/prelude.rs           common ownership imports
+  src/config.rs            runtime and blocking-lane configuration
+  src/owner.rs             validated construction and owned runtime lifecycle
+  src/context.rs           borrowed runtime migration/test harness
+  src/service_context.rs   sealed root and child capabilities
+  src/task_spawner.rs      narrow task-submission capability
+  src/task_group.rs        task tracking, cancellation, and shutdown
+  src/task_group/          child registry and deadline coordination
+  src/operation.rs         operation-local cancellation and bounded waits
+  src/scheduled.rs         periodic drivers, runs, and metrics
+  src/blocking.rs          blocking API exports
+  src/blocking/            lane admission, execution, and snapshots
+  src/resources.rs         shared process resource capabilities
+  src/resource_budget/     resource trees, permits, queues, and memory discovery
+  src/metadata_io.rs       generation-aware metadata persistence
+  src/service_lifecycle.rs readiness, liveness, and shutdown requests
+  src/shutdown_deadline.rs shared absolute shutdown deadline
+  src/shutdown_report.rs   serializable shutdown evidence
+  src/diagnostics.rs       raw snapshots and sanitized V1 views
+  src/legacy.rs            deprecated RocketMQRuntime wrapper
+  src/executor_service.rs  retained executor adapters
+  src/schedule/            retained scheduler APIs
+  src/common/              common filesystem, time, and thread helpers
 ```
 
 ## License
