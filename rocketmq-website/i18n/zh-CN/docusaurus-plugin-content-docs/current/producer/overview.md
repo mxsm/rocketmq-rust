@@ -1,196 +1,78 @@
 ---
-sidebar_position: 1
-title: 生产者概览
+title: "生产者生命周期与发送结果"
 ---
 
-> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+生产者通过 NameServer 发现可写队列，再向 Broker 发送消息。`DefaultMQProducer` 提供普通发送 API；事务和请求/响应用法还包含各自的状态与失败处理。需要完整应用及本地服务时，从[快速开始](../getting-started/quick-start.md)入手。
 
-# 生产者概览
+## 显式管理运行时所有权
 
-RocketMQ-Rust 生产端基于 `DefaultMQProducer` 和 `MQProducer` trait，支持同步发送、异步回调发送、单向发送、队列选择发送、批量发送以及事务消息。
+当前客户端 API 要求由应用持有 `Arc<ClientRuntime>`。在 `RuntimeOwner` 下使用子服务上下文和遥测句柄创建它，再传入 `DefaultMQProducer::builder`。构造生产者不会启动它，也不会创建主题。
 
-## 创建生产者
-
-```rust
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_error::RocketMQResult;
-
-#[tokio::main]
-async fn main() -> RocketMQResult<()> {
-    let mut producer = DefaultMQProducer::builder(client_runtime.clone())
-        .producer_group("my_producer_group")
-        .name_server_addr("localhost:9876")
-        .build();
-
-    producer.start().await?;
-    // 使用 producer ...
-    producer.shutdown().await;
-    Ok(())
-}
+```text
+RuntimeOwner
+  child service context + telemetry handle
+    Arc<ClientRuntime>
+      DefaultMQProducer
+        start → send operations → shutdown
+    ClientRuntime shutdown
+  RuntimeOwner shutdown
+Telemetry shutdown
 ```
 
-## 生产者配置
+上图表示：应用创建运行时所有者、子服务上下文及遥测句柄，由客户端运行时支撑生产者；生产者完成启动、发送和关闭后，才关闭客户端运行时、运行时所有者和遥测。
 
-### 基础配置
+同一应用中的兼容客户端 facade 可以共享客户端运行时。它持有客户端基础设施和后台工作，不是可以在进程退出时直接遗弃的全局单例。关闭前停止接收新发送请求，等待应用持有的在途操作，再先关闭 facade，最后关闭它们依赖的运行时。
+
+[完整收发示例](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-website/examples/first-message/src/main.rs)在成功和失败路径中均保留清理逻辑。其独立 [manifest](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-website/examples/first-message/Cargo.toml)给出了准确的路径依赖。
+
+## 构建与启动
+
+以下片段在应用持有的运行时内部执行，使用已有的 `client`。完整示例包含导入、错误处理和清理：
 
 ```rust
-let mut producer = DefaultMQProducer::builder(client_runtime.clone())
-    .producer_group("producer_group")
-    .name_server_addr("localhost:9876")
-    .send_msg_timeout(3_000)
-    .retry_times_when_send_failed(2)
-    .max_message_size(4 * 1024 * 1024)
-    .compress_msg_body_over_howmuch(4 * 1024)
+let mut producer = DefaultMQProducer::builder(client)
+    .producer_group("docs_first_message_producer")
+    .name_server_addr("127.0.0.1:9876")
     .build();
+producer.start().await?;
 ```
 
-### 高级配置
+生产者组标识生产者角色，不会创建消费者组，也不决定主题。启动前配置 NameServer，并创建具有可写队列的目标主题。教程配置已关闭主题自动创建。
+
+## 构造并发送消息
+
+使用 Model 消息 builder：
 
 ```rust
-let mut producer = DefaultMQProducer::builder(client_runtime.clone())
-    .producer_group("producer_group")
-    .name_server_addr("localhost:9876")
-    .retry_times_when_send_failed(3)
-    .retry_times_when_send_async_failed(3)
-    .retry_another_broker_when_not_store_ok(true)
-    .send_msg_max_timeout_per_request(5_000)
-    .batch_max_delay_ms(10)
-    .batch_max_bytes(512 * 1024)
-    .total_batch_max_bytes(4 * 1024 * 1024)
-    .enable_backpressure_for_async_mode(true)
-    .back_pressure_for_async_send_num(10_000)
-    .back_pressure_for_async_send_size(64 * 1024 * 1024)
-    .build();
-```
-
-## 发送模式
-
-### 同步发送
-
-```rust
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_common::common::message::message_single::Message;
-
 let message = Message::builder()
-    .topic("TopicTest")
-    .tags("TagA")
-    .body("Hello")
+    .topic("DocsFirstMessage")
+    .body("documentation message".to_owned())
     .build()?;
-
-let result = producer.send(message).await?;
-println!("Send result: {:?}", result);
+let result = producer.send_with_timeout(message, 3_000).await?;
 ```
 
-### 异步回调发送
+超时单位是毫秒。该 API 返回 `ClientResult<Option<SendResult>>`，需要同时检查错误、结果是否存在以及 `send_status`。最外层 Rust 结果不能表达 Broker 的全部返回情况。
 
-```rust
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_common::common::message::message_single::Message;
+| 发送状态 | 含义 | 应用处理 |
+| --- | --- | --- |
+| `SendOk` | 所选发送路径按配置的存储/复制策略报告成功 | 保存诊断所需结果，按业务契约继续 |
+| `FlushDiskTimeout` | 要求的磁盘刷盘等待未在规定时间内完成 | 持久化结果存在不确定性，直接重试可能产生重复 |
+| `FlushSlaveTimeout` | 要求的副本等待未在规定时间内完成 | 诊断副本进度并应用业务重试策略 |
+| `SlaveNotAvailable` | 所需副本不可用 | 重试前检查拓扑与可用性要求 |
+| 错误或缺少结果 | 未获得可用的成功结果 | 保留操作上下文，不能据此断定消息未存储 |
 
-let message = Message::builder()
-    .topic("TopicTest")
-    .body("Hello")
-    .build()?;
+规范的结果类型位于 `rocketmq-model::result`。发送成功不能证明消费者已经处理消息，也不会让数据库更新与发送组成原子操作。
 
-producer
-    .send_with_callback(message, |result, error| {
-        if let Some(send_result) = result {
-            println!("Message sent: {:?}", send_result);
-        }
-        if let Some(err) = error {
-            eprintln!("Send failed: {}", err);
-        }
-    })
-    .await?;
-```
+## 明确选择发送操作
 
-### 单向发送
+[发送消息](sending-messages.md)说明发送变体与队列选择。需要响应的发送可以返回 Broker 结果；单向发送则主动放弃该响应。事务消息需要本地事务决策与检查行为，详见[事务消息](transaction-messages.md)。
 
-```rust
-let message = Message::builder().topic("TopicTest").body("Fire and forget").build()?;
-producer.send_oneway(message).await?;
-```
+在第一次发送前定义业务事件标识，在重试中保持该标识，并使消费者的副作用具备幂等性。客户端重试次数与超时应受应用总截止时间约束；在客户端重试外再叠加无限应用重试，会放大集群故障。
 
-## 队列选择
+## 关闭与诊断
 
-通过 selector 将同一业务键路由到同一队列。
+发送结束后始终调用 `producer.shutdown().await`，包括启动或后续操作失败的路径。随后关闭共享客户端运行时并检查报告，再关闭运行时所有者与遥测。不要仅为了在异步代码中调用关闭操作而创建另一个 Tokio 运行时。
 
-```rust
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
+启动成功但发送失败时，先检查主题路由、可写队列数和 Broker 公布地址，再调整超时。参见[首次诊断](../operations/first-diagnosis.md)和[投递与重试](../guides/delivery-and-retry.md)。
 
-let message = Message::builder().topic("OrderEvents").body("order-123").build()?;
-let order_id = 123_i64;
-
-producer
-    .send_with_selector(
-        message,
-        |queues: &[MessageQueue], _msg: &Message, id: &i64| {
-            let index = (*id % queues.len() as i64) as usize;
-            queues.get(index).cloned()
-        },
-        order_id,
-    )
-    .await?;
-```
-
-## 错误处理
-
-```rust
-match producer.send(message).await {
-    Ok(result) => println!("Sent: {:?}", result),
-    Err(e) => {
-        // 达到重试上限后返回
-        eprintln!("Send failed: {}", e);
-    }
-}
-```
-
-## 性能优化
-
-### 批量发送
-
-```rust
-let messages = vec![
-    Message::builder().topic("TopicTest").body("Msg1").build()?,
-    Message::builder().topic("TopicTest").body("Msg2").build()?,
-    Message::builder().topic("TopicTest").body("Msg3").build()?,
-];
-
-producer.send_batch(messages).await?;
-```
-
-### 压缩
-
-```rust
-let mut producer = DefaultMQProducer::builder(client_runtime.clone())
-    .producer_group("producer_group")
-    .name_server_addr("localhost:9876")
-    .compress_msg_body_over_howmuch(4 * 1024)
-    .build();
-```
-
-## 监控建议
-
-`DefaultMQProducer` 当前没有统一的 `get_stats()` 外观方法。生产环境建议：
-
-- 记录发送结果与回调结果。
-- 使用结构化日志采集延迟和失败信息。
-- 在应用层对 `send*` 调用封装计数器/直方图。
-
-## 最佳实践
-
-1. 按服务边界拆分 producer group。
-2. 重试与超时参数按业务 SLA 设置。
-3. 高吞吐链路优先使用回调发送。
-4. 控制消息体大小，对大消息启用压缩。
-5. 需要顺序语义时使用队列选择器。
-6. 消费端实现幂等，适配至少一次投递语义。
-
-## 下一步
-
-- [消息发送](./sending-messages) - 学习高级发送技巧
-- [事务消息](./transaction-messages) - 学习分布式事务消息
-- [客户端配置](../configuration/client-config) - 查看详细配置项
+来源：[生产者 facade](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/producer/default_mq_producer.rs)、[发送结果](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-model/src/result.rs)、[消息 builder](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-model/src/common/message/message_builder.rs)。

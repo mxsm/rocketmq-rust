@@ -1,114 +1,76 @@
 ---
-sidebar_position: 1
-title: Installation
+title: "Install and build from source"
 ---
 
-# Installation
+This page prepares the current Rust source for the local tutorial. It builds Rust NameServer and Broker binaries; the tutorial does not substitute Java server images. If you need an older published release, use its release instructions and APIs consistently.
 
-Get RocketMQ-Rust up and running on your system.
+## Choose the source and toolchain
 
-## Prerequisites
-
-Before installing RocketMQ-Rust, ensure you have the following:
-
-- **Rust**: 1.70.0 or later ([Install Rust](https://www.rust-lang.org/tools/install))
-- **Cargo**: Comes with Rust
-- **Operating System**: Linux, macOS, or Windows
-
-### Verify Installation
+The repository pins Rust **1.95.0** in `rust-toolchain.toml` and declares the same root MSRV. Use Git, rustup/Cargo, and the linker/toolchain for your operating system. Windows MSVC builds need the Visual C++ build tools and Windows SDK; Unix builds need a working native compiler and linker. Optional native dependencies depend on the selected Cargo graph, so inspect the first missing-tool error rather than installing every optional product's dependencies.
 
 ```bash
-rustc --version
+git clone https://github.com/mxsm/rocketmq-rust.git
+cd rocketmq-rust
+rustup show active-toolchain
 cargo --version
 ```
 
-## Install from Crates.io
+Run subsequent commands from this repository root unless a different directory is stated. rustup uses the repository's toolchain selection. The root source package version is 1.0.0; consult [GitHub releases](https://github.com/mxsm/rocketmq-rust/releases) before assuming there is a published crate, archive or image with that tag.
 
-The easiest way to use RocketMQ-Rust is to add it as a dependency in your `Cargo.toml`:
+## Build only the components you need
 
-```toml
-[dependencies]
-rocketmq = "0.3"
-```
-
-Then run:
+For the single-machine tutorial:
 
 ```bash
-cargo build
+cargo build -p rocketmq-namesrv --bin rocketmq-namesrv-rust
+cargo build -p rocketmq-broker --bin rocketmq-broker-rust
+cargo build -p rocketmq-admin-cli --bin rocketmq-admin-cli
 ```
 
-## Install from Source
+The default output is `target/debug/`, with `.exe` suffixes on Windows. A configured `CARGO_TARGET_DIR` changes that location. Add `--release` for optimized binaries and use `target/release/` consistently afterward.
 
-For the latest features and bug fixes, you can build from source:
+| Target | Why it is included |
+| --- | --- |
+| `rocketmq-namesrv-rust` | Topic-route discovery and Broker registration |
+| `rocketmq-broker-rust` | Local file storage and message processing |
+| `rocketmq-admin-cli` | Explicitly create the tutorial Topic and Consumer Group and inspect routes |
+
+The Admin CLI currently enables Admin Core's `rocksdb-export` dependency, even when the running Broker uses `LocalFile`. Building this CLI therefore needs the native RocksDB build prerequisites, including a C++ compiler and Clang/libclang for bindings. `--no-default-features` on the CLI does not remove this explicitly enabled dependency. Check [the CLI manifest](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/Cargo.toml) when preparing a build machine.
+
+The first-message client is a small standalone package under `rocketmq-website/examples/first-message/`. It uses path dependencies to this checkout:
 
 ```bash
-git clone https://github.com/mxsm/rocketmq-rust.git
-cd rocketmq-rust
-cargo build --release
+cargo build --manifest-path rocketmq-website/examples/first-message/Cargo.toml
 ```
 
-## Running Examples
+Its code adapts the existing producer and LitePull example patterns to the same Topic and Group. It is outside the root workspace and is not published as a crate. Keep it inside the source checkout so its relative dependency paths remain valid.
 
-RocketMQ-Rust includes various examples to help you get started:
+## Other examples and products
+
+The larger example collection is also standalone:
 
 ```bash
-# Clone the repository
-git clone https://github.com/mxsm/rocketmq-rust.git
-cd rocketmq-rust
-
-# Run a simple producer example
-cargo run --example simple_producer
-
-# Run a simple consumer example
-cargo run --example simple_consumer
+cd rocketmq-example
+cargo build --example producer-simple
+cargo build --example consumer-lite-pull
 ```
 
-## Docker Setup
+Those two examples use different built-in Topics; running them unchanged is not a matched send/receive tutorial. Use [the paired first-message application](quick-start.md), or deliberately align the constants and provision the resources in each selected example.
 
-For development and testing, you can use Docker:
+Proxy builds involve protobuf generation and require `protoc`. RocksDB and desktop UI choices can introduce additional native tools. The website requires Node/npm, but neither is required for this minimal Rust service/client path. Build each independent Dashboard or AI project from its own manifest rather than adding it to this initial installation.
+
+## Confirm what the build established
+
+Run the built service or Cargo target with `--help` to inspect its actual options:
 
 ```bash
-# Pull the RocketMQ nameserver image
-docker pull apache/rocketmq:nameserver
-
-# Pull the RocketMQ broker image
-docker pull apache/rocketmq:broker
-
-# Start nameserver
-docker run -d -p 9876:9876 --name rmqnamesrv apache/rocketmq:nameserver
-
-# Start broker
-docker run -d -p 10911:10911 -p 10909:10909 --name rmqbroker \
-  -e "NAMESRV_ADDR=rmqnamesrv:9876" \
-  --link rmqnamesrv:rmqnamesrv \
-  apache/rocketmq:broker
+cargo run -p rocketmq-namesrv --bin rocketmq-namesrv-rust -- --help
+cargo run -p rocketmq-broker --bin rocketmq-broker-rust -- --help
+cargo run -p rocketmq-admin-cli -- --help
 ```
 
-## Next Steps
+Compilation and help output establish that the executable is available. They do not prove Broker registration, message delivery, TLS configuration, or recovery. [Local source setup](local-source.md) covers the running processes and their data directories; [quick start](quick-start.md) then follows the message path.
 
-- [Quick Start Guide](./quick-start) - Create your first producer and consumer
-- [Basic Concepts](./basic-concepts) - Understand RocketMQ's core concepts
-- [Configuration](../category/configuration) - Configure your RocketMQ instance
+If disk space runs low, Cargo build products can be removed with `cargo clean` in the relevant workspace or with the example's `--manifest-path`. This removes build products, not message data. Do not confuse cleaning the compiler output with deleting a Broker's storage directory.
 
-## Troubleshooting
-
-### Rust Version Too Old
-
-If you see an error about Rust version, update Rust:
-
-```bash
-rustup update stable
-```
-
-### Build Failures
-
-If the build fails, try:
-
-```bash
-cargo clean
-cargo build
-```
-
-### Port Already in Use
-
-If the default ports are already in use, you can configure different ports in your broker settings. See [Configuration](../category/configuration) for details.
+Sources: [root toolchain](https://github.com/mxsm/rocketmq-rust/blob/main/rust-toolchain.toml), [workspace manifest](https://github.com/mxsm/rocketmq-rust/blob/main/Cargo.toml), [example manifest](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-example/Cargo.toml).

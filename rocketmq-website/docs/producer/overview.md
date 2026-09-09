@@ -1,194 +1,76 @@
 ---
-sidebar_position: 1
-title: Producer Overview
+title: "Producer lifecycle and send results"
 ---
 
-# Producer Overview
+A producer discovers writable queues through the NameServer and sends messages to a Broker. `DefaultMQProducer` provides ordinary send APIs; transaction and request/reply usage add their own state and failure handling. Begin with [quick start](../getting-started/quick-start.md) for a complete application and local services.
 
-RocketMQ-Rust producers are built with `DefaultMQProducer` and the `MQProducer` trait. They support synchronous, asynchronous, one-way, selector-based, batch, and transactional send patterns.
+## Own the runtime explicitly
 
-## Creating a Producer
+The current client API requires an application-owned `Arc<ClientRuntime>`. Create it under a `RuntimeOwner` with a child service context and telemetry handle, then pass it into `DefaultMQProducer::builder`. Constructing a producer does not start it or provision its Topic.
 
-```rust
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_client_rust::ClientResult;
-
-#[tokio::main]
-async fn main() -> ClientResult<()> {
-    let mut producer = DefaultMQProducer::builder()
-        .producer_group("my_producer_group")
-        .name_server_addr("localhost:9876")
-        .build();
-
-    producer.start().await?;
-    // Use producer...
-    producer.shutdown().await;
-    Ok(())
-}
+```text
+RuntimeOwner
+  child service context + telemetry handle
+    Arc<ClientRuntime>
+      DefaultMQProducer
+        start → send operations → shutdown
+    ClientRuntime shutdown
+  RuntimeOwner shutdown
+Telemetry shutdown
 ```
 
-## Producer Configuration
+Share the client runtime across compatible facades within an application. It owns client infrastructure and background work; it is not a global singleton to abandon at process exit. Stop admitting new sends before shutdown, await application-owned in-flight operations, then close facades before the runtime they depend on.
 
-### Basic Configuration
+The [complete first-message application](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-website/examples/first-message/src/main.rs) preserves cleanup on both success and failure. Its standalone [manifest](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-website/examples/first-message/Cargo.toml) shows the exact path dependencies.
+
+## Build and start
+
+This fragment belongs inside the application's owned runtime and uses its existing `client`. The complete example includes imports, error handling and cleanup.
 
 ```rust
-let mut producer = DefaultMQProducer::builder()
-    .producer_group("producer_group")
-    .name_server_addr("localhost:9876")
-    .send_msg_timeout(3_000)
-    .retry_times_when_send_failed(2)
-    .max_message_size(4 * 1024 * 1024)
-    .compress_msg_body_over_howmuch(4 * 1024)
+let mut producer = DefaultMQProducer::builder(client)
+    .producer_group("docs_first_message_producer")
+    .name_server_addr("127.0.0.1:9876")
     .build();
+producer.start().await?;
 ```
 
-### Advanced Configuration
+The Producer Group identifies the producer role; it does not create a Consumer Group or determine the Topic. Configure the NameServer before startup and provision the target Topic with writable queues. In particular, the tutorial disables automatic Topic creation.
+
+## Construct and send a message
+
+Use the Model message builder:
 
 ```rust
-let mut producer = DefaultMQProducer::builder()
-    .producer_group("producer_group")
-    .name_server_addr("localhost:9876")
-    .retry_times_when_send_failed(3)
-    .retry_times_when_send_async_failed(3)
-    .retry_another_broker_when_not_store_ok(true)
-    .send_msg_max_timeout_per_request(5_000)
-    .batch_max_delay_ms(10)
-    .batch_max_bytes(512 * 1024)
-    .total_batch_max_bytes(4 * 1024 * 1024)
-    .enable_backpressure_for_async_mode(true)
-    .back_pressure_for_async_send_num(10_000)
-    .back_pressure_for_async_send_size(64 * 1024 * 1024)
-    .build();
-```
-
-## Message Sending Modes
-
-### Synchronous Send
-
-```rust
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_common::common::message::message_single::Message;
-
 let message = Message::builder()
-    .topic("TopicTest")
-    .tags("TagA")
-    .body("Hello")
+    .topic("DocsFirstMessage")
+    .body("documentation message".to_owned())
     .build()?;
-
-let result = producer.send(message).await?;
-println!("Send result: {:?}", result);
+let result = producer.send_with_timeout(message, 3_000).await?;
 ```
 
-### Asynchronous Send
+The timeout is in milliseconds. In this API, the send call returns a `ClientResult<Option<SendResult>>`; inspect both the error/result presence and `send_status`. The outer Rust result alone does not express every Broker outcome.
 
-```rust
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_common::common::message::message_single::Message;
+| Send status | Interpretation | Application response |
+| --- | --- | --- |
+| `SendOk` | The selected send path reported success under its configured storage/replication policy | Record the result needed for diagnosis; continue according to the business contract |
+| `FlushDiskTimeout` | The requested disk-flush wait did not finish in time | Treat persistence outcome as uncertain; a blind retry can duplicate data |
+| `FlushSlaveTimeout` | The requested replica wait did not finish in time | Diagnose replica progress and apply the application's retry policy |
+| `SlaveNotAvailable` | The expected replica was unavailable | Check topology and availability requirements before retrying |
+| Error or missing result | No usable successful result was obtained | Preserve operation context; do not infer that no message was stored |
 
-let message = Message::builder()
-    .topic("TopicTest")
-    .body("Hello")
-    .build()?;
+The canonical result types live in `rocketmq-model::result`. Send success does not prove that a consumer processed the message, nor does it make a database update atomic with sending.
 
-producer
-    .send_with_callback(message, |result, error| {
-        if let Some(send_result) = result {
-            println!("Message sent: {:?}", send_result);
-        }
-        if let Some(err) = error {
-            eprintln!("Send failed: {}", err);
-        }
-    })
-    .await?;
-```
+## Choose the operation deliberately
 
-### One-way Send
+[Sending messages](sending-messages.md) describes the send variants and queue selection. A response-bearing send can report a Broker result; a one-way send intentionally gives up that response. Transaction messages require a local transaction decision and checking behavior, described in [transaction messages](transaction-messages.md).
 
-```rust
-let message = Message::builder().topic("TopicTest").body("Fire and forget").build()?;
-producer.send_oneway(message).await?;
-```
+For a stable retry policy, define a business event identity before the first attempt. Keep that identity across retries and make the consumer's side effects idempotent. Client retry counts and timeouts belong inside the application's overall deadline; layering unbounded application retries over client retries can amplify a cluster failure.
 
-## Queue Selection
+## Shut down and diagnose
 
-Use selector functions to route related messages to the same queue.
+Always invoke `producer.shutdown().await` after finishing sends, including when startup or a later operation fails. Then close the shared client runtime and inspect its report; close the runtime owner and telemetry afterward. Do not introduce another Tokio runtime just to call shutdown from asynchronous code.
 
-```rust
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
+If startup succeeds but sending fails, check Topic routes, writable queue counts and the advertised Broker address before changing timeout values. See [first diagnosis](../operations/first-diagnosis.md) and [delivery and retry](../guides/delivery-and-retry.md).
 
-let message = Message::builder().topic("OrderEvents").body("order-123").build()?;
-let order_id = 123_i64;
-
-producer
-    .send_with_selector(
-        message,
-        |queues: &[MessageQueue], _msg: &Message, id: &i64| {
-            let index = (*id % queues.len() as i64) as usize;
-            queues.get(index).cloned()
-        },
-        order_id,
-    )
-    .await?;
-```
-
-## Error Handling
-
-```rust
-match producer.send(message).await {
-    Ok(result) => println!("Sent: {:?}", result),
-    Err(e) => {
-        // Returned after retries are exhausted.
-        eprintln!("Send failed: {}", e);
-    }
-}
-```
-
-## Performance Tuning
-
-### Batch Sending
-
-```rust
-let messages = vec![
-    Message::builder().topic("TopicTest").body("Msg1").build()?,
-    Message::builder().topic("TopicTest").body("Msg2").build()?,
-    Message::builder().topic("TopicTest").body("Msg3").build()?,
-];
-
-producer.send_batch(messages).await?;
-```
-
-### Compression
-
-```rust
-let mut producer = DefaultMQProducer::builder()
-    .producer_group("producer_group")
-    .name_server_addr("localhost:9876")
-    .compress_msg_body_over_howmuch(4 * 1024)
-    .build();
-```
-
-## Monitoring
-
-RocketMQ-Rust does not expose a single `get_stats()` facade on `DefaultMQProducer`. In production, use:
-
-- Send results and callback outcomes.
-- Structured logs for latency and failures.
-- Application metrics (for example counters/histograms around `send*` calls).
-
-## Best Practices
-
-1. Use dedicated producer groups per service boundary.
-2. Set retry and timeout values per business SLA.
-3. Use callback-based sending for high throughput paths.
-4. Keep message payloads small and compress large bodies.
-5. Use queue selectors for ordered business keys.
-6. Add idempotency on the consumer side for at-least-once delivery.
-
-## Next Steps
-
-- [Sending Messages](./sending-messages) - Advanced message sending techniques
-- [Transaction Messages](./transaction-messages) - Implement transactional messaging
-- [Client Configuration](../configuration/client-config) - Detailed configuration options
+Sources: [producer facade](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/producer/default_mq_producer.rs), [send result](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-model/src/result.rs), [message builder](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-model/src/common/message/message_builder.rs).

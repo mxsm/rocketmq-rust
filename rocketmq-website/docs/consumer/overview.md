@@ -1,208 +1,54 @@
 ---
-sidebar_position: 1
-title: Consumer Overview
+title: "Choose a consumer model"
 ---
 
-# Consumer Overview
+Choose a consumer by how the application receives work, owns concurrency and acknowledges progress. The models share discovery and transport infrastructure, but they do not have interchangeable confirmation semantics.
 
-RocketMQ-Rust provides two consumer styles:
+## Compare the models
 
-- `DefaultMQPushConsumer` for callback-driven processing.
-- `DefaultLitePullConsumer` for polling-driven processing.
+| Model | Application interface | Progress or acknowledgement | Suitable starting point |
+| --- | --- | --- | --- |
+| LitePull | Explicit polling loop | Queue offsets, automatic or application-controlled commit | An application that owns batching and processing flow |
+| Push | Client invokes a concurrent or orderly listener | Listener outcome feeds the consumption/retry path | Callback-oriented applications |
+| POP | Receive messages with receipt/invisibility state | Receipt-based ACK and visibility handling | Applications designed for POP's retry and receipt lifecycle |
+| Classic Pull compatibility | Explicit queue/offset pull requests | Application-managed queue position and compatible offset operations | Maintaining an existing Classic Pull integration |
 
-## Consumer Types
+Use [LitePull](pull-consumer.md) for the first-message tutorial. [Push consumption](push-consumer.md) describes callbacks, and the [client source](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-client/src/consumer) contains the POP and Classic Pull surfaces.
 
-### Push Consumer
+Push is an application-facing programming model. In the ordinary Push path, the client performs pulling/long polling and dispatches messages; the name does not mean that a Broker opens an unsolicited connection to invoke your code.
 
-Push consumer is ideal for event-driven services.
+Classic Pull's facade is deprecated. Its runtime-backed builder provides a compatibility path, while detached construction does not initialize a runnable client. New applications should choose the supported programming model they need rather than copying older constructors.
 
-```rust
-use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
+## Consumer Groups and queue assignment
 
-let mut consumer = DefaultMQPushConsumer::builder()
-    .consumer_group("push_group")
-    .name_server_addr("localhost:9876")
-    .build();
+In clustered offset-based consumption, members of a Consumer Group cooperate on queue assignments. Increasing consumer instances beyond available assigned queues does not create more queue-level parallelism. Independent applications that each need the full stream should use different groups.
 
-consumer.subscribe("TopicTest", "*").await?;
-consumer.start().await?;
-```
+Members of the same group should use consistent subscriptions and a compatible consumption model. A group name is not a per-message filter. Topic, namespace, group, expression and queue ownership all affect which data an instance can see.
 
-### Pull Consumer
+Rebalance changes assignments as membership or routes change. An application may finish work near an ownership transition and later see a message again. Make side effects idempotent and distinguish currently assigned work from old in-flight processing.
 
-Pull consumer is ideal for custom batching and replay workflows.
+## Processing success and consumption progress
 
-```rust
-use rocketmq_client_rust::consumer::default_lite_pull_consumer::DefaultLitePullConsumer;
-use rocketmq_client_rust::consumer::lite_pull_consumer::LitePullConsumer;
+Offset-based consumers track positions per queue, not a single total order across the Topic. A new group's initial-position policy applies when there is no usable stored position; it does not override an existing group's progress.
 
-let consumer = DefaultLitePullConsumer::builder()
-    .consumer_group("pull_group")
-    .name_server_addr("localhost:9876")
-    .auto_commit(true)
-    .build();
+For LitePull, polling transfers messages to application code. It does not prove that an external database update completed. Automatic commit follows client progress, so asynchronous business work launched after polling can remain unfinished when progress advances. Start with explicit processing followed by deliberate commit if that distinction matters.
 
-consumer.start().await?;
-consumer.subscribe("TopicTest").await?;
+For Push, return a successful listener outcome only after the work represented by that callback is complete. Acknowledging and then dispatching untracked work to another executor separates the acknowledgement from its business effect.
 
-loop {
-    let messages = consumer.poll_with_timeout(1_000).await;
-    for msg in messages {
-        process_message(&msg);
-    }
-}
-```
+For POP, retain and use the receipt associated with the delivery. Invisibility expiry can make an unacknowledged message eligible for redelivery. Extending visibility, retrying the business operation and acknowledging are separate actions; a stale receipt is not a general-purpose message identifier.
 
-## Creating a Push Consumer
+These models can support retries and duplicate delivery. None, by itself, creates an atomic transaction with your application's storage. See [delivery and retry](../guides/delivery-and-retry.md).
 
-```rust
-use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
-use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_client_rust::ClientResult;
+## Runtime, pressure and shutdown
 
-struct MyListener;
+Inject an application-owned `Arc<ClientRuntime>` into the chosen builder. Configure subscriptions and listeners before startup, then keep the application running while it owns work. Bound worker concurrency and retained batches so a slow dependency does not turn the client into an unbounded memory queue.
 
-impl MessageListenerConcurrently for MyListener {
-    fn consume_message(
-        &self,
-        messages: &[&MessageExt],
-        _context: &ConsumeConcurrentlyContext,
-    ) -> ClientResult<ConsumeConcurrentlyStatus> {
-        for msg in messages {
-            println!("Received message: {:?}", msg.msg_id());
-        }
-        Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
-    }
-}
+The zero-copy LitePull path returns owned `Arc<MessageExt>` values. Keeping those values alive retains their underlying data. Zero-copy changes copying and ownership costs; it does not remove memory accounting or business backpressure.
 
-#[tokio::main]
-async fn main() -> ClientResult<()> {
-    let mut consumer = DefaultMQPushConsumer::builder()
-        .consumer_group("my_consumer_group")
-        .name_server_addr("localhost:9876")
-        .consume_thread_min(2)
-        .consume_thread_max(10)
-        .build();
+When stopping, stop accepting new business work, resolve the work already accepted according to its retry policy, and close the consumer before the shared client runtime and runtime owner. An interrupt should not silently translate unfinished work into successful consumption.
 
-    consumer.subscribe("TopicTest", "*").await?;
-    consumer.register_message_listener_concurrently(MyListener);
-    consumer.start().await?;
+## Next steps
 
-    let _ = tokio::signal::ctrl_c().await;
-    consumer.shutdown().await;
-    Ok(())
-}
-```
+Follow [quick start](../getting-started/quick-start.md) for a complete matched application, then [LitePull](pull-consumer.md) for offsets and polling. Use [message filtering](message-filtering.md) when selecting only part of a Topic. If data is not arriving, [first diagnosis](../operations/first-diagnosis.md) starts with routes, subscriptions and assignment.
 
-## Consumer Configuration
-
-### Push Consumer Configuration
-
-```rust
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-
-let mut consumer = DefaultMQPushConsumer::builder()
-    .consumer_group("my_consumer_group")
-    .name_server_addr("localhost:9876")
-    .consume_thread_min(2)
-    .consume_thread_max(20)
-    .pull_batch_size(32)
-    .pull_interval(0)
-    .consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset)
-    .message_model(MessageModel::Clustering)
-    .max_reconsume_times(3)
-    .build();
-```
-
-### Lite Pull Consumer Configuration
-
-```rust
-let consumer = DefaultLitePullConsumer::builder()
-    .consumer_group("my_pull_group")
-    .name_server_addr("localhost:9876")
-    .pull_batch_size(32)
-    .pull_threshold_for_queue(1_000)
-    .pull_threshold_for_all(10_000)
-    .auto_commit(false)
-    .auto_commit_interval_millis(5_000)
-    .build();
-```
-
-## Message Filtering
-
-### Tag Filtering
-
-```rust
-consumer.subscribe("OrderEvents", "order_created || order_paid").await?;
-```
-
-### SQL Filtering
-
-```rust
-use rocketmq_client_rust::consumer::message_selector::MessageSelector;
-
-let selector = MessageSelector::by_sql("region = 'us-west' AND amount > 100");
-consumer
-    .subscribe_with_selector("OrderEvents", Some(selector))
-    .await?;
-```
-
-## Retry Handling
-
-```rust
-impl MessageListenerConcurrently for MyListener {
-    fn consume_message(
-        &self,
-        messages: &[&MessageExt],
-        _context: &ConsumeConcurrentlyContext,
-    ) -> ClientResult<ConsumeConcurrentlyStatus> {
-        for msg in messages {
-            if msg.reconsume_times() >= 3 {
-                eprintln!("Max retries exceeded: {:?}", msg.msg_id());
-                continue;
-            }
-
-            if let Err(e) = process_message_safe(msg) {
-                eprintln!("Process failed: {:?}", e);
-                return Ok(ConsumeConcurrentlyStatus::ReconsumeLater);
-            }
-        }
-
-        Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
-    }
-}
-```
-
-## Performance Tuning
-
-```rust
-let mut consumer = DefaultMQPushConsumer::builder()
-    .consumer_group("perf_group")
-    .name_server_addr("localhost:9876")
-    .consume_thread_min(4)
-    .consume_thread_max(32)
-    .pull_batch_size(64)
-    .pull_threshold_for_queue(2_000)
-    .pull_threshold_for_topic(20_000)
-    .build();
-```
-
-## Best Practices
-
-1. Use push consumer for online event processing, pull consumer for controlled replay and batching.
-2. Keep listener logic idempotent to handle at-least-once delivery semantics.
-3. Tune thread counts and pull thresholds based on production traffic.
-4. Use server-side filtering to reduce useless message transfer.
-5. Set clear retry limits and add dead-letter handling paths.
-
-## Next Steps
-
-- [Push Consumer](./push-consumer) - Deep dive into push consumer
-- [Pull Consumer](./pull-consumer) - Deep dive into pull consumer
-- [Message Filtering](./message-filtering) - Advanced filtering techniques
+Sources: [client API overview](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md), [Classic Pull facade](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/default_mq_pull_consumer.rs).

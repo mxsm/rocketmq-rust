@@ -1,196 +1,55 @@
 ---
-sidebar_position: 3
-title: Basic Concepts
+title: "Messaging concepts"
 ---
 
-# Basic Concepts
+A message system separates producing an event from processing it. The Broker stores and serves messages while clients discover routes and track consumption. Use the concepts below to reason about placement, progress, and failure before choosing an API.
 
-Understanding RocketMQ-Rust's core concepts is essential for building effective messaging applications.
+## Topic, queue and message
 
-## Core Components
+A **Topic** is a logical stream such as `DocsFirstMessage`. A Topic can have several message queues on one or more Brokers. A **message queue** identifies a Topic, Broker, and queue ID; offsets are meaningful within that queue. Queue 0 on Broker A is not the same sequence as queue 0 on Broker B.
 
-### Message
+A message has a body and metadata such as tags, keys, and properties. A **tag** supports a subscription filter; a **key** can help locate a message or carry an application identifier. Neither a tag nor a message key automatically establishes business deduplication.
 
-A message is the fundamental unit of communication in RocketMQ. Each message contains:
+Consider an order-created event. The body contains the event, the Topic groups this class of events, and an application business identifier lets the downstream database recognize repeated processing. The Broker message ID is useful for diagnostics but should not replace an explicit business idempotency strategy.
 
-- **Topic**: The category to which the message belongs
-- **Body**: The actual data payload (byte array)
-- **Tags**: Optional labels for filtering messages within a topic
-- **Keys**: Optional message keys for indexing and querying
-- **Properties**: Additional key-value pairs for metadata
+## Producer Group and Consumer Group
 
-```rust
-use rocketmq_common::common::message::message_single::Message;
+A **Producer** discovers writable queues and sends messages. Its group identifies the producer context; transaction messaging adds specific group and callback requirements. A send call and a local business transaction are separate operations unless your application deliberately coordinates them.
 
-let message = Message::builder()
-    .topic("TopicTest")
-    .body("Hello")
-    .tags("tag1")
-    .key("key1")
-    .build()?;
-```
+A **Consumer Group** represents a consumption subscription/progress identity. In clustering mode, consumers in the group share work through queue allocation and coordination. A different group can consume the same Topic independently. Adding consumers to an existing group is therefore different from giving every consumer a new group name.
 
-### Topic
+Use consistent subscriptions within a group. Changing Topic, filter, or consumption mode on just one member can produce surprising delivery or coordination behavior. Broadcast consumption is a distinct mode with different progress and retry assumptions.
 
-A topic is a logical grouping of messages. Producers send messages to topics, and consumers subscribe to topics.
+## Routes are metadata, not the message payload
 
-Topics are partitioned into multiple queues for parallel processing and load distribution.
+A NameServer receives Broker registration and answers route queries. Clients use the returned Broker addresses to communicate with Brokers. The payload does not flow through the NameServer.
 
-```text
-Topic: OrderEvents
-├── Queue 0
-├── Queue 1
-├── Queue 2
-└── Queue 3
-```
+The address a Broker advertises must be reachable from its clients. A container can successfully register a private address while a host client cannot connect to that address. Checking only the NameServer port cannot diagnose this second hop.
 
-### Producer
+## Consumption position and acknowledgement
 
-Producers are applications that send messages to RocketMQ brokers.
+| Concept | Meaning | It does not prove |
+| --- | --- | --- |
+| Queue offset | Position in one queue's sequence | Global order across all queues |
+| Consumer position | Where a consumer is reading or has advanced locally | That progress is durably committed to its shared store |
+| Committed offset | Progress recorded for later continuation | An atomic commit of the application's database transaction |
+| Send acknowledgement | Broker response under the configured write policy | That every consumer has processed the event |
+| POP receipt/ACK | Delivery receipt and completion for a POP attempt | The same operation as an ordinary LitePull offset commit |
 
-**Key Features:**
+With LitePull manual commit, process a batch successfully before committing its progress. If a process fails after the business write but before progress is recorded, it may process the event again. Committing first creates the opposite failure window: progress can advance before the business operation succeeds.
 
-- Asynchronous sending
-- Transactional messages
-- Retry mechanisms
-- Load balancing across brokers
+`ConsumeFromFirstOffset` is an initial-position policy. It does not reset an existing group's stored progress on every restart. Reusing a Consumer Group normally resumes its established position.
 
-```rust
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
+## Ordering, retries and delayed delivery
 
-let mut producer = DefaultMQProducer::builder()
-    .producer_group("example_group")
-    .name_server_addr("localhost:9876")
-    .build();
-producer.start().await?;
-producer.send(message).await?;
-```
+Ordering is scoped to the queue and processing model that preserve it. Multiple queues provide parallelism; they do not establish one global sequence. A retry can delay later processing or expose duplicates depending on the selected model.
 
-### Consumer
+Delayed delivery asks the system to make a message available later; it is not a guarantee of execution at an exact wall-clock instant. Consumer scheduling, load and failures still affect processing time.
 
-Consumers are applications that receive and process messages from RocketMQ brokers.
+For all models, distinguish “accepted,” “durable under a policy,” “visible to reads,” “delivered,” and “business processing completed.” [Delivery and retry](../guides/delivery-and-retry.md) expands those boundaries.
 
-**Types of Consumers:**
+## Apply the concepts
 
-- **Push Consumer**: Messages are pushed to the consumer
-- **Pull Consumer**: Consumer actively pulls messages from the broker
+The [first-message tutorial](quick-start.md) uses one Topic, one explicit Consumer Group, and manual LitePull commits. Keep those names aligned before troubleshooting connectivity. [First diagnosis](../operations/first-diagnosis.md) follows the route from process configuration to Topic metadata and consumer progress.
 
-```rust
-use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-
-let mut consumer = DefaultMQPushConsumer::builder()
-    .consumer_group("example_group")
-    .name_server_addr("localhost:9876")
-    .build();
-consumer.subscribe("TopicTest", "*").await?;
-consumer.start().await?;
-```
-
-### Broker
-
-Brokers are RocketMQ servers that store and deliver messages. They handle:
-
-- Message storage and persistence
-- Message querying
-- Consumer offset management
-- High availability through replication
-
-### Name Server
-
-The Name Server is a lightweight service that provides:
-
-- Route information for brokers
-- Topic-to-broker mapping
-- Heartbeat management
-
-Brokers register with the Name Server on startup, and clients query the Name Server to discover broker addresses.
-
-## Message Models
-
-### Clustering Model (Default)
-
-In clustering mode, messages are distributed among consumers in a consumer group. Each message is consumed by only one consumer.
-
-```text
-Consumer Group: OrderProcessors
-├── Consumer A → Queue 0, Queue 1
-├── Consumer B → Queue 2, Queue 3
-└── Consumer C → Queue 4, Queue 5
-
-Message M1 (Queue 0) → Consumer A only
-Message M2 (Queue 2) → Consumer B only
-```
-
-### Broadcasting Model
-
-In broadcasting mode, each consumer receives all messages in the topic.
-
-```text
-Consumer Group: LogAggregators
-├── Consumer A → All messages
-├── Consumer B → All messages
-└── Consumer C → All messages
-
-Message M1 → Consumer A, B, and C
-```
-
-## Message Delivery Semantics
-
-### At Least Once (Default)
-
-RocketMQ guarantees that each message is delivered at least once. This means:
-
-- Messages are never lost
-- Duplicate messages are possible
-- Consumers should handle idempotency
-
-### Ordering Guarantees
-
-**Order within a queue**: Messages in the same queue are consumed in FIFO order.
-
-**Order across queues**: No guaranteed order across different queues in the same topic.
-
-For strict ordering, use a single queue or message queue selector.
-
-```mermaid
-graph LR
-    P[Producer] --> Q1[Queue 1]
-    P --> Q2[Queue 2]
-    P --> Q3[Queue 3]
-
-    Q1 --> C1[Consumer 1]
-    Q2 --> C2[Consumer 2]
-    Q3 --> C3[Consumer 3]
-
-    style Q1 fill:#e1f5ff
-    style Q2 fill:#e1f5ff
-    style Q3 fill:#e1f5ff
-```
-
-## Consumer Groups
-
-A consumer group is a logical grouping of consumers that work together to consume messages from a topic.
-
-**Key Properties:**
-
-- All consumers in a group share the same group name
-- Each message is consumed by only one consumer in the group (clustering mode)
-- Load balancing is automatic within the group
-- Each group maintains its own consumer offsets
-
-```rust
-let mut consumer = DefaultMQPushConsumer::builder()
-    .consumer_group("my_consumer_group")
-    .name_server_addr("localhost:9876")
-    .build();
-```
-
-## Next Steps
-
-Now that you understand the basic concepts:
-
-- [Architecture Overview](../category/architecture) - Deep dive into RocketMQ architecture
-- [Producer Guide](../category/producer) - Learn advanced producer features
-- [Consumer Guide](../category/consumer) - Learn advanced consumer features
+Source definitions: [message and queue models](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-model/src/common/message), [consumer APIs](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-client/src/consumer), and [protocol heartbeat types](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-protocol/src/protocol/heartbeat).

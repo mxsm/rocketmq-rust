@@ -1,0 +1,15 @@
+[workspace]
+
+[package]
+name = "rocketmq-doc-first-message"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95.0"
+publish = false
+
+[dependencies]
+rocketmq-client-rust = { path = "../../../rocketmq-client", default-features = false }
+rocketmq-model = { path = "../../../rocketmq-model" }
+rocketmq-runtime = { path = "../../../rocketmq-runtime" }
+rocketmq-observability = { path = "../../../rocketmq-observability" }
+tokio = { version = "1.49", features = ["macros", "signal", "time"] }

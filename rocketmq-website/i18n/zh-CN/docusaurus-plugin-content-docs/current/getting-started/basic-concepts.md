@@ -1,198 +1,55 @@
 ---
-sidebar_position: 3
-title: 基本概念
+title: "消息基础概念"
 ---
 
-> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+消息系统将事件的生产与处理解耦。Broker 存储并提供消息，客户端发现路由并维护消费进度。选择 API 前，先用以下概念理解数据位置、进度与故障。
 
-# 基本概念
+## 主题、队列与消息
 
-理解 RocketMQ-Rust 的核心概念，是构建高效消息应用的基础。
+**主题** 是逻辑消息流，例如 `DocsFirstMessage`。一个 主题 可以在一个或多个 Broker 上具有多个消息队列。**消息队列**由 主题、Broker 和队列 ID 标识，偏移量只在该队列内部有意义。Broker A 的队列 0 与 Broker B 的队列 0 不是同一个序列。
 
-## 核心组件
+消息包含正文，以及 Tag、Key、属性等元数据。**Tag** 用于订阅过滤；**Key** 可以用于消息定位或承载应用标识。Tag 和消息 Key 都不会自动实现业务去重。
 
-### 消息（Message）
+以订单创建事件为例：正文携带事件，主题 归类事件，应用业务标识让下游数据库识别重复处理。Broker 消息 ID 有助于诊断，但不应代替明确的业务幂等策略。
 
-消息是 RocketMQ 中最基础的通信单元。每条消息通常包含：
+## 生产者组 与 消费者组
 
-- **Topic**：消息所属的主题类别
-- **Body**：实际消息体数据（字节数组）
-- **Tags**：可选标签，用于在同一主题内做消息过滤
-- **Keys**：可选消息键，用于索引与查询
-- **Properties**：额外的键值元数据
+**生产者** 查询可写队列并发送消息。生产者组 标识生产者上下文，事务消息还具有专门的分组和回调要求。除非应用有意协调，发送调用与本地业务事务仍是两个操作。
 
-```rust
-use rocketmq_common::common::message::message_single::Message;
+**消费者组** 表示消费订阅和进度身份。在集群消费模式中，同组消费者通过队列分配与协调分担工作。另一消费组可以独立消费同一 主题。因此，向已有组增加消费者，与为每个消费者设置新组名，是两种不同的行为。
 
-let message = Message::builder()
-    .topic("TopicTest")
-    .body("Hello")
-    .tags("tag1")
-    .key("key1")
-    .build()?;
-```
+同一组内保持订阅一致。只修改某个成员的 主题、过滤器或消费模式，可能造成意料之外的投递或协调行为。广播是独立模式，其进度和重试假设也不同。
 
-### 主题（Topic）
+## 路由是元数据，不承载消息正文
 
-Topic 是消息的逻辑分组。生产者向 Topic 发送消息，消费者订阅 Topic 消费消息。
+NameServer 接收 Broker 注册并回答路由查询。客户端使用返回的 Broker 地址与 Broker 通信，消息正文不经过 NameServer。
 
-Topics 会被划分为多个队列，以支持并行处理和负载分摊。
+Broker 公布的地址必须能被客户端访问。容器可能成功注册一个私网地址，而主机客户端无法连接。只检查 NameServer 端口无法诊断这第二跳。
 
-```text
-Topic: OrderEvents
-├── Queue 0
-├── Queue 1
-├── Queue 2
-└── Queue 3
-```
+## 消费位置与确认
 
-### 生产者（Producer）
+| 概念 | 含义 | 不能证明什么 |
+| --- | --- | --- |
+| 队列偏移量 | 单个队列序列中的位置 | 所有队列之间的全局顺序 |
+| 消费位置 | 消费者读取或本地推进的位置 | 进度已持久提交到共享保存位置 |
+| 已提交偏移量 | 供后续恢复使用的消费进度 | 与应用数据库事务原子提交 |
+| 发送确认 | Broker 按配置写入策略返回的结果 | 所有消费者都处理了事件 |
+| POP receipt/ACK | 一次 POP 投递的凭据与完成确认 | 与普通 LitePull 偏移量提交相同 |
 
-生产者是向 RocketMQ Broker 发送消息的应用端。
+LitePull 手动提交应在整批业务处理成功后记录进度。如果业务写入成功后、进度记录前进程失败，事件可能再次处理。先提交则产生相反窗口：业务未成功，进度已经前进。
 
-**关键特性：**
+`ConsumeFromFirstOffset` 是初始位置策略，不会在每次重启时清空已有组的进度。复用消费组通常会从已有位置继续。
 
-- 异步发送
-- 事务消息
-- 失败重试机制
-- 跨 Broker 负载均衡
+## 顺序、重试与延迟投递
 
-```rust
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
+顺序保证取决于维护它的队列和处理模型。多个队列提供并行度，不形成全局单一序列。重试可能延迟后续处理或产生重复，具体取决于所选模型。
 
-let mut producer = DefaultMQProducer::builder(client_runtime.clone())
-    .producer_group("example_group")
-    .name_server_addr("localhost:9876")
-    .build();
-producer.start().await?;
-producer.send(message).await?;
-```
+延迟投递要求系统稍后让消息可用，不保证业务一定在精确的时钟瞬间执行。消费调度、负载和故障仍会影响处理时间。
 
-### 消费者（Consumer）
+任何模型都应区分“已接纳”“按策略持久化”“读路径可见”“已投递”“业务处理完成”。[投递与重试](../guides/delivery-and-retry.md)进一步解释这些边界。
 
-消费者负责从 RocketMQ Broker 接收并处理消息。
+## 在教程中使用这些概念
 
-**消费者类型：**
+[第一条消息教程](quick-start.md)使用一个 主题、一个明确的消费组和 LitePull 手动提交。排查网络前，先确保两端名称一致。[首次诊断](../operations/first-diagnosis.md)按进程配置、主题 元数据和消费进度依次定位。
 
-- **Push Consumer**：消息由 Broker 主动推送到消费者
-- **Pull Consumer**：消费者主动从 Broker 拉取消息
-
-```rust
-use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-
-let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
-    .consumer_group("example_group")
-    .name_server_addr("localhost:9876")
-    .build();
-consumer.subscribe("TopicTest", "*").await?;
-consumer.start().await?;
-```
-
-### Broker
-
-Broker 是 RocketMQ 的服务端，负责消息存储与投递，主要能力包括：
-
-- 消息存储与持久化
-- 消息查询
-- 消费位点（offset）管理
-- 通过复制提供高可用
-
-### Name Server
-
-Name Server 是轻量级路由服务，主要提供：
-
-- Broker 路由信息
-- Topic 到 Broker 的映射
-- 心跳管理
-
-Broker 启动后会向 Name Server 注册，客户端通过 Name Server 发现可用 Broker 地址。
-
-## 消息模型
-
-### 集群模式（默认）
-
-在集群模式下，同一消费组内的消息会被分配给不同消费者，每条消息只会被其中一个消费者处理。
-
-```text
-Consumer Group: OrderProcessors
-├── Consumer A → Queue 0, Queue 1
-├── Consumer B → Queue 2, Queue 3
-└── Consumer C → Queue 4, Queue 5
-
-Message M1 (Queue 0) → Consumer A only
-Message M2 (Queue 2) → Consumer B only
-```
-
-### 广播模式
-
-在广播模式下，同一 Topic 的每条消息都会被消费组内所有消费者接收。
-
-```text
-Consumer Group: LogAggregators
-├── Consumer A → All messages
-├── Consumer B → All messages
-└── Consumer C → All messages
-
-Message M1 → Consumer A, B, and C
-```
-
-## 消息投递语义
-
-### 至少一次（默认）
-
-RocketMQ 默认保证每条消息至少投递一次，这意味着：
-
-- 消息不会丢失
-- 可能出现重复消息
-- 消费端应实现幂等处理
-
-### 有序性保证
-
-**队列内有序**：同一队列中的消息按 FIFO 顺序消费。
-
-**队列间无序**：同一 Topic 的不同队列之间不保证全局顺序。
-
-如需严格顺序，请使用单队列，或通过消息队列选择器固定路由。
-
-```mermaid
-graph LR
-    P[Producer] --> Q1[Queue 1]
-    P --> Q2[Queue 2]
-    P --> Q3[Queue 3]
-
-    Q1 --> C1[Consumer 1]
-    Q2 --> C2[Consumer 2]
-    Q3 --> C3[Consumer 3]
-
-    style Q1 fill:#e1f5ff
-    style Q2 fill:#e1f5ff
-    style Q3 fill:#e1f5ff
-```
-
-## 消费组（Consumer Group）
-
-消费组是多个消费者的逻辑集合，它们协同消费同一 Topic 的消息。
-
-**关键属性：**
-
-- 组内消费者共享同一个 group name
-- 在集群模式下，每条消息只会被组内一个消费者处理
-- 组内自动进行负载均衡
-- 每个消费组维护独立的消费位点
-
-```rust
-let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
-    .consumer_group("my_consumer_group")
-    .name_server_addr("localhost:9876")
-    .build();
-```
-
-## 下一步
-
-掌握基本概念后，你可以继续阅读：
-
-- [架构概览](../architecture/overview) - 深入理解 RocketMQ 架构
-- [生产者指南](../producer/overview) - 学习生产者高级特性
-- [消费者指南](../consumer/overview) - 学习消费者高级特性
+源码定义：[消息与队列模型](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-model/src/common/message)、[消费 API](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-client/src/consumer)、[协议心跳类型](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-protocol/src/protocol/heartbeat)。
