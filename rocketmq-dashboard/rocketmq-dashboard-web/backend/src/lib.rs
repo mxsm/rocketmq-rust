@@ -335,7 +335,7 @@ async fn shutdown_signal() {
                     _ = terminate.recv() => {},
                 }
             }
-            Err(error) => {
+            Err(_) => {
                 tracing::warn!("failed to install SIGTERM shutdown signal: using Ctrl-C only");
                 wait_for_ctrl_c().await;
             }

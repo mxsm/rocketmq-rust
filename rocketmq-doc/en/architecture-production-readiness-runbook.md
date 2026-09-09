@@ -232,18 +232,20 @@ not inputs to this isolated evidence environment.
 
 ## Evidence verification
 
-From the repository root, validate policy and dynamic fixtures during the later
+From the repository root, validate policy and synthetic evidence during the later
 production-validation tier:
 
 ```powershell
 python scripts/architecture_slo_guard.py --policy-only
-python scripts/architecture_slo_guard.py `
-  --evidence scripts/tests/fixtures/m11-slo/pass `
-  --allow-fixture
 python -m unittest scripts.tests.test_architecture_slo_guard -v
 python -m unittest scripts.tests.test_m11_dynamic_evidence -v
 cargo test -p rocketmq-observability --test production_readiness_contract
 ```
+
+The SLO tests generate synthetic evidence in a temporary repository using the
+current policy and release assets, then inject deliberate violations. Updating
+the runbook or metric registry does not require refreshing committed fixture
+hashes. These samples remain marked `fixture=true` and `status=not-run`.
 
 For production evidence, omit `--allow-fixture`. The guard then requires the
 candidate commit to equal the checked-out commit, verifies the embedded M11-11
