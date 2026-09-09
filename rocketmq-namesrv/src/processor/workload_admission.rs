@@ -257,6 +257,156 @@ fn positive_usize(value: i32) -> usize {
 mod tests {
     use super::*;
 
+    #[test]
+    fn request_classes_map_to_the_expected_admission_pool_and_label() {
+        for (request_class, admission_class, label) in [
+            (
+                NameServerRequestClass::RouteRead,
+                WorkloadAdmissionClass::RouteRead,
+                "route-read",
+            ),
+            (
+                NameServerRequestClass::BrokerControl,
+                WorkloadAdmissionClass::BrokerControl,
+                "broker-control",
+            ),
+            (
+                NameServerRequestClass::AdminRead,
+                WorkloadAdmissionClass::Admin,
+                "admin",
+            ),
+            (
+                NameServerRequestClass::AdminWrite,
+                WorkloadAdmissionClass::Admin,
+                "admin",
+            ),
+        ] {
+            assert_eq!(WorkloadAdmissionClass::from(request_class), admission_class);
+            assert_eq!(admission_class.as_str(), label);
+        }
+        assert_eq!(WorkloadAdmissionRejection::QueueFull.as_str(), "queue-full");
+        assert_eq!(WorkloadAdmissionRejection::TimedOut.as_str(), "timeout");
+    }
+
+    #[test]
+    fn capacity_helpers_clamp_inputs_and_reserve_the_admin_share() {
+        for (input, expected) in [(i32::MIN, 1), (-1, 1), (0, 1), (1, 1), (8, 8)] {
+            assert_eq!(positive_usize(input), expected);
+        }
+        for (total, expected) in [(1, (0, 1)), (3, (2, 1)), (4, (3, 1)), (5, (4, 1)), (8, (6, 2))] {
+            assert_eq!(split_default_capacity(total), expected);
+        }
+    }
+
+    #[test]
+    fn nonblocking_observation_releases_each_class_permit_on_drop() {
+        let admission = NameServerWorkloadAdmission::with_limits((1, 1), (1, 1), (1, 1), Duration::from_secs(10));
+        for class in [
+            WorkloadAdmissionClass::RouteRead,
+            WorkloadAdmissionClass::BrokerControl,
+            WorkloadAdmissionClass::Admin,
+        ] {
+            let lease = admission.try_observe(class).unwrap();
+            assert!(!lease.was_queued());
+            assert_eq!(admission.class_counts(class), (1, 0));
+            assert!(admission.try_observe(class).is_none());
+            drop(lease);
+            assert_eq!(admission.snapshot(), WorkloadAdmissionSnapshot::default());
+            assert!(admission.try_observe(class).is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_acquires_update_only_their_class_and_mark_the_lease() {
+        let admission = NameServerWorkloadAdmission::with_limits((1, 1), (1, 1), (1, 1), Duration::from_secs(10));
+        let classes = [
+            WorkloadAdmissionClass::RouteRead,
+            WorkloadAdmissionClass::BrokerControl,
+            WorkloadAdmissionClass::Admin,
+        ];
+        for (class, expected) in [
+            (
+                classes[0],
+                WorkloadAdmissionSnapshot {
+                    route_inflight: 1,
+                    route_waiting: 1,
+                    ..Default::default()
+                },
+            ),
+            (
+                classes[1],
+                WorkloadAdmissionSnapshot {
+                    broker_inflight: 1,
+                    broker_waiting: 1,
+                    ..Default::default()
+                },
+            ),
+            (
+                classes[2],
+                WorkloadAdmissionSnapshot {
+                    admin_inflight: 1,
+                    admin_waiting: 1,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let active = admission.acquire(class).await.unwrap();
+            assert!(!active.was_queued());
+            let mut waiting = std::pin::pin!(admission.acquire(class));
+            assert!(futures::poll!(&mut waiting).is_pending());
+            assert_eq!(admission.snapshot(), expected);
+            for observed_class in classes {
+                assert_eq!(
+                    admission.class_counts(observed_class),
+                    if observed_class == class { (1, 1) } else { (0, 0) }
+                );
+            }
+            drop(active);
+            let queued = waiting.await.unwrap();
+            assert!(queued.was_queued());
+            assert_eq!(admission.class_counts(class), (1, 0));
+            drop(queued);
+            assert_eq!(admission.snapshot(), WorkloadAdmissionSnapshot::default());
+        }
+    }
+
+    #[test]
+    fn config_sizes_the_pools_and_their_waiting_limits() {
+        let default_config = NamesrvConfig::default();
+        let default_admission = NameServerWorkloadAdmission::from_namesrv_config(&default_config);
+        assert_eq!(
+            default_admission.route.max_permits,
+            default_config.client_request_thread_pool_nums as usize
+        );
+        assert_eq!(
+            default_admission.broker.max_permits + default_admission.admin.max_permits,
+            default_config.default_thread_pool_nums as usize
+        );
+        assert_eq!(default_admission.snapshot(), WorkloadAdmissionSnapshot::default());
+
+        let config = NamesrvConfig {
+            client_request_thread_pool_nums: 3,
+            default_thread_pool_nums: 8,
+            client_request_thread_pool_queue_capacity: 5,
+            default_thread_pool_queue_capacity: 12,
+            namesrv_workload_admission_timeout_millis: 17,
+            ..Default::default()
+        };
+        let admission = NameServerWorkloadAdmission::from_namesrv_config(&config);
+        for (class, permits, waiting) in [
+            (WorkloadAdmissionClass::RouteRead, 3, 5),
+            (WorkloadAdmissionClass::BrokerControl, 6, 9),
+            (WorkloadAdmissionClass::Admin, 2, 3),
+        ] {
+            let pool = admission.pool(class);
+            assert_eq!((pool.max_permits, pool.max_waiting), (permits, waiting));
+            let leases: Vec<_> = (0..permits).map(|_| admission.try_observe(class).unwrap()).collect();
+            assert!(admission.try_observe(class).is_none());
+            drop(leases);
+        }
+        assert_eq!(admission.queue_timeout, Duration::from_millis(17));
+    }
+
     #[tokio::test]
     async fn broker_saturation_does_not_consume_route_capacity() {
         let admission = NameServerWorkloadAdmission::with_limits((1, 1), (1, 1), (1, 1), Duration::from_millis(50));
