@@ -42,5 +42,17 @@
   "sidebar.docsSidebar.category.Operations": {
     "message": "运维",
     "description": "The label for category 'Operations' in sidebar 'docsSidebar'"
+  },
+  "sidebar.docsSidebar.category.Deployment": {
+    "message": "部署",
+    "description": "The label for category 'Deployment' in sidebar 'docsSidebar'"
+  },
+  "sidebar.docsSidebar.category.Reference": {
+    "message": "参考",
+    "description": "The label for category 'Reference' in sidebar 'docsSidebar'"
+  },
+  "sidebar.docsSidebar.category.Ecosystem": {
+    "message": "生态项目",
+    "description": "The label for category 'Ecosystem' in sidebar 'docsSidebar'"
   }
 }

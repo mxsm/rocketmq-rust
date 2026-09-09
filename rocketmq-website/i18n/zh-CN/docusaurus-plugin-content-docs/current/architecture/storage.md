@@ -1,298 +1,120 @@
 ---
-sidebar_position: 3
-title: 存储
+title: "存储组合、持久性与恢复"
 ---
-# 存储
 
-RocketMQ-Rust 采用高性能存储机制，实现可靠消息持久化与快速检索。
+Store 将 Broker 读写请求转换为主日志操作，以及服务这些请求所需的派生结构。其核心设计区别是：接纳字节、满足持久性策略，以及通过特定读取视图使字节可见。
 
-## 存储架构
+## 组合与所有权
 
-```mermaid
-graph TB
-    subgraph Broker["Broker Storage"]
-        CommitLog[CommitLog]
-        CQ1[ConsumeQueue 0]
-        CQ2[ConsumeQueue 1]
-        CQ3[ConsumeQueue 2]
-        Index[IndexFile]
-    end
-
-    Incoming[Incoming Messages]
-    Incoming --> CommitLog
-
-    CommitLog --> CQ1
-    CommitLog --> CQ2
-    CommitLog --> CQ3
-    CommitLog --> Index
-
-    Query[Query Requests]
-    Query --> CQ1
-    Query --> CQ2
-    Query --> CQ3
-    Query --> Index
-
-    style CommitLog fill:#f96,stroke:#333,stroke-width:2px
-```
-
-## CommitLog
-
-CommitLog 是核心存储文件，所有消息都按顺序追加写入。
-
-### 特性
-
-- **顺序写**：消息以 append-only 方式写入
-- **固定文件大小**：每个 CommitLog 文件大小固定（默认 1GB）
-- **滚动创建**：写满后创建新文件
-- **延迟删除**：仅在过期后进行清理
-
-### CommitLog 结构
-
-```text
-CommitLog 文件（每个 1GB）
-
-┌────────────────────────────────────────────────────┐
-│ [Message 1][Message 2][Message 3]...[Message N]    │
-│  ↑                                                 │
-│  顺序追加写入                                        │
-└────────────────────────────────────────────────────┘
-
-文件命名：00000000000000000000, 00000000000000001000, ...
-```
-
-### CommitLog 中的消息格式
-
-```rust
-pub struct CommitLogMessage {
-    // Total message size (4 bytes)
-    total_size: u32,
-
-    // Magic code (4 bytes) - for file integrity check
-    magic_code: u32,
-
-    // Message body CRC32 (4 bytes)
-    body_crc: u32,
-
-    // Queue ID (4 bytes)
-    queue_id: u32,
-
-    // Message flag (4 bytes)
-    flag: u32,
-
-    // Message properties
-    properties: ByteBuffer,
-
-    // Message body
-    body: ByteBuffer,
-}
-```
-
-### 顺序写性能
-
-CommitLog 的顺序写可显著提升性能：
-
-```text
-Traditional random I/O:  ~10,000   ops/sec
-Sequential I/O (SSD):    ~100,000+ ops/sec
-Sequential I/O (HDD):    ~50,000+  ops/sec
-```
-
-## ConsumeQueue
-
-ConsumeQueue 是用于快速消费读取的索引结构。
-
-### ConsumeQueue 结构
-
-每个 Topic 的每个 Queue 都有独立 ConsumeQueue：
-
-```text
-ConsumeQueue（Topic: OrderEvents, Queue: 0）
-
-┌─────────────────────────────────────────────┐
-│ 单条索引大小：20 字节                          │
-├─────────────────────────────────────────────┤
-│ [CommitLog Offset][Size][Tags Hash]         │
-│ [8 bytes         ][4B  ][8 bytes  ]         │
-│                                             │
-│ 示例：                                       │
-│ [0x00000000][0x0064][0x12345678]            │
-│ [0x00000064][0x0080][0x87654321]            │
-│ [0x000000E4][0x0050][0xABCDEF12]            │
-└─────────────────────────────────────────────┘
-```
-
-### 作用
-
-1. **快速定位**：按 offset 快速定位消息
-2. **内存映射友好**：可通过 mmap 高效访问
-3. **体积小**：单条索引仅 20 字节
-4. **支持过滤**：可配合 Tag 过滤
-
-### 读取流程
+`rocketmq-store-api` 定义与执行器无关的能力和值。`rocketmq-store-local` 提供本地 CommitLog、映射文件、恢复、派生视图、定时和 HA 原语。`rocketmq-store` 通过 `StoreFactory` 与 `StorePorts` 组合面向 Broker 的实现，可选 RocksDB 和分层存储组件参与该组合。
 
 ```mermaid
-sequenceDiagram
-    participant C as Consumer
-    participant CQ as ConsumeQueue
-    participant CL as CommitLog
-
-    C->>CQ: Request message at offset 0
-    CQ-->>C: Return [CommitLog Offset: 1000, Size: 200]
-    C->>CL: Read 200 bytes at offset 1000
-    CL-->>C: Return message data
+flowchart TB
+    Broker["Broker 生命周期所有者"] --> Factory["StoreFactory / StorePorts"]
+    Factory --> Ports["窄读 / 写 / 管理 / 复制能力"]
+    Factory --> Log["主 CommitLog"]
+    Log --> Dispatch["分派与恢复重放"]
+    Dispatch --> CQ["ConsumeQueue"]
+    Dispatch --> Index["Key 索引"]
+    Dispatch --> Timer["定时 / 事务元数据"]
+    Dispatch -.-> Secondary["可选 RocksDB / 分层存储集成"]
+    CQ --> Reads["队列读取解析物理日志位置"]
+    Index --> Queries["Key 查询解析物理日志位置"]
+    Log --> Flush["本地持久水位"]
+    Log --> Replication["副本进度与确认策略"]
 ```
 
-## IndexFile
+组合根持有生命周期，请求处理器接收所需的窄能力，而不是整个后端的可变句柄。Store 是 Broker 组件，不是用户需要额外启动的服务。
 
-IndexFile 提供基于 Key 的快速查询能力。
+正常集成顺序为配置验证、`StoreFactory::open`、初始化、加载/恢复、启动，最后优雅关闭。仅打开组合，不能证明恢复成功或后台服务已启动。
 
-### IndexFile 结构
+## 主日志与派生结构
 
-```text
-IndexFile
+CommitLog 在物理字节范围内保存编码消息记录。ConsumeQueue 将主题/队列的逻辑偏移量映射到物理记录，key 索引支持按消息 key 查询。定时、事务及可选次级组件维护各自操作所需的状态。
 
-┌─────────────────────────────────────────────┐
-│ Hash 槽位（500 万个 slots）                   │
-│ ↓                                           │
-│ [Slot 0] → [Head Index] → ...               │
-│ [Slot 1] → [Head Index] → ...               │
-│ [Slot 2] → [Head Index] → ...               │
-│ ...                                         │
-│                                             │
-│ 每条索引（20 字节）：                           │
-│ - Key Hash（4 字节）                         │
-│ - CommitLog Offset（8 字节）                 │
-│ - Time Diff（4 字节）                        │
-│ - Next Index Offset（4 字节）                │
-└─────────────────────────────────────────────┘
+这种组织方式避免在每个读取索引中保存完整独立消息体，同时也产生进度差异：追加已接纳时，某个派生视图仍可能落后。队列读取与 key 查询不一定在每个时刻观察到相同进度。
+
+当前 RocksDB 模式保留本地文件 CommitLog，将消费队列、索引以及所选定时/事务元数据交给 RocksDB 服务，不代表全部主消息字节进入 RocksDB。分层存储集成属于可选次级分派，不增强主日志确认。
+
+## 将追加回执作为契约理解
+
+`AppendReceipt` 组合追加状态、可选追加范围、已追加水位、持久水位和已达到的 `Durability`，并验证各字段不互相矛盾。
+
+对于已接纳的半开字节范围 `[start, end)`：
+
+- 已追加水位必须覆盖 `end`。
+- 持久水位不能超过已追加水位。
+- 本地持久性要求持久水位覆盖完整范围。
+- 副本持久性需要覆盖该范围的已验证复制决策，不能仅在普通回执中填写更强枚举值来声明。
+
+| 持久性 | 契约 |
+| --- | --- |
+| `Memory` | 主日志接受了字节，但不保证完整范围已持久写入 |
+| `Local` | 本地持久水位覆盖完整追加范围 |
+| `Replicated` | 还满足配置的副本确认条件 |
+
+`AppendStatus::is_accepted` 包含 `PutOk`、`FlushDiskTimeout`、`FlushReplicaTimeout` 和 `ReplicaUnavailable`。这些已接纳结果达到的保证仍然不同。无效输入、存储不可用等被拒绝结果，不能表示为成功追加范围。
+
+Broker 将存储结果映射为发送响应。因此，生产者超时或非成功刷盘/副本状态可能对应不确定写入结果，重试要求业务处理能够容忍重复。
+
+## 水位不能互换
+
+```mermaid
+flowchart LR
+    A["已追加水位：主日志接纳的字节"]
+    D["持久水位：本地持久主日志前缀"]
+    R["副本观察：成员、写入权和进度"]
+    C["派生游标：引擎、来源 epoch、持久前缀"]
+    A -->|"刷盘独立推进"| D
+    A -->|"复制观察日志"| R
+    A -->|"分派构建读取视图"| C
+    D --> Decision["确认决策"]
+    R --> Decision
+    C --> Visibility["读取视图可见性 / 恢复续点"]
 ```
 
-### 使用方式
+只能比较同一坐标系和来源代次中的位置。消费者组的逻辑队列偏移量不是 CommitLog 字节偏移量。派生游标的 `next_offset` 表示某个引擎已持久完成的主日志排他性结束位置，并由 source epoch 限定。
 
-```rust
-// 按 key 查询消息
-let messages = broker.query_message_by_key("OrderEvents", "order_12345")?;
+派生重放将记录分类为已提交或连续推进。来源 epoch 不匹配、物理间隙或部分重叠均违反游标契约。类型化游标/检查点防止将任意数字静默当作另一代日志的有效进度。
 
-// 返回 key 为 "order_12345" 的消息列表
-```
+派生进度不会将 `Memory` 升级为 `Local` 或 `Replicated`，也不存在“全部派生结构追到同一位置后所有读取才可工作”的通用规则，应检查对应操作使用的视图。
 
-## 刷盘策略
+## 复制与写入权
 
-RocketMQ 支持多种刷盘策略，用于平衡性能与可靠性。
+`AckPolicy` 区分本地持久、配置副本数量和当前同步集合全部成员。副本数量包含本地主节点，按唯一且符合条件的成员计算。Controller 感知契约还携带 master/sync-set epoch 与写入权。
 
-### ASYNC_FLUSH（默认）
+决策必须符合当前写入权和确认条件。副本已连接、过时观察或过期角色，都不足以证明更强回执。Controller 发出的租约时长由 Broker 转为进程内单调时钟截止时间，不能与远端墙上时钟时间戳互换。
 
-- 消息先写入 OS Page Cache
-- 立即返回发送结果
-- 后台线程异步刷盘
-- **性能**：最高
-- **可靠性**：系统异常时可能丢失少量消息
+这些契约让 HA 推理更加明确，但用户可依赖的结果由实际部署拓扑和故障场景决定。单 Broker LocalFile 教程没有验证副本确认或故障转移。
 
-### SYNC_FLUSH
+## 文件租约与异步传输
 
-- 消息写入 OS Page Cache 后强制刷盘再返回
-- **性能**：低于异步刷盘
-- **可靠性**：更高，可避免刷盘前丢失
+读取结果可以暴露带租约的消息缓冲区或文件区域。Transport writer 仍引用数据时，租约使底层文件保持可用。清理必须尊重未释放租约；请求超时不代表所有引用已经释放。
 
-```text
-伪配置流程：
-1. 构建 Broker 存储配置
-2. 将刷盘模式设置为 SYNC_FLUSH（更强可靠性）
-3. 应用配置并重启或热加载
-```
+Transport 的可移植文件路径使用有界阻塞 I/O。可选 Linux sendfile 需要满足明文区域与能力检查条件；TLS 经其记录层使用可移植读取。这些实现选择改变传输成本，不改变 Store 确认策略。
 
-## 文件删除
+## 恢复、关闭与故障限制
 
-RocketMQ 会自动清理过期文件以释放磁盘空间。
+加载/恢复确定可用主日志记录，执行所选正常/异常恢复路径，并协调兼容的派生状态与检查点。脏尾部或中断的派生更新，需要按对应格式与引擎契约解释。
 
-### 删除策略
+优雅关闭按顺序停止准入和后台活动，按组件路径执行刷盘，并报告最终进度、未释放租约和待重放的文件退役状态。应同时检查 `MessageStoreShutdownReport` 和运行时报告，通用任务报告不能推断全部存储责任已完成。
 
-满足任一条件时会触发删除：
+| 故障窗口 | 检查内容 |
+| --- | --- |
+| 已接纳但所需本地刷盘尚未完成 | 已确认策略与恢复后的持久前缀 |
+| 已本地持久但所需副本进度尚未达到 | 副本策略、写入权和远端观察 |
+| 主记录可用但派生视图落后 | 对应引擎的游标、重放与可见性 |
+| writer 仍持有文件区域 | 租约所有权与退役进度 |
+| 业务效果完成但消费进度尚未持久化 | 应用重放/幂等，与 Store 追加恢复分开 |
 
-1. **磁盘空间不足**：磁盘使用超过阈值（默认 85%）
-2. **时间过期**：超过保留时间（默认 72 小时）
-3. **手动触发**：通过管理命令清理
+不要将删除存储目录作为常规恢复。后端/布局修改、恢复导入和保留策略修改，需要各自的流程与数据后果说明。已有数据是调查故障的证据。
 
-```text
-伪保留策略：
-- delete_when = DiskFull
-- file_reserved_time = 72h
-```
+## feature 与取舍
 
-## 内存映射
+Store 默认 feature 选择 LocalFile 和快速加载。仅在缺少 `fast-load` 时，启用 `safe-load` 才选择顺序加载；两者都未启用时，本地原语的策略仍允许并行加载。`ROCKETMQ_SAFE_LOAD=true` 可以强制安全路径。
 
-ConsumeQueue 与 IndexFile 使用 mmap 提升读取效率：
+`rocksdb_store`、分层存储、扩展定时轴、可观测性和 Linux `io_uring` 分别增加不同条件。编译平台 feature 不能证明宿主机支持。比较吞吐量时，应固定后端、持久性、消息大小、硬件和工作负载；该组合不存在通用性能数值。
 
-```text
-伪 mmap 流程：
-1. 从文件描述符创建内存映射
-2. 从映射区域读取 offset 与 size 字段
-3. 根据 offset/size 定位消息字节内容
-```
+继续阅读[消息生命周期](message-lifecycle.md)、[投递与重试](../guides/delivery-and-retry.md)或[部署总览](../deployment/overview.md)。
 
-### 优势
-
-- 零拷贝 I/O
-- 热数据访问速度快
-- 由操作系统统一管理分页
-
-## 存储性能
-
-### 写性能
-
-```text
-Type                | Throughput    | Latency
---------------------|---------------|--------------
-Single Thread       | 100K+ msg/s   | < 1ms
-Multi Thread        | 500K+ msg/s   | < 5ms
-Batch Send          | 1M+   msg/s   | < 10ms
-```
-
-### 读性能
-
-```text
-Operation           | Latency
---------------------|--------------
-Sequential Read     | < 1ms
-Random Read (mmap)  | < 1ms
-Index Lookup        | < 1ms
-```
-
-## 存储配置示例
-
-```toml
-[broker]
-# CommitLog file size (1GB default)
-commit_log_file_size = 1073741824
-
-# ConsumeQueue file size (30MB default)
-consume_queue_file_size = 31457280
-
-# Flush disk type: ASYNC_FLUSH or SYNC_FLUSH
-flush_disk_type = "ASYNC_FLUSH"
-
-# Delete policy
-delete_when = "DiskFull"
-file_reserved_time = 72  # hours
-
-# Maximum disk usage ratio
-disk_max_used_space_ratio = 85
-
-# Minimum free disk space (GB)
-disk_space_warning_level_ratio = 90
-```
-
-## 最佳实践
-
-1. **优先使用 SSD**：可显著提升随机读能力
-2. **监控磁盘使用率**：为磁盘阈值设置告警
-3. **按业务选择刷盘策略**：平衡性能与可靠性
-4. **CommitLog 与 ConsumeQueue 分盘**：条件允许时可优化 I/O
-5. **建立备份策略**：保护关键数据
-6. **合理设置保留时间**：控制存储成本
-
-## 下一步
-
-- [生产者](../producer/overview) - 了解消息发送
-- [消费者](../consumer/overview) - 了解消息消费
-- [Broker 配置](../configuration/broker-config) - 配置存储参数
+来源：[Store 组合](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store/README.md)、[追加契约](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store-api/src/lib.rs)、[派生进度](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store-api/src/progress.rs)、[HA 契约](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store-api/src/ha_contract.rs)、[本地原语](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-store-local/README.md)。

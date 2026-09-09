@@ -23,6 +23,9 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'architecture/overview',
+        'architecture/module-map',
+        'architecture/message-lifecycle',
+        'architecture/runtime',
         'architecture/message-model',
         'architecture/storage',
       ],
@@ -59,6 +62,13 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Deployment',
+      collapsible: true,
+      collapsed: true,
+      items: ['deployment/overview'],
+    },
+    {
+      type: 'category',
       label: 'Operations',
       collapsible: true,
       collapsed: true,
@@ -75,6 +85,20 @@ const sidebars: SidebarsConfig = {
         'configuration/performance-tuning',
         'configuration/observability',
       ],
+    },
+    {
+      type: 'category',
+      label: 'Reference',
+      collapsible: true,
+      collapsed: true,
+      items: ['reference/index'],
+    },
+    {
+      type: 'category',
+      label: 'Ecosystem',
+      collapsible: true,
+      collapsed: true,
+      items: ['ecosystem/overview'],
     },
     {
       type: 'category',
@@ -95,6 +119,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'contributing/overview',
         'contributing/development-guide',
+        'contributing/documentation',
         'contributing/coding-standards',
       ],
     },
