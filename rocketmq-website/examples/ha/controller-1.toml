@@ -1,0 +1,21 @@
+rocketmqHome = "./.rocketmq-ha-demo/controller-1"
+configStorePath = "./.rocketmq-ha-demo/controller-1/controller.properties"
+controllerType = "Raft"
+nodeId = 1
+listenAddr = "127.0.0.1:19878"
+storagePath = "./.rocketmq-ha-demo/controller-1/raft"
+storageBackend = "RocksDB"
+enableElectUncleanMaster = false
+enableElectUncleanMasterLocal = false
+
+[[raftPeers]]
+id = 1
+addr = "127.0.0.1:19879"
+
+[[raftPeers]]
+id = 2
+addr = "127.0.0.1:19889"
+
+[[raftPeers]]
+id = 3
+addr = "127.0.0.1:19899"

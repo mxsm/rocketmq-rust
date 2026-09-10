@@ -69,3 +69,26 @@ Add observability after the core message path is usable, then choose the require
 The [capability matrix](../overview/capability-matrix.md) identifies feature/mode conditions. [Storage design](../architecture/storage.md) explains durability, and [first diagnosis](../operations/first-diagnosis.md) provides the initial running-system checks.
 
 This overview selects paths and explains conditions. It does not claim that the HA, Kubernetes or production-security scenarios were exercised by the local single-Broker tutorial.
+
+
+## Follow a concrete deployment path
+
+[Containers](containers.md) explains image assembly and persistent mounts. [Multi-node](multi-node.md) expands discovery and independent Broker groups. [HA](high-availability.md) separates default replication from Controller authority. Add [Proxy](proxy.md) when its ingress is required, or select the matching [Kubernetes profile](kubernetes.md).
+
+```mermaid
+flowchart TB
+  subgraph LOCAL["Single-machine tutorial"]
+    LNS["NameServer process"] --- LB["One Broker process and local store"]
+  end
+  subgraph DEFAULT["Default HA — separate failure domains"]
+    DP["Primary Broker and own store"] --> DR["Replica Broker and own store"]
+  end
+  subgraph CONTROLLER["Controller HA — separate failure domains"]
+    CQ["Three Controller processes, each with Raft storage"] --> CB["Broker group with separate stores and Controller authority"]
+  end
+  K["Kubernetes core profiles"] -.-> LOCAL
+  K -.-> DEFAULT
+  K -.-> CONTROLLER
+```
+
+The dotted edges indicate packaging choices, not network links. Each Broker owns its store. Controller storage holds control metadata; it is separate from Broker message storage. Finish the selected path with [security](security.md), [production questions](production-checklist.md), and [maintenance/recovery](../operations/maintenance.md).

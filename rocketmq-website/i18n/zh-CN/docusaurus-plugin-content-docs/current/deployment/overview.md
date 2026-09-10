@@ -69,3 +69,26 @@ title: "选择部署拓扑"
 [能力矩阵](../overview/capability-matrix.md)列出 feature/模式条件，[存储设计](../architecture/storage.md)解释持久性，[首次诊断](../operations/first-diagnosis.md)提供初次运行检查。
 
 本总览用于选择路径和说明条件，不表示本地单 Broker 教程已经验证 HA、Kubernetes 或生产安全场景。
+
+
+## 进入具体部署路径
+
+[容器](containers.md)说明镜像封装与持久挂载；[多节点](multi-node.md)扩展发现服务和独立 Broker 组；[HA](high-availability.md)区分默认复制与 Controller 权限。需要相应入口时添加 [Proxy](proxy.md)，或选择匹配的 [Kubernetes profile](kubernetes.md)。
+
+```mermaid
+flowchart TB
+  subgraph LOCAL["单机教程"]
+    LNS["NameServer 进程"] --- LB["一个 Broker 进程及本地存储"]
+  end
+  subgraph DEFAULT["默认 HA — 分离的故障域"]
+    DP["主 Broker 及独立存储"] --> DR["副本 Broker 及独立存储"]
+  end
+  subgraph CONTROLLER["Controller HA — 分离的故障域"]
+    CQ["三个 Controller 进程，各自持有 Raft 存储"] --> CB["Broker 组，各自持有存储并遵循 Controller 权限"]
+  end
+  K["Kubernetes core profile"] -.-> LOCAL
+  K -.-> DEFAULT
+  K -.-> CONTROLLER
+```
+
+虚线表示部署封装选择，不表示网络连接。每个 Broker 拥有自己的存储；Controller 存储保存控制元数据，与 Broker 消息存储分离。完成所选路径后，继续[安全](security.md)、[生产自查](production-checklist.md)与[维护恢复](../operations/maintenance.md)。

@@ -1,0 +1,12 @@
+mode = "cluster"
+[grpc]
+listenAddr = "127.0.0.1:8081"
+[remoting]
+enabled = false
+listenAddr = "127.0.0.1:8080"
+[cluster]
+namesrvAddr = "127.0.0.1:9876"
+brokerClusterName = "DocsCluster"
+[auth]
+authenticationEnabled = false
+authorizationEnabled = false
