@@ -342,7 +342,7 @@ def audit_foundation(
     for name, source in (signal_sources or {}).items():
         lifecycle_markers = ["wait_for_shutdown_signal", "wait_for_signal_result"]
         if name == "mcp_stdio":
-            lifecycle_markers.append("transport::stdio::serve_typed_with_lifecycle")
+            lifecycle_markers.append("transport::stdio::serve_with_lifecycle")
         if not any(marker in source for marker in lifecycle_markers):
             findings.append(f"{name} entrypoint must use the shared lifecycle SIGINT/SIGTERM waiter")
         if "tokio::signal::ctrl_c" in source:
