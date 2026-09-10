@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import {translate} from '@docusaurus/Translate';
 
 export default function DevWarningBanner(): React.JSX.Element | null {
   const [isDark, setIsDark] = useState(true);
@@ -137,8 +138,7 @@ export default function DevWarningBanner(): React.JSX.Element | null {
             letterSpacing: '0.02em',
           }}
         >
-          RocketMQ-Rust is under active development. APIs may change before the 1.0
-          release.
+          {translate({id: 'docs.development.notice', message: 'Next documents the development source. Check release-specific instructions when deploying an artifact.'})}
         </span>
 
         {/* Status badge */}
@@ -163,13 +163,13 @@ export default function DevWarningBanner(): React.JSX.Element | null {
             backdropFilter: 'blur(8px)',
           }}
         >
-          Beta
+          {translate({id: 'docs.development.badge', message: 'Development'})}
         </span>
 
         {/* Close button */}
         <button
           onClick={handleDismiss}
-          aria-label="Dismiss warning"
+          aria-label={translate({id: 'docs.development.dismiss', message: 'Dismiss development notice'})}
           style={{
             position: 'absolute',
             right: '20px',

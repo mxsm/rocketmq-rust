@@ -79,34 +79,9 @@ hide_table_of_contents: false
 - 现代异步编程模式
 - 跨平台兼容性（Linux、Windows、macOS）
 
-## 🎯 项目愿景
+## 项目文档与发行历史
 
-开发 RocketMQ-Rust 旨在提供：
-
-### 核心特性
-- ✅ 零成本抽象的高性能消息处理
-- ✅ 通过 Rust 类型系统保证内存安全
-- ✅ 完全兼容 Apache RocketMQ 协议
-- ✅ 基于 async/await 的高效 I/O 架构
-- ✅ 跨平台支持（Linux、Windows、macOS）
-
-### 生产就绪功能
-- 🔄 事务消息
-- 📊 消息顺序和过滤
-- 🔁 重试机制和死信队列
-- 📈 高可用性和容错能力
-- 🛡️ 安全和身份验证
-
-## 📈 项目里程碑
-
-自成立以来，RocketMQ-Rust 已实现：
-
-- **v0.1.0**（2024 年 2 月）：支持基本消息传递的初始版本
-- **v0.2.0**（2024 年 4 月）：添加事务消息
-- **v0.3.0**（2024 年 6 月）：增强性能和稳定性
-- **v0.4.0**（2024 年 8 月）：跨平台支持
-- **v0.5.0**（2024 年 10 月）：生产就绪功能
-- **v0.6.0**（2024 年 12 月）：高级路由和过滤
+已实现模式和限制见[能力矩阵](./overview/capability-matrix.md)，社区分发身份见[发行范围](./overview/release-scope.md)。架构与兼容性说明以对应技术页面为准。[发行历史](/releases)保留各版本公告；Next 文档本身不表示版本已发布。
 
 ## 👷 寻找贡献者
 
@@ -117,7 +92,7 @@ hide_table_of_contents: false
 - 🌟 希望为 Apache 生态系统项目做贡献
 - 🤝 想要协作进行开源开发
 
-**欢迎你的贡献！** 查看我们的[贡献指南](/docs/zh-CN/contributing/overview)以开始参与。
+**欢迎你的贡献！** 查看我们的[贡献指南](./contributing/overview.md)以开始参与。
 
 ## 🤝 联系方式
 
@@ -164,7 +139,7 @@ hide_table_of_contents: false
 - 🔧 贡献代码
 - 🌍 翻译内容
 
-查看我们的[贡献指南](/docs/zh-CN/contributing/overview)以开始参与！
+查看我们的[贡献指南](./contributing/overview.md)以开始参与！
 
 ## 🙏 致谢
 

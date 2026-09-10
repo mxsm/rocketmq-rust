@@ -75,10 +75,10 @@
     "message": "GitHub"
   },
   "homepage.announcement.title": {
-    "message": "RocketMQ-Rust v0.9.0 发布了！"
+    "message": "浏览 RocketMQ-Rust 发行历史"
   },
   "homepage.announcement.link": {
-    "message": "查看新特性 →"
+    "message": "阅读发行说明 →"
   },
   "theme.ErrorPageContent.title": {
     "message": "页面已崩溃。",
@@ -721,5 +721,14 @@
   },
   "homepage.hero.status.client.detail": {
     "message": "生产与消费"
+  },
+  "docs.development.notice": {
+    "message": "Next 文档描述开发源码。部署发行产物时，请查阅对应版本说明。"
+  },
+  "docs.development.badge": {
+    "message": "开发文档"
+  },
+  "docs.development.dismiss": {
+    "message": "关闭开发文档提示"
   }
 }

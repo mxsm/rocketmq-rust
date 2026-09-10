@@ -79,34 +79,9 @@ Building production-ready, enterprise-grade messaging middleware that combines:
 - Modern async programming patterns
 - Cross-platform compatibility (Linux, Windows, macOS)
 
-## 🎯 Project Vision
+## Project documentation and release history
 
-RocketMQ-Rust is being developed to provide:
-
-### Core Features
-- ✅ High-performance message processing with zero-cost abstractions
-- ✅ Memory safety guarantees through Rust's type system
-- ✅ Full Apache RocketMQ protocol compatibility
-- ✅ Async/await based architecture for efficient I/O
-- ✅ Cross-platform support (Linux, Windows, macOS)
-
-### Production-Ready Capabilities
-- 🔄 Transactional messages
-- 📊 Message ordering and filtering
-- 🔁 Retry mechanisms and dead letter queues
-- 📈 High availability and fault tolerance
-- 🛡️ Security and authentication
-
-## 📈 Project Milestones
-
-Since its inception, RocketMQ-Rust has achieved:
-
-- **v0.1.0** (Feb 2024): Initial release with basic messaging
-- **v0.2.0** (Apr 2024): Added transactional messages
-- **v0.3.0** (Jun 2024): Enhanced performance and stability
-- **v0.4.0** (Aug 2024): Cross-platform support
-- **v0.5.0** (Oct 2024): Production-ready features
-- **v0.6.0** (Dec 2024): Advanced routing and filtering
+Read the [capability matrix](./overview/capability-matrix.md) for implemented modes and limitations, and [release scope](./overview/release-scope.md) for the community distribution identity. Architecture and compatibility claims belong to those technical pages. The [release history](/releases) preserves version-specific announcements; Next documentation does not itself announce a release.
 
 ## 👷 Looking for Contributors
 
@@ -117,7 +92,7 @@ I am actively looking for **partner developers** to join the RocketMQ-Rust proje
 - 🌟 Looking to contribute to Apache ecosystem projects
 - 🤝 Want to collaborate on open-source development
 
-**Your contributions are welcome!** Check out our [Contributing Guide](/docs/contributing/overview) to get started.
+**Your contributions are welcome!** Check out our [Contributing Guide](./contributing/overview.md) to get started.
 
 ## 🤝 Connect & Reach Me
 
@@ -164,7 +139,7 @@ We welcome contributions from the community! Whether you're:
 - 🔧 Contributing code
 - 🌍 Translating content
 
-Check out our [Contributing Guide](/docs/contributing/overview) to get started!
+Check out our [Contributing Guide](./contributing/overview.md) to get started!
 
 ## 🙏 Acknowledgments
 
@@ -192,4 +167,3 @@ If you find RocketMQ-Rust helpful, please:
   <h3>Thank you for your interest in RocketMQ-Rust! 🎉</h3>
   <p>Together, we're building the future of messaging middleware with Rust.</p>
 </div>
-```

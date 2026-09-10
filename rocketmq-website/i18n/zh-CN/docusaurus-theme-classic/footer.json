@@ -38,5 +38,20 @@
   "copyright": {
     "message": "版权所有 © RocketMQ-Rust Community。使用 Docusaurus 构建。",
     "description": "The footer copyright"
+  },
+  "link.title.Resources": {
+    "message": "资源"
+  },
+  "link.title.Follow Us": {
+    "message": "关注我们"
+  },
+  "link.item.label.Discussions": {
+    "message": "讨论"
+  },
+  "link.item.label.Issues": {
+    "message": "问题反馈"
+  },
+  "link.item.label.Rust Official": {
+    "message": "Rust 官网"
   }
 }

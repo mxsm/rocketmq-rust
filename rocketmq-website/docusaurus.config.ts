@@ -64,6 +64,7 @@ const config: Config = {
                 docs: {
                     sidebarPath: './sidebars.ts',
                     editUrl: 'https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-website/',
+                    editLocalizedFiles: true,
                     versions: {
                         current: {
                             label: 'Next',
@@ -210,7 +211,7 @@ const config: Config = {
                 <div style="display: flex; flex-direction: column; align-items: flex-start; padding: 0;">
                   <img 
                     src="/img/rocketmq-rustWeChat%20OfficialAccount.jpg" 
-                    alt="WeChat Official Account" 
+                    alt="WeChat / 微信公众号"
                     style="
                       width: 120px; 
                       height: 120px; 
@@ -226,7 +227,7 @@ const config: Config = {
                     color: var(--ifm-footer-link-color);
                     opacity: 0.8;
                   ">
-                    WeChat Official Account
+                    WeChat / 微信公众号
                   </p>
                 </div>
               `,
