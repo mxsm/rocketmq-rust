@@ -100,6 +100,22 @@ impl StorageManager {
         self.stats.snapshot()
     }
 
+    /// Background waiters may be cancelled; accepted I/O remains owned by `run`.
+    pub(crate) fn start_background(
+        &self,
+        name: &'static str,
+        future: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> DashboardResult<()> {
+        let accepting = self.accepting.lock().map_err(|_| DashboardError::StorageClosed)?;
+        if !*accepting {
+            return Err(DashboardError::StorageClosed);
+        }
+        self.background
+            .spawn_cancellable_service(name, future)
+            .map(|_| ())
+            .map_err(DashboardError::Persistence)
+    }
+
     /// Accepted work is owned independently of the IPC waiter. Dropping that
     /// waiter does not cancel a transaction that may already have committed.
     pub(crate) async fn run<T, F>(&self, name: &'static str, operation: F) -> DashboardResult<T>

@@ -22,9 +22,13 @@ use thiserror::Error;
 pub(crate) type DashboardResult<T> = Result<T, DashboardError>;
 pub(crate) type CommandResult<T> = Result<T, CommandError>;
 
-pub(crate) fn authorize_command(session_id: &str, session_state: &crate::auth::SessionState) -> CommandResult<()> {
+pub(crate) async fn authorize_command(
+    session_id: &str,
+    session_state: &crate::auth::SessionState,
+) -> CommandResult<()> {
     session_state
         .authorize_dashboard(session_id)
+        .await
         .map(|_| ())
         .map_err(CommandError::from)
 }
@@ -315,7 +319,7 @@ mod tests {
                 command_count += 1;
                 assert!(command.contains("session_id: String"));
                 assert!(command.contains("State<'_, SessionState>"));
-                assert!(command.contains("authorize_command(&session_id, &session_state)?;"));
+                assert!(command.contains("authorize_command(&session_id, &session_state).await?;"));
             }
         }
 

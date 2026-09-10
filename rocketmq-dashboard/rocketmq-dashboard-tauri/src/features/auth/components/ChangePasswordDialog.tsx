@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { toast } from 'sonner@2.0.3';
 import { KeyRound, Loader2, ShieldAlert, X } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { ErrorAlert } from './ErrorAlert';
@@ -60,14 +61,13 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
         });
 
         if (result.success) {
+            toast.success('Password updated. Sign in again with your new password.');
             setOldPassword('');
             setNewPassword('');
             setConfirmPassword('');
             onPasswordChanged?.();
 
-            if (!isRequiredFlow) {
-                onOpenChange?.(false);
-            }
+            onOpenChange?.(false);
         }
     };
 
@@ -79,7 +79,7 @@ export const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
     const title = isRequiredFlow ? 'Change initial password' : 'Change password';
     const description = isRequiredFlow
         ? `${currentUser?.username ?? 'Admin'} must update the bootstrap password before entering the dashboard.`
-        : 'Update the local dashboard password to keep this workstation secure.';
+        : 'Changing your password signs out all sessions, including this one.';
 
     return (
         <AnimatePresence>

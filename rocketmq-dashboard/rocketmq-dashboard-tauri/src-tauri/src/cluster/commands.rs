@@ -31,7 +31,7 @@ pub async fn get_cluster_home_page(
     cluster_manager: State<'_, ClusterManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ClusterHomePageResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     cluster_manager.get_cluster_home_page(request).await.map_err(Into::into)
 }
 
@@ -42,7 +42,7 @@ pub async fn get_cluster_broker_config(
     cluster_manager: State<'_, ClusterManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ClusterBrokerConfigView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     cluster_manager
         .get_cluster_broker_config(request)
         .await
@@ -56,7 +56,7 @@ pub async fn get_cluster_broker_status(
     cluster_manager: State<'_, ClusterManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ClusterBrokerStatusView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     cluster_manager
         .get_cluster_broker_status(request)
         .await

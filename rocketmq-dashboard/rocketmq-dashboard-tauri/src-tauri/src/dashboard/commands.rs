@@ -29,7 +29,7 @@ pub async fn get_dashboard_broker_overview(
     cluster_manager: State<'_, ClusterManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<DashboardBrokerOverviewResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     service::get_dashboard_broker_overview(&cluster_manager, request)
         .await
         .map_err(Into::into)
@@ -41,7 +41,7 @@ pub async fn query_dashboard_topic_current(
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<DashboardTopicCurrentResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     service::query_dashboard_topic_current(&topic_manager)
         .await
         .map_err(Into::into)

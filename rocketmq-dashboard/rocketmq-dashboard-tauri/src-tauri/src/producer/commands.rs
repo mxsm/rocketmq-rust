@@ -26,7 +26,7 @@ pub async fn get_producer_topic_options(
     producer_manager: State<'_, ProducerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ProducerTopicOptionsView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     producer_manager
         .get_producer_topic_options(request)
         .await
@@ -40,7 +40,7 @@ pub async fn query_producer_connections(
     producer_manager: State<'_, ProducerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ProducerConnectionView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     producer_manager
         .query_producer_connections(request)
         .await

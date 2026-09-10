@@ -3,7 +3,7 @@
 ## Overview
 
 The RocketMQ Dashboard Tauri application now uses a local embedded SQLite database for authentication.
-The backend stores users in `dashboard.db`, hashes passwords with Argon2, and keeps login sessions in memory.
+The backend stores users in `dashboard.db`, hashes passwords with Argon2, and persists SHA-256 login token digests in the same database.
 
 ## Default Administrator Bootstrap
 
@@ -50,7 +50,7 @@ them; choose a new data directory to start fresh.
 
 ## Schema
 
-The versioned database contains `dashboard_schema`, `users`, and connection configuration tables. The account table is:
+Schema version 2 contains `dashboard_schema`, `users`, `sessions`, and connection configuration tables. Version 1 development databases are not migrated; select a new data directory. The account table is:
 
 ```sql
 CREATE TABLE IF NOT EXISTS users (
@@ -67,11 +67,14 @@ CREATE TABLE IF NOT EXISTS users (
 
 ## Session Behavior
 
-- Sessions are stored only in process memory.
-- Session restore works while the Tauri backend process is still alive.
-- Restarting the desktop application clears all active sessions.
-
-This is intentional for the first version to keep the design simple and reduce local attack surface.
+- Sessions survive application restarts while their account is active and the session is neither expired nor revoked.
+- The default absolute lifetime is **8 hours**. Set `DASHBOARD_TAURI_SESSION_TTL_SECS` before launch to override it (1 to 31,536,000 seconds). Invalid values prevent startup.
+- Authorization reads the database and updates last-seen time without extending expiry. First-login sessions can change their password but cannot run business commands or manage sessions.
+- Login returns a random bearer token. SQLite stores only its SHA-256 digest and a separate random safe session ID; lists and logs never expose the bearer or digest. The frontend retains the bearer in localStorage to restore the session after restart.
+- **Changing a password revokes every existing session, including the current one. Sign in again with the new password.** Password update and revocation commit together. Concurrent logins must still match the current password hash when creating their session.
+- Account ¡ú Sessions shows creation, expiry, last visit, revocation, and current-session status with cursor pagination. Management is limited to the signed-in account; the username parameter cannot grant cross-account access. There is no local role system.
+- Signing out all sessions clears the current frontend token and returns to login. Ordinary business commands do the same when the backend reports an invalid session; late errors from an old token do not clear a newer login.
+- An application-owned cleanup runs at startup and hourly, deleting at most 500 records expired or revoked at least seven days ago per pass. Authorization rejects invalid records immediately, independent of cleanup progress. Shutdown cancels the timer and waits for accepted storage work.
 
 ## Resetting Local Authentication
 
@@ -87,7 +90,7 @@ Deleting this shared database resets the administrator and saved NameServer/Prox
 - Password hashing uses Argon2.
 - SQLite access uses parameterized queries through `rusqlite`.
 - The default admin password should be changed immediately.
-- Multi-user support, RBAC, lockout policy, and persistent session storage are not part of this first version.
+- Multi-user provisioning, RBAC, and lockout policy are not implemented.
 
 ## Tauri Commands
 
@@ -98,6 +101,9 @@ The backend currently exposes these authentication commands:
 - `restore_session`
 - `change_password`
 - `get_auth_bootstrap_status`
+- `get_current_user_profile`
+- `list_sessions`
+- `revoke_user_sessions`
 
 ## Verification
 
@@ -105,11 +111,12 @@ Backend tests:
 
 ```bash
 cd src-tauri
-cargo test
+cargo test --lib auth::
 ```
 
 Frontend build:
 
 ```bash
 npm run build
+npm test -- src/services/auth-session.test.ts src/services/invoke.test.ts
 ```

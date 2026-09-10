@@ -28,16 +28,13 @@ export const useSessionBootstrap = () => {
 
             try {
                 const result = await AuthService.restoreSession(sessionId);
-                if (!isMounted) {
+                if (!isMounted || SessionStorageService.getSessionId() !== sessionId) {
                     return;
                 }
 
                 setAuthSession(result.sessionId, result.currentUser);
             } catch (_error) {
-                SessionStorageService.clearSessionId();
-                if (isMounted) {
-                    clearAuthSession();
-                }
+                if (isMounted) SessionStorageService.reportAuthenticationFailure(sessionId, 'invalid');
             } finally {
                 if (isMounted) {
                     finishAuthBootstrap();

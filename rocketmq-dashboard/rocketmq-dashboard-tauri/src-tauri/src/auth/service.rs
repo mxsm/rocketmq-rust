@@ -126,37 +126,6 @@ impl AuthService {
         Ok(user)
     }
 
-    pub(crate) fn change_password(&self, user_id: i64, old_password: &str, new_password: &str) -> AuthResult<()> {
-        let user = self
-            .find_user_by_id(user_id)?
-            .ok_or_else(|| DashboardError::Authentication("user not found".to_string()))?;
-
-        if !verify_password(old_password, &user.password_hash)? {
-            return Err(DashboardError::Authentication(
-                "current password is incorrect".to_string(),
-            ));
-        }
-
-        validate_new_password(old_password, new_password)?;
-
-        let new_password_hash = hash_password(new_password)?;
-        let now = Utc::now().to_rfc3339();
-        let connection = self.db.connection()?;
-
-        connection.execute(
-            "
-            UPDATE users
-            SET password_hash = ?1,
-                must_change_password = 0,
-                updated_at = ?2
-            WHERE id = ?3
-            ",
-            params![new_password_hash, now, user_id],
-        )?;
-
-        Ok(())
-    }
-
     pub(crate) fn find_user_by_id(&self, user_id: i64) -> AuthResult<Option<UserRecord>> {
         let connection = self.db.connection()?;
         connection
@@ -174,6 +143,7 @@ impl AuthService {
             .map_err(Into::into)
     }
 
+    #[cfg(test)]
     pub(crate) fn update_last_login(&self, user_id: i64) -> AuthResult<()> {
         let connection = self.db.connection()?;
         let now = Utc::now().to_rfc3339();
@@ -245,7 +215,7 @@ pub(crate) fn verify_password(password: &str, hash: &str) -> AuthResult<bool> {
     }
 }
 
-fn validate_new_password(old_password: &str, new_password: &str) -> AuthResult<()> {
+pub(crate) fn validate_new_password(old_password: &str, new_password: &str) -> AuthResult<()> {
     if new_password.len() < MIN_PASSWORD_LENGTH {
         return Err(DashboardError::Validation(format!(
             "New password must be at least {MIN_PASSWORD_LENGTH} characters long"
@@ -358,31 +328,6 @@ mod tests {
         assert!(first.created);
         assert!(!second.created);
         assert!(second.has_default_admin);
-    }
-
-    #[test]
-    fn login_and_change_password_flow_updates_flags() {
-        let context = setup_service("change-me-now");
-        let service = &context.service;
-        service.bootstrap_default_admin().expect("bootstrap should succeed");
-
-        let user = service
-            .authenticate("admin", "change-me-now")
-            .expect("login should succeed");
-        assert!(user.must_change_password);
-
-        service
-            .change_password(user.id, "change-me-now", "better-secret")
-            .expect("password change should succeed");
-
-        assert!(service.authenticate("admin", "better-secret").is_ok());
-        assert!(service.authenticate("admin", "change-me-now").is_err());
-
-        let updated_user = service
-            .find_user_by_id(user.id)
-            .expect("lookup should succeed")
-            .expect("user should exist");
-        assert!(!updated_user.must_change_password);
     }
 
     #[test]

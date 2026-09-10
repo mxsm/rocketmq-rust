@@ -48,6 +48,7 @@ tauri-plugin-log = "2.9"
 rusqlite         = { version = "0.32", features = ["bundled"] }
 argon2           = "0.5"
 password-hash    = "0.5"
+sha2             = "0.11"
 rand_core        = { version = "0.6", features = ["getrandom"] }
 uuid             = { version = "1", features = ["v4", "serde"] }
 chrono           = { version = "0.4", features = ["serde"] }

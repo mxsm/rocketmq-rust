@@ -41,7 +41,7 @@ pub async fn query_message_by_topic_key(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<MessageSummaryListResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     message_manager
         .query_message_by_topic_key(request)
         .await
@@ -55,7 +55,7 @@ pub async fn query_message_by_id(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<MessageSummaryListResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     message_manager.query_message_by_id(request).await.map_err(Into::into)
 }
 
@@ -66,7 +66,7 @@ pub async fn query_message_page_by_topic(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<MessagePageResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     message_manager
         .query_message_page_by_topic(request)
         .await
@@ -80,7 +80,7 @@ pub async fn query_dlq_message_by_consumer_group(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<MessagePageResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     message_manager
         .query_dlq_message_by_consumer_group(request)
         .await
@@ -94,7 +94,7 @@ pub async fn view_message_detail(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<MessageDetailView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     message_manager.view_message_detail(request).await.map_err(Into::into)
 }
 
@@ -105,7 +105,7 @@ pub async fn view_dlq_message_detail(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<MessageDetailView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     message_manager
         .view_dlq_message_detail(request)
         .await
@@ -119,7 +119,7 @@ pub async fn resend_dlq_message(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<MessageResendResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     message_manager.resend_dlq_message(request).await.map_err(Into::into)
 }
 
@@ -130,7 +130,7 @@ pub async fn batch_resend_dlq_message(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<MessageBatchResendResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     message_manager
         .batch_resend_dlq_message(request)
         .await
@@ -144,7 +144,7 @@ pub async fn export_dlq_message(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<DlqMessageExportView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     message_manager.export_dlq_message(request).await.map_err(Into::into)
 }
 
@@ -155,7 +155,7 @@ pub async fn batch_export_dlq_message(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<DlqBatchMessageExportView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     message_manager
         .batch_export_dlq_message(request)
         .await
@@ -169,7 +169,7 @@ pub async fn consume_message_directly(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<MessageResendResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     message_manager
         .consume_message_directly(request)
         .await
@@ -183,7 +183,7 @@ pub async fn query_message_trace_by_id(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<MessageSummaryListResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     message_manager
         .query_message_trace_by_id(request)
         .await
@@ -197,7 +197,7 @@ pub async fn view_message_trace_detail(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<MessageTraceDetailView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     message_manager
         .view_message_trace_detail(request)
         .await

@@ -17,7 +17,7 @@ use crate::error::DashboardResult;
 use rusqlite::Connection;
 use rusqlite::TransactionBehavior;
 
-pub(crate) const SCHEMA_VERSION: i64 = 1;
+pub(crate) const SCHEMA_VERSION: i64 = 2;
 
 pub(crate) fn initialize(connection: &mut Connection) -> DashboardResult<()> {
     // IMMEDIATE serializes competing initializers before reading the version.
@@ -62,6 +62,18 @@ pub(crate) fn initialize(connection: &mut Connection) -> DashboardResult<()> {
                 updated_at TEXT NOT NULL,
                 last_login_at TEXT
             );
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                token_digest BLOB NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at_ms INTEGER NOT NULL,
+                expires_at_ms INTEGER NOT NULL,
+                last_seen_at_ms INTEGER NOT NULL,
+                revoked_at_ms INTEGER
+            );
+            CREATE INDEX sessions_user_id ON sessions(user_id, id);
+            CREATE INDEX sessions_expiry ON sessions(expires_at_ms);
+            CREATE INDEX sessions_revoked ON sessions(revoked_at_ms) WHERE revoked_at_ms IS NOT NULL;
             CREATE TABLE IF NOT EXISTS nameserver_addresses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 address TEXT NOT NULL UNIQUE,

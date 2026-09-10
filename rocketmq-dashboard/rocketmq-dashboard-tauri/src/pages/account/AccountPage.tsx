@@ -10,8 +10,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { AuthService } from '../../services/auth.service';
-import { DashboardClientError, dashboardErrorMessage } from '../../services/invoke';
-import { SessionStorageService } from '../../services/session.storage';
+import { dashboardErrorMessage } from '../../services/invoke';
+import { SessionsPanel } from './SessionsPanel';
 import { useAppStore } from '../../stores/app.store';
 import { SignOutConfirmDialog, useAuth } from '../../features/auth';
 import { ChangePasswordDialog } from '../../features/auth/components/ChangePasswordDialog';
@@ -67,7 +67,7 @@ const DetailRow = ({
 );
 
 export const AccountPage = () => {
-    const { clearAuthSession, currentUser, sessionId } = useAppStore();
+    const { currentUser, sessionId } = useAppStore();
     const { logout } = useAuth();
     const [profile, setProfile] = useState<UserProfile | null>(null);
     const [error, setError] = useState('');
@@ -81,8 +81,6 @@ export const AccountPage = () => {
         let isMounted = true;
 
         if (!sessionId) {
-            SessionStorageService.clearSessionId();
-            clearAuthSession();
             return () => {
                 isMounted = false;
             };
@@ -105,11 +103,6 @@ export const AccountPage = () => {
                 }
 
                 setProfile(null);
-                if (loadError instanceof DashboardClientError && loadError.code === 'auth.session.invalid') {
-                    SessionStorageService.clearSessionId();
-                    clearAuthSession();
-                    return;
-                }
                 setError(dashboardErrorMessage(loadError, 'Failed to load user profile'));
             } finally {
                 if (isMounted) {
@@ -254,13 +247,14 @@ export const AccountPage = () => {
                                 />
                                 <DetailRow label="Last Login" value={profile ? formatTimestamp(profile.lastLoginAt) : unresolvedValue} />
                                 <div className="rounded-2xl border border-sky-200/70 bg-sky-500/[0.08] px-4 py-3 text-sm text-sky-700 dark:border-sky-400/15 dark:bg-sky-400/[0.08] dark:text-sky-200">
-                                    The dashboard keeps authentication local to this workstation. Password changes apply to
-                                    future sign-ins immediately.
+                                    The dashboard keeps authentication local to this workstation. Changing the password signs out all sessions immediately.
                                 </div>
                             </div>
                         </CardContent>
                     </Card>
                 </div>
+
+                <SessionsPanel key={sessionId} username={username} />
 
                 <Card className={glassCardClass}>
                     <CardHeader className="pb-4">

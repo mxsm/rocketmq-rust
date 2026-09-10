@@ -18,45 +18,45 @@ use rocketmq_dashboard_common::ProxyMutationResult;
 use tauri::State;
 
 #[tauri::command]
-pub fn get_proxy_home_page(
+pub async fn get_proxy_home_page(
     session_id: String,
     proxy_manager: State<'_, ProxyManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ProxyConfigSnapshot> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     proxy_manager.home_page_info().map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn add_proxy_addr(
+pub async fn add_proxy_addr(
     session_id: String,
     address: String,
     proxy_manager: State<'_, ProxyManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ProxyMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     proxy_manager.add_proxy_addr(&address).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn switch_proxy_addr(
+pub async fn switch_proxy_addr(
     session_id: String,
     address: String,
     proxy_manager: State<'_, ProxyManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ProxyMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     proxy_manager.switch_proxy_addr(&address).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn delete_proxy_addr(
+pub async fn delete_proxy_addr(
     session_id: String,
     address: String,
     proxy_manager: State<'_, ProxyManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ProxyMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     proxy_manager.delete_proxy_addr(&address).map_err(Into::into)
 }
 use crate::auth::SessionState;

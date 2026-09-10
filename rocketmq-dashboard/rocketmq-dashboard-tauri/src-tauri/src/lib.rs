@@ -225,9 +225,10 @@ fn build_application() -> Result<DashboardApplication, i32> {
                 })
                 .map_err(|_| crate::error::DashboardError::Internal("admin lifecycle initialized twice"))?;
 
+            let sessions = auth::SessionState::new(storage.clone(), auth_service)?;
+            sessions.start_cleanup()?;
             app.manage(storage);
-            app.manage(auth_service);
-            app.manage(auth::SessionState::default());
+            app.manage(sessions);
             app.manage(nameserver_runtime);
             app.manage(nameserver_manager);
             app.manage(cluster_manager);
@@ -246,6 +247,8 @@ fn build_application() -> Result<DashboardApplication, i32> {
             auth::commands::change_password,
             auth::commands::get_current_user_profile,
             auth::commands::get_auth_bootstrap_status,
+            auth::commands::list_sessions,
+            auth::commands::revoke_user_sessions,
             nameserver::commands::get_name_server_home_page,
             nameserver::commands::add_name_server,
             nameserver::commands::switch_name_server,
