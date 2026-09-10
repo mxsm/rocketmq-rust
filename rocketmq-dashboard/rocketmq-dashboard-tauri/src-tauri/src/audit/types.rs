@@ -37,6 +37,9 @@ pub(crate) enum AuditAction {
     ResetOffset,
     SkipMessages,
     SendMessage,
+    CreateAclUser,
+    UpdateAclUser,
+    DeleteAclUser,
     UpdateBrokerConfig,
     UpsertConsumer,
     DeleteConsumer,
@@ -67,6 +70,9 @@ impl AuditAction {
             Self::ResetOffset => "consumer.reset_offset",
             Self::SkipMessages => "consumer.skip_messages",
             Self::SendMessage => "message.send",
+            Self::CreateAclUser => "acl.create_user",
+            Self::UpdateAclUser => "acl.update_user",
+            Self::DeleteAclUser => "acl.delete_user",
             Self::UpdateBrokerConfig => "broker.update_config",
             Self::UpsertConsumer => "consumer.upsert",
             Self::DeleteConsumer => "consumer.delete",
@@ -88,6 +94,7 @@ impl AuditAction {
             | Self::SwitchProxy
             | Self::DeleteProxy => "connection",
             Self::UpsertTopic | Self::DeleteTopic | Self::DeleteTopicByBroker | Self::SendMessage => "topic",
+            Self::CreateAclUser | Self::UpdateAclUser | Self::DeleteAclUser => "acl_user",
             Self::UpdateBrokerConfig => "broker",
             Self::ResetOffset
             | Self::SkipMessages
@@ -107,6 +114,9 @@ impl AuditAction {
                 | Self::ResetOffset
                 | Self::SkipMessages
                 | Self::SendMessage
+                | Self::CreateAclUser
+                | Self::UpdateAclUser
+                | Self::DeleteAclUser
                 | Self::UpdateBrokerConfig
                 | Self::UpsertConsumer
                 | Self::DeleteConsumer

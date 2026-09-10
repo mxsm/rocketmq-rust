@@ -26,6 +26,7 @@ pub(crate) struct AdminConnectionConfig {
 
 #[derive(Clone, Copy)]
 pub(crate) enum AdminPurpose {
+    Acl,
     Cluster,
     Consumer,
     Message,
@@ -36,6 +37,7 @@ pub(crate) enum AdminPurpose {
 impl AdminPurpose {
     fn name(self) -> &'static str {
         match self {
+            Self::Acl => "acl",
             Self::Cluster => "cluster",
             Self::Consumer => "consumer",
             Self::Message => "message",
@@ -47,7 +49,7 @@ impl AdminPurpose {
     fn timeout_millis(self) -> u64 {
         match self {
             Self::Probe => 1500,
-            Self::Cluster | Self::Consumer | Self::Message | Self::Producer | Self::Topic => 5000,
+            Self::Acl | Self::Cluster | Self::Consumer | Self::Message | Self::Producer | Self::Topic => 5000,
         }
     }
 }
