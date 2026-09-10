@@ -110,7 +110,16 @@ export const invokeSessionCommand = <T>(
 
 const localCommands = new Set(['get_storage_status', 'get_history_status', 'change_password', 'get_current_user_profile', 'get_auth_bootstrap_status', 'list_sessions', 'revoke_user_sessions', 'query_audit_events']);
 const connectionWrites = new Set(['add_name_server', 'switch_name_server', 'delete_name_server', 'update_vip_channel', 'update_use_tls', 'add_proxy_addr', 'switch_proxy_addr', 'delete_proxy_addr', 'replace_name_servers']);
-const remoteWrites = new Set(['create_or_update_topic', 'delete_topic', 'delete_topic_by_broker', 'reset_consumer_offset', 'skip_message_accumulate', 'send_topic_message', 'create_or_update_consumer_group', 'delete_consumer_group', 'consume_message_directly', 'resend_dlq_message', 'batch_resend_dlq_message']);
+const mutationCommands = new Set([
+    'create_or_update_topic', 'delete_topic', 'delete_topic_by_broker',
+    'reset_consumer_offset', 'skip_message_accumulate', 'send_topic_message',
+    'create_or_update_consumer_group', 'delete_consumer_group',
+    'consume_message_directly', 'resend_dlq_message', 'batch_resend_dlq_message',
+    'update_cluster_broker_config',
+    'create_acl_user', 'update_acl_user', 'delete_acl_user',
+    'create_acl_policy', 'update_acl_policy', 'delete_acl_policy',
+    'save_consumer_monitor_rule', 'delete_consumer_monitor_rule',
+]);
 const pendingSettings = new Map<string, Promise<ConnectionSettingsView>>();
 const ensureSettings = (token: string): Promise<ConnectionSettingsView> => {
     const current = ConnectionStore.getSnapshot();
@@ -163,8 +172,9 @@ export const invokeAuthenticatedCommand = async <T>(command: string, args?: Reco
         }
         throw error;
     }
-    // Remote writes retain their actual receipt even if the user later changes views.
-    if (!remoteWrites.has(command) && ConnectionStore.getSnapshot()?.revision !== settings.revision) throw configurationChanged();
+    // Accepted writes retain their receipt after a switch, including committed local rules.
+    // The backend rejects stale writes before execution; page generations guard old views.
+    if (!mutationCommands.has(command) && ConnectionStore.getSnapshot()?.revision !== settings.revision) throw configurationChanged();
     if (result && typeof result === 'object' && 'settings' in result) ConnectionStore.accept(sessionId, result.settings as ConnectionSettingsView);
     return result;
 };

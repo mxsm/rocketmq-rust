@@ -119,15 +119,22 @@ describe('connection revisions', () => {
         expect(invoke).toHaveBeenCalledWith('get_topic_list', { sessionId: 'current-token', expectedRevision: 0 });
     });
 
-    it('preserves a completed mutation receipt after the view changes', async () => {
+    it.each([
+        'send_topic_message',
+        'update_cluster_broker_config',
+        'create_acl_user', 'update_acl_user', 'delete_acl_user',
+        'create_acl_policy', 'update_acl_policy', 'delete_acl_policy',
+        'save_consumer_monitor_rule', 'delete_consumer_monitor_rule',
+    ])('preserves a completed %s receipt after the view changes', async (command) => {
         let resolve!: (value: unknown) => void;
         vi.mocked(invoke).mockImplementation(() => new Promise((complete) => { resolve = complete; }));
-        const request = invokeAuthenticatedCommand('send_topic_message');
+        const request = invokeAuthenticatedCommand(command);
         await Promise.resolve();
         ConnectionStore.accept('current-token', { ...ConnectionStore.getSnapshot()!, revision: 1 });
         resolve({ success: true, messageId: 'already-sent' });
         await expect(request).resolves.toMatchObject({ success: true, messageId: 'already-sent' });
         expect(invoke).toHaveBeenCalledTimes(1);
+        expect(invoke).toHaveBeenCalledWith(command, { sessionId: 'current-token', expectedRevision: 0 });
     });
 
     it('does not automatically retry a conflicting configuration draft', async () => {
