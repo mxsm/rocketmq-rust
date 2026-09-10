@@ -66,3 +66,8 @@ Rust 行为变更选择对应包/目标和聚焦回归测试。编译受影响�
 提交 PR 不意味着发布或部署。维护者按照对应项目流程处理集成和发行决策。社区分发身份见[发行范围](../overview/release-scope.md)。
 
 来源：[根工程约定](https://github.com/mxsm/rocketmq-rust/blob/main/AGENTS.md)、[网站指南](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-website/AGENTS.md)、[Issue 模板](https://github.com/mxsm/rocketmq-rust/tree/main/.github/ISSUE_TEMPLATE)、[PR 约定](https://github.com/mxsm/rocketmq-rust/blob/main/.agents/skills/rocketmq-rust-pr-submitter/SKILL.md)。
+
+## 测试与发行工作
+
+- [测试策略与工程入口](./testing.md)
+- [发行工程](./release-engineering.md)

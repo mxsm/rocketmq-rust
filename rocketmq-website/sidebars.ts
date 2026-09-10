@@ -38,6 +38,7 @@ const sidebars: SidebarsConfig = {
         'architecture/proxy',
         'architecture/security',
         'architecture/errors-observability',
+        'architecture/decisions',
       ],
     },
     {
@@ -74,6 +75,7 @@ const sidebars: SidebarsConfig = {
         'guides/delivery-and-retry',
         'guides/ordered-messages',
         'guides/delay-and-recall',
+        'guides/request-reply',
       ],
     },
     {
@@ -106,6 +108,7 @@ const sidebars: SidebarsConfig = {
         'operations/maintenance',
         'operations/backup-recovery',
         'operations/upgrade-rollback',
+        'operations/offline-tools',
       ],
     },
     {
@@ -132,6 +135,8 @@ const sidebars: SidebarsConfig = {
         'reference/errors',
         'reference/protocol-compatibility',
         'reference/admin-cli',
+        'reference/rust-api',
+        'reference/glossary',
       ],
     },
     {
@@ -146,7 +151,16 @@ const sidebars: SidebarsConfig = {
       label: 'Ecosystem',
       collapsible: true,
       collapsed: true,
-      items: ['ecosystem/overview', 'ecosystem/dashboards', 'ecosystem/mcp'],
+      items: [
+        'ecosystem/overview',
+        'ecosystem/dashboards',
+        'ecosystem/dashboard-web',
+        'ecosystem/dashboard-desktop',
+        'ecosystem/mcp',
+        'ecosystem/mcp-control',
+        'ecosystem/ai-sre',
+        'ecosystem/ai-sre-deployment',
+      ],
     },
     {
       type: 'category',
@@ -169,6 +183,8 @@ const sidebars: SidebarsConfig = {
         'contributing/development-guide',
         'contributing/documentation',
         'contributing/coding-standards',
+        'contributing/testing',
+        'contributing/release-engineering',
       ],
     },
     'author',

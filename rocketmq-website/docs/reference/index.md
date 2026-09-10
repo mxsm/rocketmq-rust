@@ -73,3 +73,8 @@ The [capability matrix](../overview/capability-matrix.md) records relevant mode/
 - [Admin CLI](./admin-cli.md): command catalog, parameters, effects and exit behavior.
 - [Java migration](../migration/java-to-rust.md): client, cluster and data migration procedures.
 - [Rust API migration](../migration/rust-api.md): public imports, owned runtimes and Classic/LitePull changes.
+
+## API and terminology
+
+- [Rust API entry points](./rust-api.md)
+- [Bilingual glossary](./glossary.md)

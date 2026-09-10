@@ -112,3 +112,8 @@ npm run tauri dev
 先在隔离开发集群执行查询。变更元数据、偏移量或消息前检查目标和操作影响，保留产品确认及授权行为。编写本概览时没有构建或启动 Web、GPUI、Tauri 应用，不宣称跨平台或操作功能对等已经验证。
 
 来源：[Dashboard common](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-common/Cargo.toml)、[Web 架构](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-web/AGENTS.md)、[Web 开发代理](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-web/frontend/vite.config.ts)、[GPUI 指南](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-gpui/README.md)、[Tauri 脚本](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-tauri/package.json)。
+
+## 详细搭建指南
+
+- [Web Dashboard 搭建与运维](./dashboard-web.md)
+- [GPUI 与 Tauri 桌面搭建](./dashboard-desktop.md)

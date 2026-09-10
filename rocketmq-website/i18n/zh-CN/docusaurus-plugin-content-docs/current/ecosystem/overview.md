@@ -73,3 +73,11 @@ MCP Control 与 SRE 执行属于独立变更路径。安装其中之一，不会
 分别跟踪目标集群可用性、产品数据库可用性、凭证有效性、证据新鲜度、模型可用性和执行驱动就绪。过时或部分观察必须保留相应标记，不能静默变成当前健康结果。
 
 系统背景见[架构总览](../architecture/overview.md)、[模块地图](../architecture/module-map.md)和[部署总览](../deployment/overview.md)。上表链接的产品指南分别负责完整安装与运维流程。
+
+## 产品详细指南
+
+- [Web Dashboard](./dashboard-web.md)
+- [桌面 Dashboard](./dashboard-desktop.md)
+- [MCP Control](./mcp-control.md)
+- [AI SRE 架构](./ai-sre.md)
+- [AI SRE 部署](./ai-sre-deployment.md)

@@ -66,3 +66,8 @@ Review feedback should improve the same scoped result. Update the description if
 A submitted PR does not imply a release or deployment. Maintainers handle integration and release decisions through the applicable project workflow. Community release identity is described in [release scope](../overview/release-scope.md).
 
 Sources: [root engineering agreement](https://github.com/mxsm/rocketmq-rust/blob/main/AGENTS.md), [website guide](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-website/AGENTS.md), [issue templates](https://github.com/mxsm/rocketmq-rust/tree/main/.github/ISSUE_TEMPLATE), [PR convention](https://github.com/mxsm/rocketmq-rust/blob/main/.agents/skills/rocketmq-rust-pr-submitter/SKILL.md).
+
+## Testing and release work
+
+- [Testing strategy and entry points](./testing.md)
+- [Release engineering](./release-engineering.md)
