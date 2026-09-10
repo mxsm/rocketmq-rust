@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::topic::batch::{TopicBatchOperation, TopicBatchResult, TopicTargetKind, project_batch};
 use crate::topic::guard::{TopicIntent, TopicWriteMode, check_topic, validate_targets};
+use rocketmq_admin_core::core::topic::{
+    TopicBatchDeleteAdmin, TopicBatchDeleteRequest, TopicBatchMutationAdmin, TopicBatchTargetOutcome,
+    TopicBatchUpsertRequest,
+};
 use std::sync::Arc;
 
 use rocketmq_admin_core::client_adapter::AdminSession;
@@ -22,12 +27,10 @@ use rocketmq_admin_core::core::topic::GetTopicRouteRequest;
 use rocketmq_admin_core::core::topic::ResetTopicConsumerOffsetRequest;
 use rocketmq_admin_core::core::topic::TopicAdmin;
 use rocketmq_admin_core::core::topic::TopicCatalogRequest;
-use rocketmq_admin_core::core::topic::TopicMutationOutcome;
 use rocketmq_admin_core::core::topic::TopicRoute;
 use rocketmq_admin_core::core::topic::TopicSendRequest as AdminTopicSendRequest;
 use rocketmq_admin_core::core::topic::TopicSendResult as AdminTopicSendResult;
 use rocketmq_admin_core::core::topic::TopicStats;
-use rocketmq_admin_core::core::topic::UpsertTopicRequest;
 use rocketmq_dashboard_common::DeleteTopicByBrokerRequest;
 use rocketmq_dashboard_common::DeleteTopicRequest;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
@@ -246,7 +249,7 @@ impl TopicManager {
         &self,
         request: TopicConfigRequest,
         mode: TopicWriteMode,
-    ) -> TopicResult<TopicMutationResult> {
+    ) -> TopicResult<TopicBatchResult> {
         let mut session_guard = self.mutation_session.lock().await;
         self.ensure_admin_session(&mut session_guard).await?;
         let result = {
@@ -264,7 +267,7 @@ impl TopicManager {
         result
     }
 
-    pub(crate) async fn delete_topic(&self, request: DeleteTopicRequest) -> TopicResult<TopicMutationResult> {
+    pub(crate) async fn delete_topic(&self, request: DeleteTopicRequest) -> TopicResult<TopicBatchResult> {
         let mut session_guard = self.mutation_session.lock().await;
         self.ensure_admin_session(&mut session_guard).await?;
         let result = {
@@ -284,7 +287,7 @@ impl TopicManager {
     pub(crate) async fn delete_topic_by_broker(
         &self,
         request: DeleteTopicByBrokerRequest,
-    ) -> TopicResult<TopicMutationResult> {
+    ) -> TopicResult<TopicBatchResult> {
         let mut session_guard = self.mutation_session.lock().await;
         self.ensure_admin_session(&mut session_guard).await?;
         let result = {
@@ -569,7 +572,7 @@ impl TopicManager {
         admin: &mut AdminSession,
         mut request: TopicConfigRequest,
         mode: TopicWriteMode,
-    ) -> TopicResult<TopicMutationResult> {
+    ) -> TopicResult<TopicBatchResult> {
         if request.topic_name.trim().is_empty() {
             return Err(TopicError::Validation("Topic name is required.".into()));
         }
@@ -588,21 +591,38 @@ impl TopicManager {
         checked
             .execute(|catalog| async move {
                 validate_targets(&catalog, &request.cluster_name_list, &request.broker_name_list)?;
-                let topic_name = request.topic_name.clone();
-                let outcome = admin
-                    .upsert_topic(&UpsertTopicRequest {
-                        cluster_names: request.cluster_name_list,
-                        broker_names: request.broker_name_list,
-                        topic: request.topic_name,
-                        write_queue_nums: request.write_queue_nums.max(1) as u32,
-                        read_queue_nums: request.read_queue_nums.max(1) as u32,
-                        perm: request.perm.max(0) as u32,
-                        order: request.order,
-                        message_type: request.message_type,
-                    })
-                    .await
-                    .map_err(map_admin_error)?;
-                Ok(project_topic_mutation_outcome(outcome, topic_name, "Topic saved."))
+                let broker_names = if request.broker_name_list.is_empty() {
+                    catalog
+                        .targets
+                        .iter()
+                        .filter(|target| request.cluster_name_list.contains(&target.cluster_name))
+                        .flat_map(|target| target.broker_names.clone())
+                        .collect()
+                } else {
+                    request.broker_name_list.clone()
+                };
+                let batch = TopicBatchUpsertRequest::try_new(
+                    request.topic_name.clone(),
+                    broker_names,
+                    request.write_queue_nums as u32,
+                    request.read_queue_nums as u32,
+                    request.perm as u32,
+                    request.order,
+                    request.message_type,
+                )
+                .map_err(map_admin_error)?;
+                let outcome = admin.upsert_topic_batch(&batch).await.map_err(map_admin_error)?;
+                let operation = match mode {
+                    TopicWriteMode::Create => TopicBatchOperation::Create,
+                    TopicWriteMode::Update => TopicBatchOperation::Update,
+                };
+                Ok(project_batch(
+                    operation,
+                    request.topic_name,
+                    TopicTargetKind::Broker,
+                    outcome.targets,
+                    outcome.order_config,
+                ))
             })
             .await
     }
@@ -611,7 +631,7 @@ impl TopicManager {
         &self,
         admin: &mut AdminSession,
         request: DeleteTopicRequest,
-    ) -> TopicResult<TopicMutationResult> {
+    ) -> TopicResult<TopicBatchResult> {
         let topic = request.topic.trim().to_string();
         if topic.is_empty() {
             return Err(TopicError::Validation("Topic name is required.".into()));
@@ -622,15 +642,23 @@ impl TopicManager {
                 if let Some(cluster) = &request.cluster_name {
                     validate_targets(&catalog, std::slice::from_ref(cluster), &[])?;
                 }
-                let outcome = admin
-                    .delete_topic(&DeleteTopicAdminRequest {
-                        topic: topic.clone(),
-                        cluster_name: request.cluster_name,
-                        broker_name: None,
-                    })
-                    .await
-                    .map_err(map_admin_error)?;
-                Ok(project_topic_mutation_outcome(outcome, topic, "Topic deleted."))
+                let cluster_names = request.cluster_name.map(|cluster| vec![cluster]).unwrap_or_else(|| {
+                    catalog
+                        .items
+                        .iter()
+                        .find(|item| item.topic == topic)
+                        .map(|item| item.clusters.clone())
+                        .unwrap_or_default()
+                });
+                let batch = TopicBatchDeleteRequest::try_new(topic.clone(), cluster_names).map_err(map_admin_error)?;
+                let outcome = admin.delete_topic_batch(&batch).await.map_err(map_admin_error)?;
+                Ok(project_batch(
+                    TopicBatchOperation::Delete,
+                    topic,
+                    TopicTargetKind::Cluster,
+                    outcome.targets,
+                    outcome.order_config,
+                ))
             })
             .await
     }
@@ -639,7 +667,7 @@ impl TopicManager {
         &self,
         admin: &mut AdminSession,
         request: DeleteTopicByBrokerRequest,
-    ) -> TopicResult<TopicMutationResult> {
+    ) -> TopicResult<TopicBatchResult> {
         let topic = request.topic.trim().to_string();
         if topic.is_empty() {
             return Err(TopicError::Validation("Topic name is required.".into()));
@@ -664,11 +692,21 @@ impl TopicManager {
                     .delete_topic(&DeleteTopicAdminRequest {
                         topic: topic.clone(),
                         cluster_name: None,
-                        broker_name: Some(broker_name),
+                        broker_name: Some(broker_name.clone()),
                     })
-                    .await
-                    .map_err(map_admin_error)?;
-                Ok(project_topic_mutation_outcome(outcome, topic, "Topic deleted."))
+                    .await;
+                let target = TopicBatchTargetOutcome {
+                    broker_name,
+                    success: outcome.is_ok(),
+                    message: String::new(),
+                };
+                Ok(project_batch(
+                    TopicBatchOperation::DeleteBroker,
+                    topic,
+                    TopicTargetKind::Broker,
+                    vec![target],
+                    None,
+                ))
             })
             .await
     }
@@ -798,41 +836,6 @@ impl TopicManager {
                 Ok(map_send_result(result))
             })
             .await
-    }
-}
-
-fn project_topic_mutation_outcome(
-    _outcome: TopicMutationOutcome,
-    topic_name: String,
-    message: &'static str,
-) -> TopicMutationResult {
-    TopicMutationResult {
-        success: true,
-        message: message.to_string(),
-        topic_name: Some(topic_name),
-        affected_queues: None,
-    }
-}
-
-#[cfg(test)]
-mod boundary_projection_tests {
-    use super::project_topic_mutation_outcome;
-    use rocketmq_admin_core::core::topic::TopicMutationOutcome;
-
-    #[test]
-    fn topic_mutation_projection_discards_upstream_message() {
-        let result = project_topic_mutation_outcome(
-            TopicMutationOutcome {
-                message: "password=secret C:\\private\\broker".to_string(),
-                target_count: 1,
-            },
-            "orders".to_string(),
-            "Topic saved.",
-        );
-
-        assert_eq!(result.message, "Topic saved.");
-        assert!(!result.message.contains("secret"));
-        assert!(!result.message.contains("private"));
     }
 }
 

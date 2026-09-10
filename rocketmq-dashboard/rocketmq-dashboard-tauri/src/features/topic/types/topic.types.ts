@@ -207,3 +207,12 @@ export const TOPIC_MESSAGE_TYPE_OPTIONS: TopicMessageType[] = [
     'TRANSACTION',
     'UNSPECIFIED',
 ];
+
+export interface TopicTargetReceipt {
+    kind: 'broker' | 'cluster'; name: string; success: boolean; errorCode: string | null; message: string;
+}
+export interface TopicBatchResult {
+    operation: 'create' | 'update' | 'delete' | 'delete_broker'; topic: string;
+    targetCount: number; targets: TopicTargetReceipt[]; success: boolean; message: string;
+    orderConfig: { success: boolean; errorCode: string | null; message: string } | null;
+}

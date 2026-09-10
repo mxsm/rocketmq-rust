@@ -20,3 +20,5 @@ pub(crate) mod types;
 pub(crate) use service::TopicManager;
 
 pub(crate) mod guard;
+
+pub(crate) mod batch;

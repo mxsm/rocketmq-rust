@@ -14,6 +14,7 @@
 
 use crate::audit::{AuditAccess, AuditAction, AuditManager, Audited};
 use crate::connection::ConnectionManager;
+use crate::topic::batch::TopicBatchResult;
 use crate::topic::service::TopicManager;
 use crate::topic::types::TopicConfigView;
 use crate::topic::types::TopicConsumerGroupListResponse;
@@ -107,7 +108,7 @@ pub async fn create_or_update_topic(
     audit_manager: State<'_, AuditManager>,
     connection_manager: State<'_, ConnectionManager>,
     expected_revision: i64,
-) -> CommandResult<Audited<TopicMutationResult>> {
+) -> CommandResult<Audited<TopicBatchResult>> {
     let connection_manager = connection_manager.inner().clone();
     let access = AuditAccess::dashboard(&session_state, session_id);
     let topic_manager = topic_manager.inner().clone();
@@ -133,7 +134,7 @@ pub async fn delete_topic(
     audit_manager: State<'_, AuditManager>,
     connection_manager: State<'_, ConnectionManager>,
     expected_revision: i64,
-) -> CommandResult<Audited<TopicMutationResult>> {
+) -> CommandResult<Audited<TopicBatchResult>> {
     let connection_manager = connection_manager.inner().clone();
     let access = AuditAccess::dashboard(&session_state, session_id);
     let topic_manager = topic_manager.inner().clone();
@@ -159,7 +160,7 @@ pub async fn delete_topic_by_broker(
     audit_manager: State<'_, AuditManager>,
     connection_manager: State<'_, ConnectionManager>,
     expected_revision: i64,
-) -> CommandResult<Audited<TopicMutationResult>> {
+) -> CommandResult<Audited<TopicBatchResult>> {
     let connection_manager = connection_manager.inner().clone();
     let access = AuditAccess::dashboard(&session_state, session_id);
     let topic_manager = topic_manager.inner().clone();

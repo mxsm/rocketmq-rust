@@ -347,3 +347,13 @@ impl AuditContext {
         super::db::insert(connection, &self.event(Some(actor.into()), Summary::count(1, 0)))
     }
 }
+
+impl AuditReceipt for crate::topic::batch::TopicBatchResult {
+    fn summary(&self) -> Summary {
+        let success = self.targets.iter().filter(|target| target.success).count()
+            + usize::from(self.order_config.as_ref().is_some_and(|result| result.success));
+        let failure = self.targets.iter().filter(|target| !target.success).count()
+            + usize::from(self.order_config.as_ref().is_some_and(|result| !result.success));
+        Summary::count(success, failure.max(usize::from(!self.success)))
+    }
+}
