@@ -113,6 +113,7 @@ impl AdminBuilder {
 
 #[must_use = "a started admin session must be explicitly shut down"]
 pub struct AdminSession {
+    pub(crate) request_signing_hook: Option<Arc<dyn rocketmq_transport::api::RPCHook>>,
     pub(crate) inner: DefaultMQAdminExt,
     client_runtime: Arc<ClientRuntime>,
     pub(crate) clock: Arc<dyn Clock>,
@@ -124,6 +125,7 @@ impl AdminSession {
     pub(crate) fn from_started(inner: DefaultMQAdminExt, clock: Arc<dyn Clock>) -> Self {
         let client_runtime = inner.client_runtime();
         Self {
+            request_signing_hook: None,
             inner,
             client_runtime,
             clock,
@@ -252,11 +254,14 @@ impl AdminBuilder {
             .map(str::to_owned)
             .unwrap_or_else(|| format!("tools-admin-{now_millis}"));
         let timeout = Duration::from_millis(config.configured_timeout_millis());
-        let mut admin = match credentials {
-            Some(credentials) => DefaultMQAdminExt::with_admin_ext_group_rpc_hook_and_timeout(
+        let request_signing_hook = credentials
+            .as_ref()
+            .map(|credentials| Arc::new(admin_acl_rpc_hook(credentials)) as Arc<dyn rocketmq_transport::api::RPCHook>);
+        let mut admin = match request_signing_hook.clone() {
+            Some(hook) => DefaultMQAdminExt::with_admin_ext_group_rpc_hook_and_timeout(
                 client_runtime.clone(),
                 admin_group,
-                Arc::new(admin_acl_rpc_hook(&credentials)),
+                hook,
                 timeout,
             ),
             None => DefaultMQAdminExt::with_admin_ext_group_and_timeout(client_runtime.clone(), admin_group, timeout),
@@ -282,6 +287,7 @@ impl AdminBuilder {
             .map_err(|error| backend_error("start_admin_session", error))?;
 
         Ok(AdminSession {
+            request_signing_hook,
             inner: admin,
             client_runtime,
             clock,

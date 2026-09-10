@@ -3835,6 +3835,7 @@ dependencies = [
  "rocketmq-admin-core",
  "rocketmq-dashboard-common",
  "rocketmq-error",
+ "rocketmq-model",
  "rocketmq-runtime",
  "rusqlite",
  "serde",

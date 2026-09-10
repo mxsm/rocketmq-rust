@@ -64,15 +64,14 @@ function Invoke-DebugAdmin {
 Invoke-DebugAdmin cluster clusterList
 Invoke-DebugAdmin topic updateTopic -n 127.0.0.1:9876 -c TauriDebugCluster -t TauriDebugSmoke -r 4 -w 4 -y
 Invoke-DebugAdmin topic topicRoute -n 127.0.0.1:8080 -t TauriDebugSmoke
-Invoke-DebugAdmin message sendMessage -t TauriDebugSmoke -p rocketmq-rust-tauri-smoke -b tauri-broker-a -i 0
-Invoke-DebugAdmin message sendMessage -t TauriDebugSmoke -p rocketmq-rust-tauri-smoke-b -b tauri-broker-b -i 0
-Invoke-DebugAdmin message queryMsgByOffset -t TauriDebugSmoke -b tauri-broker-a -i 0 -o 0
-Invoke-DebugAdmin message queryMsgByOffset -t TauriDebugSmoke -b tauri-broker-b -i 0 -o 0
+Invoke-DebugAdmin message sendMessage -t TauriDebugSmoke -p rocketmq-rust-tauri-smoke
 ```
 
-Expect both Brokers in the cluster and Proxy route response, `SEND_OK` from
-each send, and the sent bodies in the read responses. On subsequent runs, offset
-zero reads the first retained message; sending appends additional messages.
+Expect both Brokers in the cluster and Proxy route response, and `SEND_OK` from
+the send. To read the message, run `message queryMsgByOffset` with the Broker
+name (`-b`), queue ID (`-i`), and queue offset (`-o`) from that send receipt,
+along with `-t TauriDebugSmoke`. Sending appends to existing data; do not assume
+queue zero or offset zero identifies the newly sent message.
 This checks remoting administration and basic message storage, not gRPC clients,
 ACL, consumer processing, scheduled messages, or failover.
 

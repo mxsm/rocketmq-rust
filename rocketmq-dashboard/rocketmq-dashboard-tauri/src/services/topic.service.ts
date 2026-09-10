@@ -35,8 +35,8 @@ export class TopicService {
         return invokeAuthenticatedCommand<TopicConfigView>('get_topic_config', { request });
     }
 
-    static async createOrUpdateTopic(request: TopicConfigRequest): Promise<TopicMutationResult> {
-        return invokeAuthenticatedCommand<TopicMutationResult>('create_or_update_topic', { request });
+    static async createOrUpdateTopic(request: TopicConfigRequest, mode: 'create' | 'update'): Promise<TopicMutationResult> {
+        return invokeAuthenticatedCommand<TopicMutationResult>('create_or_update_topic', { request, mode });
     }
 
     static async deleteTopic(request: DeleteTopicRequest): Promise<TopicMutationResult> {

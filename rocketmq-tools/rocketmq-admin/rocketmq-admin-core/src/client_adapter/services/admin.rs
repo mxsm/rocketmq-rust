@@ -87,6 +87,7 @@ impl AdminBuilder {
             )
         })?;
         let timeout = self.timeout_millis.map(Duration::from_millis);
+        let request_signing_hook = self.rpc_hook.clone();
         let mut admin = match (self.rpc_hook, timeout) {
             (Some(hook), Some(timeout)) => DefaultMQAdminExt::with_rpc_hook_and_timeout(client_runtime, hook, timeout),
             (Some(hook), None) => DefaultMQAdminExt::with_rpc_hook(client_runtime, hook),
@@ -106,9 +107,9 @@ impl AdminBuilder {
             .start()
             .await
             .map_err(crate::IntoCanonicalError::into_canonical_error)?;
-        Ok(ServiceAdminSession {
-            session: AdminSession::from_started(admin, Arc::new(SystemClock)),
-        })
+        let mut session = AdminSession::from_started(admin, Arc::new(SystemClock));
+        session.request_signing_hook = request_signing_hook;
+        Ok(ServiceAdminSession { session })
     }
 }
 

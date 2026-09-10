@@ -18,3 +18,5 @@ pub(crate) mod service;
 pub(crate) mod types;
 
 pub(crate) use service::TopicManager;
+
+pub(crate) mod guard;

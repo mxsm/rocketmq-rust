@@ -920,7 +920,8 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit, onRefresh}: TopicConf
                                 type="button"
                                 className="topic-status-secondary-button topic-config-danger-button"
                                 onClick={() => void handleDeleteByBroker()}
-                                disabled={!configData || isLoading || isDeletingBroker || !activeBroker}
+                                disabled={topic?.systemTopic || !configData || isLoading || isDeletingBroker || !activeBroker}
+                                title={topic?.systemTopic ? 'System topics are read-only' : undefined}
                             >
                                 <Trash2 className="topic-icon" aria-hidden="true"/>
                                 {isDeletingBroker ? 'Deleting...' : 'Delete Broker'}
@@ -930,10 +931,11 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit, onRefresh}: TopicConf
                                 className="topic-status-primary-button topic-config-edit-button"
                                 onClick={() => {
                                     if (configData) {
-                                        onEdit(buildTopicEditorSeedFromConfig(configData));
+                                        if (!topic?.systemTopic) onEdit(buildTopicEditorSeedFromConfig(configData));
                                     }
                                 }}
-                                disabled={!configData || isLoading}
+                                disabled={topic?.systemTopic || !configData || isLoading}
+                                title={topic?.systemTopic ? 'System topics are read-only' : undefined}
                             >
                                 <Save className="topic-icon" aria-hidden="true"/>
                                 Edit Topic
@@ -1559,6 +1561,8 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
     const [messageBody, setMessageBody] = useState('');
     const [traceEnabled, setTraceEnabled] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const sendGeneration = useRef(0);
+    useEffect(() => { setIsSubmitting(false); return () => { sendGeneration.current += 1; }; }, [isOpen, topic?.name]);
     const [isLoadingConfig, setIsLoadingConfig] = useState(false);
     const [error, setError] = useState('');
     const [sendResult, setSendResult] = useState<TopicSendMessageResult | null>(null);
@@ -1618,6 +1622,7 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
             return;
         }
 
+        const generation = ++sendGeneration.current;
         setIsSubmitting(true);
         setError('');
         setSendResult(null);
@@ -1630,19 +1635,21 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
                 messageBody,
                 traceEnabled,
             });
+            if (generation !== sendGeneration.current) return;
             setSendResult(result);
-            toast.success(`Message sent to ${topic.name}`);
+            if (result.success) toast.success(`Message sent to ${topic.name}`);
+            else toast.warning(`Send returned ${result.sendStatus}. Review the receipt before sending again.`);
         } catch (submitError) {
-            setError(dashboardErrorMessage(submitError, 'Failed to send topic message.'));
+            if (generation === sendGeneration.current) setError(dashboardErrorMessage(submitError, 'Failed to send topic message.'));
         } finally {
-            setIsSubmitting(false);
+            if (generation === sendGeneration.current) setIsSubmitting(false);
         }
     };
 
     const producerPathText = topicMessageType === 'TRANSACTION'
         ? 'Transaction producer path. Local transaction is committed immediately for test send.'
         : `Standard producer path for ${topicMessageType}.`;
-    const canSubmit = Boolean(messageBody.trim()) && !isSubmitting && !isLoadingConfig;
+    const canSubmit = !topic?.systemTopic && Boolean(messageBody.trim()) && !isSubmitting && !isLoadingConfig;
 
     if (!isOpen) return null;
 
@@ -2385,7 +2392,7 @@ const TopicEditorModal = ({isOpen, onClose, targets, seed, mode, onSaved}: Topic
                 perm,
                 order,
                 messageType,
-            });
+            }, mode);
             toast.success(result.message || `${mode === 'create' ? 'Created' : 'Updated'} topic ${topicName.trim()}`);
             await onSaved();
             onClose();
@@ -3083,6 +3090,7 @@ export const TopicView = () => {
     };
 
     const handleOperation = (op: string, topic: Topic) => {
+        if (topic.systemTopic && !['Status', 'Router', 'Topic Config', 'Consumer Manage'].includes(op)) { toast.error('System topics are read-only.'); return; }
         const detail = ({ Status: 'status', Router: 'route', 'Topic Config': 'config', 'Consumer Manage': 'consumers' } as const)[op as 'Status'];
         if (detail) { openTopic(topic.name, detail); return; }
         if (op === 'Status') {
@@ -3428,6 +3436,7 @@ export const TopicView = () => {
                             <div className="topic-inspector-header">
                                 <span>Selected Topic</span>
                                 <h2>{selectedTopic.name}</h2>
+                                {selectedTopic.systemTopic && <p>System topic: changes, sends, and offset operations are disabled.</p>}
                                 <div className="topic-inspector-tags">
                                     <TopicTypeBadge type={selectedTopic.type}/>
                                     <span>{selectedTopic.messageType}</span>

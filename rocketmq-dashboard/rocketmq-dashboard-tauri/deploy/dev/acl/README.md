@@ -32,7 +32,9 @@ cargo test --lib local_acl_query_accepts_configured_credentials_and_rejects_inva
 
 The test uses the desktop's common AdminBuilder and checks the seeded user can be
 queried with correct credentials, while anonymous and incorrectly signed queries
-are rejected. It shuts down each session and the owned client runtime.
+are rejected. It also creates temporary normal and transaction Topics, sends
+signed messages, and deletes those Topics. It shuts down each session and the
+owned client runtime.
 
 Stop with `docker compose down`; volumes are retained. This fixture tests ACL,
 not TLS or token-provider behavior.

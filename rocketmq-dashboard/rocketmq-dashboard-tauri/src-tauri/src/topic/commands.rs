@@ -101,6 +101,7 @@ pub async fn get_topic_config(
 pub async fn create_or_update_topic(
     session_id: String,
     request: TopicConfigRequest,
+    mode: crate::topic::guard::TopicWriteMode,
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
     audit_manager: State<'_, AuditManager>,
@@ -117,7 +118,7 @@ pub async fn create_or_update_topic(
             Some(request.topic_name.clone()),
             move |audit| async move {
                 let _lease = connection_manager.mutation_lease(expected_revision, &audit).await?;
-                topic_manager.create_or_update_topic(request).await
+                topic_manager.create_or_update_topic(request, mode).await
             },
         )
         .await

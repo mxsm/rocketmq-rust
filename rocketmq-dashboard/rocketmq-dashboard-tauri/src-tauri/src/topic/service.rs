@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::topic::guard::{TopicIntent, TopicWriteMode, check_topic, validate_targets};
 use std::sync::Arc;
 
 use rocketmq_admin_core::client_adapter::AdminSession;
@@ -65,6 +66,7 @@ use crate::topic::types::TopicTargetOption;
 pub(crate) struct TopicManager {
     runtime: Arc<NameServerRuntimeState>,
     admin_session: Arc<Mutex<Option<ManagedTopicAdmin>>>,
+    mutation_session: Arc<Mutex<Option<ManagedTopicAdmin>>>,
 }
 
 impl TopicManager {
@@ -72,13 +74,16 @@ impl TopicManager {
         Self {
             runtime,
             admin_session: Arc::new(Mutex::new(None)),
+            mutation_session: Arc::new(Mutex::new(None)),
         }
     }
 
     pub(crate) async fn shutdown(&self) {
-        let mut session = self.admin_session.lock().await;
-        if let Some(mut admin) = session.take() {
-            admin.shutdown().await;
+        for slot in [&self.admin_session, &self.mutation_session] {
+            let mut session = slot.lock().await;
+            if let Some(mut admin) = session.take() {
+                admin.shutdown().await;
+            }
         }
     }
 
@@ -237,14 +242,18 @@ impl TopicManager {
         }
     }
 
-    pub(crate) async fn create_or_update_topic(&self, request: TopicConfigRequest) -> TopicResult<TopicMutationResult> {
-        let mut session_guard = self.admin_session.lock().await;
+    pub(crate) async fn create_or_update_topic(
+        &self,
+        request: TopicConfigRequest,
+        mode: TopicWriteMode,
+    ) -> TopicResult<TopicMutationResult> {
+        let mut session_guard = self.mutation_session.lock().await;
         self.ensure_admin_session(&mut session_guard).await?;
         let result = {
             let session = session_guard
                 .as_mut()
                 .expect("topic admin session should be initialized before use");
-            self.create_or_update_topic_with_admin(&mut session.admin, request)
+            self.create_or_update_topic_with_admin(&mut session.admin, request, mode)
                 .await
         };
         if Self::should_reset_session(&result) {
@@ -256,7 +265,7 @@ impl TopicManager {
     }
 
     pub(crate) async fn delete_topic(&self, request: DeleteTopicRequest) -> TopicResult<TopicMutationResult> {
-        let mut session_guard = self.admin_session.lock().await;
+        let mut session_guard = self.mutation_session.lock().await;
         self.ensure_admin_session(&mut session_guard).await?;
         let result = {
             let session = session_guard
@@ -276,7 +285,7 @@ impl TopicManager {
         &self,
         request: DeleteTopicByBrokerRequest,
     ) -> TopicResult<TopicMutationResult> {
-        let mut session_guard = self.admin_session.lock().await;
+        let mut session_guard = self.mutation_session.lock().await;
         self.ensure_admin_session(&mut session_guard).await?;
         let result = {
             let session = session_guard
@@ -372,7 +381,7 @@ impl TopicManager {
         &self,
         request: SendTopicMessageRequest,
     ) -> TopicResult<TopicSendMessageResult> {
-        let mut session_guard = self.admin_session.lock().await;
+        let mut session_guard = self.mutation_session.lock().await;
         self.ensure_admin_session(&mut session_guard).await?;
         let result = {
             let session = session_guard
@@ -558,7 +567,8 @@ impl TopicManager {
     async fn create_or_update_topic_with_admin(
         &self,
         admin: &mut AdminSession,
-        request: TopicConfigRequest,
+        mut request: TopicConfigRequest,
+        mode: TopicWriteMode,
     ) -> TopicResult<TopicMutationResult> {
         if request.topic_name.trim().is_empty() {
             return Err(TopicError::Validation("Topic name is required.".into()));
@@ -568,21 +578,33 @@ impl TopicManager {
                 "Select at least one cluster or broker before saving the topic.".into(),
             ));
         }
-        let topic_name = request.topic_name.clone();
-        let outcome = admin
-            .upsert_topic(&UpsertTopicRequest {
-                cluster_names: request.cluster_name_list,
-                broker_names: request.broker_name_list,
-                topic: request.topic_name,
-                write_queue_nums: request.write_queue_nums.max(1) as u32,
-                read_queue_nums: request.read_queue_nums.max(1) as u32,
-                perm: request.perm.max(0) as u32,
-                order: request.order,
-                message_type: request.message_type,
+        request.topic_name = request.topic_name.trim().to_string();
+        if request.write_queue_nums <= 0 || request.read_queue_nums <= 0 || ![2, 4, 6].contains(&request.perm) {
+            return Err(TopicError::Validation(
+                "Positive queue counts and read/write permissions are required.".into(),
+            ));
+        }
+        let checked = check_topic(admin, &request.topic_name, mode.into()).await?;
+        checked
+            .execute(|catalog| async move {
+                validate_targets(&catalog, &request.cluster_name_list, &request.broker_name_list)?;
+                let topic_name = request.topic_name.clone();
+                let outcome = admin
+                    .upsert_topic(&UpsertTopicRequest {
+                        cluster_names: request.cluster_name_list,
+                        broker_names: request.broker_name_list,
+                        topic: request.topic_name,
+                        write_queue_nums: request.write_queue_nums.max(1) as u32,
+                        read_queue_nums: request.read_queue_nums.max(1) as u32,
+                        perm: request.perm.max(0) as u32,
+                        order: request.order,
+                        message_type: request.message_type,
+                    })
+                    .await
+                    .map_err(map_admin_error)?;
+                Ok(project_topic_mutation_outcome(outcome, topic_name, "Topic saved."))
             })
             .await
-            .map_err(map_admin_error)?;
-        Ok(project_topic_mutation_outcome(outcome, topic_name, "Topic saved."))
     }
 
     async fn delete_topic_with_admin(
@@ -594,15 +616,23 @@ impl TopicManager {
         if topic.is_empty() {
             return Err(TopicError::Validation("Topic name is required.".into()));
         }
-        let outcome = admin
-            .delete_topic(&DeleteTopicAdminRequest {
-                topic: topic.clone(),
-                cluster_name: request.cluster_name,
-                broker_name: None,
+        let checked = check_topic(admin, &topic, TopicIntent::Existing).await?;
+        checked
+            .execute(|catalog| async move {
+                if let Some(cluster) = &request.cluster_name {
+                    validate_targets(&catalog, std::slice::from_ref(cluster), &[])?;
+                }
+                let outcome = admin
+                    .delete_topic(&DeleteTopicAdminRequest {
+                        topic: topic.clone(),
+                        cluster_name: request.cluster_name,
+                        broker_name: None,
+                    })
+                    .await
+                    .map_err(map_admin_error)?;
+                Ok(project_topic_mutation_outcome(outcome, topic, "Topic deleted."))
             })
             .await
-            .map_err(map_admin_error)?;
-        Ok(project_topic_mutation_outcome(outcome, topic, "Topic deleted."))
     }
 
     async fn delete_topic_by_broker_with_admin(
@@ -618,15 +648,29 @@ impl TopicManager {
         if broker_name.is_empty() {
             return Err(TopicError::Validation("Broker name is required.".into()));
         }
-        let outcome = admin
-            .delete_topic(&DeleteTopicAdminRequest {
-                topic: topic.clone(),
-                cluster_name: None,
-                broker_name: Some(broker_name),
+        let checked = check_topic(admin, &topic, TopicIntent::Existing).await?;
+        checked
+            .execute(|catalog| async move {
+                if !catalog
+                    .items
+                    .iter()
+                    .any(|item| item.topic == topic && item.brokers.contains(&broker_name))
+                {
+                    return Err(TopicError::Validation(
+                        "Broker does not host the selected topic.".into(),
+                    ));
+                }
+                let outcome = admin
+                    .delete_topic(&DeleteTopicAdminRequest {
+                        topic: topic.clone(),
+                        cluster_name: None,
+                        broker_name: Some(broker_name),
+                    })
+                    .await
+                    .map_err(map_admin_error)?;
+                Ok(project_topic_mutation_outcome(outcome, topic, "Topic deleted."))
             })
             .await
-            .map_err(map_admin_error)?;
-        Ok(project_topic_mutation_outcome(outcome, topic, "Topic deleted."))
     }
 
     async fn get_topic_consumer_groups_with_admin(
@@ -681,43 +725,49 @@ impl TopicManager {
         } else {
             "reset_consumer_offset"
         };
-        let mut session_guard = self.admin_session.lock().await;
+        let mut session_guard = self.mutation_session.lock().await;
         self.ensure_admin_session(&mut session_guard).await?;
-        let result = {
+        let result = async {
             let session = session_guard
                 .as_mut()
                 .expect("topic admin session should be initialized before use");
-            let mut affected_queues = 0usize;
-            for consumer_group in &request.consumer_group_list {
-                let outcome = session
-                    .admin
-                    .reset_topic_consumer_offset(&ResetTopicConsumerOffsetRequest {
-                        consumer_group: consumer_group.clone(),
-                        topic: request.topic.clone(),
-                        reset_timestamp: request.reset_time as u64,
-                        force: request.force,
+            let checked = check_topic(&mut session.admin, &request.topic, TopicIntent::Existing).await?;
+            checked
+                .execute(|_| async {
+                    let mut affected_queues = 0usize;
+                    for consumer_group in &request.consumer_group_list {
+                        let outcome = session
+                            .admin
+                            .reset_topic_consumer_offset(&ResetTopicConsumerOffsetRequest {
+                                consumer_group: consumer_group.clone(),
+                                topic: request.topic.clone(),
+                                reset_timestamp: request.reset_time as u64,
+                                force: request.force,
+                            })
+                            .await
+                            .map_err(map_admin_error)?;
+                        affected_queues += outcome.target_count;
+                    }
+                    Ok(TopicMutationResult {
+                        success: true,
+                        message: if skip_accumulate {
+                            format!(
+                                "Skipped accumulated messages for {} consumer group(s).",
+                                request.consumer_group_list.len()
+                            )
+                        } else {
+                            format!(
+                                "Reset offsets for {} consumer group(s).",
+                                request.consumer_group_list.len()
+                            )
+                        },
+                        topic_name: Some(request.topic.clone()),
+                        affected_queues: Some(affected_queues),
                     })
-                    .await
-                    .map_err(map_admin_error)?;
-                affected_queues += outcome.target_count;
-            }
-            Ok(TopicMutationResult {
-                success: true,
-                message: if skip_accumulate {
-                    format!(
-                        "Skipped accumulated messages for {} consumer group(s).",
-                        request.consumer_group_list.len()
-                    )
-                } else {
-                    format!(
-                        "Reset offsets for {} consumer group(s).",
-                        request.consumer_group_list.len()
-                    )
-                },
-                topic_name: Some(request.topic.clone()),
-                affected_queues: Some(affected_queues),
-            })
-        };
+                })
+                .await
+        }
+        .await;
         if Self::should_reset_session(&result) {
             self.reset_admin_session(&mut session_guard, &format!("{operation_name} failed"))
                 .await;
@@ -732,17 +782,22 @@ impl TopicManager {
         request: SendTopicMessageRequest,
     ) -> TopicResult<TopicSendMessageResult> {
         let message_body = normalize_topic_message_body(&request.message_body)?;
-        let result = admin
-            .send_topic_test_message(&AdminTopicSendRequest {
-                topic: request.topic,
-                key: request.key,
-                tag: request.tag,
-                message_body,
-                trace_enabled: request.trace_enabled,
+        let checked = check_topic(admin, &request.topic, TopicIntent::Existing).await?;
+        checked
+            .execute(|_| async move {
+                let result = admin
+                    .send_topic_test_message(&AdminTopicSendRequest {
+                        topic: request.topic,
+                        key: request.key,
+                        tag: request.tag,
+                        message_body,
+                        trace_enabled: request.trace_enabled,
+                    })
+                    .await
+                    .map_err(map_admin_error)?;
+                Ok(map_send_result(result))
             })
             .await
-            .map_err(map_admin_error)?;
-        Ok(map_send_result(result))
     }
 }
 

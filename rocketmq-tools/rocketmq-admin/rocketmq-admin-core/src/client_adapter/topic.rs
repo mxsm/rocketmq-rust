@@ -577,9 +577,23 @@ impl TopicAdmin for AdminSession {
             let producer_group = unique_producer_group(self.clock.now_millis(), message_type == "TRANSACTION");
 
             if message_type == "TRANSACTION" {
-                send_transaction_message(self.client_runtime(), client_config, producer_group, request).await
+                send_transaction_message(
+                    self.client_runtime(),
+                    client_config,
+                    producer_group,
+                    request,
+                    self.request_signing_hook.clone(),
+                )
+                .await
             } else {
-                send_normal_message(self.client_runtime(), client_config, producer_group, request).await
+                send_normal_message(
+                    self.client_runtime(),
+                    client_config,
+                    producer_group,
+                    request,
+                    self.request_signing_hook.clone(),
+                )
+                .await
             }
         })
     }

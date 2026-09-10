@@ -213,7 +213,57 @@ mod tests {
                 {
                     Ok(mut session) => {
                         let request = ListUsersRequest::try_new("127.0.0.1:22911", "").unwrap();
-                        let result = session.list_users(&request).await;
+                        let result = async {
+                            use rocketmq_admin_core::core::topic::{
+                                DeleteTopicAdminRequest, TopicAdmin, TopicSendRequest, UpsertTopicRequest,
+                            };
+                            let users = session.list_users(&request).await?;
+                            if secret == Some("tauri-dev-secret") {
+                                for message_type in [None, Some("TRANSACTION".to_string())] {
+                                    let topic = format!("TauriAclSend{}", Uuid::new_v4().simple());
+                                    session
+                                        .upsert_topic(&UpsertTopicRequest {
+                                            cluster_names: vec!["TauriAclDebugCluster".into()],
+                                            broker_names: vec![],
+                                            topic: topic.clone(),
+                                            write_queue_nums: 1,
+                                            read_queue_nums: 1,
+                                            perm: 6,
+                                            order: false,
+                                            message_type,
+                                        })
+                                        .await?;
+                                    let sent = session
+                                        .send_topic_test_message(&TopicSendRequest {
+                                            topic: topic.clone(),
+                                            key: String::new(),
+                                            tag: String::new(),
+                                            message_body: "signed-desktop-smoke".into(),
+                                            trace_enabled: false,
+                                        })
+                                        .await;
+                                    let deleted = session
+                                        .delete_topic(&DeleteTopicAdminRequest {
+                                            topic,
+                                            cluster_name: Some("TauriAclDebugCluster".into()),
+                                            broker_name: None,
+                                        })
+                                        .await;
+                                    let sent = sent?;
+                                    deleted?;
+                                    if sent.send_status.split(" (").next() != Some("SendOk")
+                                        || sent.message_id.is_none()
+                                    {
+                                        return Err(rocketmq_admin_core::core::AdminError::backend(
+                                            "acl_send_smoke",
+                                            "expected a successful signed send receipt",
+                                        ));
+                                    }
+                                }
+                            }
+                            Ok(users)
+                        }
+                        .await;
                         session.shutdown().await;
                         result
                     }
