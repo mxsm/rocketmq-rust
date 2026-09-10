@@ -1,0 +1,5 @@
+rocketmqHome = "./.rocketmq-multi-demo/ns-2"
+kvConfigPath = "./.rocketmq-multi-demo/ns-2/kvConfig.json"
+configStorePath = "./.rocketmq-multi-demo/ns-2/namesrv.properties"
+listenPort = 9877
+bindAddress = "127.0.0.1"

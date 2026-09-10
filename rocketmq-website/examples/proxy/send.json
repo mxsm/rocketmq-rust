@@ -1,0 +1,16 @@
+{
+  "messages": [
+    {
+      "topic": {
+        "name": "DocsProxyMessage"
+      },
+      "systemProperties": {
+        "messageId": "docs-proxy-probe-001",
+        "messageType": "NORMAL",
+        "bodyEncoding": "IDENTITY",
+        "queueId": 0
+      },
+      "body": "SGVsbG8="
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "topic": {
+    "name": "DocsProxyMessage"
+  },
+  "endpoints": {
+    "scheme": "IPv4",
+    "addresses": [
+      {
+        "host": "127.0.0.1",
+        "port": 8081
+      }
+    ]
+  }
+}

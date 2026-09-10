@@ -1,0 +1,18 @@
+{
+  "group": {
+    "name": "docs_proxy_probe"
+  },
+  "messageQueue": {
+    "topic": {
+      "name": "DocsProxyMessage"
+    },
+    "id": 0,
+    "broker": {
+      "name": "docs-broker",
+      "id": 0
+    }
+  },
+  "offset": "0",
+  "batchSize": 1,
+  "longPollingTimeout": "0s"
+}

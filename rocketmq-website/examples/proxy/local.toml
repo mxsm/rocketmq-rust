@@ -1,0 +1,15 @@
+mode = "local"
+[grpc]
+listenAddr = "127.0.0.1:8081"
+[remoting]
+enabled = false
+listenAddr = "127.0.0.1:8080"
+[local]
+brokerClusterName = "DocsLocalProxy"
+brokerName = "docs-local-proxy"
+brokerIp = "127.0.0.1"
+brokerListenPort = 10971
+storeRootDir = "./.rocketmq-proxy-demo/store"
+[auth]
+authenticationEnabled = false
+authorizationEnabled = false

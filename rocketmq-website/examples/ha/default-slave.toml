@@ -1,0 +1,30 @@
+[broker]
+namesrvAddr = "127.0.0.1:9876"
+brokerIp1 = "127.0.0.1"
+brokerIp2 = "127.0.0.1"
+listenPort = 10931
+storePathRootDir = "./.rocketmq-ha-demo/default-slave/metadata"
+autoCreateTopicEnable = false
+autoCreateSubscriptionGroup = false
+enableControllerMode = false
+
+[broker.brokerServerConfig]
+bindAddress = "127.0.0.1"
+
+[broker.brokerIdentity]
+brokerName = "docs-ha"
+brokerClusterName = "DocsCluster"
+brokerId = 1
+
+[store]
+storeType = "LocalFile"
+brokerRole = "SLAVE"
+flushDiskType = "SYNC_FLUSH"
+storePathRootDir = "./.rocketmq-ha-demo/default-slave/store"
+storePathBrokerIdentity = "./.rocketmq-ha-demo/default-slave/store/brokerIdentity"
+haListenAddress = "127.0.0.1"
+haListenPort = 10932
+totalReplicas = 2
+inSyncReplicas = 2
+minInSyncReplicas = 2
+haMasterAddress = "127.0.0.1:10912"
