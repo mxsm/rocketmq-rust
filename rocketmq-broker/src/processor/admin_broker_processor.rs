@@ -864,7 +864,12 @@ mod tests {
             (AdminOriginFact::BrokerProxy, AdminSessionFact::Unsupported),
         ] {
             let error = trusted_admin_metadata(origin, session).expect_err("untrusted fact pair must fail closed");
-            assert!(error.to_string().contains("trusted session view"));
+            assert_eq!(error.descriptor(), &rocketmq_error::CORE_INTERNAL_FAILURE);
+            let public = error
+                .public_view()
+                .expect("invariant error context must match its descriptor");
+            assert_eq!(public.message(), "Internal error");
+            assert!(public.fields().next().is_none());
         }
     }
 
