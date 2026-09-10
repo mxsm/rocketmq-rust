@@ -37,6 +37,7 @@ pub(crate) enum AuditAction {
     ResetOffset,
     SkipMessages,
     SendMessage,
+    UpdateBrokerConfig,
     UpsertConsumer,
     DeleteConsumer,
     ConsumeDirectly,
@@ -66,6 +67,7 @@ impl AuditAction {
             Self::ResetOffset => "consumer.reset_offset",
             Self::SkipMessages => "consumer.skip_messages",
             Self::SendMessage => "message.send",
+            Self::UpdateBrokerConfig => "broker.update_config",
             Self::UpsertConsumer => "consumer.upsert",
             Self::DeleteConsumer => "consumer.delete",
             Self::ConsumeDirectly => "message.consume_directly",
@@ -86,6 +88,7 @@ impl AuditAction {
             | Self::SwitchProxy
             | Self::DeleteProxy => "connection",
             Self::UpsertTopic | Self::DeleteTopic | Self::DeleteTopicByBroker | Self::SendMessage => "topic",
+            Self::UpdateBrokerConfig => "broker",
             Self::ResetOffset
             | Self::SkipMessages
             | Self::UpsertConsumer
@@ -104,6 +107,7 @@ impl AuditAction {
                 | Self::ResetOffset
                 | Self::SkipMessages
                 | Self::SendMessage
+                | Self::UpdateBrokerConfig
                 | Self::UpsertConsumer
                 | Self::DeleteConsumer
                 | Self::ConsumeDirectly

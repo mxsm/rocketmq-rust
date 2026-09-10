@@ -270,6 +270,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
             nameserver::commands::update_use_tls,
             cluster::commands::get_cluster_home_page,
             cluster::commands::get_cluster_broker_config,
+            cluster::commands::update_cluster_broker_config,
             cluster::commands::get_cluster_broker_status,
             consumer::commands::query_consumer_groups,
             consumer::commands::refresh_consumer_group,

@@ -1,3 +1,4 @@
+import { BrokerConfigEditor } from '../features/cluster/components/BrokerConfigEditor';
 import { useAppStore, useNavigationState } from '../stores/app.store';
 import React, { useEffect, useMemo, useState, useRef, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
@@ -86,6 +87,8 @@ export const ClusterView = () => {
   const target = navigation.target?.kind === 'broker' ? navigation.target : null;
   const openedTarget = useRef(false);
   const sheetGeneration = useRef(0);
+  const [configBroker, setConfigBroker] = useState<ClusterBrokerCardItem | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
   useEffect(() => () => { sheetGeneration.current += 1; }, []);
   const {
     data,
@@ -217,6 +220,8 @@ export const ClusterView = () => {
 
   const openStatusSheet = async (brokerData: ClusterBrokerCardItem) => {
     const generation = ++sheetGeneration.current;
+    setEditorOpen(false);
+    setConfigBroker(null);
     setDetailSheet({
       isOpen: true,
       type: 'Status',
@@ -257,6 +262,8 @@ export const ClusterView = () => {
 
   const openConfigSheet = async (brokerData: ClusterBrokerCardItem) => {
     const generation = ++sheetGeneration.current;
+    setEditorOpen(false);
+    setConfigBroker(brokerData);
     setDetailSheet({
       isOpen: true,
       type: 'Config',
@@ -319,12 +326,15 @@ export const ClusterView = () => {
       {targetMissing && <p role="alert" className="p-4 text-red-600">Broker not found: {target.address}</p>}
       <SideSheet
         isOpen={detailSheet.isOpen}
-        onClose={() => { sheetGeneration.current += 1; setDetailSheet({ ...detailSheet, isOpen: false }); if (target) goBack(); }}
+        onClose={() => { setEditorOpen(false); sheetGeneration.current += 1; setDetailSheet({ ...detailSheet, isOpen: false }); if (target) goBack(); }}
         title={detailSheet.title}
         data={detailSheet.data}
         type={detailSheet.type}
+        actions={detailSheet.type === 'Config' && configBroker ? <button className="ops-detail-tool-button" onClick={() => setEditorOpen(true)}>Edit configuration</button> : undefined}
       />
 
+      {editorOpen && configBroker && detailSheet.isOpen && <BrokerConfigEditor key={configBroker.address} broker={configBroker}
+        onClose={() => setEditorOpen(false)} onReadBack={(entries) => setDetailSheet(current => ({ ...current, data: { brokerAddr: configBroker.address, ...entries } }))} />}
       <section className="cluster-command-panel" aria-label="Cluster controls">
         <div className="cluster-select-shell">
           <button

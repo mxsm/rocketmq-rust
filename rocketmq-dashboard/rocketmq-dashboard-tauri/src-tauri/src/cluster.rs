@@ -14,6 +14,7 @@
 
 pub(crate) mod admin;
 pub(crate) mod commands;
+pub(crate) mod config;
 pub(crate) mod service;
 pub(crate) mod types;
 

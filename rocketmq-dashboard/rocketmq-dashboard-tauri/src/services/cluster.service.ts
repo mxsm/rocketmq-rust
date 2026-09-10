@@ -1,6 +1,8 @@
 import { invokeAuthenticatedCommand } from './invoke';
 import type {
     ClusterBrokerConfigRequest,
+    BrokerConfigUpdateRequest,
+    BrokerConfigUpdateResult,
     ClusterBrokerConfigView,
     ClusterHomePageRequest,
     ClusterHomePageResponse,
@@ -9,6 +11,10 @@ import type {
 } from '../features/cluster/types/cluster.types';
 
 export class ClusterService {
+    static async updateBrokerConfig(request: BrokerConfigUpdateRequest): Promise<BrokerConfigUpdateResult> {
+        return invokeAuthenticatedCommand<BrokerConfigUpdateResult>('update_cluster_broker_config', { request });
+    }
+
     static async getClusterHomePage(
         request: ClusterHomePageRequest = { forceRefresh: false }
     ): Promise<ClusterHomePageResponse> {
