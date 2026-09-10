@@ -1,0 +1,98 @@
+name: rocketmq-tauri-debug
+
+x-common: &common
+  stop_grace_period: 60s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  healthcheck:
+    test:
+      - CMD
+      - bash
+      - -c
+      - 'exec 3<>/dev/tcp/127.0.0.1/$${ROCKETMQ_HEALTH_BIND_ADDR##*:}; printf "GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3; read -r status <&3; [[ "$$status" == *" 200 "* ]]'
+    interval: 5s
+    timeout: 3s
+    retries: 20
+    start_period: 10s
+
+services:
+  namesrv:
+    <<: *common
+    image: rocketmq-rust/namesrv:local
+    command: [--configFile, /etc/rocketmq/namesrv.toml]
+    environment:
+      RUST_LOG: info
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:18088
+    volumes:
+      - ./namesrv.toml:/etc/rocketmq/namesrv.toml:ro
+      - namesrv-data:/var/lib/rocketmq
+    # Share this network namespace so advertised loopback routes work both
+    # between services and from the desktop through published ports.
+    ports:
+      - "127.0.0.1:9876:9876"
+      - "127.0.0.1:10911:10911"
+      - "127.0.0.1:10912:10912"
+      - "127.0.0.1:11911:11911"
+      - "127.0.0.1:11912:11912"
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8081:8081"
+      - "127.0.0.1:18088:18088"
+      - "127.0.0.1:18090:18090"
+      - "127.0.0.1:18091:18091"
+      - "127.0.0.1:18092:18092"
+
+  broker-a:
+    <<: *common
+    image: rocketmq-rust/broker:local
+    network_mode: service:namesrv
+    depends_on:
+      namesrv:
+        condition: service_healthy
+    command: [--configFile, /etc/rocketmq/broker.toml]
+    environment:
+      RUST_LOG: info
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:18090
+    volumes:
+      - ./broker-a.toml:/etc/rocketmq/broker.toml:ro
+      - broker-a-data:/var/lib/rocketmq
+
+  broker-b:
+    <<: *common
+    image: rocketmq-rust/broker:local
+    network_mode: service:namesrv
+    depends_on:
+      namesrv:
+        condition: service_healthy
+    command: [--configFile, /etc/rocketmq/broker.toml]
+    environment:
+      RUST_LOG: info
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:18092
+    volumes:
+      - ./broker-b.toml:/etc/rocketmq/broker.toml:ro
+      - broker-b-data:/var/lib/rocketmq
+
+  proxy:
+    <<: *common
+    image: rocketmq-rust/proxy:local
+    network_mode: service:namesrv
+    depends_on:
+      broker-a:
+        condition: service_healthy
+      broker-b:
+        condition: service_healthy
+    command: [--config, /etc/rocketmq/proxy.toml]
+    environment:
+      RUST_LOG: info
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:18091
+    volumes:
+      - ./proxy.toml:/etc/rocketmq/proxy.toml:ro
+      - proxy-data:/var/lib/rocketmq
+
+volumes:
+  namesrv-data:
+  broker-a-data:
+  broker-b-data:
+  proxy-data:
