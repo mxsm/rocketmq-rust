@@ -170,3 +170,12 @@ export interface ConsumerTargetResult {
     errorCode: string | null;
     message: string;
 }
+
+export interface ConsumerConfigSummary {
+    consumerGroup: string;
+    targets: { clusterName: string; brokerName: string; brokerAddress: string; config: ConsumerConfigView | null; error: string | null }[];
+    discoveryFailures: string[];
+    complete: boolean;
+    inconsistentFields: string[];
+    effective: Partial<Omit<ConsumerConfigView, 'consumerGroup' | 'brokerName' | 'brokerAddress'>>;
+}

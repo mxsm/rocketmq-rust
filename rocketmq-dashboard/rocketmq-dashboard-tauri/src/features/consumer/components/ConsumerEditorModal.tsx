@@ -139,16 +139,6 @@ const buildClusterOptions = (items: ClusterBrokerCardItem[]): ClusterBrokerOptio
         .sort((left, right) => left.clusterName.localeCompare(right.clusterName));
 };
 
-const deriveClusterSelection = (
-    options: ClusterBrokerOptionGroup[],
-    brokerNames: string[],
-): string[] => {
-    const selected = new Set(brokerNames);
-    return options
-        .filter((option) => option.brokers.some((brokerName) => selected.has(brokerName)))
-        .map((option) => option.clusterName);
-};
-
 const mergeConfigIntoForm = (
     config: ConsumerConfigView,
     clusterNameList: string[],
@@ -181,6 +171,9 @@ export const ConsumerEditorModal = ({
     onSaved,
 }: ConsumerEditorModalProps) => {
     const isEditMode = Boolean(consumer);
+    const [configSource, setConfigSource] = useState('');
+    const [sourceLoaded, setSourceLoaded] = useState(false);
+    useEffect(() => { setConfigSource(preferredBrokerAddress ?? ''); }, [consumer, isOpen, preferredBrokerAddress]);
     const [form, setForm] = useState<ConsumerEditorFormState>(createDefaultFormState);
     const [clusterOptions, setClusterOptions] = useState<ClusterBrokerOptionGroup[]>([]);
     const [activeSection, setActiveSection] = useState<EditorSectionKey>('basic');
@@ -194,7 +187,7 @@ export const ConsumerEditorModal = ({
         setReceipt(null);
         setIsSaving(false);
         return () => generation.current.invalidate();
-    }, [isOpen, consumer]);
+    }, [isOpen, consumer, configSource]);
 
 
     useEffect(() => {
@@ -210,6 +203,7 @@ export const ConsumerEditorModal = ({
 
         let cancelled = false;
         setIsLoading(true);
+        setSourceLoaded(false);
         setError('');
 
         const load = async () => {
@@ -226,18 +220,9 @@ export const ConsumerEditorModal = ({
                     return;
                 }
 
-                const brokerNames = [...(consumer.brokerNames ?? [])].sort((left, right) =>
-                    left.localeCompare(right),
-                );
-                const clusterNames = deriveClusterSelection(options, brokerNames);
-                const configAddress = preferredBrokerAddress || consumer.brokerAddresses[0];
+                const configAddress = configSource;
                 if (!configAddress) {
-                    setForm({
-                        ...createDefaultFormState(),
-                        consumerGroup: consumer.rawGroupName,
-                        brokerNameList: brokerNames,
-                        clusterNameList: clusterNames,
-                    });
+                    setForm({ ...createDefaultFormState(), consumerGroup: consumer.rawGroupName });
                     return;
                 }
 
@@ -246,7 +231,11 @@ export const ConsumerEditorModal = ({
                     address: configAddress,
                 });
                 if (!cancelled) {
-                    setForm(mergeConfigIntoForm(config, clusterNames, brokerNames));
+                    if (!config.brokerName || !options.some(option => option.brokers.includes(config.brokerName))) {
+                        throw new Error('The source Broker is no longer in the current cluster. Refresh the group before editing.');
+                    }
+                    setForm(mergeConfigIntoForm(config, [], [config.brokerName]));
+                    setSourceLoaded(true);
                 }
             } catch (loadError) {
                 if (!cancelled) {
@@ -269,7 +258,7 @@ export const ConsumerEditorModal = ({
         return () => {
             cancelled = true;
         };
-    }, [consumer, isOpen, preferredBrokerAddress]);
+    }, [consumer, isOpen, configSource]);
 
     const brokerOptions = useMemo(
         () =>
@@ -330,7 +319,7 @@ export const ConsumerEditorModal = ({
     };
 
     const handleSubmit = async () => {
-        if (isSaving || receipt || isReadOnlyConsumer(consumer)) return;
+        if (isLoading || isSaving || receipt || isReadOnlyConsumer(consumer) || (isEditMode && !sourceLoaded)) return;
         const isCurrent = generation.current.begin();
         setError('');
         const trimmedGroup = form.consumerGroup.trim();
@@ -564,6 +553,18 @@ export const ConsumerEditorModal = ({
                     </header>
 
                     <div className="topic-status-body consumer-editor-body">
+                        {consumer && <label className="block p-4">Configuration source
+                            <select aria-label="Configuration source Broker" value={configSource} disabled={isSaving || Boolean(receipt)} onChange={event => setConfigSource(event.target.value)}>
+                                <option value="">Select a Broker before editing</option>
+                                {consumer.brokerAddresses.map(address => <option key={address} value={address}>{address}</option>)}
+                            </select>
+                            <p>Loading another source replaces this draft. Only that Broker is initially selected; expanding the target selection applies these values to the added Brokers.</p>
+                        </label>}
+                        <p className="p-4" role="status">Write targets: {[...new Set([
+                            ...form.brokerNameList,
+                            ...clusterOptions.filter(option => form.clusterNameList.includes(option.clusterName)).flatMap(option => option.brokers),
+                        ])].join(', ') || 'None selected'}</p>
+
                         {isLoading ? (
                             <div className="topic-status-state">
                                 <LoaderCircle className="topic-icon consumer-spin" aria-hidden="true" />
@@ -710,7 +711,7 @@ export const ConsumerEditorModal = ({
                             <button
                                 type="button"
                                 onClick={() => void handleSubmit()}
-                                disabled={isLoading || isSaving || Boolean(receipt) || isReadOnlyConsumer(consumer)}
+                                disabled={(isEditMode && !sourceLoaded) || isLoading || isSaving || Boolean(receipt) || isReadOnlyConsumer(consumer)}
                                 className="topic-status-primary-button consumer-editor-save-button"
                             >
                                 {isSaving ? (

@@ -1,5 +1,5 @@
 import { isReadOnlyConsumer } from '../mutation';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
     Activity,
@@ -17,6 +17,7 @@ import {
 import { ConsumerService } from '../../../services/consumer.service';
 import { dashboardErrorMessage } from '../../../services/invoke';
 import type {
+    ConsumerConfigSummary,
     ConsumerConfigView,
     ConsumerGroupListItem,
 } from '../types/consumer.types';
@@ -72,61 +73,28 @@ export const ConsumerConfigModal = ({
     consumer,
     onEdit,
 }: ConsumerConfigModalProps) => {
-    const brokerAddresses = useMemo(() => consumer?.brokerAddresses ?? [], [consumer]);
     const [selectedBrokerAddress, setSelectedBrokerAddress] = useState('');
     const [activeSection, setActiveSection] = useState<ConfigSectionKey>('overview');
-    const [data, setData] = useState<ConsumerConfigView | null>(null);
+    const [summary, setSummary] = useState<ConsumerConfigSummary | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
+    const [refresh, setRefresh] = useState(0);
+    const brokerAddresses = summary?.targets.map(target => target.brokerAddress) ?? [];
+    const target = summary?.targets.find(target => target.brokerAddress === selectedBrokerAddress);
+    const data = target?.config ?? null;
 
     useEffect(() => {
-        if (!isOpen || !consumer) {
-            return;
-        }
-
-        setActiveSection('overview');
-        setSelectedBrokerAddress((current) => {
-            if (current && brokerAddresses.includes(current)) {
-                return current;
-            }
-            return brokerAddresses[0] ?? '';
-        });
-    }, [brokerAddresses, consumer, isOpen]);
-
-    useEffect(() => {
-        if (!isOpen || !consumer || !selectedBrokerAddress) {
-            return;
-        }
-
+        if (!isOpen || !consumer) return;
         let cancelled = false;
-        setIsLoading(true);
-        setError('');
-        setData(null);
-
-        void ConsumerService.queryConsumerConfig({
-            consumerGroup: consumer.rawGroupName,
-            address: selectedBrokerAddress,
-        })
-            .then((response) => {
-                if (!cancelled) {
-                    setData(response);
-                }
-            })
-            .catch((loadError) => {
-                if (!cancelled) {
-                    setError(dashboardErrorMessage(loadError, 'Failed to load consumer configuration.'));
-                }
-            })
-            .finally(() => {
-                if (!cancelled) {
-                    setIsLoading(false);
-                }
-            });
-
-        return () => {
-            cancelled = true;
-        };
-    }, [consumer, isOpen, selectedBrokerAddress]);
+        setIsLoading(true); setError(''); setSummary(null); setSelectedBrokerAddress('');
+        setActiveSection('overview');
+        void ConsumerService.queryConsumerConfigSummary(consumer.rawGroupName).then(response => {
+            if (!cancelled) setSummary(response);
+        }).catch(error => {
+            if (!cancelled) setError(dashboardErrorMessage(error, 'Failed to load Consumer configuration summary.'));
+        }).finally(() => { if (!cancelled) setIsLoading(false); });
+        return () => { cancelled = true; };
+    }, [consumer, isOpen, refresh]);
 
     if (!isOpen) {
         return null;
@@ -190,6 +158,24 @@ export const ConsumerConfigModal = ({
                     </header>
 
                     <div className="topic-status-body consumer-config-body">
+                        <button type="button" disabled={isLoading} onClick={() => setRefresh(value => value + 1)}>Refresh all Brokers</button>
+                        {summary && <section aria-label="Cross Broker configuration summary" className="space-y-3 p-4">
+                            <strong>{summary.complete ? 'All discovered Brokers read' : 'Incomplete coverage — consistency across all Brokers is unknown'}</strong>
+                            {summary.discoveryFailures.length > 0 && <p role="alert">Inventory unavailable: {summary.discoveryFailures.join(', ')}</p>}
+                            <p>Different fields: {summary.inconsistentFields.join(', ') || 'None among successful reads'}</p>
+                            <details><summary>Common values among successful reads</summary><pre className="overflow-auto">{JSON.stringify(summary.effective, null, 2)}</pre></details>
+                            <table className="w-full text-left"><thead><tr><th>Broker / Cluster</th><th>Address</th><th>Result</th></tr></thead>
+                                <tbody>{summary.targets.map(item => <tr key={item.brokerAddress}>
+                                    <td>{item.brokerName} / {item.clusterName}</td><td>{item.brokerAddress}</td>
+                                    <td><button type="button" onClick={() => setSelectedBrokerAddress(item.brokerAddress)}>View details</button> {item.error || 'Read'}</td>
+                                </tr>)}</tbody>
+                            </table>
+                            {target?.error && <p role="alert">{target.brokerName}: {target.error}</p>}
+                            {data && summary.inconsistentFields.length > 0 && <div className="rounded border border-amber-400 p-3"><strong>Different values on {target?.brokerName}</strong>
+                                {summary.inconsistentFields.map(field => <p key={field}>{field}: {JSON.stringify(data[field as keyof typeof data])}</p>)}
+                            </div>}
+                        </section>}
+
                         <section className="consumer-config-broker-scope" aria-label="Broker address scope">
                             <div>
                                 <span>Broker Address</span>
@@ -203,6 +189,7 @@ export const ConsumerConfigModal = ({
                                     onChange={(event) => setSelectedBrokerAddress(event.target.value)}
                                     disabled={brokerAddresses.length === 0}
                                 >
+                                    <option value="">Select a Broker for details and editing</option>
                                     {brokerAddresses.length > 0 ? (
                                         brokerAddresses.map((address) => (
                                             <option key={address} value={address}>
@@ -220,7 +207,7 @@ export const ConsumerConfigModal = ({
                             <div className="topic-status-state">
                                 <LoaderCircle className="topic-icon consumer-spin" aria-hidden="true" />
                                 <strong>Loading consumer configuration</strong>
-                                <span>Querying group settings from the selected broker address.</span>
+                                <span>Querying the current group configuration on each discovered Broker.</span>
                             </div>
                         ) : error ? (
                             <div className="topic-status-state is-error">
@@ -305,8 +292,8 @@ export const ConsumerConfigModal = ({
                         ) : (
                             <div className="topic-status-state">
                                 <Settings className="topic-icon" aria-hidden="true" />
-                                <strong>No consumer configuration</strong>
-                                <span>No consumer configuration was returned for the selected broker address.</span>
+                                <strong>{selectedBrokerAddress ? "No consumer configuration" : "Select a Broker for details"}</strong>
+                                <span>The summary above retains each Broker result. Select a successful Broker to inspect its fields.</span>
                             </div>
                         )}
                     </div>
@@ -318,7 +305,7 @@ export const ConsumerConfigModal = ({
                                 <button
                                     type="button"
                                     onClick={() => onEdit(consumer, selectedBrokerAddress)}
-                                    disabled={isReadOnlyConsumer(consumer)}
+                                    disabled={!data || isReadOnlyConsumer(consumer)}
                                     title={isReadOnlyConsumer(consumer) ? "System Consumer groups are read-only." : undefined}
                                     className="topic-status-primary-button consumer-config-edit-button"
                                 >

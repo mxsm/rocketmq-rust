@@ -173,6 +173,25 @@ pub async fn query_consumer_config(
 }
 
 #[tauri::command]
+pub async fn query_consumer_config_summary(
+    session_id: String,
+    consumer_group: String,
+    consumer_manager: State<'_, ConsumerManager>,
+    session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
+) -> CommandResult<super::service::config_summary::ConsumerConfigSummary> {
+    authorize_command(&session_id, &session_state).await?;
+    connection_manager.check_revision(expected_revision)?;
+    let result = consumer_manager
+        .query_consumer_config_summary(consumer_group)
+        .await
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
+}
+
+#[tauri::command]
 pub async fn create_or_update_consumer_group(
     session_id: String,
     request: ConsumerCreateOrUpdateRequest,

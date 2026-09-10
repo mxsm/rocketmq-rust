@@ -2,6 +2,7 @@ import { invokeAuthenticatedCommand } from './invoke';
 import type {
     ConsumerConfigQueryRequest,
     ConsumerConfigView,
+    ConsumerConfigSummary,
     ConsumerCreateOrUpdateRequest,
     ConsumerDeleteRequest,
     ConsumerConnectionQueryRequest,
@@ -16,6 +17,10 @@ import type {
 } from '../features/consumer/types/consumer.types';
 
 export class ConsumerService {
+    static async queryConsumerConfigSummary(consumerGroup: string): Promise<ConsumerConfigSummary> {
+        return invokeAuthenticatedCommand<ConsumerConfigSummary>('query_consumer_config_summary', { consumerGroup });
+    }
+
     static async queryConsumerGroups(request: ConsumerGroupListRequest): Promise<ConsumerGroupListResponse> {
         return invokeAuthenticatedCommand<ConsumerGroupListResponse>('query_consumer_groups', { request });
     }
