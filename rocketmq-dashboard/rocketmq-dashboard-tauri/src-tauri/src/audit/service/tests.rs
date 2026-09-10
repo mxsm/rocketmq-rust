@@ -66,6 +66,7 @@ impl Drop for Fixture {
 }
 fn result(success: bool) -> MessageResendResult {
     MessageResendResult {
+        request_message_id: None,
         success,
         message: "secret-result-text".into(),
         consumer_group: "test-group".into(),

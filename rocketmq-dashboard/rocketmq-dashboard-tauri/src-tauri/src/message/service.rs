@@ -14,6 +14,9 @@
 
 use crate::error::DashboardError as MessageError;
 use crate::message::admin::ManagedMessageAdmin;
+use crate::message::dlq::DlqBatchResendMessageRequest;
+use crate::message::dlq::DlqMessagePageQueryRequest;
+use crate::message::dlq::DlqResendMessageRequest;
 use crate::message::page_cache::MessagePageCache;
 use crate::message::page_cache::MessagePageCacheEntry;
 use crate::message::page_cache::MessagePageCacheKey;
@@ -56,9 +59,6 @@ use rocketmq_admin_core::core::message::QueryMessagesByKeyRequest;
 use rocketmq_admin_core::core::message::TraceQueryRequest;
 use rocketmq_admin_core::core::message::TraceSeed;
 use rocketmq_dashboard_common::DlqBatchExportMessageRequest;
-use rocketmq_dashboard_common::DlqBatchResendMessageRequest;
-use rocketmq_dashboard_common::DlqMessagePageQueryRequest;
-use rocketmq_dashboard_common::DlqResendMessageRequest;
 use rocketmq_dashboard_common::DlqViewMessageRequest;
 use rocketmq_dashboard_common::MessageDirectConsumeRequest;
 use rocketmq_dashboard_common::MessageIdQueryRequest;
@@ -188,6 +188,25 @@ impl MessageManager {
         &self,
         request: DlqMessagePageQueryRequest,
     ) -> MessageResult<MessagePageResponse> {
+        if let Some(key) = request.key.as_deref().and_then(non_empty) {
+            let mut response = self
+                .query_message_by_topic_key(MessageKeyQueryRequest {
+                    topic: build_dlq_topic(&request.consumer_group)?,
+                    key,
+                })
+                .await?;
+            response.items.truncate(64);
+            response.total = response.items.len();
+            let query = normalize_message_page_query(MessagePageQueryRequest {
+                topic: build_dlq_topic(&request.consumer_group)?,
+                begin: 0,
+                end: i64::MAX,
+                page_num: 1,
+                page_size: response.items.len().max(1) as u32,
+                task_id: None,
+            })?;
+            return Ok(build_message_page_response(response.items, response.total, &query, ""));
+        }
         let query = normalize_message_page_query(dlq_page_query_to_message_page_request(request)?)?;
         let generation = self.runtime.generation();
 
@@ -954,19 +973,21 @@ impl MessageManager {
     ) -> MessageResult<MessageResendResult> {
         let consumer_group = normalize_required_field("consumerGroup", request.consumer_group)?;
         let message_id = normalize_required_field("messageId", request.message_id)?;
-        let result = admin
-            .resend_dlq_message(&DlqMessageLookupRequest {
+        let message = admin
+            .find_dlq_message(&DlqMessageLookupRequest {
                 consumer_group: consumer_group.clone(),
-                message_id,
+                message_id: message_id.clone(),
             })
             .await
             .map_err(MessageError::Admin)?;
-        Ok(build_message_resend_result(
-            consumer_group,
-            result.topic,
-            result.message_id,
-            result.consume,
-        ))
+        let direct = super::dlq::direct_request(consumer_group.clone(), request.client_id, &message)?;
+        let consume = admin
+            .consume_message_directly(&direct)
+            .await
+            .map_err(MessageError::Admin)?;
+        let mut result = build_message_resend_result(consumer_group, direct.topic, direct.message_id, consume);
+        result.request_message_id = Some(message_id);
+        Ok(result)
     }
 
     async fn export_dlq_message_with_admin(
@@ -1140,19 +1161,30 @@ fn normalize_batch_resend_requests(
 ) -> MessageResult<Vec<DlqResendMessageRequest>> {
     if requests.is_empty() {
         return Err(MessageError::Validation(
-            "At least one DLQ message must be selected for batch resend.".to_string(),
+            "At least one DLQ message must be selected for batch resend.".into(),
         ));
     }
-
-    requests
-        .into_iter()
-        .map(|request| {
-            Ok(DlqResendMessageRequest {
-                consumer_group: normalize_required_field("consumerGroup", request.consumer_group)?,
-                message_id: normalize_required_field("messageId", request.message_id)?,
-            })
-        })
-        .collect()
+    if requests.len() > 256 {
+        return Err(MessageError::Validation(
+            "Select at most 256 DLQ messages per batch.".into(),
+        ));
+    }
+    let mut identities = std::collections::HashSet::new();
+    let mut result = Vec::with_capacity(requests.len());
+    for request in requests {
+        let request = DlqResendMessageRequest {
+            consumer_group: normalize_required_field("consumerGroup", request.consumer_group)?,
+            message_id: normalize_required_field("messageId", request.message_id)?,
+            client_id: request.client_id.as_deref().and_then(non_empty),
+        };
+        if !identities.insert((request.consumer_group.clone(), request.message_id.clone())) {
+            return Err(MessageError::Validation(
+                "A DLQ message can appear only once in a resend batch.".into(),
+            ));
+        }
+        result.push(request);
+    }
+    Ok(result)
 }
 
 fn normalize_batch_export_requests(requests: Vec<DlqViewMessageRequest>) -> MessageResult<Vec<DlqViewMessageRequest>> {
@@ -1320,6 +1352,7 @@ fn build_message_resend_result(
         consumer_group,
         topic,
         msg_id,
+        request_message_id: None,
         consume_result: Some(public_consume_result.to_string()),
         remark: public_remark,
     }
@@ -1347,6 +1380,7 @@ fn build_failed_message_resend_result(
         message: format!("Direct consume failed for `{msg_id}` in consumer group `{consumer_group}`."),
         consumer_group,
         topic: String::new(),
+        request_message_id: Some(msg_id.clone()),
         msg_id,
         consume_result: None,
         remark: Some(crate::error::CommandError::from(error).message.to_string()),
@@ -1936,10 +1970,23 @@ mod tests {
     }
 
     #[test]
+    fn normalize_batch_resend_rejects_duplicate_delivery_even_with_different_clients() {
+        let request = DlqResendMessageRequest {
+            consumer_group: "g".into(),
+            message_id: "m".into(),
+            client_id: None,
+        };
+        let mut duplicate = request.clone();
+        duplicate.client_id = Some("another-client".into());
+        assert!(normalize_batch_resend_requests(vec![request, duplicate]).is_err());
+    }
+
+    #[test]
     fn normalize_batch_resend_requests_trims_fields() {
         let requests = normalize_batch_resend_requests(vec![DlqResendMessageRequest {
             consumer_group: " group-a ".to_string(),
             message_id: " msg-1 ".to_string(),
+            client_id: None,
         }])
         .expect("batch resend requests should normalize");
 
@@ -1948,6 +1995,7 @@ mod tests {
             vec![DlqResendMessageRequest {
                 consumer_group: "group-a".to_string(),
                 message_id: "msg-1".to_string(),
+                client_id: None,
             }]
         );
     }
