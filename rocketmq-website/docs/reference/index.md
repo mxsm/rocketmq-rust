@@ -9,10 +9,10 @@ Use a reference when you already know the operation and need an exact option, ty
 | Question | Authoritative entry |
 | --- | --- |
 | Which packages and minimum Rust version belong to this source? | [Root manifest](https://github.com/mxsm/rocketmq-rust/blob/main/Cargo.toml) and [toolchain](https://github.com/mxsm/rocketmq-rust/blob/main/rust-toolchain.toml) |
-| Which files/settings start the Broker? | [Broker configuration guide](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/README.md) and [distribution examples](https://github.com/mxsm/rocketmq-rust/tree/main/distribution/config/broker) |
-| Which NameServer flags and merge rules apply? | [NameServer guide](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-namesrv/README.md) |
-| How do Controller/Proxy modes start? | [Controller](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-controller/README.md) and [Proxy](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-proxy/README.md) |
-| Which client builders and Cargo features exist? | [Client API guide](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md) and [manifest](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/Cargo.toml) |
+| Which files/settings start the Broker? | [Broker configuration](../configuration/broker-config.md) and [deployment overview](../deployment/overview.md) |
+| Which NameServer flags and merge rules apply? | [Service configuration](service-configuration.md#nameserver) |
+| How do Controller/Proxy modes start? | [Service configuration](service-configuration.md) and the corresponding [deployment guide](../deployment/overview.md) |
+| Which client builders and Cargo features exist? | [Client configuration](../configuration/client-config.md) and [manifest](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/Cargo.toml) |
 | What does a send result mean? | [Producer result table](../producer/overview.md) and [canonical result types](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-model/src/result.rs) |
 | What does LitePull commit mean? | [Polling and commit semantics](../consumer/pull-consumer.md) |
 | Which administration command accepts this option? | [Admin CLI](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/README.md) and that subcommand's `--help` |
@@ -64,3 +64,12 @@ Import curated public types from the crate root or its documented `api`/`prelude
 Rust source API, serialized fields, request/response codes, persisted layouts, Controller internals and operational behavior are separate compatibility surfaces. Matching one does not establish the others.
 
 The [capability matrix](../overview/capability-matrix.md) records relevant mode/feature conditions. The [module map](../architecture/module-map.md) identifies owners when a shared contract changes. Keep exact versions and observed scenarios with compatibility claims rather than using a blanket “fully compatible” label.
+
+## Reference and migration pages
+
+- [Features and platforms](./features-platforms.md): package defaults, native prerequisites and runtime conditions.
+- [Errors and status](./errors.md): stable identities, boundary mappings and retry decisions.
+- [Protocol compatibility](./protocol-compatibility.md): endpoints, scope, evidence and storage boundaries.
+- [Admin CLI](./admin-cli.md): command catalog, parameters, effects and exit behavior.
+- [Java migration](../migration/java-to-rust.md): client, cluster and data migration procedures.
+- [Rust API migration](../migration/rust-api.md): public imports, owned runtimes and Classic/LitePull changes.

@@ -124,7 +124,21 @@ const sidebars: SidebarsConfig = {
       label: 'Reference',
       collapsible: true,
       collapsed: true,
-      items: ['reference/index'],
+      items: [
+        'reference/index',
+        'reference/service-configuration',
+        'reference/features-platforms',
+        'reference/errors',
+        'reference/protocol-compatibility',
+        'reference/admin-cli',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Migration',
+      collapsible: true,
+      collapsed: true,
+      items: ['migration/java-to-rust', 'migration/rust-api'],
     },
     {
       type: 'category',
