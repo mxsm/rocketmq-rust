@@ -23,62 +23,62 @@ pub async fn get_name_server_home_page(
     nameserver_manager: State<'_, NameServerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<NameServerHomePageView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     nameserver_manager.home_page_info().await.map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn add_name_server(
+pub async fn add_name_server(
     session_id: String,
     address: String,
     nameserver_manager: State<'_, NameServerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<NameServerMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     nameserver_manager.add_name_server(&address).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn switch_name_server(
+pub async fn switch_name_server(
     session_id: String,
     address: String,
     nameserver_manager: State<'_, NameServerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<NameServerMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     nameserver_manager.switch_name_server(&address).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn delete_name_server(
+pub async fn delete_name_server(
     session_id: String,
     address: String,
     nameserver_manager: State<'_, NameServerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<NameServerMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     nameserver_manager.delete_name_server(&address).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn update_vip_channel(
+pub async fn update_vip_channel(
     session_id: String,
     enabled: bool,
     nameserver_manager: State<'_, NameServerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<NameServerMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     nameserver_manager.update_vip_channel(enabled).map_err(Into::into)
 }
 
 #[tauri::command]
-pub fn update_use_tls(
+pub async fn update_use_tls(
     session_id: String,
     enabled: bool,
     nameserver_manager: State<'_, NameServerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<NameServerMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     nameserver_manager.update_use_tls(enabled).map_err(Into::into)
 }
 use crate::auth::SessionState;

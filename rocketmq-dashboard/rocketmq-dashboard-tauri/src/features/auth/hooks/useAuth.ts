@@ -9,7 +9,7 @@ export const useAuth = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
     const [shake, setShake] = useState(false);
-    const { clearAuthSession, markPasswordChanged, sessionId, setAuthSession } = useAppStore();
+    const { sessionId, setAuthSession } = useAppStore();
 
     const login = async (credentials: LoginCredentials) => {
         setIsLoading(true);
@@ -44,7 +44,6 @@ export const useAuth = () => {
 
         try {
             await AuthService.changePassword(payload);
-            markPasswordChanged();
             return { success: true };
         } catch (err) {
             const errorMessage = dashboardErrorMessage(err, 'Failed to update password');
@@ -63,8 +62,7 @@ export const useAuth = () => {
         } catch {
             // Local session state must still be cleared when the backend session is unavailable.
         } finally {
-            SessionStorageService.clearSessionId();
-            clearAuthSession();
+            SessionStorageService.reportAuthenticationFailure(sessionId, 'invalid');
         }
     };
 

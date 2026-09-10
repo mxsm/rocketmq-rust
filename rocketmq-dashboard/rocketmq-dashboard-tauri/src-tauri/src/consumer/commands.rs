@@ -37,7 +37,7 @@ pub async fn query_consumer_groups(
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ConsumerGroupListResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     consumer_manager
         .query_consumer_groups(request)
         .await
@@ -51,7 +51,7 @@ pub async fn refresh_consumer_group(
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ConsumerGroupListItem> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     consumer_manager
         .refresh_consumer_group(request)
         .await
@@ -65,7 +65,7 @@ pub async fn refresh_all_consumer_groups(
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ConsumerGroupListResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     consumer_manager
         .refresh_all_consumer_groups(request)
         .await
@@ -79,7 +79,7 @@ pub async fn query_consumer_connection(
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ConsumerConnectionView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     consumer_manager
         .query_consumer_connection(request)
         .await
@@ -93,7 +93,7 @@ pub async fn query_consumer_topic_detail(
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ConsumerTopicDetailView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     consumer_manager
         .query_consumer_topic_detail(request)
         .await
@@ -107,7 +107,7 @@ pub async fn query_consumer_config(
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ConsumerConfigView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     consumer_manager
         .query_consumer_config(request)
         .await
@@ -121,7 +121,7 @@ pub async fn create_or_update_consumer_group(
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ConsumerMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     consumer_manager
         .create_or_update_consumer_group(request)
         .await
@@ -135,7 +135,7 @@ pub async fn delete_consumer_group(
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<ConsumerMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     consumer_manager
         .delete_consumer_group(request)
         .await

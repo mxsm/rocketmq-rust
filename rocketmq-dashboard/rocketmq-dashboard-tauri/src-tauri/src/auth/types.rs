@@ -20,8 +20,6 @@ pub(crate) type AuthResult<T> = crate::error::DashboardResult<T>;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SessionUser {
-    #[serde(skip)]
-    pub(crate) session_id: String,
     pub(crate) user_id: i64,
     pub(crate) username: String,
     pub(crate) must_change_password: bool,
@@ -72,4 +70,30 @@ pub(crate) struct UserRecord {
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
     pub(crate) last_login_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionView {
+    pub(crate) id: String,
+    pub(crate) username: String,
+    pub(crate) created_at_ms: i64,
+    pub(crate) expires_at_ms: i64,
+    pub(crate) last_seen_at_ms: i64,
+    pub(crate) revoked_at_ms: Option<i64>,
+    pub(crate) current: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionPage {
+    pub(crate) items: Vec<SessionView>,
+    pub(crate) next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RevokeSessionsResponse {
+    pub(crate) revoked_count: usize,
+    pub(crate) current_session_revoked: bool,
 }

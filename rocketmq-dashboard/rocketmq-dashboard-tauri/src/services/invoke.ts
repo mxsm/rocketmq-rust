@@ -81,11 +81,21 @@ export const invokeSessionCommand = <T>(
     command: string,
     sessionId: string,
     args?: Record<string, unknown>,
-): Promise<T> => invokeDecoded<T>(command, { ...args, sessionId });
+): Promise<T> => invokeDecoded<T>(command, { ...args, sessionId }).catch((error: unknown) => {
+    if (isDashboardClientError(error)) {
+        if (error.code === 'auth.session.invalid') {
+            SessionStorageService.reportAuthenticationFailure(sessionId, 'invalid');
+        } else if (error.code === 'auth.password_change_required') {
+            SessionStorageService.reportAuthenticationFailure(sessionId, 'password-change-required');
+        }
+    }
+    throw error;
+});
 
 export const invokeAuthenticatedCommand = <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
     const sessionId = SessionStorageService.getSessionId();
     if (!sessionId) {
+        SessionStorageService.reportAuthenticationFailure(null, 'invalid');
         return Promise.reject(
             new DashboardClientError({
                 code: 'auth.session.invalid',

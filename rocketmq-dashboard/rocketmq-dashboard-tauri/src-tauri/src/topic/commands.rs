@@ -38,7 +38,7 @@ pub async fn get_topic_list(
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<TopicListResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     topic_manager.get_topic_list(request).await.map_err(Into::into)
 }
 
@@ -49,7 +49,7 @@ pub async fn get_topic_route(
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<TopicRouteView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     topic_manager.get_topic_route(request).await.map_err(Into::into)
 }
 
@@ -60,7 +60,7 @@ pub async fn get_topic_stats(
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<TopicStatusView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     topic_manager.get_topic_stats(request).await.map_err(Into::into)
 }
 
@@ -71,7 +71,7 @@ pub async fn get_topic_config(
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<TopicConfigView> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     topic_manager.get_topic_config(request).await.map_err(Into::into)
 }
 
@@ -82,7 +82,7 @@ pub async fn create_or_update_topic(
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<TopicMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     topic_manager.create_or_update_topic(request).await.map_err(Into::into)
 }
 
@@ -93,7 +93,7 @@ pub async fn delete_topic(
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<TopicMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     topic_manager.delete_topic(request).await.map_err(Into::into)
 }
 
@@ -104,7 +104,7 @@ pub async fn delete_topic_by_broker(
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<TopicMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     topic_manager.delete_topic_by_broker(request).await.map_err(Into::into)
 }
 
@@ -115,7 +115,7 @@ pub async fn get_topic_consumer_groups(
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<TopicConsumerGroupListResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     topic_manager
         .get_topic_consumer_groups(request)
         .await
@@ -129,7 +129,7 @@ pub async fn get_topic_consumers(
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<TopicConsumerInfoResponse> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     topic_manager.get_topic_consumers(request).await.map_err(Into::into)
 }
 
@@ -140,7 +140,7 @@ pub async fn reset_consumer_offset(
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<TopicMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     topic_manager.reset_consumer_offset(request).await.map_err(Into::into)
 }
 
@@ -151,7 +151,7 @@ pub async fn skip_message_accumulate(
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<TopicMutationResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     topic_manager.skip_message_accumulate(request).await.map_err(Into::into)
 }
 
@@ -162,7 +162,7 @@ pub async fn send_topic_message(
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
 ) -> CommandResult<TopicSendMessageResult> {
-    authorize_command(&session_id, &session_state)?;
+    authorize_command(&session_id, &session_state).await?;
     topic_manager.send_topic_message(request).await.map_err(Into::into)
 }
 use crate::auth::SessionState;

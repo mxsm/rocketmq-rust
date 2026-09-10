@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { SessionStorageService } from '../services/session.storage';
 import type { SessionUser } from '../features/auth/types/auth.types';
 
 type Tab =
@@ -25,7 +26,6 @@ interface AppState {
   setActiveTab: (tab: Tab) => void;
   setAuthSession: (sessionId: string, currentUser: SessionUser) => void;
   clearAuthSession: () => void;
-  markPasswordChanged: () => void;
   startAuthBootstrap: () => void;
   finishAuthBootstrap: () => void;
   pageTitle: string;
@@ -86,17 +86,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setIsLoggedIn(false);
   };
 
-  const markPasswordChanged = () => {
-    setMustChangePassword(false);
-    setCurrentUser((previousUser) =>
-      previousUser
-        ? {
-            ...previousUser,
-            mustChangePassword: false,
-          }
-        : previousUser
-    );
-  };
+  useEffect(() => SessionStorageService.subscribeAuthenticationFailure((reason) => {
+    if (reason === 'invalid') {
+      clearAuthSession();
+    } else {
+      setMustChangePassword(true);
+      setCurrentUser((user) => user ? { ...user, mustChangePassword: true } : user);
+    }
+  }), []);
 
   return (
     <AppContext.Provider
@@ -110,7 +107,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         setActiveTab,
         setAuthSession,
         clearAuthSession,
-        markPasswordChanged,
         startAuthBootstrap: () => setIsBootstrappingAuth(true),
         finishAuthBootstrap: () => setIsBootstrappingAuth(false),
         pageTitle: getPageTitle(activeTab),
