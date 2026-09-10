@@ -677,6 +677,20 @@ class ContainerFoundationTests(unittest.TestCase):
         findings = self.audit(dockerfile=secret_command)
         self.assertTrue(any("secret arguments" in finding for finding in findings))
 
+    def test_mcp_stdio_without_lifecycle_is_rejected(self) -> None:
+        lifecycle_call = "transport::stdio::serve_with_lifecycle(app, lifecycle).await"
+        signal_sources = dict(self.signal_sources)
+        self.assertIn(lifecycle_call, signal_sources["mcp_stdio"])
+        signal_sources["mcp_stdio"] = signal_sources["mcp_stdio"].replace(
+            lifecycle_call,
+            "transport::stdio::serve(app).await",
+            1,
+        )
+        self.assertEqual(
+            ["mcp_stdio entrypoint must use the shared lifecycle SIGINT/SIGTERM waiter"],
+            self.audit(signal_sources=signal_sources),
+        )
+
     def test_ctrl_c_only_signal_or_weakened_service_smoke_is_rejected(self) -> None:
         signal_sources = dict(self.signal_sources)
         signal_sources["proxy"] = signal_sources["proxy"].replace(
@@ -686,15 +700,6 @@ class ContainerFoundationTests(unittest.TestCase):
         )
         findings = self.audit(signal_sources=signal_sources)
         self.assertTrue(any("Ctrl-C-only" in finding for finding in findings))
-
-        signal_sources = dict(self.signal_sources)
-        signal_sources["mcp_stdio"] = signal_sources["mcp_stdio"].replace(
-            "serve_typed_with_lifecycle",
-            "serve_typed",
-            1,
-        )
-        findings = self.audit(signal_sources=signal_sources)
-        self.assertTrue(any("mcp_stdio entrypoint" in finding for finding in findings))
 
         stop_contract = "docker stop --signal SIGTERM --timeout $GracePeriodSeconds"
         weakened = self.service_script.replace(stop_contract, "docker kill", 1)
