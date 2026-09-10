@@ -8,10 +8,10 @@ title: "Dashboard、MCP 与 AI SRE"
 
 | 产品 | 角色 | 部署边界 | 起点 |
 | --- | --- | --- | --- |
-| Web Dashboard | 浏览器集群/资源管理 | Rust HTTP 后端、React 前端及所选持久存储 | [Web 指南](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-web/README.md) |
-| GPUI Dashboard | 原生桌面管理 | 独立 Rust 桌面包 | [GPUI 工程](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-dashboard/rocketmq-dashboard-gpui) |
-| Tauri Dashboard | 使用 Web UI 的桌面应用 | Node 前端、Rust 后端和操作系统打包 | [Dashboard 构建指南](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/README.md) |
-| MCP | 有界只读集群诊断及可选非变更计划 | 使用 stdio 或已配置 Streamable HTTP 的独立服务 | [MCP 指南](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/README.md) |
+| Web Dashboard | 浏览器集群/资源管理 | Rust HTTP 后端、React 前端及所选持久存储 | [Web 指南](./dashboards.md) |
+| GPUI Dashboard | 原生桌面管理 | 独立 Rust 桌面包 | [GPUI 工程](./dashboards.md) |
+| Tauri Dashboard | 使用 Web UI 的桌面应用 | Node 前端、Rust 后端和操作系统打包 | [Dashboard 构建指南](./dashboards.md) |
+| MCP | 有界只读集群诊断及可选非变更计划 | 使用 stdio 或已配置 Streamable HTTP 的独立服务 | [MCP 指南](./mcp.md) |
 | MCP Control | 类型化、受监督的集群变更 | 独立 TLS/OAuth 服务、feature 与策略启用 | [Control 指南](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp-control/README.md) |
 | AI SRE | 证据、诊断、事件、计划与执行协调 | 独立 SRE workspace、服务、UI 和存储 | [SRE 指南](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-sre/README.md) |
 

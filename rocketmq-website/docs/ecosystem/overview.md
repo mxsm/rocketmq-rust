@@ -8,10 +8,10 @@ The ecosystem adds human-facing administration, read-only diagnostics and separa
 
 | Product | Role | Deployment boundary | Start here |
 | --- | --- | --- | --- |
-| Web Dashboard | Browser-based cluster/resource administration | Rust HTTP backend plus React frontend and selected persistent storage | [Web guide](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-web/README.md) |
-| GPUI Dashboard | Native desktop administration | Standalone Rust desktop package | [GPUI project](https://github.com/mxsm/rocketmq-rust/tree/main/rocketmq-dashboard/rocketmq-dashboard-gpui) |
-| Tauri Dashboard | Desktop application with web UI | Node frontend, Rust backend and OS packaging | [Dashboard build guide](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/README.md) |
-| MCP | Bounded read-only cluster diagnostics and optional non-mutating planning | Standalone server with stdio or configured Streamable HTTP | [MCP guide](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp/README.md) |
+| Web Dashboard | Browser-based cluster/resource administration | Rust HTTP backend plus React frontend and selected persistent storage | [Web guide](./dashboards.md) |
+| GPUI Dashboard | Native desktop administration | Standalone Rust desktop package | [GPUI project](./dashboards.md) |
+| Tauri Dashboard | Desktop application with web UI | Node frontend, Rust backend and OS packaging | [Dashboard build guide](./dashboards.md) |
+| MCP | Bounded read-only cluster diagnostics and optional non-mutating planning | Standalone server with stdio or configured Streamable HTTP | [MCP guide](./mcp.md) |
 | MCP Control | Typed supervised cluster mutations | Independent TLS/OAuth server, feature and policy enablement | [Control guide](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-mcp-control/README.md) |
 | AI SRE | Evidence, diagnosis, incidents, plans and execution coordination | Separate SRE workspace, services, UI and storage | [SRE guide](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-sre/README.md) |
 

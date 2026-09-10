@@ -4,6 +4,7 @@ const sidebars: SidebarsConfig = {
   docsSidebar: [
     'introduction',
     'overview/capability-matrix',
+    'overview/release-scope',
     {
       type: 'category',
       label: 'Getting Started',
@@ -145,7 +146,7 @@ const sidebars: SidebarsConfig = {
       label: 'Ecosystem',
       collapsible: true,
       collapsed: true,
-      items: ['ecosystem/overview'],
+      items: ['ecosystem/overview', 'ecosystem/dashboards', 'ecosystem/mcp'],
     },
     {
       type: 'category',
