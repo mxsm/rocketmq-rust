@@ -1,336 +1,68 @@
 ---
-sidebar_position: 1
-title: 概述
+title: "参与 RocketMQ-Rust"
 ---
 
-> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+# 参与 RocketMQ-Rust
 
-# 贡献指南概述
+从具体用户问题及其归属组件开始。有价值的贡献可以是可复现报告、修正后的双语示例、聚焦回归测试或行为变更。[开发指南](./development-guide.md)说明环境搭建和本地反馈流程，本文说明如何选择并呈现工作。
 
-欢迎来到 RocketMQ-Rust 社区！🎉
+## 选择入口
 
-感谢你对 RocketMQ-Rust 项目的贡献兴趣。无论是修复 bug、添加新功能还是改进文档，每一个贡献都很重要。本指南将帮助你开始贡献之旅。
+| 目标 | 首先阅读 | 有用的交付内容 |
+| --- | --- | --- |
+| 报告故障 | [故障排查](../operations/troubleshooting.md)和对应组件指南 | 精确操作、预期/实际结果、版本/feature 和最小复现 |
+| 改善教程或翻译 | [文档指南](./documentation.md)及两种语言文件 | 正确命令、前置条件、预期输出和完整对应译文 |
+| 修复核心行为 | [架构](../architecture/overview.md)和[模块地图](../architecture/module-map.md) | 归属层内的聚焦修改及回归覆盖 |
+| 改善客户端集成 | [客户端配置](../configuration/client-config.md)和 [API 迁移](../migration/rust-api.md) | 包含生命周期和完成语义的公共 API 示例 |
+| 开发应用产品 | [生态](../ecosystem/overview.md)和该应用的本地指南 | 在独立工程内改进产品行为、界面或服务集成 |
+| 改善性能 | [容量与性能](../operations/capacity-performance.md) | 明确工作负载、观察到的瓶颈和可比较测量 |
 
-## 贡献方式
+可执行变更使用 [GitHub Issues](https://github.com/mxsm/rocketmq-rust/issues)，使用或设计问题使用 [Discussions](https://github.com/mxsm/rocketmq-rust/discussions)。实现前检查相关工作，避免重复修改。较宽泛的 issue 应先说明准备改善的具体行为，不把小修复扩展为无关重构。
 
-有很多种方式可以为 RocketMQ-Rust 做出贡献：
+## 准备正确的工程
 
-### 代码贡献
+克隆自己的 fork 或使用已授权检出，然后遵循[开发环境搭建](./development-guide.md)。编辑前查看 `git status --short`，保护已有修改。通过最近的 `AGENTS.md` 和当前 manifest 选择构建根目录。
 
-- **Bug 修复**：修复已报告的问题
-- **新功能**：添加新功能
-- **性能改进**：优化现有代码
-- **文档**：改进代码文档
-- **测试**：添加单元测试和集成测试
+根 Cargo 工作区、独立示例、Dashboard 应用、MCP、SRE 和网站的命令不同。目录名不一定是 Cargo 包名，例如 `rocketmq-client` 应以 `rocketmq-client-rust` 选择。[发行范围](../overview/release-scope.md)解释工作区成员和产品发行成员的区别。
 
-### 非代码贡献
+除非变更有意处理对应契约，否则保留页面 ID、公共 API 和序列化字段。依赖和配置修改应限于问题所需，不格式化无关文件，也不替换他人未提交工作。
 
-- **Bug 报告**：报告 bug 和问题
-- **功能请求**：建议新功能
-- **文档**：改进用户文档
-- **代码审查**：审查拉取请求
-- **社区支持**：帮助其他用户
+## 提供可复现的问题报告
 
-## 开始贡献
+使用对应类型的仓库 issue 表单，包含最少但有效的信息：
 
-### 1. Fork 和克隆
+1. 组件、源码或制品版本、相关 feature/后端/模式及平台。
+2. 前置条件和精确操作，可能时提供最小示例。
+3. 预期行为与实际观察，包括稳定错误码和请求标识。
+4. 影响及已测试的临时处理方法。
+5. 若提出修复，说明归属文件和观察变更效果的方法。
 
-```bash
-# 在 GitHub 上 Fork 仓库
-# 克隆你的 fork
-git clone https://github.com/YOUR_USERNAME/rocketmq-rust.git
-cd rocketmq-rust
+从公开报告中移除凭据、Bearer 令牌、ACL/TLS 材料、消息体及无关个人或生产细节。脱敏输入仍应保留形状和相关类型，使示例可用。不要仅凭通用客户端超时推断故障根因。
 
-# 添加 upstream 远程仓库
-git remote add upstream https://github.com/mxsm/rocketmq-rust.git
-```
+Issue 模板区分缺陷、功能、增强、重构、测试和文档。当前字段和标题前缀位于 [.github/ISSUE_TEMPLATE](https://github.com/mxsm/rocketmq-rust/tree/main/.github/ISSUE_TEMPLATE)，使用真实表单，不额外发明必填字段。
 
-### 2. 设置开发环境
+## 实现并检查受影响行为
 
-```bash
-# 安装仓库固定的 stable 工具链和开发组件
-rustup toolchain install 1.95.0 --profile minimal --component rustfmt,clippy
+保持变更足够聚焦，使审阅者能关联原因、实现与结果。遵循[编码规范](./coding-standards.md)，复用现有抽象，将共享行为放在归属层。
 
-# 构建项目
-cargo build
-```
+Rust 行为变更选择对应包/目标和聚焦回归测试。编译受影响代码的测试构建也可提供编译依据。共享 API 或 feature 变化时，增加直接受影响消费者的检查。并非每次贡献都自动要求根目录全目标或全部 feature 检查。
 
-### 3. 创建分支
+网站内容应同步修改英文和中文，保留可执行示例及技术限制，并在 `rocketmq-website` 运行 `npm run build`。文档工作不需要源码指纹、清洁工作区仪式、评分或新增审批流程，正常校对和现有预览/构建工具即可。
 
-```bash
-# 与 upstream 同步
-git fetch upstream
-git checkout main
-git merge upstream/main
+记录实际运行内容及其说明的问题。外部集群、GUI 平台或可选工具不可用时，说明未测试场景，不宣称通过，也不修改无关依赖来绕过问题。
 
-# 创建功能分支
-git checkout -b feature/your-feature-name
-```
+## 提交便于审阅的 PR
 
-## 开发工作流
-
-### 进行更改
-
-1. **编写代码**：遵循编码标准
-2. **添加测试**：确保测试覆盖率
-3. **格式化代码**：使用 rustfmt
-
-    ```bash
-    cargo fmt
-    ```
-
-4. **运行 linter**：使用 clippy
-
-    ```bash
-    cargo clippy -- -D warnings
-    ```
-
-5. **运行测试**：确保所有测试通过
-
-    ```bash
-    cargo test --all
-    ```
-
-### 提交更改
-
-使用清晰的提交信息：
+关联 issue，并使用当前 [PR 模板](https://github.com/mxsm/rocketmq-rust/blob/main/.github/PULL_REQUEST_TEMPLATE.md)。仓库约定使用关联 issue 的英文标题，例如：
 
 ```text
-feat: 添加事务消息支持
-
-- 实现 TransactionMQProducer
-- 添加事务监听器 trait
-- 为事务消息添加单元测试
-
-Closes #123
+[ISSUE #1234]📝Clarify consumer offset completion
 ```
 
-提交信息格式：
+将示例编号替换为实际 issue。先描述具体问题和最终行为，再总结相关验证及限制。语义变更解释兼容性或迁移影响；简单文档修正只需简短描述和相关构建结果。
 
-- `feat:` 新功能
-- `fix:` Bug 修复
-- `docs:` 文档更改
-- `test:` 测试更改
-- `refactor:` 代码重构
-- `perf:` 性能改进
-- `chore:` 构建过程或工具
+根据评审反馈改进同一范围的结果，最终实现范围变化时同步更新描述。不要提交生成构建、日志、覆盖率、临时截图和本地测试数据。仅在截图属于有意交付的文档资源且准确反映产品时保留。
 
-### 提交拉取请求
+提交 PR 不意味着发布或部署。维护者按照对应项目流程处理集成和发行决策。社区分发身份见[发行范围](../overview/release-scope.md)。
 
-1. **推送到你的 fork**：
-
-    ```bash
-    git push origin feature/your-feature-name
-    ```
-
-2. **创建拉取请求**：在 GitHub 上
-
-3. **填写 PR 模板**：
-   - 描述你的更改
-   - 引用相关问题
-   - 如果适用，添加截图
-
-4. **等待审查**：维护者将审查你的 PR
-
-## 代码审查流程
-
-### 预期情况
-
-我们的审查流程旨在保持代码质量，同时对贡献者友好：
-
-1. **自动检查**（1-5 分钟）：CI 运行测试、linting 和格式检查
-2. **人工审查**（1-3 天）：维护者审查你的代码质量和设计
-3. **反馈讨论**：协作讨论以改进代码
-4. **批准和合并**：一旦批准，你的 PR 将被合并！🎉
-
-### 处理反馈
-
-代码审查是对话，而非批评。当你收到反馈时：
-
-- 回应所有审查意见（即使是确认收到）
-- 如果有不清楚的地方，请提问
-- 做出请求的更改并推送到同一分支
-- 准备好后请求重新审查
-- 不要犹豫讨论替代方案
-
-**注意**：CodeRabbit 的建议是有帮助的参考，但最终决定由维护者在代码审查期间做出。
-
-## 编码标准
-
-详见 [编码标准](./coding-standards) 获取详细指南。
-
-### 核心原则
-
-1. **遵循 Rust 惯用语**：编写地道的 Rust 代码
-2. **错误处理**：正确使用 `Result` 类型
-3. **文档**：为公共 API 添加文档注释
-4. **测试**：编写全面的测试
-5. **性能**：考虑性能影响
-
-### 示例
-
-```rust
-//! 向 RocketMQ broker 发送消息的生产者模块。
-
-use crate::error::{Error, Result};
-use crate::model::Message;
-
-/// 用于发送消息的 RocketMQ 生产者。
-///
-/// # 示例
-///
-/// ```rust
-/// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-///
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut producer = DefaultMQProducer::builder(client_runtime.clone())
-///     .producer_group("example_group")
-///     .name_server_addr("localhost:9876")
-///     .build();
-/// producer.start().await?;
-/// # Ok(())
-/// # }
-/// ```
-pub struct Producer {
-    // 实现
-}
-
-impl Producer {
-    /// 创建新的生产者实例。
-    pub fn new() -> Self {
-        Self { /* ... */ }
-    }
-
-    /// 向 broker 发送消息。
-    ///
-    /// # 错误
-    ///
-    /// 以下情况将返回错误：
-    /// - broker 不可用
-    /// - 消息超过最大大小
-    /// - 发生网络超时
-    pub async fn send(&self, message: Message) -> Result<SendResult> {
-        // 实现
-    }
-}
-```
-
-## 开发指南
-
-详见 [开发指南](./development-guide) 获取详细信息。
-
-## 测试
-
-### 运行测试
-
-```bash
-# 运行所有测试
-cargo test --all
-
-# 运行特定测试
-cargo test test_send_message
-
-# 带输出运行测试
-cargo test -- --nocapture
-
-# 并行运行测试
-cargo test --all -- --test-threads=4
-```
-
-### 编写测试
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_send_message() {
-        let mut producer = DefaultMQProducer::builder(client_runtime.clone())
-            .producer_group("example_group")
-            .name_server_addr("localhost:9876")
-            .build();
-        producer.start().await.unwrap();
-
-        let message = Message::builder()
-            .topic("TestTopic")
-            .body("Test")
-            .build()
-            .unwrap();
-        let result = producer.send(message).await;
-
-        assert!(result.is_ok());
-    }
-}
-```
-
-## 文档
-
-### 构建文档
-
-```bash
-# 构建文档
-cargo doc --no-deps --open
-```
-
-### 编写文档
-
-```rust
-/// 简要说明（一句话）
-///
-/// 更详细的解释。
-///
-/// # 示例
-///
-/// ```
-/// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-/// use rocketmq_common::common::message::message_single::Message;
-///
-/// let mut producer = DefaultMQProducer::builder(client_runtime.clone())
-///     .producer_group("example_group")
-///     .name_server_addr("localhost:9876")
-///     .build();
-/// let message = Message::builder().topic("TopicTest").body("hello").build().unwrap();
-/// ```
-///
-/// # 错误
-///
-/// 以下情况此函数将返回错误...
-///
-/// # Panics
-///
-/// 以下情况此函数将 panic...
-pub fn public_function() -> Result<()> {
-    // 实现
-}
-```
-
-## 获取帮助
-
-我们随时提供帮助！请通过以下方式联系：
-
-- **GitHub Issues**：[报告 bug 或请求功能](https://github.com/mxsm/rocketmq-rust/issues)
-- **GitHub Discussions**：[提问和分享想法](https://github.com/mxsm/rocketmq-rust/discussions)
-- **邮件**：[mxsm@apache.org](mailto:mxsm@apache.org)
-
-## 许可证
-
-RocketMQ-Rust 采用 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) 许可。通过贡献，你同意你的贡献将使用相同的许可证。
-
-## 行为准则
-
-我们致力于为每个人提供一个友好和包容的环境。请：
-
-- 在交流中保持尊重和体贴
-- 欢迎新来者并帮助他们入门
-- 专注于建设性反馈
-- 假设良好的意图
-- 开放协作并分享知识
-
-我们都在这里一起构建优秀的软件！🚀
-
-## 后续步骤
-
-- [开发指南](./development-guide) - 详细的开发信息
-- [编码标准](./coding-standards) - 代码风格指南
-- [报告问题](https://github.com/mxsm/rocketmq-rust/issues) - 提交 bug 或功能请求
+来源：[根工程约定](https://github.com/mxsm/rocketmq-rust/blob/main/AGENTS.md)、[网站指南](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-website/AGENTS.md)、[Issue 模板](https://github.com/mxsm/rocketmq-rust/tree/main/.github/ISSUE_TEMPLATE)、[PR 约定](https://github.com/mxsm/rocketmq-rust/blob/main/.agents/skills/rocketmq-rust-pr-submitter/SKILL.md)。

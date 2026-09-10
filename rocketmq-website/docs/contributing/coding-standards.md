@@ -1,552 +1,71 @@
 ---
-sidebar_position: 3
-title: Coding Standards
+title: "Coding standards"
 ---
 
-# Coding Standards
+# Coding standards
 
-Welcome to RocketMQ-Rust's coding standards! 📝
+Follow the existing implementation at the owning layer and the nearest project guide. These conventions preserve public contracts, lifecycle ownership and diagnosable failures. They summarize current repository rules rather than defining a separate contribution process.
 
-This guide will help you write clean, idiomatic Rust code that follows our project conventions. These standards ensure code consistency, maintainability, and quality across the entire codebase.
+## Rust structure and public contracts
 
-## Why Coding Standards Matter
+Use the selected toolchain, package edition, `rustfmt.toml` and `.clippy.toml`. The root defaults to Rust 2021; Admin CLI and several standalone applications use Rust 2024. Preserve those manifest choices. Use snake_case modules/functions, PascalCase types and SCREAMING_SNAKE_CASE constants, and retain the Apache 2.0 header on new Rust files.
 
-Consistent code is:
+Keep implementation modules private and exports deliberate. Prefer enums, configuration/request structs, builders and newtypes to positional flags or long argument lists. Exhaustively match project-owned compatibility-sensitive enums. Keep optional features additive and test the relevant default/disabled behavior when a change affects it.
 
-- **Easier to read** and understand
-- **Easier to maintain** and debug
-- **Easier to review** in pull requests
-- **More reliable** with fewer bugs
+Request codes, response codes, headers, Serde fields/defaults and persisted layouts are compatibility surfaces. A rename that preserves an internal Rust call can still break a wire or storage contract. Explain an intended semantic change and its migration path; consult [protocol compatibility](../reference/protocol-compatibility.md).
 
-## Rust Conventions
+Split modules by cohesive behavior when useful. File length is a review signal, not a reason to split unrelated logic into arbitrary fragments. Web backend and GPUI local guides use a flat module layout without `mod.rs`; do not impose that local rule on unrelated modules without checking their guide.
 
-### Naming
+## Errors and documentation
 
-```rust
-// Modules: snake_case
-mod message_queue;
+Use typed errors for recoverable configuration, input, I/O, transport, storage and lifecycle failures. At public boundaries, map to the established component error model and stable descriptor. Do not replace meaningful errors with a generic string or match a human-readable message to make a retry decision.
 
-// Types: PascalCase
-struct MessageQueue;
-enum ConsumeResult;
+Avoid production `todo!`, `unimplemented!` and recoverable-path `unwrap`/`expect`/panic. Test assertions are appropriate, and an intentional infallible facade needs a documented invariant or a fallible companion. Narrow any lint allowance and explain why it exists.
 
-// Functions: snake_case
-fn send_message() {}
+Rustdoc should describe non-obvious invariants and applicable `# Errors`, `# Panics` and `# Safety` contracts. Comments explain why a choice is required; do not narrate every line. Keep unsafe blocks minimal with an immediately preceding `// SAFETY:` explanation and a clear safe-wrapper or caller contract.
 
-// Constants: SCREAMING_SNAKE_CASE
-const MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
+## Async execution and shutdown
 
-// Static: SCREAMING_SNAKE_CASE
-static DEFAULT_TIMEOUT: u64 = 3000;
-```
+| Concern | Required design property |
+| --- | --- |
+| Background tasks | Own work through `ServiceContext`, `TaskGroup` or the established lifecycle owner; cancel and await it during shutdown. |
+| Blocking operations | Use `BlockingExecutor` or an established top-level boundary; do not introduce raw `spawn_blocking`, nested `block_on` or ad hoc runtimes. |
+| Synchronization | Do not hold a synchronous lock guard across `.await`; keep lock scopes small. |
+| Admission | Preserve bounded task, byte and blocking budgets. Timeout does not necessarily stop underlying blocking work. |
+| Async traits | Prefer native async trait methods; do not introduce `#[async_trait]`. |
+| Completion | Distinguish accepted, written, durable, replicated and business-complete outcomes. |
 
-### Code Organization
+The [runtime design](../architecture/runtime.md) describes ownership and budget boundaries. A shutdown implementation that drops a handle without awaiting owned work is not equivalent to a completed shutdown. Runtime changes need focused cancellation/resource tests where those behaviors change, without a fingerprint or baseline ceremony.
 
-```rust
-// Imports (std, external crates, internal modules)
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use crate::model::Message;
-use crate::error::{Error, Result};
+## Observability and sensitive data
 
-// Type aliases
-type MessageQueueRef = Arc<MessageQueue>;
+Prefer `#[tracing::instrument(skip_all, ...)]` with explicit low-cardinality fields. Never log credentials, ACL/TLS material, tokens, message bodies or entire request/configuration objects. Avoid unsampled per-message spans and unbounded topic/group labels.
 
-// Constants
-const MAX_RETRY: u32 = 3;
+Use the established error redaction and telemetry ownership paths. A safe `Debug` implementation on one wrapper does not make arbitrary strings safe to log. [Errors and observability](../architecture/errors-observability.md) explains signal ownership and boundary mappings.
 
-// Structs
-pub struct Producer {
-    // Private fields
-    client: Arc<Client>,
-    options: ProducerOptions,
-}
+## Frontend and desktop code
 
-// Impl blocks
-impl Producer {
-    // Associated functions ( constructors)
-    pub fn new() -> Self { }
+| Project | Local convention |
+| --- | --- |
+| Website | Docusaurus/MDX, existing components and page IDs; paired English/Chinese content and translated navigation. |
+| Web frontend | React/TypeScript/Vite, shared tokens/components and unified `src/api/` client; operational tables with loading, empty, error, search, pagination and refresh states. |
+| Web backend | Thin Axum handlers, service orchestration, separate API DTOs and internal models, explicit local error mapping; reusable logic in Dashboard common. |
+| GPUI | Deterministic render paths, state changes through Context/Window, stable element IDs, owned subscriptions and nonblocking UI work. |
+| Tauri | Frontend commands from the app root; Rust commands from `src-tauri`. Frontend asset compilation is separate from desktop packaging. |
 
-    // Methods
-    pub async fn send(&self, msg: Message) -> Result<SendResult> { }
+Preserve accessibility, focus, keyboard operation, light/dark consistency and usable resizing. Product confirmation dialogs for destructive actions remain part of the application behavior; they are unrelated to the documentation-writing workflow. Do not expose internal migration or API-parity implementation notes as user-facing product controls.
 
-    // Private methods
-    async fn do_send(&self, msg: Message) -> Result<SendResult> { }
-}
+## Select relevant checks
 
-// Trait impls
-impl Default for Producer {
-    fn default() -> Self { }
-}
-```
-
-### Error Handling
-
-RocketMQ-Rust uses the `thiserror` crate for error definitions. Always use `Result` types for operations that can fail.
-
-```rust
-// Use Result for fallible operations
-use crate::error::Result;
-
-pub async fn send_message(&self, msg: Message) -> Result<SendResult> {
-    // Use ? for error propagation - clean and idiomatic
-    let broker = resolve_broker(&msg.topic)?;
-
-    // ⚠️ Avoid unwrap() in library code - it can panic!
-    // ✅ Instead, handle errors explicitly
-    match broker.send(msg).await {
-        Ok(result) => Ok(result),
-        Err(e) => Err(Error::SendFailed(e.to_string())),
-    }
-}
-
-// Custom error types using thiserror
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Broker not found: {0}")]
-    BrokerNotFound(String),
-
-    #[error("Timeout after {0}ms")]
-    Timeout(u64),
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-}
-
-// ✅ Good: Explicit error handling
-pub fn parse_config(data: &str) -> Result<Config> {
-    serde_json::from_str(data)
-        .map_err(|e| Error::ConfigParse(e.to_string()))
-}
-
-// ❌ Bad: Using unwrap() - can panic!
-pub fn parse_config_bad(data: &str) -> Config {
-    serde_json::from_str(data).unwrap() // Don't do this!
-}
-```
-
-### Async/Await
-
-RocketMQ-Rust uses `tokio` as the async runtime. All I/O operations should be async.
-
-```rust
-// ✅ Use async/await for async operations
-pub async fn send(&self, msg: Message) -> Result<SendResult> {
-    let broker = resolve_broker_async().await?;
-    broker.send(msg).await
-}
-
-// ✅ Spawn tasks for concurrent operations
-pub async fn send_batch(&self, msgs: Vec<Message>) -> Result<Vec<SendResult>> {
-    let tasks: Vec<_> = msgs
-        .into_iter()
-        .map(|msg| {
-            let self_clone = self.clone();
-            tokio::spawn(async move { self_clone.send(msg).await })
-        })
-        .collect();
-
-    let results = futures::future::try_join_all(tasks).await?;
-    results.into_iter().collect::<Result<Vec<_>>>()
-}
-
-// ❌ Bad: Blocking operations in async context
-pub async fn send_bad(&self, msg: Message) -> Result<SendResult> {
-    // Don't do this - blocks the async runtime!
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    self.send(msg).await
-}
-
-// ✅ Good: Use tokio's async sleep
-pub async fn send_good(&self, msg: Message) -> Result<SendResult> {
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    self.send(msg).await
-}
-```
-
-## Documentation
-
-### Public APIs
-
-```rust
-/// A producer for sending messages to RocketMQ brokers.
-///
-/// The producer handles message routing, load balancing, and
-/// automatic retry on failure.
-///
-/// # Examples
-///
-/// ```rust
-/// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-///
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut producer = DefaultMQProducer::builder()
-///     .producer_group("example_group")
-///     .name_server_addr("localhost:9876")
-///     .build();
-/// producer.start().await?;
-/// # Ok(())
-/// # }
-/// ```
-///
-/// # See Also
-///
-/// - [`Consumer`] for consuming messages
-/// - [`Message`] for message structure
-pub struct Producer { }
-```
-
-### Module Documentation
-
-```rust
-//! Producer module.
-//!
-//! This module provides the [`Producer`] type for sending messages
-//! to RocketMQ brokers.
-//!
-//! # Features
-//!
-//! - Asynchronous message sending
-//! - Automatic retry on failure
-//! - Load balancing across brokers
-//! - Transactional message support
-//!
-//! # Examples
-//!
-//! ```rust
-//! use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut producer = DefaultMQProducer::builder()
-//!     .producer_group("example_group")
-//!     .name_server_addr("localhost:9876")
-//!     .build();
-//! let message = Message::builder()
-//!     .topic("TopicTest")
-//!     .body("Hello")
-//!     .build()?;
-//! producer.send(message).await?;
-//! # Ok(())
-//! # }
-//! ```
-```
-
-## Testing
-
-### Unit Tests
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_message_creation() {
-        let msg = Message::builder()
-            .topic("Test")
-            .body(vec![1, 2, 3])
-            .build()
-            .unwrap();
-        assert_eq!(msg.topic().as_str(), "Test");
-    }
-
-    #[tokio::test]
-    async fn test_async_operation() {
-        let result = async_operation().await;
-        assert!(result.is_ok());
-    }
-}
-```
-
-### Integration Tests
-
-```rust
-// tests/integration_test.rs
-#[tokio::test]
-async fn test_producer_consumer() {
-    let mut producer = DefaultMQProducer::builder()
-        .producer_group("example_group")
-        .name_server_addr("localhost:9876")
-        .build();
-    producer.start().await.unwrap();
-
-    let mut consumer = DefaultMQPushConsumer::builder()
-        .consumer_group("example_group")
-        .name_server_addr("localhost:9876")
-        .build();
-    consumer.subscribe("TestTopic", "*").await.unwrap();
-
-    // Test logic
-}
-```
-
-## Code Style
-
-### Automated Formatting
-
-We use `rustfmt` to ensure consistent code formatting across the project. **Always format your code before committing!**
+Use the smallest target that demonstrates the change. For example, a model change can use:
 
 ```bash
-# Format all code in the workspace
-cargo fmt --all
-
-# Check if code is formatted (used in CI)
-cargo fmt --all --check
+cargo fmt -p rocketmq-model -- --check
+cargo test -p rocketmq-model --lib
 ```
 
-**Pro tip**: Configure your IDE to format on save:
+These are examples for that package, not commands to run for every edit. Reuse a meaningful test and inspect how many tests ran. A compiling test can replace a redundant `cargo check`; add package-scoped Clippy or consumer validation when it addresses an actual concern. Do not run a mutating workspace formatter over unrelated dirty Rust files.
 
-- **VS Code**: Set `"editor.formatOnSave": true` with rust-analyzer
-- **RustRover**: Enable "Reformat code" in Settings → Tools → Actions on Save
+For rendered website changes, run `npm run build` in `rocketmq-website`. Standalone projects use their own local profiles. Full feature/platform matrices, interoperability, long-running fault tests and release qualification belong to tasks that need that evidence. Do not claim an unrun scenario passed.
 
-### Linting with Clippy
-
-We use `clippy` to catch common mistakes and non-idiomatic code. All clippy warnings must be fixed before merging.
-
-```bash
-# Run clippy on all targets and features
-cargo clippy --all-targets --all-features --workspace -- -D warnings
-
-# Auto-fix clippy suggestions (when possible)
-cargo clippy --fix --all-targets --all-features --workspace
-```
-
-**Note**: Some clippy suggestions are auto-fixable, but always review the changes before committing.
-
-### Common Patterns
-
-**Builder Pattern**:
-
-```rust
-pub struct ProducerOptions {
-    name_server_addr: String,
-    group_name: String,
-    timeout: u64,
-}
-
-impl ProducerOptions {
-    pub fn new() -> Self {
-        Self {
-            name_server_addr: "localhost:9876".to_string(),
-            group_name: "DEFAULT_PRODUCER".to_string(),
-            timeout: 3000,
-        }
-    }
-
-    pub fn name_server_addr(mut self, addr: impl Into<String>) -> Self {
-        self.name_server_addr = addr.into();
-        self
-    }
-
-    pub fn timeout(mut self, timeout: u64) -> Self {
-        self.timeout = timeout;
-        self
-    }
-}
-```
-
-**Newtype Pattern**:
-
-```rust
-/// Wrapper for message IDs with validation
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct MessageId(String);
-
-impl MessageId {
-    pub fn new(id: String) -> Result<Self> {
-        if id.is_empty() {
-            return Err(Error::InvalidMessageId);
-        }
-        Ok(Self(id))
-    }
-}
-
-impl AsRef<str> for MessageId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-```
-
-## Performance Guidelines
-
-RocketMQ-Rust is designed for high performance. Follow these guidelines to maintain optimal performance.
-
-### Memory Management
-
-**Prefer borrowing over cloning** - avoid unnecessary allocations:
-
-```rust
-// ✅ Good: Use references to avoid copies
-pub fn process_message(msg: &Message) -> Result<()> {
-    let body = msg.get_body();  // Borrows, no copy
-    // Process body without cloning
-    Ok(())
-}
-
-// ❌ Bad: Unnecessary cloning
-pub fn process_message_bad(msg: Message) -> Result<()> {
-    let body = msg.get_body().clone();  // Extra allocation!
-    Ok(())
-}
-
-// ✅ Use Cow for conditional ownership
-use std::borrow::Cow;
-
-pub fn get_topic<'a>(msg: &'a Message, default: &'a str) -> Cow<'a, str> {
-    match msg.get_topic() {
-        "" => Cow::Borrowed(default),  // No allocation
-        topic => Cow::Borrowed(topic), // No allocation
-    }
-}
-```
-
-### Concurrency
-
-```rust
-// Use Arc for shared ownership
-use std::sync::Arc;
-
-let client = Arc::new(Client::new());
-
-// Use Mutex/RwLock for interior mutability
-use tokio::sync::Mutex;
-
-let state = Arc::new(Mutex::new(State::new()));
-
-// Use channels for communication
-use tokio::sync::mpsc;
-
-let (tx, mut rx) = mpsc::channel(1000);
-```
-
-## Common Mistakes to Avoid ⚠️
-
-Learn from these common pitfalls:
-
-### 1. Using `unwrap()` or `panic!()` in Library Code
-
-❌ **Bad**:
-
-```rust
-pub fn get_broker(&self) -> Broker {
-    self.brokers.get(0).unwrap()  // Can panic!
-}
-```
-
-✅ **Good**:
-
-```rust
-pub fn get_broker(&self) -> Result<&Broker> {
-    self.brokers.get(0).ok_or(Error::NoBrokerAvailable)
-}
-```
-
-### 2. Ignoring Errors
-
-❌ **Bad**:
-
-```rust
-let _ = self.send(msg).await;  // Error silently ignored!
-```
-
-✅ **Good**:
-
-```rust
-if let Err(e) = self.send(msg).await {
-    log::error!("Failed to send message: {}", e);
-    return Err(e);
-}
-```
-
-### 3. Blocking in Async Code
-
-❌ **Bad**:
-
-```rust
-pub async fn send(&self) -> Result<()> {
-    std::thread::sleep(Duration::from_secs(1));  // Blocks executor!
-}
-```
-
-✅ **Good**:
-
-```rust
-pub async fn send(&self) -> Result<()> {
-    tokio::time::sleep(Duration::from_secs(1)).await;
-}
-```
-
-### 4. Unnecessary Clones
-
-❌ **Bad**:
-
-```rust
-pub fn process(&self, data: String) -> Result<()> {
-    let copy = data.clone();  // Unnecessary!
-    process_data(&copy)
-}
-```
-
-✅ **Good**:
-
-```rust
-pub fn process(&self, data: &str) -> Result<()> {
-    process_data(data)
-}
-```
-
-### 5. Memory Leaks with Reference Cycles
-
-Be careful with `Rc`/`Arc` cycles. Use `Weak` references when needed.
-
-### 6. Overusing `unsafe`
-
-Only use `unsafe` when absolutely necessary and always document why it's safe.
-
-### 7. Not Handling All Enum Variants
-
-Avoid using `_` in match arms - be explicit to catch future enum additions.
-
-## Learning Resources 📚
-
-Want to write better Rust code? Check out these resources:
-
-### Official Rust Resources
-
-- [The Rust Book](https://doc.rust-lang.org/book/) - Comprehensive Rust guide
-- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) - API design best practices
-- [Rust by Example](https://doc.rust-lang.org/rust-by-example/) - Learn by examples
-- [Clippy Lint List](https://rust-lang.github.io/rust-clippy/master/index.html) - All clippy lints explained
-
-### Advanced Topics
-
-- [Async Book](https://rust-lang.github.io/async-book/) - Deep dive into async Rust
-- [Tokio Tutorial](https://tokio.rs/tokio/tutorial) - Async runtime guide
-- [The Rustonomicon](https://doc.rust-lang.org/nomicon/) - Unsafe Rust (advanced)
-
-### RocketMQ-Rust Specific
-
-- [Architecture Overview](/docs/architecture/overview) - Understand the codebase structure
-- [Development Guide](./development-guide) - Set up your dev environment
-- [Contributing Overview](./overview) - Start contributing today!
-
-## Summary
-
-Remember:
-
-- ✅ Write idiomatic Rust code
-- ✅ Handle errors properly with `Result`
-- ✅ Use async/await for I/O operations
-- ✅ Format code with `cargo fmt`
-- ✅ Fix clippy warnings before committing
-- ✅ Write tests for your code
-- ✅ Document public APIs
-
-Happy coding! 🚀
-
-## Next Steps
-
-- [Development Guide](./development-guide) - Set up your environment
-- [Overview](./overview) - Start contributing
-- [Report Issues](https://github.com/mxsm/rocketmq-rust/issues) - Found a bug?
+Sources: [root rules](https://github.com/mxsm/rocketmq-rust/blob/main/AGENTS.md), [Web frontend](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-web/frontend/AGENTS.md), [Web backend](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-web/backend/AGENTS.md), [GPUI](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-gpui/AGENTS.md), [Tauri](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-tauri/AGENTS.md), [website](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-website/AGENTS.md).

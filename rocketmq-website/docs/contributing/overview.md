@@ -1,334 +1,68 @@
 ---
-sidebar_position: 1
-title: Overview
+title: "Contribute to RocketMQ-Rust"
 ---
 
-# Contributing Overview
+# Contribute to RocketMQ-Rust
 
-Welcome to the RocketMQ-Rust community! 🎉
+Start with a concrete user problem and the component that owns it. A useful contribution can be a reproducible report, a corrected bilingual example, a focused regression test or a behavior change. The [development guide](./development-guide.md) explains environment setup and the local feedback loop; this page explains how to choose and present the work.
 
-Thank you for your interest in contributing to RocketMQ-Rust. Whether you're fixing a bug, adding a feature, or improving documentation, every contribution makes a difference. This guide will help you get started on your contribution journey.
+## Choose an entry point
 
-## Ways to Contribute
+| Your goal | First material to read | Useful contribution |
+| --- | --- | --- |
+| Report a failure | [Troubleshooting](../operations/troubleshooting.md) and the relevant component guide | Exact operation, expected/actual result, version/features and a small reproducer |
+| Improve a tutorial or translation | [Documentation guide](./documentation.md) and both language files | Correct commands, prerequisites, expected output and a full counterpart translation |
+| Fix a core behavior | [Architecture](../architecture/overview.md) and [module map](../architecture/module-map.md) | A focused change at the owning layer with regression coverage |
+| Improve client integration | [Client configuration](../configuration/client-config.md) and [API migration](../migration/rust-api.md) | A public-API example with lifecycle and completion semantics |
+| Work on an application | [Ecosystem](../ecosystem/overview.md) and that application's local guide | Product-specific behavior, UI or service integration in its own project |
+| Improve performance | [Capacity and performance](../operations/capacity-performance.md) | A defined workload, observed bottleneck and comparable measurements |
 
-There are many ways to contribute to RocketMQ-Rust:
+Use [GitHub Issues](https://github.com/mxsm/rocketmq-rust/issues) for actionable changes and [Discussions](https://github.com/mxsm/rocketmq-rust/discussions) for usage/design questions. Inspect related work before implementing the same change. Describe the behavior you intend to improve when an issue is broad; avoid expanding a small fix into unrelated refactoring.
 
-### Code Contributions
+## Prepare the correct project
 
-- **Bug fixes**: Fix reported issues
-- **New features**: Add new functionality
-- **Performance improvements**: Optimize existing code
-- **Documentation**: Improve code documentation
-- **Tests**: Add unit and integration tests
+Clone your fork or an authorized checkout, then follow [development setup](./development-guide.md). Read `git status --short` before editing so existing changes stay intact. Use the nearest `AGENTS.md` and current manifest to choose the build root.
 
-### Non-Code Contributions
+The root Cargo workspace, standalone examples, Dashboard applications, MCP, SRE and website have different commands. A directory name is not necessarily a Cargo package name: `rocketmq-client` is selected as `rocketmq-client-rust`. [Release scope](../overview/release-scope.md) explains why workspace membership and product release membership differ.
 
-- **Bug reports**: Report bugs and issues
-- **Feature requests**: Suggest new features
-- **Documentation**: Improve user documentation
-- **Code review**: Review pull requests
-- **Community support**: Help other users
+Preserve page IDs, public APIs and serialized fields unless the change intentionally addresses that contract. Keep dependencies and configuration changes limited to what the problem requires. Do not reformat unrelated files or replace someone else's uncommitted work.
 
-## Getting Started
+## Report a problem that can be reproduced
 
-### 1. Fork and Clone
+Use the repository's issue form for the change type. Include the smallest useful description:
 
-```bash
-# Fork the repository on GitHub
-# Clone your fork
-git clone https://github.com/YOUR_USERNAME/rocketmq-rust.git
-cd rocketmq-rust
+1. Component, source or artifact version, relevant features/backend/mode and platform.
+2. Preconditions and exact operation; include a minimal example when possible.
+3. Expected behavior and actual observed behavior, including stable error codes and request identifiers.
+4. Impact and any workaround already tested.
+5. For a proposed fix, the owning files and how the changed behavior will be observed.
 
-# Add upstream remote
-git remote add upstream https://github.com/mxsm/rocketmq-rust.git
-```
+Remove credentials, bearer tokens, ACL/TLS material, message bodies and unrelated personal or production details from public reports. Preserve the shape and relevant type of a redacted input so the example remains useful. Do not infer an outage's cause solely from a generic client timeout.
 
-### 2. Set Up Development Environment
+The issue templates distinguish bugs, features, enhancements, refactoring, tests and documentation. Their current fields and title prefixes live in [.github/ISSUE_TEMPLATE](https://github.com/mxsm/rocketmq-rust/tree/main/.github/ISSUE_TEMPLATE); use the actual form instead of inventing extra mandatory fields.
 
-```bash
-# Install the repository's pinned stable toolchain and development components
-rustup toolchain install 1.95.0 --profile minimal --component rustfmt,clippy
+## Implement and check the affected behavior
 
-# Build the project
-cargo build
-```
+Keep the change small enough for a reviewer to connect cause, implementation and result. Follow [coding standards](./coding-standards.md), reuse current abstractions and put shared behavior in its owning layer.
 
-### 3. Create a Branch
+For a Rust behavior change, choose a package/target and a focused regression test. A test build that compiles the affected code can also provide compilation evidence. Add checks for directly affected consumers when a shared API or feature changes. A root all-targets build or all-features run is not automatically required for every contribution.
 
-```bash
-# Sync with upstream
-git fetch upstream
-git checkout main
-git merge upstream/main
+For website content, update English and Chinese together, retain executable examples and technical limits, and run `npm run build` in `rocketmq-website`. Documentation work does not require source fingerprints, a clean-worktree ceremony, a score or a new approval process. Use normal proofreading and the existing preview/build tools.
 
-# Create feature branch
-git checkout -b feature/your-feature-name
-```
+Record what actually ran and what it demonstrated. If an external cluster, GUI platform or optional tool is unavailable, describe the untested scenario rather than claiming it passed or modifying unrelated dependencies to bypass it.
 
-## Development Workflow
+## Submit a reviewable pull request
 
-### Making Changes
-
-1. **Write code**: Follow the coding standards
-2. **Add tests**: Ensure test coverage
-3. **Format code**: Use rustfmt
-
-    ```bash
-    cargo fmt
-    ```
-
-4. **Run linter**: Use clippy
-
-    ```bash
-    cargo clippy -- -D warnings
-    ```
-
-5. **Run tests**: Ensure all tests pass
-
-    ```bash
-    cargo test --all
-    ```
-
-### Committing Changes
-
-Use clear commit messages:
+Link the issue and use the current [pull request template](https://github.com/mxsm/rocketmq-rust/blob/main/.github/PULL_REQUEST_TEMPLATE.md). The repository convention uses an issue-linked English title, for example:
 
 ```text
-feat: Add transaction message support
-
-- Implement TransactionMQProducer
-- Add transaction listener trait
-- Add unit tests for transaction messages
-
-Closes #123
+[ISSUE #1234]📝Clarify consumer offset completion
 ```
 
-Commit message format:
+Replace the example number with the actual issue. Describe the concrete problem and final behavior, then summarize relevant validation and limitations. For a semantic change, explain the compatibility or migration effect; for a simple documentation correction, a short description and relevant build result are sufficient.
 
-- `feat:` New feature
-- `fix:` Bug fix
-- `docs:` Documentation changes
-- `test:` Test changes
-- `refactor:` Code refactoring
-- `perf:` Performance improvement
-- `chore:` Build process or tooling
+Review feedback should improve the same scoped result. Update the description if the final implementation changes scope. Leave generated builds, logs, coverage, temporary screenshots and local test data out of the commit. Keep screenshots only when they are intentional documentation assets and accurately represent the product.
 
-### Submitting Pull Request
+A submitted PR does not imply a release or deployment. Maintainers handle integration and release decisions through the applicable project workflow. Community release identity is described in [release scope](../overview/release-scope.md).
 
-1. **Push to your fork**:
-
-    ```bash
-    git push origin feature/your-feature-name
-    ```
-
-2. **Create pull request**: On GitHub
-
-3. **Fill PR template**:
-   - Describe your changes
-   - Reference related issues
-   - Add screenshots if applicable
-
-4. **Wait for review**: Maintainers will review your PR
-
-## Code Review Process
-
-### What to Expect
-
-Our review process is designed to maintain code quality while being welcoming to contributors:
-
-1. **Automated checks** (1-5 minutes): CI runs tests, linting, and format checks
-2. **Manual review** (1-3 days): Maintainers review your code for quality and design
-3. **Feedback discussion**: Collaborative discussion to improve the code
-4. **Approval & merge**: Once approved, your PR will be merged! 🎉
-
-### Addressing Feedback
-
-Code review is a conversation, not criticism. When you receive feedback:
-
-- Respond to all review comments (even if just to acknowledge)
-- Ask questions if something is unclear
-- Make requested changes and push updates to the same branch
-- Request re-review when ready
-- Don't hesitate to discuss alternative approaches
-
-**Note**: CodeRabbit suggestions are helpful references, but the final decision is made by maintainers during code review.
-
-## Coding Standards
-
-See [Coding Standards](./coding-standards) for detailed guidelines.
-
-### Key Principles
-
-1. **Follow Rust idioms**: Write idiomatic Rust code
-2. **Error handling**: Use `Result` types properly
-3. **Documentation**: Add doc comments to public APIs
-4. **Testing**: Write comprehensive tests
-5. **Performance**: Consider performance implications
-
-### Example
-
-```rust
-//! Producer module for sending messages to RocketMQ brokers.
-
-use crate::error::{Error, Result};
-use crate::model::Message;
-
-/// A RocketMQ producer for sending messages.
-///
-/// # Examples
-///
-/// ```rust
-/// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-///
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut producer = DefaultMQProducer::builder()
-///     .producer_group("example_group")
-///     .name_server_addr("localhost:9876")
-///     .build();
-/// producer.start().await?;
-/// # Ok(())
-/// # }
-/// ```
-pub struct Producer {
-    // Implementation
-}
-
-impl Producer {
-    /// Creates a new producer instance.
-    pub fn new() -> Self {
-        Self { /* ... */ }
-    }
-
-    /// Sends a message to the broker.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The broker is not available
-    /// - The message exceeds maximum size
-    /// - Network timeout occurs
-    pub async fn send(&self, message: Message) -> Result<SendResult> {
-        // Implementation
-    }
-}
-```
-
-## Development Guide
-
-See [Development Guide](./development-guide) for detailed information.
-
-## Testing
-
-### Running Tests
-
-```bash
-# Run all tests
-cargo test --all
-
-# Run specific test
-cargo test test_send_message
-
-# Run tests with output
-cargo test -- --nocapture
-
-# Run tests in parallel
-cargo test --all -- --test-threads=4
-```
-
-### Writing Tests
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_send_message() {
-        let mut producer = DefaultMQProducer::builder()
-            .producer_group("example_group")
-            .name_server_addr("localhost:9876")
-            .build();
-        producer.start().await.unwrap();
-
-        let message = Message::builder()
-            .topic("TestTopic")
-            .body("Test")
-            .build()
-            .unwrap();
-        let result = producer.send(message).await;
-
-        assert!(result.is_ok());
-    }
-}
-```
-
-## Documentation
-
-### Building Documentation
-
-```bash
-# Build documentation
-cargo doc --no-deps --open
-```
-
-### Writing Documentation
-
-```rust
-/// Summary (one sentence)
-///
-/// More detailed explanation.
-///
-/// # Examples
-///
-/// ```
-/// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-/// use rocketmq_common::common::message::message_single::Message;
-///
-/// let mut producer = DefaultMQProducer::builder()
-///     .producer_group("example_group")
-///     .name_server_addr("localhost:9876")
-///     .build();
-/// let message = Message::builder().topic("TopicTest").body("hello").build().unwrap();
-/// ```
-///
-/// # Errors
-///
-/// This function will return an error if...
-///
-/// # Panics
-///
-/// This function will panic if...
-pub fn public_function() -> Result<()> {
-    // Implementation
-}
-```
-
-## Getting Help
-
-We're here to help! Feel free to reach out through:
-
-- **GitHub Issues**: [Report bugs or request features](https://github.com/mxsm/rocketmq-rust/issues)
-- **GitHub Discussions**: [Ask questions and share ideas](https://github.com/mxsm/rocketmq-rust/discussions)
-- **Email**: [mxsm@apache.org](mailto:mxsm@apache.org)
-
-## License
-
-RocketMQ-Rust is licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). By contributing, you agree that your contributions will be licensed under the same license.
-
-## Code of Conduct
-
-We are committed to providing a welcoming and inclusive environment for everyone. Please:
-
-- Be respectful and considerate in your communication
-- Welcome newcomers and help them get started
-- Focus on constructive feedback
-- Assume good intentions
-- Collaborate openly and share knowledge
-
-We're all here to build great software together! 🚀
-
-## Next Steps
-
-- [Development Guide](./development-guide) - Detailed development information
-- [Coding Standards](./coding-standards) - Code style guidelines
-- [Report Issues](https://github.com/mxsm/rocketmq-rust/issues) - File a bug or feature request
+Sources: [root engineering agreement](https://github.com/mxsm/rocketmq-rust/blob/main/AGENTS.md), [website guide](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-website/AGENTS.md), [issue templates](https://github.com/mxsm/rocketmq-rust/tree/main/.github/ISSUE_TEMPLATE), [PR convention](https://github.com/mxsm/rocketmq-rust/blob/main/.agents/skills/rocketmq-rust-pr-submitter/SKILL.md).

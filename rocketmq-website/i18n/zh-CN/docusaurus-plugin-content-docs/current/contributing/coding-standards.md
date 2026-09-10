@@ -1,552 +1,71 @@
 ---
-sidebar_position: 3
-title: 编码标准
+title: "编码规范"
 ---
 
-> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+# 编码规范
 
-# 编码标准
+遵循归属层现有实现及最近的工程指南。这些约定用于维护公共契约、生命周期所有权和可诊断故障，概括当前仓库规则，不另设贡献流程。
 
-欢迎来到 RocketMQ-Rust 的编码标准！📝
+## Rust 结构与公共契约
 
-本指南将帮助你编写整洁、地道的 Rust 代码，遵循项目约定。这些标准确保整个代码库的一致性、可维护性和质量。
+使用选定工具链、包 edition、`rustfmt.toml` 和 `.clippy.toml`。根目录默认 Rust 2021，Admin CLI 及部分独立应用使用 Rust 2024，应保留各自 manifest 选择。模块/函数使用 snake_case，类型使用 PascalCase，常量使用 SCREAMING_SNAKE_CASE；新 Rust 文件保留 Apache 2.0 头部。
 
-## 为什么编码标准很重要
+保持实现模块私有，显式选择公共导出。优先使用枚举、配置/请求结构体、builder 和 newtype，避免位置布尔标志及过长参数列表。穷尽匹配项目自有、兼容性敏感的枚举。可选 feature 保持增量性质，变更影响默认或关闭 feature 行为时检查对应组合。
 
-一致的代码：
+请求码、响应码、请求头、Serde 字段/默认值和持久化布局都属于兼容性表面。保留内部 Rust 调用的重命名仍可能破坏线协议或存储契约。说明有意改变的语义和迁移路径，参见[协议兼容性](../reference/protocol-compatibility.md)。
 
-- **更易于阅读**和理解
-- **更易于维护**和调试
-- **更易于审查**拉取请求
-- **更可靠**，bug 更少
+需要时按内聚行为拆分模块。文件长度是审阅信号，不应为满足数字而任意拆散无关逻辑。Web 后端和 GPUI 本地指南采用不含 `mod.rs` 的扁平模块布局，不应未经核对就把局部规则强加给其他模块。
 
-## Rust 约定
+## 错误与文档
 
-### 命名
+对可恢复的配置、输入、I/O、传输、存储和生命周期故障使用类型化错误。在公共边界映射到已有组件错误模型和稳定描述符，不以通用字符串替代有意义错误，也不匹配面向人的消息来决定重试。
 
-```rust
-// 模块：snake_case
-mod message_queue;
+避免生产环境 `todo!`、`unimplemented!` 及可恢复路径中的 `unwrap`/`expect`/panic。测试断言是适当的；有意设计的不可失败门面需要记录不变量或提供可失败的配套 API。限定 lint 豁免范围，并解释原因。
 
-// 类型：PascalCase
-struct MessageQueue;
-enum ConsumeResult;
+Rustdoc 应说明不明显的不变量，以及适用的 `# Errors`、`# Panics`、`# Safety` 契约。注释解释为什么需要某种选择，不逐行复述代码。unsafe 块应尽量小，前面紧接 `// SAFETY:` 说明，并明确安全包装器或调用方契约。
 
-// 函数：snake_case
-fn send_message() {}
+## 异步执行与关闭
 
-// 常量：SCREAMING_SNAKE_CASE
-const MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
+| 关注点 | 设计要求 |
+| --- | --- |
+| 后台任务 | 通过 `ServiceContext`、`TaskGroup` 或已有生命周期所有者持有工作，关闭时取消并等待完成。 |
+| 阻塞操作 | 使用 `BlockingExecutor` 或已有顶层边界，不引入原始 `spawn_blocking`、嵌套 `block_on` 或临时运行时。 |
+| 同步 | 不跨 `.await` 持有同步锁守卫，缩小锁范围。 |
+| 准入 | 保留有界任务、字节和阻塞预算；超时不一定停止底层阻塞工作。 |
+| 异步 trait | 优先原生异步 trait 方法，不引入 `#[async_trait]`。 |
+| 完成语义 | 区分已接受、已写入、已持久化、已复制和业务完成。 |
 
-// 静态变量：SCREAMING_SNAKE_CASE
-static DEFAULT_TIMEOUT: u64 = 3000;
-```
+[运行时设计](../architecture/runtime.md)说明所有权和预算边界。只丢弃句柄而不等待所属工作，不等价于完成关闭。运行时变更需要针对改变行为的取消/资源测试，无需指纹或基线仪式。
 
-### 代码组织
+## 可观测性与敏感数据
 
-```rust
-// 导入（std、外部 crate、内部模块）
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use crate::model::Message;
-use crate::error::{Error, Result};
+优先使用 `#[tracing::instrument(skip_all, ...)]` 并显式列出低基数字段。不得记录凭据、ACL/TLS 材料、令牌、消息体或整个请求/配置对象。避免未采样的逐消息 span 和无界主题/消费者组标签。
 
-// 类型别名
-type MessageQueueRef = Arc<MessageQueue>;
+使用已有错误脱敏及遥测所有权路径。某个包装器具有安全 `Debug` 实现，不代表任意字符串都可安全记录。[错误与可观测性](../architecture/errors-observability.md)解释信号所有权和边界映射。
 
-// 常量
-const MAX_RETRY: u32 = 3;
+## 前端与桌面代码
 
-// 结构体
-pub struct Producer {
-    // 私有字段
-    client: Arc<Client>,
-    options: ProducerOptions,
-}
+| 工程 | 本地约定 |
+| --- | --- |
+| 网站 | Docusaurus/MDX、已有组件和页面 ID；英文/中文配对正文及导航翻译。 |
+| Web 前端 | React/TypeScript/Vite、共享设计 token/组件和统一 `src/api/` 客户端；运维表格包含加载、空、错误、搜索、分页及刷新状态。 |
+| Web 后端 | 精简 Axum handler、服务编排、分离 API DTO 与内部模型、显式本地错误映射；可复用逻辑放入 Dashboard common。 |
+| GPUI | 确定性渲染路径，通过 Context/Window 修改状态，稳定元素 ID、持有所属订阅和不阻塞 UI 的工作。 |
+| Tauri | 从应用根目录运行前端命令，从 `src-tauri` 运行 Rust 命令；前端资源编译与桌面打包分开。 |
 
-// Impl 块
-impl Producer {
-    // 关联函数（构造函数）
-    pub fn new() -> Self { }
+保留无障碍、焦点、键盘操作、明暗主题一致性和可用的窗口缩放。破坏性操作的产品确认对话框仍属于应用行为，与文档编写流程无关。不要把内部迁移或 API 对齐说明暴露为面向用户的产品控件。
 
-    // 方法
-    pub async fn send(&self, msg: Message) -> Result<SendResult> { }
+## 选择相关检查
 
-    // 私有方法
-    async fn do_send(&self, msg: Message) -> Result<SendResult> { }
-}
-
-// Trait 实现
-impl Default for Producer {
-    fn default() -> Self { }
-}
-```
-
-### 错误处理
-
-RocketMQ-Rust 使用 `thiserror` crate 定义错误。对于可能失败的操作，始终使用 `Result` 类型。
-
-```rust
-// 对可能失败的操作使用 Result
-use crate::error::Result;
-
-pub async fn send_message(&self, msg: Message) -> Result<SendResult> {
-    // 使用 ? 进行错误传播 - 简洁且地道
-    let broker = resolve_broker(&msg.topic)?;
-
-    // ⚠️ 在库代码中避免使用 unwrap() - 它可能导致 panic！
-    // ✅ 相反，应显式处理错误
-    match broker.send(msg).await {
-        Ok(result) => Ok(result),
-        Err(e) => Err(Error::SendFailed(e.to_string())),
-    }
-}
-
-// 使用 thiserror 定义自定义错误类型
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Broker not found: {0}")]
-    BrokerNotFound(String),
-
-    #[error("Timeout after {0}ms")]
-    Timeout(u64),
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-}
-
-// ✅ 好的做法：显式错误处理
-pub fn parse_config(data: &str) -> Result<Config> {
-    serde_json::from_str(data)
-        .map_err(|e| Error::ConfigParse(e.to_string()))
-}
-
-// ❌ 坏的做法：使用 unwrap() - 可能 panic！
-pub fn parse_config_bad(data: &str) -> Config {
-    serde_json::from_str(data).unwrap() // 不要这样做！
-}
-```
-
-### Async/Await
-
-RocketMQ-Rust 使用 `tokio` 作为异步运行时。所有 I/O 操作都应该是异步的。
-
-```rust
-// ✅ 对异步操作使用 async/await
-pub async fn send(&self, msg: Message) -> Result<SendResult> {
-    let broker = resolve_broker_async().await?;
-    broker.send(msg).await
-}
-
-// ✅ 为并发操作生成任务
-pub async fn send_batch(&self, msgs: Vec<Message>) -> Result<Vec<SendResult>> {
-    let tasks: Vec<_> = msgs
-        .into_iter()
-        .map(|msg| {
-            let self_clone = self.clone();
-            tokio::spawn(async move { self_clone.send(msg).await })
-        })
-        .collect();
-
-    let results = futures::future::try_join_all(tasks).await?;
-    results.into_iter().collect::<Result<Vec<_>>>()
-}
-
-// ❌ 坏的做法：异步上下文中的阻塞操作
-pub async fn send_bad(&self, msg: Message) -> Result<SendResult> {
-    // 不要这样做 - 会阻塞异步运行时！
-    std::thread::sleep(std::time::Duration::from_secs(1));
-    self.send(msg).await
-}
-
-// ✅ 好的做法：使用 tokio 的异步 sleep
-pub async fn send_good(&self, msg: Message) -> Result<SendResult> {
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    self.send(msg).await
-}
-```
-
-## 文档
-
-### 公共 API
-
-```rust
-/// 向 RocketMQ broker 发送消息的生产者。
-///
-/// 生产者处理消息路由、负载均衡和失败时的自动重试。
-///
-/// # 示例
-///
-/// ```rust
-/// use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-///
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut producer = DefaultMQProducer::builder(client_runtime.clone())
-///     .producer_group("example_group")
-///     .name_server_addr("localhost:9876")
-///     .build();
-/// producer.start().await?;
-/// # Ok(())
-/// # }
-/// ```
-///
-/// # 另请参阅
-///
-/// - [`Consumer`] 用于消费消息
-/// - [`Message`] 用于消息结构
-pub struct Producer { }
-```
-
-### 模块文档
-
-```rust
-//! 生产者模块。
-//!
-//! 此模块提供 [`Producer`] 类型用于向 RocketMQ broker 发送消息。
-//!
-//! # 特性
-//!
-//! - 异步消息发送
-//! - 失败时自动重试
-//! - 跨 broker 的负载均衡
-//! - 事务消息支持
-//!
-//! # 示例
-//!
-//! ```rust
-//! use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut producer = DefaultMQProducer::builder(client_runtime.clone())
-//!     .producer_group("example_group")
-//!     .name_server_addr("localhost:9876")
-//!     .build();
-//! let message = Message::builder()
-//!     .topic("TopicTest")
-//!     .body("Hello")
-//!     .build()?;
-//! producer.send(message).await?;
-//! # Ok(())
-//! # }
-//! //! ```
-```
-
-## 测试
-
-### 单元测试
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_message_creation() {
-        let msg = Message::builder()
-            .topic("Test")
-            .body(vec![1, 2, 3])
-            .build()
-            .unwrap();
-        assert_eq!(msg.topic().as_str(), "Test");
-    }
-
-    #[tokio::test]
-    async fn test_async_operation() {
-        let result = async_operation().await;
-        assert!(result.is_ok());
-    }
-}
-```
-
-### 集成测试
-
-```rust
-// tests/integration_test.rs
-#[tokio::test]
-async fn test_producer_consumer() {
-    let mut producer = DefaultMQProducer::builder(client_runtime.clone())
-        .producer_group("example_group")
-        .name_server_addr("localhost:9876")
-        .build();
-    producer.start().await.unwrap();
-
-    let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
-        .consumer_group("example_group")
-        .name_server_addr("localhost:9876")
-        .build();
-    consumer.subscribe("TestTopic", "*").await.unwrap();
-
-    // 测试逻辑
-}
-```
-
-## 代码风格
-
-### 自动格式化
-
-我们使用 `rustfmt` 确保整个项目的代码格式一致。**提交前务必格式化代码！**
+使用能够说明变更效果的最小目标，例如模型变更可以运行：
 
 ```bash
-# 格式化 workspace 中的所有代码
-cargo fmt --all
-
-# 检查代码是否已格式化（在 CI 中使用）
-cargo fmt --all --check
+cargo fmt -p rocketmq-model -- --check
+cargo test -p rocketmq-model --lib
 ```
 
-**专业提示**：配置 IDE 在保存时自动格式化：
+这些是对应包的示例，不是每次编辑都要执行的命令。复用有意义测试，并查看实际测试数量。完成编译的测试可以替代重复的 `cargo check`；只有存在具体问题时才增加包级 Clippy 或消费者验证。不要在有无关 Rust 修改时执行会改写整个工作区的格式化。
 
-- **VS Code**：使用 rust-analyzer 设置 `"editor.formatOnSave": true`
-- **RustRover**：在设置 → 工具 → 保存时操作中启用"重新格式化代码"
+网站渲染内容变化时，在 `rocketmq-website` 运行 `npm run build`。独立工程采用各自本地检查配置。完整 feature/平台矩阵、互操作、长时间故障测试和发行验证属于需要对应证据的任务，不宣称未运行场景已通过。
 
-### 使用 Clippy 进行 Linting
-
-我们使用 `clippy` 来捕获常见错误和非地道代码。所有 clippy 警告必须在合并前修复。
-
-```bash
-# 对所有目标和功能运行 clippy
-cargo clippy --all-targets --all-features --workspace -- -D warnings
-
-# 自动修复 clippy 建议（如果可能）
-cargo clippy --fix --all-targets --all-features --workspace
-```
-
-**注意**：一些 clippy 建议可以自动修复，但在提交前请始终审查更改。
-
-### 常见模式
-
-**构建器模式**：
-
-```rust
-pub struct ProducerOptions {
-    name_server_addr: String,
-    group_name: String,
-    timeout: u64,
-}
-
-impl ProducerOptions {
-    pub fn new() -> Self {
-        Self {
-            name_server_addr: "localhost:9876".to_string(),
-            group_name: "DEFAULT_PRODUCER".to_string(),
-            timeout: 3000,
-        }
-    }
-
-    pub fn name_server_addr(mut self, addr: impl Into<String>) -> Self {
-        self.name_server_addr = addr.into();
-        self
-    }
-
-    pub fn timeout(mut self, timeout: u64) -> Self {
-        self.timeout = timeout;
-        self
-    }
-}
-```
-
-**Newtype 模式**：
-
-```rust
-/// 带验证的消息 ID 包装器
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct MessageId(String);
-
-impl MessageId {
-    pub fn new(id: String) -> Result<Self> {
-        if id.is_empty() {
-            return Err(Error::InvalidMessageId);
-        }
-        Ok(Self(id))
-    }
-}
-
-impl AsRef<str> for MessageId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-```
-
-## 性能指南
-
-RocketMQ-Rust 专为高性能设计。遵循这些指南以保持最佳性能。
-
-### 内存管理
-
-**优先使用借用而不是克隆** - 避免不必要的分配：
-
-```rust
-// ✅ 好的做法：使用引用避免复制
-pub fn process_message(msg: &Message) -> Result<()> {
-    let body = msg.get_body();  // 借用，不复制
-    // 在不克隆的情况下处理 body
-    Ok(())
-}
-
-// ❌ 坏的做法：不必要的克隆
-pub fn process_message_bad(msg: Message) -> Result<()> {
-    let body = msg.get_body().clone();  // 额外分配！
-    Ok(())
-}
-
-// ✅ 使用 Cow 进行条件所有权
-use std::borrow::Cow;
-
-pub fn get_topic<'a>(msg: &'a Message, default: &'a str) -> Cow<'a, str> {
-    match msg.get_topic() {
-        "" => Cow::Borrowed(default),  // 无分配
-        topic => Cow::Borrowed(topic), // 无分配
-    }
-}
-```
-
-### 并发
-
-```rust
-// 使用 Arc 进行共享所有权
-use std::sync::Arc;
-
-let client = Arc::new(Client::new());
-
-// 使用 Mutex/RwLock 进行内部可变性
-use tokio::sync::Mutex;
-
-let state = Arc::new(Mutex::new(State::new()));
-
-// 使用 channel 进行通信
-use tokio::sync::mpsc;
-
-let (tx, mut rx) = mpsc::channel(1000);
-```
-
-## 需要避免的常见错误 ⚠️
-
-从这些常见陷阱中学习：
-
-### 1. 在库代码中使用 `unwrap()` 或 `panic!()`
-
-❌ **坏的做法**：
-
-```rust
-pub fn get_broker(&self) -> Broker {
-    self.brokers.get(0).unwrap()  // 可能 panic！
-}
-```
-
-✅ **好的做法**：
-
-```rust
-pub fn get_broker(&self) -> Result<&Broker> {
-    self.brokers.get(0).ok_or(Error::NoBrokerAvailable)
-}
-```
-
-### 2. 忽略错误
-
-❌ **坏的做法**：
-
-```rust
-let _ = self.send(msg).await;  // 错误被静默忽略！
-```
-
-✅ **好的做法**：
-
-```rust
-if let Err(e) = self.send(msg).await {
-    log::error!("Failed to send message: {}", e);
-    return Err(e);
-}
-```
-
-### 3. 在异步代码中阻塞
-
-❌ **坏的做法**：
-
-```rust
-pub async fn send(&self) -> Result<()> {
-    std::thread::sleep(Duration::from_secs(1));  // 阻塞执行器！
-}
-```
-
-✅ **好的做法**：
-
-```rust
-pub async fn send(&self) -> Result<()> {
-    tokio::time::sleep(Duration::from_secs(1)).await;
-}
-```
-
-### 4. 不必要的克隆
-
-❌ **坏的做法**：
-
-```rust
-pub fn process(&self, data: String) -> Result<()> {
-    let copy = data.clone();  // 不必要！
-    process_data(&copy)
-}
-```
-
-✅ **好的做法**：
-
-```rust
-pub fn process(&self, data: &str) -> Result<()> {
-    process_data(data)
-}
-```
-
-### 5. 引用循环导致的内存泄漏
-
-使用 `Rc`/`Arc` 循环时要小心。需要时使用 `Weak` 引用。
-
-### 6. 过度使用 `unsafe`
-
-只在绝对必要时使用 `unsafe`，并始终记录为什么它是安全的。
-
-### 7. 未处理所有枚举变体
-
-避免在 match 分支中使用 `_` - 要明确以捕获未来的枚举添加。
-
-## 学习资源 📚
-
-想编写更好的 Rust 代码？查看这些资源：
-
-### 官方 Rust 资源
-
-- [The Rust Book](https://doc.rust-lang.org/book/) - 全面的 Rust 指南
-- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) - API 设计最佳实践
-- [Rust by Example](https://doc.rust-lang.org/rust-by-example/) - 通过示例学习
-- [Clippy Lint List](https://rust-lang.github.io/rust-clippy/master/index.html) - 所有 clippy lints 解释
-
-### 高级主题
-
-- [Async Book](https://rust-lang.github.io/async-book/) - 深入异步 Rust
-- [Tokio Tutorial](https://tokio.rs/tokio/tutorial) - 异步运行时指南
-- [The Rustonomicon](https://doc.rust-lang.org/nomicon/) - Unsafe Rust（高级）
-
-### RocketMQ-Rust 专用
-
-- [架构概述](/docs/zh-CN/architecture/overview) - 了解代码库结构
-- [开发指南](./development-guide) - 设置开发环境
-- [贡献概述](./overview) - 立即开始贡献！
-
-## 总结
-
-请记住：
-
-- ✅ 编写地道的 Rust 代码
-- ✅ 使用 `Result` 正确处理错误
-- ✅ 对 I/O 操作使用 async/await
-- ✅ 使用 `cargo fmt` 格式化代码
-- ✅ 提交前修复 clippy 警告
-- ✅ 为代码编写测试
-- ✅ 记录公共 API
-
-祝你编码愉快！🚀
-
-## 后续步骤
-
-- [开发指南](./development-guide) - 设置环境
-- [概述](./overview) - 开始贡献
-- [报告问题](https://github.com/mxsm/rocketmq-rust/issues) - 发现 bug？
+来源：[根规则](https://github.com/mxsm/rocketmq-rust/blob/main/AGENTS.md)、[Web 前端](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-web/frontend/AGENTS.md)、[Web 后端](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-web/backend/AGENTS.md)、[GPUI](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-gpui/AGENTS.md)、[Tauri](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-tauri/AGENTS.md)、[网站](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-website/AGENTS.md)。
