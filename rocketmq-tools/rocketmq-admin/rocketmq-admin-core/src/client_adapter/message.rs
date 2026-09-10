@@ -324,26 +324,22 @@ impl MessageAdmin for AdminSession {
                 .as_deref()
                 .and_then(non_empty)
                 .unwrap_or_else(|| DEFAULT_TRACE_TOPIC.to_string());
-            let result = self
-                .inner
-                .query_message_by_key(
-                    None,
-                    trace_topic.as_str().into(),
-                    message_id.into(),
-                    64,
-                    0,
-                    i64::MAX,
-                    CheetahString::from_static_str(""),
-                    None,
-                )
-                .await
-                .map_err(|error| backend_error("query_message_by_key", error))?;
+            // Trace records index the original message ID as a normal Key.
+            // Reuse the normal query contract, including its valid index type.
+            let result = MessageAdmin::query_messages_by_key(
+                self,
+                &QueryMessagesByKeyRequest {
+                    topic: trace_topic.clone(),
+                    key: message_id.to_string(),
+                    max_messages: 64,
+                    begin: 0,
+                    end: i64::MAX,
+                },
+            )
+            .await?;
             let mut seeds = Vec::new();
-            for trace_message in result.message_list() {
-                let Some(body) = trace_message.body() else {
-                    continue;
-                };
-                let body_text = String::from_utf8_lossy(body.as_ref());
+            for trace_message in &result.messages {
+                let body_text = String::from_utf8_lossy(&trace_message.body);
                 if body_text.trim().is_empty() {
                     continue;
                 }
@@ -362,12 +358,12 @@ impl MessageAdmin for AdminSession {
                             trace_type: trace_type.clone(),
                             group_name: group_name.clone(),
                             client_host: if bean.client_host.is_empty() {
-                                trace_message.born_host().to_string()
+                                trace_message.born_host.clone()
                             } else {
                                 bean.client_host.to_string()
                             },
                             store_host: if bean.store_host.is_empty() {
-                                trace_message.store_host().to_string()
+                                trace_message.store_host.clone()
                             } else {
                                 bean.store_host.to_string()
                             },
@@ -527,6 +523,45 @@ fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires DASHBOARD_DEBUG_NAMESRV, DASHBOARD_DEBUG_TRACE_TOPIC, and DASHBOARD_DEBUG_MESSAGE_ID"]
+    fn live_trace_query_reads_the_normal_key_index() {
+        use crate::client_adapter::{AdminBuilder, ClientRuntime, ClientRuntimeConfig, TelemetryHandle};
+        use rocketmq_runtime::{RuntimeConfig, RuntimeOwner};
+
+        let namesrv = std::env::var("DASHBOARD_DEBUG_NAMESRV").expect("explicit development NameServer");
+        let request = TraceQueryRequest {
+            trace_topic: Some(std::env::var("DASHBOARD_DEBUG_TRACE_TOPIC").expect("explicit Trace Topic")),
+            message_id: std::env::var("DASHBOARD_DEBUG_MESSAGE_ID").expect("original producer message ID"),
+        };
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("live-trace-query"))
+            .unwrap()
+            .build()
+            .unwrap();
+        let runtime = ClientRuntime::try_new(
+            owner.root_context().component("client"),
+            ClientRuntimeConfig::default(),
+            TelemetryHandle::noop(),
+        )
+        .unwrap();
+        let result = owner.block_on(async {
+            let mut session = AdminBuilder::new(runtime.clone())
+                .namesrv_addr(namesrv)
+                .vip_channel_enabled(false)
+                .build_and_start()
+                .await?;
+            let result = MessageAdmin::query_trace_data(&mut session, &request).await;
+            session.shutdown().await;
+            result
+        });
+        assert!(owner.block_on(runtime.shutdown()).is_healthy());
+        assert!(owner.block_on(owner.shutdown_tasks()).is_healthy());
+        assert!(owner.shutdown_background().is_healthy());
+        let trace = result.expect("stored producer Trace must be found through the Key index");
+        assert_eq!(trace.message_id, request.message_id);
+        assert!(trace.seeds.iter().any(|seed| seed.trace_type == "Pub"));
+    }
 
     #[test]
     fn dlq_topic_accepts_plain_and_prefixed_consumer_groups() {

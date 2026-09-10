@@ -73,8 +73,15 @@ impl ConsumeMessageTraceHookImpl {
             // Build trace bean for this message
             let trace_bean = TraceBean {
                 topic: Self::without_namespace(msg.topic()),
-                msg_id: msg.msg_id().clone(),
-                offset_msg_id: CheetahString::new(),
+                // Producer traces use UNIQ_KEY. Keep the same identity after
+                // delivery, where MessageExt::msg_id contains the physical ID.
+                msg_id: msg
+                    .get_property(&CheetahString::from_static_str(
+                        MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                    ))
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or_else(|| msg.msg_id().clone()),
+                offset_msg_id: msg.msg_id().clone(),
                 tags: msg.get_tags().unwrap_or_default(),
                 keys: msg
                     .keys()
@@ -335,6 +342,23 @@ mod tests {
             );
         }
         Arc::new(msg)
+    }
+
+    #[test]
+    fn consume_trace_correlates_producer_unique_id_and_retains_physical_id() {
+        let hook = ConsumeMessageTraceHookImpl::new(Arc::new(CapturingTraceDispatcher::new()));
+        let mut delivery = message("TopicA", "physical-offset-id", "RegionA", None);
+        Arc::make_mut(&mut delivery).put_property(
+            MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX.into(),
+            "producer-unique-id".into(),
+        );
+        let (beans, _) = hook.build_trace_beans(&[delivery]).unwrap();
+        assert_eq!(beans[0].msg_id, "producer-unique-id");
+        assert_eq!(beans[0].offset_msg_id, "physical-offset-id");
+        let (legacy, _) = hook
+            .build_trace_beans(&[message("TopicA", "legacy-physical-id", "RegionA", None)])
+            .unwrap();
+        assert_eq!(legacy[0].msg_id, "legacy-physical-id");
     }
 
     #[test]
