@@ -73,3 +73,8 @@ Rust 源码 API、序列化字段、请求/响应码、持久布局、Controller
 - [Admin CLI](./admin-cli.md)：命令目录、参数、影响和退出行为。
 - [Java 迁移](../migration/java-to-rust.md)：客户端、集群及数据迁移流程。
 - [Rust API 迁移](../migration/rust-api.md)：公共导入、运行时所有权和 Classic/LitePull 调整。
+
+## API 与术语
+
+- [Rust API 入口](./rust-api.md)
+- [中英文术语表](./glossary.md)

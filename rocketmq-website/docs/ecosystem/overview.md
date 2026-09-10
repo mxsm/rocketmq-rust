@@ -73,3 +73,11 @@ MCP Control and SRE execution are independent mutation paths. Installing one doe
 Track target-cluster availability, product database availability, credential validity, evidence freshness, model availability and execution-driver readiness as separate conditions. A stale or partial observation must remain marked as such; it cannot silently become a current healthy result.
 
 For deeper system context, read [architecture overview](../architecture/overview.md), [module map](../architecture/module-map.md) and [deployment overview](../deployment/overview.md). Each product guide linked above owns its complete installation and operational procedure.
+
+## Detailed product guides
+
+- [Web Dashboard](./dashboard-web.md)
+- [Desktop Dashboards](./dashboard-desktop.md)
+- [MCP Control](./mcp-control.md)
+- [AI SRE architecture](./ai-sre.md)
+- [AI SRE deployment](./ai-sre-deployment.md)

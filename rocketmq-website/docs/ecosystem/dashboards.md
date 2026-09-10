@@ -112,3 +112,8 @@ The default bundle location is `src-tauri/target/release/bundle/` unless the tar
 Start with read operations against an isolated development cluster. Inspect the target and operation effect before a metadata, offset or message mutation; retain product confirmation and authorization behavior. No Web, GPUI or Tauri application was built or launched as part of writing this overview, and no cross-platform or operation-parity result is claimed.
 
 Sources: [Dashboard common](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-common/Cargo.toml), [Web architecture](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-web/AGENTS.md), [Web development proxy](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-web/frontend/vite.config.ts), [GPUI guide](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-gpui/README.md), [Tauri scripts](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-dashboard/rocketmq-dashboard-tauri/package.json).
+
+## Detailed setup guides
+
+- [Web Dashboard setup and operations](./dashboard-web.md)
+- [GPUI and Tauri desktop setup](./dashboard-desktop.md)
