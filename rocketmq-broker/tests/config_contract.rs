@@ -65,18 +65,14 @@ fn assert_broker_config_error_redacts(error: &BrokerConfigError, canary: &str) {
             "broker configuration error exposed sensitive input: {output}"
         );
     }
-    assert!(
-        std::error::Error::source(error).is_none(),
-        "raw config::ConfigError must not remain in the public source chain"
-    );
-    if let BrokerConfigError::Load { source, .. } = error {
-        for output in [source.to_string(), format!("{source:?}")] {
-            assert!(
-                !output.contains(canary),
-                "Broker Load source exposed sensitive input: {output}"
-            );
-        }
-    }
+    let BrokerConfigError::Load { source, .. } = error else {
+        panic!("expected a typed load error, got {error}");
+    };
+    // Typed causes retain parser details; only the outer Display and Debug are safe to render.
+    let cause = std::error::Error::source(error)
+        .and_then(|source| source.downcast_ref::<config::ConfigError>())
+        .expect("load error must preserve the typed configuration source");
+    assert!(std::ptr::eq(cause, source.as_ref()));
 }
 
 #[test]
@@ -465,25 +461,38 @@ fn ipv6_advertised_address_uses_socket_address_brackets() {
 fn dynamic_patch_is_validated_and_static_fields_require_restart() {
     let current = ValidatedBrokerConfig::default();
     let dynamic = HashMap::from([(
-        CheetahString::from_static_str("maxClientEventCount"),
-        CheetahString::from_static_str("101"),
+        CheetahString::from_static_str("defaultTopicQueueNums"),
+        CheetahString::from_static_str("16"),
     )]);
     let transaction = ConfigUpdateTransaction::from_broker_patch(ConfigGeneration::INITIAL, &current, &dynamic)
         .expect("supported dynamic patch should validate");
     assert_eq!(transaction.expected_generation(), ConfigGeneration::INITIAL);
 
-    let static_field = HashMap::from([(
-        CheetahString::from_static_str("listenPort"),
-        CheetahString::from_static_str("20911"),
-    )]);
-    let error = match ConfigUpdateTransaction::from_broker_patch(ConfigGeneration::INITIAL, &current, &static_field) {
-        Ok(_) => panic!("listenPort must not be published at runtime"),
-        Err(error) => error,
-    };
-    assert!(matches!(
-        error,
-        BrokerConfigError::RestartRequired { fields } if fields == "listenPort"
-    ));
+    for value in ["0", "129"] {
+        let invalid_dynamic = HashMap::from([(
+            CheetahString::from_static_str("defaultTopicQueueNums"),
+            CheetahString::from_static_str(value),
+        )]);
+        let error = ConfigUpdateTransaction::from_broker_patch(ConfigGeneration::INITIAL, &current, &invalid_dynamic)
+            .expect_err("out-of-range dynamic values must not build a transaction");
+        assert!(matches!(
+            error,
+            BrokerConfigError::InvalidProperty { key, .. } if key == "defaultTopicQueueNums"
+        ));
+    }
+
+    for (key, value) in [("listenPort", "20911"), ("maxClientEventCount", "101")] {
+        let static_field = HashMap::from([(
+            CheetahString::from_static_str(key),
+            CheetahString::from_static_str(value),
+        )]);
+        let error = ConfigUpdateTransaction::from_broker_patch(ConfigGeneration::INITIAL, &current, &static_field)
+            .expect_err("static fields must not be published at runtime");
+        assert!(matches!(
+            error,
+            BrokerConfigError::RestartRequired { fields } if fields == key
+        ));
+    }
 }
 
 #[test]
