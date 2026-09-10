@@ -39,6 +39,7 @@ mutation adapters expose their own capability boundaries.
 | `read-client-adapter` | No | Read-only SDK adapter capabilities. |
 | `mutation-client-adapter` | No | Mutation SDK adapter capabilities. |
 | `client-adapter` | No | Enables the RocketMQ Client-backed `AdminSession` and adapter implementations. |
+| `tls` | No | Enables certificate-verified TLS transport for SDK adapter sessions. |
 | `rocksdb-export` | No | Enables direct local RocksDB metadata export for the admin tools that need it. |
 
 Contract-only consumers can use the default build:
@@ -55,6 +56,10 @@ Runtime consumers enable the adapter explicitly:
 path = "rocketmq-tools/rocketmq-admin/rocketmq-admin-core"
 features = ["client-adapter"]
 ```
+
+Add `tls` when sessions may enable TLS. Certificate verification uses the transport's
+configured trust roots; enabling a session's TLS option alone does not enable a
+Cargo feature. The Tauri desktop explicitly selects both `client-adapter` and `tls`.
 
 ## Explicit Session Lifecycle
 

@@ -36,6 +36,7 @@ SDK 集成由特性控制；完整 `client-adapter` 提供 CLI/TUI 使用的会�
 | `read-client-adapter` | 否 | 只读 SDK 适配能力。 |
 | `mutation-client-adapter` | 否 | 变更 SDK 适配能力。 |
 | `client-adapter` | 否 | 启用基于 RocketMQ Client 的 `AdminSession` 和 adapter 实现。 |
+| `tls` | 否 | 为 SDK 适配器会话启用带证书校验的 TLS 传输。 |
 | `rocksdb-export` | 否 | 为确实需要的管理工具启用本地 RocksDB 元数据导出。 |
 
 只使用 contract 的 consumer 保持默认配置：

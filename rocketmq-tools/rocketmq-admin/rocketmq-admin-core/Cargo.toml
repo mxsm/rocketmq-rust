@@ -35,6 +35,7 @@ rust-version.workspace = true
 
 [features]
 default                 = []
+tls                     = ["dep:rocketmq-transport", "rocketmq-transport/tls"]
 read-client-adapter     = [
   "dep:rocketmq-client-rust",
   "rocketmq-client-rust/admin-read",

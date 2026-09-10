@@ -30,6 +30,7 @@ rust-version.workspace = true
 
 [features]
 default          = ["local_file_store"]
+tls              = ["rocketmq-transport/tls"]
 local_file_store = ["rocketmq-store/local_file_store"]
 rocksdb_store    = ["rocketmq-store/rocksdb_store", "dep:rocketmq-store-rocksdb"]
 rocksdb-store    = ["rocksdb_store"]
