@@ -1,292 +1,58 @@
 ---
-sidebar_position: 2
-title: 消息模型
+title: "消息模型与偏移量语义"
 ---
 
-> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
-# 消息模型
+RocketMQ Rust 将应用创建的消息与路由、存储、投递阶段补充的元数据分开。这使生产者、消费者、协议适配器和存储后端能够共享领域类型，而不让模型 crate 承担套接字或后台任务的所有权。
 
-理解 RocketMQ 的消息模型，是设计高质量消息应用的关键。
+建议先阅读[基本概念](../getting-started/basic-concepts.md)。本章解释当前源码中的模型，并不是用 Rust 结构体描述 CommitLog 的持久化格式。
 
-## 消息结构
+## 领域对象与职责
 
-### 基础消息
+| 对象 | 职责 | 不能由此得出的结论 |
+| --- | --- | --- |
+| `Message` | 生产者提供的主题、消息体、标志和属性 | Broker 已接纳、已分配队列或已持久化 |
+| `MessageBody` 与 `MessageProperties` | 消息使用的消息体表示和属性操作 | 业务结构有效或调用方拥有权限 |
+| `MessageExt` | 消息及投递、存储元数据，包括队列和物理偏移量、时间戳、主机及重消费次数 | 业务处理成功 |
+| `MessageEnvelope` | 将消息、路由和存储信息分离后组合的表示 | 使用了另一种线协议，或所有现有 API 都已被它替代 |
+| `MessageQueue` | 主题、Broker 名称、队列 ID 三元组 | 套接字地址、消费者分配结果或偏移量 |
 
-RocketMQ 中的一条消息通常包含以下字段：
+队列标识的规范类型位于 `rocketmq_model::message::MessageQueue`。`common::message::message_queue` 下的兼容路径重新导出同一个类型。相等比较和哈希包含全部三个字段：Broker A 的队列 0 与 Broker B 的队列 0 是不同队列。Broker 地址可以改变，而逻辑 Broker 名称仍是队列标识的一部分。
 
-```rust
-pub struct Message {
-    // Topic 名称
-    topic: String,
+公开消息 API 提供构造器和访问方法；应用文档不应自行拼出类似 `struct Message { topic: String, body: Vec<u8> }` 的近似定义。当前实现使用专用消息体、属性类型和紧凑字符串。成功构造模型值也不能替代生产者、Broker 或存储层的校验。
 
-    // 消息体（字节数组）
-    body: Vec<u8>,
+## 消息体与属性
 
-    // 可选标签，用于过滤
-    tags: Option<String>,
+消息体是应用数据。RocketMQ 不会根据其字节推断业务结构或去重策略。需要兼容演进或幂等业务效果时，应用应选择明确的结构版本和稳定业务键。
 
-    // 可选键，用于索引
-    keys: Option<String>,
+Tag、Key、重试元数据、事务标记和定时元数据都可能通过消息属性传递，但其管理方不同。用户属性用于过滤及业务元数据；系统保留属性会影响处理流程，应通过对应 API 设置。`TagA || TagB` 这样的 Tag 表达式属于订阅选择器，不是单条消息的 Tag 值。
 
-    // 可选属性
-    properties: HashMap<String, String>,
-}
-```
+SQL 过滤针对消息属性求值；消息体中的 JSON 字段不会自动变成 SQL 属性，详见[消息过滤](../consumer/message-filtering.md)。Key 用于查询和关联；两次发送使用相同 Key，并不会让 Broker 自动去重。
 
-### 消息示例
+共享字节缓冲区和 `Arc<MessageExt>` 可以减少复制，但引用存活期间也会保留内存。零拷贝轮询 API 改变的是所有权和分配行为，不会免除消费者完成处理、记录进度的责任。
 
-```rust
-use rocketmq_common::common::message::message_single::Message;
+## 必须区分的四类位置
 
-let message = Message::builder()
-    .topic("OrderEvents")
-    .body_slice(b"{\"order_id\": \"12345\", \"amount\": 99.99}")
-    .tags("order_created")
-    .key("order_12345")
-    .raw_property("region", "us-west")?
-    .raw_property("priority", "high")?
-    .build()?;
-```
+| 位置 | 范围与单位 | 典型用途 |
+| --- | --- | --- |
+| 队列偏移量 | 一个主题/Broker/队列中的逻辑消息位置 | 拉取请求和消费进度 |
+| CommitLog 偏移量 | 主日志中的物理字节位置 | 存储查找、恢复和复制 |
+| 持久化水位 | 在相应契约下已持久化的物理排他边界 | 判断某次追加范围是否被覆盖 |
+| 派生游标 | 特定引擎、源 epoch 对主日志排他边界的处理进度 | 重建或推进 ConsumeQueue、索引 |
 
-## Topics 与 Queues
+消费者的下一个偏移量不是 CommitLog 字节地址。应结合拉取结果和处理策略使用它，不能按消息体大小累加，也不能简单按返回消息数推算。过滤以及无效偏移量修正，都可能在未返回同等数量消息的情况下推进结果位置。
 
-### Topic
+例如，一条记录可以占用物理字节 `[4096, 4224)`，同时对应逻辑队列偏移量 `17`。持久化水位 `4224` 覆盖了该追加范围；下一个逻辑队列位置则按消费协议解释。这两个数字都不是跨 Broker 的全局消息序号。
 
-Topic 是消息的逻辑通道，用于分类消息：
+消息 ID、业务 Key 和 POP receipt handle 也具有不同职责。receipt 标识一次投递及其确认上下文，不是永久消息标识。续期返回新 receipt 后，不应继续使用旧值。
 
-- **层次化命名**：如 `orders`、`payments`、`logs`
-- **多租户隔离**：不同应用可使用不同 Topic
-- **逻辑隔离**：不同 Topic 的消息互不影响
+## 编码与校验分别发生在哪里
 
-### Queue
+`rocketmq-model` 提供不依赖运行时的值类型及模型契约错误。`rocketmq-protocol` 负责 Remoting 请求头、命令体、线协议编码器和消息编解码兼容性。`rocketmq-store` 及其实现 crate 负责持久化分帧、恢复和持久性。因此，修改 Rust 字段、Serde 名称、协议编码、存储记录，需要分别分析兼容性。
 
-Topic 会被拆分成多个 Queue，以支持并行处理：
+模型有效的消息仍可能因主题不存在、属性组合不受支持、调用方无权限或存储不可用而失败。模型校验错误与运行错误是不同层次的问题。同样，设置事务状态属性不会使消息与应用数据库形成原子事务；[事务协议](../producer/transaction-messages.md) 需要持久化业务决策和事务回查。
 
-```text
-Topic: OrderEvents (4 queues)
+## 阅读实现
 
-┌───────────────────────────────────────┐
-│ Queue 0 │ Queue 1 │ Queue 2 │ Queue 3 │
-├───────────────────────────────────────┤
-│ Msg 0   │ Msg 1   │ Msg 2   │ Msg 3   │
-│ Msg 4   │ Msg 5   │ Msg 6   │ Msg 7   │
-│ Msg 8   │ Msg 9   │ Msg 10  │ Msg 11  │
-└───────────────────────────────────────┘
-```
-
-**多队列的价值：**
-
-- 多消费者并行消费
-- 负载分摊
-- 提升吞吐
-
-## 消息类型
-
-### 普通消息
-
-无特殊语义的常规消息：
-
-```rust
-let message = Message::builder()
-    .topic("NormalTopic")
-    .body(body)
-    .build()?;
-producer.send(message).await?;
-```
-
-### 顺序消息
-
-同一队列内按顺序消费的消息：
-
-```rust
-let message = Message::builder()
-    .topic("OrderEvents")
-    .body("ordered payload")
-    .build()?;
-
-let order_id = "order_123".to_string();
-producer
-    .send_with_selector(
-        message,
-        |queues: &[MessageQueue], _msg: &Message, id: &String| {
-            let hash = compute_hash(id);
-            let index = (hash % queues.len() as u64) as usize;
-            queues.get(index).cloned()
-        },
-        order_id,
-    )
-    .await?;
-```
-
-### 事务消息
-
-与本地事务保持原子性的消息：
-
-```rust
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_client_rust::producer::transaction_mq_producer::TransactionMQProducer;
-
-let mut transaction_producer = TransactionMQProducer::builder(client_runtime.clone())
-    .producer_group("tx_group")
-    .name_server_addr("localhost:9876")
-    .topics(vec!["OrderEvents"])
-    .transaction_listener(OrderTransactionListener::default())
-    .build();
-
-let tx_result = transaction_producer
-    .send_message_in_transaction(message, Some("order_123".to_string()))
-    .await?;
-
-println!("tx_result = {}", tx_result);
-```
-
-### 延迟消息
-
-经过指定延迟后再投递的消息：
-
-```rust
-let message = Message::builder()
-    .topic("DelayedTopic")
-    .body(body)
-    .delay_level(3) // 延迟等级 3（例如 10 秒）
-    .build()?;
-producer.send(message).await?;
-```
-
-## 消息过滤
-
-### 基于 Tag 的过滤
-
-在 Broker 侧按 Tag 进行过滤：
-
-```rust
-let message = Message::builder()
-    .topic("OrderEvents")
-    .body("payload")
-    .tags("order_paid")
-    .build()?;
-
-// 消费者订阅指定 tag
-consumer.subscribe("OrderEvents", "order_paid || order_shipped").await?;
-```
-
-### SQL92 过滤
-
-使用 SQL92 表达式进行高级过滤：
-
-```rust
-let message = Message::builder()
-    .topic("OrderEvents")
-    .body("payload")
-    .raw_property("region", "us-west")?
-    .raw_property("amount", "100")?
-    .build()?;
-
-// 消费者使用 SQL 表达式
-consumer.subscribe("OrderEvents", "region = 'us-west' AND amount > 50").await?;
-```
-
-## 消息属性
-
-### 系统属性
-
-RocketMQ 会自动为每条消息写入系统属性：
-
-- `MSG_ID`：全局唯一消息 ID
-- `TOPIC`：Topic 名称
-- `QUEUE_ID`：Queue ID
-- `QUEUE_OFFSET`：消息在队列中的位置
-- `STORE_SIZE`：消息存储大小
-- `BORN_TIMESTAMP`：消息创建时间
-- `STORE_TIMESTAMP`：消息落盘时间
-
-### 用户属性
-
-你也可以写入自定义属性：
-
-```rust
-let message = Message::builder()
-    .topic("OrderEvents")
-    .body("payload")
-    .raw_property("source", "mobile_app")?
-    .raw_property("version", "2.1.0")?
-    .raw_property("user_id", "user_12345")?
-    .build()?;
-```
-
-## 消息生命周期
-
-```mermaid
-stateDiagram-v2
-    [*] --> Created: Producer creates
-    Created --> Sent: Producer sends
-    Sent --> Stored: Broker stores
-    Stored --> Consumed: Consumer pulls
-    Consumed --> Acknowledged: Consumer acknowledges
-    Acknowledged --> [*]: Completed
-
-    Sent --> Failed: Send fails
-    Failed --> Retrying: Producer retries
-    Retrying --> Sent: Retry succeeds
-    Retrying --> DeadLetter: Max retries exceeded
-```
-
-### 发送流程
-
-```text
-1. 创建消息
-2. 设置 topic、body、tags、keys、properties
-3. 选择队列（负载均衡或自定义选择器）
-4. 发送到 broker
-5. broker 写入 CommitLog
-6. broker 更新 ConsumeQueue
-7. 返回发送结果给 producer
-```
-
-### 消费流程
-
-```text
-1. consumer 从 queue 拉取消息
-2. 反序列化消息
-3. 执行业务处理
-4. 确认消费
-5. 更新消费位点
-6. 继续下一批消费
-```
-
-## 消息持久化
-
-RocketMQ 提供高可靠的持久化机制：
-
-```text
-┌─────────────────────────────────────┐
-│         CommitLog                   │
-│  (Sequential storage of all msgs)   │
-├─────────────────────────────────────┤
-│ [Msg 1][Msg 2][Msg 3][Msg 4]...     │
-└─────────────────────────────────────┘
-              ↓
-┌─────────────────────────────────────┐
-│      ConsumeQueue per Queue         │
-│  (Index structure for fast access)  │
-├─────────────────────────────────────┤
-│ Queue 0: [Offset 0][Offset 8]...    │
-│ Queue 1: [Offset 16][Offset 24]...  │
-└─────────────────────────────────────┘
-```
-
-## 最佳实践
-
-1. **使用清晰的 Topic 命名规范**：便于治理与排障
-2. **合理设置 Tag**：提升过滤效率
-3. **写入消息 Key**：便于追踪与查询
-4. **控制消息体大小**：通常建议小于 256KB
-5. **将元数据放入 properties**：避免塞入 body
-6. **明确顺序需求**：根据业务选择顺序或普通消息
-7. **实现幂等消费**：应对至少一次语义下的重复消息
-
-## 下一步
-
-- [存储](../architecture/storage) - 了解持久化实现
-- [生产者](../producer/overview) - 学习生产者高级特性
-- [消费者](../consumer/overview) - 学习消费者高级特性
+- [模型导出与边界](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-model/README.md)、[队列标识](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-model/src/message.rs)。
+- [生产者消息](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-model/src/common/message/message_single.rs)、[扩展消息](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-model/src/common/message/message_ext.rs)、[消息封装](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-model/src/common/message/message_envelope.rs)。
+- 继续阅读[存储契约](storage.md)、[协议与传输](protocol-transport.md)及[投递与重试](../guides/delivery-and-retry.md)。
