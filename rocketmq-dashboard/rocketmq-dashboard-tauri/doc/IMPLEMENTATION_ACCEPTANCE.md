@@ -78,7 +78,7 @@ target parameter. Unknown or partial observations are not reported as healthy.
 
 ## Automated validation
 
-- Frontend production build passed; all 41 tests across 13 Vitest files passed.
+- Frontend production build passed; all 50 tests across 13 Vitest files passed.
 - Backend full library suite passed: 141 tests, with three live ACL tests selected
   separately and also passing against the rebuilt local images. The registration coverage test includes every non-auth command and
   checks its dashboard authorization boundary instead of a historical fixed count.
@@ -96,6 +96,15 @@ target parameter. Unknown or partial observations are not reported as healthy.
   also compiled without TLS; the desktop compiled with TLS enabled.
 
 ## Desktop and cluster verification
+
+The subsequent plan-conformance review found that the IPC response guard treated
+Broker configuration, ACL user/policy, and Monitor mutations as reads. A connection
+switch could therefore replace a completed write receipt with a conflict error.
+[Issue #10432](https://github.com/mxsm/rocketmq-rust/issues/10432) corrects all nine
+commands. Deferred-response regressions failed before the fix and passed afterward;
+obsolete reads still fail, accepted writes are not replayed, and backend revision
+checks remain authoritative. This race was verified with deterministic frontend
+tests, not a claim of reproducing every response ordering in the live desktop.
 
 The Windows Tauri executable was started with an isolated data directory. Its real
 WebView and authenticated IPC were used; no mock backend supplied these results.
