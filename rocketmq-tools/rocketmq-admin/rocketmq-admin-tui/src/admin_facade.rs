@@ -76,6 +76,13 @@ impl TuiAdminFacade {
     pub(crate) fn client_runtime(&self) -> Arc<ClientRuntime> {
         Arc::clone(&self.client_runtime)
     }
+
+    pub(crate) fn with_client_runtime(&self, client_runtime: Arc<ClientRuntime>) -> Self {
+        Self {
+            client_runtime,
+            namesrv_addr: self.namesrv_addr.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
