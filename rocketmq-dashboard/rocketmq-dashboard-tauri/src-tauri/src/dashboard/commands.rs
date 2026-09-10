@@ -58,3 +58,29 @@ pub async fn query_dashboard_topic_current(
     result
 }
 use crate::auth::SessionState;
+
+#[tauri::command]
+pub async fn get_dashboard_overview(
+    session_id: String,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
+    session_state: State<'_, SessionState>,
+    cluster_manager: State<'_, ClusterManager>,
+    topic_manager: State<'_, TopicManager>,
+    consumer_manager: State<'_, crate::consumer::ConsumerManager>,
+    producer_manager: State<'_, crate::producer::service::ProducerManager>,
+) -> CommandResult<super::overview::Overview> {
+    authorize_command(&session_id, &session_state).await?;
+    connection_manager.check_revision(expected_revision)?;
+    let configured = connection_manager.snapshot()?.nameserver.current_namesrv.is_some();
+    let result = super::overview::query(
+        configured,
+        &cluster_manager,
+        &topic_manager,
+        &consumer_manager,
+        &producer_manager,
+    )
+    .await;
+    connection_manager.check_revision(expected_revision)?;
+    Ok(result)
+}

@@ -36,6 +36,19 @@ pub(crate) struct ProducerManager {
 }
 
 impl ProducerManager {
+    pub(crate) async fn workspace_inventory(
+        &self,
+    ) -> ProducerResult<rocketmq_admin_core::core::consumer_workspace::ProducerInventoryResult> {
+        use rocketmq_admin_core::core::consumer_workspace::ConsumerWorkspaceAdmin;
+        let mut session = self.admin_session.lock().await;
+        self.ensure_admin_session(&mut session).await?;
+        let admin = &session
+            .as_ref()
+            .ok_or_else(|| ProducerError::Validation("Producer connection unavailable.".into()))?
+            .admin;
+        admin.producer_inventory().await.map_err(Into::into)
+    }
+
     pub(crate) fn new(runtime: Arc<NameServerRuntimeState>) -> Self {
         Self {
             runtime,
