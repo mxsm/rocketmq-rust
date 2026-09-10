@@ -1,3 +1,4 @@
+import { filterTopics } from '../features/topic/filters';
 import { ConsumerService } from '../services/consumer.service';
 import { OffsetResetForm } from '../features/topic/components/OffsetResetForm';
 import { TopicMutationReceipt, failedBrokerNames } from '../features/topic/components/TopicMutationReceipt';
@@ -2839,6 +2840,9 @@ export const TopicView = () => {
 
     const {data, error, isLoading, isRefreshPending, isRefreshing, refresh} = useTopicCatalog();
     const [searchTerm, setSearchTerm] = useNavigationState('search', '');
+    const [brokerFilter, setBrokerFilter] = useNavigationState('brokerFilter', '');
+    const [clusterFilter, setClusterFilter] = useNavigationState('clusterFilter', '');
+    const [messageTypeFilter, setMessageTypeFilter] = useNavigationState('messageTypeFilter', '');
     const [selectedFilters, setSelectedFilters] = useNavigationState<Record<TopicCategory, boolean>>('filters', () => target ? Object.fromEntries(TOPIC_FILTER_ORDER.map((key) => [key, true])) as Record<TopicCategory, boolean> : buildDefaultTopicFilters());
     const [currentPage, setCurrentPage] = useNavigationState('page', 1);
     const [selectedTopicName, setSelectedTopicName] = useNavigationState<string | null>('selection', target?.name ?? null);
@@ -2864,36 +2868,18 @@ export const TopicView = () => {
 
     const topics = useMemo(() => (data?.items ?? []).map(mapTopicListItem), [data?.items]);
     const normalizedSearch = searchTerm.trim().toLowerCase();
-    const filteredTopics = useMemo(
-        () =>
-            topics.filter((topic) => {
-                const matchesType = selectedFilters[topic.type as TopicCategory] ?? true;
-                if (!matchesType) {
-                    return false;
-                }
-
-                if (!normalizedSearch) {
-                    return true;
-                }
-
-                const searchableText = [
-                    topic.name,
-                    topic.type,
-                    topic.messageType,
-                    ...topic.clusters,
-                    ...topic.brokers,
-                ].join(' ').toLowerCase();
-
-                return searchableText.includes(normalizedSearch);
-            }),
-        [normalizedSearch, selectedFilters, topics],
-    );
+    const filteredTopics = useMemo(() => filterTopics(topics, {
+        search: normalizedSearch, categories: selectedFilters, brokerName: brokerFilter, clusterName: clusterFilter, messageType: messageTypeFilter,
+    }), [normalizedSearch, selectedFilters, brokerFilter, clusterFilter, messageTypeFilter, topics]);
+    const brokerOptions = useMemo(() => [...new Set(topics.flatMap(topic => topic.brokers))].sort(), [topics]);
+    const clusterOptions = useMemo(() => [...new Set(topics.flatMap(topic => topic.clusters))].sort(), [topics]);
+    const messageTypes = useMemo(() => [...new Set(topics.map(topic => topic.messageType))].sort(), [topics]);
     const totalPages = Math.max(1, Math.ceil(filteredTopics.length / TOPIC_PAGE_SIZE));
     const pagedTopics = filteredTopics.slice(
         (currentPage - 1) * TOPIC_PAGE_SIZE,
         currentPage * TOPIC_PAGE_SIZE,
     );
-    const selectedTopic = findEntity(target ? topics : filteredTopics, (topic) => topic.name, selectedTopicName);
+    const selectedTopic = findEntity(filteredTopics, (topic) => topic.name, selectedTopicName);
     const targetMissing = target && data && !isLoading && !error && !topics.some((topic) => topic.name === target.name);
     const topicTypeCounts = useMemo(
         () =>
@@ -2909,11 +2895,16 @@ export const TopicView = () => {
     const targetBrokerCount = data?.targets.reduce((sum, target) => sum + target.brokerNames.length, 0) ?? 0;
     const activeFilterCount = TOPIC_FILTER_ORDER.filter((key) => selectedFilters[key]).length;
 
-    const previousFilter = useRef({ normalizedSearch, selectedFilters });
+    const previousFilter = useRef({ normalizedSearch, selectedFilters, brokerFilter, clusterFilter, messageTypeFilter });
     useEffect(() => {
-        if (previousFilter.current.normalizedSearch !== normalizedSearch || previousFilter.current.selectedFilters !== selectedFilters) setCurrentPage(1);
-        previousFilter.current = { normalizedSearch, selectedFilters };
-    }, [normalizedSearch, selectedFilters]);
+        const previous = previousFilter.current;
+        if (previous.normalizedSearch !== normalizedSearch || previous.selectedFilters !== selectedFilters ||
+            previous.brokerFilter !== brokerFilter || previous.clusterFilter !== clusterFilter || previous.messageTypeFilter !== messageTypeFilter) {
+            setCurrentPage(1);
+            setSelectedTopicName(target?.name ?? filteredTopics[0]?.name ?? null);
+        }
+        previousFilter.current = { normalizedSearch, selectedFilters, brokerFilter, clusterFilter, messageTypeFilter };
+    }, [normalizedSearch, selectedFilters, brokerFilter, clusterFilter, messageTypeFilter]);
 
     useEffect(() => {
         if (data && currentPage > totalPages) {
@@ -3113,6 +3104,7 @@ export const TopicView = () => {
                 />
             </section>
 
+            {target && !targetMissing && data && !filteredTopics.some(topic => topic.name === target.name) && <p role="status" className="p-4">The requested Topic is hidden by current filters. Clear the filters to inspect it.</p>}
             <section className="topic-command-panel" aria-label="Topic filters and actions">
                 <div className="topic-command-main">
                     <label className="topic-search-field">
@@ -3146,6 +3138,20 @@ export const TopicView = () => {
                     </div>
                 </div>
 
+                <div className="flex flex-wrap gap-4 p-4" aria-label="Exact Topic filters">
+                    <label>Broker <select className="rounded border p-2 dark:bg-gray-900" value={brokerFilter} onChange={event => setBrokerFilter(event.target.value)}>
+                        <option value="">All Brokers</option>{brokerFilter && !brokerOptions.includes(brokerFilter) && <option value={brokerFilter}>{brokerFilter} (not in current catalog)</option>}
+                        {brokerOptions.map(value => <option key={value} value={value}>{value}</option>)}
+                    </select></label>
+                    <label>Cluster <select className="rounded border p-2 dark:bg-gray-900" value={clusterFilter} onChange={event => setClusterFilter(event.target.value)}>
+                        <option value="">All clusters</option>{clusterFilter && !clusterOptions.includes(clusterFilter) && <option value={clusterFilter}>{clusterFilter} (not in current catalog)</option>}
+                        {clusterOptions.map(value => <option key={value} value={value}>{value}</option>)}
+                    </select></label>
+                    <label>Message type <select className="rounded border p-2 dark:bg-gray-900" value={messageTypeFilter} onChange={event => setMessageTypeFilter(event.target.value)}>
+                        <option value="">All message types</option>{messageTypeFilter && !messageTypes.includes(messageTypeFilter) && <option value={messageTypeFilter}>{messageTypeFilter} (not in current catalog)</option>}{messageTypes.map(value => <option key={value} value={value}>{value}</option>)}
+                    </select></label>
+                    <button type="button" onClick={() => { setBrokerFilter(''); setClusterFilter(''); setMessageTypeFilter(''); setSearchTerm(''); setSelectedFilters(Object.fromEntries(TOPIC_FILTER_ORDER.map(key => [key, true])) as Record<TopicCategory, boolean>); }}>Clear filters</button>
+                </div>
                 <div className="topic-filter-row">
                     <div className="topic-filter-label">
                         <Filter className="topic-icon" aria-hidden="true"/>
