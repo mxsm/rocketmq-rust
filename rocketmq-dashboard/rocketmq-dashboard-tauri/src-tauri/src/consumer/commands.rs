@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::audit::{AuditAccess, AuditAction, AuditManager, Audited};
 use crate::consumer::service::ConsumerManager;
 use crate::consumer::types::ConsumerConfigView;
 use crate::consumer::types::ConsumerConnectionView;
@@ -120,12 +121,18 @@ pub async fn create_or_update_consumer_group(
     request: ConsumerCreateOrUpdateRequest,
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<ConsumerMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    consumer_manager
-        .create_or_update_consumer_group(request)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<ConsumerMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let consumer_manager = consumer_manager.inner().clone();
+    audit_manager
+        .execute(
+            access,
+            AuditAction::UpsertConsumer,
+            Some(request.consumer_group.clone()),
+            move |_audit| async move { consumer_manager.create_or_update_consumer_group(request).await },
+        )
         .await
-        .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -134,11 +141,17 @@ pub async fn delete_consumer_group(
     request: ConsumerDeleteRequest,
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<ConsumerMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    consumer_manager
-        .delete_consumer_group(request)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<ConsumerMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let consumer_manager = consumer_manager.inner().clone();
+    audit_manager
+        .execute(
+            access,
+            AuditAction::DeleteConsumer,
+            Some(request.consumer_group.clone()),
+            move |_audit| async move { consumer_manager.delete_consumer_group(request).await },
+        )
         .await
-        .map_err(Into::into)
 }
 use crate::auth::SessionState;

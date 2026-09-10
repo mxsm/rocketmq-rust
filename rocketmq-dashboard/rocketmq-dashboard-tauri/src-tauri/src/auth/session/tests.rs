@@ -49,6 +49,7 @@ impl Fixture {
             storage: storage.clone(),
             auth,
             ttl_ms: 1000,
+            audit: None,
             clock: Arc::new(move || test_clock.load(Ordering::SeqCst)),
         };
         Self {

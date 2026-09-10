@@ -14,6 +14,7 @@
 
 #![recursion_limit = "512"]
 
+mod audit;
 mod auth;
 mod cluster;
 mod consumer;
@@ -43,6 +44,7 @@ const CLEANUP_FAILURE_EXIT_CODE: i32 = 71;
 
 #[derive(Clone)]
 struct DashboardAdminLifecycle {
+    audit: audit::AuditManager,
     storage: persistence::StorageManager,
     cluster_manager: cluster::ClusterManager,
     consumer_manager: consumer::ConsumerManager,
@@ -60,6 +62,7 @@ struct DashboardApplication {
 
 impl DashboardAdminLifecycle {
     async fn shutdown(&self) -> bool {
+        let audit_healthy = self.audit.shutdown(ADMIN_SHUTDOWN_TIMEOUT).await;
         let storage_healthy = self.storage.shutdown(ADMIN_SHUTDOWN_TIMEOUT).await;
         tokio::join!(
             self.cluster_manager.shutdown(),
@@ -68,7 +71,7 @@ impl DashboardAdminLifecycle {
             self.producer_manager.shutdown(),
             self.topic_manager.shutdown(),
         );
-        storage_healthy
+        audit_healthy && storage_healthy
     }
 }
 
@@ -181,6 +184,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
     };
     let setup_client_runtime = client_runtime.clone();
     let storage_context = client_runtime_owner.root_context().component("dashboard-storage");
+    let audit_context = client_runtime_owner.root_context().component("dashboard-audit");
     let admin_lifecycle = Arc::new(OnceLock::new());
     let setup_lifecycle = admin_lifecycle.clone();
     let app = tauri::Builder::default()
@@ -214,8 +218,11 @@ fn build_application() -> Result<DashboardApplication, i32> {
             }))?;
             log::info!("Dashboard storage initialized: {:?}", storage.health());
 
+            let audit = audit::AuditManager::new(storage.clone(), audit_context);
+            audit.start_cleanup()?;
             setup_lifecycle
                 .set(DashboardAdminLifecycle {
+                    audit: audit.clone(),
                     storage: storage.clone(),
                     cluster_manager: cluster_manager.clone(),
                     consumer_manager: consumer_manager.clone(),
@@ -229,6 +236,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
             sessions.start_cleanup()?;
             app.manage(storage);
             app.manage(sessions);
+            app.manage(audit);
             app.manage(nameserver_runtime);
             app.manage(nameserver_manager);
             app.manage(cluster_manager);
@@ -241,6 +249,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            audit::commands::query_audit_events,
             auth::commands::login,
             auth::commands::logout,
             auth::commands::restore_session,
@@ -352,7 +361,7 @@ pub fn run() -> i32 {
     let mut cleanup_healthy = true;
     if let Some(lifecycle) = admin_lifecycle.get() {
         let shutdown = tauri::async_runtime::block_on(async {
-            tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT * 2, lifecycle.shutdown()).await
+            tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT * 3, lifecycle.shutdown()).await
         });
         if !matches!(shutdown, Ok(true)) {
             cleanup_healthy = false;

@@ -16,6 +16,7 @@ use super::SessionState;
 use super::types::{
     AuthSessionResponse, BootstrapStatus, CommonResponse, RevokeSessionsResponse, SessionPage, UserProfile,
 };
+use crate::audit::{AuditAccess, AuditAction, AuditManager, Audited};
 use crate::error::CommandResult;
 use tauri::State;
 
@@ -24,16 +25,35 @@ pub async fn login(
     username: String,
     password: String,
     session_state: State<'_, SessionState>,
-) -> CommandResult<AuthSessionResponse> {
-    session_state.login(username, password).await.map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<AuthSessionResponse>> {
+    let access = AuditAccess::Login;
+    let session_state = session_state.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::Login, None, move |audit| async move {
+            let session_state = session_state.with_audit(audit);
+            session_state.login(username, password).await
+        })
+        .await
 }
 
 #[tauri::command]
-pub async fn logout(session_id: String, session_state: State<'_, SessionState>) -> CommandResult<CommonResponse> {
-    session_state.logout(session_id).await?;
-    Ok(CommonResponse {
-        message: "Logged out successfully".into(),
-    })
+pub async fn logout(
+    session_id: String,
+    session_state: State<'_, SessionState>,
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<CommonResponse>> {
+    let access = AuditAccess::account(&session_state, session_id.clone());
+    let session_state = session_state.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::Logout, None, move |audit| async move {
+            let session_state = session_state.with_audit(audit);
+            session_state.logout(session_id).await?;
+            Ok(CommonResponse {
+                message: "Logged out successfully".into(),
+            })
+        })
+        .await
 }
 
 #[tauri::command]
@@ -50,13 +70,21 @@ pub async fn change_password(
     old_password: String,
     new_password: String,
     session_state: State<'_, SessionState>,
-) -> CommandResult<CommonResponse> {
-    session_state
-        .change_password(session_id, old_password, new_password)
-        .await?;
-    Ok(CommonResponse {
-        message: "Password updated. All sessions were revoked; sign in again.".into(),
-    })
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<CommonResponse>> {
+    let access = AuditAccess::account(&session_state, session_id.clone());
+    let session_state = session_state.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::ChangePassword, None, move |audit| async move {
+            let session_state = session_state.with_audit(audit);
+            session_state
+                .change_password(session_id, old_password, new_password)
+                .await?;
+            Ok(CommonResponse {
+                message: "Password updated. All sessions were revoked; sign in again.".into(),
+            })
+        })
+        .await
 }
 
 #[tauri::command]
@@ -91,6 +119,14 @@ pub async fn revoke_user_sessions(
     session_id: String,
     username: String,
     session_state: State<'_, SessionState>,
-) -> CommandResult<RevokeSessionsResponse> {
-    session_state.revoke(session_id, username).await.map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<RevokeSessionsResponse>> {
+    let access = AuditAccess::account(&session_state, session_id.clone());
+    let session_state = session_state.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::RevokeSessions, None, move |audit| async move {
+            let session_state = session_state.with_audit(audit);
+            session_state.revoke(session_id, username).await
+        })
+        .await
 }

@@ -63,7 +63,8 @@ const NAV_SECTIONS = [
     {
         title: 'Governance',
         items: [
-            {tab: 'ACL', label: 'ACL', icon: Shield}
+            {tab: 'ACL', label: 'ACL', icon: Shield},
+            {tab: 'Audit', label: 'Audit', icon: Shield}
         ]
     }
 ] as const;
@@ -80,6 +81,7 @@ const PAGE_SUMMARIES: Record<string, string> = {
     MessageTrace: 'End-to-end trace timeline for produced and consumed messages.',
     DLQ: 'Dead-letter queue search, retry context, and payload inspection.',
     ACL: 'Access-control resources, credentials, and permission posture.',
+    Audit: 'Operation history, outcomes, and audit receipts.',
     Account: 'Local administrator profile, active session, and account security.'
 };
 

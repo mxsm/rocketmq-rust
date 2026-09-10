@@ -14,6 +14,7 @@ import {MessageView} from '../../components/MessageView';
 import {MessageTraceView} from '../../components/MessageTraceView';
 import {DLQMessageView} from '../../components/DLQMessageView';
 import {Activity} from 'lucide-react';
+import {AuditPage} from '../../pages/audit/AuditPage';
 import {AccountPage} from '../../pages/account/AccountPage';
 
 export const AppRouter = () => {
@@ -42,6 +43,8 @@ export const AppRouter = () => {
             return <DLQMessageView/>;
         case 'ACL':
             return <ACLView/>;
+        case 'Audit':
+            return <AuditPage/>;
         case 'Account':
             return <AccountPage/>;
         default:
