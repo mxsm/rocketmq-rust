@@ -77,13 +77,16 @@ impl DashboardAdminLifecycle {
     async fn shutdown(&self) -> bool {
         let audit_healthy = self.audit.shutdown(ADMIN_SHUTDOWN_TIMEOUT).await;
         let storage_healthy = self.storage.shutdown(ADMIN_SHUTDOWN_TIMEOUT).await;
+        // Admin shutdown futures contain owned SDK state. Keep each future on the heap
+        // so polling the joined cleanup does not exhaust the Windows main-thread stack.
+        // They remain borrowed and awaited here; no shutdown work is detached.
         tokio::join!(
-            self.cluster_manager.shutdown(),
-            self.consumer_manager.shutdown(),
-            self.message_manager.shutdown(),
-            self.producer_manager.shutdown(),
-            self.acl_manager.shutdown(),
-            self.topic_manager.shutdown(),
+            Box::pin(self.cluster_manager.shutdown()),
+            Box::pin(self.consumer_manager.shutdown()),
+            Box::pin(self.message_manager.shutdown()),
+            Box::pin(self.producer_manager.shutdown()),
+            Box::pin(self.acl_manager.shutdown()),
+            Box::pin(self.topic_manager.shutdown()),
         );
         audit_healthy && storage_healthy
     }
@@ -414,16 +417,17 @@ pub fn run() -> i32 {
     let exit_code = app.run_return(|_, _| {});
     let mut cleanup_healthy = true;
     if let Some(lifecycle) = admin_lifecycle.get() {
-        let shutdown = tauri::async_runtime::block_on(async {
+        let shutdown = tauri::async_runtime::block_on(Box::pin(async {
             tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT * 3, lifecycle.shutdown()).await
-        });
+        }));
         if !matches!(shutdown, Ok(true)) {
             cleanup_healthy = false;
             log::error!("Dashboard storage or admin session shutdown was incomplete");
         }
     }
-    let client_shutdown = client_runtime_owner
-        .block_on(async { tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT, client_runtime.shutdown()).await });
+    let client_shutdown = client_runtime_owner.block_on(Box::pin(async {
+        tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT, client_runtime.shutdown()).await
+    }));
     match client_shutdown {
         Ok(report) => {
             cleanup_healthy &= report.is_healthy();
@@ -470,6 +474,55 @@ pub fn run() {
 mod tests {
     use super::CLEANUP_FAILURE_EXIT_CODE;
     use super::final_exit_code;
+
+    #[test]
+    fn shutdown_completes_on_a_windows_sized_main_thread_stack() {
+        // Windows executables default to a 1 MiB main-thread stack. Test the real
+        // lifecycle on that budget rather than relying on the test harness stack.
+        std::thread::Builder::new()
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                let owner = super::RuntimeOwner::plan(super::RuntimeConfig::server_default("desktop-shutdown-test"))
+                    .unwrap()
+                    .build()
+                    .unwrap();
+                let client = super::ClientRuntime::try_new(
+                    owner.root_context().component("client"),
+                    super::ClientRuntimeConfig::default(),
+                    super::TelemetryHandle::noop(),
+                )
+                .unwrap();
+                let runtime = std::sync::Arc::new(crate::nameserver::NameServerRuntimeState::new(
+                    rocketmq_dashboard_common::NameServerConfigSnapshot {
+                        current_namesrv: None,
+                        namesrv_addr_list: vec![],
+                        use_vip_channel: false,
+                        use_tls: false,
+                    },
+                    client.clone(),
+                ));
+                let storage = crate::persistence::StorageManager::new(
+                    std::path::PathBuf::from("unused-shutdown-test.db"),
+                    owner.root_context().component("storage"),
+                );
+                let lifecycle = super::DashboardAdminLifecycle {
+                    audit: crate::audit::AuditManager::new(storage.clone(), owner.root_context().component("audit")),
+                    storage,
+                    cluster_manager: crate::cluster::ClusterManager::new(runtime.clone()),
+                    consumer_manager: crate::consumer::ConsumerManager::new(runtime.clone()),
+                    message_manager: crate::message::MessageManager::new(runtime.clone()),
+                    producer_manager: crate::producer::ProducerManager::new(runtime.clone()),
+                    acl_manager: crate::acl::AclManager::new(runtime.clone()),
+                    topic_manager: crate::topic::TopicManager::new(runtime),
+                };
+                assert!(owner.block_on(Box::pin(lifecycle.shutdown())));
+                assert!(owner.block_on(Box::pin(client.shutdown())).is_healthy());
+                assert!(owner.shutdown_runtime_blocking().unwrap().is_healthy());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     #[test]
     fn exit_code_preserves_application_failure_and_reports_cleanup_failure() {
