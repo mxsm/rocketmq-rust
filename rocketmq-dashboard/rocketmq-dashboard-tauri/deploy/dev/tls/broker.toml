@@ -1,0 +1,27 @@
+[broker]
+listenPort = 33911
+brokerIp1 = "127.0.0.1"
+storePathRootDir = "/var/lib/rocketmq/broker"
+namesrvAddr = "127.0.0.1:9876"
+autoCreateTopicEnable = false
+[broker.brokerIdentity]
+brokerName = "tauri-tls-broker"
+brokerClusterName = "TauriTlsDebugCluster"
+brokerId = 0
+[broker.brokerServerConfig.tlsConfig]
+enable = true
+[broker.brokerServerConfig.tlsConfig.server]
+mode = "enforcing"
+needClientAuth = "none"
+authClient = false
+certPath = "/certs/server.pem"
+keyPath = "/certs/server.key"
+[store]
+storePathRootDir = "/var/lib/rocketmq/broker"
+haListenPort = 33912
+mappedFileSizeCommitLog = 67108864
+mappedFileSizeConsumeQueue = 6000
+mappedFileSizeConsumeQueueExt = 65536
+maxHashSlotNum = 1000
+maxIndexNum = 4000
+timerWheelEnable = false
