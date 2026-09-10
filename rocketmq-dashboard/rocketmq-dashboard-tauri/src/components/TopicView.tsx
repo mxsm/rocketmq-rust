@@ -1,4 +1,6 @@
-import React, {useEffect, useMemo, useState, ReactNode} from 'react';
+import { useAppStore, useNavigationState } from '../stores/app.store';
+import { findEntity } from '../stores/navigation';
+import React, {useEffect, useMemo, useState, useRef, ReactNode} from 'react';
 import {motion, AnimatePresence} from 'motion/react';
 import {
     Activity,
@@ -147,6 +149,7 @@ interface TopicRouterModalProps {
 }
 
 const TopicRouterModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
+    const { openBroker } = useAppStore();
     const [routeData, setRouteData] = useState<TopicRouteView | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
@@ -407,7 +410,7 @@ const TopicRouterModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
                                             <div className="topic-router-map-card is-broker">
                                                 <span>Broker</span>
                                                 <strong>{selectedBroker.brokerName}</strong>
-                                                <small>{selectedBroker.addresses[0]?.address ?? 'No address'}</small>
+                                                <small>{selectedBroker.addresses[0] ? <button type="button" className="underline" onClick={() => openBroker(selectedBroker.addresses[0].address, 'status')}>{selectedBroker.addresses[0].address}</button> : 'No address'}</small>
                                             </div>
                                         </div>
                                     ) : (
@@ -1272,6 +1275,7 @@ const TopicStatusModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
 };
 
 const TopicConsumerManageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
+    const { openConsumer } = useAppStore();
     const [consumerItems, setConsumerItems] = useState<TopicConsumerInfoView[]>([]);
     const [selectedConsumerGroup, setSelectedConsumerGroup] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
@@ -1490,7 +1494,7 @@ const TopicConsumerManageModal = ({isOpen, onClose, topic}: TopicRouterModalProp
                                             <>
                                                 <div className="topic-consumer-selected-name">
                                                     <span>{selectedConsumer.totalDiff > 0 ? 'Lagging' : 'Caught up'}</span>
-                                                    <strong>{selectedConsumer.consumerGroup}</strong>
+                                                    <button type="button" className="underline" onClick={() => openConsumer(selectedConsumer.consumerGroup, 'progress')}>{selectedConsumer.consumerGroup}</button>
                                                 </div>
 
                                                 <div className={`topic-consumer-pressure-card ${selectedConsumer.totalDiff > 0 ? 'is-warning' : 'is-healthy'}`}>
@@ -2972,11 +2976,15 @@ const TopicActionButton = ({
 };
 
 export const TopicView = () => {
+    const { navigation, openTopic, goBack } = useAppStore();
+    const target = navigation.target?.kind === 'topic' ? navigation.target : null;
+    const openedTarget = useRef(false);
+
     const {data, error, isLoading, isRefreshPending, isRefreshing, refresh} = useTopicCatalog();
-    const [searchTerm, setSearchTerm] = useState('');
-    const [selectedFilters, setSelectedFilters] = useState<Record<TopicCategory, boolean>>(buildDefaultTopicFilters);
-    const [currentPage, setCurrentPage] = useState(1);
-    const [selectedTopicName, setSelectedTopicName] = useState<string | null>(null);
+    const [searchTerm, setSearchTerm] = useNavigationState('search', '');
+    const [selectedFilters, setSelectedFilters] = useNavigationState<Record<TopicCategory, boolean>>('filters', () => target ? Object.fromEntries(TOPIC_FILTER_ORDER.map((key) => [key, true])) as Record<TopicCategory, boolean> : buildDefaultTopicFilters());
+    const [currentPage, setCurrentPage] = useNavigationState('page', 1);
+    const [selectedTopicName, setSelectedTopicName] = useNavigationState<string | null>('selection', target?.name ?? null);
     const [editorModal, setEditorModal] = useState<{ isOpen: boolean, mode: 'create' | 'update', seed: TopicEditorSeed | null }>({
         isOpen: false,
         mode: 'create',
@@ -3028,7 +3036,8 @@ export const TopicView = () => {
         (currentPage - 1) * TOPIC_PAGE_SIZE,
         currentPage * TOPIC_PAGE_SIZE,
     );
-    const selectedTopic = filteredTopics.find((topic) => topic.name === selectedTopicName) ?? filteredTopics[0] ?? null;
+    const selectedTopic = findEntity(target ? topics : filteredTopics, (topic) => topic.name, selectedTopicName);
+    const targetMissing = target && data && !isLoading && !error && !topics.some((topic) => topic.name === target.name);
     const topicTypeCounts = useMemo(
         () =>
             TOPIC_FILTER_ORDER.reduce((acc, key) => {
@@ -3043,17 +3052,20 @@ export const TopicView = () => {
     const targetBrokerCount = data?.targets.reduce((sum, target) => sum + target.brokerNames.length, 0) ?? 0;
     const activeFilterCount = TOPIC_FILTER_ORDER.filter((key) => selectedFilters[key]).length;
 
+    const previousFilter = useRef({ normalizedSearch, selectedFilters });
     useEffect(() => {
-        setCurrentPage(1);
+        if (previousFilter.current.normalizedSearch !== normalizedSearch || previousFilter.current.selectedFilters !== selectedFilters) setCurrentPage(1);
+        previousFilter.current = { normalizedSearch, selectedFilters };
     }, [normalizedSearch, selectedFilters]);
 
     useEffect(() => {
-        if (currentPage > totalPages) {
+        if (data && currentPage > totalPages) {
             setCurrentPage(totalPages);
         }
     }, [currentPage, totalPages]);
 
     useEffect(() => {
+        if (target || !data) return;
         if (filteredTopics.length === 0) {
             if (selectedTopicName !== null) {
                 setSelectedTopicName(null);
@@ -3071,6 +3083,8 @@ export const TopicView = () => {
     };
 
     const handleOperation = (op: string, topic: Topic) => {
+        const detail = ({ Status: 'status', Router: 'route', 'Topic Config': 'config', 'Consumer Manage': 'consumers' } as const)[op as 'Status'];
+        if (detail) { openTopic(topic.name, detail); return; }
         if (op === 'Status') {
             setStatusModal({isOpen: true, topic});
         } else if (op === 'Router') {
@@ -3091,6 +3105,15 @@ export const TopicView = () => {
             toast(`${op} clicked for ${topic.name}`);
         }
     };
+
+    useEffect(() => {
+        if (!target || openedTarget.current || !data || isLoading) return;
+        const topic = topics.find((item) => item.name === target.name);
+        if (!topic) return;
+        openedTarget.current = true;
+        const setters = { status: setStatusModal, route: setRouterModal, config: setConfigModal, consumers: setConsumerModal };
+        if (target.detail !== 'overview') setters[target.detail]({ isOpen: true, topic });
+    }, [data, isLoading, target, topics]);
 
     const getActionIcon = (action: string) => {
         switch (action) {
@@ -3147,17 +3170,18 @@ export const TopicView = () => {
         <div className="topic-page animate-in fade-in slide-in-from-bottom-4 duration-500">
             <TopicStatusModal
                 isOpen={statusModal.isOpen}
-                onClose={() => setStatusModal({isOpen: false, topic: null})}
+                onClose={() => { setStatusModal({isOpen: false, topic: null}); if (target) goBack(); }}
                 topic={statusModal.topic}
             />
+            {targetMissing && <p role="alert" className="p-4 text-red-600">Topic not found: {target.name}</p>}
             <TopicRouterModal
                 isOpen={routerModal.isOpen}
-                onClose={() => setRouterModal({isOpen: false, topic: null})}
+                onClose={() => { setRouterModal({isOpen: false, topic: null}); if (target) goBack(); }}
                 topic={routerModal.topic}
             />
             <TopicConfigModal
                 isOpen={configModal.isOpen}
-                onClose={() => setConfigModal({isOpen: false, topic: null})}
+                onClose={() => { setConfigModal({isOpen: false, topic: null}); if (target) goBack(); }}
                 topic={configModal.topic}
                 onRefresh={refresh}
                 onEdit={(seed) => {
@@ -3175,7 +3199,7 @@ export const TopicView = () => {
             />
             <TopicConsumerManageModal
                 isOpen={consumerModal.isOpen}
-                onClose={() => setConsumerModal({isOpen: false, topic: null})}
+                onClose={() => { setConsumerModal({isOpen: false, topic: null}); if (target) goBack(); }}
                 topic={consumerModal.topic}
             />
             <TopicSendMessageModal

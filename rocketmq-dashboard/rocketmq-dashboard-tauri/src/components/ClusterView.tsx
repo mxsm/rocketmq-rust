@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useAppStore, useNavigationState } from '../stores/app.store';
+import React, { useEffect, useMemo, useState, useRef, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Activity,
@@ -81,6 +82,11 @@ const BrokerTpsTile = ({
 );
 
 export const ClusterView = () => {
+  const { navigation, openBroker, goBack } = useAppStore();
+  const target = navigation.target?.kind === 'broker' ? navigation.target : null;
+  const openedTarget = useRef(false);
+  const sheetGeneration = useRef(0);
+  useEffect(() => () => { sheetGeneration.current += 1; }, []);
   const {
     data,
     isLoading,
@@ -92,7 +98,7 @@ export const ClusterView = () => {
     getBrokerConfig,
     getBrokerStatus,
   } = useClusterCatalog();
-  const [selectedCluster, setSelectedCluster] = useState('');
+  const [selectedCluster, setSelectedCluster] = useNavigationState('cluster', '');
   const [isSelectOpen, setIsSelectOpen] = useState(false);
   const [detailSheet, setDetailSheet] = useState<{
     isOpen: boolean;
@@ -107,6 +113,10 @@ export const ClusterView = () => {
   });
 
   useEffect(() => {
+    if (target) {
+      setSelectedCluster(data?.items.find((item) => item.address === target.address)?.clusterName ?? '');
+      return;
+    }
     if (!data?.clusters.length) {
       setSelectedCluster('');
       return;
@@ -117,7 +127,8 @@ export const ClusterView = () => {
     );
   }, [data?.clusters]);
 
-  const visibleCluster = selectedCluster || data?.clusters[0] || '';
+  const visibleCluster = selectedCluster || (target ? '' : data?.clusters[0]) || '';
+  const targetMissing = target && data && !isLoading && !loadError && !data.items.some((item) => item.address === target.address);
 
   const clusterData = useMemo(
     () => (data?.items ?? []).filter((broker) => broker.clusterName === visibleCluster),
@@ -205,6 +216,7 @@ export const ClusterView = () => {
         : 'No brokers available';
 
   const openStatusSheet = async (brokerData: ClusterBrokerCardItem) => {
+    const generation = ++sheetGeneration.current;
     setDetailSheet({
       isOpen: true,
       type: 'Status',
@@ -217,6 +229,7 @@ export const ClusterView = () => {
 
     try {
       const status = await getBrokerStatus(brokerData.address);
+      if (generation !== sheetGeneration.current) return;
       setDetailSheet({
         isOpen: true,
         type: 'Status',
@@ -227,6 +240,7 @@ export const ClusterView = () => {
         },
       });
     } catch (error) {
+      if (generation !== sheetGeneration.current) return;
       const message = dashboardErrorMessage(error, 'Failed to load broker status');
       setDetailSheet({
         isOpen: true,
@@ -242,6 +256,7 @@ export const ClusterView = () => {
   };
 
   const openConfigSheet = async (brokerData: ClusterBrokerCardItem) => {
+    const generation = ++sheetGeneration.current;
     setDetailSheet({
       isOpen: true,
       type: 'Config',
@@ -254,6 +269,7 @@ export const ClusterView = () => {
 
     try {
       const config = await getBrokerConfig(brokerData.address);
+      if (generation !== sheetGeneration.current) return;
       setDetailSheet({
         isOpen: true,
         type: 'Config',
@@ -264,6 +280,7 @@ export const ClusterView = () => {
         },
       });
     } catch (error) {
+      if (generation !== sheetGeneration.current) return;
       const message = dashboardErrorMessage(error, 'Failed to load broker config');
       setDetailSheet({
         isOpen: true,
@@ -278,6 +295,15 @@ export const ClusterView = () => {
     }
   };
 
+  useEffect(() => {
+    if (!target || openedTarget.current || !data || isLoading) return;
+    const broker = data.items.find((item) => item.address === target.address);
+    if (!broker) return;
+    openedTarget.current = true;
+    if (target.detail === 'status') void openStatusSheet(broker);
+    if (target.detail === 'config') void openConfigSheet(broker);
+  }, [target, data, isLoading]);
+
   const handleRefresh = async () => {
     try {
       await refresh();
@@ -290,9 +316,10 @@ export const ClusterView = () => {
 
   return (
     <div className="cluster-page">
+      {targetMissing && <p role="alert" className="p-4 text-red-600">Broker not found: {target.address}</p>}
       <SideSheet
         isOpen={detailSheet.isOpen}
-        onClose={() => setDetailSheet({ ...detailSheet, isOpen: false })}
+        onClose={() => { sheetGeneration.current += 1; setDetailSheet({ ...detailSheet, isOpen: false }); if (target) goBack(); }}
         title={detailSheet.title}
         data={detailSheet.data}
         type={detailSheet.type}
@@ -602,7 +629,7 @@ export const ClusterView = () => {
                 <div className="cluster-broker-actions">
                   <Button
                     variant="secondary"
-                    onClick={() => void openStatusSheet(broker)}
+                    onClick={() => openBroker(broker.address, 'status')}
                     className="cluster-action-button"
                     disabled={pendingStatusAddr === broker.address}
                   >
@@ -610,7 +637,7 @@ export const ClusterView = () => {
                   </Button>
                   <Button
                     variant="primary"
-                    onClick={() => void openConfigSheet(broker)}
+                    onClick={() => openBroker(broker.address, 'config')}
                     className="cluster-action-button"
                     disabled={pendingConfigAddr === broker.address}
                   >

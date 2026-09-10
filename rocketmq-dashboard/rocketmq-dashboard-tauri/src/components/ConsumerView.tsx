@@ -1,4 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useAppStore, useNavigationState } from '../stores/app.store';
+import { findEntity } from '../stores/navigation';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, 
@@ -943,21 +945,25 @@ const LegacyConsumerCardView = () => {
 };
 
 export const ConsumerView = () => {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filters, setFilters] = useState<Record<string, boolean>>({
+  const { navigation, openConsumer, goBack } = useAppStore();
+  const target = navigation.target?.kind === 'consumer' ? navigation.target : null;
+  const openedTarget = useRef(false);
+
+  const [searchTerm, setSearchTerm] = useNavigationState('search', '');
+  const [filters, setFilters] = useNavigationState<Record<string, boolean>>('filters', {
     NORMAL: true,
-    FIFO: false,
+    FIFO: !!target,
     SYSTEM: true,
   });
-  const [proxy, setProxy] = useState('127.0.0.1:8080');
-  const [enableProxy, setEnableProxy] = useState(false);
+  const [proxy, setProxy] = useNavigationState('proxy', target?.proxyAddress ?? '127.0.0.1:8080');
+  const [enableProxy, setEnableProxy] = useNavigationState('enableProxy', !!target?.proxyAddress);
   const [detailModal, setDetailModal] = useState<{ isOpen: boolean, consumer: ConsumerGroupListItem | null }>({isOpen: false, consumer: null});
   const [configModal, setConfigModal] = useState<{ isOpen: boolean, consumer: ConsumerGroupListItem | null }>({isOpen: false, consumer: null});
   const [clientModal, setClientModal] = useState<{ isOpen: boolean, consumer: ConsumerGroupListItem | null }>({isOpen: false, consumer: null});
   const [editorModal, setEditorModal] = useState<{ isOpen: boolean, consumer: ConsumerGroupListItem | null, preferredBrokerAddress?: string }>({isOpen: false, consumer: null});
   const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean, consumer: ConsumerGroupListItem | null }>({isOpen: false, consumer: null});
-  const [selectedGroup, setSelectedGroup] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
+  const [selectedGroup, setSelectedGroup] = useNavigationState('selection', target?.name ?? '');
+  const [currentPage, setCurrentPage] = useNavigationState('page', 1);
   const itemsPerPage = 6;
   const sourceAddress = enableProxy ? proxy : undefined;
   const {
@@ -996,22 +1002,20 @@ export const ConsumerView = () => {
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage,
   );
-  const selectedConsumer =
-    filteredConsumers.find((consumer) => consumer.rawGroupName === selectedGroup) ??
-    currentConsumers[0] ??
-    filteredConsumers[0] ??
-    null;
+  const selectedConsumer = findEntity(target ? items : filteredConsumers, (consumer) => consumer.rawGroupName, selectedGroup || null);
+  const targetMissing = target && response && !isInitialLoading && !error && !items.some((item) => item.rawGroupName === target.name);
   const activeClientCount = items.reduce((total, consumer) => total + consumer.connectionCount, 0);
   const totalLag = items.reduce((total, consumer) => total + consumer.diffTotal, 0);
   const lagHealthClass = selectedConsumer && selectedConsumer.diffTotal > 0 ? 'is-warning' : 'is-healthy';
 
   useEffect(() => {
-    if (currentPage > totalPages) {
+    if (response && currentPage > totalPages) {
       setCurrentPage(totalPages);
     }
   }, [currentPage, totalPages]);
 
   useEffect(() => {
+    if (target || !response) return;
     if (filteredConsumers.length === 0) {
       setSelectedGroup('');
       return;
@@ -1020,6 +1024,15 @@ export const ConsumerView = () => {
       setSelectedGroup(filteredConsumers[0].rawGroupName);
     }
   }, [filteredConsumers, selectedGroup]);
+
+  useEffect(() => {
+    if (!target || openedTarget.current || !response || isInitialLoading) return;
+    const consumer = items.find((item) => item.rawGroupName === target.name);
+    if (!consumer) return;
+    openedTarget.current = true;
+    const setters = { progress: setDetailModal, config: setConfigModal, clients: setClientModal };
+    if (target.detail !== 'overview') setters[target.detail]({ isOpen: true, consumer });
+  }, [target, response, isInitialLoading, items]);
 
   const toggleFilter = (key: string) => {
     setCurrentPage(1);
@@ -1066,21 +1079,22 @@ export const ConsumerView = () => {
 
   return (
     <div className="consumer-page">
+      {targetMissing && <p role="alert" className="p-4 text-red-600">Consumer group not found: {target.name}</p>}
       <ConsumerDetailModal
         isOpen={detailModal.isOpen}
-        onClose={() => setDetailModal({isOpen: false, consumer: null})}
+        onClose={() => { setDetailModal({isOpen: false, consumer: null}); if (target) goBack(); }}
         consumer={detailModal.consumer}
         address={sourceAddress}
       />
       <ConsumerConfigModal
         isOpen={configModal.isOpen}
-        onClose={() => setConfigModal({isOpen: false, consumer: null})}
+        onClose={() => { setConfigModal({isOpen: false, consumer: null}); if (target) goBack(); }}
         consumer={configModal.consumer}
         onEdit={handleEditFromConfig}
       />
       <ConsumerClientModal
         isOpen={clientModal.isOpen}
-        onClose={() => setClientModal({isOpen: false, consumer: null})}
+        onClose={() => { setClientModal({isOpen: false, consumer: null}); if (target) goBack(); }}
         consumer={clientModal.consumer}
         address={sourceAddress}
       />
@@ -1374,15 +1388,15 @@ export const ConsumerView = () => {
                 </div>
 
                 <div className="consumer-action-grid">
-                  <button type="button" className="topic-action-button" onClick={() => setClientModal({isOpen: true, consumer: selectedConsumer})}>
+                  <button type="button" className="topic-action-button" onClick={() => openConsumer(selectedConsumer.rawGroupName, 'clients', sourceAddress)}>
                     <Users className="topic-icon" aria-hidden="true"/>
                     <span>Client</span>
                   </button>
-                  <button type="button" className="topic-action-button" onClick={() => setDetailModal({isOpen: true, consumer: selectedConsumer})}>
+                  <button type="button" className="topic-action-button" onClick={() => openConsumer(selectedConsumer.rawGroupName, 'progress', sourceAddress)}>
                     <FileText className="topic-icon" aria-hidden="true"/>
                     <span>Detail</span>
                   </button>
-                  <button type="button" className="topic-action-button" onClick={() => setConfigModal({isOpen: true, consumer: selectedConsumer})}>
+                  <button type="button" className="topic-action-button" onClick={() => openConsumer(selectedConsumer.rawGroupName, 'config', sourceAddress)}>
                     <Settings className="topic-icon" aria-hidden="true"/>
                     <span>Config</span>
                   </button>
