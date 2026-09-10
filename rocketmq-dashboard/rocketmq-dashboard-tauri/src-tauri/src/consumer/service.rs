@@ -66,6 +66,19 @@ pub(crate) struct ConsumerManager {
 }
 
 impl ConsumerManager {
+    pub(crate) async fn workspace_inventory(&self) -> ConsumerResult<ConsumerInventoryResult> {
+        let mut session = self.admin_session.lock().await;
+        self.ensure_admin_session(&mut session).await?;
+        let admin = &session
+            .as_ref()
+            .ok_or_else(|| ConsumerError::Validation("Consumer connection unavailable.".into()))?
+            .admin;
+        admin
+            .consumer_inventory(&ConsumerInventoryRequest::default())
+            .await
+            .map_err(map_admin_error)
+    }
+
     pub(crate) fn new(runtime: Arc<NameServerRuntimeState>) -> Self {
         Self {
             runtime,

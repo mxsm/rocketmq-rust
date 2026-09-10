@@ -293,6 +293,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
             consumer::commands::create_or_update_consumer_group,
             consumer::commands::delete_consumer_group,
             dashboard::commands::get_dashboard_broker_overview,
+            dashboard::commands::get_dashboard_overview,
             dashboard::commands::query_dashboard_topic_current,
             message::commands::query_message_by_topic_key,
             message::commands::query_message_by_id,

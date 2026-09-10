@@ -71,3 +71,15 @@ export interface DashboardTopicCurrentResponse {
     topicQueueTop: DashboardTopicQueueItem[];
     topicCategoryDistribution: DashboardTopicCategoryItem[];
 }
+
+export interface OverviewMetric { value: number | null; quality: 'complete' | 'reported' | 'partial' | 'unknown' }
+export interface DashboardOverview {
+    status: 'UNCONFIGURED' | 'DOWN' | 'PARTIAL' | 'READY';
+    observedAtMs: number;
+    brokers: OverviewMetric;
+    topics: OverviewMetric;
+    consumerGroups: OverviewMetric;
+    producerGroups: OverviewMetric;
+    totalLag: OverviewMetric;
+    laggingGroups: string[];
+}
