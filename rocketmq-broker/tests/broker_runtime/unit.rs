@@ -575,6 +575,38 @@ fn build_auth_config_maps_signature_algorithm() {
 }
 
 #[test]
+fn advertised_store_host_is_used_with_wildcard_listeners() {
+    for (advertised, expected) in [
+        ("127.0.0.1", "127.0.0.1:11911"),
+        ("192.0.2.10", "192.0.2.10:11911"),
+        ("2001:db8::10", "[2001:db8::10]:11911"),
+    ] {
+        let mut broker = BrokerConfig {
+            broker_ip1: advertised.into(),
+            listen_port: 11911,
+            ..BrokerConfig::default()
+        };
+        broker.broker_server_config.bind_address = "0.0.0.0".into();
+        let runtime = BrokerRuntime::new(Arc::new(broker), Arc::new(MessageStoreConfig::default()));
+        assert_eq!(runtime.composition.state.store_host(), expected.parse().unwrap());
+    }
+}
+
+#[test]
+fn advertised_store_host_preserves_hostname_bind_fallback_without_dns() {
+    let mut broker = BrokerConfig {
+        broker_ip1: "broker.example.invalid".into(),
+        ..BrokerConfig::default()
+    };
+    broker.broker_server_config.bind_address = "192.0.2.20".into();
+    let runtime = BrokerRuntime::new(Arc::new(broker), Arc::new(MessageStoreConfig::default()));
+    assert_eq!(
+        runtime.composition.state.store_host(),
+        "192.0.2.20:10911".parse().unwrap()
+    );
+}
+
+#[test]
 fn transaction_capability_handles_share_runtime_generations() {
     let runtime = BrokerRuntime::new(
         Arc::new(BrokerConfig::default()),

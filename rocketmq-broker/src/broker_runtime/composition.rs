@@ -1160,7 +1160,13 @@ impl BrokerRuntime {
         .expect("validated Broker Lite event limits must fit the root resource budget");
         let broker_address = broker_config.get_broker_addr();
         let network = validated_config.sections().network();
-        let store_host = SocketAddr::new(network.bind_address(), network.listen_port());
+        // Persist the advertised IP in physical message IDs. A wildcard listener
+        // is not a destination that remote clients can use for offset lookups.
+        // Hostname advertisements retain the configured bind-address fallback;
+        // runtime composition must not perform blocking DNS resolution.
+        let store_host = broker_address
+            .parse::<SocketAddr>()
+            .unwrap_or_else(|_| SocketAddr::new(network.bind_address(), network.listen_port()));
         let scheduled_task_manager = BrokerScheduledTasks::new_with_task_group(service_context.task_group().clone());
         let metadata_io = Some(
             MetadataIoConfig::default()
