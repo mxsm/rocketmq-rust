@@ -33,6 +33,8 @@ Readiness checks use each service's `/readyz` endpoint. Logs are rotated and
 service data uses separate named volumes. All published ports bind to host
 loopback; this is an unauthenticated local debugging fixture. ACL and TLS require
 a separately configured secured fixture before claiming authentication coverage.
+The [ACL fixture](acl/README.md) provides isolated credential verification with
+the same local Rust images.
 
 | Desktop setting | Address |
 | --- | --- |

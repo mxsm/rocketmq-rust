@@ -1,0 +1,53 @@
+name: rocketmq-tauri-acl-debug
+
+x-common: &common
+  stop_grace_period: 60s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  healthcheck:
+    test:
+      - CMD
+      - bash
+      - -c
+      - 'exec 3<>/dev/tcp/127.0.0.1/$${ROCKETMQ_HEALTH_BIND_ADDR##*:}; printf "GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3; read -r status <&3; [[ "$$status" == *" 200 "* ]]'
+    interval: 5s
+    timeout: 3s
+    retries: 20
+    start_period: 10s
+
+services:
+  namesrv:
+    <<: *common
+    image: rocketmq-rust/namesrv:local
+    command: [--configFile, /etc/rocketmq/namesrv.toml]
+    environment:
+      RUST_LOG: warn
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:28088
+    volumes:
+      - ../namesrv.toml:/etc/rocketmq/namesrv.toml:ro
+      - namesrv-data:/var/lib/rocketmq
+    ports:
+      - "127.0.0.1:29876:9876"
+      - "127.0.0.1:22911:22911"
+      - "127.0.0.1:28088:28088"
+      - "127.0.0.1:28090:28090"
+  broker:
+    <<: *common
+    image: rocketmq-rust/broker:local
+    network_mode: service:namesrv
+    depends_on:
+      namesrv:
+        condition: service_healthy
+    command: [--configFile, /etc/rocketmq/broker.toml]
+    environment:
+      RUST_LOG: warn
+      ROCKETMQ_HEALTH_BIND_ADDR: 0.0.0.0:28090
+    volumes:
+      - ./broker.toml:/etc/rocketmq/broker.toml:ro
+      - broker-data:/var/lib/rocketmq
+volumes:
+  namesrv-data:
+  broker-data:

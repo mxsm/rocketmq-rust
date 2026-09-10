@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod admin;
 pub(crate) mod commands;
 mod db;
 mod service;
 mod types;
 pub(crate) use service::ConnectionManager;
 pub(crate) use types::*;
+
+pub(crate) use admin::{AdminConnectionConfig, AdminPurpose};

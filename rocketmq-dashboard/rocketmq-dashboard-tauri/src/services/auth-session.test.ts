@@ -17,7 +17,7 @@ beforeEach(() => {
     } });
     SessionStorageService.setSessionId('current-token');
     ConnectionStore.reset();
-    ConnectionStore.accept('current-token', { revision: 0, endpoints: [], currentNameserverId: null, currentProxyId: null, environmentId: null, nameserver: { currentNamesrv: null, namesrvAddrList: [], useVIPChannel: false, useTLS: false }, proxy: { currentProxyAddr: null, proxyAddrList: [] } });
+    ConnectionStore.accept('current-token', { revision: 0, credentialsConfigured: false, endpoints: [], currentNameserverId: null, currentProxyId: null, environmentId: null, nameserver: { currentNamesrv: null, namesrvAddrList: [], useVIPChannel: false, useTLS: false }, proxy: { currentProxyAddr: null, proxyAddrList: [] } });
 });
 afterEach(() => { vi.resetAllMocks(); vi.unstubAllGlobals(); });
 

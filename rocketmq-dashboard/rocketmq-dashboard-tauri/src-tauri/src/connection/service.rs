@@ -35,7 +35,7 @@ impl ConnectionManager {
         storage: StorageManager,
         runtime: Arc<NameServerRuntimeState>,
     ) -> DashboardResult<Self> {
-        let view = storage
+        let mut view = storage
             .run("connection-initialize", |connection| {
                 let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 db::ensure_identities(&transaction)?;
@@ -44,6 +44,7 @@ impl ConnectionManager {
                 Ok(view)
             })
             .await?;
+        view.credentials_configured = runtime.credentials_configured();
         Ok(Self {
             storage,
             runtime,
@@ -105,7 +106,8 @@ impl ConnectionManager {
                     "UPDATE connection_metadata SET revision = revision + 1 WHERE id = 1",
                     [],
                 )?;
-                let view = db::load(&transaction)?;
+                let mut view = db::load(&transaction)?;
+                view.credentials_configured = runtime.credentials_configured();
                 audit.set_environment(view.environment_id.clone())?;
                 audit.record_local_success(&transaction)?;
                 // Lock publication before committing; a poisoned state must not commit an invisible configuration.

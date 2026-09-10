@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::connection::AdminPurpose;
 use crate::error::DashboardError as ProducerError;
 use crate::nameserver::NameServerRuntimeState;
 use crate::producer::types::ProducerResult;
-use rocketmq_admin_core::client_adapter::AdminBuilder;
 use rocketmq_admin_core::client_adapter::AdminSession;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use std::sync::Arc;
-use uuid::Uuid;
 
 pub(crate) struct ManagedProducerAdmin {
     pub(crate) admin: AdminSession,
@@ -30,18 +29,8 @@ pub(crate) struct ManagedProducerAdmin {
 impl ManagedProducerAdmin {
     pub(crate) async fn connect(runtime: &Arc<NameServerRuntimeState>) -> ProducerResult<Self> {
         let (snapshot, generation) = runtime.snapshot_and_generation();
-        let current_namesrv = snapshot.current_namesrv.clone().ok_or_else(|| {
-            ProducerError::Configuration(
-                "No active NameServer is configured. Add and select a NameServer first.".into(),
-            )
-        })?;
-
-        let admin = AdminBuilder::new(runtime.client_runtime())
-            .admin_group(format!("dashboard-producer-admin-{}", Uuid::new_v4()))
-            .namesrv_addr(current_namesrv)
-            .timeout_millis(5_000)
-            .vip_channel_enabled(snapshot.use_vip_channel)
-            .use_tls(snapshot.use_tls)
+        let admin = runtime
+            .admin_builder(&snapshot, AdminPurpose::Producer)?
             .build_and_start()
             .await
             .map_err(ProducerError::from)?;
