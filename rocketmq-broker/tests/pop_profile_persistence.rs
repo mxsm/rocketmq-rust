@@ -12,7 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error as StdError;
+
 use rocketmq_broker::test_support::PopProfileStoreProbe;
+use rocketmq_error::ViewValueRef;
+use rocketmq_error::CORE_CONFIGURATION_INVALID;
+use rocketmq_error::CORE_INTERNAL_FAILURE;
+use rocketmq_error::STORAGE_STATE_CORRUPTED;
+use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
+use rocketmq_store_api::StoreComponent;
+use rocketmq_store_api::StoreError;
+use rocketmq_store_api::StoreOperation;
 use tempfile::TempDir;
 
 #[test]
@@ -63,8 +73,15 @@ fn unknown_format_version_fails_closed() {
     let root = TempDir::new().expect("temp dir");
     PopProfileStoreProbe::write_unknown_marker(root.path(), 99).expect("write marker fixture");
 
-    let error = PopProfileStoreProbe::open(root.path(), 16).expect_err("unknown version must fail");
-    assert!(error.contains("unsupported POP consumer profile format version 99"));
+    let error = PopProfileStoreProbe::open_with_error(root.path(), 16).expect_err("unknown version must fail");
+    assert_eq!(error.descriptor(), &CORE_INTERNAL_FAILURE);
+    let source = error
+        .source()
+        .and_then(|source| source.downcast_ref::<StoreError>())
+        .expect("the broker error must preserve the typed storage failure");
+    assert_eq!(source.descriptor(), &STORAGE_STATE_CORRUPTED);
+    assert_eq!(source.operation(), StoreOperation::Admin);
+    assert_eq!(source.component(), StoreComponent::RocksDb);
 }
 
 #[test]
@@ -74,11 +91,26 @@ fn capacity_failure_does_not_advance_generation() {
     store
         .upsert("group-a", &["topic-a"], 1, 10)
         .expect("persist first profile");
+    let original = store.snapshot();
 
     let error = store
-        .upsert("group-b", &["topic-b"], 1, 11)
+        .upsert_policy_with_error("group-b", &["topic-b"], PopRetryPolicy::v1_only(0), 11)
         .expect_err("capacity must be enforced");
-    assert!(error.contains("capacity"));
+    assert_eq!(error.descriptor(), &CORE_CONFIGURATION_INVALID);
+    assert_eq!(
+        error
+            .diagnostic_view()
+            .expect("valid configuration error context")
+            .fields()
+            .find(|field| field.name() == "key")
+            .map(|field| field.value()),
+        Some(ViewValueRef::Text("capacity"))
+    );
     assert_eq!(store.generation(), 1);
-    assert_eq!(store.snapshot().len(), 1);
+    assert_eq!(store.snapshot(), original);
+    drop(store);
+
+    let reopened = PopProfileStoreProbe::open(root.path(), 1).expect("reopen profile store");
+    assert_eq!(reopened.generation(), 1);
+    assert_eq!(reopened.snapshot(), original);
 }
