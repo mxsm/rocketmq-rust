@@ -49,11 +49,15 @@ pub(crate) enum AuditAction {
     ConsumeDirectly,
     ResendDlq,
     BatchResendDlq,
+    SaveMonitor,
+    DeleteMonitor,
 }
 
 impl AuditAction {
     pub(crate) fn name(self) -> &'static str {
         match self {
+            Self::SaveMonitor => "monitor.save",
+            Self::DeleteMonitor => "monitor.delete",
             Self::Login => "auth.login",
             Self::Logout => "auth.logout",
             Self::ChangePassword => "auth.change_password",
@@ -89,6 +93,7 @@ impl AuditAction {
     }
     pub(crate) fn resource_type(self) -> &'static str {
         match self {
+            Self::SaveMonitor | Self::DeleteMonitor => "consumer_monitor",
             Self::Login | Self::Logout | Self::ChangePassword | Self::RevokeSessions => "account",
             Self::AddNameServer
             | Self::SwitchNameServer

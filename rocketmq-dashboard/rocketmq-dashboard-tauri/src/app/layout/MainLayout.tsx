@@ -64,6 +64,7 @@ const NAV_SECTIONS = [
         title: 'Governance',
         items: [
             {tab: 'ACL', label: 'ACL', icon: Shield},
+            {tab: 'Monitors', label: 'Monitors', icon: MonitorDot},
             {tab: 'Audit', label: 'Audit', icon: Shield},
             {tab: 'Sessions', label: 'Sessions', icon: UserRound}
         ]
@@ -82,6 +83,7 @@ const PAGE_SUMMARIES: Record<string, string> = {
     MessageTrace: 'End-to-end trace timeline for produced and consumed messages.',
     DLQ: 'Dead-letter queue search, retry context, and payload inspection.',
     ACL: 'Access-control resources, credentials, and permission posture.',
+    Monitors: 'Environment-scoped Consumer group thresholds.',
     Audit: 'Operation history, outcomes, and audit receipts.',
     Sessions: 'Active, expired, and revoked sessions for your account.',
     Account: 'Local administrator profile, active session, and account security.'
