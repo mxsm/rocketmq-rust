@@ -16,11 +16,15 @@ use clap::Parser;
 use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
+use crate::commands::CommonArgs;
 use rocketmq_admin_core::client_adapter::services::namesrv::KvConfigDeleteRequest;
 use rocketmq_admin_core::client_adapter::services::namesrv::NameServerService;
 
 #[derive(Debug, Clone, Parser)]
 pub struct DeleteKvConfigSubCommand {
+    #[command(flatten)]
+    common_args: CommonArgs,
+
     #[arg(short = 's', long = "namespace", required = true)]
     namespace: String,
 
@@ -30,17 +34,21 @@ pub struct DeleteKvConfigSubCommand {
 
 impl DeleteKvConfigSubCommand {
     fn request(&self) -> CanonicalResult<KvConfigDeleteRequest> {
-        KvConfigDeleteRequest::try_new(self.namespace.clone(), self.key.clone())
+        Ok(
+            KvConfigDeleteRequest::try_new(self.namespace.clone(), self.key.clone())?
+                .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()),
+        )
     }
 }
 
 impl CommandExecute for DeleteKvConfigSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> CanonicalResult<()> {
-        NameServerService::delete_kv_config_by_request(self.request()?).await?;
+        NameServerService::delete_kv_config_by_request_with_credentials(self.request()?, credentials, client_runtime)
+            .await?;
         println!("delete kv config from namespace success.");
         Ok(())
     }

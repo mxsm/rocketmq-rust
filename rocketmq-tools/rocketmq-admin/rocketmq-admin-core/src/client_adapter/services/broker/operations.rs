@@ -85,6 +85,20 @@ impl BrokerService {
         result
     }
 
+    /// Query broker configuration using the caller-owned runtime and optional credentials.
+    pub async fn query_broker_config_by_request_with_credentials(
+        request: BrokerConfigQueryRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<BrokerConfigQueryResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await?;
+        let result = Self::query_broker_config_with_admin(&mut admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
     pub async fn delete_expired_commit_log_by_request_with_credentials(
         request: BrokerOptionalTarget,
         credentials: Option<crate::core::security::AdminCredentials>,
@@ -719,6 +733,24 @@ impl BrokerService {
         request: BrokerConfigUpdateRequest,
     ) -> CanonicalResult<BrokerConfigUpdateApplyResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
+        let result = async {
+            let plan = Self::build_broker_config_update_plan_with_admin(&mut admin, &request).await?;
+            Self::apply_broker_config_update_plan_with_admin(&admin, &plan, request.rollback_enabled()).await
+        }
+        .await;
+        admin.shutdown().await;
+        result
+    }
+
+    /// Build and apply a broker config update using the caller-owned runtime and optional credentials.
+    pub async fn apply_broker_config_update_by_request_with_credentials(
+        request: BrokerConfigUpdateRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<BrokerConfigUpdateApplyResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime.clone())
+            .build_and_start()
+            .await?;
         let result = async {
             let plan = Self::build_broker_config_update_plan_with_admin(&mut admin, &request).await?;
             Self::apply_broker_config_update_plan_with_admin(&admin, &plan, request.rollback_enabled()).await

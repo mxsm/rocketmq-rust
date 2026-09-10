@@ -93,6 +93,21 @@ impl TopicService {
         result
     }
 
+    /// Query the clusters of a topic using the caller-owned runtime and optional credentials.
+    pub async fn query_topic_clusters_by_request_with_credentials(
+        request: TopicClusterQueryRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<TopicClusterList> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+        let result = Self::get_topic_cluster_list(&mut admin, request.topic().clone()).await;
+        admin.shutdown().await;
+        result
+    }
+
     /// Query all topics, optionally filtered by cluster, through a complete core request lifecycle.
     pub async fn query_topic_list(request: TopicListQueryRequest) -> CanonicalResult<TopicListResult> {
         let mut admin = request
@@ -100,6 +115,23 @@ impl TopicService {
             .build_and_start()
             .await
             .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+        let result = Self::query_topic_list_with_admin(&mut admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    /// Query all topics using the caller-owned runtime and optional credentials.
+    ///
+    /// This application-facing variant keeps runtime ownership explicit and applies
+    /// the same authentication hook as the other CLI-backed topic operations.
+    pub async fn query_topic_list_by_request_with_credentials(
+        request: TopicListQueryRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<TopicListResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await?;
         let result = Self::query_topic_list_with_admin(&mut admin, &request).await;
         admin.shutdown().await;
         result
@@ -146,41 +178,59 @@ impl TopicService {
             .build_and_start()
             .await
             .map_err(crate::IntoCanonicalError::into_canonical_error)?;
-        let topic = request.topic().clone();
-        let result = async {
-            if let Some(cluster) = request.cluster_name() {
-                let topic_route_data = admin
-                    .examine_topic_route_info(cluster.clone())
-                    .await
-                    .map_err(crate::IntoCanonicalError::into_canonical_error)?;
-                let mut topic_stats_table =
-                    rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable::new();
-                if let Some(route_data) = &topic_route_data {
-                    let mut total_offset_table = HashMap::new();
-                    let mut topic_put_tps = 0.0;
-                    for broker_data in &route_data.broker_datas {
-                        let addr = broker_data.select_broker_addr();
-                        let stats = admin
-                            .examine_topic_stats(topic.clone(), addr)
-                            .await
-                            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
-                        topic_put_tps += stats.get_topic_put_tps();
-                        total_offset_table.extend(stats.into_offset_table());
-                    }
-                    topic_stats_table.set_offset_table(total_offset_table);
-                    topic_stats_table.set_topic_put_tps(topic_put_tps);
-                }
-                Ok(topic_stats_table)
-            } else {
-                admin
-                    .examine_topic_stats(topic, None)
-                    .await
-                    .map_err(crate::IntoCanonicalError::into_canonical_error)
-            }
-        }
-        .await;
+        let result = Self::query_topic_status_with_admin(&mut admin, &request).await;
         admin.shutdown().await;
         result
+    }
+
+    /// Query topic status using the caller-owned runtime and optional credentials.
+    pub async fn query_topic_status_by_request_with_credentials(
+        request: TopicStatusQueryRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+        let result = Self::query_topic_status_with_admin(&mut admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    async fn query_topic_status_with_admin(
+        admin: &mut DefaultMQAdminExt,
+        request: &TopicStatusQueryRequest,
+    ) -> CanonicalResult<rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable> {
+        let topic = request.topic().clone();
+        if let Some(cluster) = request.cluster_name() {
+            let topic_route_data = admin
+                .examine_topic_route_info(cluster.clone())
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+            let mut topic_stats_table = rocketmq_protocol::protocol::admin::topic_stats_table::TopicStatsTable::new();
+            if let Some(route_data) = &topic_route_data {
+                let mut total_offset_table = HashMap::new();
+                let mut topic_put_tps = 0.0;
+                for broker_data in &route_data.broker_datas {
+                    let addr = broker_data.select_broker_addr();
+                    let stats = admin
+                        .examine_topic_stats(topic.clone(), addr)
+                        .await
+                        .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+                    topic_put_tps += stats.get_topic_put_tps();
+                    total_offset_table.extend(stats.into_offset_table());
+                }
+                topic_stats_table.set_offset_table(total_offset_table);
+                topic_stats_table.set_topic_put_tps(topic_put_tps);
+            }
+            Ok(topic_stats_table)
+        } else {
+            admin
+                .examine_topic_stats(topic, None)
+                .await
+                .map_err(crate::IntoCanonicalError::into_canonical_error)
+        }
     }
 
     /// Apply order configuration through a complete core request lifecycle.
@@ -190,10 +240,34 @@ impl TopicService {
             .build_and_start()
             .await
             .map_err(crate::IntoCanonicalError::into_canonical_error)?;
-        let result = match request.method() {
+        let result = Self::apply_order_conf_with_admin(&mut admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    /// Apply order configuration using the caller-owned runtime and optional credentials.
+    pub async fn apply_order_conf_by_request_with_credentials(
+        request: OrderConfRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<OrderConfResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+        let result = Self::apply_order_conf_with_admin(&mut admin, &request).await;
+        admin.shutdown().await;
+        result
+    }
+
+    async fn apply_order_conf_with_admin(
+        admin: &mut DefaultMQAdminExt,
+        request: &OrderConfRequest,
+    ) -> CanonicalResult<OrderConfResult> {
+        match request.method() {
             OrderConfMethod::Put => {
                 let order_conf = CheetahString::from(request.order_conf().unwrap_or_default());
-                Self::create_or_update_order_conf(&mut admin, request.topic().clone(), order_conf.clone())
+                Self::create_or_update_order_conf(admin, request.topic().clone(), order_conf.clone())
                     .await
                     .map(|_| OrderConfResult {
                         topic: request.topic().clone(),
@@ -201,23 +275,23 @@ impl TopicService {
                         order_conf: Some(order_conf),
                     })
             }
-            OrderConfMethod::Get => Self::get_order_conf(&mut admin, request.topic().clone())
+            OrderConfMethod::Get => Self::get_order_conf(admin, request.topic().clone())
                 .await
                 .map(|order_conf| OrderConfResult {
                     topic: request.topic().clone(),
                     method: request.method(),
                     order_conf: Some(order_conf),
                 }),
-            OrderConfMethod::Delete => Self::delete_order_conf(&mut admin, request.topic().clone())
-                .await
-                .map(|_| OrderConfResult {
-                    topic: request.topic().clone(),
-                    method: request.method(),
-                    order_conf: None,
-                }),
-        };
-        admin.shutdown().await;
-        result
+            OrderConfMethod::Delete => {
+                Self::delete_order_conf(admin, request.topic().clone())
+                    .await
+                    .map(|_| OrderConfResult {
+                        topic: request.topic().clone(),
+                        method: request.method(),
+                        order_conf: None,
+                    })
+            }
+        }
     }
 
     /// Query message queue allocation through a complete core request lifecycle.
@@ -226,6 +300,21 @@ impl TopicService {
     ) -> CanonicalResult<AllocatedMqQueryResult> {
         let mut admin = request
             .admin_builder()
+            .build_and_start()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+        let result = Self::query_allocated_mq(&mut admin, request.topic().clone(), request.ip_list().clone()).await;
+        admin.shutdown().await;
+        result
+    }
+
+    /// Query message queue allocation using the caller-owned runtime and optional credentials.
+    pub async fn query_allocated_mq_by_request_with_credentials(
+        request: AllocateMqQueryRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<AllocatedMqQueryResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
             .build_and_start()
             .await
             .map_err(crate::IntoCanonicalError::into_canonical_error)?;
@@ -297,12 +386,55 @@ impl TopicService {
         result
     }
 
+    /// Apply a batch of topic configs using the caller-owned runtime and optional credentials.
+    pub async fn update_topic_config_list_by_request_with_credentials(
+        request: UpdateTopicListRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<UpdateTopicListResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+        let target = request.target().clone();
+        let topic_configs = request.topic_configs().to_vec();
+        let result = Self::update_topic_config_list(&mut admin, target, topic_configs).await;
+        admin.shutdown().await;
+        result
+    }
+
     /// Update topic permission through a complete core request lifecycle.
     pub async fn update_topic_perm_by_request(
         request: UpdateTopicPermRequest,
     ) -> CanonicalResult<UpdateTopicPermResult> {
         let mut admin = request
             .admin_builder()
+            .build_and_start()
+            .await
+            .map_err(crate::IntoCanonicalError::into_canonical_error)?;
+        let result = Self::update_topic_perm(
+            &mut admin,
+            request.topic().clone(),
+            request.perm(),
+            request.target().clone(),
+        )
+        .await
+        .map(|_| UpdateTopicPermResult {
+            topic: request.topic().clone(),
+            target: request.target().clone(),
+            perm: request.perm(),
+        });
+        admin.shutdown().await;
+        result
+    }
+
+    /// Update topic permission using the caller-owned runtime and optional credentials.
+    pub async fn update_topic_perm_by_request_with_credentials(
+        request: UpdateTopicPermRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<UpdateTopicPermResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
             .build_and_start()
             .await
             .map_err(crate::IntoCanonicalError::into_canonical_error)?;

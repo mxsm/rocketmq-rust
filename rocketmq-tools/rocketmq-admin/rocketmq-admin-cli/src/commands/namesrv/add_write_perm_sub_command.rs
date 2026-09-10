@@ -59,10 +59,12 @@ impl AddWritePermSubCommand {
 impl CommandExecute for AddWritePermSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> CanonicalResult<()> {
-        let result = NameServerService::add_write_perm_by_request(self.request()?).await?;
+        let result =
+            NameServerService::add_write_perm_by_request_with_credentials(self.request()?, credentials, client_runtime)
+                .await?;
         Self::print_result(result);
         Ok(())
     }

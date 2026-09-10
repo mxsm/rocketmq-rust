@@ -39,13 +39,14 @@ pub struct TopicStatusSubCommand {
 impl CommandExecute for TopicStatusSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::Result<()> {
         let request = TopicStatusQueryRequest::try_new(self.topic.clone())?
             .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone())
             .with_optional_cluster_name(self.cluster_name.clone());
-        let topic_status = TopicService::query_topic_status(request).await?;
+        let topic_status =
+            TopicService::query_topic_status_by_request_with_credentials(request, credentials, client_runtime).await?;
 
         let offset_table = topic_status.get_offset_table();
         let mut mq_list: Vec<_> = offset_table.keys().cloned().collect();

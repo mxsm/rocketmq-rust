@@ -77,8 +77,8 @@ impl UpdateTopicListSubCommand {
 impl CommandExecute for UpdateTopicListSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::Result<()> {
         if !self.file.is_file() {
             return Err(crate::errors::argument_invalid(
@@ -102,7 +102,12 @@ impl CommandExecute for UpdateTopicListSubCommand {
                 return Err(crate::errors::argument_invalid("the file isn't in json or yaml format"));
             };
 
-        let result = TopicService::update_topic_config_list_by_request(self.request(topic_configs)?).await?;
+        let result = TopicService::update_topic_config_list_by_request_with_credentials(
+            self.request(topic_configs)?,
+            credentials,
+            client_runtime,
+        )
+        .await?;
         Self::print_result(&result);
         Ok(())
     }

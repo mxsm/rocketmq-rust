@@ -36,10 +36,6 @@ impl TopicClusterSubCommand {
             .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
 
-    async fn get_topic_clusters(&self) -> CanonicalResult<TopicClusterList> {
-        TopicService::query_topic_clusters(self.request()?).await
-    }
-
     fn print_clusters(&self, result: &TopicClusterList) {
         for cluster in &result.clusters {
             println!("{}", cluster);
@@ -49,10 +45,15 @@ impl TopicClusterSubCommand {
 impl CommandExecute for TopicClusterSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::Result<()> {
-        let clusters = self.get_topic_clusters().await?;
+        let clusters = TopicService::query_topic_clusters_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime,
+        )
+        .await?;
         self.print_clusters(&clusters);
         Ok(())
     }

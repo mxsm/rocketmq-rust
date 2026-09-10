@@ -1420,11 +1420,21 @@ impl TuiAdminFacade {
     }
 
     pub async fn query_topic_clusters(&self, topic: impl Into<String>) -> CanonicalResult<TopicClusterList> {
-        TopicService::query_topic_clusters(self.topic_cluster_request(topic)?).await
+        TopicService::query_topic_clusters_by_request_with_credentials(
+            self.topic_cluster_request(topic)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn query_topic_route(&self, topic: impl Into<String>) -> CanonicalResult<Option<TopicRouteData>> {
-        TopicService::query_topic_route(self.topic_route_request(topic)?).await
+        TopicService::query_topic_route_by_request_with_credentials(
+            self.topic_route_request(topic)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn query_topic_status(
@@ -1432,11 +1442,21 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         cluster_name: Option<String>,
     ) -> CanonicalResult<TopicStatsTable> {
-        TopicService::query_topic_status(self.topic_status_request(topic, cluster_name)?).await
+        TopicService::query_topic_status_by_request_with_credentials(
+            self.topic_status_request(topic, cluster_name)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn query_topic_list(&self, cluster_name: Option<String>) -> CanonicalResult<TopicListResult> {
-        TopicService::query_topic_list(self.topic_list_request(cluster_name)).await
+        TopicService::query_topic_list_by_request_with_credentials(
+            self.topic_list_request(cluster_name),
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn delete_topic(
@@ -1458,7 +1478,12 @@ impl TuiAdminFacade {
         method: impl AsRef<str>,
         order_conf: Option<String>,
     ) -> CanonicalResult<OrderConfResult> {
-        TopicService::apply_order_conf(self.order_conf_request(topic, method, order_conf)?).await
+        TopicService::apply_order_conf_by_request_with_credentials(
+            self.order_conf_request(topic, method, order_conf)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn query_allocated_mq(
@@ -1466,15 +1491,20 @@ impl TuiAdminFacade {
         topic: impl Into<String>,
         ip_list: impl Into<String>,
     ) -> CanonicalResult<AllocatedMqQueryResult> {
-        TopicService::query_allocated_mq_by_request(self.allocate_mq_request(topic, ip_list)?).await
+        TopicService::query_allocated_mq_by_request_with_credentials(
+            self.allocate_mq_request(topic, ip_list)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn create_or_update_topic(&self, request: UpdateTopicRequest) -> CanonicalResult<UpdateTopicResult> {
-        TopicService::create_or_update_topic_by_request(request).await
+        TopicService::create_or_update_topic_by_request_with_credentials(request, None, self.client_runtime()).await
     }
 
     pub async fn update_topic_perm(&self, request: UpdateTopicPermRequest) -> CanonicalResult<UpdateTopicPermResult> {
-        TopicService::update_topic_perm_by_request(request).await
+        TopicService::update_topic_perm_by_request_with_credentials(request, None, self.client_runtime()).await
     }
 
     pub async fn query_auth_user(
@@ -1754,7 +1784,12 @@ impl TuiAdminFacade {
     }
 
     pub async fn query_namesrv_config(&self) -> CanonicalResult<NamesrvConfigQueryResult> {
-        NameServerService::query_namesrv_config(self.namesrv_config_query_request()?).await
+        NameServerService::query_namesrv_config_by_request_with_credentials(
+            self.namesrv_config_query_request()?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn update_namesrv_config(
@@ -1762,7 +1797,12 @@ impl TuiAdminFacade {
         key: impl Into<String>,
         value: impl Into<String>,
     ) -> CanonicalResult<NamesrvConfigUpdateResult> {
-        NameServerService::update_namesrv_config_by_request(self.namesrv_config_update_request(key, value)?).await
+        NameServerService::update_namesrv_config_by_request_with_credentials(
+            self.namesrv_config_update_request(key, value)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn update_kv_config(
@@ -1771,7 +1811,12 @@ impl TuiAdminFacade {
         key: impl Into<String>,
         value: impl Into<String>,
     ) -> CanonicalResult<KvConfigUpdateResult> {
-        NameServerService::update_kv_config_by_request(self.kv_config_update_request(namespace, key, value)?).await
+        NameServerService::update_kv_config_by_request_with_credentials(
+            self.kv_config_update_request(namespace, key, value)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn delete_kv_config(
@@ -1779,15 +1824,30 @@ impl TuiAdminFacade {
         namespace: impl Into<String>,
         key: impl Into<String>,
     ) -> CanonicalResult<KvConfigUpdateResult> {
-        NameServerService::delete_kv_config_by_request(self.kv_config_delete_request(namespace, key)?).await
+        NameServerService::delete_kv_config_by_request_with_credentials(
+            self.kv_config_delete_request(namespace, key)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn add_write_perm(&self, broker_name: impl Into<String>) -> CanonicalResult<WritePermResult> {
-        NameServerService::add_write_perm_by_request(self.write_perm_request(broker_name)?).await
+        NameServerService::add_write_perm_by_request_with_credentials(
+            self.write_perm_request(broker_name)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn wipe_write_perm(&self, broker_name: impl Into<String>) -> CanonicalResult<WritePermResult> {
-        NameServerService::wipe_write_perm_by_request(self.write_perm_request(broker_name)?).await
+        NameServerService::wipe_write_perm_by_request_with_credentials(
+            self.write_perm_request(broker_name)?,
+            None,
+            self.client_runtime(),
+        )
+        .await
     }
 
     pub async fn query_broker_config(
@@ -1796,11 +1856,11 @@ impl TuiAdminFacade {
         cluster_name: Option<String>,
         key_pattern: Option<String>,
     ) -> CanonicalResult<BrokerConfigQueryResult> {
-        BrokerService::query_broker_config_by_request(self.broker_config_query_request(
-            broker_addr,
-            cluster_name,
-            key_pattern,
-        )?)
+        BrokerService::query_broker_config_by_request_with_credentials(
+            self.broker_config_query_request(broker_addr, cluster_name, key_pattern)?,
+            None,
+            self.client_runtime(),
+        )
         .await
     }
 
@@ -1808,14 +1868,16 @@ impl TuiAdminFacade {
         &self,
         request: BrokerConfigUpdateRequest,
     ) -> CanonicalResult<BrokerConfigUpdatePlanResult> {
-        BrokerService::build_broker_config_update_plan_by_request(request).await
+        BrokerService::build_broker_config_update_plan_by_request_with_credentials(request, None, self.client_runtime())
+            .await
     }
 
     pub async fn apply_broker_config_update(
         &self,
         request: BrokerConfigUpdateRequest,
     ) -> CanonicalResult<BrokerConfigUpdateApplyResult> {
-        BrokerService::apply_broker_config_update_by_request(request).await
+        BrokerService::apply_broker_config_update_by_request_with_credentials(request, None, self.client_runtime())
+            .await
     }
 
     pub async fn query_broker_runtime_stats(
@@ -1823,8 +1885,10 @@ impl TuiAdminFacade {
         broker_addr: Option<String>,
         cluster_name: Option<String>,
     ) -> CanonicalResult<BrokerRuntimeStatsResult> {
-        BrokerService::query_broker_runtime_stats_by_request(
+        BrokerService::query_broker_runtime_stats_by_request_with_credentials(
             self.broker_runtime_stats_request(broker_addr, cluster_name)?,
+            None,
+            self.client_runtime(),
         )
         .await
     }
@@ -1836,12 +1900,11 @@ impl TuiAdminFacade {
         diff_level: i64,
         is_order: bool,
     ) -> CanonicalResult<BrokerConsumeStatsResult> {
-        BrokerService::query_broker_consume_stats_by_request(self.broker_consume_stats_request(
-            broker_addr,
-            timeout_millis,
-            diff_level,
-            is_order,
-        )?)
+        BrokerService::query_broker_consume_stats_by_request_with_credentials(
+            self.broker_consume_stats_request(broker_addr, timeout_millis, diff_level, is_order)?,
+            None,
+            self.client_runtime(),
+        )
         .await
     }
 

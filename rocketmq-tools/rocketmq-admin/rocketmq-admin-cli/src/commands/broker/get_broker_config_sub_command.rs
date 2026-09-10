@@ -16,6 +16,7 @@ use clap::Parser;
 use rocketmq_error::Result as CanonicalResult;
 
 use crate::commands::CommandExecute;
+use crate::commands::CommonArgs;
 use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigQueryRequest;
 use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigQueryResult;
 use rocketmq_admin_core::client_adapter::services::broker::BrokerConfigSection;
@@ -29,6 +30,9 @@ use rocketmq_admin_core::client_adapter::services::broker::BrokerService;
         .args(&["broker_addr", "cluster_name"])
 ))]
 pub struct GetBrokerConfigSubCommand {
+    #[command(flatten)]
+    common_args: CommonArgs,
+
     #[arg(short = 'b', long = "brokerAddr", help = "get which broker")]
     broker_addr: Option<String>,
 
@@ -45,21 +49,27 @@ pub struct GetBrokerConfigSubCommand {
 
 impl GetBrokerConfigSubCommand {
     fn request(&self) -> CanonicalResult<BrokerConfigQueryRequest> {
-        BrokerConfigQueryRequest::try_new(
+        Ok(BrokerConfigQueryRequest::try_new(
             self.broker_addr.clone(),
             self.cluster_name.clone(),
             self.key_pattern.clone(),
-        )
+        )?
+        .with_optional_namesrv_addr(self.common_args.namesrv_addr.clone()))
     }
 }
 
 impl CommandExecute for GetBrokerConfigSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> CanonicalResult<()> {
-        let result = BrokerService::query_broker_config_by_request(self.request()?).await?;
+        let result = BrokerService::query_broker_config_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime,
+        )
+        .await?;
         print_broker_config_result(&result);
         Ok(())
     }
@@ -206,6 +216,10 @@ mod tests {
     #[test]
     fn test_invalid_key_pattern_regex_returns_error() {
         let cmd = GetBrokerConfigSubCommand {
+            common_args: CommonArgs {
+                namesrv_addr: None,
+                skip_confirm: false,
+            },
             broker_addr: Some("127.0.0.1:10911".to_string()),
             cluster_name: None,
             key_pattern: Some("[".to_string()),

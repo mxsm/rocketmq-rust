@@ -97,8 +97,8 @@ impl UpdateTopicPermSubCommand {
 impl CommandExecute for UpdateTopicPermSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> CanonicalResult<()> {
         let validation_result = TopicValidator::validate_topic(&self.topic);
         if !validation_result.valid() {
@@ -108,7 +108,9 @@ impl CommandExecute for UpdateTopicPermSubCommand {
             )));
         }
 
-        let result = TopicService::update_topic_perm_by_request(self.request()?).await?;
+        let result =
+            TopicService::update_topic_perm_by_request_with_credentials(self.request()?, credentials, client_runtime)
+                .await?;
         Self::print_result(result);
         Ok(())
     }
