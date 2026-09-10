@@ -103,13 +103,21 @@ pub mod test_support {
     #[cfg(feature = "rocksdb_store")]
     impl PopProfileStoreProbe {
         pub fn open(root: &Path, capacity: usize) -> Result<Self, String> {
-            let rocksdb = Arc::new(
-                PopConsumerRocksDbStore::open(pop_rocksdb_path(root), 16 * 1024 * 1024, 4 * 1024 * 1024)
-                    .map_err(|error| error.to_string())?,
-            );
-            let store = Arc::new(
-                PopConsumerProfileStore::load(Arc::clone(&rocksdb), capacity).map_err(|error| error.to_string())?,
-            );
+            Self::open_with_error(root, capacity).map_err(|error| error.to_string())
+        }
+
+        /// Opens the probe while preserving canonical errors and their typed sources.
+        ///
+        /// # Errors
+        ///
+        /// Returns the storage or profile validation error if the store cannot be loaded.
+        pub fn open_with_error(root: &Path, capacity: usize) -> Result<Self, rocketmq_error::SharedError> {
+            let rocksdb = Arc::new(PopConsumerRocksDbStore::open(
+                pop_rocksdb_path(root),
+                16 * 1024 * 1024,
+                4 * 1024 * 1024,
+            )?);
+            let store = Arc::new(PopConsumerProfileStore::load(Arc::clone(&rocksdb), capacity)?);
             Ok(Self { store, rocksdb })
         }
 
@@ -135,6 +143,22 @@ pub mod test_support {
             retry_policy: PopRetryPolicy,
             last_seen: i64,
         ) -> Result<PopProfileSnapshotProbe, String> {
+            self.upsert_policy_with_error(group, topics, retry_policy, last_seen)
+                .map_err(|error| error.to_string())
+        }
+
+        /// Upserts a profile while preserving canonical errors and their typed context.
+        ///
+        /// # Errors
+        ///
+        /// Returns the validation or storage error if the profile cannot be persisted.
+        pub fn upsert_policy_with_error(
+            &self,
+            group: &str,
+            topics: &[&str],
+            retry_policy: PopRetryPolicy,
+            last_seen: i64,
+        ) -> Result<PopProfileSnapshotProbe, rocketmq_error::SharedError> {
             let subscriptions = topics
                 .iter()
                 .map(
@@ -148,7 +172,6 @@ pub mod test_support {
             self.store
                 .upsert(CheetahString::from_slice(group), subscriptions, retry_policy, last_seen)
                 .map(profile_probe)
-                .map_err(|error| error.to_string())
         }
 
         pub fn remove(&self, group: &str, last_seen: i64) -> Result<bool, String> {

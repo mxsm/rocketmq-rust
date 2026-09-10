@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use rocketmq_broker::test_support::PopProfileStoreProbe;
+use rocketmq_error::ViewValueRef;
+use rocketmq_error::CORE_CONFIGURATION_INVALID;
 use rocketmq_model::common::pop_retry_policy::PopRetryMigrationState;
 use rocketmq_model::common::pop_retry_policy::PopRetryPolicy;
 use rocketmq_model::PopRetryPolicyOutcome;
@@ -83,10 +85,26 @@ fn persisted_profile_rejects_a_skipped_v1_to_v2_only_transition() {
     store
         .upsert_policy("group-a", &["orders"], PopRetryPolicy::v1_only(0), 10)
         .expect("persist v1-only policy");
+    let original = store.snapshot();
 
     let error = store
-        .upsert_policy("group-a", &["orders"], PopRetryPolicy::v2_only(2), 11)
+        .upsert_policy_with_error("group-a", &["orders"], PopRetryPolicy::v2_only(2), 11)
         .expect_err("migration must not skip both dual-read states");
-    assert!(error.contains("next safe POP retry migration state"), "{error}");
+    assert_eq!(error.descriptor(), &CORE_CONFIGURATION_INVALID);
+    assert_eq!(
+        error
+            .diagnostic_view()
+            .expect("valid configuration error context")
+            .fields()
+            .find(|field| field.name() == "key")
+            .map(|field| field.value()),
+        Some(ViewValueRef::Text("retryPolicy"))
+    );
     assert_eq!(store.generation(), 1);
+    assert_eq!(store.snapshot(), original);
+    drop(store);
+
+    let reopened = PopProfileStoreProbe::open(root.path(), 16).expect("reopen profile store");
+    assert_eq!(reopened.generation(), 1);
+    assert_eq!(reopened.snapshot(), original);
 }
