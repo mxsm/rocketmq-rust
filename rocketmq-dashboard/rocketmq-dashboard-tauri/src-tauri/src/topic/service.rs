@@ -15,8 +15,8 @@
 use crate::topic::batch::{TopicBatchOperation, TopicBatchResult, TopicTargetKind, project_batch};
 use crate::topic::guard::{TopicIntent, TopicWriteMode, check_topic, validate_targets};
 use rocketmq_admin_core::core::topic::{
-    TopicBatchDeleteAdmin, TopicBatchDeleteRequest, TopicBatchMutationAdmin, TopicBatchTargetOutcome,
-    TopicBatchUpsertRequest,
+    SkipTopicAccumulatedRequest, TopicBatchDeleteAdmin, TopicBatchDeleteRequest, TopicBatchMutationAdmin,
+    TopicBatchTargetOutcome, TopicBatchUpsertRequest, TopicSkipMutationAdmin,
 };
 use std::sync::Arc;
 
@@ -755,9 +755,7 @@ impl TopicManager {
         request: ResetOffsetRequest,
         skip_accumulate: bool,
     ) -> TopicResult<TopicMutationResult> {
-        if request.consumer_group_list.is_empty() {
-            return Err(TopicError::Validation("Select at least one consumer group.".into()));
-        }
+        let reset_timestamp = validate_offset_reset(&request, skip_accumulate)?;
         let operation_name = if skip_accumulate {
             "skip_message_accumulate"
         } else {
@@ -774,16 +772,34 @@ impl TopicManager {
                 .execute(|_| async {
                     let mut affected_queues = 0usize;
                     for consumer_group in &request.consumer_group_list {
-                        let outcome = session
-                            .admin
-                            .reset_topic_consumer_offset(&ResetTopicConsumerOffsetRequest {
-                                consumer_group: consumer_group.clone(),
-                                topic: request.topic.clone(),
-                                reset_timestamp: request.reset_time as u64,
-                                force: request.force,
-                            })
-                            .await
-                            .map_err(map_admin_error)?;
+                        let outcome = match reset_timestamp {
+                            OffsetResetPosition::Latest => {
+                                session
+                                    .admin
+                                    .skip_accumulated(
+                                        &SkipTopicAccumulatedRequest::try_new(
+                                            request.topic.clone(),
+                                            consumer_group.clone(),
+                                            None,
+                                            request.force,
+                                        )
+                                        .map_err(map_admin_error)?,
+                                    )
+                                    .await
+                            }
+                            OffsetResetPosition::Timestamp(timestamp) => {
+                                session
+                                    .admin
+                                    .reset_topic_consumer_offset(&ResetTopicConsumerOffsetRequest {
+                                        consumer_group: consumer_group.clone(),
+                                        topic: request.topic.clone(),
+                                        reset_timestamp: timestamp,
+                                        force: request.force,
+                                    })
+                                    .await
+                            }
+                        }
+                        .map_err(map_admin_error)?;
                         affected_queues += outcome.target_count;
                     }
                     Ok(TopicMutationResult {
@@ -842,6 +858,32 @@ impl TopicManager {
 mod mapping;
 
 use mapping::*;
+
+#[derive(Debug, PartialEq, Eq)]
+enum OffsetResetPosition {
+    Latest,
+    Timestamp(u64),
+}
+
+fn validate_offset_reset(request: &ResetOffsetRequest, skip_accumulate: bool) -> TopicResult<OffsetResetPosition> {
+    use rocketmq_admin_core::core::consumer::is_protected_consumer_group;
+    if request.consumer_group_list.is_empty()
+        || request
+            .consumer_group_list
+            .iter()
+            .any(|group| group.trim().is_empty() || group.trim() != group || is_protected_consumer_group(group))
+    {
+        return Err(TopicError::Validation(
+            "Select non-system Consumer groups before resetting offsets.".into(),
+        ));
+    }
+    if skip_accumulate {
+        return Ok(OffsetResetPosition::Latest);
+    }
+    u64::try_from(request.reset_time)
+        .map(OffsetResetPosition::Timestamp)
+        .map_err(|_| TopicError::Validation("Reset time must be a nonnegative millisecond timestamp.".into()))
+}
 
 #[cfg(test)]
 mod tests;
