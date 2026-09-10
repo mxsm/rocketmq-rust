@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::connection::ConnectionManager;
 use crate::producer::service::ProducerManager;
 use crate::producer::types::ProducerConnectionView;
 use crate::producer::types::ProducerTopicOptionsView;
@@ -25,12 +26,17 @@ pub async fn get_producer_topic_options(
     request: ProducerTopicOptionsRequest,
     producer_manager: State<'_, ProducerManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<ProducerTopicOptionsView> {
     authorize_command(&session_id, &session_state).await?;
-    producer_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = producer_manager
         .get_producer_topic_options(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -39,12 +45,17 @@ pub async fn query_producer_connections(
     request: ProducerConnectionQueryRequest,
     producer_manager: State<'_, ProducerManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<ProducerConnectionView> {
     authorize_command(&session_id, &session_state).await?;
-    producer_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = producer_manager
         .query_producer_connections(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 use crate::auth::SessionState;
 use crate::error::CommandResult;

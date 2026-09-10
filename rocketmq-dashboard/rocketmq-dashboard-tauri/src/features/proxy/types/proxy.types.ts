@@ -1,3 +1,4 @@
+import type { ConnectionSettingsView } from '../../../services/connection.store';
 export interface ProxyConfigSnapshot {
     currentProxyAddr: string | null;
     proxyAddrList: string[];
@@ -5,5 +6,7 @@ export interface ProxyConfigSnapshot {
 
 export interface ProxyMutationResult {
     message: string;
-    snapshot: ProxyConfigSnapshot;
+    settings: ConnectionSettingsView;
 }
+
+export interface ProxyHomePageInfo extends ProxyConfigSnapshot { settings: ConnectionSettingsView }

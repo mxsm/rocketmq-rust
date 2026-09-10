@@ -87,7 +87,9 @@ impl AuditManager {
         F: FnOnce(AuditContext) -> Fut,
         Fut: Future<Output = DashboardResult<T>>,
     {
-        let context = AuditContext {
+        let mut context = AuditContext {
+            actor: None,
+            environment: Arc::new(Mutex::new(None)),
             event_id: Uuid::new_v4().to_string(),
             request_id: Uuid::new_v4().to_string(),
             action,
@@ -111,6 +113,7 @@ impl AuditManager {
                 Err(error) => Err(error),
             },
         };
+        context.actor = actor.clone();
         let result = match identity {
             Ok(_) => operation(context.clone()).await.map_err(CommandError::from),
             Err(error) => Err(CommandError::from(error)),
@@ -141,13 +144,6 @@ impl AuditManager {
                 Err(error)
             }
         }
-    }
-
-    pub(crate) async fn run_local<T: Send + 'static>(
-        &self,
-        operation: impl FnOnce() -> DashboardResult<T> + Send + 'static,
-    ) -> DashboardResult<T> {
-        self.storage.run("local-config-mutation", move |_| operation()).await
     }
 
     pub(crate) async fn query(&self, query: AuditQuery) -> DashboardResult<AuditPage> {

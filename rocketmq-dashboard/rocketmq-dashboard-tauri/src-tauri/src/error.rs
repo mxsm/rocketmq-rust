@@ -45,6 +45,8 @@ pub(crate) enum DashboardError {
     Unauthenticated,
     #[error("the account password must be changed before dashboard access")]
     PasswordChangeRequired,
+    #[error("connection settings changed; review the current configuration")]
+    ConfigurationConflict,
     #[error("I/O operation failed")]
     Io(#[from] std::io::Error),
     #[error("database operation failed")]
@@ -75,6 +77,13 @@ impl DashboardError {
             Self::Validation(_) => (
                 "dashboard.invalid_argument",
                 "The request is invalid.",
+                CommandErrorCategory::Validation,
+                false,
+                None,
+            ),
+            Self::ConfigurationConflict => (
+                "dashboard.configuration_conflict",
+                "Connection settings changed. Refresh and review your changes before saving again.",
                 CommandErrorCategory::Validation,
                 false,
                 None,

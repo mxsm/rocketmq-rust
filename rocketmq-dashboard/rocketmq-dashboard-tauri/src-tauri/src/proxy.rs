@@ -13,8 +13,8 @@
 // limitations under the License.
 
 pub(crate) mod commands;
-mod db;
+pub(crate) mod db;
+#[cfg(test)]
 mod service;
 
 pub(crate) use db::ProxyDb;
-pub(crate) use service::ProxyManager;

@@ -15,6 +15,6 @@
 pub(crate) mod commands;
 mod db;
 mod service;
-pub(crate) mod types;
-pub(crate) use service::AuditManager;
-pub(crate) use types::{AuditAccess, AuditAction, AuditContext, Audited};
+mod types;
+pub(crate) use service::ConnectionManager;
+pub(crate) use types::*;

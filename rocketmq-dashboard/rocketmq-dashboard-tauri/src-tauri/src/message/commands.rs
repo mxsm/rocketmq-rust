@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::audit::{AuditAccess, AuditAction, AuditManager, Audited};
+use crate::connection::ConnectionManager;
 use crate::message::service::MessageManager;
 use crate::message::types::DlqBatchMessageExportView;
 use crate::message::types::DlqMessageExportView;
@@ -41,12 +42,17 @@ pub async fn query_message_by_topic_key(
     request: MessageKeyQueryRequest,
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<MessageSummaryListResponse> {
     authorize_command(&session_id, &session_state).await?;
-    message_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = message_manager
         .query_message_by_topic_key(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -55,9 +61,14 @@ pub async fn query_message_by_id(
     request: MessageIdQueryRequest,
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<MessageSummaryListResponse> {
     authorize_command(&session_id, &session_state).await?;
-    message_manager.query_message_by_id(request).await.map_err(Into::into)
+    connection_manager.check_revision(expected_revision)?;
+    let result = message_manager.query_message_by_id(request).await.map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -66,12 +77,17 @@ pub async fn query_message_page_by_topic(
     request: MessagePageQueryRequest,
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<MessagePageResponse> {
     authorize_command(&session_id, &session_state).await?;
-    message_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = message_manager
         .query_message_page_by_topic(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -80,12 +96,17 @@ pub async fn query_dlq_message_by_consumer_group(
     request: DlqMessagePageQueryRequest,
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<MessagePageResponse> {
     authorize_command(&session_id, &session_state).await?;
-    message_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = message_manager
         .query_dlq_message_by_consumer_group(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -94,9 +115,14 @@ pub async fn view_message_detail(
     request: ViewMessageRequest,
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<MessageDetailView> {
     authorize_command(&session_id, &session_state).await?;
-    message_manager.view_message_detail(request).await.map_err(Into::into)
+    connection_manager.check_revision(expected_revision)?;
+    let result = message_manager.view_message_detail(request).await.map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -105,12 +131,17 @@ pub async fn view_dlq_message_detail(
     request: DlqViewMessageRequest,
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<MessageDetailView> {
     authorize_command(&session_id, &session_state).await?;
-    message_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = message_manager
         .view_dlq_message_detail(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -120,11 +151,15 @@ pub async fn resend_dlq_message(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
     audit_manager: State<'_, AuditManager>,
+    connection_manager: State<'_, ConnectionManager>,
+    expected_revision: i64,
 ) -> CommandResult<Audited<MessageResendResult>> {
+    let connection_manager = connection_manager.inner().clone();
     let access = AuditAccess::dashboard(&session_state, session_id);
     let message_manager = message_manager.inner().clone();
     audit_manager
-        .execute(access, AuditAction::ResendDlq, None, move |_audit| async move {
+        .execute(access, AuditAction::ResendDlq, None, move |audit| async move {
+            let _lease = connection_manager.mutation_lease(expected_revision, &audit).await?;
             message_manager.resend_dlq_message(request).await
         })
         .await
@@ -137,11 +172,15 @@ pub async fn batch_resend_dlq_message(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
     audit_manager: State<'_, AuditManager>,
+    connection_manager: State<'_, ConnectionManager>,
+    expected_revision: i64,
 ) -> CommandResult<Audited<MessageBatchResendResponse>> {
+    let connection_manager = connection_manager.inner().clone();
     let access = AuditAccess::dashboard(&session_state, session_id);
     let message_manager = message_manager.inner().clone();
     audit_manager
-        .execute(access, AuditAction::BatchResendDlq, None, move |_audit| async move {
+        .execute(access, AuditAction::BatchResendDlq, None, move |audit| async move {
+            let _lease = connection_manager.mutation_lease(expected_revision, &audit).await?;
             message_manager.batch_resend_dlq_message(request).await
         })
         .await
@@ -153,9 +192,14 @@ pub async fn export_dlq_message(
     request: DlqViewMessageRequest,
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<DlqMessageExportView> {
     authorize_command(&session_id, &session_state).await?;
-    message_manager.export_dlq_message(request).await.map_err(Into::into)
+    connection_manager.check_revision(expected_revision)?;
+    let result = message_manager.export_dlq_message(request).await.map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -164,12 +208,17 @@ pub async fn batch_export_dlq_message(
     request: DlqBatchExportMessageRequest,
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<DlqBatchMessageExportView> {
     authorize_command(&session_id, &session_state).await?;
-    message_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = message_manager
         .batch_export_dlq_message(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -179,11 +228,15 @@ pub async fn consume_message_directly(
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
     audit_manager: State<'_, AuditManager>,
+    connection_manager: State<'_, ConnectionManager>,
+    expected_revision: i64,
 ) -> CommandResult<Audited<MessageResendResult>> {
+    let connection_manager = connection_manager.inner().clone();
     let access = AuditAccess::dashboard(&session_state, session_id);
     let message_manager = message_manager.inner().clone();
     audit_manager
-        .execute(access, AuditAction::ConsumeDirectly, None, move |_audit| async move {
+        .execute(access, AuditAction::ConsumeDirectly, None, move |audit| async move {
+            let _lease = connection_manager.mutation_lease(expected_revision, &audit).await?;
             message_manager.consume_message_directly(request).await
         })
         .await
@@ -195,12 +248,17 @@ pub async fn query_message_trace_by_id(
     request: MessageTraceQueryRequest,
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<MessageSummaryListResponse> {
     authorize_command(&session_id, &session_state).await?;
-    message_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = message_manager
         .query_message_trace_by_id(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -209,12 +267,17 @@ pub async fn view_message_trace_detail(
     request: MessageTraceQueryRequest,
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<MessageTraceDetailView> {
     authorize_command(&session_id, &session_state).await?;
-    message_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = message_manager
         .view_message_trace_detail(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 use crate::auth::SessionState;
 use crate::error::CommandResult;

@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useSyncExternalStore } from 'react';
+import { ConnectionStore } from '../../services/connection.store';
 import {useAppStore} from '../../stores/app.store';
 import {DashboardPage} from '../../pages/dashboard/DashboardPage';
 
@@ -18,6 +19,13 @@ import {AuditPage} from '../../pages/audit/AuditPage';
 import {AccountPage} from '../../pages/account/AccountPage';
 
 export const AppRouter = () => {
+    const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
+    const { activeTab } = useAppStore();
+    const key = ['NameServer', 'Proxy', 'Account', 'Audit'].includes(activeTab) ? activeTab : `${activeTab}:${settings?.revision ?? 0}`;
+    return <RouteContent key={key} />;
+};
+
+const RouteContent = () => {
     const {activeTab} = useAppStore();
 
     switch (activeTab) {

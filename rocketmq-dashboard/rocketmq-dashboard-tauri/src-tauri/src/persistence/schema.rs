@@ -17,7 +17,7 @@ use crate::error::DashboardResult;
 use rusqlite::Connection;
 use rusqlite::TransactionBehavior;
 
-pub(crate) const SCHEMA_VERSION: i64 = 3;
+pub(crate) const SCHEMA_VERSION: i64 = 4;
 
 pub(crate) fn initialize(connection: &mut Connection) -> DashboardResult<()> {
     // IMMEDIATE serializes competing initializers before reading the version.
@@ -61,6 +61,15 @@ pub(crate) fn initialize(connection: &mut Connection) -> DashboardResult<()> {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 last_login_at TEXT
+            );
+            CREATE TABLE connection_metadata (id INTEGER PRIMARY KEY CHECK(id = 1), revision INTEGER NOT NULL CHECK(revision >= 0 AND revision < 9007199254740991));
+            INSERT INTO connection_metadata(id, revision) VALUES (1, 0);
+            CREATE TABLE endpoint_identity (
+                kind TEXT NOT NULL CHECK(kind IN ('nameserver', 'proxy')),
+                address TEXT NOT NULL,
+                endpoint_id TEXT NOT NULL UNIQUE,
+                environment_id TEXT UNIQUE,
+                PRIMARY KEY(kind, address)
             );
             CREATE TABLE audit_events (
                 event_id TEXT PRIMARY KEY,

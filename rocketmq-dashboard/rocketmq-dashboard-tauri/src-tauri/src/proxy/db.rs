@@ -56,11 +56,13 @@ impl ProxyDb {
         crate::persistence::open_connection(&self.db_path)
     }
 
+    #[cfg(test)]
     pub(crate) fn load_snapshot(&self) -> Result<ProxyConfigSnapshot> {
         let connection = self.connection()?;
         load_snapshot_from_connection(&connection)
     }
 
+    #[cfg(test)]
     pub(crate) fn update_snapshot<F>(&self, operation: F) -> Result<ProxyConfigSnapshot>
     where
         F: FnOnce(&mut ProxyConfigSnapshot) -> Result<()>,
@@ -78,7 +80,7 @@ impl ProxyDb {
     }
 }
 
-fn load_snapshot_from_connection(connection: &Connection) -> Result<ProxyConfigSnapshot> {
+pub(crate) fn load_snapshot_from_connection(connection: &Connection) -> Result<ProxyConfigSnapshot> {
     let mut statement = connection.prepare(
         "
         SELECT address, is_current
@@ -105,7 +107,10 @@ fn load_snapshot_from_connection(connection: &Connection) -> Result<ProxyConfigS
     })?)
 }
 
-fn save_snapshot_to_transaction(transaction: &Transaction<'_>, snapshot: &ProxyConfigSnapshot) -> Result<()> {
+pub(crate) fn save_snapshot_to_transaction(
+    transaction: &Transaction<'_>,
+    snapshot: &ProxyConfigSnapshot,
+) -> Result<()> {
     let snapshot = canonicalize_proxy_snapshot(snapshot)?;
     let now = Utc::now().to_rfc3339();
 

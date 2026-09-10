@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NameServerService } from '../../../services/nameserver.service';
+import type { ConnectionSettingsView } from '../../../services/connection.store';
 import { dashboardErrorMessage } from '../../../services/invoke';
 import type {
     NameServerConfigSnapshot,
@@ -29,9 +30,15 @@ export const useNameServer = () => {
     const [pendingAction, setPendingAction] = useState<string | null>(null);
     const [newAddress, setNewAddress] = useState('');
 
-    const loadHomePage = async () => {
+    const loadedRevision = useRef<number | null>(null);
+    const loadHomePage = async (poll = false) => {
         try {
             const homePage = await NameServerService.getHomePageInfo();
+            if (poll && loadedRevision.current !== null && loadedRevision.current !== homePage.settings.revision) {
+                setLoadError('Connection settings changed. Refresh and review your pending edits.');
+                return homePage;
+            }
+            loadedRevision.current = homePage.settings.revision;
             setData(homePage);
             setLoadError('');
             return homePage;
@@ -62,7 +69,7 @@ export const useNameServer = () => {
         void loadInitialState();
 
         const intervalId = window.setInterval(() => {
-            void loadHomePage().catch(() => {});
+            void loadHomePage(true).catch(() => {});
         }, NAMESERVER_REFRESH_INTERVAL_MS);
 
         return () => {
@@ -80,7 +87,7 @@ export const useNameServer = () => {
         setPendingAction('add');
 
         try {
-            const result = await NameServerService.addNameServer(nextAddress);
+            const result = await NameServerService.addNameServer(nextAddress, data?.settings.revision ?? -1);
             await loadHomePage();
             setNewAddress('');
             return result.message;
@@ -95,7 +102,7 @@ export const useNameServer = () => {
         setPendingAction(`switch:${address}`);
 
         try {
-            const result = await NameServerService.switchNameServer(address);
+            const result = await NameServerService.switchNameServer(address, data?.settings.revision ?? -1);
             await loadHomePage();
             return result.message;
         } catch (error) {
@@ -109,7 +116,7 @@ export const useNameServer = () => {
         setPendingAction(`delete:${address}`);
 
         try {
-            const result = await NameServerService.deleteNameServer(address);
+            const result = await NameServerService.deleteNameServer(address, data?.settings.revision ?? -1);
             await loadHomePage();
             return result.message;
         } catch (error) {
@@ -123,13 +130,16 @@ export const useNameServer = () => {
         setData((previous) => (previous ? updater(previous) : previous));
     };
 
-    const applySnapshot = (snapshot: NameServerConfigSnapshot) => {
+    const applySnapshot = (settings: ConnectionSettingsView) => {
+        loadedRevision.current = settings.revision;
+        const snapshot = settings.nameserver;
         setData((previous) => ({
             currentNamesrv: snapshot.currentNamesrv,
             namesrvAddrList: snapshot.namesrvAddrList,
             useVIPChannel: snapshot.useVIPChannel,
             useTLS: snapshot.useTLS,
             servers: buildServerStatuses(snapshot, previous?.servers),
+            settings,
         }));
     };
 
@@ -143,8 +153,8 @@ export const useNameServer = () => {
         updateSnapshot((snapshot) => ({ ...snapshot, useVIPChannel: enabled }));
 
         try {
-            const result = await NameServerService.updateVipChannel(enabled);
-            applySnapshot(result.snapshot);
+            const result = await NameServerService.updateVipChannel(enabled, data?.settings.revision ?? -1);
+            applySnapshot(result.settings);
             return result.message;
         } catch (error) {
             setData(previous);
@@ -164,8 +174,8 @@ export const useNameServer = () => {
         updateSnapshot((snapshot) => ({ ...snapshot, useTLS: enabled }));
 
         try {
-            const result = await NameServerService.updateUseTls(enabled);
-            applySnapshot(result.snapshot);
+            const result = await NameServerService.updateUseTls(enabled, data?.settings.revision ?? -1);
+            applySnapshot(result.settings);
             return result.message;
         } catch (error) {
             setData(previous);

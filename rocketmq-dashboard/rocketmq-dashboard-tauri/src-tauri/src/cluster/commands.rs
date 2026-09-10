@@ -17,6 +17,7 @@ use crate::cluster::service::ClusterManager;
 use crate::cluster::types::ClusterBrokerConfigView;
 use crate::cluster::types::ClusterBrokerStatusView;
 use crate::cluster::types::ClusterHomePageResponse;
+use crate::connection::ConnectionManager;
 use crate::error::CommandResult;
 use crate::error::authorize_command;
 use rocketmq_dashboard_common::ClusterBrokerConfigRequest;
@@ -30,9 +31,14 @@ pub async fn get_cluster_home_page(
     request: ClusterHomePageRequest,
     cluster_manager: State<'_, ClusterManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<ClusterHomePageResponse> {
     authorize_command(&session_id, &session_state).await?;
-    cluster_manager.get_cluster_home_page(request).await.map_err(Into::into)
+    connection_manager.check_revision(expected_revision)?;
+    let result = cluster_manager.get_cluster_home_page(request).await.map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -41,12 +47,17 @@ pub async fn get_cluster_broker_config(
     request: ClusterBrokerConfigRequest,
     cluster_manager: State<'_, ClusterManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<ClusterBrokerConfigView> {
     authorize_command(&session_id, &session_state).await?;
-    cluster_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = cluster_manager
         .get_cluster_broker_config(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -55,10 +66,15 @@ pub async fn get_cluster_broker_status(
     request: ClusterBrokerStatusRequest,
     cluster_manager: State<'_, ClusterManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<ClusterBrokerStatusView> {
     authorize_command(&session_id, &session_state).await?;
-    cluster_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = cluster_manager
         .get_cluster_broker_status(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }

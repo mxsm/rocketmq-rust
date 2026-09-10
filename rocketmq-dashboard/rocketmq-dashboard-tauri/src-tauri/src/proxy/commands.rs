@@ -13,36 +13,50 @@
 // limitations under the License.
 
 use crate::audit::{AuditAccess, AuditAction, AuditManager, Audited};
-use crate::proxy::ProxyManager;
+use crate::auth::SessionState;
+use crate::connection::{
+    ConnectionChange, ConnectionManager, ConnectionMutationResult, ConnectionProjection, EndpointKind,
+};
+use crate::error::{CommandResult, authorize_command};
 use rocketmq_dashboard_common::ProxyConfigSnapshot;
-use rocketmq_dashboard_common::ProxyMutationResult;
 use tauri::State;
 
 #[tauri::command]
 pub async fn get_proxy_home_page(
     session_id: String,
-    proxy_manager: State<'_, ProxyManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<ProxyConfigSnapshot> {
+    connection_manager: State<'_, ConnectionManager>,
+) -> CommandResult<ConnectionProjection<ProxyConfigSnapshot>> {
     authorize_command(&session_id, &session_state).await?;
-    proxy_manager.home_page_info().map_err(Into::into)
+    let settings = connection_manager.snapshot()?;
+    Ok(ConnectionProjection {
+        value: settings.proxy.clone(),
+        settings,
+    })
 }
 
 #[tauri::command]
 pub async fn add_proxy_addr(
     session_id: String,
     address: String,
-    proxy_manager: State<'_, ProxyManager>,
+    expected_revision: i64,
     session_state: State<'_, SessionState>,
+    connection_manager: State<'_, ConnectionManager>,
     audit_manager: State<'_, AuditManager>,
-) -> CommandResult<Audited<ProxyMutationResult>> {
+) -> CommandResult<Audited<ConnectionMutationResult>> {
     let access = AuditAccess::dashboard(&session_state, session_id);
-    let proxy_manager = proxy_manager.inner().clone();
-    let local_audit = audit_manager.inner().clone();
+    let manager = connection_manager.inner().clone();
     audit_manager
-        .execute(access, AuditAction::AddProxy, None, move |_audit| async move {
-            local_audit
-                .run_local(move || proxy_manager.add_proxy_addr(&address))
+        .execute(access, AuditAction::AddProxy, None, move |audit| async move {
+            manager
+                .change(
+                    expected_revision,
+                    ConnectionChange::Add {
+                        kind: EndpointKind::Proxy,
+                        address,
+                    },
+                    audit,
+                )
                 .await
         })
         .await
@@ -52,17 +66,24 @@ pub async fn add_proxy_addr(
 pub async fn switch_proxy_addr(
     session_id: String,
     address: String,
-    proxy_manager: State<'_, ProxyManager>,
+    expected_revision: i64,
     session_state: State<'_, SessionState>,
+    connection_manager: State<'_, ConnectionManager>,
     audit_manager: State<'_, AuditManager>,
-) -> CommandResult<Audited<ProxyMutationResult>> {
+) -> CommandResult<Audited<ConnectionMutationResult>> {
     let access = AuditAccess::dashboard(&session_state, session_id);
-    let proxy_manager = proxy_manager.inner().clone();
-    let local_audit = audit_manager.inner().clone();
+    let manager = connection_manager.inner().clone();
     audit_manager
-        .execute(access, AuditAction::SwitchProxy, None, move |_audit| async move {
-            local_audit
-                .run_local(move || proxy_manager.switch_proxy_addr(&address))
+        .execute(access, AuditAction::SwitchProxy, None, move |audit| async move {
+            manager
+                .change(
+                    expected_revision,
+                    ConnectionChange::Switch {
+                        kind: EndpointKind::Proxy,
+                        address,
+                    },
+                    audit,
+                )
                 .await
         })
         .await
@@ -72,21 +93,25 @@ pub async fn switch_proxy_addr(
 pub async fn delete_proxy_addr(
     session_id: String,
     address: String,
-    proxy_manager: State<'_, ProxyManager>,
+    expected_revision: i64,
     session_state: State<'_, SessionState>,
+    connection_manager: State<'_, ConnectionManager>,
     audit_manager: State<'_, AuditManager>,
-) -> CommandResult<Audited<ProxyMutationResult>> {
+) -> CommandResult<Audited<ConnectionMutationResult>> {
     let access = AuditAccess::dashboard(&session_state, session_id);
-    let proxy_manager = proxy_manager.inner().clone();
-    let local_audit = audit_manager.inner().clone();
+    let manager = connection_manager.inner().clone();
     audit_manager
-        .execute(access, AuditAction::DeleteProxy, None, move |_audit| async move {
-            local_audit
-                .run_local(move || proxy_manager.delete_proxy_addr(&address))
+        .execute(access, AuditAction::DeleteProxy, None, move |audit| async move {
+            manager
+                .change(
+                    expected_revision,
+                    ConnectionChange::Delete {
+                        kind: EndpointKind::Proxy,
+                        address,
+                    },
+                    audit,
+                )
                 .await
         })
         .await
 }
-use crate::auth::SessionState;
-use crate::error::CommandResult;
-use crate::error::authorize_command;
