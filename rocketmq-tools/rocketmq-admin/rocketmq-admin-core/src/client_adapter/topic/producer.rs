@@ -84,12 +84,19 @@ pub(crate) async fn send_normal_message(
     mut client_config: rocketmq_client_rust::ClientConfig,
     producer_group: String,
     request: &TopicSendRequest,
+    signing_hook: Option<Arc<dyn rocketmq_transport::api::RPCHook>>,
 ) -> Result<TopicSendResult, AdminError> {
     client_config.set_instance_name(producer_group.clone().into());
-    let mut producer = DefaultMQProducer::builder(client_runtime)
+    let mut builder = DefaultMQProducer::builder(client_runtime)
         .producer_group(producer_group)
         .client_config(client_config)
-        .build();
+        .retry_times_when_send_failed(0)
+        .retry_times_when_send_async_failed(0)
+        .retry_another_broker_when_not_store_ok(false);
+    if let Some(hook) = signing_hook {
+        builder = builder.rpc_hook(hook);
+    }
+    let mut producer = builder.build();
     producer
         .start()
         .await
@@ -114,13 +121,20 @@ pub(crate) async fn send_transaction_message(
     mut client_config: rocketmq_client_rust::ClientConfig,
     producer_group: String,
     request: &TopicSendRequest,
+    signing_hook: Option<Arc<dyn rocketmq_transport::api::RPCHook>>,
 ) -> Result<TopicSendResult, AdminError> {
     client_config.set_instance_name(producer_group.clone().into());
-    let mut producer = TransactionMQProducer::builder(client_runtime)
+    let mut builder = TransactionMQProducer::builder(client_runtime)
         .producer_group(producer_group)
         .client_config(client_config)
         .transaction_listener(CommitTransactionListener)
-        .build();
+        .retry_times_when_send_failed(0)
+        .retry_times_when_send_async_failed(0)
+        .retry_another_broker_when_not_store_ok(false);
+    if let Some(hook) = signing_hook {
+        builder = builder.rpc_hook(hook);
+    }
+    let mut producer = builder.build();
     producer
         .start()
         .await

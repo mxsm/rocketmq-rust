@@ -71,9 +71,18 @@ pub(super) fn map_status_view(stats: TopicStats) -> TopicStatusView {
 }
 
 pub(super) fn map_send_result(result: AdminTopicSendResult) -> TopicSendMessageResult {
+    let status = result.send_status.split(" (").next().unwrap_or_default().trim();
+    let send_status = match status {
+        "SendOk" | "SEND_OK" => "SEND_OK",
+        "FlushDiskTimeout" | "FLUSH_DISK_TIMEOUT" => "FLUSH_DISK_TIMEOUT",
+        "FlushSlaveTimeout" | "FLUSH_SLAVE_TIMEOUT" => "FLUSH_SLAVE_TIMEOUT",
+        "SlaveNotAvailable" | "SLAVE_NOT_AVAILABLE" => "SLAVE_NOT_AVAILABLE",
+        _ => "UNKNOWN",
+    };
     TopicSendMessageResult {
+        success: send_status == "SEND_OK",
         topic: result.topic,
-        send_status: result.send_status,
+        send_status: send_status.to_string(),
         message_id: result.message_id,
         broker_name: result.broker_name,
         queue_id: result.queue_id,

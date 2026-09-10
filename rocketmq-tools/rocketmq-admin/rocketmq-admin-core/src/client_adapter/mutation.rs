@@ -529,9 +529,23 @@ impl TopicMutationAdmin for MutationAdminSession {
             let producer_group = unique_producer_group(self.inner.clock.now_millis(), transactional);
             let client_config = self.inner.inner.client_config().clone_client_config();
             if transactional {
-                send_transaction_message(self.client_runtime(), client_config, producer_group, request).await
+                send_transaction_message(
+                    self.client_runtime(),
+                    client_config,
+                    producer_group,
+                    request,
+                    self.inner.request_signing_hook.clone(),
+                )
+                .await
             } else {
-                send_normal_message(self.client_runtime(), client_config, producer_group, request).await
+                send_normal_message(
+                    self.client_runtime(),
+                    client_config,
+                    producer_group,
+                    request,
+                    self.inner.request_signing_hook.clone(),
+                )
+                .await
             }
         })
     }

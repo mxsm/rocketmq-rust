@@ -238,7 +238,7 @@ impl AuditReceipt for crate::topic::types::TopicMutationResult {
 }
 impl AuditReceipt for crate::topic::types::TopicSendMessageResult {
     fn summary(&self) -> Summary {
-        let ok = self.send_status == "SEND_OK";
+        let ok = self.success;
         Summary::count(usize::from(ok), usize::from(!ok))
     }
 }

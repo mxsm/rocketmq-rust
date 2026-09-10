@@ -116,6 +116,7 @@ export interface TopicConsumerInfoResponse {
 }
 
 export interface TopicSendMessageResult {
+    success: boolean;
     topic: string;
     sendStatus: string;
     messageId?: string | null;

@@ -183,6 +183,7 @@ pub(crate) struct TopicConsumerInfoResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TopicSendMessageResult {
+    pub(crate) success: bool,
     pub(crate) topic: String,
     pub(crate) send_status: String,
     pub(crate) message_id: Option<String>,
