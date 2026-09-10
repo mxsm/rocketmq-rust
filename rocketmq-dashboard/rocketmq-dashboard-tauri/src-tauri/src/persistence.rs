@@ -18,4 +18,5 @@ mod types;
 
 pub(crate) use db::StorageManager;
 pub(crate) use db::open_connection;
+pub(crate) use db::open_read_only;
 pub(crate) use db::resolve_data_path;

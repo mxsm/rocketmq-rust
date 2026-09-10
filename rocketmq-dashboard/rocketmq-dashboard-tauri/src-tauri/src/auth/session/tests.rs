@@ -333,3 +333,38 @@ fn ttl_configuration_is_validated_without_changing_process_environment() {
         assert!(ttl_millis(Some(value)).is_err());
     }
 }
+
+#[test]
+fn diagnostic_authorization_does_not_write_and_still_enforces_expiry() {
+    let fixture = Fixture::new();
+    fixture.owner.as_ref().unwrap().block_on(async {
+        let login = fixture.ready_login().await;
+        fixture
+            .storage
+            .run("test-sentinel", |db| {
+                db.execute("UPDATE storage_activity SET last_write_ms=123", [])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        fixture.clock.fetch_add(500, Ordering::SeqCst);
+        fixture.service.authorize_read_only(&login.session_id).await.unwrap();
+        fixture
+            .storage
+            .read("test-status", |db| {
+                assert_eq!(
+                    db.query_row("SELECT last_write_ms FROM storage_activity", [], |row| row
+                        .get::<_, i64>(0))?,
+                    123
+                );
+                Ok(())
+            })
+            .await
+            .unwrap();
+        fixture.clock.fetch_add(500, Ordering::SeqCst);
+        assert!(matches!(
+            fixture.service.authorize_read_only(&login.session_id).await,
+            Err(DashboardError::Unauthenticated)
+        ));
+    });
+}

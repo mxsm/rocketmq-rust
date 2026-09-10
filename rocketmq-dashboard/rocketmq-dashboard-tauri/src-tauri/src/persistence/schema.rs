@@ -17,7 +17,7 @@ use crate::error::DashboardResult;
 use rusqlite::Connection;
 use rusqlite::TransactionBehavior;
 
-pub(crate) const SCHEMA_VERSION: i64 = 6;
+pub(crate) const SCHEMA_VERSION: i64 = 7;
 
 pub(crate) fn initialize(connection: &mut Connection) -> DashboardResult<()> {
     // IMMEDIATE serializes competing initializers before reading the version.
@@ -141,6 +141,30 @@ pub(crate) fn initialize(connection: &mut Connection) -> DashboardResult<()> {
                 updated_at TEXT NOT NULL
             );",
         )?;
+        transaction.execute_batch(
+            "CREATE TABLE storage_activity (
+            id INTEGER PRIMARY KEY CHECK(id = 1), last_write_ms INTEGER
+        ); INSERT INTO storage_activity(id,last_write_ms) VALUES(1,NULL);",
+        )?;
+        // Trigger effects commit or roll back with the business transaction. Reads never touch this row.
+        // The timestamp identifies a write in the latest committed transaction, not an I/O completion.
+        for table in [
+            "users",
+            "sessions",
+            "connection_metadata",
+            "endpoint_identity",
+            "nameserver_addresses",
+            "nameserver_settings",
+            "proxy_addresses",
+            "audit_events",
+            "history_samples",
+            "consumer_monitor_rules",
+        ] {
+            for action in ["INSERT", "UPDATE", "DELETE"] {
+                transaction.execute_batch(&format!("CREATE TRIGGER activity_{table}_{action} AFTER {action} ON {table}
+                    BEGIN UPDATE storage_activity SET last_write_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER) WHERE id = 1; END;"))?;
+            }
+        }
         transaction.execute(
             "UPDATE dashboard_schema SET version = ?1 WHERE id = 1",
             [SCHEMA_VERSION],

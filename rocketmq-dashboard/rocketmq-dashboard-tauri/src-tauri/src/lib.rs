@@ -26,6 +26,7 @@ mod history;
 mod message;
 mod monitor;
 mod nameserver;
+mod ops;
 mod persistence;
 mod producer;
 mod proxy;
@@ -255,6 +256,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
             sessions.start_cleanup()?;
             app.manage(monitor::MonitorManager::new(storage.clone(), connections.clone()));
             app.manage(history);
+            app.manage(ops::OpsManager::new(storage.clone()));
             app.manage(storage);
             app.manage(sessions);
             app.manage(audit);
@@ -308,6 +310,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
             history::query_broker_history,
             history::query_topic_history,
             history::get_history_status,
+            ops::get_storage_status,
             monitor::list_consumer_monitor_rules,
             monitor::save_consumer_monitor_rule,
             monitor::delete_consumer_monitor_rule,

@@ -160,6 +160,19 @@ impl SessionState {
         Ok(session)
     }
 
+    /// Diagnostics authenticate without advancing session activity or storage write timestamps.
+    pub(crate) async fn authorize_read_only(&self, token: &str) -> DashboardResult<SessionUser> {
+        let hash = digest(token);
+        let clock = self.clock.clone();
+        self.storage
+            .read("session-authorize-read-only", move |connection| {
+                let session = lookup(connection, &hash, clock())?;
+                require_password_changed(&session)?;
+                Ok(session)
+            })
+            .await
+    }
+
     pub(crate) async fn restore(&self, token: String) -> DashboardResult<AuthSessionResponse> {
         let current_user = self.require_session(&token).await?;
         Ok(AuthSessionResponse {
