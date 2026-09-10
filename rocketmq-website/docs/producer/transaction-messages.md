@@ -1,168 +1,138 @@
 ---
-sidebar_position: 3
-title: Transaction Messages
+title: "Transaction messages"
 ---
 
-# Transaction Messages
+# Transaction messages
 
-Transaction messages are used to keep message delivery and local business state consistent.
+Transaction messages coordinate visibility of an event with a producer-side business transaction. The Broker first stores a prepared, or half, message; the producer then reports commit, rollback, or an unknown local outcome. This is not a distributed ACID transaction spanning Broker storage and the application's database.
 
-## Overview
+Use a `TransactionMQProducer` with a registered `TransactionListener` and an injected `ClientRuntime`. The ordinary producer's similarly named method is not a replacement for transaction-producer initialization. Start with the [producer lifecycle](./overview.md), and provision the intended business topic.
 
-Transaction messages ensure that:
-
-1. The half message is persisted before local business execution.
-2. The final visibility (commit/rollback) depends on local transaction state.
-3. Unknown states can be checked by broker callbacks.
-
-## Transaction Flow
+## Prepare, decide, and check
 
 ```mermaid
 sequenceDiagram
-    participant P as Producer
-    participant B as Broker
-    participant L as Local Transaction
+    participant P as Transaction producer
+    participant B as Broker transaction service
+    participant D as Business database
     participant C as Consumer
-
-    P->>B: Send half message
-    B-->>P: Ack half message
-    P->>L: Execute local transaction
-    L-->>P: Return local state
-
-    alt Commit
-        P->>B: Commit message
-        B->>C: Deliver message
-    else Rollback
-        P->>B: Rollback message
-    else Unknown
-        B->>P: Check local transaction
-        P-->>B: Return local state
+    P->>B: Send prepared message
+    B-->>P: Half-message send status
+    alt SendOk
+        P->>D: Execute local transaction and record outcome
+        D-->>P: Commit / rollback / uncertain
+        P->>B: End-transaction decision
+    else Flush or replica status is not SendOk
+        P->>B: Current client chooses rollback
     end
+    opt Broker needs to resolve a pending outcome
+        B->>P: Check local transaction
+        P->>D: Read durable business outcome
+        D-->>P: Known outcome or uncertain
+        P-->>B: Commit / rollback / unknown
+    end
+    B-->>C: Committed message becomes eligible for delivery
 ```
 
-## Creating a Transaction Producer
+The final arrow describes eligibility, not an immediate callback or proof of business processing. The half-message response inherits the configured storage/replication policy; do not label every accepted half message durably replicated.
 
-```rust
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_client_rust::producer::transaction_mq_producer::TransactionMQProducer;
-use rocketmq_client_rust::ClientResult;
+In the current client, `SendOk` triggers the local listener. `FlushDiskTimeout`, `FlushSlaveTimeout`, and `SlaveNotAvailable` select rollback without executing that listener. A transport error before a usable send result returns an error instead. These branches matter because some non-success statuses can still describe an accepted log append.
 
-#[tokio::main]
-async fn main() -> ClientResult<()> {
-    let mut producer = TransactionMQProducer::builder()
-        .producer_group("transaction_producer_group")
-        .name_server_addr("localhost:9876")
-        .topics(vec!["OrderEvents"])
-        .transaction_listener(OrderTransactionListener::default())
-        .build();
+## Implement a durable decision
 
-    producer.start().await?;
-    // Send transaction messages ...
-    producer.shutdown().await;
-    Ok(())
-}
-```
+`TransactionListener` has two synchronous callbacks:
 
-## Implementing Transaction Listener
+| Callback | Responsibility |
+| --- | --- |
+| `execute_local_transaction(&dyn MessageTrait, Option<&(dyn Any + Send + Sync)>)` | Execute idempotent local business work and return `LocalTransactionState` |
+| `check_local_transaction(&MessageExt)` | Read the authoritative persisted outcome and return the same state domain |
 
-```rust
-use std::any::Any;
+Both return `CommitMessage`, `RollbackMessage`, or `Unknown`. Keep the callback bounded. The client runs local execution through its managed blocking boundary; a caller timeout or panic mapping does not roll back an already committed external transaction.
 
-use cheetah_string::CheetahString;
-use rocketmq_client_rust::producer::local_transaction_state::LocalTransactionState;
-use rocketmq_client_rust::producer::transaction_listener::TransactionListener;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::MessageTrait;
-
-#[derive(Default)]
-struct OrderTransactionListener;
-
-impl TransactionListener for OrderTransactionListener {
-    fn execute_local_transaction(
-        &self,
-        msg: &dyn MessageTrait,
-        _arg: Option<&(dyn Any + Send + Sync)>,
-    ) -> LocalTransactionState {
-        // Implement your local transaction with msg body/properties.
-        let _tx_id: Option<&CheetahString> = msg.transaction_id();
-        LocalTransactionState::Unknown
-    }
-
-    fn check_local_transaction(&self, _msg: &MessageExt) -> LocalTransactionState {
-        // Query local storage and return CommitMessage / RollbackMessage / Unknown.
-        LocalTransactionState::Unknown
-    }
-}
-```
-
-## Sending Transaction Messages
-
-```rust
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_common::common::message::message_single::Message;
-
-let message = Message::builder()
-    .topic("OrderEvents")
-    .tags("order_created")
-    .key("order_12345")
-    .body("{\"order_id\":\"order_12345\"}")
-    .build()?;
-
-let result = producer
-    .send_message_in_transaction(message, Some("order_12345".to_string()))
-    .await?;
-
-println!("Transaction message sent: {}", result);
-```
-
-## Local Transaction State Handling (Pseudo Code)
+The following is application pseudocode, not a complete database implementation:
 
 ```text
-execute_local_transaction(message):
-  if local business succeeds:
-    return CommitMessage
-  if local business fails permanently:
-    return RollbackMessage
-  if local result is uncertain:
-    return Unknown
+execute(message):
+    event_id = stable business identifier carried in message
+    within one local database transaction:
+        if recorded outcome exists: return it
+        apply the business change idempotently
+        persist event_id and the final business outcome
+    return CommitMessage only after commit is known
 
-check_local_transaction(message):
-  query local transaction table by transaction id
-  return CommitMessage / RollbackMessage / Unknown
+check(message):
+    read authoritative outcome using event_id
+    committed -> CommitMessage
+    definitively aborted -> RollbackMessage
+    unavailable or unresolved -> Unknown
 ```
 
-## Configuration
+Do not use a process-local map as the recovery authority. A restarted producer, or another eligible producer in the same group, must be able to answer a check from durable business state. The callback's optional in-memory argument is not sent back by the Broker as durable transaction metadata.
 
-`TransactionMQProducer::builder()` currently exposes thread-pool and check queue controls:
+Missing state needs a business policy: it may mean “not executed,” “not yet visible,” or “storage unavailable.” Returning rollback for every lookup failure can hide a committed business change. Returning unknown forever leaves unresolved work and eventually meets the Broker's configured check/discard policy.
+
+## Integrate the producer
+
+The excerpt below assumes `client_runtime` is the application's shared runtime and `listener` is a real `TransactionListener` implementation:
 
 ```rust
-let mut producer = TransactionMQProducer::builder()
-    .producer_group("transaction_producer_group")
-    .name_server_addr("localhost:9876")
-    .topics(vec!["OrderEvents"])
-    .transaction_listener(OrderTransactionListener::default())
-    .check_thread_pool_min_size(2)
-    .check_thread_pool_max_size(8)
-    .check_request_hold_max(2_000)
+let mut producer = TransactionMQProducer::builder(client_runtime.clone())
+    .producer_group("docs_transaction_group")
+    .name_server_addr("127.0.0.1:9876")
+    .topics(vec!["TransactionSendTestTopic"])
+    .transaction_listener(listener)
     .build();
 ```
 
-## Best Practices
+Start the producer before sending, and inspect both fields in the returned `TransactionSendResult`:
 
-1. Keep local transaction execution short and deterministic.
-2. Persist transaction outcome before returning commit/rollback.
-3. Implement idempotent local transaction logic.
-4. Return `Unknown` only for transient uncertainty, not for permanent errors.
-5. Monitor transaction check frequency and unknown-state duration.
+```rust
+let message = Message::builder()
+    .topic("TransactionSendTestTopic")
+    .key("order-1001:event-1")
+    .body("order created")
+    .build()?;
+let outcome = producer
+    .send_message_in_transaction::<(), _>(message, None)
+    .await?;
+```
 
-## Limitations
+`send_result` describes the prepared-message send. `local_transaction_state` describes the client's decision. **Neither field is a final Broker commit receipt.** The current implementation logs an end-transaction request failure and can still return `Ok(TransactionSendResult)`. Keep transaction checking available to reconcile that window.
 
-- Transaction messages have higher latency than normal messages.
-- Brokers hold half messages until commit/rollback is resolved.
-- Poorly designed check logic can cause long pending windows.
+Once outstanding work is resolved or handed to an explicit recovery procedure, close the transaction producer, then the shared ClientRuntime, RuntimeOwner, and telemetry. Stopping immediately after returning unknown removes this process's ability to answer later checks.
 
-## Next Steps
+## Failure windows
 
-- [Client Configuration](../configuration/client-config) - Configure producer/client options
-- [Consumer Guide](../consumer/overview) - Learn consumer-side handling
-- [Troubleshooting](../faq/troubleshooting) - Diagnose production issues
+| Window | Application consequence |
+| --- | --- |
+| Half-message outcome is uncertain | Do not assume no message exists; reconcile by stable business identity |
+| Business commits, process exits before reporting commit | Broker checks must recover the durable committed outcome |
+| End-transaction request fails | A local commit return does not establish immediate consumer visibility |
+| Check reaches a producer without shared state | The group cannot reliably resolve pending transactions |
+| Business work or check panics | Current client maps the callback failure to unknown; investigate the underlying operation |
+| Consumer commits a side effect but its progress is not persisted | The consumer can receive the committed message again |
+
+Transaction messages do not remove consumer idempotency requirements. See [delivery and retry](../guides/delivery-and-retry.md).
+
+## Bounds and supported combinations
+
+The current transaction path rejects delayed/timer properties, including delay-level, relative delay and absolute delivery timestamp properties. Do not combine the ordinary batch API with a transaction send and infer batch-transaction semantics.
+
+Check settings validate positive min/max sizes, min not greater than max, and a positive request hold limit. The implementation uses admission semaphores: max size bounds concurrent checks and hold max bounds admitted check work. The min value is validated; it is not evidence that a dedicated minimum-sized OS thread pool is created.
+
+Broker check intervals, maximum checks, transaction-service availability, and producer connectivity affect resolution. Treat them as part of the deployment; an available listener type alone does not prove the full transaction path is configured.
+
+## Inspect the example without treating it as recovery proof
+
+From `rocketmq-example/`:
+
+```bash
+cargo check --example producer-transaction-send
+cargo run --example producer-transaction-send
+```
+
+First provision `TransactionSendTestTopic` on the loopback cluster. The example alternates commit, rollback and unknown decisions in memory, then shuts down after six sends. It illustrates listener wiring and the result structure. It does not persist a business transaction log or stay alive to establish eventual resolution of every unknown message.
+
+To validate an application transaction integration, keep a checking producer available, observe only committed business events at a consumer, and separately exercise restart between local commit and end-transaction reporting. Record that scenario's actual result; compiling the example is not that test.
+
+Sources: [transaction facade](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/producer/transaction_mq_producer.rs), [send and decision path](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/producer/producer_impl/default_mq_producer_impl/transaction.rs), [check dispatch](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/producer/producer_impl/default_mq_producer_impl/lifecycle.rs), [example](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-example/examples/producer/transaction_send.rs).

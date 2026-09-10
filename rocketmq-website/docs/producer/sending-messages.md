@@ -1,278 +1,122 @@
 ---
-sidebar_position: 2
-title: Sending Messages
+title: "Sending messages"
 ---
 
-# Sending Messages
+# Sending messages
 
-This page covers practical sending patterns using `DefaultMQProducer` and `MQProducer`.
+Choose a send method by how the application observes completion and selects a destination. All methods use an application-owned `ClientRuntime` and a started producer. Begin with [quick start](../getting-started/quick-start.md) for the complete runtime, Broker, topic, and shutdown setup.
 
-## Message Types
+## Choose the result contract
 
-### Basic Message
+“Synchronous send” here means waiting for a Broker response. The Rust call is still an asynchronous future and is awaited.
 
-```rust
-use rocketmq_common::common::message::message_single::Message;
+| API family | Result channel | Suitable use |
+| --- | --- | --- |
+| `send`, `send_with_timeout` | `ClientResult<Option<SendResult>>` | Observe the send response before continuing |
+| `send_with_callback`, `send_with_callback_timeout` | Immediate method result plus callback result/error | Keep bounded application work in flight and correlate completion |
+| `send_oneway` | `ClientResult<()>` without a Broker response | Cases where the application deliberately does not require remote acknowledgement |
+| `send_batch` and timeout variants | `ClientResult<SendResult>` | Send an explicit eligible batch |
+| `send_to_queue` and queue variants | Same completion style, chosen queue | Preserve a known destination |
+| `send_with_selector` and selector variants | Same completion style, application selects from available queues | Route related events using a stable business key |
 
-let message = Message::builder()
-    .topic("TopicTest")
-    .body("Hello, RocketMQ!")
-    .build()?;
+An `Ok` wrapper is not sufficient to count a successful acknowledged send. Inspect `SendResult.send_status`, and handle `None` explicitly where the API permits it. The direct timeout path expects a response; absence is not a successful Broker acknowledgement.
 
-producer.send(message).await?;
-```
+`SendStatus::SendOk`, `FlushDiskTimeout`, `FlushSlaveTimeout`, and `SlaveNotAvailable` have different meanings. The latter statuses can follow an accepted append. The status names retain the protocol's terminology; [storage design](../architecture/storage.md) explains the corresponding durability and replica conditions. Even `SendOk` does not mean a consumer completed its business work.
 
-### Message with Tags
+## Send one message and inspect its status
 
-```rust
-let message = Message::builder()
-    .topic("OrderEvents")
-    .body(body)
-    .tags("order_created")
-    .build()?;
-
-producer.send(message).await?;
-```
-
-### Message with Keys
+This complete function accepts the shared runtime created in the quick-start application. Call it on that runtime and close the shared ClientRuntime and RuntimeOwner afterward. Provision `DocsFirstMessage` before calling it.
 
 ```rust
-let message = Message::builder()
-    .topic("OrderEvents")
-    .body(body)
-    .key("order_12345")
-    .build()?;
+use std::{io, sync::Arc};
+use rocketmq_client_rust::{ClientRuntime, DefaultMQProducer, SendResult, SendStatus};
+use rocketmq_model::common::message::message_single::Message;
 
-producer.send(message).await?;
-```
-
-### Message with Properties
-
-```rust
-let message = Message::builder()
-    .topic("OrderEvents")
-    .body(body)
-    .raw_property("region", "us-west")?
-    .raw_property("priority", "high")?
-    .raw_property("source", "mobile_app")?
-    .build()?;
-
-producer.send(message).await?;
-```
-
-## Send Strategies
-
-### Sequential Sending
-
-```rust
-for msg in messages {
-    producer.send(msg).await?;
-}
-```
-
-### Concurrent Sending
-
-```rust
-use futures::future::join_all;
-
-let tasks = messages
-    .into_iter()
-    .map(|msg| producer.send(msg))
-    .collect::<Vec<_>>();
-
-let results = join_all(tasks).await;
-```
-
-### Delayed Sending
-
-```rust
-let message = Message::builder()
-    .topic("DelayedTopic")
-    .body(body)
-    .delay_level(3) // 1=1s, 2=5s, 3=10s ...
-    .build()?;
-
-producer.send(message).await?;
-```
-
-## Message Size Management
-
-### Large Messages
-
-```rust
-let mut producer = DefaultMQProducer::builder()
-    .producer_group("my_group")
-    .name_server_addr("localhost:9876")
-    .compress_msg_body_over_howmuch(4 * 1024)
-    .build();
-
-let large_body = vec![0u8; 5 * 1024 * 1024];
-let message = Message::builder()
-    .topic("TopicTest")
-    .body(large_body)
-    .build()?;
-
-producer.send(message).await?;
-```
-
-### Splitting Large Messages
-
-```rust
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-
-async fn split_and_send(
-    producer: &mut DefaultMQProducer,
-    topic: &str,
-    data: Vec<u8>,
-    chunk_size: usize,
-) -> rocketmq_client_rust::ClientResult<()> {
-    let chunks: Vec<_> = data.chunks(chunk_size).collect();
-    let total = chunks.len();
-
-    for (i, chunk) in chunks.iter().enumerate() {
+async fn send_one(
+    client_runtime: Arc<ClientRuntime>,
+) -> Result<SendResult, Box<dyn std::error::Error>> {
+    let mut producer = DefaultMQProducer::builder(client_runtime)
+        .producer_group("docs_sending_group")
+        .name_server_addr("127.0.0.1:9876")
+        .build();
+    let outcome: Result<SendResult, Box<dyn std::error::Error>> = async {
+        producer.start().await?;
         let message = Message::builder()
-            .topic(topic)
-            .body_slice(chunk)
-            .key(format!("chunk-{i}-{total}"))
+            .topic("DocsFirstMessage")
+            .key("order-1001:event-1")
+            .tags("created")
+            .body("order created")
             .build()?;
-
-        producer.send(message).await?;
-    }
-
-    Ok(())
-}
-```
-
-## Error Handling
-
-### Retry on Failure
-
-```rust
-use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
-use rocketmq_client_rust::producer::mq_producer::MQProducer;
-use rocketmq_client_rust::producer::send_result::SendResult;
-
-async fn send_with_retry(
-    producer: &mut DefaultMQProducer,
-    message: Message,
-    max_retries: u32,
-) -> rocketmq_client_rust::ClientResult<Option<SendResult>> {
-    let mut retry_count = 0;
-
-    loop {
-        match producer.send(message.clone()).await {
-            Ok(result) => return Ok(result),
-            Err(e) if retry_count < max_retries => {
-                retry_count += 1;
-                tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
-                eprintln!("retry {} after error: {}", retry_count, e);
-            }
-            Err(e) => return Err(e),
+        let result = producer.send_with_timeout(message, 3_000).await?
+            .ok_or_else(|| io::Error::other("send response is absent"))?;
+        if result.send_status != SendStatus::SendOk {
+            return Err(io::Error::other(format!(
+                "send policy not satisfied: {}", result.send_status
+            )).into());
         }
-    }
+        Ok(result)
+    }.await;
+    producer.shutdown().await;
+    outcome
 }
 ```
 
-### Fallback Topic
+The key supports business correlation; setting a key does not make the Broker deduplicate sends. Persist the business event identity independently if it must survive retries or process restarts. The cleanup runs after an operation error too.
+
+## Use callbacks without losing failures
+
+Callbacks receive `Option<&SendResult>` and `Option<&ClientError>`. Those references belong to the callback invocation; copy the bounded information needed for later processing. Avoid retaining a whole request or message body in a completion record.
+
+Inspect both channels: a method can fail before submission, and completion can fail through the callback. In the current `send_with_callback` facade, some underlying submission errors are delivered to the callback and the method returns `Ok(())`. Therefore, counting only successful method returns will overcount successful sends.
+
+Keep the producer and runtime alive until the application's outstanding completion records settle or its explicit deadline expires. Bound in-flight count/bytes and callback work. A callback should not block a runtime worker or launch unowned background tasks. Shutdown is not a substitute for correlating each business operation's outcome.
+
+One-way sending has no send-result callback or Broker acknowledgement to inspect. Successful local submission cannot establish remote persistence. It should not be used when the next business step requires confirmation that the Broker accepted the event.
+
+## Send a valid batch
+
+An explicit batch is non-empty, uses one topic and a consistent `waitStoreMsgOK` value, and excludes retry-topic messages and delayed/timer messages. The current `MessageBatch` validator checks delay level, relative millisecond/second delay, and absolute delivery timestamp properties. Do not combine transaction semantics with the ordinary batch path.
+
+The following is an excerpt after producer startup:
 
 ```rust
-async fn send_with_fallback(
-    producer: &mut DefaultMQProducer,
-    message: Message,
-    fallback_topic: &str,
-) -> rocketmq_client_rust::ClientResult<Option<SendResult>> {
-    match producer.send(message.clone()).await {
-        Ok(result) => Ok(result),
-        Err(_) => {
-            let mut fallback_message = message;
-            fallback_message.set_topic(fallback_topic.into());
-            producer.send(fallback_message).await
-        }
-    }
-}
+let messages = vec![
+    Message::builder().topic("DocsFirstMessage")
+        .body("batch event 1").build()?,
+    Message::builder().topic("DocsFirstMessage")
+        .body("batch event 2").build()?,
+];
+let result = producer.send_batch_with_timeout(messages, 3_000).await?;
 ```
 
-## Monitoring Sends
+Inspect the batch's `send_status` as for a single send. A batch send is not a transaction spanning a consumer's database. Encoded aggregate size, properties and framing overhead must fit the active client/Broker limits; a message-count limit alone cannot ensure that. Split into bounded batches before submitting, and give every business event its own replay identity.
 
-```rust
-let mut success_count = 0;
-let mut failure_count = 0;
+Automatic accumulation is a separate option from explicit `send_batch`. Current `send`/some callback and queue facades can route through the accumulator when enabled, while the explicit `send_with_timeout` path directly invokes its timed send implementation. Do not assume all overloads have identical buffering behavior.
 
-for message in messages {
-    match producer.send(message).await {
-        Ok(_) => success_count += 1,
-        Err(e) => {
-            failure_count += 1;
-            eprintln!("Failed: {}", e);
-        }
-    }
-}
+## Select queues and retry deliberately
 
-println!("Success: {}, Failed: {}", success_count, failure_count);
+Fetch publish queues from the topic route rather than inventing a Broker name or queue ID. A selector receives candidate queues, the message and its argument, and returns an optional queue. Handle an empty candidate set; a modulo operation on zero queues is invalid.
+
+Keep mapping stable for related events and serialize their sends if order matters. Route changes or queue-count changes can change a simple modulo mapping. See [ordered messages](../guides/ordered-messages.md).
+
+Timeouts bound a client's wait, not the remote side effect. Separate pre-admission rejection from an uncertain post-send result, keep a bounded retry deadline, and account for retries already performed by the selected send path. Do not silently redirect a failed business event to another topic: that changes subscriptions, ordering and recovery semantics.
+
+## Example targets and observations
+
+From `rocketmq-example/`, use its standalone manifest and provision each example's actual topic first:
+
+| Target | Topic | What to inspect |
+| --- | --- | --- |
+| `producer-basic-send` | `BasicSendTestTopic` | Response, callback and one-way differences |
+| `producer-batch-send` | `BatchSendTestTopic` | Batch status and selected queue |
+| `producer-send-to-queue` | Read its constants | Explicit route selection |
+| `producer-send-with-selector` | Read its constants | Selector argument and queue mapping |
+
+```bash
+cargo check --example producer-basic-send --example producer-batch-send
+cargo run --example producer-basic-send
 ```
 
-## Common Use Cases
+These examples use loopback NameServer constants rather than a universal command-line address option. They demonstrate APIs; their debug prints are not a production logging policy. For a verified first-message sequence and full cleanup, use the website's paired tutorial application. Compilation does not establish callback loss behavior, failover, or crash recovery.
 
-### Sending Order Events
-
-```rust
-async fn send_order_event(
-    producer: &mut DefaultMQProducer,
-    order_id: &str,
-    event_type: &str,
-    order_data: &Order,
-) -> rocketmq_client_rust::ClientResult<Option<SendResult>> {
-    let body = serde_json::to_vec(order_data).map_err(|source| {
-        rocketmq_client_rust::ClientError::from_error(rocketmq_error::Error::caused_by(
-            &rocketmq_error::CORE_SERIALIZATION_FAILED,
-            source,
-        ))
-    })?;
-
-    let message = Message::builder()
-        .topic("OrderEvents")
-        .body(body)
-        .tags(event_type)
-        .key(order_id)
-        .raw_property("event_type", event_type)?
-        .raw_property("timestamp", chrono::Utc::now().to_rfc3339())?
-        .build()?;
-
-    producer.send(message).await
-}
-```
-
-### Sending Logs
-
-```rust
-async fn send_log(
-    producer: &mut DefaultMQProducer,
-    level: &str,
-    message_text: &str,
-) -> rocketmq_client_rust::ClientResult<Option<SendResult>> {
-    let message = Message::builder()
-        .topic("Logs")
-        .body(message_text)
-        .tags(level)
-        .build()?;
-
-    producer.send(message).await
-}
-```
-
-## Best Practices
-
-1. Set meaningful keys to simplify tracing and deduplication.
-2. Use tags for coarse filtering and properties for rich metadata.
-3. Apply retry with bounded attempts and visible logging.
-4. Track send success rate and latency continuously.
-5. Use batch sending when throughput is more important than per-message latency.
-6. Validate payload size before send.
-7. Keep producer-side schemas stable and versioned.
-
-## Next Steps
-
-- [Transaction Messages](./transaction-messages) - Implement transactional messaging
-- [Client Configuration](../configuration/client-config) - Configure producer settings
-- [Consumer Guide](../consumer/overview) - Learn about consuming messages
+Sources: [producer facade](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/producer/default_mq_producer.rs), [send implementation](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/producer/producer_impl/default_mq_producer_impl/send.rs), [batch validation](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-model/src/common/message/message_batch.rs), [canonical send results](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-model/src/result.rs).

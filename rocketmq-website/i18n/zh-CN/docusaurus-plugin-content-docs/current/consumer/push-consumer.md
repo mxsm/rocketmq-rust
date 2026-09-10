@@ -1,165 +1,111 @@
 ---
-sidebar_position: 2
-title: 推消费者
+title: "Push 消费者"
 ---
 
-> Runtime 所有权：示例中的 `client_runtime` 是应用持有的 `Arc<ClientRuntime>`，它从 `RuntimeOwner` 的 child scope 创建，并在进程边界显式关闭。
+# Push 消费者
 
-# 推消费者
+`DefaultMQPushConsumer` 将消息交给已注册的监听器。在普通 Pull 模式中，客户端完成路由发现、队列分配、后台拉取和长轮询，然后调度回调。“Push”描述应用接口，不表示 Broker 无条件主动推送流。
 
-RocketMQ-Rust 中的推模式由 `DefaultMQPushConsumer` 实现。客户端在后台拉取消息，并将消息批次分发给你注册的监听器。
+需要应用手动轮询时，使用 [LitePull](./pull-consumer.md)。需要 Broker 管理不可见时间和回执确认时，参见 [POP](./pop.md)；其监听器成功返回后的确认路径不同。
 
-## 创建推消费者
+## 启动具有完整生命周期的消费者
 
-```rust
-use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_error::RocketMQResult;
-
-#[tokio::main]
-async fn main() -> RocketMQResult<()> {
-    let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
-        .consumer_group("my_consumer_group")
-        .name_server_addr("localhost:9876")
-        .consume_thread_min(2)
-        .consume_thread_max(20)
-        .build();
-
-    consumer.subscribe("TopicTest", "*").await?;
-    consumer.start().await?;
-
-    Ok(())
-}
-```
-
-## 消息监听器
-
-### 并发监听器
+按照[快速开始](../getting-started/quick-start.md)创建 `DocsFirstMessage`，再将组创建命令的参数替换为 `-g docs_push_group`，为本页消费者创建独立组。以下函数使用教程中的共享 `Arc<ClientRuntime>`。监听器仅把统计消息数作为处理演示；实际应用应在返回成功前完成有界、幂等的业务处理。
 
 ```rust
-use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_error::RocketMQResult;
+use std::sync::Arc;
+use rocketmq_client_rust::{
+    ClientResult, ClientRuntime, ConsumeConcurrentlyContext,
+    ConsumeConcurrentlyStatus, DefaultMQPushConsumer,
+    MessageListenerConcurrently, MQPushConsumer,
+};
+use rocketmq_model::common::message::message_ext::MessageExt;
 
-struct MyListener;
+struct CountListener;
 
-impl MessageListenerConcurrently for MyListener {
+impl MessageListenerConcurrently for CountListener {
     fn consume_message(
         &self,
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
-    ) -> RocketMQResult<ConsumeConcurrentlyStatus> {
-        for msg in messages {
-            println!("Processing: {:?}", msg.msg_id());
-        }
+    ) -> ClientResult<ConsumeConcurrentlyStatus> {
+        println!("received={}", messages.len());
         Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
     }
 }
 
-consumer.register_message_listener_concurrently(MyListener);
-```
-
-### 顺序监听器
-
-```rust
-use rocketmq_client_rust::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
-use rocketmq_client_rust::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
-use rocketmq_client_rust::consumer::listener::message_listener_orderly::MessageListenerOrderly;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_error::RocketMQResult;
-
-struct OrderListener;
-
-impl MessageListenerOrderly for OrderListener {
-    fn consume_message(
-        &self,
-        messages: &[&MessageExt],
-        context: &mut ConsumeOrderlyContext,
-    ) -> RocketMQResult<ConsumeOrderlyStatus> {
-        for msg in messages {
-            process_in_order(msg);
-        }
-        context.set_auto_commit(true);
-        Ok(ConsumeOrderlyStatus::Success)
-    }
+async fn consume_until_interrupt(
+    client_runtime: Arc<ClientRuntime>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut consumer = DefaultMQPushConsumer::builder(client_runtime)
+        .consumer_group("docs_push_group")
+        .name_server_addr("127.0.0.1:9876")
+        .consume_message_batch_max_size(1)
+        .build();
+    let outcome = async {
+        consumer.subscribe("DocsFirstMessage", "*").await?;
+        consumer.register_message_listener_concurrently(CountListener);
+        consumer.start().await?;
+        tokio::signal::ctrl_c().await?;
+        Ok(())
+    }.await;
+    consumer.shutdown().await;
+    outcome
 }
-
-consumer.register_message_listener_orderly(OrderListener);
 ```
 
-## 订阅模式
+在持有它的 RuntimeOwner 上调用该函数，之后关闭共享 ClientRuntime、RuntimeOwner 和遥测设施。启动前注册监听器和订阅。学习默认新组行为时，先启动消费者再发送；已有存储偏移量可能覆盖初始位置设置。
 
-### 单主题
+## 选择并发方式与消费模型
 
-```rust
-consumer.subscribe("TopicTest", "*").await?;
-```
+| 选择 | 含义 |
+| --- | --- |
+| 并发监听器 | 不同批次可以并行执行，完成顺序可能不同于队列顺序 |
+| 顺序监听器 | 在对应队列所有权和锁边界内串行消费 |
+| 集群消费 Clustering | 组成员分担工作，重试遵循该组配置路径 |
+| 广播消费 Broadcasting | 每个实例接收独立副本；普通并发实现对失败投递记录日志并丢弃，不使用集群式发回重试 |
 
-### 多主题
+监听器方法是同步的。客户端通过受管理的阻塞边界调度，但下游调用仍需要自己的有限超时和容量。把工作交给无人持有的后台任务后立即返回成功，可能使进度先于业务提交推进。
 
-```rust
-consumer.subscribe("TopicA", "*").await?;
-consumer.subscribe("TopicB", "tag1 || tag2").await?;
-```
+同一逻辑组内，不应混用并发与顺序监听器契约，也不应使用不一致订阅。组成员应在主题、选择器、消费模型和顺序要求上保持一致。另一个独立业务应用通常应使用自己的消费者组。
 
-### 消息选择器
+## 从监听器结果理解进度
 
-```rust
-use rocketmq_client_rust::consumer::message_selector::MessageSelector;
+`ConsumeSuccess` 表示成功处理的前缀，`ReconsumeLater` 表示批次未成功。默认并发上下文在成功时确认全部消息。使用部分确认时，其含义是前缀索引，不是批次中的任意子集。
 
-let selector = MessageSelector::by_sql("amount > 100 AND region = 'us-west'");
-consumer
-    .subscribe_with_selector("OrderEvents", Some(selector))
-    .await?;
-```
+普通集群并发消费中，失败消息进入发回路径。发回失败的消息继续待处理，等待后续本地尝试。完成或成功移交的消息可从处理队列移除，使下一个安全偏移量推进；偏移量持久化是另一步。
 
-## 并发与拉取参数
+因此，业务完成、监听器成功、进度更新和消费者组进度持久化是不同事件。应用应容忍这些步骤之间崩溃造成的重放。广播模式的失败行为不同，需要显式应用恢复策略。
 
-```rust
-let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
-    .consumer_group("my_consumer_group")
-    .name_server_addr("localhost:9876")
-    .consume_thread_min(2)
-    .consume_thread_max(20)
-    .pull_batch_size(32)
-    .pull_interval(0)
-    .pull_threshold_for_queue(1024)
-    .pull_threshold_for_topic(10_000)
-    .build();
-```
+顺序消费使用 `MessageListenerOrderly` 和 `ConsumeOrderlyStatus`。当前队列失败时可以暂停并重试，以队列进度为代价保护局部顺序。发送侧映射和故障边界参见[顺序消息](../guides/ordered-messages.md)。
 
-## 消费起点
+## 再平衡与内存控制
 
-```rust
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
+路由或组成员变化可能撤销并重新分配队列。队列所有权是临时的；应停止属于已撤销所有权的工作，并使业务幂等在转移到其他进程后仍然有效。
 
-let mut consumer = DefaultMQPushConsumer::builder(client_runtime.clone())
-    .consumer_group("my_consumer_group")
-    .name_server_addr("localhost:9876")
-    .consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset)
-    .build();
-```
+| 配置类别 | 限制或影响的内容 |
+| --- | --- |
+| `pull_batch_size` | 网络请求批次大小 |
+| `consume_message_batch_max_size` | 单次监听器调用的消息数量 |
+| `consume_thread_min` / `consume_thread_max` | 受管理的消费并发控制，不代表允许无限阻塞 |
+| `pull_threshold_for_queue` / `pull_threshold_size_for_queue` | 队列缓存数量与大小压力 |
+| 主题阈值及 `pull_interval` | 主题级压力与拉取节奏 |
+| `consume_from_where` | 没有可用存储进度决定起点时的初始位置 |
 
-## 暂停与恢复
+网络批次与回调批次不同。更大的缓存可能保留消息体并延长关闭；增加线程不能修复数据库饱和。根据真实处理成本选择限制，同时观察积压、待处理数量、保留字节和重试率。
 
-```rust
-consumer.suspend().await;
-// ...
-consumer.resume().await;
-```
+暂停会按消费者路径暂停接入，但它不是证明全部回调完成的事务屏障。退出服务生命周期时应显式关闭。
 
-## 最佳实践
+## 排查运行中的消费者
 
-1. 按业务处理复杂度设置消费线程数。
-2. 吞吐优先用并发监听，严格有序用顺序监听。
-3. 监听逻辑保持幂等，适配重试语义。
-4. 基于真实流量调优 `pull_batch_size` 与阈值参数。
-5. 优先使用服务端过滤，减少无效消息传输。
+| 观察结果 | 后续检查 |
+| --- | --- |
+| 没有回调 | 主题路由、组配置、监听器注册、起始偏移量、选择器 |
+| 增加实例但吞吐提升有限 | 队列数量、分配及下游瓶颈 |
+| 重复投递 | 监听器失败、发回或 ACK 失败、再平衡和持久化进度 |
+| 回调成功但积压增加 | 处理延迟、队列分配、持久化，以及指标实际对应的集群和组 |
+| 广播失败消息消失 | 广播分支不提供集群式重试语义 |
 
-## 下一步
+在 `rocketmq-example/` 中，`consumer-cluster` 展示并发集群消费，`consumer-orderly` 展示顺序接口。创建资源和运行前，应查看各自的主题、组常量。SQL 与 Tag 示例也有独立主题。集群侧检查命令参见[首次诊断](../operations/first-diagnosis.md)。
 
-- [拉取消费者](./pull-consumer) - 了解拉模式消费
-- [消息过滤](./message-filtering) - 学习高级过滤能力
-- [客户端配置](../configuration/client-config) - 查看消费者配置项
+源码依据：[Push facade 与配置](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/default_mq_push_consumer.rs)、[Push 生命周期](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/consumer_impl/default_mq_push_consumer_impl.rs)、[并发处理](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/consumer_impl/consume_message_concurrently_service.rs)、[顺序处理](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/consumer_impl/consume_message_orderly_service.rs)。

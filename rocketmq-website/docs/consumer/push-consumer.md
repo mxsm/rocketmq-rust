@@ -1,163 +1,111 @@
 ---
-sidebar_position: 2
-title: Push Consumer
+title: "Push consumers"
 ---
 
-# Push Consumer
+# Push consumers
 
-Push consumption in RocketMQ-Rust is implemented by `DefaultMQPushConsumer`. The client pulls messages in the background and dispatches them to your listener callbacks.
+`DefaultMQPushConsumer` delivers messages to a registered listener. In ordinary Pull mode, the client performs route discovery, queue assignment and background pulls/long polling, then schedules callbacks. “Push” describes the application interface, not an unconditional Broker-initiated stream.
 
-## Creating a Push Consumer
+For a manually polled application, use [LitePull](./pull-consumer.md). For Broker-managed invisibility and receipt acknowledgement, see [POP](./pop.md); its successful listener result follows a different acknowledgement path.
 
-```rust
-use rocketmq_client_rust::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use rocketmq_client_rust::consumer::mq_push_consumer::MQPushConsumer;
-use rocketmq_client_rust::ClientResult;
+## Start a consumer with a complete lifecycle
 
-#[tokio::main]
-async fn main() -> ClientResult<()> {
-    let mut consumer = DefaultMQPushConsumer::builder()
-        .consumer_group("my_consumer_group")
-        .name_server_addr("localhost:9876")
-        .consume_thread_min(2)
-        .consume_thread_max(20)
-        .build();
-
-    consumer.subscribe("TopicTest", "*").await?;
-    consumer.start().await?;
-
-    Ok(())
-}
-```
-
-## Message Listeners
-
-### Concurrent Message Listener
+Create `DocsFirstMessage` using [quick start](../getting-started/quick-start.md), and repeat its group-creation command with `-g docs_push_group` for this consumer. The following function uses the tutorial's shared `Arc<ClientRuntime>`. The listener counts messages as processed for demonstration; replace that operation with bounded, idempotent business processing before returning success.
 
 ```rust
-use rocketmq_client_rust::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use rocketmq_client_rust::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_client_rust::ClientResult;
+use std::sync::Arc;
+use rocketmq_client_rust::{
+    ClientResult, ClientRuntime, ConsumeConcurrentlyContext,
+    ConsumeConcurrentlyStatus, DefaultMQPushConsumer,
+    MessageListenerConcurrently, MQPushConsumer,
+};
+use rocketmq_model::common::message::message_ext::MessageExt;
 
-struct MyListener;
+struct CountListener;
 
-impl MessageListenerConcurrently for MyListener {
+impl MessageListenerConcurrently for CountListener {
     fn consume_message(
         &self,
         messages: &[&MessageExt],
         _context: &ConsumeConcurrentlyContext,
     ) -> ClientResult<ConsumeConcurrentlyStatus> {
-        for msg in messages {
-            println!("Processing: {:?}", msg.msg_id());
-        }
+        println!("received={}", messages.len());
         Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
     }
 }
 
-consumer.register_message_listener_concurrently(MyListener);
-```
-
-### Ordered Message Listener
-
-```rust
-use rocketmq_client_rust::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
-use rocketmq_client_rust::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
-use rocketmq_client_rust::consumer::listener::message_listener_orderly::MessageListenerOrderly;
-use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_client_rust::ClientResult;
-
-struct OrderListener;
-
-impl MessageListenerOrderly for OrderListener {
-    fn consume_message(
-        &self,
-        messages: &[&MessageExt],
-        context: &mut ConsumeOrderlyContext,
-    ) -> ClientResult<ConsumeOrderlyStatus> {
-        for msg in messages {
-            process_in_order(msg);
-        }
-        context.set_auto_commit(true);
-        Ok(ConsumeOrderlyStatus::Success)
-    }
+async fn consume_until_interrupt(
+    client_runtime: Arc<ClientRuntime>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut consumer = DefaultMQPushConsumer::builder(client_runtime)
+        .consumer_group("docs_push_group")
+        .name_server_addr("127.0.0.1:9876")
+        .consume_message_batch_max_size(1)
+        .build();
+    let outcome = async {
+        consumer.subscribe("DocsFirstMessage", "*").await?;
+        consumer.register_message_listener_concurrently(CountListener);
+        consumer.start().await?;
+        tokio::signal::ctrl_c().await?;
+        Ok(())
+    }.await;
+    consumer.shutdown().await;
+    outcome
 }
-
-consumer.register_message_listener_orderly(OrderListener);
 ```
 
-## Subscription Patterns
+Invoke the function on the owning RuntimeOwner, then close the shared ClientRuntime, RuntimeOwner, and telemetry. Register a listener and subscription before startup. Publish after the consumer starts when learning the default new-group behavior; an existing stored offset can override the initial-position setting.
 
-### Single Topic
+## Choose concurrency and consumption model
 
-```rust
-consumer.subscribe("TopicTest", "*").await?;
-```
+| Choice | Meaning |
+| --- | --- |
+| Concurrent listener | Different batches can run concurrently; completion order can differ from queue order |
+| Orderly listener | Serializes consumption within the relevant queue ownership/lock boundary |
+| Clustering | Group members divide work; retries use the group's configured path |
+| Broadcasting | Each instance receives its own copy; the ordinary concurrent implementation logs and drops failed deliveries rather than using clustered send-back retries |
 
-### Multiple Topics
+The listener methods are synchronous. The client dispatches them through its managed blocking boundary, but downstream calls still need their own finite timeouts and capacity. Returning success immediately after handing work to an unowned background task can advance progress before the work commits.
 
-```rust
-consumer.subscribe("TopicA", "*").await?;
-consumer.subscribe("TopicB", "tag1 || tag2").await?;
-```
+Do not mix concurrent and orderly listener contracts or inconsistent subscriptions within one logical group. Group members should agree on topic, selector, consumption model and intended ordering. A second independent business application normally needs its own consumer group.
 
-### Message Selectors
+## Translate listener outcomes into progress
 
-```rust
-use rocketmq_client_rust::consumer::message_selector::MessageSelector;
+`ConsumeSuccess` marks the successfully processed prefix; `ReconsumeLater` treats the batch as unsuccessful. The default concurrent context acknowledges all messages on success. If partial acknowledgement is used, it is a prefix index, not an arbitrary subset of the batch.
 
-let selector = MessageSelector::by_sql("amount > 100 AND region = 'us-west'");
-consumer
-    .subscribe_with_selector("OrderEvents", Some(selector))
-    .await?;
-```
+In ordinary clustered concurrent consumption, failed messages go through the send-back path. Failures to send back remain pending for a later local attempt. Completed or successfully handed-off messages can be removed from the process queue, allowing its next safe offset to advance. Offset persistence is a separate step.
 
-## Concurrency Configuration
+Consequently, business completion, listener success, progress update and persistent group progress are different events. Processing must tolerate replay after a crash in between them. Broadcasting requires an explicit application recovery policy because its failure behavior differs.
 
-```rust
-let mut consumer = DefaultMQPushConsumer::builder()
-    .consumer_group("my_consumer_group")
-    .name_server_addr("localhost:9876")
-    .consume_thread_min(2)
-    .consume_thread_max(20)
-    .pull_batch_size(32)
-    .pull_interval(0)
-    .pull_threshold_for_queue(1024)
-    .pull_threshold_for_topic(10_000)
-    .build();
-```
+For orderly consumption, use `MessageListenerOrderly` and its `ConsumeOrderlyStatus`. A failed current queue can suspend and retry; that protects local sequence at the cost of queue progress. See [ordered messages](../guides/ordered-messages.md) for send-side mapping and failure boundaries.
 
-## Offset Position
+## Rebalance and control memory
 
-```rust
-use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
+Route changes or group membership changes can revoke and assign queues. Treat queue ownership as temporary. Stop work belonging to revoked ownership and keep business idempotency effective across a move to another process.
 
-let mut consumer = DefaultMQPushConsumer::builder()
-    .consumer_group("my_consumer_group")
-    .name_server_addr("localhost:9876")
-    .consume_from_where(ConsumeFromWhere::ConsumeFromLastOffset)
-    .build();
-```
+| Setting family | What it bounds or influences |
+| --- | --- |
+| `pull_batch_size` | Requested network batch size |
+| `consume_message_batch_max_size` | Messages passed to one listener invocation |
+| `consume_thread_min` / `consume_thread_max` | Managed consumption concurrency controls, not permission to block indefinitely |
+| `pull_threshold_for_queue` / `pull_threshold_size_for_queue` | Buffered queue count/size pressure |
+| Topic thresholds and `pull_interval` | Topic-level pressure and pull pacing |
+| `consume_from_where` | Initial position when no usable stored progress determines the start |
 
-## Pause and Resume
+Network batch size and callback batch size are different. Larger caches can retain message bodies and delay shutdown; increasing threads does not fix a saturated database. Choose limits from the real handler cost and observe lag, pending count, retained bytes and retry rate together.
 
-```rust
-consumer.suspend().await;
-// ...
-consumer.resume().await;
-```
+Suspension pauses intake according to the consumer path; it is not a transaction barrier that proves all callbacks finished. Use explicit shutdown when leaving the service lifecycle.
 
-## Best Practices
+## Diagnose a running consumer
 
-1. Size consume threads according to your business handler complexity.
-2. Use concurrent listener for throughput, orderly listener for strict ordering.
-3. Keep listener logic idempotent to handle retries.
-4. Tune `pull_batch_size` and pull thresholds under real load.
-5. Prefer server-side filtering to reduce unnecessary network transfer.
+| Observation | Check next |
+| --- | --- |
+| No callbacks | Topic route, group configuration, listener registration, starting offset, selector |
+| More instances but little additional throughput | Queue count/assignment and downstream bottleneck |
+| Repeated delivery | Listener failures, send-back/ACK failures, rebalance and persisted progress |
+| Lag rises while callbacks succeed | Handler latency, queue assignment, persistence and which cluster/group the metric describes |
+| Broadcast failure disappears | The broadcast branch does not provide clustered retry semantics |
 
-## Next Steps
+From `rocketmq-example/`, `consumer-cluster` demonstrates concurrent clustering and `consumer-orderly` demonstrates the orderly interface. Inspect their topic/group constants before provisioning and running them. The SQL and Tag examples have their own topics. Use [first diagnosis](../operations/first-diagnosis.md) for the cluster-side commands.
 
-- [Pull Consumer](./pull-consumer) - Learn about pull consumer
-- [Message Filtering](./message-filtering) - Advanced filtering techniques
-- [Client Configuration](../configuration/client-config) - Consumer configuration options
+Sources: [Push facade/configuration](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/default_mq_push_consumer.rs), [Push lifecycle](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/consumer_impl/default_mq_push_consumer_impl.rs), [concurrent processing](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/consumer_impl/consume_message_concurrently_service.rs), [orderly processing](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/consumer_impl/consume_message_orderly_service.rs).
