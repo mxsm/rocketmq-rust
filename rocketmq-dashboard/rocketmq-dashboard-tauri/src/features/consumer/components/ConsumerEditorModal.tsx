@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ConsumerRequestGeneration } from '../scope';
+import { isReadOnlyConsumer, failedConsumerBrokers } from '../mutation';
+import { ConsumerMutationReceipt } from './ConsumerMutationReceipt';
+import { useEffect, useRef, useMemo, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
     Activity,
@@ -184,6 +187,15 @@ export const ConsumerEditorModal = ({
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState('');
+    const [receipt, setReceipt] = useState<ConsumerMutationResult | null>(null);
+    const generation = useRef(new ConsumerRequestGeneration());
+    useEffect(() => {
+        generation.current.invalidate();
+        setReceipt(null);
+        setIsSaving(false);
+        return () => generation.current.invalidate();
+    }, [isOpen, consumer]);
+
 
     useEffect(() => {
         if (isOpen) {
@@ -295,7 +307,31 @@ export const ConsumerEditorModal = ({
         }));
     };
 
+    const reviewFailed = async () => {
+        if (!receipt || isSaving) return;
+        const isCurrent = generation.current.begin();
+        setIsSaving(true);
+        try {
+            const cluster = await ClusterService.getClusterHomePage({ forceRefresh: true });
+            if (!isCurrent()) return;
+            const options = buildClusterOptions(cluster.items);
+            const available = new Set(options.flatMap(option => option.brokers));
+            const failed = failedConsumerBrokers(receipt);
+            if (failed.some(name => !available.has(name))) throw new Error('A failed Broker is no longer in the current cluster. Reopen the editor to review targets.');
+            setClusterOptions(options);
+            // Empty cluster selection prevents expanding the failed Broker subset.
+            setForm(current => ({ ...current, clusterNameList: [], brokerNameList: failed }));
+            setActiveSection('targets');
+            setReceipt(null);
+            setError('');
+        } catch (error) {
+            if (isCurrent()) setError(dashboardErrorMessage(error, 'Unable to refresh target state.'));
+        } finally { if (isCurrent()) setIsSaving(false); }
+    };
+
     const handleSubmit = async () => {
+        if (isSaving || receipt || isReadOnlyConsumer(consumer)) return;
+        const isCurrent = generation.current.begin();
         setError('');
         const trimmedGroup = form.consumerGroup.trim();
         if (!trimmedGroup) {
@@ -317,16 +353,16 @@ export const ConsumerEditorModal = ({
         try {
             setIsSaving(true);
             const result = await ConsumerService.createOrUpdateConsumerGroup(request);
-            toast.success(
-                isEditMode
-                    ? 'Consumer group configuration updated.'
-                    : 'Consumer group created successfully.',
-            );
+            if (!isCurrent()) return;
+            setReceipt(result);
+            if (result.success) toast.success('Consumer group saved on all selected targets.');
+            else toast.warning('Some Consumer operations were not confirmed. Review each result.');
             onSaved(result);
         } catch (saveError) {
+            if (!isCurrent()) return;
             setError(dashboardErrorMessage(saveError, 'Failed to save consumer group changes.'));
         } finally {
-            setIsSaving(false);
+            if (isCurrent()) setIsSaving(false);
         }
     };
 
@@ -659,6 +695,8 @@ export const ConsumerEditorModal = ({
                         )}
                     </div>
 
+                    {receipt && <ConsumerMutationReceipt result={receipt} onReviewFailed={() => void reviewFailed()} disabled={isSaving} />}
+                    {isReadOnlyConsumer(consumer) && <p role="note">System Consumer groups are read-only.</p>}
                     <footer className="topic-status-footer consumer-editor-footer">
                         <span>
                             {isEditMode
@@ -672,7 +710,7 @@ export const ConsumerEditorModal = ({
                             <button
                                 type="button"
                                 onClick={() => void handleSubmit()}
-                                disabled={isLoading || isSaving}
+                                disabled={isLoading || isSaving || Boolean(receipt) || isReadOnlyConsumer(consumer)}
                                 className="topic-status-primary-button consumer-editor-save-button"
                             >
                                 {isSaving ? (

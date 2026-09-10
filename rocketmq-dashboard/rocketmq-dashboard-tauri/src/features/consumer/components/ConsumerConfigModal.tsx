@@ -1,3 +1,4 @@
+import { isReadOnlyConsumer } from '../mutation';
 import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
@@ -317,6 +318,8 @@ export const ConsumerConfigModal = ({
                                 <button
                                     type="button"
                                     onClick={() => onEdit(consumer, selectedBrokerAddress)}
+                                    disabled={isReadOnlyConsumer(consumer)}
+                                    title={isReadOnlyConsumer(consumer) ? "System Consumer groups are read-only." : undefined}
                                     className="topic-status-primary-button consumer-config-edit-button"
                                 >
                                     Edit Group

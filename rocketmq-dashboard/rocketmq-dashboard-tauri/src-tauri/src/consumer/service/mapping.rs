@@ -18,17 +18,17 @@ use crate::consumer::types::ConsumerConnectionItem;
 use crate::consumer::types::ConsumerConnectionView;
 use crate::consumer::types::ConsumerGroupListItem;
 use crate::consumer::types::ConsumerGroupListSummary;
-use crate::consumer::types::ConsumerMutationResult;
 use crate::consumer::types::ConsumerSubscriptionItem;
 use crate::consumer::types::ConsumerTopicDetailItem;
 use crate::consumer::types::ConsumerTopicDetailQueueItem;
 use crate::consumer::types::ConsumerTopicDetailView;
+use crate::consumer::types::{ConsumerMutationResult, ConsumerOperation, ConsumerTargetResult};
 use crate::error::DashboardError as ConsumerError;
 use rocketmq_admin_core::core::AdminError;
+use rocketmq_admin_core::core::consumer::DashboardConsumerBatchResult as AdminConsumerMutationResult;
 use rocketmq_admin_core::core::consumer::DashboardConsumerConfig;
 use rocketmq_admin_core::core::consumer::DashboardConsumerConnection;
 use rocketmq_admin_core::core::consumer::DashboardConsumerGroupItem;
-use rocketmq_admin_core::core::consumer::DashboardConsumerMutationResult as AdminConsumerMutationResult;
 use rocketmq_admin_core::core::consumer::DashboardConsumerProgress;
 
 pub(super) fn map_consumer_group_item(item: DashboardConsumerGroupItem) -> ConsumerGroupListItem {
@@ -161,11 +161,32 @@ pub(super) fn map_consumer_topic_detail_view(progress: DashboardConsumerProgress
     }
 }
 
-pub(super) fn map_consumer_mutation_result(result: AdminConsumerMutationResult) -> ConsumerMutationResult {
+pub(super) fn map_consumer_mutation_result(
+    result: AdminConsumerMutationResult,
+    operation: ConsumerOperation,
+) -> ConsumerMutationResult {
+    let success = result.success && !result.targets.is_empty() && result.targets.iter().all(|target| target.success);
     ConsumerMutationResult {
         consumer_group: result.consumer_group,
-        broker_names: result.broker_names,
-        updated: result.updated,
+        operation,
+        target_count: result.targets.len(),
+        success,
+        targets: result
+            .targets
+            .into_iter()
+            .map(|target| ConsumerTargetResult {
+                target: target.target,
+                kind: target.kind,
+                success: target.success,
+                error_code: (!target.success).then(|| "dashboard.consumer_target_failed".into()),
+                message: if target.success {
+                    "Target operation completed."
+                } else {
+                    "Target operation was not confirmed. Refresh its state before another attempt."
+                }
+                .into(),
+            })
+            .collect(),
     }
 }
 
@@ -182,6 +203,7 @@ mod tests {
     use super::map_consumer_group_item;
     use super::map_consumer_mutation_result;
     use super::map_consumer_topic_detail_view;
+    use crate::consumer::types::ConsumerOperation;
     use crate::error::DashboardError as ConsumerError;
     use rocketmq_admin_core::core::AdminError;
     use rocketmq_admin_core::core::consumer::DashboardConsumerConfig;
@@ -189,11 +211,11 @@ mod tests {
     use rocketmq_admin_core::core::consumer::DashboardConsumerConnection;
     use rocketmq_admin_core::core::consumer::DashboardConsumerConnectionItem;
     use rocketmq_admin_core::core::consumer::DashboardConsumerGroupItem;
-    use rocketmq_admin_core::core::consumer::DashboardConsumerMutationResult;
     use rocketmq_admin_core::core::consumer::DashboardConsumerProgress;
     use rocketmq_admin_core::core::consumer::DashboardConsumerSubscriptionItem;
     use rocketmq_admin_core::core::consumer::DashboardConsumerTopicDetail;
     use rocketmq_admin_core::core::consumer::DashboardConsumerTopicQueue;
+    use rocketmq_admin_core::core::consumer::{DashboardConsumerBatchResult, DashboardConsumerTargetOutcome};
 
     #[test]
     fn group_mapping_and_summary_preserve_dashboard_fields() {
@@ -298,14 +320,37 @@ mod tests {
 
     #[test]
     fn mutation_and_error_mapping_preserve_ui_contract() {
-        let result = map_consumer_mutation_result(DashboardConsumerMutationResult {
-            consumer_group: "group-a".into(),
-            broker_names: vec!["broker-a".into()],
-            updated: true,
-        });
+        let result = map_consumer_mutation_result(
+            DashboardConsumerBatchResult {
+                consumer_group: "group-a".into(),
+                success: false,
+                targets: vec![
+                    DashboardConsumerTargetOutcome {
+                        target: "broker-a".into(),
+                        kind: "BROKER".into(),
+                        success: true,
+                        message: "ok".into(),
+                    },
+                    DashboardConsumerTargetOutcome {
+                        target: "broker-b".into(),
+                        kind: "BROKER".into(),
+                        success: false,
+                        message: "secret backend details".into(),
+                    },
+                ],
+            },
+            ConsumerOperation::Upsert,
+        );
+        assert!(!result.success);
+        assert_eq!(result.target_count, 2);
+        assert!(result.targets[0].success);
+        assert_eq!(
+            result.targets[1].error_code.as_deref(),
+            Some("dashboard.consumer_target_failed")
+        );
+        assert!(!serde_json::to_string(&result).unwrap().contains("secret backend"));
         let error = map_admin_error(AdminError::invalid_argument("consumer_group", "required"));
 
-        assert!(result.updated);
         let ConsumerError::Admin(error) = error else {
             panic!("invalid admin input must retain the canonical admin facade");
         };

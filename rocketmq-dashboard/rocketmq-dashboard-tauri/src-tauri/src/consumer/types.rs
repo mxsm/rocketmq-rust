@@ -151,6 +151,25 @@ pub(crate) struct ConsumerConfigView {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ConsumerMutationResult {
     pub(crate) consumer_group: String,
-    pub(crate) broker_names: Vec<String>,
-    pub(crate) updated: bool,
+    pub(crate) operation: ConsumerOperation,
+    pub(crate) targets: Vec<ConsumerTargetResult>,
+    pub(crate) target_count: usize,
+    pub(crate) success: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ConsumerOperation {
+    Upsert,
+    Delete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConsumerTargetResult {
+    pub(crate) target: String,
+    pub(crate) kind: String,
+    pub(crate) success: bool,
+    pub(crate) error_code: Option<String>,
+    pub(crate) message: String,
 }

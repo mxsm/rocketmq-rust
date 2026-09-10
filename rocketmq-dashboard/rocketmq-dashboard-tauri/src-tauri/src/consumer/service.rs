@@ -18,6 +18,7 @@ use crate::consumer::types::ConsumerConnectionView;
 use crate::consumer::types::ConsumerGroupListItem;
 use crate::consumer::types::ConsumerGroupListResponse;
 use crate::consumer::types::ConsumerMutationResult;
+use crate::consumer::types::ConsumerOperation;
 use crate::consumer::types::ConsumerResult;
 use crate::consumer::types::ConsumerTopicDetailView;
 use crate::error::DashboardError as ConsumerError;
@@ -26,10 +27,15 @@ use rocketmq_admin_core::client_adapter::AdminSession;
 use rocketmq_admin_core::core::consumer::ConsumerAdmin;
 use rocketmq_admin_core::core::consumer::DashboardConsumerConfigRequest;
 use rocketmq_admin_core::core::consumer::DashboardConsumerConnectionRequest;
-use rocketmq_admin_core::core::consumer::DashboardConsumerDeleteRequest;
 use rocketmq_admin_core::core::consumer::DashboardConsumerGroupListRequest;
 use rocketmq_admin_core::core::consumer::DashboardConsumerProgressRequest;
 use rocketmq_admin_core::core::consumer::DashboardConsumerUpsertRequest;
+use rocketmq_admin_core::core::consumer::{
+    ConsumerBatchDeleteRequest, ConsumerBatchMutationAdmin, ConsumerBatchUpsertRequest, is_protected_consumer_group,
+};
+use rocketmq_admin_core::core::consumer_workspace::{
+    ConsumerInventoryRequest, ConsumerInventoryResult, ConsumerWorkspaceAdmin, WorkspaceFailureStage,
+};
 use rocketmq_dashboard_common::ConsumerConfigQueryRequest;
 use rocketmq_dashboard_common::ConsumerConnectionQueryRequest;
 use rocketmq_dashboard_common::ConsumerCreateOrUpdateRequest;
@@ -273,7 +279,7 @@ impl ConsumerManager {
         &self,
         request: ConsumerCreateOrUpdateRequest,
     ) -> ConsumerResult<ConsumerMutationResult> {
-        let group_name = validate_consumer_group_name(&request.consumer_group)?;
+        let group_name = validate_mutable_consumer_group(&request.consumer_group)?;
         validate_consumer_targets(&request.cluster_name_list, &request.broker_name_list)?;
         validate_consumer_limits(&request)?;
 
@@ -302,7 +308,7 @@ impl ConsumerManager {
         &self,
         request: ConsumerDeleteRequest,
     ) -> ConsumerResult<ConsumerMutationResult> {
-        let group_name = validate_consumer_group_name(&request.consumer_group)?;
+        let group_name = validate_mutable_consumer_group(&request.consumer_group)?;
         if request.broker_name_list.is_empty() {
             return Err(ConsumerError::Validation(
                 "Select at least one broker before deleting the consumer group.".into(),
@@ -479,24 +485,27 @@ impl ConsumerManager {
         request: ConsumerCreateOrUpdateRequest,
     ) -> ConsumerResult<ConsumerMutationResult> {
         admin
-            .upsert_dashboard_consumer_group(&DashboardConsumerUpsertRequest {
-                cluster_name_list: request.cluster_name_list,
-                broker_name_list: request.broker_name_list,
-                consumer_group: raw_group_name.to_string(),
-                consume_enable: request.consume_enable,
-                consume_from_min_enable: request.consume_from_min_enable,
-                consume_broadcast_enable: request.consume_broadcast_enable,
-                consume_message_orderly: request.consume_message_orderly,
-                retry_queue_nums: request.retry_queue_nums,
-                retry_max_times: request.retry_max_times,
-                broker_id: request.broker_id,
-                which_broker_when_consume_slowly: request.which_broker_when_consume_slowly,
-                notify_consumer_ids_changed_enable: request.notify_consumer_ids_changed_enable,
-                group_sys_flag: request.group_sys_flag,
-                consume_timeout_minute: request.consume_timeout_minute,
-            })
+            .upsert_consumer_group_batch(
+                &ConsumerBatchUpsertRequest::try_new(DashboardConsumerUpsertRequest {
+                    cluster_name_list: request.cluster_name_list,
+                    broker_name_list: request.broker_name_list,
+                    consumer_group: raw_group_name.to_string(),
+                    consume_enable: request.consume_enable,
+                    consume_from_min_enable: request.consume_from_min_enable,
+                    consume_broadcast_enable: request.consume_broadcast_enable,
+                    consume_message_orderly: request.consume_message_orderly,
+                    retry_queue_nums: request.retry_queue_nums,
+                    retry_max_times: request.retry_max_times,
+                    broker_id: request.broker_id,
+                    which_broker_when_consume_slowly: request.which_broker_when_consume_slowly,
+                    notify_consumer_ids_changed_enable: request.notify_consumer_ids_changed_enable,
+                    group_sys_flag: request.group_sys_flag,
+                    consume_timeout_minute: request.consume_timeout_minute,
+                })
+                .map_err(map_admin_error)?,
+            )
             .await
-            .map(map_consumer_mutation_result)
+            .map(|result| map_consumer_mutation_result(result, ConsumerOperation::Upsert))
             .map_err(map_admin_error)
     }
 
@@ -506,13 +515,17 @@ impl ConsumerManager {
         raw_group_name: &str,
         request: ConsumerDeleteRequest,
     ) -> ConsumerResult<ConsumerMutationResult> {
-        admin
-            .delete_dashboard_consumer_group(&DashboardConsumerDeleteRequest {
-                consumer_group: raw_group_name.to_string(),
-                broker_name_list: request.broker_name_list,
-            })
+        let catalog = admin
+            .consumer_inventory(&ConsumerInventoryRequest::default())
             .await
-            .map(map_consumer_mutation_result)
+            .map_err(map_admin_error)?;
+        let all_brokers = authoritative_group_brokers(catalog, raw_group_name)?;
+        let batch = ConsumerBatchDeleteRequest::try_new(raw_group_name, request.broker_name_list, all_brokers)
+            .map_err(map_admin_error)?;
+        admin
+            .delete_consumer_group_batch(&batch)
+            .await
+            .map(|result| map_consumer_mutation_result(result, ConsumerOperation::Delete))
             .map_err(map_admin_error)
     }
 }
@@ -532,6 +545,45 @@ fn validate_consumer_group_name(group_name: &str) -> ConsumerResult<String> {
     } else {
         Ok(normalized)
     }
+}
+
+fn authoritative_group_brokers(catalog: ConsumerInventoryResult, group_name: &str) -> ConsumerResult<Vec<String>> {
+    // Read-only lists tolerate failed brokers. Deletion must not mistake that partial list
+    // for full group coverage and trigger retry/DLQ cleanup on unselected brokers.
+    if catalog.targets.is_empty()
+        || catalog
+            .failures
+            .iter()
+            .any(|failure| failure.stage == WorkspaceFailureStage::Inventory)
+    {
+        return Err(ConsumerError::Validation(
+            "Complete Broker subscription metadata is required before deletion. Refresh the cluster and try again."
+                .into(),
+        ));
+    }
+    let group = catalog
+        .items
+        .into_iter()
+        .find(|group| group.group == group_name)
+        .ok_or_else(|| ConsumerError::Validation("Consumer group was not found in the current cluster.".into()))?;
+    validate_mutable_consumer_group(&group.group)?;
+    if group.category == "SYSTEM" {
+        return Err(ConsumerError::Validation(
+            "System consumer groups are read-only.".into(),
+        ));
+    }
+    Ok(group.targets.into_iter().map(|target| target.broker_name).collect())
+}
+
+fn validate_mutable_consumer_group(group_name: &str) -> ConsumerResult<String> {
+    let raw = group_name.trim();
+    let normalized = validate_consumer_group_name(raw)?;
+    if is_protected_consumer_group(raw) || is_protected_consumer_group(&normalized) {
+        return Err(ConsumerError::Validation(
+            "System consumer groups are read-only.".into(),
+        ));
+    }
+    Ok(normalized)
 }
 
 fn validate_consumer_targets(cluster_name_list: &[String], broker_name_list: &[String]) -> ConsumerResult<()> {
@@ -564,7 +616,46 @@ fn validate_consumer_limits(request: &ConsumerCreateOrUpdateRequest) -> Consumer
 
 #[cfg(test)]
 mod tests {
-    use super::strip_system_prefix;
+    use super::{authoritative_group_brokers, strip_system_prefix, validate_mutable_consumer_group};
+    use rocketmq_admin_core::core::consumer_workspace::*;
+
+    #[test]
+    fn incomplete_inventory_cannot_authorize_deletion() {
+        let catalog = ConsumerInventoryResult {
+            items: vec![],
+            targets: vec![ConsumerWorkspaceTarget {
+                cluster_name: "cluster".into(),
+                broker_name: "broker".into(),
+                broker_address: "localhost:10911".into(),
+            }],
+            observation: WorkspaceObservationState::Partial,
+            failures: vec![WorkspaceTargetFailure {
+                target: "broker".into(),
+                stage: WorkspaceFailureStage::Inventory,
+                code: WorkspaceFailureCode::Unavailable,
+                retryable: true,
+            }],
+        };
+        let error = authoritative_group_brokers(catalog, "group").unwrap_err();
+        assert!(error.to_string().contains("Complete Broker subscription metadata"));
+    }
+
+    #[test]
+    fn protected_names_are_rejected_before_opening_a_session() {
+        for group in [
+            "%SYS%ordinary",
+            " %SYS%TOOLS_CONSUMER ",
+            "TOOLS_CONSUMER",
+            "CID_RMQ_SYS_TEST",
+            " ",
+        ] {
+            assert!(validate_mutable_consumer_group(group).is_err(), "{group}");
+        }
+        assert_eq!(
+            validate_mutable_consumer_group(" normal-group ").unwrap(),
+            "normal-group"
+        );
+    }
 
     #[test]
     fn strip_system_prefix_handles_prefixed_group_names() {
