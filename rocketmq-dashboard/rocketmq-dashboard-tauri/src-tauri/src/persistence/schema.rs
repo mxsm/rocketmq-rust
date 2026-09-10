@@ -17,7 +17,7 @@ use crate::error::DashboardResult;
 use rusqlite::Connection;
 use rusqlite::TransactionBehavior;
 
-pub(crate) const SCHEMA_VERSION: i64 = 5;
+pub(crate) const SCHEMA_VERSION: i64 = 6;
 
 pub(crate) fn initialize(connection: &mut Connection) -> DashboardResult<()> {
     // IMMEDIATE serializes competing initializers before reading the version.
@@ -70,6 +70,16 @@ pub(crate) fn initialize(connection: &mut Connection) -> DashboardResult<()> {
                 endpoint_id TEXT NOT NULL UNIQUE,
                 environment_id TEXT UNIQUE,
                 PRIMARY KEY(kind, address)
+            );
+            CREATE TABLE consumer_monitor_rules (
+                environment_id TEXT NOT NULL,
+                consumer_group TEXT NOT NULL,
+                min_count INTEGER NOT NULL CHECK(min_count >= 0),
+                max_diff_total INTEGER NOT NULL CHECK(max_diff_total >= 0),
+                revision INTEGER NOT NULL CHECK(revision > 0 AND revision <= 9007199254740991),
+                created_at_ms INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL,
+                PRIMARY KEY(environment_id,consumer_group)
             );
             CREATE TABLE history_samples (
                 environment_id TEXT NOT NULL,

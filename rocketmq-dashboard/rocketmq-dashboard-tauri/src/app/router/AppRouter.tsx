@@ -15,6 +15,7 @@ import {MessageView} from '../../components/MessageView';
 import {MessageTraceView} from '../../components/MessageTraceView';
 import {DLQMessageView} from '../../components/DLQMessageView';
 import {Activity} from 'lucide-react';
+import {MonitorPage} from '../../pages/monitor/MonitorPage';
 import {AuditPage} from '../../pages/audit/AuditPage';
 import {SessionsPanel} from '../../pages/account/SessionsPanel';
 import {AccountPage} from '../../pages/account/AccountPage';
@@ -55,6 +56,8 @@ const RouteContent = () => {
             return <DLQMessageView/>;
         case 'ACL':
             return <ACLView/>;
+        case 'Monitors':
+            return <MonitorPage/>;
         case 'Audit':
             return <AuditPage/>;
         case 'Sessions':

@@ -47,6 +47,8 @@ pub(crate) enum DashboardError {
     PasswordChangeRequired,
     #[error("connection settings changed; review the current configuration")]
     ConfigurationConflict,
+    #[error("monitor rule changed; review the current rule")]
+    MonitorConflict,
     #[error("I/O operation failed")]
     Io(#[from] std::io::Error),
     #[error("database operation failed")]
@@ -77,6 +79,13 @@ impl DashboardError {
             Self::Validation(_) => (
                 "dashboard.invalid_argument",
                 "The request is invalid.",
+                CommandErrorCategory::Validation,
+                false,
+                None,
+            ),
+            Self::MonitorConflict => (
+                "dashboard.monitor_conflict",
+                "This rule changed. Review its current version before saving again.",
                 CommandErrorCategory::Validation,
                 false,
                 None,

@@ -24,6 +24,7 @@ mod dashboard;
 mod error;
 mod history;
 mod message;
+mod monitor;
 mod nameserver;
 mod persistence;
 mod producer;
@@ -252,6 +253,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
 
             let sessions = auth::SessionState::new(storage.clone(), auth_service)?;
             sessions.start_cleanup()?;
+            app.manage(monitor::MonitorManager::new(storage.clone(), connections.clone()));
             app.manage(history);
             app.manage(storage);
             app.manage(sessions);
@@ -306,6 +308,9 @@ fn build_application() -> Result<DashboardApplication, i32> {
             history::query_broker_history,
             history::query_topic_history,
             history::get_history_status,
+            monitor::list_consumer_monitor_rules,
+            monitor::save_consumer_monitor_rule,
+            monitor::delete_consumer_monitor_rule,
             dashboard::commands::query_dashboard_topic_current,
             message::commands::query_message_by_topic_key,
             message::commands::query_message_by_id,
