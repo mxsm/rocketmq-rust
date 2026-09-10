@@ -1,0 +1,11 @@
+# Persisted desktop history
+
+The fresh SQLite schema includes environment/metric/dimension/time samples with a unique primary key and a retention index. Older schema versions remain explicitly unsupported; no migration or deletion of an old database is attempted. Select a fresh data directory for this schema when necessary.
+
+The application-owned collector records broker-count, topic-count, and per-Topic topic-total-messages. It uses existing managers, runs one collection at a time, and skips missed timer ticks. Counts are discovered values, not proof that all Brokers are healthy. Failed metrics produce no zero samples. Partial collection stores successful metrics and reports a safe warning. Topic totals are actual current queue-offset totals; TPS charts are never repurposed as history.
+
+Defaults are 60 seconds and 30 days. `DASHBOARD_TAURI_HISTORY_INTERVAL_SECONDS` accepts 15 through 3600; `DASHBOARD_TAURI_HISTORY_RETENTION_DAYS` accepts 1 through 365. Invalid settings reject startup. Configuration is read on startup.
+
+Each collection captures environment and connection revision. The sample transaction acquires an IMMEDIATE write lock and checks the persisted revision before inserting, so a configuration change discards the obsolete result. Cleanup deletes expired rows in batches of 1000 with an await boundary between batches. Storage owns the timer task, cancels and awaits background work, and drains accepted writes before admin managers close.
+
+The Dashboard history section queries the selected local calendar day using UTC millisecond boundaries, displays its timezone, and supports Broker/Topic count or selected-Topic message history. Samples are returned newest-first with a bounded timestamp cursor; the chart renders them chronologically. Missing data shows a waiting/empty state and read failures show an error. Collector status reports its last successful sample/write and recent safe error. These process-local collector timestamps restart with the application; persisted samples remain readable.

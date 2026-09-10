@@ -1,3 +1,4 @@
+import { HistoryChart } from '../../features/dashboard/components/HistoryChart';
 import { GlobalOverview } from '../../features/dashboard/components/GlobalOverview';
 import React from 'react';
 import { BrokerOverview } from '../../features/dashboard/components/BrokerOverview';
@@ -9,6 +10,7 @@ export const DashboardPage = () => {
       <GlobalOverview />
       <BrokerOverview />
       <DashboardCharts />
+      <HistoryChart />
     </div>
   );
 };
