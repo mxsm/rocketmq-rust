@@ -100,3 +100,28 @@ fn non_send_ok_receipts_preserve_identifiers_without_claiming_success() {
         assert_ne!(result.send_status, "SEND_OK");
     }
 }
+
+#[test]
+fn offset_reset_validation_rejects_protected_groups_and_negative_time() {
+    use rocketmq_dashboard_common::ResetOffsetRequest;
+    let mut request = ResetOffsetRequest {
+        consumer_group_list: vec!["orders-reader".into()],
+        topic: "orders".into(),
+        reset_time: 1_700_000_000_000,
+        force: false,
+    };
+    assert_eq!(
+        super::validate_offset_reset(&request, false).unwrap(),
+        super::OffsetResetPosition::Timestamp(1_700_000_000_000)
+    );
+    request.reset_time = -1;
+    assert!(super::validate_offset_reset(&request, false).is_err());
+    assert_eq!(
+        super::validate_offset_reset(&request, true).unwrap(),
+        super::OffsetResetPosition::Latest
+    );
+    for group in ["", " reader ", "%SYS%reader", "TOOLS_CONSUMER"] {
+        request.consumer_group_list = vec![group.into()];
+        assert!(super::validate_offset_reset(&request, true).is_err(), "{group}");
+    }
+}

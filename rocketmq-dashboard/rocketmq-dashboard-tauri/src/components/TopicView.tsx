@@ -1,3 +1,5 @@
+import { ConsumerService } from '../services/consumer.service';
+import { OffsetResetForm } from '../features/topic/components/OffsetResetForm';
 import { TopicMutationReceipt, failedBrokerNames } from '../features/topic/components/TopicMutationReceipt';
 import type { TopicBatchResult } from '../features/topic/types/topic.types';
 import { useAppStore, useNavigationState } from '../stores/app.store';
@@ -127,11 +129,6 @@ const mapTopicListItem = (item: TopicListItem): Topic => ({
     messageType: item.messageType,
     operations: buildTopicOperations(item),
 });
-
-const toDateTimeLocalValue = (date: Date): string => {
-    const adjusted = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-    return adjusted.toISOString().slice(0, 16);
-};
 
 const buildTopicEditorSeedFromConfig = (config: TopicConfigView): TopicEditorSeed => ({
     topicName: config.topicName,
@@ -1899,218 +1896,36 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
 };
 
 const TopicResetOffsetModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
-    const [consumerGroups, setConsumerGroups] = useState<string[]>([]);
-    const [selectedConsumerGroup, setSelectedConsumerGroup] = useState('');
-    const [selectedTime, setSelectedTime] = useState('');
-    const [isLoadingGroups, setIsLoadingGroups] = useState(false);
-    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [groups, setGroups] = useState<string[]>([]);
+    const [group, setGroup] = useState('');
     const [error, setError] = useState('');
-
     useEffect(() => {
-        if (!isOpen || !topic?.name) {
-            return;
-        }
-
+        if (!isOpen || !topic) return;
         let cancelled = false;
-
-        setConsumerGroups([]);
-        setSelectedConsumerGroup('');
-        setSelectedTime(toDateTimeLocalValue(new Date()));
-        setIsLoadingGroups(true);
-        setIsSubmitting(false);
-        setError('');
-
-        const loadConsumerGroups = async () => {
-            try {
-                const response = await TopicService.getTopicConsumerGroups({topic: topic.name});
-                if (cancelled) {
-                    return;
-                }
-
-                const groups = response.consumerGroups ?? [];
-                setConsumerGroups(groups);
-                setSelectedConsumerGroup(groups[0] ?? '');
-            } catch (loadError) {
-                if (!cancelled) {
-                    setError(dashboardErrorMessage(loadError, 'Failed to load consumer groups.'));
-                }
-            } finally {
-                if (!cancelled) {
-                    setIsLoadingGroups(false);
-                }
-            }
-        };
-
-        void loadConsumerGroups();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [isOpen, topic?.name]);
-
-    const handleReset = async () => {
-        if (!topic?.name) {
-            return;
-        }
-
-        if (!selectedConsumerGroup) {
-            setError('Select a consumer group before resetting offsets.');
-            return;
-        }
-
-        if (!selectedTime) {
-            setError('Select a reset time before submitting.');
-            return;
-        }
-
-        const resetTime = new Date(selectedTime).getTime();
-        if (Number.isNaN(resetTime)) {
-            setError('The selected reset time is invalid.');
-            return;
-        }
-
-        setIsSubmitting(true);
-        setError('');
-
-        try {
-            const result = await TopicService.resetConsumerOffset({
-                consumerGroupList: [selectedConsumerGroup],
-                topic: topic.name,
-                resetTime,
-                force: true,
-            });
-            toast.success(result.message || `Offset reset requested for ${topic.name}`);
-            onClose();
-        } catch (resetError) {
-            setError(dashboardErrorMessage(resetError, 'Failed to reset consumer offset.'));
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
-
-    if (!isOpen) return null;
-
-    return (
-        <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                <motion.div
-                    initial={{opacity: 0}}
-                    animate={{opacity: 0.3}}
-                    exit={{opacity: 0}}
-                    onClick={onClose}
-                    className="absolute inset-0 bg-black"
-                />
-                <motion.div
-                    initial={{opacity: 0, scale: 0.95, y: 10}}
-                    animate={{opacity: 1, scale: 1, y: 0}}
-                    exit={{opacity: 0, scale: 0.95, y: 10}}
-                    className="relative w-full max-w-lg bg-white dark:bg-gray-900 rounded-xl shadow-2xl overflow-hidden flex flex-col border border-gray-100 dark:border-gray-800"
-                >
-                    {/* Header */}
-                    <div className="px-6 py-5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-white dark:bg-gray-900 z-10">
-                        <div>
-                            <h3 className="text-xl font-bold text-gray-800 dark:text-white flex items-center">
-                                <RotateCcw className="w-5 h-5 mr-2 text-blue-500"/>
-                                Reset Consumer Offset
-                            </h3>
-                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                                <span className="font-mono text-gray-700 dark:text-gray-300 font-medium">{topic?.name}</span> resetOffset
-                            </p>
-                        </div>
-                        <button
-                            onClick={onClose}
-                            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors"
-                        >
-                            <X className="w-5 h-5"/>
-                        </button>
-                    </div>
-
-                    {/* Content */}
-                    <div className="p-6 space-y-5 bg-gray-50/50 dark:bg-gray-950/50">
-                        <div className="bg-white dark:bg-gray-900 p-6 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-5">
-                            {isLoadingGroups && (
-                                <div className="rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3 text-sm text-gray-500 dark:border-gray-800 dark:bg-gray-800/60 dark:text-gray-400">
-                                    Loading consumer groups for this topic...
-                                </div>
-                            )}
-
-                            {!isLoadingGroups && error && (
-                                <div className="rounded-xl border border-red-200 bg-red-50/80 px-4 py-3 text-sm text-red-600 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
-                                    {error}
-                                </div>
-                            )}
-
-                            {/* SubscriptionGroup */}
-                            <div className="space-y-1.5">
-                                <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300">
-                                    <span className="text-red-500 mr-1">*</span>SubscriptionGroup
-                                </label>
-                                <div className="relative">
-                                    <select
-                                        value={selectedConsumerGroup}
-                                        onChange={(event) => setSelectedConsumerGroup(event.target.value)}
-                                        disabled={isLoadingGroups || consumerGroups.length === 0 || isSubmitting}
-                                        className="w-full px-3 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-750">
-                                        <option value="" disabled>
-                                            {isLoadingGroups ? 'Loading groups...' : 'Select a group...'}
-                                        </option>
-                                        {consumerGroups.map((group) => (
-                                            <option key={group} value={group}>
-                                                {group}
-                                            </option>
-                                        ))}
-                                    </select>
-                                    <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none"/>
-                                </div>
-                                {!isLoadingGroups && consumerGroups.length === 0 && !error && (
-                                    <p className="text-xs text-amber-600 dark:text-amber-400">
-                                        No consumer groups are currently associated with this topic.
-                                    </p>
-                                )}
-                            </div>
-
-                            {/* Time */}
-                            <div className="space-y-1.5">
-                                <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300">
-                                    <span className="text-red-500 mr-1">*</span>Time
-                                </label>
-                                <div className="relative">
-                                    <input
-                                        type="datetime-local"
-                                        value={selectedTime}
-                                        onChange={(event) => setSelectedTime(event.target.value)}
-                                        disabled={isSubmitting}
-                                        className="w-full px-3 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-gray-400 dark:placeholder:text-gray-600 dark:[color-scheme:dark]"
-                                    />
-                                </div>
-                                <p className="text-xs text-gray-500 dark:text-gray-400">
-                                    The selected consumer group will rewind to the nearest offset at this timestamp.
-                                </p>
-                            </div>
-
-                        </div>
-                    </div>
-
-                    {/* Footer */}
-                    <div className="px-6 py-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex justify-end space-x-3 z-10">
-                        <button
-                            onClick={onClose}
-                            className="px-6 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
-                        >
-                            Close
-                        </button>
-                        <button
-                            onClick={() => void handleReset()}
-                            disabled={isLoadingGroups || consumerGroups.length === 0 || isSubmitting}
-                            className="px-6 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-all shadow-md hover:shadow-lg flex items-center dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
-                        >
-                            {isSubmitting ? 'Resetting...' : 'RESET'}
-                        </button>
-                    </div>
-                </motion.div>
+        setGroups([]); setGroup(''); setError('');
+        void TopicService.getTopicConsumerGroups({ topic: topic.name }).then(result => {
+            if (!cancelled) setGroups(result.consumerGroups);
+        }).catch(error => { if (!cancelled) setError(dashboardErrorMessage(error, 'Unable to load Consumer groups.')); });
+        return () => { cancelled = true; };
+    }, [isOpen, topic]);
+    if (!isOpen || !topic) return null;
+    return <div className="topic-status-modal-root">
+        <div className="topic-status-backdrop" onClick={onClose} />
+        <div className="topic-status-dialog max-w-xl">
+            <header className="topic-status-header"><h3>Reset Consumer Offset</h3><button type="button" onClick={onClose} aria-label="Close offset reset">Close</button></header>
+            <div className="topic-status-body p-4">
+                {error && <p role="alert">{error}</p>}
+                <label>Consumer group <select className="rounded border p-2 dark:bg-gray-900" value={group} onChange={event => setGroup(event.target.value)}>
+                    <option value="">Select a group</option>{groups.map(value => <option key={value} value={value}>{value}</option>)}
+                </select></label>
+                <OffsetResetForm key={`${topic.name}:${group}`} topic={topic.name} group={group} disabled={topic.systemTopic}
+                    readProgress={async request => {
+                        const result = await ConsumerService.queryConsumerTopicDetail({ consumerGroup: request.consumerGroupList[0], scope: { mode: 'name_server' } });
+                        return { consumerGroup: result.consumerGroup, topics: result.topics.filter(item => item.topic === request.topic) };
+                    }} />
             </div>
-        </AnimatePresence>
-    );
+        </div>
+    </div>;
 };
 
 const TopicSkipMessageAccumulateModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {

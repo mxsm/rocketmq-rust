@@ -1,3 +1,6 @@
+import { OffsetResetForm } from '../../topic/components/OffsetResetForm';
+import { isReadOnlyConsumer } from '../mutation';
+import { consumerScopeKey } from '../scope';
 import type { ConsumerQueryScope } from '../types/consumer.types';
 import { consumerScopeLabel } from '../scope';
 import { useAppStore } from '../../../stores/app.store';
@@ -51,6 +54,8 @@ export const ConsumerDetailModal = ({
     scope,
 }: ConsumerDetailModalProps) => {
     const { openTopic } = useAppStore();
+    const [activeTab, setActiveTab] = useState<'progress' | 'reset'>('progress');
+    useEffect(() => { setActiveTab('progress'); }, [scope, consumer, isOpen]);
     const [data, setData] = useState<ConsumerTopicDetailView | null>(null);
     const [selectedTopicName, setSelectedTopicName] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -145,7 +150,7 @@ export const ConsumerDetailModal = ({
                         <div className="topic-status-header-actions consumer-topic-detail-header-actions">
                             <span className={`consumer-topic-detail-chip ${lagStateClass}`}>
                                 <i aria-hidden="true" />
-                                {data && data.totalDiff > 0 ? 'Lagging' : 'No lag'}
+                                {!data ? 'Unknown' : data.totalDiff > 0 ? 'Lagging' : 'No lag'}
                             </span>
                             {data && (
                                 <span className="consumer-topic-detail-chip is-info">
@@ -163,8 +168,22 @@ export const ConsumerDetailModal = ({
                         </div>
                     </header>
 
+                    <nav className="flex gap-4 p-4" aria-label="Consumer detail sections">
+                        <button type="button" aria-pressed={activeTab === 'progress'} onClick={() => setActiveTab('progress')}>Progress</button>
+                        <button type="button" aria-pressed={activeTab === 'reset'} disabled={isReadOnlyConsumer(consumer)} onClick={() => setActiveTab('reset')}>Reset offset</button>
+                    </nav>
                     <div className="topic-status-body consumer-topic-detail-body">
-                        {isLoading ? (
+                        {activeTab === 'reset' && consumer ? <>
+                            <label>Topic from Consumer progress <select className="rounded border p-2 dark:bg-gray-900" value={selectedTopicName} onChange={event => setSelectedTopicName(event.target.value)}>
+                                <option value="">Select a Topic</option>{topics.map(item => <option key={item.topic} value={item.topic}>{item.topic}</option>)}
+                            </select></label>
+                            {topics.length === 0 && <p>No Topics available from Consumer progress. Refresh the detail view first.</p>}
+                            <OffsetResetForm key={`${consumer.rawGroupName}:${consumerScopeKey(scope)}:${selectedTopicName}`} topic={selectedTopicName} group={consumer.rawGroupName}
+                                disabled={isLoading || isReadOnlyConsumer(consumer)} readProgress={async request => {
+                                    const result = await ConsumerService.queryConsumerTopicDetail({ consumerGroup: request.consumerGroupList[0], scope });
+                                    return { consumerGroup: result.consumerGroup, topics: result.topics.filter(item => item.topic === request.topic) };
+                                }} />
+                        </> : isLoading ? (
                             <div className="topic-status-state">
                                 <LoaderCircle className="topic-icon consumer-spin" aria-hidden="true" />
                                 <strong>Loading consumer details</strong>
