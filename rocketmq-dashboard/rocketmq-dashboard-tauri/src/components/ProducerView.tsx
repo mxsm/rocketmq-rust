@@ -1,3 +1,4 @@
+import { ProducerGroupDirectory } from '../features/producer/components/ProducerGroupDirectory';
 import React, {useEffect, useMemo, useState} from 'react';
 import {motion} from 'motion/react';
 import {
@@ -46,7 +47,7 @@ export const ProducerView = () => {
     const versionCount = new Set(clients.map((client) => client.versionDesc).filter(Boolean)).size;
     const runtimeLabel = selectedClient?.language ?? 'Pending';
     const versionLabel = selectedClient?.versionDesc ?? 'No client';
-    const connectionCount = result?.connectionCount ?? clients.length;
+    const connectionCount = result?.connectionCount ?? '—';
     const canSearch = Boolean(selectedTopic.trim()) && Boolean(producerGroup.trim()) && !isTopicLoading && !isSearchPending;
 
     useEffect(() => {
@@ -83,7 +84,7 @@ export const ProducerView = () => {
                     <div>
                         <span>Connections</span>
                         <strong>{connectionCount}</strong>
-                        <small>{hasSearched ? 'active producer clients' : 'run a scoped lookup'}</small>
+                        <small>{result ? 'clients from the scoped lookup' : error ? 'lookup unavailable' : 'run a scoped lookup'}</small>
                     </div>
                     <span className="topic-summary-icon">
                         <RadioTower className="topic-icon" aria-hidden="true"/>
@@ -111,6 +112,7 @@ export const ProducerView = () => {
                 </div>
             </section>
 
+            <ProducerGroupDirectory selectedGroup={producerGroup} onSelect={setProducerGroup} />
             <form
                 className="producer-command-panel"
                 aria-label="Producer connection search"
@@ -196,7 +198,7 @@ export const ProducerView = () => {
                         </div>
                     </div>
 
-                    {hasSearched && !isSearching && clients.length === 0 ? (
+                    {hasSearched && !error && result && !isSearching && clients.length === 0 ? (
                         <div className="producer-empty-state">
                             <Users className="topic-icon" aria-hidden="true"/>
                             <strong>No producer connections</strong>

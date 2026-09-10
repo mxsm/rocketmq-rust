@@ -1,12 +1,17 @@
 import { invokeAuthenticatedCommand } from './invoke';
 import type {
     ProducerConnectionQueryRequest,
+    ProducerGroupItem,
     ProducerConnectionView,
     ProducerTopicOptionsRequest,
     ProducerTopicOptionsView,
 } from '../features/producer/types/producer.types';
 
 export class ProducerService {
+    static async listProducerGroups(): Promise<ProducerGroupItem[]> {
+        return invokeAuthenticatedCommand<ProducerGroupItem[]>('list_producer_groups');
+    }
+
     static async getProducerTopicOptions(
         request: ProducerTopicOptionsRequest = {},
     ): Promise<ProducerTopicOptionsView> {

@@ -17,6 +17,7 @@ use crate::nameserver::NameServerRuntimeState;
 use crate::producer::admin::ManagedProducerAdmin;
 use crate::producer::types::ProducerConnectionItem;
 use crate::producer::types::ProducerConnectionView;
+use crate::producer::types::ProducerGroupItem;
 use crate::producer::types::ProducerResult;
 use crate::producer::types::ProducerTopicOptionsView;
 use rocketmq_admin_core::client_adapter::AdminSession;
@@ -126,6 +127,25 @@ impl ProducerManager {
         }
     }
 
+    pub(crate) async fn list_producer_groups(&self) -> ProducerResult<Vec<ProducerGroupItem>> {
+        let mut session_guard = self.admin_session.lock().await;
+        self.ensure_admin_session(&mut session_guard).await?;
+        let session = session_guard
+            .as_ref()
+            .ok_or(ProducerError::Internal("Producer session was not initialized"))?;
+        let result = session
+            .admin
+            .dashboard_list_producers()
+            .await
+            .map(|items| items.into_iter().map(map_producer_group).collect())
+            .map_err(ProducerError::Admin);
+        if Self::should_reset_session(&result) {
+            self.reset_admin_session(&mut session_guard, "list_producer_groups failed")
+                .await;
+        }
+        result
+    }
+
     fn validate_query_request(&self, request: &ProducerConnectionQueryRequest) -> ProducerResult<()> {
         if request.topic.trim().is_empty() {
             return Err(ProducerError::Validation("Topic is required.".into()));
@@ -233,8 +253,27 @@ fn build_connection_view(
     }
 }
 
+fn map_producer_group(item: rocketmq_admin_core::core::dashboard::DashboardProducerInfo) -> ProducerGroupItem {
+    ProducerGroupItem {
+        producer_group: item.producer_group,
+        reported_connection_count: item.connection_count,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn discovered_zero_connection_group_is_preserved_without_inventing_clients() {
+        let item = super::map_producer_group(rocketmq_admin_core::core::dashboard::DashboardProducerInfo {
+            topic: String::new(),
+            producer_group: "idle-group".into(),
+            connection_count: 0,
+        });
+        assert_eq!(item.producer_group, "idle-group");
+        assert_eq!(item.reported_connection_count, 0);
+        assert!(!serde_json::to_string(&item).unwrap().contains("clients"));
+    }
+
     use super::ProducerTopicOptionsView;
     use super::build_connection_view;
     use rocketmq_admin_core::core::dashboard::DashboardProducerConnection;

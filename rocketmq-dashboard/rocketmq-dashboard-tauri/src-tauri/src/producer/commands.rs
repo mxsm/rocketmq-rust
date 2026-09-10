@@ -60,3 +60,18 @@ pub async fn query_producer_connections(
 use crate::auth::SessionState;
 use crate::error::CommandResult;
 use crate::error::authorize_command;
+
+#[tauri::command]
+pub async fn list_producer_groups(
+    session_id: String,
+    producer_manager: State<'_, ProducerManager>,
+    session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
+) -> CommandResult<Vec<super::types::ProducerGroupItem>> {
+    authorize_command(&session_id, &session_state).await?;
+    connection_manager.check_revision(expected_revision)?;
+    let result = producer_manager.list_producer_groups().await.map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
+}
