@@ -14,6 +14,7 @@
 
 #![recursion_limit = "512"]
 
+mod acl;
 mod audit;
 mod auth;
 mod cluster;
@@ -51,6 +52,7 @@ struct DashboardAdminLifecycle {
     consumer_manager: consumer::ConsumerManager,
     message_manager: message::MessageManager,
     producer_manager: producer::ProducerManager,
+    acl_manager: acl::AclManager,
     topic_manager: topic::TopicManager,
 }
 
@@ -70,6 +72,7 @@ impl DashboardAdminLifecycle {
             self.consumer_manager.shutdown(),
             self.message_manager.shutdown(),
             self.producer_manager.shutdown(),
+            self.acl_manager.shutdown(),
             self.topic_manager.shutdown(),
         );
         audit_healthy && storage_healthy
@@ -94,6 +97,7 @@ struct DashboardServices {
     consumer_manager: consumer::ConsumerManager,
     message_manager: message::MessageManager,
     producer_manager: producer::ProducerManager,
+    acl_manager: acl::AclManager,
     topic_manager: topic::TopicManager,
 }
 
@@ -131,6 +135,7 @@ fn initialize_services(
     let consumer_manager = consumer::ConsumerManager::new(nameserver_runtime.clone());
     let message_manager = message::MessageManager::new(nameserver_runtime.clone());
     let producer_manager = producer::ProducerManager::new(nameserver_runtime.clone());
+    let acl_manager = acl::AclManager::new(nameserver_runtime.clone());
     let topic_manager = topic::TopicManager::new(nameserver_runtime.clone());
     let proxy_db = proxy::ProxyDb::from_path(database_path);
     proxy_db.init()?;
@@ -144,6 +149,7 @@ fn initialize_services(
         consumer_manager,
         message_manager,
         producer_manager,
+        acl_manager,
         topic_manager,
     })
 }
@@ -210,6 +216,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
                 consumer_manager,
                 message_manager,
                 producer_manager,
+                acl_manager,
                 topic_manager,
             } = tauri::async_runtime::block_on(storage.run("storage-bootstrap", move |_connection| {
                 initialize_services(&database_path, setup_client_runtime)
@@ -230,6 +237,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
                     consumer_manager: consumer_manager.clone(),
                     message_manager: message_manager.clone(),
                     producer_manager: producer_manager.clone(),
+                    acl_manager: acl_manager.clone(),
                     topic_manager: topic_manager.clone(),
                 })
                 .map_err(|_| crate::error::DashboardError::Internal("admin lifecycle initialized twice"))?;
@@ -246,6 +254,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
             app.manage(consumer_manager);
             app.manage(message_manager);
             app.manage(producer_manager);
+            app.manage(acl_manager);
             app.manage(topic_manager);
 
             Ok(())
@@ -297,6 +306,10 @@ fn build_application() -> Result<DashboardApplication, i32> {
             message::commands::view_message_trace_detail,
             producer::commands::get_producer_topic_options,
             producer::commands::list_producer_groups,
+            acl::commands::list_acl_users,
+            acl::commands::create_acl_user,
+            acl::commands::update_acl_user,
+            acl::commands::delete_acl_user,
             producer::commands::query_producer_connections,
             proxy::commands::get_proxy_home_page,
             proxy::commands::add_proxy_addr,
