@@ -324,6 +324,12 @@ mod tests {
     #[test]
     fn every_non_auth_command_requires_dashboard_authorization() {
         const COMMAND_SOURCES: &[&str] = &[
+            include_str!("acl/commands.rs"),
+            include_str!("audit/commands.rs"),
+            include_str!("connection/commands.rs"),
+            include_str!("history.rs"),
+            include_str!("monitor.rs"),
+            include_str!("ops.rs"),
             include_str!("cluster/commands.rs"),
             include_str!("consumer/commands.rs"),
             include_str!("dashboard/commands.rs"),
@@ -334,19 +340,44 @@ mod tests {
             include_str!("topic/commands.rs"),
         ];
 
-        let mut command_count = 0;
+        let mut checked = std::collections::BTreeSet::new();
         for source in COMMAND_SOURCES {
             for command in source.split("#[tauri::command]").skip(1) {
-                command_count += 1;
+                let name = command
+                    .split("pub async fn ")
+                    .nth(1)
+                    .unwrap()
+                    .split('(')
+                    .next()
+                    .unwrap()
+                    .trim();
+                assert!(checked.insert(name), "duplicate command {name}");
                 assert!(command.contains("session_id: String"));
                 assert!(command.contains("State<'_, SessionState>"));
                 assert!(
                     command.contains("authorize_command(&session_id, &session_state).await?;")
                         || command.contains("AuditAccess::dashboard(&session_state, session_id)")
+                        || command.contains("session_state.authorize_read_only(&session_id).await")
                 );
             }
         }
 
-        assert_eq!(command_count, 50);
+        let registered = include_str!("lib.rs")
+            .split("tauri::generate_handler![")
+            .nth(1)
+            .unwrap()
+            .split("])")
+            .next()
+            .unwrap()
+            .split(',')
+            .map(str::trim)
+            .filter(|path| !path.is_empty() && !path.starts_with("auth::"))
+            .map(|path| path.rsplit("::").next().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(!registered.is_empty());
+        assert_eq!(
+            checked, registered,
+            "every registered non-auth command must be covered by the authorization check"
+        );
     }
 }
