@@ -5,7 +5,7 @@ describe('entity navigation', () => {
     it('returns to the exact source entry and reopens an entity as a new visit', () => {
         const list = navigationReducer(initialNavigation, { type: 'open', tab: 'Topic', environmentId: 'env-a' });
         const topic = navigationReducer(list, { type: 'open', tab: 'Topic', environmentId: 'env-a', target: { kind: 'topic', name: 'Orders', detail: 'consumers' } });
-        const consumer = navigationReducer(topic, { type: 'open', tab: 'Consumer', environmentId: 'env-a', target: { kind: 'consumer', name: 'OrderReaders', detail: 'progress', proxyAddress: '127.0.0.1:8080' } });
+        const consumer = navigationReducer(topic, { type: 'open', tab: 'Consumer', environmentId: 'env-a', target: { kind: 'consumer', name: 'OrderReaders', detail: 'progress', scope: { mode: 'proxy', endpointId: 'proxy-a' } } });
         const returned = navigationReducer(consumer, { type: 'back' });
         expect(returned.current).toEqual(topic.current);
         expect(navigationReducer(returned, { type: 'back' }).current).toEqual(list.current);
@@ -35,5 +35,12 @@ describe('entity navigation', () => {
         for (let index = 0; index < 40; index++) state = navigationReducer(state, { type: 'open', tab: 'Topic', environmentId: 'env-a' });
         expect(state.history).toHaveLength(20);
         expect(navigationReducer(state, { type: 'back' }).current.id).toBe(39);
+    });
+
+    it('keeps configuration pages mounted so a connection refresh cannot discard a draft', () => {
+        const source = navigationReducer(initialNavigation, { type: 'open', tab: 'NameServer', environmentId: 'env-a' });
+        const next = navigationReducer(source, { type: 'reset', environmentId: 'env-b' });
+        expect(next.current.id).toBe(source.current.id);
+        expect(next.history).toEqual([]);
     });
 });

@@ -16,7 +16,7 @@ import type {
 } from '../features/consumer/types/consumer.types';
 
 export class ConsumerService {
-    static async queryConsumerGroups(request: ConsumerGroupListRequest = {}): Promise<ConsumerGroupListResponse> {
+    static async queryConsumerGroups(request: ConsumerGroupListRequest): Promise<ConsumerGroupListResponse> {
         return invokeAuthenticatedCommand<ConsumerGroupListResponse>('query_consumer_groups', { request });
     }
 
@@ -25,7 +25,7 @@ export class ConsumerService {
     }
 
     static async refreshAllConsumerGroups(
-        request: ConsumerGroupListRequest = {},
+        request: ConsumerGroupListRequest,
     ): Promise<ConsumerGroupListResponse> {
         return invokeAuthenticatedCommand<ConsumerGroupListResponse>('refresh_all_consumer_groups', { request });
     }

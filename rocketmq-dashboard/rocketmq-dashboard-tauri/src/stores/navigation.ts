@@ -1,10 +1,11 @@
+import type { ConsumerQueryScope } from '../features/consumer/types/consumer.types';
 export type Tab = 'NameServer' | 'Proxy' | 'Dashboard' | 'Cluster' | 'Topic' |
     'Consumer' | 'Producer' | 'Message' | 'MessageTrace' | 'DLQ' | 'ACL' |
     'Account' | 'Sessions' | 'Audit' | 'Monitors' | 'Storage';
 
 export type EntityTarget =
     | { kind: 'topic'; name: string; detail: 'overview' | 'status' | 'route' | 'consumers' | 'config' }
-    | { kind: 'consumer'; name: string; detail: 'overview' | 'progress' | 'clients' | 'config'; proxyAddress?: string }
+    | { kind: 'consumer'; name: string; detail: 'overview' | 'progress' | 'clients' | 'config'; scope: ConsumerQueryScope }
     | { kind: 'broker'; address: string; detail: 'overview' | 'status' | 'config' };
 
 export interface NavigationLocation {
@@ -37,7 +38,8 @@ export function navigationReducer(state: NavigationState, action: NavigationActi
     }
     const id = state.sequence + 1;
     if (action.type === 'reset') {
-        return { current: { id, tab: state.current.tab, target: null, environmentId: action.environmentId }, history: [], sequence: id };
+        const keepMounted = ['NameServer', 'Proxy', 'Account', 'Sessions', 'Audit'].includes(state.current.tab);
+        return { current: { id: keepMounted ? state.current.id : id, tab: state.current.tab, target: null, environmentId: action.environmentId }, history: [], sequence: id };
     }
     return {
         current: { id, tab: action.tab, target: action.target ?? null, environmentId: action.environmentId },

@@ -1,3 +1,5 @@
+import type { ConsumerQueryScope } from '../types/consumer.types';
+import { consumerScopeLabel } from '../scope';
 import { useAppStore } from '../../../stores/app.store';
 import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
@@ -25,16 +27,13 @@ interface ConsumerDetailModalProps {
     isOpen: boolean;
     onClose: () => void;
     consumer: ConsumerGroupListItem | null;
-    address?: string;
+    scope: ConsumerQueryScope;
 }
 
 const getConsumerLabel = (consumer: ConsumerGroupListItem | null) =>
     consumer?.displayGroupName ?? consumer?.rawGroupName ?? '-';
 
-const getBrokerScope = (address?: string) => {
-    const trimmed = address?.trim();
-    return trimmed && trimmed.length > 0 ? trimmed : 'All brokers';
-};
+
 
 const formatTimestamp = (timestamp: number) => {
     if (!timestamp || timestamp <= 0) {
@@ -49,7 +48,7 @@ export const ConsumerDetailModal = ({
     isOpen,
     onClose,
     consumer,
-    address,
+    scope,
 }: ConsumerDetailModalProps) => {
     const { openTopic } = useAppStore();
     const [data, setData] = useState<ConsumerTopicDetailView | null>(null);
@@ -70,7 +69,7 @@ export const ConsumerDetailModal = ({
 
         void ConsumerService.queryConsumerTopicDetail({
             consumerGroup: consumer.rawGroupName,
-            address,
+            scope,
         })
             .then((response) => {
                 if (!cancelled) {
@@ -92,10 +91,10 @@ export const ConsumerDetailModal = ({
         return () => {
             cancelled = true;
         };
-    }, [address, consumer, isOpen]);
+    }, [scope, consumer, isOpen]);
 
     const consumerLabel = getConsumerLabel(consumer);
-    const brokerScope = getBrokerScope(address);
+    const brokerScope = consumerScopeLabel(scope);
     const topics = data?.topics ?? [];
     const queueCount = useMemo(
         () => topics.reduce((total, topic) => total + topic.queueStatInfoList.length, 0),

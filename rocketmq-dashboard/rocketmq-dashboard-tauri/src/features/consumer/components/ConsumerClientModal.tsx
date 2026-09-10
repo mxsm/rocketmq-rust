@@ -1,3 +1,5 @@
+import type { ConsumerQueryScope } from '../types/consumer.types';
+import { consumerScopeLabel } from '../scope';
 import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
@@ -24,22 +26,19 @@ interface ConsumerClientModalProps {
     isOpen: boolean;
     onClose: () => void;
     consumer: ConsumerGroupListItem | null;
-    address?: string;
+    scope: ConsumerQueryScope;
 }
 
 const getConsumerLabel = (consumer: ConsumerGroupListItem | null) =>
     consumer?.displayGroupName ?? consumer?.rawGroupName ?? '-';
 
-const getBrokerScope = (address?: string) => {
-    const trimmed = address?.trim();
-    return trimmed && trimmed.length > 0 ? trimmed : 'All brokers';
-};
+
 
 export const ConsumerClientModal = ({
     isOpen,
     onClose,
     consumer,
-    address,
+    scope,
 }: ConsumerClientModalProps) => {
     const [data, setData] = useState<ConsumerConnectionView | null>(null);
     const [isLoading, setIsLoading] = useState(false);
@@ -57,7 +56,7 @@ export const ConsumerClientModal = ({
 
         void ConsumerService.queryConsumerConnection({
             consumerGroup: consumer.rawGroupName,
-            address,
+            scope,
         })
             .then((response) => {
                 if (!cancelled) {
@@ -78,10 +77,10 @@ export const ConsumerClientModal = ({
         return () => {
             cancelled = true;
         };
-    }, [address, consumer, isOpen]);
+    }, [scope, consumer, isOpen]);
 
     const consumerLabel = getConsumerLabel(consumer);
-    const brokerScope = getBrokerScope(address);
+    const brokerScope = consumerScopeLabel(scope);
 
     const latestSubscriptionVersion = useMemo(() => {
         if (!data || data.subscriptions.length === 0) {
@@ -343,7 +342,7 @@ export const ConsumerClientModal = ({
                     </div>
 
                     <footer className="topic-status-footer consumer-client-footer">
-                        <span>Client data is scoped by consumer group and broker address.</span>
+                        <span>Client data uses the selected consumer query scope.</span>
                         <div>
                             <button type="button" onClick={onClose} className="topic-status-secondary-button">
                                 Close

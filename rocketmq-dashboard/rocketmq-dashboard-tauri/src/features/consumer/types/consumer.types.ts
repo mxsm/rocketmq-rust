@@ -1,21 +1,23 @@
+export type ConsumerQueryScope = { mode: 'name_server' } | { mode: 'proxy'; endpointId: string };
+
 export interface ConsumerGroupListRequest {
     skipSysGroup?: boolean;
-    address?: string;
+    scope: ConsumerQueryScope;
 }
 
 export interface ConsumerGroupRefreshRequest {
     consumerGroup: string;
-    address?: string;
+    scope: ConsumerQueryScope;
 }
 
 export interface ConsumerConnectionQueryRequest {
     consumerGroup: string;
-    address?: string;
+    scope: ConsumerQueryScope;
 }
 
 export interface ConsumerTopicDetailQueryRequest {
     consumerGroup: string;
-    address?: string;
+    scope: ConsumerQueryScope;
 }
 
 export interface ConsumerConfigQueryRequest {

@@ -1,7 +1,7 @@
 # Desktop entity navigation
 
 The app store exposes `openTopic(name, detail)`,
-`openConsumer(group, detail, proxyAddress?)`, `openBroker(address, detail)`, and
+`openConsumer(group, detail, scope?)`, `openBroker(address, detail)`, and
 `goBack()`. Targets are discriminated by entity kind, contain an exact identity
 and detail selection, and belong to the current connection environment. They
 are browsing state, never authorization evidence.

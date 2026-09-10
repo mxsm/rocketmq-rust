@@ -14,6 +14,7 @@
 
 use crate::audit::{AuditAccess, AuditAction, AuditManager, Audited};
 use crate::connection::ConnectionManager;
+use crate::consumer::scope::{ScopedConsumerGroupRequest, ScopedConsumerListRequest};
 use crate::consumer::service::ConsumerManager;
 use crate::consumer::types::ConsumerConfigView;
 use crate::consumer::types::ConsumerConnectionView;
@@ -35,7 +36,7 @@ use tauri::State;
 #[tauri::command]
 pub async fn query_consumer_groups(
     session_id: String,
-    request: ConsumerGroupListRequest,
+    request: ScopedConsumerListRequest,
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
     expected_revision: i64,
@@ -43,6 +44,11 @@ pub async fn query_consumer_groups(
 ) -> CommandResult<ConsumerGroupListResponse> {
     authorize_command(&session_id, &session_state).await?;
     connection_manager.check_revision(expected_revision)?;
+    let address = request.scope.address(&connection_manager.snapshot()?)?;
+    let request = ConsumerGroupListRequest {
+        skip_sys_group: request.skip_sys_group,
+        address,
+    };
     let result = consumer_manager
         .query_consumer_groups(request)
         .await
@@ -54,7 +60,7 @@ pub async fn query_consumer_groups(
 #[tauri::command]
 pub async fn refresh_consumer_group(
     session_id: String,
-    request: ConsumerGroupRefreshRequest,
+    request: ScopedConsumerGroupRequest,
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
     expected_revision: i64,
@@ -62,6 +68,11 @@ pub async fn refresh_consumer_group(
 ) -> CommandResult<ConsumerGroupListItem> {
     authorize_command(&session_id, &session_state).await?;
     connection_manager.check_revision(expected_revision)?;
+    let address = request.scope.address(&connection_manager.snapshot()?)?;
+    let request = ConsumerGroupRefreshRequest {
+        consumer_group: request.consumer_group,
+        address,
+    };
     let result = consumer_manager
         .refresh_consumer_group(request)
         .await
@@ -73,7 +84,7 @@ pub async fn refresh_consumer_group(
 #[tauri::command]
 pub async fn refresh_all_consumer_groups(
     session_id: String,
-    request: ConsumerGroupListRequest,
+    request: ScopedConsumerListRequest,
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
     expected_revision: i64,
@@ -81,6 +92,11 @@ pub async fn refresh_all_consumer_groups(
 ) -> CommandResult<ConsumerGroupListResponse> {
     authorize_command(&session_id, &session_state).await?;
     connection_manager.check_revision(expected_revision)?;
+    let address = request.scope.address(&connection_manager.snapshot()?)?;
+    let request = ConsumerGroupListRequest {
+        skip_sys_group: request.skip_sys_group,
+        address,
+    };
     let result = consumer_manager
         .refresh_all_consumer_groups(request)
         .await
@@ -92,7 +108,7 @@ pub async fn refresh_all_consumer_groups(
 #[tauri::command]
 pub async fn query_consumer_connection(
     session_id: String,
-    request: ConsumerConnectionQueryRequest,
+    request: ScopedConsumerGroupRequest,
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
     expected_revision: i64,
@@ -100,6 +116,11 @@ pub async fn query_consumer_connection(
 ) -> CommandResult<ConsumerConnectionView> {
     authorize_command(&session_id, &session_state).await?;
     connection_manager.check_revision(expected_revision)?;
+    let address = request.scope.address(&connection_manager.snapshot()?)?;
+    let request = ConsumerConnectionQueryRequest {
+        consumer_group: request.consumer_group,
+        address,
+    };
     let result = consumer_manager
         .query_consumer_connection(request)
         .await
@@ -111,7 +132,7 @@ pub async fn query_consumer_connection(
 #[tauri::command]
 pub async fn query_consumer_topic_detail(
     session_id: String,
-    request: ConsumerTopicDetailQueryRequest,
+    request: ScopedConsumerGroupRequest,
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
     expected_revision: i64,
@@ -119,6 +140,11 @@ pub async fn query_consumer_topic_detail(
 ) -> CommandResult<ConsumerTopicDetailView> {
     authorize_command(&session_id, &session_state).await?;
     connection_manager.check_revision(expected_revision)?;
+    let address = request.scope.address(&connection_manager.snapshot()?)?;
+    let request = ConsumerTopicDetailQueryRequest {
+        consumer_group: request.consumer_group,
+        address,
+    };
     let result = consumer_manager
         .query_consumer_topic_detail(request)
         .await
