@@ -179,3 +179,20 @@ export interface ConsumerConfigSummary {
     inconsistentFields: string[];
     effective: Partial<Omit<ConsumerConfigView, 'consumerGroup' | 'brokerName' | 'brokerAddress'>>;
 }
+
+export interface ConsumerDiagnosticRequest {
+    consumerGroup: string;
+    clientId: string;
+    scope: ConsumerQueryScope;
+}
+export interface ConsumerDiagnosticResult {
+    consumerGroup: string;
+    clientId: string;
+    status: 'available' | 'offline' | 'unsupported' | 'unavailable';
+    reason: string | null;
+    properties: unknown[];
+    subscriptions: unknown[];
+    processQueues: unknown[];
+    jstack: string | null;
+    truncated: boolean;
+}

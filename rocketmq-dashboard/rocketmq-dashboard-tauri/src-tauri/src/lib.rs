@@ -288,6 +288,8 @@ fn build_application() -> Result<DashboardApplication, i32> {
             consumer::commands::query_consumer_topic_detail,
             consumer::commands::query_consumer_config,
             consumer::commands::query_consumer_config_summary,
+            consumer::commands::query_consumer_running_info,
+            consumer::commands::query_consumer_jstack,
             consumer::commands::create_or_update_consumer_group,
             consumer::commands::delete_consumer_group,
             dashboard::commands::get_dashboard_broker_overview,

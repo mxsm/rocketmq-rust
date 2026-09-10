@@ -1,3 +1,5 @@
+import { ConsumerDiagnostics } from './ConsumerDiagnostics';
+import { consumerScopeKey } from '../scope';
 import type { ConsumerQueryScope } from '../types/consumer.types';
 import { consumerScopeLabel } from '../scope';
 import { useEffect, useMemo, useState } from 'react';
@@ -41,6 +43,7 @@ export const ConsumerClientModal = ({
     scope,
 }: ConsumerClientModalProps) => {
     const [data, setData] = useState<ConsumerConnectionView | null>(null);
+    const [selectedClient, setSelectedClient] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
 
@@ -53,6 +56,7 @@ export const ConsumerClientModal = ({
         setIsLoading(true);
         setError('');
         setData(null);
+        setSelectedClient('');
 
         void ConsumerService.queryConsumerConnection({
             consumerGroup: consumer.rawGroupName,
@@ -273,13 +277,19 @@ export const ConsumerClientModal = ({
                                                             </span>
                                                             <span data-label="Client Addr" className="consumer-client-cell is-mono">{item.clientAddr}</span>
                                                             <span data-label="Language" className="consumer-client-cell">{item.language}</span>
-                                                            <span data-label="Version" className="consumer-client-cell">{item.versionDesc}</span>
+                                                            <span data-label="Version" className="consumer-client-cell">{item.versionDesc}
+                                                                <small className="block">{scope.mode === 'proxy' ? 'Diagnostics unsupported in Proxy scope' : 'Diagnostics available to request; support not yet verified'}</small>
+                                                                <button type="button" disabled={scope.mode === 'proxy'} onClick={() => setSelectedClient(item.clientId)}>Inspect diagnostics</button>
+                                                            </span>
                                                         </div>
                                                     ))}
                                                 </div>
                                             )}
                                         </section>
 
+                                        {selectedClient && consumer && data.connections.some(item => item.clientId === selectedClient) &&
+                                            <ConsumerDiagnostics key={`${consumer.rawGroupName}:${consumerScopeKey(scope)}:${selectedClient}`} request={{ consumerGroup: consumer.rawGroupName, clientId: selectedClient, scope }} />}
+                                        {scope.mode === 'proxy' && <p>Diagnostic requests cannot be forwarded through the selected Proxy by the current admin capability. Use NameServer discovery for remoting client diagnostics.</p>}
                                         <section className="consumer-client-panel" aria-label="Client subscriptions">
                                             <div className="consumer-client-panel-header">
                                                 <div className="consumer-client-panel-title">
