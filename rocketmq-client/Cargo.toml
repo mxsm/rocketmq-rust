@@ -269,6 +269,10 @@ name = "consumer"
 path = "examples/quickstart/consumer.rs"
 
 [[example]]
+name = "dashboard-debug-client"
+path = "examples/quickstart/dashboard_debug_client.rs"
+
+[[example]]
 name = "broadcast-consumer"
 path = "examples/broadcast/push_consumer.rs"
 

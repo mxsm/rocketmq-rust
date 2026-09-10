@@ -112,6 +112,37 @@ fn new_unstarted_admin() -> DefaultMQAdminExtImpl {
     )
 }
 
+#[tokio::test]
+#[ignore = "requires DASHBOARD_DEBUG_NAMESRV and DASHBOARD_DEBUG_GROUP with an online Rust consumer"]
+async fn live_consumer_diagnostics_are_forwarded_by_the_broker() {
+    let namesrv = std::env::var("DASHBOARD_DEBUG_NAMESRV").expect("explicit development NameServer");
+    let group: CheetahString = std::env::var("DASHBOARD_DEBUG_GROUP")
+        .expect("explicit development Consumer group")
+        .into();
+    let runtime = crate::runtime::test_client_runtime("live-consumer-diagnostics");
+    let mut admin = crate::DefaultMQAdminExt::new(runtime.clone());
+    admin.set_namesrv_addr(namesrv);
+    let outcome: crate::ClientResult<_> = async {
+        admin.start().await?;
+        let connections = admin.examine_consumer_connection_info(group.clone(), None).await?;
+        let client = connections.get_connection_set().iter().next().expect("online consumer");
+        let running = admin
+            .get_consumer_running_info(group.clone(), client.get_client_id(), false, None)
+            .await?;
+        let stack = admin
+            .get_consumer_running_info(group, client.get_client_id(), true, None)
+            .await?;
+        Ok((running, stack))
+    }
+    .await;
+    admin.shutdown().await;
+    let shutdown = runtime.shutdown().await;
+    assert!(shutdown.is_healthy(), "{}", shutdown.to_json());
+    let (running, stack) = outcome.expect("Broker must forward to the outbound client connection");
+    assert!(!running.subscription_set.is_empty());
+    assert!(stack.jstack.as_ref().is_some_and(|stack| !stack.is_empty()));
+}
+
 #[test]
 fn retain_java_user_topic_config_filters_java_internal_topics() {
     let mut topic_table = HashMap::from([

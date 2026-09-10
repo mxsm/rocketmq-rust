@@ -1010,32 +1010,30 @@ impl ConsumerAdmin for DefaultMQAdminExtImpl {
         jstack: bool,
         _metrics: Option<bool>,
     ) -> crate::ClientResult<ConsumerRunningInfo> {
-        let broker_addr = self
-            .examine_consumer_connection_info(consumer_group.clone(), None)
+        let retry_topic = CheetahString::from_string(mix_all::get_retry_topic(&consumer_group));
+        let route = self
+            .examine_topic_route_info(retry_topic.clone())
             .await?
-            .get_connection_set()
-            .iter()
-            .find(|connection| connection.get_client_id() == client_id)
-            .map(|connection| connection.get_client_addr().clone())
-            .ok_or_else(|| {
-                crate::ClientError::illegal_argument(format!(
-                    "Client `{}` was not found in consumer group `{}`",
-                    client_id, consumer_group
-                ))
-            })?;
-
-        self.client_instance
-            .as_ref()
-            .ok_or(crate::ClientError::not_started())?
-            .get_mq_client_api_impl()?
-            .get_consumer_running_info(
-                &broker_addr,
-                consumer_group,
-                client_id,
-                jstack,
-                self.remoting_timeout_millis()?,
-            )
-            .await
+            .ok_or_else(|| admin_route_not_found(&retry_topic))?;
+        let api = self.mq_client_api()?;
+        let timeout = self.remoting_timeout_millis()?;
+        let mut last_error = None;
+        // A client's advertised connection is an outbound ephemeral socket, not
+        // an RPC listener. The Broker forwards diagnostics over that connection.
+        // Try each route because the client may only be connected to one Broker.
+        for broker in &route.broker_datas {
+            let Some(address) = broker.select_broker_addr() else {
+                continue;
+            };
+            match api
+                .get_consumer_running_info(&address, consumer_group.clone(), client_id.clone(), jstack, timeout)
+                .await
+            {
+                Ok(info) => return Ok(info),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| admin_route_not_found(&retry_topic)))
     }
 
     async fn consume_message_directly(
