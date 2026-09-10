@@ -1,4 +1,7 @@
-import { useEffect, useState } from 'react';
+import { ConsumerRequestGeneration } from '../scope';
+import { isReadOnlyConsumer, failedConsumerBrokers } from '../mutation';
+import { ConsumerMutationReceipt } from './ConsumerMutationReceipt';
+import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { AlertCircle, LoaderCircle, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
@@ -25,6 +28,15 @@ export const ConsumerDeleteModal = ({
     const [selectedBrokerNames, setSelectedBrokerNames] = useState<string[]>([]);
     const [isDeleting, setIsDeleting] = useState(false);
     const [error, setError] = useState('');
+    const [receipt, setReceipt] = useState<ConsumerMutationResult | null>(null);
+    const generation = useRef(new ConsumerRequestGeneration());
+    useEffect(() => {
+        generation.current.invalidate();
+        setReceipt(null);
+        setIsDeleting(false);
+        return () => generation.current.invalidate();
+    }, [isOpen, consumer]);
+
 
     useEffect(() => {
         if (!isOpen) {
@@ -46,7 +58,26 @@ export const ConsumerDeleteModal = ({
         );
     };
 
+    const reviewFailed = async () => {
+        if (!receipt || isDeleting) return;
+        const isCurrent = generation.current.begin();
+        setIsDeleting(true);
+        try {
+            const current = await ConsumerService.refreshConsumerGroup({ consumerGroup: receipt.consumerGroup, scope: { mode: 'name_server' } });
+            if (!isCurrent()) return;
+            const failed = failedConsumerBrokers(receipt);
+            if (failed.some(name => !current.brokerNames.includes(name))) throw new Error('A failed Broker no longer hosts this group. Reopen deletion to review current state.');
+            setSelectedBrokerNames(failed);
+            setReceipt(null);
+            setError('');
+        } catch (error) {
+            if (isCurrent()) setError(dashboardErrorMessage(error, 'Unable to refresh group state.'));
+        } finally { if (isCurrent()) setIsDeleting(false); }
+    };
+
     const handleDelete = async () => {
+        if (isDeleting || receipt || isReadOnlyConsumer(consumer)) return;
+        const isCurrent = generation.current.begin();
         if (!consumer) {
             return;
         }
@@ -62,12 +93,16 @@ export const ConsumerDeleteModal = ({
                 consumerGroup: consumer.rawGroupName,
                 brokerNameList: selectedBrokerNames,
             });
-            toast.success('Consumer group deleted from the selected brokers.');
+            if (!isCurrent()) return;
+            setReceipt(result);
+            if (result.success) toast.success('Consumer group deleted from the selected brokers.');
+            else toast.warning('Some Consumer operations were not confirmed. Review each result.');
             onDeleted(result);
         } catch (deleteError) {
+            if (!isCurrent()) return;
             setError(dashboardErrorMessage(deleteError, 'Failed to delete the consumer group.'));
         } finally {
-            setIsDeleting(false);
+            if (isCurrent()) setIsDeleting(false);
         }
     };
 
@@ -113,6 +148,8 @@ export const ConsumerDeleteModal = ({
                             associated retry / DLQ topics where the full broker coverage is selected.
                         </div>
 
+                        {receipt && <ConsumerMutationReceipt result={receipt} onReviewFailed={() => void reviewFailed()} disabled={isDeleting} />}
+                        {isReadOnlyConsumer(consumer) && <p role="note">System Consumer groups are read-only.</p>}
                         {error && (
                             <div className="flex items-start gap-3 rounded-2xl border border-red-200/70 bg-red-50/80 px-4 py-3 text-sm text-red-700 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
                                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -155,7 +192,7 @@ export const ConsumerDeleteModal = ({
                         </button>
                         <button
                             onClick={() => void handleDelete()}
-                            disabled={isDeleting}
+                            disabled={isDeleting || Boolean(receipt) || isReadOnlyConsumer(consumer)}
                             className="flex items-center rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                             {isDeleting ? (

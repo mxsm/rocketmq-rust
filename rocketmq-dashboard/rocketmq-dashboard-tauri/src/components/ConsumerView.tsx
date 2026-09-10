@@ -1,3 +1,4 @@
+import { isReadOnlyConsumer } from '../features/consumer/mutation';
 import { motion } from 'motion/react';
 import { ConnectionStore } from '../services/connection.store';
 import { getConnectionSettings } from '../services/connection.service';
@@ -15,7 +16,7 @@ import { ConsumerConfigModal } from '../features/consumer/components/ConsumerCon
 import { ConsumerDeleteModal } from '../features/consumer/components/ConsumerDeleteModal';
 import { ConsumerDetailModal } from '../features/consumer/components/ConsumerDetailModal';
 import { ConsumerEditorModal } from '../features/consumer/components/ConsumerEditorModal';
-import type { ConsumerGroupListItem } from '../features/consumer/types/consumer.types';
+import type { ConsumerGroupListItem, ConsumerMutationResult } from '../features/consumer/types/consumer.types';
 
 export const ConsumerView = () => {
   const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
@@ -133,17 +134,18 @@ const ConsumerCatalog = ({ scope, proxyAddress, changeMode }: { scope: ConsumerQ
     }
   };
 
-  const handleEditorSaved = async () => {
-    setEditorModal({isOpen: false, consumer: null});
+  const handleEditorSaved = async (result: ConsumerMutationResult) => {
+    if (result.success) setEditorModal({isOpen: false, consumer: null});
     await refresh();
   };
 
-  const handleDeleteSaved = async () => {
-    setDeleteModal({isOpen: false, consumer: null});
+  const handleDeleteSaved = async (result: ConsumerMutationResult) => {
+    if (result.success) setDeleteModal({isOpen: false, consumer: null});
     await refresh();
   };
 
   const handleEditFromConfig = (consumer: ConsumerGroupListItem, preferredBrokerAddress?: string) => {
+    if (isReadOnlyConsumer(consumer)) return;
     setConfigModal({isOpen: false, consumer: null});
     setEditorModal({isOpen: true, consumer, preferredBrokerAddress});
   };
@@ -191,13 +193,13 @@ const ConsumerCatalog = ({ scope, proxyAddress, changeMode }: { scope: ConsumerQ
         onClose={() => setEditorModal({isOpen: false, consumer: null})}
         consumer={editorModal.consumer}
         preferredBrokerAddress={editorModal.preferredBrokerAddress}
-        onSaved={() => void handleEditorSaved()}
+        onSaved={(result) => void handleEditorSaved(result)}
       />
       <ConsumerDeleteModal
         isOpen={deleteModal.isOpen}
         onClose={() => setDeleteModal({isOpen: false, consumer: null})}
         consumer={deleteModal.consumer}
-        onDeleted={() => void handleDeleteSaved()}
+        onDeleted={(result) => void handleDeleteSaved(result)}
       />
 
       <section className="consumer-summary-grid" aria-label="Consumer summary">
@@ -501,7 +503,7 @@ const ConsumerCatalog = ({ scope, proxyAddress, changeMode }: { scope: ConsumerQ
                     )}
                     <span>Sync</span>
                   </button>
-                  <button type="button" className="topic-action-button is-danger" onClick={() => setDeleteModal({isOpen: true, consumer: selectedConsumer})}>
+                  <button type="button" className="topic-action-button is-danger" disabled={isReadOnlyConsumer(selectedConsumer)} title={isReadOnlyConsumer(selectedConsumer) ? "System Consumer groups are read-only." : undefined} onClick={() => setDeleteModal({isOpen: true, consumer: selectedConsumer})}>
                     <Trash2 className="topic-icon" aria-hidden="true"/>
                     <span>Delete</span>
                   </button>

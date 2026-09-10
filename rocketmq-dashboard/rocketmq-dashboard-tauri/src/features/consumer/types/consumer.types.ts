@@ -157,6 +157,16 @@ export interface ConsumerConfigView {
 
 export interface ConsumerMutationResult {
     consumerGroup: string;
-    brokerNames: string[];
-    updated: boolean;
+    operation: 'upsert' | 'delete';
+    targets: ConsumerTargetResult[];
+    targetCount: number;
+    success: boolean;
+}
+
+export interface ConsumerTargetResult {
+    target: string;
+    kind: string;
+    success: boolean;
+    errorCode: string | null;
+    message: string;
 }

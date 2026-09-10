@@ -220,8 +220,7 @@ successful_receipt!(
     crate::auth::types::CommonResponse,
     crate::auth::types::RevokeSessionsResponse,
     rocketmq_dashboard_common::NameServerMutationResult,
-    rocketmq_dashboard_common::ProxyMutationResult,
-    crate::consumer::types::ConsumerMutationResult
+    rocketmq_dashboard_common::ProxyMutationResult
 );
 impl AuditReceipt for AuthSessionResponse {
     fn summary(&self) -> Summary {
@@ -355,5 +354,15 @@ impl AuditReceipt for crate::topic::batch::TopicBatchResult {
         let failure = self.targets.iter().filter(|target| !target.success).count()
             + usize::from(self.order_config.as_ref().is_some_and(|result| !result.success));
         Summary::count(success, failure.max(usize::from(!self.success)))
+    }
+}
+
+impl AuditReceipt for crate::consumer::types::ConsumerMutationResult {
+    fn summary(&self) -> Summary {
+        let successes = self.targets.iter().filter(|target| target.success).count();
+        Summary::count(
+            successes,
+            (self.targets.len() - successes).max(usize::from(!self.success)),
+        )
     }
 }
