@@ -30,7 +30,14 @@ mod ops;
 mod persistence;
 mod producer;
 mod proxy;
+mod storage_operations;
 mod topic;
+
+/// Runs the local storage CLI without starting the desktop or a background runtime.
+/// Returns zero on success and a nonzero exit code for invalid arguments or failed operations.
+pub fn run_storage_cli(args: Vec<std::ffi::OsString>) -> i32 {
+    storage_operations::run(args)
+}
 
 use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;

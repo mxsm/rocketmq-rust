@@ -18,6 +18,7 @@
 
 [package]
 name         = "rocketmq-dashboard-tauri"
+default-run  = "rocketmq-dashboard-tauri"
 version      = "0.1.0"
 description  = "RocketMQ-Rust Dashboard Desktop App (Tauri)"
 authors      = ["mxsm <mxsm@apache.org>"]
@@ -45,7 +46,7 @@ serde            = { version = "1.0", features = ["derive"] }
 log              = "0.4"
 tauri            = { version = "2.11.5", features = [] }
 tauri-plugin-log = "2.9"
-rusqlite         = { version = "0.32", features = ["bundled"] }
+rusqlite         = { version = "0.32", features = ["bundled", "backup"] }
 argon2           = "0.5"
 password-hash    = "0.5"
 sha2             = "0.11"
