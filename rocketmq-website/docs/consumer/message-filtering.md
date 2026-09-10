@@ -1,175 +1,97 @@
 ---
-sidebar_position: 4
-title: Message Filtering
+title: "Message filtering"
 ---
 
-# Message Filtering
+# Message filtering
 
-RocketMQ filtering helps consumers avoid processing irrelevant messages.
+Filtering selects messages for a subscription. It does not remove messages from the primary log, replace authorization, or guarantee that all business conditions were checked. Use tags for coarse event categories and supported SQL expressions for predicates over message properties.
 
-## Tag-based Filtering
+## Choose the layer
 
-### Basic Tag Subscription
+| Selection | Input | Boundary |
+| --- | --- | --- |
+| Tag expression | Message tag and `TagA || TagB` or `*` | Subscription filtering with a simple category model |
+| SQL92-style selector | Named string properties and a supported expression | Requires Broker property-filter support and valid subscription metadata |
+| Application predicate | Delivered message and business state | Consumes network/client capacity; application decides whether processing succeeded |
 
-```rust
-// Subscribe to one tag
-consumer.subscribe("OrderEvents", "order_created").await?;
+Keep group members' topic subscriptions and selectors consistent. A filter change is a change to what the group considers relevant; it is not a request to replay previously skipped records.
 
-// Subscribe to multiple tags
-consumer
-    .subscribe("OrderEvents", "order_created || order_paid")
-    .await?;
+## Set producer metadata
 
-// Subscribe to all tags
-consumer.subscribe("OrderEvents", "*").await?;
-```
-
-### Setting Tags on Producer
+This excerpt runs after the producer has started and the topic exists:
 
 ```rust
-use rocketmq_common::common::message::message_single::Message;
+use rocketmq_model::common::message::message_single::Message;
 
 let message = Message::builder()
-    .topic("OrderEvents")
-    .body(body)
+    .topic("SqlFilterConsumerTestTopic")
     .tags("order_created")
+    .raw_property("region", "cn")?
+    .raw_property("priority", "3")?
+    .body("order event")
     .build()?;
-
-producer.send(message).await?;
+let result = producer.send_with_timeout(message, 3_000).await?;
 ```
 
-## Filtering with Message Properties
+Inspect the returned send status as described in [sending messages](../producer/sending-messages.md). Property values are strings on the message; SQL evaluation applies its supported coercion rules. A JSON field inside the body does not automatically become a filterable property.
 
-Producer can attach structured metadata to support downstream filtering logic.
+Treat tags as exact categories. `TagA || TagB` is a subscription expression, not a recommendation to put that entire expression into one message's tag.
+
+## Subscribe with a Tag or SQL selector
+
+For a started-later `DefaultMQPushConsumer` with its listener registered:
 
 ```rust
-let message = Message::builder()
-    .topic("OrderEvents")
-    .body(body)
-    .tags("order_created")
-    .raw_property("amount", "150.00")?
-    .raw_property("region", "us-west")?
-    .raw_property("priority", "high")?
-    .build()?;
-
-producer.send(message).await?;
+consumer.subscribe("OrderEvents", "order_created || order_paid").await?;
 ```
 
-## Client-side Filtering (Property-based)
-
-When business conditions are dynamic or complex, you can do additional checks in the listener.
+For SQL, use the public `MessageSelector`:
 
 ```rust
-use cheetah_string::CheetahString;
-use rocketmq_client_rust::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use rocketmq_common::common::message::MessageTrait;
+use rocketmq_client_rust::MessageSelector;
 
-consumer.register_message_listener_concurrently(|msgs, _ctx| {
-    let region_key = CheetahString::from_static_str("region");
-    let amount_key = CheetahString::from_static_str("amount");
-
-    for msg in msgs {
-        let region = msg
-            .property(&region_key)
-            .map(|v| v.to_string())
-            .unwrap_or_default();
-
-        let amount = msg
-            .property(&amount_key)
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(0.0);
-
-        if region == "us-west" && amount > 100.0 {
-            // process_message(msg);
-        }
-    }
-
-    Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
-});
+consumer.subscribe_with_selector(
+    "SqlFilterConsumerTestTopic",
+    Some(MessageSelector::by_sql("region = 'cn' AND priority >= 3")),
+).await?;
 ```
 
-## SQL92 Notes
+Complete the lifecycle from [Push consumers](./push-consumer.md), including startup and shutdown. LitePull has its own `subscribe` and selector methods; do not copy Push method signatures into a LitePull loop.
 
-RocketMQ broker supports SQL92-based server-side filtering, but current public consumer examples in this project focus on tag-expression subscriptions and optional client-side property checks.
+The Broker's `enablePropertyFilter` defaults to false. For the canonical TOML configuration, merge this field into the existing `[broker]` table and restart the configured Broker using the normal setup procedure:
 
-If you need SQL92 at scale, verify your broker and client capability in an integration environment before adopting it in production.
-
-## Filter Performance
-
-### Tag Filtering
-
-- Performance: very fast
-- Location: broker side
-- Best for: stable event categories
-
-### Client-side Property Filtering
-
-- Performance: lower than tag filtering (messages still reach consumer)
-- Location: consumer side
-- Best for: dynamic or complex business conditions
-
-## Best Practices
-
-1. Prefer tag filtering as the first-stage filter.
-2. Keep tag taxonomy stable and business-oriented.
-3. Put frequently queried dimensions into message properties.
-4. Keep client-side filter logic lightweight.
-5. Monitor rejection rate to tune producer tagging strategy.
-
-## Examples
-
-### Order Processing
-
-```rust
-// Producer
-let message = Message::builder()
-    .topic("OrderEvents")
-    .body(order_json)
-    .tags("order_created")
-    .raw_property("region", &order.region)?
-    .raw_property("amount", order.amount.to_string())?
-    .build()?;
-producer.send(message).await?;
-
-// Consumer
-consumer.subscribe("OrderEvents", "order_created").await?;
+```toml
+[broker]
+enablePropertyFilter = true
 ```
 
-### Log Aggregation
+This is a configuration excerpt, not a complete Broker file. The non-Tag pull path rejects requests when this support is disabled, and client subscription checks compile the requested expression. All Brokers that can serve the subscription need compatible support; one enabled Broker does not configure the others.
 
-```rust
-// Producer
-let message = Message::builder()
-    .topic("ApplicationLogs")
-    .body(log_entry)
-    .tags(&log.level) // ERROR, WARN, INFO, DEBUG
-    .raw_property("service", &log.service)?
-    .raw_property("environment", &log.environment)?
-    .build()?;
-producer.send(message).await?;
+## Use the implemented expression language
 
-// Consumer
-consumer.subscribe("ApplicationLogs", "ERROR || WARN").await?;
-```
+The current SQL runtime supports logical `AND`/`OR`/`NOT`, comparisons, `IS NULL`/`IS NOT NULL`, `IN`/`NOT IN`, `BETWEEN`/`NOT BETWEEN`, and supported string predicates such as `CONTAINS`, `STARTSWITH` and `ENDSWITH`. It is a predicate language over properties, not a database `SELECT` statement with joins or arbitrary functions.
 
-### Event Routing
+Strings use single quotes and escape a quote by doubling it. Missing properties evaluate as `NULL`; the three-valued logic means a missing value is not automatically equivalent to false in every intermediate expression. Final Broker matching requires a true Boolean result. Validate missing, malformed and boundary values, not only one matching message.
 
-```rust
-// Producer
-let message = Message::builder()
-    .topic("UserEvents")
-    .body(event_json)
-    .tags(&event.event_type)
-    .raw_property("user_tier", &user.tier)?
-    .build()?;
-producer.send(message).await?;
+Numeric-looking strings can be coerced by the evaluator where required. Keep producer property schemas stable so a changed representation does not silently change matches. Do not assume every Java client or another Broker version supports identical expression extensions.
 
-// Consumer
-consumer.subscribe("UserEvents", "login || logout || purchase").await?;
-```
+## Understand prefiltering and final evaluation
 
-## Next Steps
+ConsumeQueue tag codes or optional Bloom metadata can reject candidates before loading full properties. Bloom hits are candidates, not proof of a final SQL match. The current filter falls back to later evaluation when relevant prefilter metadata is absent or unsuitable.
 
-- [Broker Configuration](../configuration/broker-config) - Configure filtering-related settings
-- [Producer Guide](../category/producer) - Set tags and properties properly
-- [Consumer Overview](./overview) - Learn consumption models and offset management
+For SQL, the Broker evaluates the compiled expression against message properties from the read path. Subscription versions and compiled filter metadata must agree. A stale subscription or missing filter metadata can fail before any message reaches a listener.
+
+Application-side filtering remains useful for decisions that require current business state. If the application intentionally ignores a delivered message and returns success, it has chosen to advance that consumer's progress. To process it later, define a replay or separate subscription rather than relying on rejection by application code.
+
+## Diagnose mismatches
+
+1. Confirm the target cluster, topic, group, starting offset and producer send result.
+2. Inspect the actual tag/property values using bounded authorized tooling; do not infer them from a message body.
+3. Check `enablePropertyFilter` and expression compilation errors for SQL.
+4. Compare the subscriptions of all group members and their versions.
+5. Test one matching, one non-matching and one missing-property event in an isolated group.
+6. Observe progress separately from delivered count: scanning filtered records can advance the next position without returning messages.
+
+From `rocketmq-example/`, `consumer-tag-filter` and `consumer-sql-filter` demonstrate their respective selectors. The SQL example uses `SqlFilterConsumerTestTopic` with `region = 'cn' AND priority >= 3`. Provision that topic/group and send matching properties; running an unrelated simple producer is insufficient.
+
+Sources: [selector API](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/src/consumer/message_selector.rs), [SQL language](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-filter/README.md), [Broker expression filter](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/src/filter/expression_message_filter.rs), [pull validation](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/src/processor/pull_message_processor.rs), [Broker configuration](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/src/config/broker_config.rs).

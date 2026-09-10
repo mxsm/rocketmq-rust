@@ -50,6 +50,8 @@ const sidebars: SidebarsConfig = {
         'consumer/overview',
         'consumer/push-consumer',
         'consumer/pull-consumer',
+        'consumer/classic-pull-compatibility',
+        'consumer/pop',
         'consumer/message-filtering',
       ],
     },
@@ -58,7 +60,11 @@ const sidebars: SidebarsConfig = {
       label: 'Application Guides',
       collapsible: true,
       collapsed: true,
-      items: ['guides/delivery-and-retry'],
+      items: [
+        'guides/delivery-and-retry',
+        'guides/ordered-messages',
+        'guides/delay-and-recall',
+      ],
     },
     {
       type: 'category',
