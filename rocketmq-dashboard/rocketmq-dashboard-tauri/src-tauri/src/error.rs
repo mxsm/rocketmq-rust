@@ -45,6 +45,12 @@ pub(crate) enum DashboardError {
     Io(#[from] std::io::Error),
     #[error("database operation failed")]
     Database(#[from] rusqlite::Error),
+    #[error("the database schema is not supported")]
+    UnsupportedStorageVersion,
+    #[error("dashboard storage is shutting down")]
+    StorageClosed,
+    #[error("dashboard persistence work could not complete")]
+    Persistence(#[source] rocketmq_runtime::RuntimeError),
     #[error("password processing failed")]
     PasswordHash(password_hash::Error),
     #[error("application integration failed")]
@@ -111,7 +117,21 @@ impl DashboardError {
                 automatic_recovery(error.recovery_hint()),
                 None,
             ),
-            Self::Io(_) | Self::Database(_) | Self::Tauri(_) => (
+            Self::UnsupportedStorageVersion => (
+                "dashboard.storage_version_unsupported",
+                "This database format is not supported. Select a new data directory.",
+                CommandErrorCategory::Configuration,
+                false,
+                None,
+            ),
+            Self::StorageClosed => (
+                "dashboard.storage_closed",
+                "Dashboard storage is shutting down.",
+                CommandErrorCategory::Unavailable,
+                false,
+                None,
+            ),
+            Self::Io(_) | Self::Database(_) | Self::Tauri(_) | Self::Persistence(_) => (
                 "dashboard.storage_unavailable",
                 "Dashboard storage is unavailable.",
                 CommandErrorCategory::Unavailable,

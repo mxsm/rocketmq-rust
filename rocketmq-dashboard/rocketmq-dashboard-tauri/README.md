@@ -27,12 +27,20 @@ On first startup the application bootstraps a local administrator account:
 After the first successful login, the user must change the password before entering the dashboard.
 
 Authentication and saved NameServer/Proxy configuration share `dashboard.db` in
-Tauri's application configuration directory (identifier `com.rocketmqrust.dashboard`):
+the `data` subdirectory of Tauri's application configuration directory (identifier `com.rocketmqrust.dashboard`):
 
-- Windows: `%APPDATA%\com.rocketmqrust.dashboard\dashboard.db`
-- macOS: `~/Library/Application Support/com.rocketmqrust.dashboard/dashboard.db`
-- Linux: `$XDG_CONFIG_HOME/com.rocketmqrust.dashboard/dashboard.db`, or
-  `~/.config/com.rocketmqrust.dashboard/dashboard.db` when unset
+- Windows: `%APPDATA%\com.rocketmqrust.dashboard\data\dashboard.db`
+- macOS: `~/Library/Application Support/com.rocketmqrust.dashboard/data/dashboard.db`
+- Linux: `$XDG_CONFIG_HOME/com.rocketmqrust.dashboard/data/dashboard.db`, or
+  `~/.config/com.rocketmqrust.dashboard/data/dashboard.db` when unset
+
+Set `DASHBOARD_TAURI_DATA_DIR` to an isolated directory to override the default;
+its database is `<configured-directory>/dashboard.db`. An empty override is rejected.
+This storage design starts with a fresh database. It does not import accounts or
+addresses from the previous unversioned database, which remains untouched at its
+old location. The new database bootstraps the administrator as described above.
+Unversioned or unsupported databases are rejected without deleting or rebuilding
+them; choose a new data directory to start fresh.
 
 For more detail, see [doc/AUTH_CONFIG.md](./doc/AUTH_CONFIG.md).
 

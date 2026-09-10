@@ -21,25 +21,9 @@ use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
 use rusqlite::params;
-use std::fs;
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::Duration;
-use tauri::AppHandle;
-use tauri::Manager;
-
-const DB_FILE_NAME: &str = "dashboard.db";
-const PROXY_ADDRESSES_TABLE_SCHEMA: &str = "
-    CREATE TABLE IF NOT EXISTS proxy_addresses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        address TEXT NOT NULL UNIQUE,
-        is_current INTEGER NOT NULL DEFAULT 0,
-        sort_order INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-";
 
 #[derive(Debug, Clone)]
 pub(crate) struct ProxyDb {
@@ -47,11 +31,6 @@ pub(crate) struct ProxyDb {
 }
 
 impl ProxyDb {
-    pub(crate) fn new(app: &AppHandle) -> Result<Self> {
-        let app_config_dir = app.path().app_config_dir()?;
-        Ok(Self::from_path(app_config_dir.join(DB_FILE_NAME)))
-    }
-
     pub(crate) fn from_path(db_path: impl Into<PathBuf>) -> Self {
         Self {
             db_path: db_path.into(),
@@ -65,8 +44,8 @@ impl ProxyDb {
 
     pub(crate) fn init(&self) -> Result<()> {
         let mut connection = self.connection()?;
+        crate::persistence::schema::initialize(&mut connection)?;
         let transaction = connection.transaction()?;
-        transaction.execute_batch(PROXY_ADDRESSES_TABLE_SCHEMA)?;
         sanitize_proxy_rows(&transaction)?;
         repair_proxy_rows(&transaction)?;
         transaction.commit()?;
@@ -74,11 +53,7 @@ impl ProxyDb {
     }
 
     pub(crate) fn connection(&self) -> Result<Connection> {
-        self.ensure_parent_dir()?;
-
-        let connection = Connection::open(&self.db_path)?;
-        connection.busy_timeout(Duration::from_secs(5))?;
-        Ok(connection)
+        crate::persistence::open_connection(&self.db_path)
     }
 
     pub(crate) fn load_snapshot(&self) -> Result<ProxyConfigSnapshot> {
@@ -100,14 +75,6 @@ impl ProxyDb {
         save_snapshot_to_transaction(&transaction, &snapshot)?;
         transaction.commit()?;
         Ok(snapshot)
-    }
-
-    fn ensure_parent_dir(&self) -> Result<()> {
-        if let Some(parent) = self.db_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        Ok(())
     }
 }
 
@@ -321,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn init_sanitizes_duplicate_addresses_after_normalization() {
+    fn init_rejects_unversioned_database() {
         let test_dir = TestDir::new();
         let db = ProxyDb::from_path(test_dir.db_path());
         {
@@ -351,12 +318,10 @@ mod tests {
                 .expect("duplicate rows should insert");
         }
 
-        db.init().expect("database initialization should sanitize duplicates");
-
-        let snapshot = db.load_snapshot().expect("snapshot should load");
-
-        assert_eq!(snapshot.proxy_addr_list, vec!["localhost:8080".to_string()]);
-        assert_eq!(snapshot.current_proxy_addr.as_deref(), Some("localhost:8080"));
+        assert!(matches!(
+            db.init(),
+            Err(crate::error::DashboardError::UnsupportedStorageVersion)
+        ));
     }
 
     #[test]

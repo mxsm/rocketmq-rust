@@ -26,35 +26,11 @@ use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
 use rusqlite::params;
-use std::fs;
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::Duration;
-use tauri::AppHandle;
-use tauri::Manager;
 
-const DB_FILE_NAME: &str = "dashboard.db";
 const DEFAULT_NAMESERVER_ADDRESS: &str = "127.0.0.1:9876";
-const ADDRESSES_TABLE_SCHEMA: &str = "
-    CREATE TABLE IF NOT EXISTS nameserver_addresses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        address TEXT NOT NULL UNIQUE,
-        is_current INTEGER NOT NULL DEFAULT 0,
-        sort_order INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-";
-const SETTINGS_TABLE_SCHEMA: &str = "
-    CREATE TABLE IF NOT EXISTS nameserver_settings (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        use_vip_channel INTEGER NOT NULL DEFAULT 1,
-        use_tls INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-";
 
 #[derive(Debug, Clone)]
 pub(crate) struct NameServerDb {
@@ -62,11 +38,6 @@ pub(crate) struct NameServerDb {
 }
 
 impl NameServerDb {
-    pub(crate) fn new(app: &AppHandle) -> Result<Self> {
-        let app_config_dir = app.path().app_config_dir()?;
-        Ok(Self::from_path(app_config_dir.join(DB_FILE_NAME)))
-    }
-
     pub(crate) fn from_path(db_path: impl Into<PathBuf>) -> Self {
         Self {
             db_path: db_path.into(),
@@ -80,9 +51,8 @@ impl NameServerDb {
 
     pub(crate) fn init(&self) -> Result<()> {
         let mut connection = self.connection()?;
+        crate::persistence::schema::initialize(&mut connection)?;
         let transaction = connection.transaction()?;
-        transaction.execute_batch(ADDRESSES_TABLE_SCHEMA)?;
-        transaction.execute_batch(SETTINGS_TABLE_SCHEMA)?;
         sanitize_nameserver_rows(&transaction)?;
         repair_snapshot_tables(&transaction)?;
         transaction.commit()?;
@@ -90,19 +60,7 @@ impl NameServerDb {
     }
 
     pub(crate) fn connection(&self) -> Result<Connection> {
-        self.ensure_parent_dir()?;
-
-        let connection = Connection::open(&self.db_path)?;
-        connection.busy_timeout(Duration::from_secs(5))?;
-        Ok(connection)
-    }
-
-    fn ensure_parent_dir(&self) -> Result<()> {
-        if let Some(parent) = self.db_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        Ok(())
+        crate::persistence::open_connection(&self.db_path)
     }
 }
 
@@ -434,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn init_sanitizes_duplicate_addresses_after_normalization() {
+    fn init_rejects_unversioned_database() {
         let test_dir = TestDir::new();
         let db = NameServerDb::from_path(test_dir.db_path());
         {
@@ -471,13 +429,10 @@ mod tests {
                 .expect("duplicate rows should insert");
         }
 
-        db.init().expect("database initialization should sanitize duplicates");
-
-        let store = SqliteNameServerStore::new(db);
-        let snapshot = store.load_snapshot().expect("snapshot should load");
-
-        assert_eq!(snapshot.namesrv_addr_list, vec!["localhost:9876".to_string()]);
-        assert_eq!(snapshot.current_namesrv.as_deref(), Some("localhost:9876"));
+        assert!(matches!(
+            db.init(),
+            Err(crate::error::DashboardError::UnsupportedStorageVersion)
+        ));
     }
 
     #[test]
