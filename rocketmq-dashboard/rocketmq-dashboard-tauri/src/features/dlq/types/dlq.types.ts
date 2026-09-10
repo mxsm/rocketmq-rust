@@ -11,6 +11,7 @@ export interface DlqMessagePageQueryRequest {
     pageNum: number;
     pageSize: number;
     taskId?: string | null;
+    key?: string | null;
 }
 
 export interface DlqMessageDetailRequest {
@@ -24,6 +25,7 @@ export interface DlqMessageExportRequest {
 }
 
 export interface DlqResendMessageRequest {
+    clientId?: string | null;
     consumerGroup: string;
     messageId: string;
 }
@@ -37,6 +39,7 @@ export interface DlqBatchExportMessageRequest {
 }
 
 export interface DlqResendMessageResult {
+    requestMessageId?: string | null;
     success: boolean;
     message: string;
     consumerGroup: string;

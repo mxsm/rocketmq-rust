@@ -1,4 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { ConsumerRequestGeneration } from '../features/consumer/scope';
+import { failedDlqSelection, dlqQueryTaskId } from '../features/dlq/receipts';
+import type { DlqBatchResendMessageResponse } from '../features/dlq/types/dlq.types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { toast } from 'sonner@2.0.3';
 import {
@@ -23,7 +26,7 @@ import type { DlqMessageSummary } from '../features/dlq/types/dlq.types';
 import { DlqService } from '../services/dlq.service';
 import { dashboardErrorMessage } from '../services/invoke';
 
-type DlqTab = 'Consumer' | 'Message ID';
+type DlqTab = 'Consumer' | 'Key' | 'Message ID';
 
 const DEFAULT_PAGE_SIZE = 20;
 
@@ -68,6 +71,16 @@ export const DLQMessageView = () => {
   const [activeTab, setActiveTab] = useState<DlqTab>('Consumer');
   const [consumerGroup, setConsumerGroup] = useState('');
   const [messageId, setMessageId] = useState('');
+  const [messageKey, setMessageKey] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [receipt, setReceipt] = useState<DlqBatchResendMessageResponse | null>(null);
+  const queryGeneration = useRef(new ConsumerRequestGeneration());
+  const writeGeneration = useRef(new ConsumerRequestGeneration());
+  useEffect(() => {
+    writeGeneration.current.invalidate(); setReceipt(null);
+    setIsBatchResending(false); setResendingMessageId(null);
+    return () => { writeGeneration.current.invalidate(); queryGeneration.current.invalidate(); };
+  }, [consumerGroup]);
   const [beginTime, setBeginTime] = useState(formatDateTimeInput(new Date(Date.now() - 3 * 60 * 60 * 1000)));
   const [endTime, setEndTime] = useState(formatDateTimeInput(new Date()));
   const [messages, setMessages] = useState<DlqMessageSummary[]>([]);
@@ -103,6 +116,7 @@ export const DLQMessageView = () => {
   }, [consumerGroupOptions, consumerGroup]);
 
   useEffect(() => {
+    setIsSearching(false);
     setMessages([]);
     setSelectedMessage(null);
     setSearchError('');
@@ -111,6 +125,8 @@ export const DLQMessageView = () => {
     setTaskId('');
     setPagination(defaultPagination);
   }, [activeTab]);
+
+  useEffect(() => { queryGeneration.current.invalidate(); return () => queryGeneration.current.invalidate(); }, [activeTab, consumerGroup, messageId, messageKey, beginTime, endTime]);
 
   const formatTimestamp = (value: number) => {
     if (!value) {
@@ -131,6 +147,8 @@ export const DLQMessageView = () => {
   };
 
   const resetConsumerPagingState = () => {
+    queryGeneration.current.invalidate();
+    setIsSearching(false);
     setMessages([]);
     setSelectedMessage(null);
     setSearchError('');
@@ -146,8 +164,9 @@ export const DLQMessageView = () => {
       return;
     }
 
-    const begin = parseDateTimeInput(beginTime);
-    const end = parseDateTimeInput(endTime);
+    if (activeTab === 'Key' && !messageKey.trim()) { setSearchError('Message Key is required.'); return; }
+    const begin = activeTab === 'Key' ? 0 : parseDateTimeInput(beginTime);
+    const end = activeTab === 'Key' ? Date.now() : parseDateTimeInput(endTime);
     if (begin === null || end === null) {
       setSearchError('Begin and end must be valid date-time strings.');
       return;
@@ -157,6 +176,7 @@ export const DLQMessageView = () => {
       return;
     }
 
+    const isCurrent = queryGeneration.current.begin();
     setIsSearching(true);
     setSearchError('');
     setHasSearched(true);
@@ -168,9 +188,11 @@ export const DLQMessageView = () => {
         end,
         pageNum,
         pageSize: pagination.pageSize,
-        taskId: taskId || undefined,
+        taskId: dlqQueryTaskId(activeTab, pageNum, taskId),
+        key: activeTab === 'Key' ? messageKey.trim() : undefined,
       });
 
+      if (!isCurrent()) return;
       setMessages(response.page.content);
       setSelectedMessageIds(EMPTY_SELECTED_IDS);
       setTaskId(response.taskId);
@@ -181,10 +203,11 @@ export const DLQMessageView = () => {
         totalElements: response.page.totalElements,
       });
     } catch (error) {
+      if (!isCurrent()) return;
       setMessages([]);
       setSearchError(dashboardErrorMessage(error, 'Failed to query DLQ messages.'));
     } finally {
-      setIsSearching(false);
+      if (isCurrent()) setIsSearching(false);
     }
   };
 
@@ -198,6 +221,7 @@ export const DLQMessageView = () => {
       return;
     }
 
+    const isCurrent = queryGeneration.current.begin();
     setIsSearching(true);
     setSearchError('');
     setHasSearched(true);
@@ -210,17 +234,19 @@ export const DLQMessageView = () => {
         consumerGroup: consumerGroup.trim(),
         messageId: messageId.trim(),
       });
+      if (!isCurrent()) return;
       setMessages([toSummary(detail)]);
     } catch (error) {
+      if (!isCurrent()) return;
       setMessages([]);
       setSearchError(dashboardErrorMessage(error, 'Failed to query DLQ message detail.'));
     } finally {
-      setIsSearching(false);
+      if (isCurrent()) setIsSearching(false);
     }
   };
 
   const handleSearch = async () => {
-    if (activeTab === 'Consumer') {
+    if (activeTab !== 'Message ID') {
       await queryDlqPage(1);
       return;
     }
@@ -229,6 +255,7 @@ export const DLQMessageView = () => {
   };
 
   const handleResend = async (message: DlqMessageSummary) => {
+    if (isBatchResending || resendingMessageId) return;
     const normalizedConsumerGroup = consumerGroup.trim();
     if (!normalizedConsumerGroup) {
       setSearchError('Consumer group is required.');
@@ -236,12 +263,13 @@ export const DLQMessageView = () => {
     }
 
     const confirmed = window.confirm(
-      `Request direct consume for DLQ message ${message.msgId} in consumer group ${normalizedConsumerGroup}?`,
+      `Request direct consume for DLQ message ${message.msgId} in consumer group ${normalizedConsumerGroup}, ClientId ${clientId.trim() || 'automatic'}?`,
     );
     if (!confirmed) {
       return;
     }
 
+    const isCurrent = writeGeneration.current.begin();
     setResendingMessageId(message.queryMsgId);
     setSearchError('');
 
@@ -249,19 +277,23 @@ export const DLQMessageView = () => {
       const result = await DlqService.resendDlqMessage({
         consumerGroup: normalizedConsumerGroup,
         messageId: message.queryMsgId,
+        clientId: clientId.trim() || undefined,
       });
 
+      if (!isCurrent()) return;
+      setReceipt({ items: [result], total: 1, successCount: Number(result.success), failureCount: Number(!result.success) });
       if (result.success) {
         toast.success(result.message);
       } else {
         toast.error(result.message);
       }
     } catch (error) {
+      if (!isCurrent()) return;
       const messageText = dashboardErrorMessage(error, 'Failed to resend DLQ message.');
       toast.error(messageText);
       setSearchError(messageText);
     } finally {
-      setResendingMessageId(null);
+      if (isCurrent()) setResendingMessageId(null);
     }
   };
 
@@ -299,6 +331,7 @@ export const DLQMessageView = () => {
   };
 
   const handleBatchResend = async () => {
+    if (isBatchResending || resendingMessageId) return;
     const normalizedConsumerGroup = consumerGroup.trim();
     if (!normalizedConsumerGroup) {
       setSearchError('Consumer group is required.');
@@ -312,12 +345,13 @@ export const DLQMessageView = () => {
     }
 
     const confirmed = window.confirm(
-      `Request direct consume for ${selectedMessages.length} DLQ message(s) in consumer group ${normalizedConsumerGroup}?`,
+      `Request direct consume for ${selectedMessages.length} DLQ message(s) in consumer group ${normalizedConsumerGroup}, ClientId ${clientId.trim() || 'automatic'}?`,
     );
     if (!confirmed) {
       return;
     }
 
+    const isCurrent = writeGeneration.current.begin();
     setIsBatchResending(true);
     setSearchError('');
 
@@ -326,9 +360,12 @@ export const DLQMessageView = () => {
         messages: selectedMessages.map((message) => ({
           consumerGroup: normalizedConsumerGroup,
           messageId: message.queryMsgId,
+          clientId: clientId.trim() || undefined,
         })),
       });
 
+      if (!isCurrent()) return;
+      setReceipt(response);
       if (response.failureCount === 0) {
         toast.success(`Batch resend completed for ${response.successCount} DLQ message(s).`);
       } else if (response.successCount === 0) {
@@ -347,13 +384,14 @@ export const DLQMessageView = () => {
         }
       }
 
-      await queryDlqPage(pagination.currentPage || 1);
+      setSelectedMessageIds(EMPTY_SELECTED_IDS);
     } catch (error) {
+      if (!isCurrent()) return;
       const messageText = dashboardErrorMessage(error, 'Failed to batch resend DLQ messages.');
       toast.error(messageText);
       setSearchError(messageText);
     } finally {
-      setIsBatchResending(false);
+      if (isCurrent()) setIsBatchResending(false);
     }
   };
 
@@ -435,7 +473,7 @@ export const DLQMessageView = () => {
     if (activeTab === 'Consumer') {
       return 'Enter a consumer group and time range to search DLQ messages.';
     }
-    return 'Enter a consumer group and message id to load the DLQ message detail.';
+    return activeTab === 'Key' ? 'Enter a Consumer group and exact message Key.' : 'Enter a consumer group and message id to load the DLQ message detail.';
   };
 
   return (
@@ -446,9 +484,22 @@ export const DLQMessageView = () => {
         message={selectedMessage}
       />
 
+      {receipt && <section aria-label="DLQ resend receipts" className="rounded border border-blue-300 p-4 mb-4 overflow-auto">
+        <h3>Latest resend receipt: {receipt.successCount} succeeded / {receipt.failureCount} failed</h3>
+        <table className="w-full text-left text-sm"><thead><tr><th>DLQ request ID</th><th>Original ID / Topic</th><th>Group</th><th>Success</th><th>Consume result</th><th>Remark</th></tr></thead><tbody>
+          {receipt.items.map((item, index) => <tr key={`${item.requestMessageId ?? item.msgId}:${index}`}><td>{item.requestMessageId ?? item.msgId}</td><td>{item.msgId} / {item.topic}</td><td>{item.consumerGroup}</td><td>{String(item.success)}</td><td>{item.consumeResult ?? 'Not confirmed'}</td><td>{item.remark || item.message}</td></tr>)}
+        </tbody></table>
+        <button type="button" disabled={isBatchResending || Boolean(resendingMessageId)} onClick={() => {
+          const failed = failedDlqSelection(receipt, consumerGroup.trim(), messages);
+          setSelectedMessageIds(failed);
+          setSearchError(failed.size ? 'Only visible failed messages are selected. Review and confirm Batch resend to retry.' : 'No failed messages from this receipt are visible in the current query. Refresh or query their IDs first.');
+        }}>Select only failed messages for review</button>
+      </section>}
+      <details className="mb-4"><summary>Advanced resend target</summary><label>Optional ClientId <Input value={clientId} onChange={event => setClientId(event.target.value)} placeholder="Automatic client selection when empty" /></label></details>
+      <p className="text-sm mb-3">Select a query mode: Message ID and Key are exact queries with no time-page cursor. Key returns at most 64 matches. CSV exports include only explicitly selected messages.</p>
       <div className="mb-8 flex justify-center">
         <div className="inline-flex rounded-xl bg-gray-100 p-1 shadow-inner dark:bg-gray-800">
-          {(['Consumer', 'Message ID'] as DlqTab[]).map((tab) => (
+          {(['Consumer', 'Key', 'Message ID'] as DlqTab[]).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -480,9 +531,8 @@ export const DLQMessageView = () => {
                 value={consumerGroup}
                 onChange={(event) => {
                   setConsumerGroup(event.target.value);
-                  if (activeTab === 'Consumer') {
-                    resetConsumerPagingState();
-                  }
+                  writeGeneration.current.invalidate();
+                  resetConsumerPagingState();
                 }}
                 list="dlq-consumer-group-options"
                 placeholder={isConsumerCatalogLoading ? 'Loading consumer groups...' : 'Enter consumer group...'}
@@ -532,13 +582,13 @@ export const DLQMessageView = () => {
           ) : (
             <div className="flex min-w-[320px] flex-1 items-center space-x-2">
               <span className="whitespace-nowrap text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                Message ID:
+                {activeTab === 'Key' ? 'Message Key:' : 'Message ID:'}
               </span>
               <div className="relative flex-1">
                 <Input
-                  value={messageId}
-                  onChange={(event) => setMessageId(event.target.value)}
-                  placeholder="Enter Message ID..."
+                  value={activeTab === 'Key' ? messageKey : messageId}
+                  onChange={(event) => { if (activeTab === 'Key') setMessageKey(event.target.value); else setMessageId(event.target.value); resetConsumerPagingState(); }}
+                  placeholder={activeTab === 'Key' ? 'Enter Message Key...' : 'Enter Message ID...'}
                   className="border-gray-200 bg-gray-50 pr-10 font-mono text-gray-900 placeholder:text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
                 />
                 <Hash className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
@@ -557,11 +607,11 @@ export const DLQMessageView = () => {
             {isSearching ? 'SEARCHING...' : 'SEARCH'}
           </button>
 
-          {activeTab === 'Consumer' ? (
+
             <>
               <button
                 onClick={() => void handleBatchResend()}
-                disabled={isBatchResending || isBatchExporting || selectedMessageIds.size === 0}
+                disabled={isBatchResending || Boolean(resendingMessageId) || isBatchExporting || selectedMessageIds.size === 0}
                 className="flex items-center rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:border-amber-800 dark:hover:bg-amber-900/30"
               >
                 <Send className="mr-2 h-4 w-4" />
@@ -576,7 +626,7 @@ export const DLQMessageView = () => {
                 {isBatchExporting ? 'Batch Exporting...' : `Batch Export${selectedMessageIds.size > 0 ? ` (${selectedMessageIds.size})` : ''}`}
               </button>
             </>
-          ) : null}
+
         </div>
       </div>
 
@@ -597,7 +647,7 @@ export const DLQMessageView = () => {
       <div>
         {messages.length > 0 ? (
           <>
-            {activeTab === 'Consumer' ? (
+
               <div className="mb-4 flex items-center justify-between rounded-2xl border border-gray-100 bg-white px-4 py-3 text-sm text-gray-600 shadow-sm dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300">
                 <label className="flex items-center gap-3">
                   <input
@@ -612,7 +662,7 @@ export const DLQMessageView = () => {
                   {selectedMessageIds.size} selected
                 </span>
               </div>
-            ) : null}
+
 
             <div className="grid grid-cols-1 gap-6 md:grid-cols-2 2xl:grid-cols-3">
             {messages.map((message, index) => (
@@ -629,14 +679,14 @@ export const DLQMessageView = () => {
                       Message ID
                     </span>
                     <div className="flex items-center gap-3">
-                      {activeTab === 'Consumer' ? (
+
                         <input
                           type="checkbox"
                           checked={isMessageSelected(message)}
                           onChange={() => toggleMessageSelection(message)}
                           className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-500 dark:border-gray-600 dark:bg-gray-800"
                         />
-                      ) : null}
+
                       <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-red-500 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
                         DLQ
                       </span>

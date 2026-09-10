@@ -19,3 +19,5 @@ pub(crate) mod service;
 pub(crate) mod types;
 
 pub(crate) use service::MessageManager;
+
+pub(crate) mod dlq;

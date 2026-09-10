@@ -65,6 +65,7 @@ pub(crate) struct MessageResendResult {
     pub(crate) consumer_group: String,
     pub(crate) topic: String,
     pub(crate) msg_id: String,
+    pub(crate) request_message_id: Option<String>,
     pub(crate) consume_result: Option<String>,
     pub(crate) remark: Option<String>,
 }
