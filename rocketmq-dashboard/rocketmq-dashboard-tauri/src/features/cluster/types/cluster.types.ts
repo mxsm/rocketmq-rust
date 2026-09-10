@@ -57,3 +57,18 @@ export interface ClusterBrokerStatusView {
     brokerAddr: string;
     entries: Record<string, string>;
 }
+
+export interface BrokerConfigUpdateRequest {
+    clusterName: string;
+    brokerName: string;
+    brokerId: number;
+    brokerAddr: string;
+    entries: Record<string, string>;
+}
+export interface BrokerConfigUpdateResult {
+    brokerAddr: string;
+    written: boolean;
+    changedKeys: string[];
+    readBack: 'confirmed' | 'different' | 'unavailable';
+    entries: Record<string, string> | null;
+}

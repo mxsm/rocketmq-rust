@@ -168,6 +168,24 @@ impl ClusterManager {
         }
     }
 
+    pub(crate) async fn update_broker_config(
+        &self,
+        request: super::config::BrokerConfigUpdateRequest,
+    ) -> ClusterResult<super::config::BrokerConfigUpdateResult> {
+        request.validate()?;
+        let mut session_guard = self.admin_session.lock().await;
+        self.ensure_admin_session(&mut session_guard).await?;
+        let session = session_guard
+            .as_ref()
+            .ok_or(ClusterError::Internal("Cluster session was not initialized"))?;
+        let result = super::config::update_config(&session.admin, request).await;
+        if Self::should_reset_session(&result) {
+            self.reset_admin_session(&mut session_guard, "update_broker_config failed")
+                .await;
+        }
+        result
+    }
+
     async fn ensure_admin_session(&self, session_slot: &mut Option<ManagedClusterAdmin>) -> ClusterResult<()> {
         let generation = self.runtime.generation();
         let needs_reconnect = session_slot

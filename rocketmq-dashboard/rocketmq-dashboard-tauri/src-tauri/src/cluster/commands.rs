@@ -78,3 +78,29 @@ pub async fn get_cluster_broker_status(
     connection_manager.check_revision(expected_revision)?;
     result
 }
+
+#[tauri::command]
+pub async fn update_cluster_broker_config(
+    session_id: String,
+    request: super::config::BrokerConfigUpdateRequest,
+    cluster_manager: State<'_, ClusterManager>,
+    session_state: State<'_, SessionState>,
+    audit_manager: State<'_, crate::audit::AuditManager>,
+    connection_manager: State<'_, ConnectionManager>,
+    expected_revision: i64,
+) -> CommandResult<crate::audit::Audited<super::config::BrokerConfigUpdateResult>> {
+    let access = crate::audit::AuditAccess::dashboard(&session_state, session_id);
+    let manager = cluster_manager.inner().clone();
+    let connection = connection_manager.inner().clone();
+    audit_manager
+        .execute(
+            access,
+            crate::audit::AuditAction::UpdateBrokerConfig,
+            Some(request.broker_addr.clone()),
+            move |audit| async move {
+                let _lease = connection.mutation_lease(expected_revision, &audit).await?;
+                manager.update_broker_config(request).await
+            },
+        )
+        .await
+}

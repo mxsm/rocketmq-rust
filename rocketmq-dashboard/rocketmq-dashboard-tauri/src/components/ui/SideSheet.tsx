@@ -10,6 +10,7 @@ interface SideSheetProps {
   title: string;
   data: Record<string, unknown>;
   type?: SheetType;
+  actions?: React.ReactNode;
 }
 
 interface DetailEntry {
@@ -103,7 +104,7 @@ const extractBrokerLabel = (title: string) => {
   return match ? `${match[1]}-${match[2]}` : title;
 };
 
-export const SideSheet = ({ isOpen, onClose, title, data, type }: SideSheetProps) => {
+export const SideSheet = ({ isOpen, onClose, title, data, type, actions }: SideSheetProps) => {
   const [query, setQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
   const [copiedKey, setCopiedKey] = useState('');
@@ -214,6 +215,7 @@ export const SideSheet = ({ isOpen, onClose, title, data, type }: SideSheetProps
             </header>
 
             <section className="ops-detail-toolbar" aria-label="Detail filters">
+              {actions}
               <label className="ops-detail-search">
                 <Search className="ops-detail-search-icon" />
                 <span className="sr-only">Search detail entries</span>
