@@ -22,6 +22,7 @@ mod connection;
 mod consumer;
 mod dashboard;
 mod error;
+mod history;
 mod message;
 mod nameserver;
 mod persistence;
@@ -227,6 +228,13 @@ fn build_application() -> Result<DashboardApplication, i32> {
                 storage.clone(),
                 nameserver_runtime.clone(),
             ))?;
+            let history = history::HistoryManager::new(
+                storage.clone(),
+                connections.clone(),
+                cluster_manager.clone(),
+                topic_manager.clone(),
+            )?;
+            history.start()?;
             let audit = audit::AuditManager::new(storage.clone(), audit_context);
             audit.start_cleanup()?;
             setup_lifecycle
@@ -244,6 +252,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
 
             let sessions = auth::SessionState::new(storage.clone(), auth_service)?;
             sessions.start_cleanup()?;
+            app.manage(history);
             app.manage(storage);
             app.manage(sessions);
             app.manage(audit);
@@ -294,6 +303,9 @@ fn build_application() -> Result<DashboardApplication, i32> {
             consumer::commands::delete_consumer_group,
             dashboard::commands::get_dashboard_broker_overview,
             dashboard::commands::get_dashboard_overview,
+            history::query_broker_history,
+            history::query_topic_history,
+            history::get_history_status,
             dashboard::commands::query_dashboard_topic_current,
             message::commands::query_message_by_topic_key,
             message::commands::query_message_by_id,
