@@ -12,6 +12,7 @@ import type {
     TopicListRequest,
     TopicListResponse,
     TopicMutationResult,
+    TopicBatchResult,
     TopicQueryRequest,
     TopicRouteView,
     TopicSendMessageResult,
@@ -35,16 +36,16 @@ export class TopicService {
         return invokeAuthenticatedCommand<TopicConfigView>('get_topic_config', { request });
     }
 
-    static async createOrUpdateTopic(request: TopicConfigRequest, mode: 'create' | 'update'): Promise<TopicMutationResult> {
-        return invokeAuthenticatedCommand<TopicMutationResult>('create_or_update_topic', { request, mode });
+    static async createOrUpdateTopic(request: TopicConfigRequest, mode: 'create' | 'update'): Promise<TopicBatchResult> {
+        return invokeAuthenticatedCommand<TopicBatchResult>('create_or_update_topic', { request, mode });
     }
 
-    static async deleteTopic(request: DeleteTopicRequest): Promise<TopicMutationResult> {
-        return invokeAuthenticatedCommand<TopicMutationResult>('delete_topic', { request });
+    static async deleteTopic(request: DeleteTopicRequest): Promise<TopicBatchResult> {
+        return invokeAuthenticatedCommand<TopicBatchResult>('delete_topic', { request });
     }
 
-    static async deleteTopicByBroker(request: DeleteTopicByBrokerRequest): Promise<TopicMutationResult> {
-        return invokeAuthenticatedCommand<TopicMutationResult>('delete_topic_by_broker', { request });
+    static async deleteTopicByBroker(request: DeleteTopicByBrokerRequest): Promise<TopicBatchResult> {
+        return invokeAuthenticatedCommand<TopicBatchResult>('delete_topic_by_broker', { request });
     }
 
     static async getTopicConsumerGroups(request: TopicQueryRequest): Promise<TopicConsumerGroupListResponse> {

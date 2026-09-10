@@ -1,3 +1,5 @@
+import { TopicMutationReceipt, failedBrokerNames } from '../features/topic/components/TopicMutationReceipt';
+import type { TopicBatchResult } from '../features/topic/types/topic.types';
 import { useAppStore, useNavigationState } from '../stores/app.store';
 import { findEntity } from '../stores/navigation';
 import React, {useEffect, useMemo, useState, useRef, ReactNode} from 'react';
@@ -519,6 +521,9 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit, onRefresh}: TopicConf
     const [error, setError] = useState('');
     const [actionError, setActionError] = useState('');
     const [isDeletingBroker, setIsDeletingBroker] = useState(false);
+    const [mutationReceipt, setMutationReceipt] = useState<TopicBatchResult | null>(null);
+    const mutationGeneration = useRef(0);
+    useEffect(() => { setMutationReceipt(null); return () => { mutationGeneration.current += 1; }; }, [isOpen, topic?.name]);
 
     useEffect(() => {
         if (!isOpen || !topic?.name) {
@@ -628,6 +633,7 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit, onRefresh}: TopicConf
             return;
         }
 
+        const generation = ++mutationGeneration.current;
         setIsDeletingBroker(true);
         setActionError('');
 
@@ -636,13 +642,14 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit, onRefresh}: TopicConf
                 brokerName: activeBroker,
                 topic: configData.topicName,
             });
-            toast.success(result.message || `Deleted ${configData.topicName} from ${activeBroker}`);
+            if (generation !== mutationGeneration.current) return;
+            setMutationReceipt(result);
+            if (result.success) toast.success(result.message); else toast.warning(result.message);
             await onRefresh();
-            onClose();
         } catch (deleteError) {
-            setActionError(dashboardErrorMessage(deleteError, 'Failed to delete topic from the selected broker.'));
+            if (generation === mutationGeneration.current) setActionError(dashboardErrorMessage(deleteError, 'Failed to delete topic from the selected broker.'));
         } finally {
-            setIsDeletingBroker(false);
+            if (generation === mutationGeneration.current) setIsDeletingBroker(false);
         }
     };
 
@@ -910,6 +917,7 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit, onRefresh}: TopicConf
                         )}
                     </div>
 
+                    {mutationReceipt && <TopicMutationReceipt result={mutationReceipt} />}
                     <footer className="topic-status-footer topic-config-footer">
                         <span>Config is read-only here. Use Edit Topic to commit queue, permission, or type changes.</span>
                         <div className="topic-config-footer-actions">
@@ -920,7 +928,7 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit, onRefresh}: TopicConf
                                 type="button"
                                 className="topic-status-secondary-button topic-config-danger-button"
                                 onClick={() => void handleDeleteByBroker()}
-                                disabled={topic?.systemTopic || !configData || isLoading || isDeletingBroker || !activeBroker}
+                                disabled={topic?.systemTopic || !configData || isLoading || isDeletingBroker || !activeBroker || !!mutationReceipt?.targets.some((target) => target.name === activeBroker && target.success)}
                                 title={topic?.systemTopic ? 'System topics are read-only' : undefined}
                             >
                                 <Trash2 className="topic-icon" aria-hidden="true"/>
@@ -2313,6 +2321,10 @@ const TopicEditorModal = ({isOpen, onClose, targets, seed, mode, onSaved}: Topic
     const [perm, setPerm] = useState(6);
     const [order, setOrder] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [receipt, setReceipt] = useState<TopicBatchResult | null>(null);
+    const [submitMode, setSubmitMode] = useState(mode);
+    const generation = useRef(0);
+    useEffect(() => () => { generation.current += 1; }, [isOpen, seed, mode]);
     const [error, setError] = useState('');
 
     useEffect(() => {
@@ -2330,6 +2342,8 @@ const TopicEditorModal = ({isOpen, onClose, targets, seed, mode, onSaved}: Topic
         setOrder(seed?.order ?? false);
         setIsBrokerDropdownOpen(false);
         setIsSubmitting(false);
+        setReceipt(null);
+        setSubmitMode(mode);
         setError('');
     }, [isOpen, seed, mode]);
 
@@ -2379,6 +2393,7 @@ const TopicEditorModal = ({isOpen, onClose, targets, seed, mode, onSaved}: Topic
             return;
         }
 
+        const requestGeneration = ++generation.current;
         setIsSubmitting(true);
         setError('');
 
@@ -2392,18 +2407,19 @@ const TopicEditorModal = ({isOpen, onClose, targets, seed, mode, onSaved}: Topic
                 perm,
                 order,
                 messageType,
-            }, mode);
-            toast.success(result.message || `${mode === 'create' ? 'Created' : 'Updated'} topic ${topicName.trim()}`);
+            }, submitMode);
+            if (requestGeneration !== generation.current) return;
+            setReceipt(result);
+            if (result.success) toast.success(result.message); else toast.warning(result.message);
             await onSaved();
-            onClose();
         } catch (submitError) {
-            setError(dashboardErrorMessage(submitError, 'Failed to save topic changes.'));
+            if (requestGeneration === generation.current) setError(dashboardErrorMessage(submitError, 'Failed to save topic changes.'));
         } finally {
-            setIsSubmitting(false);
+            if (requestGeneration === generation.current) setIsSubmitting(false);
         }
     };
 
-    const isCreateMode = mode === 'create';
+    const isCreateMode = submitMode === 'create';
     const targetSummary = selectedClusters.length > 0
         ? `${selectedClusters.length} cluster${selectedClusters.length === 1 ? '' : 's'}`
         : 'No cluster';
@@ -2718,6 +2734,13 @@ const TopicEditorModal = ({isOpen, onClose, targets, seed, mode, onSaved}: Topic
                         </section>
                     </div>
 
+                    {receipt && <TopicMutationReceipt result={receipt} onReviewFailed={() => {
+                        const failed = failedBrokerNames(receipt);
+                        setSelectedClusters(targets.filter((target) => target.brokerNames.some((broker) => failed.includes(broker))).map((target) => target.clusterName));
+                        setSelectedBrokers(failed);
+                        setSubmitMode(receipt.operation === 'create' && !receipt.targets.some((target) => target.success) ? 'create' : 'update');
+                        setReceipt(null);
+                    }} />}
                     <footer className="topic-status-footer topic-editor-footer">
                         <span>Create/Update validates topic name, target cluster, and queue counts before submit.</span>
                         <div>
@@ -2727,7 +2750,7 @@ const TopicEditorModal = ({isOpen, onClose, targets, seed, mode, onSaved}: Topic
                             <button
                                 type="button"
                                 onClick={() => void handleSubmit()}
-                                disabled={isSubmitting}
+                                disabled={isSubmitting || !!receipt}
                                 className="topic-status-primary-button topic-editor-submit-button"
                             >
                                 <Save className="topic-icon" aria-hidden="true"/>
@@ -2747,6 +2770,10 @@ interface TopicDeleteModalProps extends TopicRouterModalProps {
 
 const TopicDeleteModal = ({isOpen, onClose, topic, onDeleted}: TopicDeleteModalProps) => {
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [receipt, setReceipt] = useState<TopicBatchResult | null>(null);
+    const [retryCluster, setRetryCluster] = useState<string | undefined>();
+    const generation = useRef(0);
+    useEffect(() => () => { generation.current += 1; }, [isOpen, topic?.name]);
     const [error, setError] = useState('');
 
     useEffect(() => {
@@ -2754,6 +2781,8 @@ const TopicDeleteModal = ({isOpen, onClose, topic, onDeleted}: TopicDeleteModalP
             return;
         }
         setIsSubmitting(false);
+        setReceipt(null);
+        setRetryCluster(undefined);
         setError('');
     }, [isOpen, topic?.name]);
 
@@ -2762,20 +2791,24 @@ const TopicDeleteModal = ({isOpen, onClose, topic, onDeleted}: TopicDeleteModalP
             return;
         }
 
+        const requestGeneration = ++generation.current;
         setIsSubmitting(true);
         setError('');
 
         try {
             const result = await TopicService.deleteTopic({
                 topic: topic.name,
+                clusterName: retryCluster,
             });
-            toast.success(result.message || `Deleted topic ${topic.name}`);
+            if (requestGeneration !== generation.current) return;
+            setReceipt(result);
+            setRetryCluster(undefined);
+            if (result.success) toast.success(result.message); else toast.warning(result.message);
             await onDeleted();
-            onClose();
         } catch (deleteError) {
-            setError(dashboardErrorMessage(deleteError, 'Failed to delete topic.'));
+            if (requestGeneration === generation.current) setError(dashboardErrorMessage(deleteError, 'Failed to delete topic.'));
         } finally {
-            setIsSubmitting(false);
+            if (requestGeneration === generation.current) setIsSubmitting(false);
         }
     };
 
@@ -2857,6 +2890,8 @@ const TopicDeleteModal = ({isOpen, onClose, topic, onDeleted}: TopicDeleteModalP
                         </div>
                     </div>
 
+                    {receipt && <TopicMutationReceipt result={receipt} onReviewTarget={(target) => { if (target.kind === 'cluster') setRetryCluster(target.name); }} />}
+                    {retryCluster && <p className="px-6 text-sm">Reviewing deletion for Cluster: {retryCluster}</p>}
                     <div className="px-6 py-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex justify-end space-x-3 z-10">
                         <button
                             onClick={onClose}
@@ -2866,7 +2901,7 @@ const TopicDeleteModal = ({isOpen, onClose, topic, onDeleted}: TopicDeleteModalP
                         </button>
                         <button
                             onClick={() => void handleDelete()}
-                            disabled={isSubmitting}
+                            disabled={isSubmitting || (!!receipt && !retryCluster)}
                             className="px-6 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-500 transition-all shadow-md hover:shadow-lg flex items-center disabled:cursor-not-allowed disabled:opacity-70 dark:bg-red-600 dark:text-white dark:hover:bg-red-500"
                         >
                             <Trash2 className="w-4 h-4 mr-2"/>
