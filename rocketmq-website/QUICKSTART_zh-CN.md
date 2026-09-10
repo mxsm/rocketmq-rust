@@ -1,117 +1,56 @@
-# RocketMQ-Rust Website 快速启动指南
+# 开发 RocketMQ-Rust 文档网站
 
-## 🚀 快速开始
+[English](./QUICKSTART.md) · [完整搭建说明](./README-zh_cn.md) · [写作指南](./DOCUMENTATION-zh-CN.md)
 
-### 1. 安装依赖
+本指南启动文档网站。若要运行 RocketMQ-Rust **1.0.0 开发版**服务并收发消息，请阅读[源码安装](./i18n/zh-CN/docusaurus-plugin-content-docs/current/getting-started/installation.md)和[首条消息教程](./i18n/zh-CN/docusaurus-plugin-content-docs/current/getting-started/quick-start.md)。
+
+## 安装与预览
+
+从仓库根目录开始，使用 `.nvmrc` 指定的 Node **24.13.0** 和 npm：
 
 ```bash
 cd rocketmq-website
-npm install
-```
-
-### 2. 启动开发服务器
-
-```bash
+node --version
+npm ci
 npm run start
 ```
 
-网站将在 [http://localhost:3000](http://localhost:3000) 启动。
+`npm ci` 安装 lockfile 中的依赖集合。日常编辑复用现有依赖，缺少依赖或 lockfile 变化时再安装。终端显示实际地址，通常为 `http://localhost:3000/`。按 Ctrl+C 停止。
 
-### 3. 构建生产版本
+用以下命令替代英文开发服务器，启动中文站点：
+
+```bash
+npm run start:zh
+```
+
+开发模式一次服务一种语言。构建并预览两种语言：
 
 ```bash
 npm run build
-```
-
-构建产物将输出到 `build/` 目录。
-
-### 4. 预览生产构建
-
-```bash
 npm run serve
 ```
 
-## 📁 项目结构速览
+静态产物位于 `build/`，中文内容在 `zh-CN/` 下。通过静态预览确认受影响的页面、链接和图示。网站构建不会编译或启动消息服务。
 
-```
-rocketmq-website/
-├── docs/                    # 文档内容（Markdown）
-├── src/                     # React 组件和页面
-├── static/                  # 静态资源（图片、文件）
-├── i18n/                    # 国际化翻译文件
-├── docusaurus.config.ts     # 网站配置
-└── sidebars.ts              # 文档侧边栏结构
-```
+## 同步更新两种语言
 
-## ✨ 主要功能
+1. 同时编辑 `docs/<id>.md` 和 `i18n/zh-CN/docusaurus-plugin-content-docs/current/<id>.md`，保留已有 ID 与 slug。
+2. 新页面的 ID 加入 `sidebars.ts`；需要时，在中文 docs 翻译 JSON 中翻译分类名称。
+3. 两种语言的命令、配置键、单位与技术限制保持一致；Mermaid 标签及解释文字完整配对。
+4. 运行现有构建并检查受影响路由。来源、MDX、资源和示例规则见[写作指南](./DOCUMENTATION-zh-CN.md)。
 
-- ✅ 完整的文档系统（22+ 篇文档）
-- ✅ 国际化支持（英文 + 中文）
-- ✅ 响应式设计（移动端友好）
-- ✅ 暗色模式支持
-- ✅ 代码高亮
-- ✅ Mermaid 图表支持
-- ✅ 搜索功能
-- ✅ TypeScript 类型检查
+`npm run write-translations -- --locale zh-CN` 提取界面翻译消息，**不会**翻译 Markdown 正文或自动生成完整中文页面。
 
-## 📝 添加新内容
+## 配置与发布
 
-### 添加文档
+| 修改内容 | 文件或目录 |
+| --- | --- |
+| 网站 URL、版本标签、语言、导航及页脚结构 | `docusaurus.config.ts` |
+| 文档导航 | `sidebars.ts` |
+| 共享样式 | `src/css/custom.css` |
+| 界面翻译 | `i18n/zh-CN/code.json` 及插件/主题翻译 JSON |
+| 历史发行公告 | `releases/`，目前为两种语言构建共用的英文文章 |
 
-1. 在 `docs/` 目录创建新的 Markdown 文件
-2. 在 `sidebars.ts` 中添加文档引用
+当前文档集面向 **1.0.0 开发版**，不表示 1.0.0 发行产物已经发布。历史发行文章保留原版本。网站私有 package 的 `0.0.0` 版本不是 RocketMQ-Rust 产品版本。
 
-### 添加翻译
-
-```bash
-npm run write-translations -- --locale zh-CN
-```
-
-### 自定义样式
-
-编辑 `src/css/custom.css`
-
-## 🌐 部署
-
-### GitHub Pages
-
-```bash
-npm run deploy
-```
-
-### 其他平台
-
-上传 `build/` 目录到你的服务器或 CDN。
-
-## 🔧 常用命令
-
-```bash
-npm start              # 启动开发服务器
-npm run build          # 构建生产版本
-npm run serve          # 预览生产构建
-npm run typecheck      # TypeScript 类型检查
-npm run write-translations  # 生成翻译文件
-```
-
-## 📚 文档分类
-
-- Getting Started (3篇)
-- Architecture (3篇)
-- Producer (3篇)
-- Consumer (4篇)
-- Configuration (3篇)
-- FAQ (3篇)
-- Contributing (3篇)
-
-## 🎨 自定义
-
-- 主题颜色: 编辑 `docusaurus.config.ts`
-- 网站样式: 编辑 `src/css/custom.css`
-- 导航栏: 编辑 `docusaurus.config.ts` 中的 `themeConfig.navbar`
-- 页脚: 编辑 `docusaurus.config.ts` 中的 `themeConfig.footer`
-
-## 📖 更多信息
-
-- 完整文档: [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md)
-- Docusaurus 文档: https://docusaurus.io/docs
-- RocketMQ-Rust GitHub: https://github.com/mxsm/rocketmq-rust
+发布使用现有[部署工作流](../.github/workflows/deploy.yml)或有意配置的 `npm run deploy`，与本地预览分开。搜索依赖已配置的外部索引，本地构建不能证明索引已更新。目录职责和路由见[项目结构](./PROJECT_STRUCTURE_zh-CN.md)。

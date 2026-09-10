@@ -45,7 +45,7 @@ cargo run -p rocketmq-broker --bin rocketmq-broker-rust -- -c rocketmq-website/e
 
 ## 路径 B：三个 Controller 与三个 Broker 副本
 
-使用默认 RocksDB 后端构建 Controller；需要原生 RocksDB 工具链和 `protoc`：
+使用默认 RocksDB 后端构建 Controller，并准备 RocksDB 原生依赖。Controller 构建脚本选择 `protoc-bin-vendored`，无需在 `PATH` 中另行安装 `protoc`。Proxy 构建的编译器要求不同，详见 [feature 与平台](../reference/features-platforms.md)。
 
 ```bash
 cargo build -p rocketmq-controller --bin rocketmq-controller-rust

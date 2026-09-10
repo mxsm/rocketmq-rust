@@ -723,10 +723,10 @@
     "message": "生产与消费"
   },
   "docs.development.notice": {
-    "message": "Next 文档描述开发源码。部署发行产物时，请查阅对应版本说明。"
+    "message": "本文档面向 RocketMQ-Rust 1.0.0 开发版。搭建时请使用与源码或实际产物匹配的说明。"
   },
   "docs.development.badge": {
-    "message": "开发文档"
+    "message": "1.0.0 开发版"
   },
   "docs.development.dismiss": {
     "message": "关闭开发文档提示"

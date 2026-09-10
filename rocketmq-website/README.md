@@ -61,7 +61,7 @@ Read [the writing guide](DOCUMENTATION.md) before adding a tutorial, design expl
 
 ## Version and release scope
 
-The current documentation is labeled **Next**. The root Cargo source version and the website package version serve different purposes; neither identifies a published downloadable release by itself. Use the project's [GitHub releases](https://github.com/mxsm/rocketmq-rust/releases) for published artifacts and version-specific release information.
+The current documentation is labeled **1.0.0 development**. The root Cargo source version and the website package version serve different purposes; neither identifies a published downloadable release by itself. Use the project's [GitHub releases](https://github.com/mxsm/rocketmq-rust/releases) for published artifacts and version-specific release information.
 
 Do not mix current source APIs with dependency versions copied from an older tutorial. The source tree, examples, and published release instructions must identify which version they describe.
 

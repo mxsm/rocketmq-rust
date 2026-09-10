@@ -55,7 +55,7 @@ To inspect the current client API locally:
 cargo doc -p rocketmq-client-rust --no-deps --open
 ```
 
-This generates documentation for the selected package and feature graph. Add the features your application actually uses, and generate standalone products from their own manifest. Published API documentation may describe a different release from Next.
+This generates documentation for the selected package and feature graph. Add the features your application actually uses, and generate standalone products from their own manifest. Published API documentation may describe a different release from 1.0.0 development.
 
 Import curated public types from the crate root or its documented `api`/`prelude`. Files under implementation modules are not automatically public integration contracts.
 

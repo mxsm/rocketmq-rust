@@ -53,7 +53,7 @@ Separate these questions:
 
 An exported API is not evidence that every runtime path is wired. A workflow file is not evidence that its scenario ran. A Cargo package version is not a release announcement. State an unresolved condition precisely and continue with the facts available.
 
-The current site labels development documentation **Next**. The root source selects Rust 1.95.0 and package version 1.0.0; those values describe the source tree, not a promise that 1.0.0 binaries or crates are published. Link release-specific instructions to the corresponding release, rather than mixing an older crate dependency with current source examples.
+The current site labels development documentation **1.0.0 development**. The root source selects Rust 1.95.0 and package version 1.0.0; those values describe the source tree, not a promise that 1.0.0 binaries or crates are published. Link release-specific instructions to the corresponding release, rather than mixing an older crate dependency with current source examples.
 
 ## Make commands reproducible
 

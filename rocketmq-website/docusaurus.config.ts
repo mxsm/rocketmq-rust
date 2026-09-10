@@ -67,8 +67,8 @@ const config: Config = {
                     editLocalizedFiles: true,
                     versions: {
                         current: {
-                            label: 'Next',
-                            badge: false,
+                            label: '1.0.0 (development)',
+                            badge: true,
                         },
                     },
                 },

@@ -20,7 +20,7 @@ Broker、NameServer、Controller、Proxy 和 RocketMQ MCP 使用统一的
 
 不同服务的 feature 名称并不完全相同，必须以对应服务的 `Cargo.toml` 为准：
 
-| Service | 便捷 feature | 信号及导出器 feature |
+| 服务 | 便捷 feature | 信号及导出器 feature |
 | --- | --- | --- |
 | Broker | `observability` 启用 metrics 和 traces | `otel-metrics`、`otlp-metrics`、`prometheus`、`metrics-prometheus`、`otel-traces`、`otlp-traces`、`otel-logs`、`otlp-logs` |
 | NameServer | `observability` 启用 metrics 和 traces | `otel-metrics`、`otlp-metrics`、`otel-traces`、`otlp-traces`、`otel-logs`、`otlp-logs` |
@@ -32,8 +32,8 @@ Broker、NameServer、Controller、Proxy 和 RocketMQ MCP 使用统一的
 仍然需要在构建时显式选择。例如：
 
 ```bash
-cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features "otlp-metrics,otlp-traces,otlp-logs"
-cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features prometheus
+cargo build -p rocketmq-broker --bin rocketmq-broker-rust --features "otlp-metrics,otlp-traces,otlp-logs"
+cargo build -p rocketmq-broker --bin rocketmq-broker-rust --features prometheus
 ```
 
 仅启用 Cargo feature 不会自动启用导出；运行时选择导出器也无法加入编译时未包含的代码。
@@ -51,9 +51,9 @@ cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features prometheus
 缺失的环境变量不会产生默认覆盖。例如，未设置
 `ROCKETMQ_METRICS_ENABLED` 时，文件中的 metrics 导出器保持有效。
 
-## 完整 TOML 示例
+## TOML 观测配置段
 
-所有文件字段都使用 camelCase。空映射是有效配置，可避免把凭据写入普通配置文件。
+所有文件字段都使用 camelCase。将以下根级配置段合并到已有的规范 Broker TOML 中，保留原有 `broker` 与 `store` 配置。这是观测配置节选，不是完整部署文件。空映射可避免将凭据写入共享示例。
 
 ```toml
 [observability]
@@ -93,47 +93,11 @@ port = 5557
 path = "/metrics"
 ```
 
-## 完整 YAML 示例
+## 配置文件格式
 
-Broker 的规范 YAML 结构使用相同的嵌套 schema：
+1.0.0 Broker 可执行程序通过 `--config-format toml|properties` 接受规范 TOML 或 Java properties，不加载 YAML。请将上述 TOML 配置段与 [Broker 配置](./broker-config.md)配套使用。共享 Rust 数据结构的 YAML 表达，包括旧 `broker_observability.yaml` 示例，不能直接传给当前 Broker 启动器。
 
-```yaml
-observability:
-  environment: production
-  serviceInstanceId: broker-a-0
-  resourceAttributes:
-    deployment.zone: az-a
-    deployment.rack: rack-1
-  metrics:
-    exporter: otlp_grpc
-    exportIntervalMillis: 5000
-    exportTimeoutMillis: 3000
-    cardinalityLimit: 10000
-    sampleRatio: 1.0
-    topicLabelEnabled: true
-    consumerGroupLabelEnabled: true
-  traces:
-    exporter: otlp_grpc
-    sampleRatio: 0.01
-    propagateContext: true
-    recordMessageId: false
-    recordMessageKeys: false
-    recordBodySize: true
-  logs:
-    exporter: otlp_grpc
-  otlp:
-    endpoint: http://otel-collector.observability.svc.cluster.local:4317
-    protocol: grpc
-    headers: {}
-    timeoutMillis: 3000
-  prometheus:
-    host: 127.0.0.1
-    port: 5557
-    path: /metrics
-```
-
-可复制的 Broker 示例位于
-`rocketmq-example/examples/broker_observability.yaml`。
+Kubernetes values、Collector 和 Prometheus 配置各自使用对应工具的 YAML 格式，不能与 Broker 服务文件互换。完整本地集成流程见[监控指南](../operations/monitoring.md)。
 
 ## 导出器和文件字段
 
@@ -217,7 +181,7 @@ metrics 标签。
 - 主题和消费者组标签受 `cardinalityLimit` 限制；超出限制的值会归一化为
   `other`。
 - Trace 的消息 ID 和 key 默认关闭，因为它们具有高基数。消息体大小只记录大小。
-- W3C `traceparent`、`tracestate` 和 `baggage` 属性用于传递 trace context。
+- 消息传播使用小写 W3C 属性键 `traceparent` 与 `tracestate`，Rust 常量 `TRACEPARENT` 和 `TRACESTATE` 的值对应这些键。内置传播器不会将任意 OpenTelemetry `baggage` 写入消息属性；`traceparent` 最多允许 128 字节，`tracestate` 最多允许 512 字节。
 - 直接 Prometheus endpoint 默认为
   `http://127.0.0.1:5557/metrics`。
 
@@ -231,3 +195,5 @@ prometheus --config.file=distribution/config/prometheus-observability.yaml
 ## 运维阅读入口
 
 本页保留配置参考。安装采集器、解释指标和调查信号缺失，请阅读[监控](../operations/monitoring.md)；所有权和关闭语义见[错误与可观测性设计](../architecture/errors-observability.md)。
+
+来源：[Broker 文件加载](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/src/bin/broker_bootstrap_server.rs)、[共享配置解析器](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-observability/src/resolver.rs)、[消息上下文传播](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-observability/src/propagation.rs)。

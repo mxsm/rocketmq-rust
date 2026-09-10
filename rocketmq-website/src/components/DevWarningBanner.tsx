@@ -138,7 +138,7 @@ export default function DevWarningBanner(): React.JSX.Element | null {
             letterSpacing: '0.02em',
           }}
         >
-          {translate({id: 'docs.development.notice', message: 'Next documents the development source. Check release-specific instructions when deploying an artifact.'})}
+          {translate({id: 'docs.development.notice', message: 'This documentation describes RocketMQ-Rust 1.0.0 development. Match deployment instructions to the source or artifact you use.'})}
         </span>
 
         {/* Status badge */}
@@ -163,7 +163,7 @@ export default function DevWarningBanner(): React.JSX.Element | null {
             backdropFilter: 'blur(8px)',
           }}
         >
-          {translate({id: 'docs.development.badge', message: 'Development'})}
+          {translate({id: 'docs.development.badge', message: '1.0.0 development'})}
         </span>
 
         {/* Close button */}

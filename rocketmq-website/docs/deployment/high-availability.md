@@ -45,7 +45,7 @@ This path has no Controller election service. Stopping the primary does not auto
 
 ## Path B: three Controllers and three Broker replicas
 
-Build Controller with its default RocksDB backend; the native RocksDB toolchain and `protoc` must be available:
+Build Controller with its default RocksDB backend and the native RocksDB prerequisites. Controller's build script selects `protoc-bin-vendored`, so it does not require a separately installed `protoc` on `PATH`. Proxy builds have a different compiler requirement; see [build features and platforms](../reference/features-platforms.md).
 
 ```bash
 cargo build -p rocketmq-controller --bin rocketmq-controller-rust

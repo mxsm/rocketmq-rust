@@ -33,8 +33,8 @@ In particular, Controller does not define an `observability` convenience
 feature. OTLP logs remain an explicit build-time choice. Examples:
 
 ```bash
-cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features "otlp-metrics,otlp-traces,otlp-logs"
-cargo run -p rocketmq-broker --bin rocketmq-broker-rust --features prometheus
+cargo build -p rocketmq-broker --bin rocketmq-broker-rust --features "otlp-metrics,otlp-traces,otlp-logs"
+cargo build -p rocketmq-broker --bin rocketmq-broker-rust --features prometheus
 ```
 
 Enabling a Cargo feature does not enable export by itself, and selecting an
@@ -54,10 +54,9 @@ A missing environment variable never supplies a fallback override. For example,
 if `ROCKETMQ_METRICS_ENABLED` is absent, the file's metrics exporter remains
 effective.
 
-## Complete TOML example
+## TOML observability section
 
-All file keys use camelCase. Empty maps are valid and avoid putting credentials
-in an ordinary configuration file.
+All file keys use camelCase. Merge these root-level sections into an existing canonical Broker TOML, preserving its `broker` and `store` configuration. This is an observability excerpt, not a complete deployment file. Empty maps avoid putting credentials in a shared example.
 
 ```toml
 [observability]
@@ -97,47 +96,11 @@ port = 5557
 path = "/metrics"
 ```
 
-## Complete YAML example
+## Configuration file formats
 
-Broker's canonical YAML shape is the same nested schema:
+The 1.0.0 Broker executable accepts canonical TOML or Java properties through `--config-format toml|properties`; it does not load YAML. Use the TOML section above with [Broker configuration](./broker-config.md). A YAML representation of the shared Rust data structure, including the older `broker_observability.yaml` example, is not a file that can be passed to the current Broker launcher.
 
-```yaml
-observability:
-  environment: production
-  serviceInstanceId: broker-a-0
-  resourceAttributes:
-    deployment.zone: az-a
-    deployment.rack: rack-1
-  metrics:
-    exporter: otlp_grpc
-    exportIntervalMillis: 5000
-    exportTimeoutMillis: 3000
-    cardinalityLimit: 10000
-    sampleRatio: 1.0
-    topicLabelEnabled: true
-    consumerGroupLabelEnabled: true
-  traces:
-    exporter: otlp_grpc
-    sampleRatio: 0.01
-    propagateContext: true
-    recordMessageId: false
-    recordMessageKeys: false
-    recordBodySize: true
-  logs:
-    exporter: otlp_grpc
-  otlp:
-    endpoint: http://otel-collector.observability.svc.cluster.local:4317
-    protocol: grpc
-    headers: {}
-    timeoutMillis: 3000
-  prometheus:
-    host: 127.0.0.1
-    port: 5557
-    path: /metrics
-```
-
-The copyable Broker example is
-`rocketmq-example/examples/broker_observability.yaml`.
+Kubernetes values and collector/Prometheus configuration use their own YAML formats. They configure those tools; they are not interchangeable with the Broker service file. See [monitoring](../operations/monitoring.md) for a complete local integration procedure.
 
 ## Exporters and file fields
 
@@ -233,8 +196,7 @@ metric labels.
   values are normalized to `other`.
 - Trace message IDs and keys are disabled by default because they are
   high-cardinality. Body-size recording stores only the size.
-- W3C `traceparent`, `tracestate`, and `baggage` properties carry trace
-  context.
+- Message propagation uses the lowercase W3C property keys `traceparent` and `tracestate`. The Rust constants `TRACEPARENT` and `TRACESTATE` resolve to those keys. The built-in propagator excludes arbitrary OpenTelemetry `baggage` from message properties and admits at most 128 bytes for `traceparent` and 512 bytes for `tracestate`.
 - The direct Prometheus endpoint defaults to
   `http://127.0.0.1:5557/metrics`.
 
@@ -248,3 +210,5 @@ prometheus --config.file=distribution/config/prometheus-observability.yaml
 ## Operational context
 
 This page is the configuration reference. Use [monitoring](../operations/monitoring.md) to install collectors, interpret metrics and investigate missing signals; [error and observability design](../architecture/errors-observability.md) explains ownership and shutdown.
+
+Sources: [Broker file loading](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/src/bin/broker_bootstrap_server.rs), [shared configuration resolver](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-observability/src/resolver.rs), [message propagation](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-observability/src/propagation.rs).

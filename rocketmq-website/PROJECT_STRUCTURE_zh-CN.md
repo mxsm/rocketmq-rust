@@ -1,311 +1,58 @@
 # RocketMQ-Rust 网站项目结构
 
-## 项目概述
+[English](./PROJECT_STRUCTURE.md) · [搭建说明](./README-zh_cn.md) · [写作指南](./DOCUMENTATION-zh-CN.md)
 
-这是 RocketMQ-Rust 的官方文档网站，使用 Docusaurus v3.9.2 构建，支持国际化（英文和中文），采用 React 18 + TypeScript 技术栈。
+网站是独立的 Docusaurus 3.9 / React 18 / TypeScript 工程，当前文档描述 **RocketMQ-Rust 1.0.0 开发版**。`.nvmrc` 选择 Node **24.13.0**，`package-lock.json` 记录实际解析的 Node 依赖。Cargo 构建不能验证网站。
 
-## 目录结构
+## 目录职责
 
-```
-rocketmq-website/
-├── docusaurus.config.ts           # Docusaurus 主配置文件
-├── sidebars.ts                    # 文档侧边栏配置
-├── package.json                   # 项目依赖管理
-├── tsconfig.json                  # TypeScript 配置
-├── README.md                      # 项目描述
-├── QUICKSTART.md                  # 快速开始指南（英文）
-├── QUICKSTART_zh-CN.md            # 快速开始指南（中文）
-├── PROJECT_STRUCTURE.md           # 项目结构（英文）
-├── PROJECT_STRUCTURE_zh-CN.md     # 项目结构（中文）
-├── .gitignore                     # Git 忽略文件
-├── .nvmrc                         # Node.js 版本管理
-│
-├── docs/                          # 文档内容目录
-│   ├── author.md                  # 作者信息
-│   ├── introduction.md            # 项目介绍
-│   │
-│   ├── getting-started/           # 快速开始
-│   │   ├── _category_.json        # 分类配置
-│   │   ├── installation.md        # 安装指南
-│   │   ├── quick-start.md         # 快速开始
-│   │   └── basic-concepts.md      # 基本概念
-│   │
-│   ├── architecture/              # 架构文档
-│   │   ├── _category_.json        # 分类配置
-│   │   ├── overview.md            # 架构概览
-│   │   ├── message-model.md       # 消息模型
-│   │   └── storage.md             # 存储机制
-│   │
-│   ├── producer/                  # 生产者文档
-│   │   ├── _category_.json        # 分类配置
-│   │   ├── overview.md            # 生产者概览
-│   │   ├── sending-messages.md    # 发送消息
-│   │   └── transaction-messages.md # 事务消息
-│   │
-│   ├── consumer/                  # 消费者文档
-│   │   ├── _category_.json        # 分类配置
-│   │   ├── overview.md            # 消费者概览
-│   │   ├── push-consumer.md       # 推送消费者
-│   │   ├── pull-consumer.md       # 拉取消费者
-│   │   └── message-filtering.md   # 消息过滤
-│   │
-│   ├── configuration/             # 配置文档
-│   │   ├── _category_.json        # 分类配置
-│   │   ├── broker-config.md       # Broker 配置
-│   │   ├── client-config.md       # 客户端配置
-│   │   └── performance-tuning.md  # 性能调优
-│   │
-│   ├── faq/                       # 常见问题
-│   │   ├── _category_.json        # 分类配置
-│   │   ├── common-issues.md       # 常见问题
-│   │   ├── performance.md         # 性能问题
-│   │   └── troubleshooting.md     # 故障排除
-│   │
-│   └── contributing/              # 贡献指南
-│       ├── _category_.json        # 分类配置
-│       ├── overview.md            # 贡献概览
-│       ├── development-guide.md   # 开发指南
-│       └── coding-standards.md    # 编码规范
-│
-├── releases/                      # 版本发布说明目录
-│   ├── authors.yml                # 发布作者信息
-│   ├── 2024-01-28-v0.1.0.md       # v0.1.0 发布说明
-│   ├── 2024-06-05-v0.2.0.md       # v0.2.0 发布说明
-│   ├── 2024-11-17-v0.3.0.md       # v0.3.0 发布说明
-│   ├── 2025-02-16-v0.4.0.md       # v0.4.0 发布说明
-│   ├── 2025-05-19-v0.5.0.md       # v0.5.0 发布说明
-│   ├── 2025-08-19-v0.6.0.md       # v0.6.0 发布说明
-│   └── 2025-12-07-v0.7.0.md       # v0.7.0 发布说明
-│
-├── src/                           # 源代码目录
-│   ├── components/                # React 组件
-│   │   ├── HomepageFeatures.tsx   # 首页特性组件
-│   │   ├── HomepageFeatures.module.css
-│   │   ├── DeveloperStyleHero.tsx # 开发者风格的 Hero 区块
-│   │   ├── AnnouncementBanner.tsx # 公告横幅组件
-│   │   ├── DevWarningBanner.tsx   # 开发环境警告横幅
-│   │   ├── DevWarningBannerWrapper.tsx # 横幅包装器
-│   │   ├── OrbBackground.tsx      # 球体背景效果
-│   │   ├── OrbBackground.centered.tsx
-│   │   ├── OrbBackground.global.tsx
-│   │   ├── OrbBackground.module.css
-│   │   ├── OrbBackground.test.tsx # 球体背景测试
-│   │   ├── OrbBackground.test.module.css
-│   │   └── SimpleOrb.tsx          # 简单球体组件
-│   │
-│   ├── pages/                     # 页面组件
-│   │   ├── index.tsx              # 首页
-│   │   └── index.module.css
-│   │
-│   ├── css/                       # 样式文件
-│   │   └── custom.css             # 自定义样式
-│   │
-│   └── theme/                     # 主题定制
-│
-├── static/                        # 静态资源
-│   ├── CNAME                      # 自定义域名配置
-│   ├── google0e604df170413726.html # Google 验证文件
-│   ├── img/                       # 图片资源
-│   └── js/                        # JavaScript 文件
-│
-├── i18n/                          # 国际化文件
-│   ├── en/                        # 英文翻译
-│   │   ├── code.json              # UI 文本翻译
-│   │   ├── docusaurus-theme-classic.json
-│   │   ├── docusaurus-plugin-content-pages/
-│   │   └── docusaurus-theme-classic/
-│   │
-│   └── zh-CN/                     # 中文翻译
-│       ├── code.json              # UI 文本翻译
-│       ├── docusaurus-theme-classic.json
-│       ├── docusaurus-plugin-content-docs/  # 翻译后的文档
-│       ├── docusaurus-plugin-content-pages/
-│       └── docusaurus-theme-classic/
-│           ├── navbar.json        # 导航栏翻译
-│           └── footer.json        # 页脚翻译
-│
-└── .docusaurus/                   # 构建输出（自动生成）
-    ├── client-modules.js
-    ├── routes.js
-    └── ... (其他构建产物)
-```
+| 路径 | 职责 |
+| --- | --- |
+| `docs/` | 当前英文技术正文 |
+| `i18n/zh-CN/docusaurus-plugin-content-docs/current/` | 同 ID 的完整中文正文 |
+| `i18n/zh-CN/docusaurus-plugin-content-docs/current.json` | 中文版本及侧栏分类标签 |
+| `releases/` | 使用博客插件的英文历史发行文章，目前由两种语言构建共用 |
+| `src/pages/` | 独立于文档侧栏的自定义页面 |
+| `src/components/`、`src/theme/`、`src/css/` | 组件、主题覆盖及样式 |
+| `static/` | 复制到网站的静态图片与文件 |
+| `examples/` | 首条消息独立 Rust 应用及部署配置示例 |
+| `docusaurus.config.ts` | 网站 URL、语言、docs/blog 插件、版本标签与主题配置 |
+| `sidebars.ts` | 显式技术文档导航 |
+| `i18n/zh-CN/code.json`、`i18n/zh-CN/docusaurus-theme-classic/` | 界面、导航栏及页脚翻译 |
+| `.docusaurus/`、`build/`、`node_modules/` | 生成元数据、静态产物及安装依赖，不是作者维护的正文 |
 
-## 核心配置文件
+## 技术内容组织
 
-### 1. docusaurus.config.ts
+主体文档方案包含 79 篇逻辑页面，每篇都有完整英文与中文文件。旧入口及发布索引是额外补充页面。
 
-Docusaurus 主配置文件，包含：
-- 网站元数据（标题、描述、URL）
-- 主题配置（导航栏、页脚）
-- 文档配置
-- 国际化配置
-- 插件配置
+| 分类 | 内容 |
+| --- | --- |
+| Introduction 与 overview | 项目身份、能力及发行范围 |
+| `getting-started/` | 概念、安装、本地服务及首条消息 |
+| `architecture/` | 模块所有权、消息流程、运行时、存储、路由、HA、Proxy、安全及设计取舍 |
+| `producer/`、`consumer/`、`guides/` | API、生命周期、重试、过滤、顺序、事务、延迟召回及请求应答 |
+| `deployment/`、`operations/` | 拓扑、安全、资源准备、监控、诊断、维护及恢复 |
+| `configuration/`、`reference/`、`migration/` | 字段与默认值、构建特性、错误、CLI、协议/API 契约及迁移 |
+| `ecosystem/` | Web/原生 Dashboard、只读 MCP、MCP Control 及 AI SRE |
+| `contributing/` | 开发、编码、文档、测试及发行工程 |
+| `faq/`、`author.md`、`release-notes/` | 保留的补充 URL，以及指向持续维护技术正文和发行内容的链接 |
 
-### 2. sidebars.ts
+实际顺序以 `sidebars.ts` 为准。`_category_.json` 不能代替显式侧栏条目。新页面需要两种语言正文，以及可到达的导航或交叉引用入口。
 
-定义文档的侧边栏结构，将文档组织为以下类别：
-- 快速开始
-- 架构
-- 生产者
-- 消费者
-- 配置
-- 常见问题
-- 贡献指南
+## 路由、版本与翻译
 
-### 3. package.json
+英文技术页面使用 `/docs/<route>`，中文使用 `/zh-CN/docs/<route>`。默认路由由文件路径形成，但必须保留已有显式 ID/slug。发行历史使用 `/releases`，中文构建使用带语言前缀的路由。当前没有中文博客正文目录，因此中文路由不代表历史文章已经翻译；双语技术发布索引在 `docs/release-notes/` 下单独维护。`baseUrl`、尾斜杠行为及生产 URL 统一配置。
 
-定义项目依赖和脚本：
-- Docusaurus 核心依赖
-- React 和 TypeScript
-- 构建脚本（start、build、serve）
+当前文档标签为 `1.0.0 (development)`，中文为 `1.0.0（开发版）`，在技术页面中可见。更改标签不会创建已发布的 1.0.0 快照。保留现有 `current/` 翻译路径；这套开发文档无需另建 `versioned_docs/` 或 `versions.json`。
 
-## 技术栈
+界面消息提取与正文翻译是不同工作。`npm run write-translations -- --locale zh-CN` 提取消息；作者仍需维护完整中文 Markdown 和图示标签。历史发行正文保留原先描述的版本。
 
-### 框架和库
-- **Docusaurus**: v3.9.2（静态网站生成器）
-- **React**: v18.3.1（UI 框架）
-- **TypeScript**: v5.3.3（类型系统）
-- **Prism**: v2.3.0（代码高亮）
+搜索通过主题的外部 Algolia 集成配置，本地正文构建不会更新远端爬虫或索引。源码编辑链接使用 `editLocalizedFiles: true`，使中文页面打开对应中文源文件。
 
-### 开发工具
-- **Node.js**: 18.0+
-- **npm**: 9.0+
+## 构建与维护
 
-## 文档结构
+依赖安装和本地预览见[快速开始](./QUICKSTART_zh-CN.md)。`npm run build` 渲染两种语言，`npm run serve` 预览结果。检查受影响路由、代码块、图示和链接，修复内容变更引入的问题。生成产物不纳入源码提交。
 
-### 文档分类
+首条消息示例拥有独立 Cargo manifest 和路径依赖。部署示例是服务输入，不是 Node 应用配置。可执行行为变化时，在所属运行环境中验证对应示例；Docusaurus 构建只验证网站渲染。
 
-1. **快速开始**（3 篇）
-   - 安装：安装指南
-   - 快速开始：快速入门教程
-   - 基本概念：核心概念介绍
-
-2. **架构**（3 篇）
-   - 概览：系统架构概览
-   - 消息模型：消息模型详情
-   - 存储：存储机制
-
-3. **生产者**（3 篇）
-   - 概览：生产者概览
-   - 发送消息：消息发送
-   - 事务消息：事务消息
-
-4. **消费者**（4 篇）
-   - 概览：消费者概览
-   - 推送消费者：推送消费者
-   - 拉取消费者：拉取消费者
-   - 消息过滤：消息过滤
-
-5. **配置**（3 篇）
-   - Broker 配置：Broker 配置
-   - 客户端配置：客户端配置
-   - 性能调优：性能调优
-
-6. **常见问题**（3 篇）
-   - 常见问题：常见问题
-   - 性能：性能问题
-   - 故障排除：故障排除
-
-7. **贡献指南**（3 篇）
-   - 概览：贡献概览
-   - 开发指南：开发指南
-   - 编码规范：编码规范
-
-## 国际化（i18n）
-
-### 支持的语言
-- **en**（英文）：默认语言
-- **zh-CN**（简体中文）：保留以供扩展
-
-### 翻译文件位置
-- `i18n/en/`：英文翻译
-- `i18n/zh-CN/`：中文翻译
-
-### 翻译内容
-- 主题 UI 文本（导航栏、页脚等）
-- 文档内容
-- 首页内容
-
-## 自定义功能
-
-### 1. 首页（着陆页）
-- 渐变背景设计
-- 功能展示（6 个功能卡片）
-- 快速开始按钮
-- GitHub 链接
-
-### 2. 自定义样式
-- 主题颜色自定义
-- 暗色模式优化
-- 响应式设计
-- 自定义滚动条
-
-### 3. Mermaid 图表支持
-- 架构图
-- 流程图
-- 时序图
-
-## 构建命令
-
-```bash
-# 安装依赖
-npm install
-
-# 启动开发服务器
-npm start
-
-# 构建生产版本
-npm run build
-
-# 预览生产构建
-npm run serve
-
-# 生成翻译文件
-npm run write-translations
-
-# 类型检查
-npm run typecheck
-```
-
-## 部署
-
-### GitHub Pages
-```bash
-npm run deploy
-```
-
-### 其他平台
-构建后将 `build/` 目录部署到任何静态网站托管服务（Nginx、CDN 等）。
-
-## 扩展建议
-
-### 1. 多语言扩展
-- 添加更多语言版本（日语、韩语等）
-- 使用 `npm run write-translations -- --locale <locale>` 生成翻译模板
-
-### 2. 多版本文档
-- 使用 Docusaurus 版本控制功能维护多个文档版本
-- 配置 `versions.json` 管理版本
-
-### 3. 博客功能
-- 在 `docusaurus.config.ts` 中启用博客功能
-- 创建 `blog/` 目录存储博客文章
-
-### 4. 搜索功能
-- 集成 Algolia DocSearch
-- 或使用本地搜索插件
-
-## 维护建议
-
-1. **定期更新依赖**：`npm update`
-2. **检查构建警告**：确保 `npm run build` 无警告
-3. **测试多语言**：切换语言验证翻译
-4. **性能优化**：定期检查 Lighthouse 评分
-5. **备份数据**：定期备份文档内容
-
-## 资源链接
-
-- [Docusaurus 官方文档](https://docusaurus.io/docs)
-- [React 官方文档](https://react.dev)
-- [TypeScript 官方文档](https://www.typescriptlang.org/docs)
-- [RocketMQ-Rust GitHub](https://github.com/mxsm/rocketmq-rust)
+发布遵循现有[部署工作流](../.github/workflows/deploy.yml)。静态托管、远端搜索索引与 Rust 产品发行均独立于网站编辑。

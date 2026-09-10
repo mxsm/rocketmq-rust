@@ -59,7 +59,7 @@ Control Plane 配置默认禁用网络模型调用，部署可以显式启用。
 
 ## 受监督执行已实现，但逐项启用
 
-当前 Control Plane 代码持久化方案、策略/Critic 评估、人工审批和执行协调。Execution Agent 启动注册表按条件注册已审阅处理器。本地指南较早的“P3-05 前禁用”边界描述了隔离阶段前提，不能解释为当前源码没有执行实现。实际可用性由当前启动配置及注册处理器决定。
+在 1.0.0 开发版源码树中，Control Plane 代码持久化方案、策略/Critic 评估、人工审批和执行协调。Execution Agent 启动注册表按条件注册类型化处理器。实际可用性取决于启动配置与已注册处理器；该产品仍是独立管理版本的 workspace。
 
 所有 Agent 动作开关默认 false。支持配置的处理器类别为：
 
@@ -88,6 +88,6 @@ Control Plane 配置默认禁用网络模型调用，部署可以显式启用。
 - 普通 Dashboard 仍是直接资源管理产品。SRE 拥有跨信号调查和受治理工作流，不共享凭据与会话。
 - 编译、描述符注册、配置启用和真实场景成功是不同证据。使用观察到的能力/覆盖状态，不声明全部已定义动作都通过生产验证。
 
-本文架构依据当前清单、服务注册和组件文档，未为此页面执行真实 SRE 诊断、模型调用或目标执行。文档写作没有指纹或审批门禁；产品自身策略、权限及审计契约仍属于技术设计。
+本文架构描述源码契约与配置后的能力边界。应根据所选部署的实际观测结果验证诊断、模型集成及已启用的目标操作。编译成功和处理器注册本身不能证明端到端执行或恢复行为。
 
 来源：[工作区](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-sre/Cargo.toml)、[Control Plane](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/README.md)、[Connector](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-connector/README.md)、[Executor](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/README.md)和 [Agent 注册](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/api.rs)。

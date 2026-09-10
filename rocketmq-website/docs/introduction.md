@@ -32,7 +32,7 @@ The system is modular at the library level as well. Message domain types belong 
 
 ## Version and capability scope
 
-These **Next** pages describe the current source tree. The root package version is 1.0.0 and its toolchain is Rust 1.95.0. Neither value proves that an identically numbered downloadable artifact has been published. Use [GitHub releases](https://github.com/mxsm/rocketmq-rust/releases) for release-specific artifacts, and keep the corresponding release's configuration and APIs together.
+These **1.0.0 development** pages describe the current source tree. The root package version is 1.0.0 and its toolchain is Rust 1.95.0. Neither value proves that an identically numbered downloadable artifact has been published. Use [GitHub releases](https://github.com/mxsm/rocketmq-rust/releases) for release-specific artifacts, and keep the corresponding release's configuration and APIs together.
 
 The [capability matrix](overview/capability-matrix.md) separates implementation from build features, runtime configuration, and deployment limits. An available request handler does not establish that every storage backend or topology supports the same behavior.
 

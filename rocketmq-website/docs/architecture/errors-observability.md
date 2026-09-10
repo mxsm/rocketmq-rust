@@ -57,7 +57,7 @@ The observability crate has no default features. Selecting an exporter at runtim
 
 The client feature `observability` enables traces; `observability-metrics` enables metrics. Client OTLP metrics additionally need `rocketmq-observability/otlp-metrics` in the graph. Do not copy a same-named feature between crates without checking what it forwards.
 
-Use low-cardinality outcomes, service roles, and stable operation names as metric labels. Message IDs, keys, receipt handles, arbitrary addresses, and unbounded Topic/group names can multiply series. Trace context properties use `TRACEPARENT` and `TRACESTATE`; propagation does not replace a message's business identity or authorization.
+Use low-cardinality outcomes, service roles, and stable operation names as metric labels. Message IDs, keys, receipt handles, arbitrary addresses, and unbounded Topic/group names can multiply series. Trace context uses the lowercase message property keys `traceparent` and `tracestate`; `TRACEPARENT` and `TRACESTATE` are the Rust constant names. The built-in message propagator excludes arbitrary OpenTelemetry `baggage`. Propagation does not replace a message's business identity or authorization.
 
 ## Operational interpretation
 

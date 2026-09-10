@@ -49,11 +49,11 @@ RocketMQ-Rust 包含的产品多于一次核心发行。使用根 Cargo manifest
 
 制品使用方式见[容器](../deployment/containers.md)和 [Kubernetes](../deployment/kubernetes.md)。保持镜像 tag、chart values、服务二进制与相应文档配套，不用未经核实的“latest”制品替代指定发行版。
 
-## 版本号与 Next 文档
+## 版本号与 1.0.0 开发版 文档
 
 根工作区当前声明版本 `1.0.0`，独立应用可以声明自身版本，例如 `0.1.0`。这些是源码 manifest 数值，不能据此推断发布日期、支持周期或跨产品同步发布。
 
-Docusaurus 当前文档标记为 **Next**，提供英文和 `zh-CN` 内容。Next 描述当前源码系列，可能包含晚于已发布制品的行为。中文页是相同页面 ID 的完整对应正文，不是另一产品版本。
+Docusaurus 当前文档标记为 **1.0.0 开发版**，提供英文和 `zh-CN` 内容。1.0.0 开发版 描述当前源码系列，可能包含晚于已发布制品的行为。中文页是相同页面 ID 的完整对应正文，不是另一产品版本。
 
 定位事故或兼容性问题时，记录实际二进制/包版本、构建 feature、部署模式及相关配置，再核对匹配的源码/API 文档。[能力矩阵](./capability-matrix.md)和[兼容性参考](../reference/protocol-compatibility.md)解释了为何仅有版本字符串不足以判断行为。
 

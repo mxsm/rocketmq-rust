@@ -8,7 +8,7 @@ Use this page to decide which component and configuration belong in your system.
 
 “Implemented” means a concrete source path exists. “Enabled” additionally requires the right build features, runtime settings, credentials, and backend. “Exercised” describes a particular test or deployment scenario. “Released” means a published artifact contains it. These are different claims.
 
-The repository's `v1-capability-manifest.json` records a defined 1.0 core scope, with profile-specific implementation and evidence fields. Its recorded `component` or `interop` state is not a claim that this documentation task reran those scenarios, and the manifest is not the complete capability catalog for Dashboard and AI products.
+The repository's `v1-capability-manifest.json` records the 1.0.0 core scope, with profile-specific implementation and evidence fields. Its `component` or `interop` state applies to the referenced scenario and profile; it does not establish the same behavior for a different deployment. The manifest is not the complete capability catalog for Dashboard and AI products.
 
 ## Core services and clients
 

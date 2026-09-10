@@ -32,7 +32,7 @@ RocketMQ-Rust 使用 Rust 实现消息服务和客户端 API。应用将消息�
 
 ## 版本与能力范围
 
-这些 **Next** 页面描述当前源码。根包版本为 1.0.0，工具链为 Rust 1.95.0；任一数值都不能证明已经发布同版本下载包。发行物以 [GitHub releases](https://github.com/mxsm/rocketmq-rust/releases) 为准，同一发行版的配置和 API 应配套使用。
+这些 **1.0.0 开发版** 页面描述当前源码。根包版本为 1.0.0，工具链为 Rust 1.95.0；任一数值都不能证明已经发布同版本下载包。发行物以 [GitHub releases](https://github.com/mxsm/rocketmq-rust/releases) 为准，同一发行版的配置和 API 应配套使用。
 
 [能力矩阵](overview/capability-matrix.md)分别说明实现、编译 feature、运行配置和部署限制。存在请求处理器，不代表每种存储后端或拓扑都具有相同语义。
 
