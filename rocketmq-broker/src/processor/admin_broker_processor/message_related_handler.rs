@@ -488,12 +488,15 @@ fn cq_ext_unit_response_serialize_error(error: serde_json::Error) -> rocketmq_er
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as StdError;
     use std::sync::Arc;
     use std::time::SystemTime;
 
     use crate::config::broker_config::BrokerConfig;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
+    use rocketmq_error::fields;
+    use rocketmq_error::ViewValueRef;
     use rocketmq_model::common::config::TopicConfig;
     use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
     use rocketmq_model::common::message::MessageConst;
@@ -559,7 +562,21 @@ mod tests {
         let error = cq_ext_unit_response_serialize_error(serde_error);
 
         assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_RESPONSE_FAILED);
-        assert!(error.to_string().contains("query_consume_queue.cq_ext_unit"));
+        let diagnostic = error
+            .diagnostic_view()
+            .expect("response error context must match its descriptor");
+        assert_eq!(
+            diagnostic
+                .fields()
+                .find(|field| field.name() == fields::OPERATION_DIAGNOSTIC.schema().name())
+                .map(|field| field.value()),
+            Some(ViewValueRef::Text("query_consume_queue.cq_ext_unit"))
+        );
+        assert!(!error.to_string().contains("query_consume_queue.cq_ext_unit"));
+        assert!(StdError::source(error.as_ref())
+            .expect("response error must preserve the JSON source")
+            .downcast_ref::<serde_json::Error>()
+            .is_some());
     }
 
     #[tokio::test]

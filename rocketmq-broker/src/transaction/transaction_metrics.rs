@@ -220,6 +220,9 @@ mod tests {
     use std::error::Error as StdError;
     use std::fs;
 
+    use rocketmq_error::fields;
+    use rocketmq_error::ViewValueRef;
+
     use super::read_checkpoint;
 
     #[test]
@@ -230,8 +233,26 @@ mod tests {
 
         let error = read_checkpoint(&checkpoint_path).expect_err("invalid checkpoint must fail to decode");
 
-        assert_eq!(error.to_string(), "deserialize failed (JSON)");
-        assert_eq!(error.descriptor().public_message(), "Serialization failed");
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
+        assert_eq!(error.to_string(), "core.serialization.failed: Serialization failed");
+        let public = error
+            .public_view()
+            .expect("checkpoint error context must match its descriptor");
+        assert_eq!(public.message(), "Serialization failed");
+        assert!(public.fields().next().is_none());
+
+        let diagnostic = error
+            .diagnostic_view()
+            .expect("checkpoint diagnostics must match the descriptor");
+        for (key, expected) in [(fields::OPERATION_DIAGNOSTIC, "deserialize"), (fields::FORMAT, "JSON")] {
+            assert_eq!(
+                diagnostic
+                    .fields()
+                    .find(|field| field.name() == key.schema().name())
+                    .map(|field| field.value()),
+                Some(ViewValueRef::Text(expected))
+            );
+        }
         assert!(StdError::source(error.as_ref())
             .expect("outer error must preserve the source")
             .downcast_ref::<serde_json::Error>()

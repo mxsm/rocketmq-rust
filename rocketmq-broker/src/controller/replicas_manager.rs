@@ -1101,7 +1101,7 @@ mod tests {
             )
             .expect_err("same epoch must not authorize a different master");
 
-        assert!(error.to_string().contains("conflicts with the installed authority"));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
         assert_eq!(manager.write_authority(), Some(installed));
         assert_eq!(manager.master_broker_id(), Some(2));
         assert_eq!(manager.sync_state_set(), &HashSet::from([2_i64]));
