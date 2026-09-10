@@ -5,7 +5,9 @@ This file applies to `rocketmq-website/`.
 
 ## Project role
 - This directory is the standalone Docusaurus website for RocketMQ Rust.
-- It is a Node project, not a Cargo project and not part of the root Rust workspace.
+- The website is a Node project outside the root Rust workspace.
+- `examples/first-message/` is a standalone Cargo tutorial; follow its
+  [local guide](examples/first-message/AGENTS.md) for Rust validation.
 - Root Cargo validation does not validate this website.
 
 ## Repository boundaries

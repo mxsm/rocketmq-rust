@@ -32,6 +32,7 @@ Node projects require their own commands. Consult the matching local guide when 
 | `rocketmq-dashboard/rocketmq-dashboard-web/backend/` | [Web backend](rocketmq-dashboard/rocketmq-dashboard-web/backend/AGENTS.md) |
 | `rocketmq-dashboard/rocketmq-dashboard-web/frontend/` | [Web frontend](rocketmq-dashboard/rocketmq-dashboard-web/frontend/AGENTS.md) |
 | `rocketmq-website/` | [Docusaurus site](rocketmq-website/AGENTS.md) |
+| `rocketmq-website/examples/first-message/` | [Standalone first-message tutorial](rocketmq-website/examples/first-message/AGENTS.md) |
 
 ## Working agreement
 
