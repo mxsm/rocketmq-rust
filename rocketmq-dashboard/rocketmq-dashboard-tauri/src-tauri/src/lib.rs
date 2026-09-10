@@ -121,9 +121,10 @@ fn initialize_services(
     log::info!("Local NameServer SQLite tables initialized");
 
     let nameserver_store = nameserver::SqliteNameServerStore::new(nameserver_db.clone());
-    let nameserver_runtime = Arc::new(nameserver::NameServerRuntimeState::new(
+    let nameserver_runtime = Arc::new(nameserver::NameServerRuntimeState::with_admin_config(
         nameserver_store.load_snapshot()?,
         client_runtime,
+        connection::AdminConnectionConfig::from_environment()?,
     ));
     let nameserver_manager = nameserver::NameServerManager::new(nameserver_db, nameserver_runtime.clone())?;
     let cluster_manager = cluster::ClusterManager::new(nameserver_runtime.clone());

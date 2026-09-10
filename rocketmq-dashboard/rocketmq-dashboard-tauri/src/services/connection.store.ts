@@ -3,6 +3,7 @@ import type { NameServerConfigSnapshot } from '../features/nameserver/types/name
 import type { ProxyConfigSnapshot } from '../features/proxy/types/proxy.types';
 export interface ConnectionSettingsView {
     revision: number;
+    credentialsConfigured: boolean;
     endpoints: Array<{ endpointId: string; kind: 'name_server' | 'proxy'; address: string; environmentId: string | null }>;
     currentNameserverId: string | null; currentProxyId: string | null; environmentId: string | null;
     nameserver: NameServerConfigSnapshot; proxy: ProxyConfigSnapshot;

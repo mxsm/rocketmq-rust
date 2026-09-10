@@ -1,0 +1,29 @@
+# Copyright 2026 The RocketMQ Rust Authors
+# Licensed under the Apache License, Version 2.0.
+[broker]
+listenPort = 22911
+brokerIp1 = "127.0.0.1"
+storePathRootDir = "/var/lib/rocketmq/broker"
+namesrvAddr = "127.0.0.1:9876"
+autoCreateTopicEnable = false
+authenticationEnabled = true
+authorizationEnabled = true
+signatureAlgorithm = "HmacSHA256"
+authConfigPath = "/var/lib/rocketmq/auth"
+# Public development fixture credentials; never use for a deployed Broker.
+initAuthenticationUser = "tauri-dev-admin:tauri-dev-secret"
+
+[broker.brokerIdentity]
+brokerName = "tauri-acl-broker"
+brokerClusterName = "TauriAclDebugCluster"
+brokerId = 0
+
+[store]
+storePathRootDir = "/var/lib/rocketmq/broker"
+haListenPort = 22912
+mappedFileSizeCommitLog = 67108864
+mappedFileSizeConsumeQueue = 6000
+mappedFileSizeConsumeQueueExt = 65536
+maxHashSlotNum = 1000
+maxIndexNum = 4000
+timerWheelEnable = false

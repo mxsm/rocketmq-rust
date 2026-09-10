@@ -58,3 +58,23 @@ NameServer, Proxy, audit, and error tests. Tests cover competing revisions, inva
 replacement rollback, stable IDs, empty-list reopening, write leases, and atomic
 audit failure. From the frontend: `npm run build` and the focused auth/session
 service tests, including stale reads and preservation of completed writes.
+
+## RocketMQ administration credentials
+
+Set `DASHBOARD_TAURI_ROCKETMQ_ACCESS_KEY` and
+`DASHBOARD_TAURI_ROCKETMQ_SECRET_KEY` in the process environment before starting
+the desktop app. `DASHBOARD_TAURI_ROCKETMQ_SECURITY_TOKEN` is optional. Missing
+half of a credential pair, empty keys, or a token without keys fails startup with
+a safe configuration error. With none configured, the client remains anonymous.
+
+Credentials stay in backend memory and are shared by all administration sessions
+and NameServer probes. They are not saved in SQLite or returned to the frontend.
+Connection settings expose only `credentialsConfigured`; the NameServer page
+shows that status. Environment changes require restarting the app. Desktop login
+credentials and RocketMQ administration credentials serve separate purposes.
+The current admin-core client signs using HMAC-SHA256. Configure the target Rust
+Broker with `signatureAlgorithm = "HmacSHA256"`; its default HMAC-SHA1 setting
+does not match this client.
+
+See the [isolated ACL fixture](../deploy/dev/acl/README.md) for a reproducible local
+authentication query with the same builder used by the desktop app.

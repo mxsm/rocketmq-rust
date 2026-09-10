@@ -43,6 +43,7 @@ pub(crate) struct EndpointView {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ConnectionSettingsView {
     pub(crate) revision: i64,
+    pub(crate) credentials_configured: bool,
     pub(crate) endpoints: Vec<EndpointView>,
     pub(crate) current_nameserver_id: Option<String>,
     pub(crate) current_proxy_id: Option<String>,

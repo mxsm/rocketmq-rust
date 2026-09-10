@@ -38,6 +38,7 @@ struct RuntimeState {
 
 pub(crate) struct NameServerRuntimeState {
     state: Mutex<RuntimeState>,
+    admin_config: crate::connection::AdminConnectionConfig,
     client_runtime: Arc<ClientRuntime>,
     reset_hook: Arc<dyn ClientResetHook>,
 }
@@ -53,6 +54,7 @@ impl NameServerRuntimeState {
         reset_hook: Arc<dyn ClientResetHook>,
     ) -> Self {
         Self {
+            admin_config: crate::connection::AdminConnectionConfig::default(),
             state: Mutex::new(RuntimeState {
                 snapshot,
                 generation: 0,
@@ -60,6 +62,42 @@ impl NameServerRuntimeState {
             client_runtime,
             reset_hook,
         }
+    }
+
+    pub(crate) fn with_admin_config(
+        snapshot: NameServerConfigSnapshot,
+        client_runtime: Arc<ClientRuntime>,
+        config: crate::connection::AdminConnectionConfig,
+    ) -> Self {
+        let mut runtime = Self::new(snapshot, client_runtime);
+        runtime.admin_config = config;
+        runtime
+    }
+
+    pub(crate) fn credentials_configured(&self) -> bool {
+        self.admin_config.credentials_configured()
+    }
+
+    pub(crate) fn admin_builder(
+        &self,
+        snapshot: &NameServerConfigSnapshot,
+        purpose: crate::connection::AdminPurpose,
+    ) -> crate::error::DashboardResult<rocketmq_admin_core::client_adapter::AdminBuilder> {
+        let address = snapshot
+            .current_namesrv
+            .as_deref()
+            .ok_or_else(|| crate::error::DashboardError::Configuration("select an active NameServer".into()))?;
+        Ok(self.admin_builder_for(snapshot, address, purpose))
+    }
+
+    pub(crate) fn admin_builder_for(
+        &self,
+        snapshot: &NameServerConfigSnapshot,
+        address: &str,
+        purpose: crate::connection::AdminPurpose,
+    ) -> rocketmq_admin_core::client_adapter::AdminBuilder {
+        self.admin_config
+            .builder(self.client_runtime(), snapshot, address, purpose)
     }
 
     pub(crate) fn client_runtime(&self) -> Arc<ClientRuntime> {

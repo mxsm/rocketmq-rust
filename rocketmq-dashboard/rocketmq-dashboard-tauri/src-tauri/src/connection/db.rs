@@ -71,6 +71,7 @@ pub(super) fn load(connection: &Connection) -> DashboardResult<ConnectionSetting
         })
         .map(|endpoint| endpoint.endpoint_id.clone());
     Ok(ConnectionSettingsView {
+        credentials_configured: false,
         revision,
         endpoints,
         current_nameserver_id,

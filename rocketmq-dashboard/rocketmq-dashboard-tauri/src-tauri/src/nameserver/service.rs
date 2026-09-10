@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::connection::AdminPurpose;
 use crate::error::DashboardResult as Result;
 use crate::nameserver::db::NameServerDb;
 #[cfg(test)]
@@ -19,7 +20,6 @@ use crate::nameserver::db::SqliteNameServerStore;
 use crate::nameserver::runtime::NameServerRuntimeState;
 use crate::nameserver::types::NameServerHomePageView;
 use crate::nameserver::types::NameServerStatusItem;
-use rocketmq_admin_core::client_adapter::AdminBuilder;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 #[cfg(test)]
 use rocketmq_dashboard_common::NameServerMutationResult;
@@ -28,9 +28,6 @@ use rocketmq_dashboard_common::NameServerService;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use uuid::Uuid;
-
-const NAMESERVER_PROBE_TIMEOUT_MILLIS: u64 = 1_500;
 
 pub(crate) trait NameServerProbe: Send + Sync {
     fn probe<'a>(
@@ -41,7 +38,7 @@ pub(crate) trait NameServerProbe: Send + Sync {
 }
 
 struct DefaultNameServerProbe {
-    client_runtime: Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+    runtime: Arc<NameServerRuntimeState>,
 }
 
 impl NameServerProbe for DefaultNameServerProbe {
@@ -51,12 +48,9 @@ impl NameServerProbe for DefaultNameServerProbe {
         address: &'a str,
     ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
         Box::pin(async move {
-            let mut admin = match AdminBuilder::new(Arc::clone(&self.client_runtime))
-                .admin_group(format!("dashboard-nameserver-probe-{}", Uuid::new_v4()))
-                .namesrv_addr(address)
-                .timeout_millis(NAMESERVER_PROBE_TIMEOUT_MILLIS)
-                .vip_channel_enabled(snapshot.use_vip_channel)
-                .use_tls(snapshot.use_tls)
+            let mut admin = match self
+                .runtime
+                .admin_builder_for(snapshot, address, AdminPurpose::Probe)
                 .build_and_start()
                 .await
             {
@@ -94,7 +88,7 @@ pub(crate) struct NameServerManager {
 impl NameServerManager {
     pub(crate) fn new(db: NameServerDb, runtime: Arc<NameServerRuntimeState>) -> Result<Self> {
         let probe = Arc::new(DefaultNameServerProbe {
-            client_runtime: runtime.client_runtime(),
+            runtime: runtime.clone(),
         });
         Self::with_probe(db, runtime, probe)
     }

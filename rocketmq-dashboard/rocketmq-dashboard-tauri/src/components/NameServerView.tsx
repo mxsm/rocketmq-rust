@@ -392,6 +392,10 @@ export const NameServerView = () => {
                         </div>
 
                         <div className="nameserver-security-list">
+                            <div className="px-4 py-3 text-sm">
+                                <strong>RocketMQ credentials: {data?.settings.credentialsConfigured ? 'Configured' : 'Not configured'}</strong>
+                                <p>Management credentials are set when the app starts. Restart after changing them.</p>
+                            </div>
                             <SecurityRow
                                 icon={Wifi}
                                 label="VIP Channel"
