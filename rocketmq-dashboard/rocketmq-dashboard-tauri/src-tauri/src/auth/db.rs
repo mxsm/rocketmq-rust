@@ -18,77 +18,34 @@
 
 use crate::auth::types::AuthResult;
 use rusqlite::Connection;
-use std::fs;
+#[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::Duration;
-use tauri::AppHandle;
-use tauri::Manager;
 
-// The database layer is implemented before the Tauri setup starts using it
-// so we temporarily silence dead-code warnings during the migration.
-#[allow(dead_code)]
-const DB_FILE_NAME: &str = "dashboard.db";
-#[allow(dead_code)]
-const USERS_TABLE_SCHEMA: &str = "
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL UNIQUE,
-        password_hash TEXT NOT NULL,
-        is_active INTEGER NOT NULL DEFAULT 1,
-        must_change_password INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        last_login_at TEXT
-    );
-";
-
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct AuthDb {
     db_path: PathBuf,
 }
 
-#[allow(dead_code)]
 impl AuthDb {
-    pub(crate) fn new(app: &AppHandle) -> AuthResult<Self> {
-        let app_config_dir = app.path().app_config_dir()?;
-
-        Ok(Self::from_path(app_config_dir.join(DB_FILE_NAME)))
-    }
-
     pub(crate) fn from_path(db_path: impl Into<PathBuf>) -> Self {
         Self {
             db_path: db_path.into(),
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn db_path(&self) -> &Path {
         &self.db_path
     }
 
     pub(crate) fn init(&self) -> AuthResult<()> {
         let mut connection = self.connection()?;
-        let transaction = connection.transaction()?;
-        transaction.execute_batch(USERS_TABLE_SCHEMA)?;
-        transaction.commit()?;
-        Ok(())
+        crate::persistence::schema::initialize(&mut connection)
     }
 
     pub(crate) fn connection(&self) -> AuthResult<Connection> {
-        self.ensure_parent_dir()?;
-
-        let connection = Connection::open(&self.db_path)?;
-        connection.busy_timeout(Duration::from_secs(5))?;
-        Ok(connection)
-    }
-
-    fn ensure_parent_dir(&self) -> AuthResult<()> {
-        if let Some(parent) = self.db_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        Ok(())
+        crate::persistence::open_connection(&self.db_path)
     }
 }
 

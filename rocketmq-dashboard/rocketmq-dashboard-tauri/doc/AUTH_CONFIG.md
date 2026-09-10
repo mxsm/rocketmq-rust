@@ -20,29 +20,37 @@ After the first successful login, the administrator must change the password bef
 
 ## Database Location
 
-Authentication and saved NameServer/Proxy configuration share `dashboard.db` in the application config directory for `com.rocketmqrust.dashboard`. On Linux, `XDG_CONFIG_HOME` overrides `~/.config`.
+Authentication and saved NameServer/Proxy configuration share `dashboard.db` in the `data` subdirectory of the application config directory for `com.rocketmqrust.dashboard`. On Linux, `XDG_CONFIG_HOME` overrides `~/.config`.
 
 ### Windows
 
 ```text
-C:\Users\<YourUsername>\AppData\Roaming\com.rocketmqrust.dashboard\dashboard.db
+C:\Users\<YourUsername>\AppData\Roaming\com.rocketmqrust.dashboard\data\dashboard.db
 ```
 
 ### macOS
 
 ```text
-~/Library/Application Support/com.rocketmqrust.dashboard/dashboard.db
+~/Library/Application Support/com.rocketmqrust.dashboard/data/dashboard.db
 ```
 
 ### Linux
 
 ```text
-~/.config/com.rocketmqrust.dashboard/dashboard.db
+~/.config/com.rocketmqrust.dashboard/data/dashboard.db
 ```
+
+Set `DASHBOARD_TAURI_DATA_DIR` to an isolated directory to override the default;
+its database is `<configured-directory>/dashboard.db`. An empty override is rejected.
+This storage design starts with a fresh database. It does not import accounts or
+addresses from the previous unversioned database, which remains untouched at its
+old location. The new database bootstraps the administrator as described above.
+Unversioned or unsupported databases are rejected without deleting or rebuilding
+them; choose a new data directory to start fresh.
 
 ## Schema
 
-The embedded database currently uses a single `users` table:
+The versioned database contains `dashboard_schema`, `users`, and connection configuration tables. The account table is:
 
 ```sql
 CREATE TABLE IF NOT EXISTS users (

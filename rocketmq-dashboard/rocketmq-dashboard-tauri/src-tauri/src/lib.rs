@@ -21,6 +21,7 @@ mod dashboard;
 mod error;
 mod message;
 mod nameserver;
+mod persistence;
 mod producer;
 mod proxy;
 mod topic;
@@ -42,6 +43,7 @@ const CLEANUP_FAILURE_EXIT_CODE: i32 = 71;
 
 #[derive(Clone)]
 struct DashboardAdminLifecycle {
+    storage: persistence::StorageManager,
     cluster_manager: cluster::ClusterManager,
     consumer_manager: consumer::ConsumerManager,
     message_manager: message::MessageManager,
@@ -57,7 +59,8 @@ struct DashboardApplication {
 }
 
 impl DashboardAdminLifecycle {
-    async fn shutdown(&self) {
+    async fn shutdown(&self) -> bool {
+        let storage_healthy = self.storage.shutdown(ADMIN_SHUTDOWN_TIMEOUT).await;
         tokio::join!(
             self.cluster_manager.shutdown(),
             self.consumer_manager.shutdown(),
@@ -65,6 +68,7 @@ impl DashboardAdminLifecycle {
             self.producer_manager.shutdown(),
             self.topic_manager.shutdown(),
         );
+        storage_healthy
     }
 }
 
@@ -76,6 +80,70 @@ fn final_exit_code(application_exit_code: i32, cleanup_healthy: bool) -> i32 {
     } else {
         CLEANUP_FAILURE_EXIT_CODE
     }
+}
+
+struct DashboardServices {
+    auth_service: auth::AuthService,
+    nameserver_runtime: Arc<nameserver::NameServerRuntimeState>,
+    nameserver_manager: nameserver::NameServerManager,
+    cluster_manager: cluster::ClusterManager,
+    consumer_manager: consumer::ConsumerManager,
+    message_manager: message::MessageManager,
+    producer_manager: producer::ProducerManager,
+    topic_manager: topic::TopicManager,
+    proxy_manager: proxy::ProxyManager,
+}
+
+fn initialize_services(
+    database_path: &std::path::Path,
+    client_runtime: Arc<ClientRuntime>,
+) -> error::DashboardResult<DashboardServices> {
+    let auth_db = auth::AuthDb::from_path(database_path);
+    auth_db.init()?;
+    log::info!("Local auth SQLite database initialized");
+
+    let auth_service = auth::AuthService::new(auth_db);
+    let bootstrap_status = auth_service.bootstrap_default_admin()?;
+
+    if bootstrap_status.created {
+        log::warn!(
+            "Initialized local dashboard admin account `{}` with the bootstrap password. The password must be \
+             changed after login.",
+            bootstrap_status.username
+        );
+    }
+
+    let nameserver_db = nameserver::NameServerDb::from_path(database_path);
+    nameserver_db.init()?;
+    log::info!("Local NameServer SQLite tables initialized");
+
+    let nameserver_store = nameserver::SqliteNameServerStore::new(nameserver_db.clone());
+    let nameserver_runtime = Arc::new(nameserver::NameServerRuntimeState::new(
+        nameserver_store.load_snapshot()?,
+        client_runtime,
+    ));
+    let nameserver_manager = nameserver::NameServerManager::new(nameserver_db, nameserver_runtime.clone())?;
+    let cluster_manager = cluster::ClusterManager::new(nameserver_runtime.clone());
+    let consumer_manager = consumer::ConsumerManager::new(nameserver_runtime.clone());
+    let message_manager = message::MessageManager::new(nameserver_runtime.clone());
+    let producer_manager = producer::ProducerManager::new(nameserver_runtime.clone());
+    let topic_manager = topic::TopicManager::new(nameserver_runtime.clone());
+    let proxy_db = proxy::ProxyDb::from_path(database_path);
+    proxy_db.init()?;
+    log::info!("Local Proxy SQLite tables initialized");
+    let proxy_manager = proxy::ProxyManager::new(proxy_db)?;
+
+    Ok(DashboardServices {
+        auth_service,
+        nameserver_runtime,
+        nameserver_manager,
+        cluster_manager,
+        consumer_manager,
+        message_manager,
+        producer_manager,
+        topic_manager,
+        proxy_manager,
+    })
 }
 
 fn build_application() -> Result<DashboardApplication, i32> {
@@ -112,6 +180,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
         }
     };
     let setup_client_runtime = client_runtime.clone();
+    let storage_context = client_runtime_owner.root_context().component("dashboard-storage");
     let admin_lifecycle = Arc::new(OnceLock::new());
     let setup_lifecycle = admin_lifecycle.clone();
     let app = tauri::Builder::default()
@@ -124,43 +193,30 @@ fn build_application() -> Result<DashboardApplication, i32> {
                 )?;
             }
 
-            let auth_db = auth::AuthDb::new(app.handle())?;
-            auth_db.init()?;
-            log::info!("Local auth SQLite database initialized");
-
-            let auth_service = auth::AuthService::new(auth_db);
-            let bootstrap_status = auth_service.bootstrap_default_admin()?;
-
-            if bootstrap_status.created {
-                log::warn!(
-                    "Initialized local dashboard admin account `{}` with the bootstrap password. The password must be \
-                     changed after login.",
-                    bootstrap_status.username
-                );
-            }
-
-            let nameserver_db = nameserver::NameServerDb::new(app.handle())?;
-            nameserver_db.init()?;
-            log::info!("Local NameServer SQLite tables initialized");
-
-            let nameserver_store = nameserver::SqliteNameServerStore::new(nameserver_db.clone());
-            let nameserver_runtime = Arc::new(nameserver::NameServerRuntimeState::new(
-                nameserver_store.load_snapshot()?,
-                setup_client_runtime.clone(),
-            ));
-            let nameserver_manager = nameserver::NameServerManager::new(nameserver_db, nameserver_runtime.clone())?;
-            let cluster_manager = cluster::ClusterManager::new(nameserver_runtime.clone());
-            let consumer_manager = consumer::ConsumerManager::new(nameserver_runtime.clone());
-            let message_manager = message::MessageManager::new(nameserver_runtime.clone());
-            let producer_manager = producer::ProducerManager::new(nameserver_runtime.clone());
-            let topic_manager = topic::TopicManager::new(nameserver_runtime.clone());
-            let proxy_db = proxy::ProxyDb::new(app.handle())?;
-            proxy_db.init()?;
-            log::info!("Local Proxy SQLite tables initialized");
-            let proxy_manager = proxy::ProxyManager::new(proxy_db)?;
+            let storage =
+                persistence::StorageManager::new(persistence::resolve_data_path(app.handle())?, storage_context);
+            let database_path = storage.path().to_path_buf();
+            // Tauri setup is the synchronous UI composition boundary. All startup
+            // SQLite/file work executes on the owned StorageIo blocking lane.
+            tauri::async_runtime::block_on(storage.initialize())?;
+            let DashboardServices {
+                auth_service,
+                nameserver_runtime,
+                nameserver_manager,
+                cluster_manager,
+                consumer_manager,
+                message_manager,
+                producer_manager,
+                topic_manager,
+                proxy_manager,
+            } = tauri::async_runtime::block_on(storage.run("storage-bootstrap", move |_connection| {
+                initialize_services(&database_path, setup_client_runtime)
+            }))?;
+            log::info!("Dashboard storage initialized: {:?}", storage.health());
 
             setup_lifecycle
                 .set(DashboardAdminLifecycle {
+                    storage: storage.clone(),
                     cluster_manager: cluster_manager.clone(),
                     consumer_manager: consumer_manager.clone(),
                     message_manager: message_manager.clone(),
@@ -169,6 +225,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
                 })
                 .map_err(|_| crate::error::DashboardError::Internal("admin lifecycle initialized twice"))?;
 
+            app.manage(storage);
             app.manage(auth_service);
             app.manage(auth::SessionState::default());
             app.manage(nameserver_runtime);
@@ -246,7 +303,8 @@ fn build_application() -> Result<DashboardApplication, i32> {
         Ok(app) => app,
         Err(_error) => {
             eprintln!("Dashboard startup failed while building the application");
-            match client_runtime_owner.block_on(tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT, client_runtime.shutdown()))
+            match client_runtime_owner
+                .block_on(async { tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT, client_runtime.shutdown()).await })
             {
                 Ok(report) if !report.is_healthy() => {
                     eprintln!("Dashboard admin client cleanup was incomplete after startup failure");
@@ -290,18 +348,16 @@ pub fn run() -> i32 {
     let exit_code = app.run_return(|_, _| {});
     let mut cleanup_healthy = true;
     if let Some(lifecycle) = admin_lifecycle.get() {
-        let shutdown =
-            tauri::async_runtime::block_on(tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT, lifecycle.shutdown()));
-        if shutdown.is_err() {
+        let shutdown = tauri::async_runtime::block_on(async {
+            tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT * 2, lifecycle.shutdown()).await
+        });
+        if !matches!(shutdown, Ok(true)) {
             cleanup_healthy = false;
-            log::error!(
-                "Timed out after {} seconds while shutting down dashboard admin sessions",
-                ADMIN_SHUTDOWN_TIMEOUT.as_secs()
-            );
+            log::error!("Dashboard storage or admin session shutdown was incomplete");
         }
     }
-    let client_shutdown =
-        client_runtime_owner.block_on(tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT, client_runtime.shutdown()));
+    let client_shutdown = client_runtime_owner
+        .block_on(async { tokio::time::timeout(ADMIN_SHUTDOWN_TIMEOUT, client_runtime.shutdown()).await });
     match client_shutdown {
         Ok(report) => {
             cleanup_healthy &= report.is_healthy();
