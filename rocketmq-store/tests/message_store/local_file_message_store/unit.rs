@@ -4394,6 +4394,29 @@ async fn get_ha_runtime_info_reports_current_commitlog_max_offset() {
 }
 
 #[tokio::test]
+async fn query_message_returns_each_physical_record_once_for_repeated_keys() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_async_flush_test_store(&temp_dir);
+    let topic = CheetahString::from_static_str("repeated-query-key-topic");
+    let key = CheetahString::from_static_str("repeated-key");
+    let mut message = MessageExtBrokerInner::default();
+    message.set_topic(topic.clone());
+    message.message_ext_inner.set_queue_id(0);
+    message.set_body(Bytes::from_static(b"single indexed record"));
+    message.set_keys("repeated-key repeated-key".into());
+    assert_eq!(
+        store.put_message(message).await.put_message_status(),
+        PutMessageStatus::PutOk
+    );
+    store.reput_once().await;
+    let result = store.query_message(&topic, &key, 10, 0, i64::MAX).await.unwrap();
+    let mut data = result.get_message_data().expect("indexed message bytes");
+    let messages = rocketmq_protocol::common::message::message_decoder::decodes_batch(&mut data, true, true);
+    assert_eq!(messages.len(), 1, "repeated Keys must not repeat the physical record");
+    assert_eq!(messages[0].body().unwrap().as_ref(), b"single indexed record");
+}
+
+#[tokio::test]
 async fn query_message_returns_only_indexed_records_not_adjacent_commitlog_data() {
     let temp_dir = tempdir().unwrap();
     let mut store = new_async_flush_test_store(&temp_dir);

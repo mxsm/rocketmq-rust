@@ -438,6 +438,8 @@ impl LocalFileMessageStore {
             }
 
             query_offset_result.get_phy_offsets_mut().sort();
+            // Repeated Keys can index the same record more than once.
+            query_offset_result.get_phy_offsets_mut().dedup();
 
             query_message_result.index_last_update_timestamp = query_offset_result.get_index_last_update_timestamp();
             query_message_result.index_last_update_phyoffset = query_offset_result.get_index_last_update_phyoffset();
