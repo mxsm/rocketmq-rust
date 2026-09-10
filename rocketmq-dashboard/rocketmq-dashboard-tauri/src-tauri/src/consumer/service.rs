@@ -47,6 +47,7 @@ use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+pub(crate) mod config_summary;
 mod mapping;
 
 use self::mapping::build_summary;
