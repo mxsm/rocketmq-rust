@@ -72,8 +72,54 @@ the send. To read the message, run `message queryMsgByOffset` with the Broker
 name (`-b`), queue ID (`-i`), and queue offset (`-o`) from that send receipt,
 along with `-t TauriDebugSmoke`. Sending appends to existing data; do not assume
 queue zero or offset zero identifies the newly sent message.
-This checks remoting administration and basic message storage, not gRPC clients,
-ACL, consumer processing, scheduled messages, or failover.
+This checks remoting administration and basic message storage. Use the bounded
+client below to exercise consumer processing and Trace. gRPC clients, ACL,
+scheduled messages, and failover require their own fixtures.
+
+## Online client, DLQ, and Trace fixture
+
+Use fresh Topic and group names for each run. The example sends one keyed message,
+rejects its first delivery with zero retries, then accepts later deliveries. It
+keeps a Producer and Consumer online until Ctrl-C or the specified lifetime
+(1–3600 seconds), and awaits both clients and their runtime during shutdown.
+It prints delivery counts and send receipts without printing message bodies.
+
+Prepare the normal Topic and a dedicated Trace Topic using `Invoke-DebugAdmin`
+above. Both must exist because this fixture disables automatic Topic creation:
+
+```powershell
+$debugTopic = 'DesktopAcceptanceFresh'
+$debugGroup = 'DesktopAcceptanceFreshGroup'
+Invoke-DebugAdmin topic updateTopic -n 127.0.0.1:9876 -c TauriDebugCluster -t $debugTopic -r 1 -w 1 -y
+Invoke-DebugAdmin topic updateTopic -n 127.0.0.1:9876 -c TauriDebugCluster -t "${debugTopic}_trace" -r 1 -w 1 -y
+
+# Run from the repository root; leave this process running during desktop checks.
+cargo run -p rocketmq-client-rust --example dashboard-debug-client -- 127.0.0.1:9876 $debugTopic $debugGroup 600
+```
+
+In the desktop, discover the group in Consumers and open its connection details,
+RunningInfo, and JStack. Discover `${debugGroup}_producer` in Producers and open
+its connection details. Query the group's DLQ by Key `dashboard-debug-key`, inspect
+its unique ID, export CSV, and resend to the displayed online client. Mixed valid
+and invalid selections should retain individual success/failure receipts.
+
+For Trace, use `${debugTopic}_trace` and the producer message ID in the send receipt.
+Wait for the asynchronous trace flush before querying. A dedicated normal Topic
+avoids changing the cluster's system Trace Topic policy.
+
+The ignored SDK regression can also verify live Broker forwarding while the
+example remains online (run from the repository root in another terminal):
+
+```powershell
+$env:DASHBOARD_DEBUG_NAMESRV = '127.0.0.1:9876'
+$env:DASHBOARD_DEBUG_GROUP = $debugGroup
+cargo test -p rocketmq-client-rust --lib live_consumer_diagnostics_are_forwarded_by_the_broker -- --ignored
+```
+
+After the client exits, delete only these test resources through the desktop:
+the Consumer group (including retry/DLQ cleanup), the normal Topic, and its Trace
+Topic. Existing physical message IDs generated with an unspecified Broker host
+remain a separate Broker limitation; do not count those lookups as passing.
 
 ## Stop and inspect
 

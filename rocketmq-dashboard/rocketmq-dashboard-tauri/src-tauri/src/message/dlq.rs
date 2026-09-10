@@ -65,6 +65,9 @@ pub(super) fn direct_request(
         .ok_or_else(|| DashboardError::Validation("The DLQ message has no valid original Topic.".into()))?;
     let id = property("ORIGIN_MESSAGE_ID")
         .or_else(|| property("DLQ_ORIGIN_MESSAGE_ID"))
+        // Rust send-back preserves the original producer's unique ID even when
+        // no physical origin ID is attached. Resolve it within the original Topic.
+        .or_else(|| property("UNIQ_KEY"))
         .ok_or_else(|| DashboardError::Validation("The DLQ message has no original message ID.".into()))?;
     Ok(DirectConsumeRequest {
         topic: topic.into(),
@@ -123,6 +126,28 @@ mod tests {
                 .is_none()
         );
     }
+    #[test]
+    fn dlq_resend_resolves_preserved_rust_unique_id_in_original_topic() {
+        let mut message = message();
+        message.properties.remove("ORIGIN_MESSAGE_ID");
+        message
+            .properties
+            .insert("UNIQ_KEY".into(), "producer-unique-id".into());
+        let request = direct_request("g".into(), None, &message).unwrap();
+        assert_eq!(request.topic, "orders");
+        assert_eq!(request.message_id, "producer-unique-id");
+        message
+            .properties
+            .insert("ORIGIN_MESSAGE_ID".into(), "physical-origin".into());
+        assert_eq!(
+            direct_request("g".into(), None, &message).unwrap().message_id,
+            "physical-origin"
+        );
+        message.properties.remove("ORIGIN_MESSAGE_ID");
+        message.properties.insert("UNIQ_KEY".into(), "  ".into());
+        assert!(direct_request("g".into(), None, &message).is_err());
+    }
+
     #[test]
     fn dlq_resend_rejects_wrong_group_missing_origin_and_dlq_as_original_topic() {
         let mut message = message();

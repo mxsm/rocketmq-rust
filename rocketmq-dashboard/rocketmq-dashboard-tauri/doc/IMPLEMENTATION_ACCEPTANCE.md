@@ -84,12 +84,13 @@ WebView and authenticated IPC were used; no mock backend supplied these results.
 | Visible Monitor / Storage pages | Rule create and confirmed delete; available SQLite, actual page capacity, unknown filesystem free space, collector status; consecutive diagnostics refreshes did not change the write timestamp |
 | Connection IPC | Address add/switch/delete, stale revision rejection, invalid atomic replacement rollback, environment-isolated rules, configured Proxy Consumer query |
 | Topic and message IPC | Two-Broker create/update, route, SEND_OK receipt, ID/Key lookup, message detail, single-Broker delete and whole-Topic delete |
-| Consumer / Broker IPC | Two-Broker group writes, complete configuration summary, detected differing configuration, reset of four queues, skip to latest, per-target group deletion; Broker configuration write/readback and restoration of the original value |
+| Consumer / Broker IPC | Two-Broker group writes, complete configuration summary, detected differing configuration, reset of four queues, skip to latest, per-target group deletion; Broker configuration write/readback and restoration of the original value; online Rust Consumer RunningInfo available (5 properties, 4 queue entries), JStack available (27,337 characters) after correcting SDK Broker forwarding |
 | Directory and history IPC | Producer directory query without a supplied group, audit filtering/cursor, Broker/Topic stored samples and pagination; history remained readable after restart |
 | Storage CLI / restored desktop | Live backup, verify, restore; restored cached session rejected, new login successful, rules/history retained, restore audit present |
 | New local Rust images | NameServer, Broker, Proxy, and admin CLI rebuilt from local source; ordinary and ACL Compose projects healthy (six containers); two-Broker listing and desktop SEND_OK after replacement |
 | Isolated ACL integration | Valid/invalid/anonymous credential query behavior, normal/transactional sends, user CRUD, typed policy deletion preserving other entries: all three live tests passed |
 | Exit | The initial real exit exposed a Windows main-thread stack overflow. Heap-pinning the joined SDK shutdown futures fixed it. A 1 MiB-stack lifecycle regression passed; two subsequent real desktop exits returned code 0 |
+| Online Producer and populated DLQ | Producer directory discovered the live group and connection detail returned one Rust client. A rejected message was found by DLQ Key and unique ID; CSV export returned one successful row. Batch resend retained both failures while the separate physical store-host defect remains open |
 
 Temporary Topic, Consumer group, and Monitor smoke resources were deleted. Both
 Docker clusters remain running for development. The desktop and its temporary
@@ -99,13 +100,16 @@ Vite process were closed after checking graceful shutdown.
 
 - TLS certificate/handshake integration was not exercised; the local fixtures use
   plaintext remoting. Configuration and credential boundaries have automated tests.
-- No live consumer implementing RunningInfo/JStack was attached. The no-client
-  query returned a safe unavailable result; Proxy diagnostics reported unsupported.
-  Offline, unsupported, bounded and truncated response branches have unit coverage.
-- No populated DLQ with an online recipient or recorded Trace fixture was present.
-  The empty DLQ route reported topic-not-found. Actual DLQ resend/CSV and Trace
-  round trips remain unverified; receipt identity, failure retention, Key/client
-  parameter handling, and export behavior are covered by focused tests.
+- Online Rust RunningInfo/JStack were exercised after fixing the diagnostic target
+  in [issue #10416](https://github.com/mxsm/rocketmq-rust/issues/10416). The ignored
+  live SDK regression also passed. Proxy diagnostics remain explicitly unsupported;
+  offline, bounded and truncated branches have focused coverage.
+- Populated DLQ Key/unique-ID lookup and CSV export passed. Rust origin-ID fallback
+  has three focused regression tests. Successful DLQ resend and physical-ID detail
+  remain blocked by [issue #10417](https://github.com/mxsm/rocketmq-rust/issues/10417):
+  Broker metadata encodes the wildcard listener instead of its advertised IP.
+  Mixed failed results were retained correctly. Trace round trips still require
+  the dedicated Trace Topic fixture described in the development README.
 - Topic/Consumer modal interactions were not exhaustively clicked. Their real
   service/IPC mutations were exercised above, with focused receipt and navigation
   tests covering result branches. This is not a complete visual or cross-platform
