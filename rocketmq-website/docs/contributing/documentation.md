@@ -55,7 +55,7 @@ Check the relevant implementation, configuration parser, manifest, and executabl
 | Has this behavior been observed? | The scenario actually run and its output or state |
 | Is it in a release? | The corresponding published artifact and release notes |
 
-The current documentation is labeled **Next** and describes development source. A package's version field or an available type does not prove that the feature was released, enabled, or exercised end to end. Keep current-source instructions separate from release-specific dependency versions.
+The current documentation is labeled **1.0.0 development** and describes development source. A package's version field or an available type does not prove that the feature was released, enabled, or exercised end to end. Keep current-source instructions separate from release-specific dependency versions.
 
 Describe acceptance, local durability, replica acknowledgement, index visibility, consumption, and business success separately. A timeout can leave an uncertain outcome. Configuration references should use external parser names, units, and defaults; field existence does not imply live reload.
 

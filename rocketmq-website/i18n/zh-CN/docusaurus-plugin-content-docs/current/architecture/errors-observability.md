@@ -57,7 +57,7 @@ SDK 提供方属于 guard。初始化不会安装全局 OpenTelemetry meter/trac
 
 客户端 `observability` feature 启用追踪，`observability-metrics` 启用指标。客户端通过 OTLP 导出指标还需要依赖图中的 `rocketmq-observability/otlp-metrics`。不要在不同 crate 之间直接照搬同名 feature，而不检查其转发内容。
 
-指标标签应使用低基数结果、服务角色及稳定操作名。消息 ID、Key、receipt、任意地址和无界主题/消费者组名称可能使时间序列数量成倍增长。追踪上下文属性使用 `TRACEPARENT`、`TRACESTATE`；传播不会替代消息业务身份或授权。
+指标标签应使用低基数结果、服务角色及稳定操作名。消息 ID、Key、receipt、任意地址和无界主题/消费者组名称可能使时间序列数量成倍增长。追踪上下文使用小写消息属性键 `traceparent`、`tracestate`；`TRACEPARENT`、`TRACESTATE` 是对应 Rust 常量名。内置消息传播器排除任意 OpenTelemetry `baggage`。传播不会替代消息业务身份或授权。
 
 ## 运行解释
 

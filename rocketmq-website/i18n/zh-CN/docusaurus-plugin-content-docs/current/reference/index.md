@@ -55,7 +55,7 @@ CLI 选项属于其声明层级。当前 `clusterList` 和 `updateSubGroup` 使�
 cargo doc -p rocketmq-client-rust --no-deps --open
 ```
 
-该命令为所选包与 feature 图生成文档。增加应用实际使用的 feature，独立产品从自己的 manifest 生成。已发布 API 文档对应的发行版可能不同于 Next。
+该命令为所选包与 feature 图生成文档。增加应用实际使用的 feature，独立产品从自己的 manifest 生成。已发布 API 文档对应的发行版可能不同于 1.0.0 开发版。
 
 从 crate 根或文档指定的 `api`/`prelude` 导入公开类型。实现模块中的文件不会自动成为公开集成契约。
 

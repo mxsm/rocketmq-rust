@@ -2,7 +2,7 @@
 title: "Rust API entry points"
 ---
 
-Use this page to locate the public API for a task and generate documentation from the source you build. The website's Next documentation, a registry package and a source checkout can describe different revisions. Read the package manifest and selected Cargo features together with Rustdoc; an item visible in another build is not necessarily available in yours.
+Use this page to locate the public API for a task and generate documentation from the source you build. The website's 1.0.0 development documentation, a registry package and a source checkout can describe different revisions. Read the package manifest and selected Cargo features together with Rustdoc; an item visible in another build is not necessarily available in yours.
 
 ## Select an API by responsibility
 

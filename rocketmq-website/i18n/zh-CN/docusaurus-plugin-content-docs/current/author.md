@@ -81,7 +81,7 @@ hide_table_of_contents: false
 
 ## 项目文档与发行历史
 
-已实现模式和限制见[能力矩阵](./overview/capability-matrix.md)，社区分发身份见[发行范围](./overview/release-scope.md)。架构与兼容性说明以对应技术页面为准。[发行历史](/releases)保留各版本公告；Next 文档本身不表示版本已发布。
+已实现模式和限制见[能力矩阵](./overview/capability-matrix.md)，社区分发身份见[发行范围](./overview/release-scope.md)。架构与兼容性说明以对应技术页面为准。[发行历史](/releases)保留各版本公告；1.0.0 开发版 文档本身不表示版本已发布。
 
 ## 👷 寻找贡献者
 

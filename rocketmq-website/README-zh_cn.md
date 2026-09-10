@@ -61,7 +61,7 @@ Docusaurus 生成数据过时时使用 `npm run clear`。不要提交 `build/`�
 
 ## 文档版本与发布范围
 
-当前文档标记为 **Next**。根 Cargo 源码版本与网站 package 版本含义不同，任一数值都不能单独表示存在对应的已发布下载版本。已发布发行物和特定版本信息见项目的 [GitHub releases](https://github.com/mxsm/rocketmq-rust/releases)。
+当前文档标记为 **1.0.0 开发版**。根 Cargo 源码版本与网站 package 版本含义不同，任一数值都不能单独表示存在对应的已发布下载版本。已发布发行物和特定版本信息见项目的 [GitHub releases](https://github.com/mxsm/rocketmq-rust/releases)。
 
 不要把当前源码 API 与旧教程中的依赖版本混用。源码、示例和发行版安装说明需要明确它们描述的版本。
 

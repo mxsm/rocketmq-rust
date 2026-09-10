@@ -81,7 +81,7 @@ Building production-ready, enterprise-grade messaging middleware that combines:
 
 ## Project documentation and release history
 
-Read the [capability matrix](./overview/capability-matrix.md) for implemented modes and limitations, and [release scope](./overview/release-scope.md) for the community distribution identity. Architecture and compatibility claims belong to those technical pages. The [release history](/releases) preserves version-specific announcements; Next documentation does not itself announce a release.
+Read the [capability matrix](./overview/capability-matrix.md) for implemented modes and limitations, and [release scope](./overview/release-scope.md) for the community distribution identity. Architecture and compatibility claims belong to those technical pages. The [release history](/releases) preserves version-specific announcements; 1.0.0 development documentation does not itself announce a release.
 
 ## 👷 Looking for Contributors
 

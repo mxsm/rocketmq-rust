@@ -59,7 +59,7 @@ Rules and typed contracts remain authoritative. Unsafe, denied or unavailable mo
 
 ## Supervised execution is implemented but individually enabled
 
-Current Control Plane code persists plans, policy/Critic evaluation, human approval and execution coordination. The Execution Agent's startup registry conditionally registers reviewed handlers. The earlier local guide's “disabled until P3-05” boundary describes the prerequisite isolation stage; it must not be interpreted as proof that today's source has no execution implementation. Current startup configuration and registered handlers determine availability.
+In the 1.0.0 development source tree, Control Plane code persists plans, policy/Critic evaluation, human approval and execution coordination. The Execution Agent's startup registry conditionally registers typed handlers. Availability depends on startup configuration and the registered handlers; the product remains a separately versioned workspace.
 
 All Agent action switches default to false. Supported configured handler families are:
 
@@ -88,6 +88,6 @@ Verification combines Agent resource observations with independent Control Plane
 - The ordinary Dashboard remains a direct resource-management product. SRE owns cross-signal investigation and governed workflows; credentials and sessions are not shared.
 - Compilation, descriptor registration, configured enablement and a successful live scenario are different evidence. Use observed capability/coverage state rather than claiming every declared action is production verified.
 
-The architecture described here follows current manifests, service registration and component documentation. No live SRE diagnosis, model invocation or target execution was performed for this page. Documentation writing has no fingerprint or approval gate; the product's own policy, authority and audit contracts remain part of its technical design.
+This architecture describes source contracts and configured capability boundaries. Validate diagnosis, model integration and any enabled target action against the selected deployment's observed results. Compilation and handler registration alone do not establish end-to-end execution or recovery behavior.
 
 Sources: [workspace](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-sre/Cargo.toml), [Control Plane](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-control-plane/README.md), [Connector](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-connector/README.md), [Executor](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-executor/README.md) and [Agent registration](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-ai/rocketmq-sre/crates/rocketmq-sre-execution-agent/src/api.rs).

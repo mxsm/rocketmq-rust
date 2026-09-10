@@ -49,11 +49,11 @@ These are declared release destinations and identity metadata, not a statement t
 
 Use artifact-specific documentation for [containers](../deployment/containers.md) and [Kubernetes](../deployment/kubernetes.md). Keep the image tag, chart values, service binary and corresponding documentation together; do not substitute an unverified “latest” artifact for a named release.
 
-## Version numbers and Next documentation
+## Version numbers and the 1.0.0 development documentation
 
 The root workspace currently declares version `1.0.0`, while independent applications can declare their own versions, such as `0.1.0`. These are source manifest values. They do not establish a publication date, support period, or cross-product release lockstep.
 
-The Docusaurus current documentation is labeled **Next** and uses English plus `zh-CN` content. Next describes the current source family and can contain behavior newer than a published artifact. A Chinese page is a full counterpart with the same page ID, not a separate product version.
+The Docusaurus current documentation is labeled **1.0.0 development** and uses English plus `zh-CN` content. 1.0.0 development describes the current source family and can contain behavior newer than a published artifact. A Chinese page is a full counterpart with the same page ID, not a separate product version.
 
 For an incident or compatibility question, record the actual executable/package version, build features, deployment mode and relevant configuration. Then compare the matching source/API documentation. The [capability matrix](./capability-matrix.md) and [compatibility reference](../reference/protocol-compatibility.md) explain why a version string alone is insufficient.
 

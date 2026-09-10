@@ -8,7 +8,7 @@ title: "能力与实现边界"
 
 “已实现”表示存在具体源码路径；“已启用”还需要正确的编译 feature、运行设置、凭据和后端；“已演练”针对某个测试或部署场景；“已发布”表示发行物中包含该能力。这些结论不能互相替代。
 
-仓库 `v1-capability-manifest.json` 记录明确的 1.0 核心范围，包含按 profile 划分的实现和证据字段。记录中的 `component` 或 `interop` 不表示本次文档编写重新运行了这些场景，也不能将该文件当作 Dashboard 和 AI 产品的完整目录。
+仓库 `v1-capability-manifest.json` 记录 1.0.0 核心范围，包含按 profile 划分的实现和证据字段。`component` 或 `interop` 状态适用于其引用的场景与 profile，不能证明其他部署具有相同行为。该文件也不是 Dashboard 和 AI 产品的完整能力目录。
 
 ## 核心服务与客户端
 
