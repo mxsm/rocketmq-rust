@@ -1,3 +1,4 @@
+import { AclPolicies } from '../features/acl/components/AclPolicies';
 import { useEffect, useState } from 'react';
 import { ClusterService } from '../services/cluster.service';
 import { dashboardErrorMessage } from '../services/invoke';
@@ -5,6 +6,7 @@ import { AclUsers } from '../features/acl/components/AclUsers';
 import { aclScopeKey, type AclScope } from '../features/acl/types';
 
 export const ACLView = () => {
+    const [tab, setTab] = useState<'users' | 'policies'>('users');
     const [scopes, setScopes] = useState<AclScope[]>([]);
     const [selected, setSelected] = useState('');
     const [scope, setScope] = useState<AclScope | null>(null);
@@ -23,14 +25,15 @@ export const ACLView = () => {
             <h1 className="text-xl font-semibold">Broker access control</h1><p className="text-sm text-gray-500">Manage RocketMQ Broker ACL identities. Dashboard login accounts are managed separately in Account settings.</p>
             {error && <p role="alert" className="text-red-600">{error}</p>}
             <div className="flex flex-wrap gap-3"><select aria-label="ACL Broker scope" disabled={loading} className="min-w-64 rounded border bg-transparent p-2" value={selected}
-                onChange={event => { setSelected(event.target.value); setScope(null); }}>
+                onChange={event => { setSelected(event.target.value); setScope(null); setTab('users'); }}>
                 <option value="">{loading ? 'Loading Brokers…' : 'Select a master Broker'}</option>
                 {scopes.map(scope => <option key={aclScopeKey(scope)} value={aclScopeKey(scope)}>{scope.clusterName} / {scope.brokerName} · {scope.brokerAddr}</option>)}
             </select><button disabled={!selected} onClick={() => setScope(scopes.find(scope => aclScopeKey(scope) === selected) ?? null)} className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50">Confirm scope</button></div>
             {!loading && !error && scopes.length === 0 && <p>No master Brokers are available in the current environment.</p>}
         </section>
         <section className="rounded-xl border bg-white p-6 dark:border-gray-800 dark:bg-gray-900">
-            {scope ? <AclUsers key={aclScopeKey(scope)} scope={scope} /> : <p>Select and confirm a Broker scope to load ACL users.</p>}
+            {scope ? <><nav aria-label="ACL sections" className="mb-5 flex gap-5 border-b pb-3"><button aria-pressed={tab === 'users'} onClick={() => setTab('users')}>Users</button><button aria-pressed={tab === 'policies'} onClick={() => setTab('policies')}>Policies</button></nav>
+                {tab === 'users' ? <AclUsers key={aclScopeKey(scope)} scope={scope} /> : <AclPolicies key={aclScopeKey(scope)} scope={scope} />}</> : <p>Select and confirm a Broker scope to load access control.</p>}
         </section>
     </div>;
 };

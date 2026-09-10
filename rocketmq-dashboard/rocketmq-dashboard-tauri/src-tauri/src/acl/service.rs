@@ -26,7 +26,7 @@ use tokio::sync::Mutex;
 #[derive(Clone)]
 pub(crate) struct AclManager {
     runtime: Arc<NameServerRuntimeState>,
-    session: Arc<Mutex<Option<ManagedAclAdmin>>>,
+    pub(super) session: Arc<Mutex<Option<ManagedAclAdmin>>>,
 }
 impl AclManager {
     pub(crate) fn new(runtime: Arc<NameServerRuntimeState>) -> Self {
@@ -40,7 +40,7 @@ impl AclManager {
             admin.shutdown().await;
         }
     }
-    async fn ensure(&self, slot: &mut Option<ManagedAclAdmin>) -> DashboardResult<()> {
+    pub(super) async fn ensure(&self, slot: &mut Option<ManagedAclAdmin>) -> DashboardResult<()> {
         if slot
             .as_ref()
             .is_none_or(|session| !session.matches_generation(self.runtime.generation()))

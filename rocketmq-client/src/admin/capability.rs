@@ -745,6 +745,24 @@ pub trait AuthAdmin: Send {
         resource: CheetahString,
     ) -> crate::ClientResult<()>;
 
+    /// Deletes one resource from an explicitly selected ACL policy type.
+    ///
+    /// # Errors
+    /// Returns an error for empty identities, unsupported policy types, or failed RPCs.
+    /// Implementations that only support the legacy API may reject this operation.
+    async fn delete_acl_entry(
+        &self,
+        broker_addr: CheetahString,
+        subject: CheetahString,
+        policy_type: CheetahString,
+        resource: CheetahString,
+    ) -> crate::ClientResult<()> {
+        let _ = (broker_addr, subject, policy_type, resource);
+        Err(crate::ClientError::illegal_argument(
+            "Typed ACL entry deletion is not supported by this admin implementation",
+        ))
+    }
+
     async fn get_acl(&self, broker_addr: CheetahString, subject: CheetahString) -> crate::ClientResult<AclInfo>;
 
     async fn list_acl(
@@ -1906,6 +1924,16 @@ impl AuthAdmin for crate::admin::default_mq_admin_ext::DefaultMQAdminExt {
         resource: CheetahString,
     ) -> crate::ClientResult<()> {
         AuthAdmin::delete_acl(self.inner(), broker_addr, subject, resource).await
+    }
+
+    async fn delete_acl_entry(
+        &self,
+        broker_addr: CheetahString,
+        subject: CheetahString,
+        policy_type: CheetahString,
+        resource: CheetahString,
+    ) -> crate::ClientResult<()> {
+        AuthAdmin::delete_acl_entry(self.inner(), broker_addr, subject, policy_type, resource).await
     }
 
     async fn get_acl(&self, broker_addr: CheetahString, subject: CheetahString) -> crate::ClientResult<AclInfo> {

@@ -283,6 +283,45 @@ pub struct DashboardAclPolicyMutationRequest {
     pub policies: Vec<DashboardAclPolicyMutation>,
 }
 
+/// Selects one ACL policy independently of policies containing the same resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DashboardAclPolicyType {
+    Custom,
+    Default,
+}
+impl DashboardAclPolicyType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Custom => "Custom",
+            Self::Default => "Default",
+        }
+    }
+}
+
+/// Deletes one resource without expanding to an entire subject.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardAclEntryDeleteRequest {
+    pub selector: TargetSelector,
+    pub subject: String,
+    pub policy_type: DashboardAclPolicyType,
+    pub resource: String,
+}
+impl DashboardAclEntryDeleteRequest {
+    /// Validates the subject and resource before an admin session performs I/O.
+    ///
+    /// # Errors
+    /// Returns an invalid-argument error for an empty subject or resource.
+    pub fn validate(&self) -> crate::core::AdminResult<()> {
+        if self.subject.trim().is_empty() || self.resource.trim().is_empty() {
+            return Err(crate::core::AdminError::invalid_argument(
+                "resource",
+                "ACL entry deletion requires nonempty subject and resource",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DashboardAclQuery {
     pub selector: TargetSelector,
@@ -442,6 +481,23 @@ pub trait DashboardAdmin: Send + Sync {
         subject: &'a str,
         resource: &'a str,
     ) -> AdminFuture<'a, AdminMutationResult>;
+
+    /// Deletes one resource from the explicitly selected ACL policy type.
+    ///
+    /// # Errors
+    /// Returns an error when unsupported, invalid, or rejected by a Broker.
+    fn dashboard_delete_acl_entry<'a>(
+        &'a self,
+        request: &'a DashboardAclEntryDeleteRequest,
+    ) -> AdminFuture<'a, AdminMutationResult> {
+        Box::pin(async move {
+            request.validate()?;
+            Err(crate::core::AdminError::backend(
+                "delete_acl_entry",
+                "Typed ACL entry deletion is not supported by this adapter",
+            ))
+        })
+    }
 
     fn dashboard_query_messages<'a>(
         &'a self,

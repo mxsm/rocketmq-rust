@@ -14,6 +14,7 @@
 
 mod admin;
 pub(crate) mod commands;
+pub(crate) mod policy;
 pub(crate) mod service;
 pub(crate) mod types;
 pub(crate) use service::AclManager;

@@ -732,6 +732,30 @@ impl MQClientAPIImpl {
     ) -> ClientResult<()> {
         let resource_option = if resource.is_empty() { None } else { Some(resource) };
         let request_header = DeleteAclRequestHeader::new(subject, resource_option);
+        self.delete_acl_request(broker_address, request_header, timeout_millis)
+            .await
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    pub(crate) async fn delete_acl_entry(
+        &self,
+        broker_address: CheetahString,
+        subject: CheetahString,
+        policy_type: CheetahString,
+        resource: CheetahString,
+        timeout_millis: u64,
+    ) -> ClientResult<()> {
+        let header = acl_entry_delete_header(subject, policy_type, resource)?;
+        self.delete_acl_request(broker_address, header, timeout_millis).await
+    }
+
+    #[cfg(feature = "admin-mutation")]
+    async fn delete_acl_request(
+        &self,
+        broker_address: CheetahString,
+        request_header: DeleteAclRequestHeader,
+        timeout_millis: u64,
+    ) -> ClientResult<()> {
         let request = self.create_request_command(RequestCode::AuthDeleteAcl, request_header);
 
         let outcome = self
@@ -4911,5 +4935,41 @@ mod json_error_boundary_tests {
 
         assert!(error.is(&rocketmq_error::PROTOCOL_RESPONSE_FAILED));
         assert!(error.source_ref::<rocketmq_error::Error>().is_some());
+    }
+}
+
+#[cfg(feature = "admin-mutation")]
+fn acl_entry_delete_header(
+    subject: CheetahString,
+    policy_type: CheetahString,
+    resource: CheetahString,
+) -> ClientResult<DeleteAclRequestHeader> {
+    if subject.trim().is_empty()
+        || resource.trim().is_empty()
+        || !(policy_type.eq_ignore_ascii_case("Custom") || policy_type.eq_ignore_ascii_case("Default"))
+    {
+        return Err(ClientError::illegal_argument(
+            "ACL entry deletion requires subject, resource and Custom or Default policy type",
+        ));
+    }
+    Ok(DeleteAclRequestHeader::with_policy_type(
+        subject,
+        Some(policy_type),
+        Some(resource),
+    ))
+}
+#[cfg(all(test, feature = "admin-mutation"))]
+mod acl_policy_entry_tests {
+    use super::*;
+    #[test]
+    fn acl_policy_entry_delete_preserves_type_and_never_expands_empty_resource() {
+        let header = acl_entry_delete_header("User:alice".into(), "Default".into(), "Topic:orders".into()).unwrap();
+        assert_eq!(header.policy_type.as_deref(), Some("Default"));
+        assert_eq!(header.resource.as_deref(), Some("Topic:orders"));
+        assert!(acl_entry_delete_header("User:alice".into(), "Default".into(), "".into()).is_err());
+        assert!(acl_entry_delete_header("User:alice".into(), "invalid".into(), "Topic:orders".into()).is_err());
+        let legacy = DeleteAclRequestHeader::new("User:alice".into(), None);
+        assert!(legacy.policy_type.is_none());
+        assert!(legacy.resource.is_none());
     }
 }

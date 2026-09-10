@@ -1923,6 +1923,29 @@ impl AuthAdmin for DefaultMQAdminExtImpl {
         }
     }
 
+    async fn delete_acl_entry(
+        &self,
+        broker_addr: CheetahString,
+        subject: CheetahString,
+        policy_type: CheetahString,
+        resource: CheetahString,
+    ) -> crate::ClientResult<()> {
+        if let Some(ref client_instance) = self.client_instance {
+            client_instance
+                .get_mq_client_api_impl()?
+                .delete_acl_entry(
+                    broker_addr,
+                    subject,
+                    policy_type,
+                    resource,
+                    self.remoting_timeout_millis()?,
+                )
+                .await
+        } else {
+            Err(crate::ClientError::not_started())
+        }
+    }
+
     async fn delete_acl(
         &self,
         broker_addr: CheetahString,
