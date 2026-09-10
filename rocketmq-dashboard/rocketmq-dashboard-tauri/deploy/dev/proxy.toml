@@ -11,3 +11,9 @@ listenAddr = "0.0.0.0:8080"
 
 [cluster]
 namesrvAddr = "127.0.0.1:9876"
+brokerClusterName = "TauriDebugCluster"
+
+[auth]
+# Proxy bootstrap uses this cluster for metadata discovery even with ACL off.
+clusterName = "TauriDebugCluster"
+authConfigPath = "/var/lib/rocketmq/proxy/auth"
