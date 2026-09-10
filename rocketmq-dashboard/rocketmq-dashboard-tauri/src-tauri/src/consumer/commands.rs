@@ -243,3 +243,43 @@ pub async fn delete_consumer_group(
         .await
 }
 use crate::auth::SessionState;
+
+#[tauri::command]
+pub async fn query_consumer_running_info(
+    session_id: String,
+    request: super::service::diagnostics::DiagnosticRequest,
+    consumer_manager: State<'_, ConsumerManager>,
+    session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
+) -> CommandResult<super::service::diagnostics::DiagnosticResult> {
+    authorize_command(&session_id, &session_state).await?;
+    connection_manager.check_revision(expected_revision)?;
+    request.scope.address(&connection_manager.snapshot()?)?;
+    let result = consumer_manager
+        .query_diagnostic(request, false)
+        .await
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
+}
+
+#[tauri::command]
+pub async fn query_consumer_jstack(
+    session_id: String,
+    request: super::service::diagnostics::DiagnosticRequest,
+    consumer_manager: State<'_, ConsumerManager>,
+    session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
+) -> CommandResult<super::service::diagnostics::DiagnosticResult> {
+    authorize_command(&session_id, &session_state).await?;
+    connection_manager.check_revision(expected_revision)?;
+    request.scope.address(&connection_manager.snapshot()?)?;
+    let result = consumer_manager
+        .query_diagnostic(request, true)
+        .await
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
+}

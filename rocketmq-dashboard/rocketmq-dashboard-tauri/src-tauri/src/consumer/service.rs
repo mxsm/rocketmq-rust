@@ -48,6 +48,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub(crate) mod config_summary;
+pub(crate) mod diagnostics;
 mod mapping;
 
 use self::mapping::build_summary;

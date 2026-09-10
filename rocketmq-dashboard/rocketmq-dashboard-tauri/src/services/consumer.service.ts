@@ -3,6 +3,8 @@ import type {
     ConsumerConfigQueryRequest,
     ConsumerConfigView,
     ConsumerConfigSummary,
+    ConsumerDiagnosticRequest,
+    ConsumerDiagnosticResult,
     ConsumerCreateOrUpdateRequest,
     ConsumerDeleteRequest,
     ConsumerConnectionQueryRequest,
@@ -17,6 +19,13 @@ import type {
 } from '../features/consumer/types/consumer.types';
 
 export class ConsumerService {
+    static queryRunningInfo(request: ConsumerDiagnosticRequest): Promise<ConsumerDiagnosticResult> {
+        return invokeAuthenticatedCommand('query_consumer_running_info', { request });
+    }
+    static queryJstack(request: ConsumerDiagnosticRequest): Promise<ConsumerDiagnosticResult> {
+        return invokeAuthenticatedCommand('query_consumer_jstack', { request });
+    }
+
     static async queryConsumerConfigSummary(consumerGroup: string): Promise<ConsumerConfigSummary> {
         return invokeAuthenticatedCommand<ConsumerConfigSummary>('query_consumer_config_summary', { consumerGroup });
     }
