@@ -34,6 +34,7 @@ pub(crate) struct SessionState {
     storage: StorageManager,
     auth: AuthService,
     ttl_ms: i64,
+    audit: Option<crate::audit::AuditContext>,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
@@ -49,8 +50,14 @@ impl SessionState {
             storage,
             auth,
             ttl_ms: ttl_millis(configured.as_deref())?,
+            audit: None,
             clock: Arc::new(|| Utc::now().timestamp_millis()),
         })
+    }
+
+    pub(crate) fn with_audit(mut self, audit: crate::audit::AuditContext) -> Self {
+        self.audit = Some(audit);
+        self
     }
 
     pub(crate) fn start_cleanup(&self) -> DashboardResult<()> {
@@ -85,6 +92,7 @@ impl SessionState {
     pub(crate) async fn login(&self, username: String, password: String) -> DashboardResult<AuthSessionResponse> {
         let auth = self.auth.clone();
         let clock = self.clock.clone();
+        let audit = self.audit.clone();
         let ttl = self.ttl_ms;
         self.storage
             .run("session-login", move |connection| {
@@ -116,6 +124,9 @@ impl SessionState {
                     params![Utc::now().to_rfc3339(), user.id],
                 )?;
                 let session = lookup(&transaction, &digest(&token), now)?;
+                if let Some(audit) = audit {
+                    audit.record_success(&transaction, &user.username)?;
+                }
                 transaction.commit()?;
                 Ok(AuthSessionResponse {
                     session_id: token,
@@ -160,12 +171,20 @@ impl SessionState {
     pub(crate) async fn logout(&self, token: String) -> DashboardResult<()> {
         let hash = digest(&token);
         let clock = self.clock.clone();
+        let audit = self.audit.clone();
         self.storage
             .run("session-logout", move |connection| {
-                connection.execute(
+                let now = clock();
+                let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                if let Some(audit) = audit {
+                    let user = lookup(&transaction, &hash, now)?;
+                    audit.record_success(&transaction, &user.username)?;
+                }
+                transaction.execute(
                     "UPDATE sessions SET revoked_at_ms = ?1 WHERE token_digest = ?2 AND revoked_at_ms IS NULL",
-                    params![clock(), hash],
+                    params![now, hash],
                 )?;
+                transaction.commit()?;
                 Ok(())
             })
             .await
@@ -196,6 +215,7 @@ impl SessionState {
         let auth = self.auth.clone();
         let hash = digest(&token);
         let clock = self.clock.clone();
+        let audit = self.audit.clone();
         self.storage
             .run("session-change-password", move |connection| {
                 let session = lookup(connection, &hash, clock())?;
@@ -223,6 +243,9 @@ impl SessionState {
                     "UPDATE sessions SET revoked_at_ms = ?1 WHERE user_id = ?2 AND revoked_at_ms IS NULL",
                     params![now, user.id],
                 )?;
+                if let Some(audit) = audit {
+                    audit.record_success(&transaction, &user.username)?;
+                }
                 transaction.commit()?;
                 Ok(())
             })
@@ -286,6 +309,7 @@ impl SessionState {
     pub(crate) async fn revoke(&self, token: String, username: String) -> DashboardResult<RevokeSessionsResponse> {
         let hash = digest(&token);
         let clock = self.clock.clone();
+        let audit = self.audit.clone();
         self.storage
             .run("session-revoke-account", move |connection| {
                 let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -299,6 +323,9 @@ impl SessionState {
                     "UPDATE sessions SET revoked_at_ms = ?1 WHERE user_id = ?2 AND revoked_at_ms IS NULL",
                     params![now, actor.user_id],
                 )?;
+                if let Some(audit) = audit {
+                    audit.record_success(&transaction, &actor.username)?;
+                }
                 transaction.commit()?;
                 Ok(RevokeSessionsResponse {
                     revoked_count,

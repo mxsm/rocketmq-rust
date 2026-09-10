@@ -50,7 +50,7 @@ them; choose a new data directory to start fresh.
 
 ## Schema
 
-Schema version 2 contains `dashboard_schema`, `users`, `sessions`, and connection configuration tables. Version 1 development databases are not migrated; select a new data directory. The account table is:
+Schema version 3 contains `dashboard_schema`, `users`, `sessions`, `audit_events`, and connection configuration tables. Version 1/2 development databases are not migrated; select a new data directory. The account table is:
 
 ```sql
 CREATE TABLE IF NOT EXISTS users (

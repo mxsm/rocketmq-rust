@@ -13,6 +13,7 @@ A RocketMQ-Rust desktop dashboard built with Tauri, React, and Rust.
 - Local embedded authentication with SQLite
 - Argon2 password hashing
 - Forced bootstrap password change on first login
+- Audit history with filters, cursor pagination, explicit uncertain outcomes, and persistent audit-write warnings
 - Persistent sessions with fixed expiry, restart restoration, and account-wide revocation
 
 ## Authentication Quick Start
@@ -44,7 +45,7 @@ them; choose a new data directory to start fresh.
 
 Sessions expire after eight hours by default (`DASHBOARD_TAURI_SESSION_TTL_SECS` overrides this). Password changes revoke all sessions and require a new login. Account ¡ú Sessions lists safe identifiers and can sign out the entire account.
 
-The current fresh schema is version 2; version 1 development databases are not migrated. Select a new data directory when changing from an older format.
+The current fresh schema is version 3; version 1/2 development databases are not migrated. Select a new data directory when changing from an older format.
 
 For more detail, see [doc/AUTH_CONFIG.md](./doc/AUTH_CONFIG.md).
 

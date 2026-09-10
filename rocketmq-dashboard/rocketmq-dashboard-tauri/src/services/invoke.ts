@@ -15,6 +15,7 @@ export interface CommandErrorPayload {
     category: CommandErrorCategory;
     retryable: boolean;
     field?: string;
+    auditWarning?: string;
 }
 
 export class DashboardClientError extends Error {
@@ -66,10 +67,24 @@ export const isDashboardClientError = (error: unknown): error is DashboardClient
 export const dashboardErrorMessage = (error: unknown, fallback: string): string =>
     isDashboardClientError(error) && error.message.trim().length > 0 ? error.message : fallback;
 
+const auditWarningListeners = new Set<(message: string) => void>();
+export const subscribeAuditWarning = (listener: (message: string) => void): (() => void) => {
+    auditWarningListeners.add(listener);
+    return () => { auditWarningListeners.delete(listener); };
+};
+const reportAuditWarning = (value: unknown): void => {
+    if (value && typeof value === 'object' && 'auditWarning' in value && typeof value.auditWarning === 'string') {
+        for (const listener of auditWarningListeners) listener(value.auditWarning);
+    }
+};
+
 const invokeDecoded = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
     try {
-        return await invoke<T>(command, args);
+        const result = await invoke<T>(command, args);
+        reportAuditWarning(result);
+        return result;
     } catch (error) {
+        if (isCommandError(error)) reportAuditWarning(error);
         throw normalizeCommandError(error);
     }
 };

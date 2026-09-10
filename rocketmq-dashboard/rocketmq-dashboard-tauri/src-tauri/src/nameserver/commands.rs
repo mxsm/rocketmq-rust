@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::audit::{AuditAccess, AuditAction, AuditManager, Audited};
 use crate::nameserver::NameServerManager;
 use crate::nameserver::types::NameServerHomePageView;
 use rocketmq_dashboard_common::NameServerMutationResult;
@@ -33,9 +34,18 @@ pub async fn add_name_server(
     address: String,
     nameserver_manager: State<'_, NameServerManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<NameServerMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    nameserver_manager.add_name_server(&address).map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<NameServerMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let nameserver_manager = nameserver_manager.inner().clone();
+    let local_audit = audit_manager.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::AddNameServer, None, move |_audit| async move {
+            local_audit
+                .run_local(move || nameserver_manager.add_name_server(&address))
+                .await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -44,9 +54,18 @@ pub async fn switch_name_server(
     address: String,
     nameserver_manager: State<'_, NameServerManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<NameServerMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    nameserver_manager.switch_name_server(&address).map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<NameServerMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let nameserver_manager = nameserver_manager.inner().clone();
+    let local_audit = audit_manager.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::SwitchNameServer, None, move |_audit| async move {
+            local_audit
+                .run_local(move || nameserver_manager.switch_name_server(&address))
+                .await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -55,9 +74,18 @@ pub async fn delete_name_server(
     address: String,
     nameserver_manager: State<'_, NameServerManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<NameServerMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    nameserver_manager.delete_name_server(&address).map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<NameServerMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let nameserver_manager = nameserver_manager.inner().clone();
+    let local_audit = audit_manager.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::DeleteNameServer, None, move |_audit| async move {
+            local_audit
+                .run_local(move || nameserver_manager.delete_name_server(&address))
+                .await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -66,9 +94,18 @@ pub async fn update_vip_channel(
     enabled: bool,
     nameserver_manager: State<'_, NameServerManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<NameServerMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    nameserver_manager.update_vip_channel(enabled).map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<NameServerMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let nameserver_manager = nameserver_manager.inner().clone();
+    let local_audit = audit_manager.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::UpdateVip, None, move |_audit| async move {
+            local_audit
+                .run_local(move || nameserver_manager.update_vip_channel(enabled))
+                .await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -77,9 +114,18 @@ pub async fn update_use_tls(
     enabled: bool,
     nameserver_manager: State<'_, NameServerManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<NameServerMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    nameserver_manager.update_use_tls(enabled).map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<NameServerMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let nameserver_manager = nameserver_manager.inner().clone();
+    let local_audit = audit_manager.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::UpdateTls, None, move |_audit| async move {
+            local_audit
+                .run_local(move || nameserver_manager.update_use_tls(enabled))
+                .await
+        })
+        .await
 }
 use crate::auth::SessionState;
 use crate::error::CommandResult;

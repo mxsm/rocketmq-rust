@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::audit::{AuditAccess, AuditAction, AuditManager, Audited};
 use crate::proxy::ProxyManager;
 use rocketmq_dashboard_common::ProxyConfigSnapshot;
 use rocketmq_dashboard_common::ProxyMutationResult;
@@ -33,9 +34,18 @@ pub async fn add_proxy_addr(
     address: String,
     proxy_manager: State<'_, ProxyManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<ProxyMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    proxy_manager.add_proxy_addr(&address).map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<ProxyMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let proxy_manager = proxy_manager.inner().clone();
+    let local_audit = audit_manager.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::AddProxy, None, move |_audit| async move {
+            local_audit
+                .run_local(move || proxy_manager.add_proxy_addr(&address))
+                .await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -44,9 +54,18 @@ pub async fn switch_proxy_addr(
     address: String,
     proxy_manager: State<'_, ProxyManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<ProxyMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    proxy_manager.switch_proxy_addr(&address).map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<ProxyMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let proxy_manager = proxy_manager.inner().clone();
+    let local_audit = audit_manager.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::SwitchProxy, None, move |_audit| async move {
+            local_audit
+                .run_local(move || proxy_manager.switch_proxy_addr(&address))
+                .await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -55,9 +74,18 @@ pub async fn delete_proxy_addr(
     address: String,
     proxy_manager: State<'_, ProxyManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<ProxyMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    proxy_manager.delete_proxy_addr(&address).map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<ProxyMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let proxy_manager = proxy_manager.inner().clone();
+    let local_audit = audit_manager.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::DeleteProxy, None, move |_audit| async move {
+            local_audit
+                .run_local(move || proxy_manager.delete_proxy_addr(&address))
+                .await
+        })
+        .await
 }
 use crate::auth::SessionState;
 use crate::error::CommandResult;

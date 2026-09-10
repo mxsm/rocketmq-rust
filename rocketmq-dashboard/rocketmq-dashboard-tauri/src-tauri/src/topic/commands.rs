@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::audit::{AuditAccess, AuditAction, AuditManager, Audited};
 use crate::topic::service::TopicManager;
 use crate::topic::types::TopicConfigView;
 use crate::topic::types::TopicConsumerGroupListResponse;
@@ -81,9 +82,18 @@ pub async fn create_or_update_topic(
     request: TopicConfigRequest,
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<TopicMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    topic_manager.create_or_update_topic(request).await.map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<TopicMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let topic_manager = topic_manager.inner().clone();
+    audit_manager
+        .execute(
+            access,
+            AuditAction::UpsertTopic,
+            Some(request.topic_name.clone()),
+            move |_audit| async move { topic_manager.create_or_update_topic(request).await },
+        )
+        .await
 }
 
 #[tauri::command]
@@ -92,9 +102,18 @@ pub async fn delete_topic(
     request: DeleteTopicRequest,
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<TopicMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    topic_manager.delete_topic(request).await.map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<TopicMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let topic_manager = topic_manager.inner().clone();
+    audit_manager
+        .execute(
+            access,
+            AuditAction::DeleteTopic,
+            Some(request.topic.clone()),
+            move |_audit| async move { topic_manager.delete_topic(request).await },
+        )
+        .await
 }
 
 #[tauri::command]
@@ -103,9 +122,18 @@ pub async fn delete_topic_by_broker(
     request: DeleteTopicByBrokerRequest,
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<TopicMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    topic_manager.delete_topic_by_broker(request).await.map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<TopicMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let topic_manager = topic_manager.inner().clone();
+    audit_manager
+        .execute(
+            access,
+            AuditAction::DeleteTopicByBroker,
+            Some(request.topic.clone()),
+            move |_audit| async move { topic_manager.delete_topic_by_broker(request).await },
+        )
+        .await
 }
 
 #[tauri::command]
@@ -139,9 +167,15 @@ pub async fn reset_consumer_offset(
     request: ResetOffsetRequest,
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<TopicMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    topic_manager.reset_consumer_offset(request).await.map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<TopicMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let topic_manager = topic_manager.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::ResetOffset, None, move |_audit| async move {
+            topic_manager.reset_consumer_offset(request).await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -150,9 +184,15 @@ pub async fn skip_message_accumulate(
     request: ResetOffsetRequest,
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<TopicMutationResult> {
-    authorize_command(&session_id, &session_state).await?;
-    topic_manager.skip_message_accumulate(request).await.map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<TopicMutationResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let topic_manager = topic_manager.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::SkipMessages, None, move |_audit| async move {
+            topic_manager.skip_message_accumulate(request).await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -161,9 +201,18 @@ pub async fn send_topic_message(
     request: SendTopicMessageRequest,
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<TopicSendMessageResult> {
-    authorize_command(&session_id, &session_state).await?;
-    topic_manager.send_topic_message(request).await.map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<TopicSendMessageResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let topic_manager = topic_manager.inner().clone();
+    audit_manager
+        .execute(
+            access,
+            AuditAction::SendMessage,
+            Some(request.topic.clone()),
+            move |_audit| async move { topic_manager.send_topic_message(request).await },
+        )
+        .await
 }
 use crate::auth::SessionState;
 use crate::error::CommandResult;

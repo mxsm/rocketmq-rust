@@ -157,6 +157,7 @@ impl DashboardError {
             category,
             retryable,
             field,
+            audit_warning: None,
         }
     }
 }
@@ -218,6 +219,8 @@ pub(crate) struct CommandError {
     pub(crate) retryable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) audit_warning: Option<&'static str>,
 }
 
 impl From<DashboardError> for CommandError {
@@ -319,7 +322,10 @@ mod tests {
                 command_count += 1;
                 assert!(command.contains("session_id: String"));
                 assert!(command.contains("State<'_, SessionState>"));
-                assert!(command.contains("authorize_command(&session_id, &session_state).await?;"));
+                assert!(
+                    command.contains("authorize_command(&session_id, &session_state).await?;")
+                        || command.contains("AuditAccess::dashboard(&session_state, session_id)")
+                );
             }
         }
 

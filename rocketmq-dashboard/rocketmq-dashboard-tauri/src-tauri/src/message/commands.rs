@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::audit::{AuditAccess, AuditAction, AuditManager, Audited};
 use crate::message::service::MessageManager;
 use crate::message::types::DlqBatchMessageExportView;
 use crate::message::types::DlqMessageExportView;
@@ -118,9 +119,15 @@ pub async fn resend_dlq_message(
     request: DlqResendMessageRequest,
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<MessageResendResult> {
-    authorize_command(&session_id, &session_state).await?;
-    message_manager.resend_dlq_message(request).await.map_err(Into::into)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<MessageResendResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let message_manager = message_manager.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::ResendDlq, None, move |_audit| async move {
+            message_manager.resend_dlq_message(request).await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -129,12 +136,15 @@ pub async fn batch_resend_dlq_message(
     request: DlqBatchResendMessageRequest,
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<MessageBatchResendResponse> {
-    authorize_command(&session_id, &session_state).await?;
-    message_manager
-        .batch_resend_dlq_message(request)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<MessageBatchResendResponse>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let message_manager = message_manager.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::BatchResendDlq, None, move |_audit| async move {
+            message_manager.batch_resend_dlq_message(request).await
+        })
         .await
-        .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -168,12 +178,15 @@ pub async fn consume_message_directly(
     request: MessageDirectConsumeRequest,
     message_manager: State<'_, MessageManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<MessageResendResult> {
-    authorize_command(&session_id, &session_state).await?;
-    message_manager
-        .consume_message_directly(request)
+    audit_manager: State<'_, AuditManager>,
+) -> CommandResult<Audited<MessageResendResult>> {
+    let access = AuditAccess::dashboard(&session_state, session_id);
+    let message_manager = message_manager.inner().clone();
+    audit_manager
+        .execute(access, AuditAction::ConsumeDirectly, None, move |_audit| async move {
+            message_manager.consume_message_directly(request).await
+        })
         .await
-        .map_err(Into::into)
 }
 
 #[tauri::command]

@@ -17,7 +17,7 @@ use crate::error::DashboardResult;
 use rusqlite::Connection;
 use rusqlite::TransactionBehavior;
 
-pub(crate) const SCHEMA_VERSION: i64 = 2;
+pub(crate) const SCHEMA_VERSION: i64 = 3;
 
 pub(crate) fn initialize(connection: &mut Connection) -> DashboardResult<()> {
     // IMMEDIATE serializes competing initializers before reading the version.
@@ -62,6 +62,21 @@ pub(crate) fn initialize(connection: &mut Connection) -> DashboardResult<()> {
                 updated_at TEXT NOT NULL,
                 last_login_at TEXT
             );
+            CREATE TABLE audit_events (
+                event_id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL UNIQUE,
+                actor TEXT,
+                action TEXT NOT NULL,
+                resource_type TEXT NOT NULL,
+                resource_name TEXT,
+                environment_id TEXT,
+                outcome TEXT NOT NULL CHECK(outcome IN ('success', 'rejected', 'failed', 'partial', 'unknown')),
+                detail_json TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX audit_time ON audit_events(created_at_ms DESC, event_id DESC);
+            CREATE INDEX audit_actor_time ON audit_events(actor, created_at_ms DESC, event_id DESC);
+            CREATE INDEX audit_action_time ON audit_events(action, created_at_ms DESC, event_id DESC);
             CREATE TABLE sessions (
                 id TEXT PRIMARY KEY,
                 token_digest BLOB NOT NULL UNIQUE,

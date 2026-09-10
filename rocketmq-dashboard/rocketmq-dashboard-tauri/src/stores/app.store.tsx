@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { subscribeAuditWarning } from '../services/invoke';
 import { SessionStorageService } from '../services/session.storage';
 import type { SessionUser } from '../features/auth/types/auth.types';
 
@@ -14,7 +15,8 @@ type Tab =
   | 'MessageTrace'
   | 'DLQ'
   | 'ACL'
-  | 'Account';
+  | 'Account'
+  | 'Audit';
 
 interface AppState {
   isLoggedIn: boolean;
@@ -39,6 +41,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<SessionUser | null>(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
+  const [auditWarning, setAuditWarning] = useState<string | null>(null);
+  useEffect(() => subscribeAuditWarning(setAuditWarning), []);
   const [activeTab, setActiveTab] = useState<Tab>('Dashboard');
 
   const getPageTitle = (tab: Tab) => {
@@ -65,6 +69,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         return 'DLQ Message Management';
       case 'ACL':
         return 'ACL Management';
+      case 'Audit':
+        return 'Audit Events';
       case 'Account':
         return 'Account Overview';
       default:
@@ -113,6 +119,9 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       }}
     >
       {children}
+      {auditWarning && <div role="alert" className="fixed bottom-4 left-4 right-4 z-[100] flex items-center justify-between gap-4 rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm text-amber-950 shadow-lg">
+        <p>{auditWarning}</p><button type="button" className="font-semibold underline" onClick={() => setAuditWarning(null)}>Dismiss</button>
+      </div>}
     </AppContext.Provider>
   );
 };

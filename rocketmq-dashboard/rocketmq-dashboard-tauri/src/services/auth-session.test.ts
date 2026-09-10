@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { AuthService } from './auth.service';
-import { invokeAuthenticatedCommand } from './invoke';
+import { invokeAuthenticatedCommand, subscribeAuditWarning } from './invoke';
 import { SessionStorageService } from './session.storage';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
@@ -73,5 +73,31 @@ describe('authoritative session lifecycle', () => {
         vi.mocked(invoke).mockResolvedValue({ message: 'Password changed' });
         await AuthService.changePassword({ oldPassword: 'old-secret', newPassword: 'new-secret' });
         expect(SessionStorageService.getSessionId()).toBeNull();
+    });
+});
+
+describe('audit warnings', () => {
+    it('preserves the successful receipt and reports a separate warning without retrying', async () => {
+        const warning = vi.fn();
+        const unsubscribe = subscribeAuditWarning(warning);
+        try {
+            const receipt = { success: true, messageId: 'sent-once', auditWarning: 'Audit record unavailable.' };
+            vi.mocked(invoke).mockResolvedValue(receipt);
+            const result = await invokeAuthenticatedCommand('send_topic_message');
+            expect(result).toEqual(receipt);
+            expect(warning).toHaveBeenCalledWith('Audit record unavailable.');
+            expect(invoke).toHaveBeenCalledTimes(1);
+        } finally { unsubscribe(); }
+    });
+
+    it('keeps the operation error when recording its failure also fails', async () => {
+        const warning = vi.fn();
+        const unsubscribe = subscribeAuditWarning(warning);
+        try {
+            vi.mocked(invoke).mockRejectedValue({ code: 'client.component.unavailable', category: 'unavailable', message: 'Client unavailable.', retryable: false, auditWarning: 'Audit record unavailable.' });
+            await expect(invokeAuthenticatedCommand('delete_topic')).rejects.toMatchObject({ code: 'client.component.unavailable' });
+            expect(warning).toHaveBeenCalledOnce();
+            expect(invoke).toHaveBeenCalledTimes(1);
+        } finally { unsubscribe(); }
     });
 });
