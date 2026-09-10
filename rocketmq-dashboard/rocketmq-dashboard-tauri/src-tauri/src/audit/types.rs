@@ -37,6 +37,9 @@ pub(crate) enum AuditAction {
     ResetOffset,
     SkipMessages,
     SendMessage,
+    CreateAclPolicy,
+    UpdateAclPolicy,
+    DeleteAclPolicy,
     CreateAclUser,
     UpdateAclUser,
     DeleteAclUser,
@@ -70,6 +73,9 @@ impl AuditAction {
             Self::ResetOffset => "consumer.reset_offset",
             Self::SkipMessages => "consumer.skip_messages",
             Self::SendMessage => "message.send",
+            Self::CreateAclPolicy => "acl.create_policy",
+            Self::UpdateAclPolicy => "acl.update_policy",
+            Self::DeleteAclPolicy => "acl.delete_policy",
             Self::CreateAclUser => "acl.create_user",
             Self::UpdateAclUser => "acl.update_user",
             Self::DeleteAclUser => "acl.delete_user",
@@ -94,6 +100,7 @@ impl AuditAction {
             | Self::SwitchProxy
             | Self::DeleteProxy => "connection",
             Self::UpsertTopic | Self::DeleteTopic | Self::DeleteTopicByBroker | Self::SendMessage => "topic",
+            Self::CreateAclPolicy | Self::UpdateAclPolicy | Self::DeleteAclPolicy => "acl_policy",
             Self::CreateAclUser | Self::UpdateAclUser | Self::DeleteAclUser => "acl_user",
             Self::UpdateBrokerConfig => "broker",
             Self::ResetOffset
@@ -114,6 +121,9 @@ impl AuditAction {
                 | Self::ResetOffset
                 | Self::SkipMessages
                 | Self::SendMessage
+                | Self::CreateAclPolicy
+                | Self::UpdateAclPolicy
+                | Self::DeleteAclPolicy
                 | Self::CreateAclUser
                 | Self::UpdateAclUser
                 | Self::DeleteAclUser

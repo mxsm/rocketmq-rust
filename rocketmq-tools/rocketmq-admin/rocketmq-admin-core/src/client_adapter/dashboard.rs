@@ -801,6 +801,33 @@ impl dashboard::DashboardAdmin for AdminSession {
         })
     }
 
+    fn dashboard_delete_acl_entry<'a>(
+        &'a self,
+        request: &'a dashboard::DashboardAclEntryDeleteRequest,
+    ) -> AdminFuture<'a, dashboard::AdminMutationResult> {
+        Box::pin(async move {
+            request.validate()?;
+            self.ensure_open()?;
+            let targets = resolve_acl_targets(&self.inner, &request.selector).await?;
+            let target_count = targets.len();
+            for target in targets {
+                self.inner
+                    .delete_acl_entry(
+                        target.broker_addr.as_str().into(),
+                        request.subject.as_str().into(),
+                        request.policy_type.as_str().into(),
+                        request.resource.as_str().into(),
+                    )
+                    .await
+                    .map_err(|error| backend_error("delete_acl_entry", error))?;
+            }
+            Ok(dashboard::AdminMutationResult {
+                message: "ACL policy entry deleted.".into(),
+                target_count,
+            })
+        })
+    }
+
     fn dashboard_query_messages<'a>(
         &'a self,
         request: &'a dashboard::DashboardMessageQuery,
