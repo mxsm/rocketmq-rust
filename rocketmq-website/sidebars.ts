@@ -5,6 +5,7 @@ const sidebars: SidebarsConfig = {
     'introduction',
     'overview/capability-matrix',
     'overview/release-scope',
+    'release-notes/index',
     {
       type: 'category',
       label: 'Getting Started',

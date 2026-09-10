@@ -227,3 +227,7 @@ metrics 标签。
 otelcol-contrib --config distribution/config/otel-collector-observability.yaml
 prometheus --config.file=distribution/config/prometheus-observability.yaml
 ```
+
+## 运维阅读入口
+
+本页保留配置参考。安装采集器、解释指标和调查信号缺失，请阅读[监控](../operations/monitoring.md)；所有权和关闭语义见[错误与可观测性设计](../architecture/errors-observability.md)。

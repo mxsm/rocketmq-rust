@@ -4,7 +4,7 @@
     "description": "The title in the navbar"
   },
   "logo.alt": {
-    "message": "RocketMQ-Rust Logo",
+    "message": "RocketMQ-Rust 标志",
     "description": "The alt text of navbar logo"
   },
   "item.label.Documentation": {
@@ -26,5 +26,20 @@
   "item.label.GitHub": {
     "message": "GitHub",
     "description": "Navbar item with label GitHub"
+  },
+  "item.label.Docs": {
+    "message": "文档"
+  },
+  "item.label.Architecture": {
+    "message": "架构"
+  },
+  "item.label.Examples": {
+    "message": "示例"
+  },
+  "item.label.Community": {
+    "message": "社区"
+  },
+  "item.label.Help us translate": {
+    "message": "帮助翻译"
   }
 }

@@ -244,3 +244,7 @@ Local collector examples remain under `distribution/config`:
 otelcol-contrib --config distribution/config/otel-collector-observability.yaml
 prometheus --config.file=distribution/config/prometheus-observability.yaml
 ```
+
+## Operational context
+
+This page is the configuration reference. Use [monitoring](../operations/monitoring.md) to install collectors, interpret metrics and investigate missing signals; [error and observability design](../architecture/errors-observability.md) explains ownership and shutdown.

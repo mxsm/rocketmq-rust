@@ -39,7 +39,7 @@ export default function AnnouncementBanner(): React.JSX.Element {
                 }}>
           {translate({
               id: 'homepage.announcement.title',
-              message: 'RocketMQ-Rust v0.8.0 is out!',
+              message: 'Explore RocketMQ-Rust release history',
           })}
         </span>
                 <span style={{fontSize: '24px'}}>🚀</span>
@@ -68,7 +68,7 @@ export default function AnnouncementBanner(): React.JSX.Element {
                 >
                     {translate({
                         id: 'homepage.announcement.link',
-                        message: 'See what\'s new →',
+                        message: 'Read release notes →',
                     })}
                 </Link>
             </div>
