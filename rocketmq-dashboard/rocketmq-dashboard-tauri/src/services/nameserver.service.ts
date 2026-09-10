@@ -9,23 +9,23 @@ export class NameServerService {
         return invokeAuthenticatedCommand<NameServerHomePageInfo>('get_name_server_home_page');
     }
 
-    static async addNameServer(address: string): Promise<NameServerMutationResult> {
-        return invokeAuthenticatedCommand<NameServerMutationResult>('add_name_server', { address });
+    static async addNameServer(address: string, expectedRevision: number): Promise<NameServerMutationResult> {
+        return invokeAuthenticatedCommand<NameServerMutationResult>('add_name_server', { address, expectedRevision });
     }
 
-    static async switchNameServer(address: string): Promise<NameServerMutationResult> {
-        return invokeAuthenticatedCommand<NameServerMutationResult>('switch_name_server', { address });
+    static async switchNameServer(address: string, expectedRevision: number): Promise<NameServerMutationResult> {
+        return invokeAuthenticatedCommand<NameServerMutationResult>('switch_name_server', { address, expectedRevision });
     }
 
-    static async deleteNameServer(address: string): Promise<NameServerMutationResult> {
-        return invokeAuthenticatedCommand<NameServerMutationResult>('delete_name_server', { address });
+    static async deleteNameServer(address: string, expectedRevision: number): Promise<NameServerMutationResult> {
+        return invokeAuthenticatedCommand<NameServerMutationResult>('delete_name_server', { address, expectedRevision });
     }
 
-    static async updateVipChannel(enabled: boolean): Promise<NameServerMutationResult> {
-        return invokeAuthenticatedCommand<NameServerMutationResult>('update_vip_channel', { enabled });
+    static async updateVipChannel(enabled: boolean, expectedRevision: number): Promise<NameServerMutationResult> {
+        return invokeAuthenticatedCommand<NameServerMutationResult>('update_vip_channel', { enabled, expectedRevision });
     }
 
-    static async updateUseTls(enabled: boolean): Promise<NameServerMutationResult> {
-        return invokeAuthenticatedCommand<NameServerMutationResult>('update_use_tls', { enabled });
+    static async updateUseTls(enabled: boolean, expectedRevision: number): Promise<NameServerMutationResult> {
+        return invokeAuthenticatedCommand<NameServerMutationResult>('update_use_tls', { enabled, expectedRevision });
     }
 }

@@ -1,3 +1,4 @@
+import type { ConnectionSettingsView } from '../../../services/connection.store';
 export interface NameServerConfigSnapshot {
     currentNamesrv: string | null;
     namesrvAddrList: string[];
@@ -13,9 +14,10 @@ export interface NameServerStatusItem {
 
 export interface NameServerHomePageInfo extends NameServerConfigSnapshot {
     servers: NameServerStatusItem[];
+    settings: ConnectionSettingsView;
 }
 
 export interface NameServerMutationResult {
     message: string;
-    snapshot: NameServerConfigSnapshot;
+    settings: ConnectionSettingsView;
 }

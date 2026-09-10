@@ -14,13 +14,16 @@
 
 use crate::error::DashboardResult as Result;
 use crate::nameserver::db::NameServerDb;
+#[cfg(test)]
 use crate::nameserver::db::SqliteNameServerStore;
 use crate::nameserver::runtime::NameServerRuntimeState;
 use crate::nameserver::types::NameServerHomePageView;
 use crate::nameserver::types::NameServerStatusItem;
 use rocketmq_admin_core::client_adapter::AdminBuilder;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
+#[cfg(test)]
 use rocketmq_dashboard_common::NameServerMutationResult;
+#[cfg(test)]
 use rocketmq_dashboard_common::NameServerService;
 use std::future::Future;
 use std::pin::Pin;
@@ -81,6 +84,7 @@ impl NameServerProbe for DefaultNameServerProbe {
 
 #[derive(Clone)]
 pub(crate) struct NameServerManager {
+    #[cfg(test)]
     service: Arc<NameServerService<SqliteNameServerStore, NameServerRuntimeState>>,
     #[cfg_attr(not(test), allow(dead_code))]
     runtime: Arc<NameServerRuntimeState>,
@@ -100,60 +104,65 @@ impl NameServerManager {
         runtime: Arc<NameServerRuntimeState>,
         probe: Arc<dyn NameServerProbe>,
     ) -> Result<Self> {
+        #[cfg(test)]
         let store = Arc::new(SqliteNameServerStore::new(db));
+        #[cfg(test)]
         let service = Arc::new(NameServerService::new(store, runtime.clone()));
 
+        #[cfg(not(test))]
+        let _ = db;
         Ok(Self {
+            #[cfg(test)]
             service,
             runtime,
             probe,
         })
     }
 
+    #[cfg(test)]
     pub(crate) async fn home_page_info(&self) -> Result<NameServerHomePageView> {
-        let home_page = self.service.home_page_info()?;
-        let snapshot = NameServerConfigSnapshot {
-            current_namesrv: home_page.current_namesrv.clone(),
-            namesrv_addr_list: home_page.namesrv_addr_list.clone(),
-            use_vip_channel: home_page.use_vip_channel,
-            use_tls: home_page.use_tls,
-        };
+        self.home_page_for_snapshot(self.runtime.snapshot()).await
+    }
 
-        let mut servers = Vec::with_capacity(home_page.namesrv_addr_list.len());
-        for address in &home_page.namesrv_addr_list {
+    pub(crate) async fn home_page_for_snapshot(
+        &self,
+        snapshot: NameServerConfigSnapshot,
+    ) -> Result<NameServerHomePageView> {
+        let mut servers = Vec::with_capacity(snapshot.namesrv_addr_list.len());
+        for address in &snapshot.namesrv_addr_list {
             let is_alive = self.probe.probe(&snapshot, address).await;
             servers.push(NameServerStatusItem {
                 address: address.clone(),
-                is_current: home_page.current_namesrv.as_deref() == Some(address.as_str()),
+                is_current: snapshot.current_namesrv.as_deref() == Some(address.as_str()),
                 is_alive,
             });
         }
 
         Ok(NameServerHomePageView {
-            current_namesrv: home_page.current_namesrv,
-            namesrv_addr_list: home_page.namesrv_addr_list,
-            use_vip_channel: home_page.use_vip_channel,
-            use_tls: home_page.use_tls,
+            current_namesrv: snapshot.current_namesrv,
+            namesrv_addr_list: snapshot.namesrv_addr_list,
+            use_vip_channel: snapshot.use_vip_channel,
+            use_tls: snapshot.use_tls,
             servers,
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn add_name_server(&self, address: &str) -> Result<NameServerMutationResult> {
         Ok(self.service.add_nameserver(address)?)
     }
 
+    #[cfg(test)]
     pub(crate) fn switch_name_server(&self, address: &str) -> Result<NameServerMutationResult> {
         Ok(self.service.update_current_nameserver(address)?)
     }
 
-    pub(crate) fn delete_name_server(&self, address: &str) -> Result<NameServerMutationResult> {
-        Ok(self.service.delete_nameserver(address)?)
-    }
-
+    #[cfg(test)]
     pub(crate) fn update_vip_channel(&self, enabled: bool) -> Result<NameServerMutationResult> {
         Ok(self.service.update_use_vip_channel(enabled)?)
     }
 
+    #[cfg(test)]
     pub(crate) fn update_use_tls(&self, enabled: bool) -> Result<NameServerMutationResult> {
         Ok(self.service.update_use_tls(enabled)?)
     }
@@ -174,6 +183,7 @@ mod tests {
     use super::NameServerManager;
     use super::NameServerProbe;
     use crate::nameserver::db::NameServerDb;
+    #[cfg(test)]
     use crate::nameserver::db::SqliteNameServerStore;
     use crate::nameserver::runtime::NameServerRuntimeState;
     use crate::nameserver::runtime::test_client_runtime;

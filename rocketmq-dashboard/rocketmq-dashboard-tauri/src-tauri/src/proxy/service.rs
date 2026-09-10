@@ -15,7 +15,6 @@
 use crate::error::DashboardError;
 use crate::error::DashboardResult as Result;
 use crate::proxy::db::ProxyDb;
-use rocketmq_dashboard_common::ProxyConfigSnapshot;
 use rocketmq_dashboard_common::ProxyMutationResult;
 use rocketmq_dashboard_common::normalize_proxy_address;
 
@@ -27,10 +26,6 @@ pub(crate) struct ProxyManager {
 impl ProxyManager {
     pub(crate) fn new(db: ProxyDb) -> Result<Self> {
         Ok(Self { db })
-    }
-
-    pub(crate) fn home_page_info(&self) -> Result<ProxyConfigSnapshot> {
-        self.db.load_snapshot()
     }
 
     pub(crate) fn add_proxy_addr(&self, address: &str) -> Result<ProxyMutationResult> {

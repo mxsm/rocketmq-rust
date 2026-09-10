@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::audit::{AuditAccess, AuditAction, AuditManager, Audited};
+use crate::connection::ConnectionManager;
 use crate::consumer::service::ConsumerManager;
 use crate::consumer::types::ConsumerConfigView;
 use crate::consumer::types::ConsumerConnectionView;
@@ -37,12 +38,17 @@ pub async fn query_consumer_groups(
     request: ConsumerGroupListRequest,
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<ConsumerGroupListResponse> {
     authorize_command(&session_id, &session_state).await?;
-    consumer_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = consumer_manager
         .query_consumer_groups(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -51,12 +57,17 @@ pub async fn refresh_consumer_group(
     request: ConsumerGroupRefreshRequest,
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<ConsumerGroupListItem> {
     authorize_command(&session_id, &session_state).await?;
-    consumer_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = consumer_manager
         .refresh_consumer_group(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -65,12 +76,17 @@ pub async fn refresh_all_consumer_groups(
     request: ConsumerGroupListRequest,
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<ConsumerGroupListResponse> {
     authorize_command(&session_id, &session_state).await?;
-    consumer_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = consumer_manager
         .refresh_all_consumer_groups(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -79,12 +95,17 @@ pub async fn query_consumer_connection(
     request: ConsumerConnectionQueryRequest,
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<ConsumerConnectionView> {
     authorize_command(&session_id, &session_state).await?;
-    consumer_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = consumer_manager
         .query_consumer_connection(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -93,12 +114,17 @@ pub async fn query_consumer_topic_detail(
     request: ConsumerTopicDetailQueryRequest,
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<ConsumerTopicDetailView> {
     authorize_command(&session_id, &session_state).await?;
-    consumer_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = consumer_manager
         .query_consumer_topic_detail(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -107,12 +133,17 @@ pub async fn query_consumer_config(
     request: ConsumerConfigQueryRequest,
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<ConsumerConfigView> {
     authorize_command(&session_id, &session_state).await?;
-    consumer_manager
+    connection_manager.check_revision(expected_revision)?;
+    let result = consumer_manager
         .query_consumer_config(request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -122,7 +153,10 @@ pub async fn create_or_update_consumer_group(
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
     audit_manager: State<'_, AuditManager>,
+    connection_manager: State<'_, ConnectionManager>,
+    expected_revision: i64,
 ) -> CommandResult<Audited<ConsumerMutationResult>> {
+    let connection_manager = connection_manager.inner().clone();
     let access = AuditAccess::dashboard(&session_state, session_id);
     let consumer_manager = consumer_manager.inner().clone();
     audit_manager
@@ -130,7 +164,10 @@ pub async fn create_or_update_consumer_group(
             access,
             AuditAction::UpsertConsumer,
             Some(request.consumer_group.clone()),
-            move |_audit| async move { consumer_manager.create_or_update_consumer_group(request).await },
+            move |audit| async move {
+                let _lease = connection_manager.mutation_lease(expected_revision, &audit).await?;
+                consumer_manager.create_or_update_consumer_group(request).await
+            },
         )
         .await
 }
@@ -142,7 +179,10 @@ pub async fn delete_consumer_group(
     consumer_manager: State<'_, ConsumerManager>,
     session_state: State<'_, SessionState>,
     audit_manager: State<'_, AuditManager>,
+    connection_manager: State<'_, ConnectionManager>,
+    expected_revision: i64,
 ) -> CommandResult<Audited<ConsumerMutationResult>> {
+    let connection_manager = connection_manager.inner().clone();
     let access = AuditAccess::dashboard(&session_state, session_id);
     let consumer_manager = consumer_manager.inner().clone();
     audit_manager
@@ -150,7 +190,10 @@ pub async fn delete_consumer_group(
             access,
             AuditAction::DeleteConsumer,
             Some(request.consumer_group.clone()),
-            move |_audit| async move { consumer_manager.delete_consumer_group(request).await },
+            move |audit| async move {
+                let _lease = connection_manager.mutation_lease(expected_revision, &audit).await?;
+                consumer_manager.delete_consumer_group(request).await
+            },
         )
         .await
 }

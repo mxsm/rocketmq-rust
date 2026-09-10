@@ -17,6 +17,7 @@
 mod audit;
 mod auth;
 mod cluster;
+mod connection;
 mod consumer;
 mod dashboard;
 mod error;
@@ -94,7 +95,6 @@ struct DashboardServices {
     message_manager: message::MessageManager,
     producer_manager: producer::ProducerManager,
     topic_manager: topic::TopicManager,
-    proxy_manager: proxy::ProxyManager,
 }
 
 fn initialize_services(
@@ -134,7 +134,6 @@ fn initialize_services(
     let proxy_db = proxy::ProxyDb::from_path(database_path);
     proxy_db.init()?;
     log::info!("Local Proxy SQLite tables initialized");
-    let proxy_manager = proxy::ProxyManager::new(proxy_db)?;
 
     Ok(DashboardServices {
         auth_service,
@@ -145,7 +144,6 @@ fn initialize_services(
         message_manager,
         producer_manager,
         topic_manager,
-        proxy_manager,
     })
 }
 
@@ -212,12 +210,15 @@ fn build_application() -> Result<DashboardApplication, i32> {
                 message_manager,
                 producer_manager,
                 topic_manager,
-                proxy_manager,
             } = tauri::async_runtime::block_on(storage.run("storage-bootstrap", move |_connection| {
                 initialize_services(&database_path, setup_client_runtime)
             }))?;
             log::info!("Dashboard storage initialized: {:?}", storage.health());
 
+            let connections = tauri::async_runtime::block_on(connection::ConnectionManager::initialize(
+                storage.clone(),
+                nameserver_runtime.clone(),
+            ))?;
             let audit = audit::AuditManager::new(storage.clone(), audit_context);
             audit.start_cleanup()?;
             setup_lifecycle
@@ -237,18 +238,20 @@ fn build_application() -> Result<DashboardApplication, i32> {
             app.manage(storage);
             app.manage(sessions);
             app.manage(audit);
+            app.manage(connections);
             app.manage(nameserver_runtime);
             app.manage(nameserver_manager);
             app.manage(cluster_manager);
             app.manage(consumer_manager);
             app.manage(message_manager);
             app.manage(producer_manager);
-            app.manage(proxy_manager);
             app.manage(topic_manager);
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            connection::commands::get_connection_settings,
+            connection::commands::replace_name_servers,
             audit::commands::query_audit_events,
             auth::commands::login,
             auth::commands::logout,

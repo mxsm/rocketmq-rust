@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,36 +13,51 @@
 // limitations under the License.
 
 use crate::audit::{AuditAccess, AuditAction, AuditManager, Audited};
-use crate::nameserver::NameServerManager;
-use crate::nameserver::types::NameServerHomePageView;
-use rocketmq_dashboard_common::NameServerMutationResult;
+use crate::auth::SessionState;
+use crate::connection::{
+    ConnectionChange, ConnectionManager, ConnectionMutationResult, ConnectionProjection, EndpointKind,
+};
+use crate::error::{CommandResult, authorize_command};
+use crate::nameserver::{NameServerManager, types::NameServerHomePageView};
 use tauri::State;
 
 #[tauri::command]
 pub async fn get_name_server_home_page(
     session_id: String,
-    nameserver_manager: State<'_, NameServerManager>,
     session_state: State<'_, SessionState>,
-) -> CommandResult<NameServerHomePageView> {
+    nameserver_manager: State<'_, NameServerManager>,
+    connection_manager: State<'_, ConnectionManager>,
+) -> CommandResult<ConnectionProjection<NameServerHomePageView>> {
     authorize_command(&session_id, &session_state).await?;
-    nameserver_manager.home_page_info().await.map_err(Into::into)
+    let settings = connection_manager.snapshot()?;
+    let value = nameserver_manager
+        .home_page_for_snapshot(settings.nameserver.clone())
+        .await?;
+    Ok(ConnectionProjection { value, settings })
 }
 
 #[tauri::command]
 pub async fn add_name_server(
     session_id: String,
     address: String,
-    nameserver_manager: State<'_, NameServerManager>,
+    expected_revision: i64,
     session_state: State<'_, SessionState>,
+    connection_manager: State<'_, ConnectionManager>,
     audit_manager: State<'_, AuditManager>,
-) -> CommandResult<Audited<NameServerMutationResult>> {
+) -> CommandResult<Audited<ConnectionMutationResult>> {
     let access = AuditAccess::dashboard(&session_state, session_id);
-    let nameserver_manager = nameserver_manager.inner().clone();
-    let local_audit = audit_manager.inner().clone();
+    let manager = connection_manager.inner().clone();
     audit_manager
-        .execute(access, AuditAction::AddNameServer, None, move |_audit| async move {
-            local_audit
-                .run_local(move || nameserver_manager.add_name_server(&address))
+        .execute(access, AuditAction::AddNameServer, None, move |audit| async move {
+            manager
+                .change(
+                    expected_revision,
+                    ConnectionChange::Add {
+                        kind: EndpointKind::NameServer,
+                        address,
+                    },
+                    audit,
+                )
                 .await
         })
         .await
@@ -52,17 +67,24 @@ pub async fn add_name_server(
 pub async fn switch_name_server(
     session_id: String,
     address: String,
-    nameserver_manager: State<'_, NameServerManager>,
+    expected_revision: i64,
     session_state: State<'_, SessionState>,
+    connection_manager: State<'_, ConnectionManager>,
     audit_manager: State<'_, AuditManager>,
-) -> CommandResult<Audited<NameServerMutationResult>> {
+) -> CommandResult<Audited<ConnectionMutationResult>> {
     let access = AuditAccess::dashboard(&session_state, session_id);
-    let nameserver_manager = nameserver_manager.inner().clone();
-    let local_audit = audit_manager.inner().clone();
+    let manager = connection_manager.inner().clone();
     audit_manager
-        .execute(access, AuditAction::SwitchNameServer, None, move |_audit| async move {
-            local_audit
-                .run_local(move || nameserver_manager.switch_name_server(&address))
+        .execute(access, AuditAction::SwitchNameServer, None, move |audit| async move {
+            manager
+                .change(
+                    expected_revision,
+                    ConnectionChange::Switch {
+                        kind: EndpointKind::NameServer,
+                        address,
+                    },
+                    audit,
+                )
                 .await
         })
         .await
@@ -72,17 +94,24 @@ pub async fn switch_name_server(
 pub async fn delete_name_server(
     session_id: String,
     address: String,
-    nameserver_manager: State<'_, NameServerManager>,
+    expected_revision: i64,
     session_state: State<'_, SessionState>,
+    connection_manager: State<'_, ConnectionManager>,
     audit_manager: State<'_, AuditManager>,
-) -> CommandResult<Audited<NameServerMutationResult>> {
+) -> CommandResult<Audited<ConnectionMutationResult>> {
     let access = AuditAccess::dashboard(&session_state, session_id);
-    let nameserver_manager = nameserver_manager.inner().clone();
-    let local_audit = audit_manager.inner().clone();
+    let manager = connection_manager.inner().clone();
     audit_manager
-        .execute(access, AuditAction::DeleteNameServer, None, move |_audit| async move {
-            local_audit
-                .run_local(move || nameserver_manager.delete_name_server(&address))
+        .execute(access, AuditAction::DeleteNameServer, None, move |audit| async move {
+            manager
+                .change(
+                    expected_revision,
+                    ConnectionChange::Delete {
+                        kind: EndpointKind::NameServer,
+                        address,
+                    },
+                    audit,
+                )
                 .await
         })
         .await
@@ -92,17 +121,17 @@ pub async fn delete_name_server(
 pub async fn update_vip_channel(
     session_id: String,
     enabled: bool,
-    nameserver_manager: State<'_, NameServerManager>,
+    expected_revision: i64,
     session_state: State<'_, SessionState>,
+    connection_manager: State<'_, ConnectionManager>,
     audit_manager: State<'_, AuditManager>,
-) -> CommandResult<Audited<NameServerMutationResult>> {
+) -> CommandResult<Audited<ConnectionMutationResult>> {
     let access = AuditAccess::dashboard(&session_state, session_id);
-    let nameserver_manager = nameserver_manager.inner().clone();
-    let local_audit = audit_manager.inner().clone();
+    let manager = connection_manager.inner().clone();
     audit_manager
-        .execute(access, AuditAction::UpdateVip, None, move |_audit| async move {
-            local_audit
-                .run_local(move || nameserver_manager.update_vip_channel(enabled))
+        .execute(access, AuditAction::UpdateVip, None, move |audit| async move {
+            manager
+                .change(expected_revision, ConnectionChange::Vip(enabled), audit)
                 .await
         })
         .await
@@ -112,21 +141,18 @@ pub async fn update_vip_channel(
 pub async fn update_use_tls(
     session_id: String,
     enabled: bool,
-    nameserver_manager: State<'_, NameServerManager>,
+    expected_revision: i64,
     session_state: State<'_, SessionState>,
+    connection_manager: State<'_, ConnectionManager>,
     audit_manager: State<'_, AuditManager>,
-) -> CommandResult<Audited<NameServerMutationResult>> {
+) -> CommandResult<Audited<ConnectionMutationResult>> {
     let access = AuditAccess::dashboard(&session_state, session_id);
-    let nameserver_manager = nameserver_manager.inner().clone();
-    let local_audit = audit_manager.inner().clone();
+    let manager = connection_manager.inner().clone();
     audit_manager
-        .execute(access, AuditAction::UpdateTls, None, move |_audit| async move {
-            local_audit
-                .run_local(move || nameserver_manager.update_use_tls(enabled))
+        .execute(access, AuditAction::UpdateTls, None, move |audit| async move {
+            manager
+                .change(expected_revision, ConnectionChange::Tls(enabled), audit)
                 .await
         })
         .await
 }
-use crate::auth::SessionState;
-use crate::error::CommandResult;
-use crate::error::authorize_command;

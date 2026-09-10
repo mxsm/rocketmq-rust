@@ -6,6 +6,7 @@ A RocketMQ-Rust desktop dashboard built with Tauri, React, and Rust.
 
 - Live cluster, broker, topic, consumer, producer and message inspection, with
   explicit topic/consumer administration and message actions
+- Revisioned NameServer and Proxy configuration with stable endpoint/environment identities
 - Saved NameServer and Proxy address configuration (Proxy entries do not control
   Proxy server processes)
 - Native desktop packaging with a web UI
@@ -45,7 +46,7 @@ them; choose a new data directory to start fresh.
 
 Sessions expire after eight hours by default (`DASHBOARD_TAURI_SESSION_TTL_SECS` overrides this). Password changes revoke all sessions and require a new login. Account ¡ú Sessions lists safe identifiers and can sign out the entire account.
 
-The current fresh schema is version 3; version 1/2 development databases are not migrated. Select a new data directory when changing from an older format.
+The current fresh schema is version 4; version 1/2/3 development databases are not migrated. Select a new data directory when changing from an older format.
 
 For more detail, see [doc/AUTH_CONFIG.md](./doc/AUTH_CONFIG.md).
 

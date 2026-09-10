@@ -6,8 +6,9 @@ and DLQ resends. Read-only business queries are not recorded individually.
 
 The Audit navigation entry supports an inclusive time range, exact actor/action/
 outcome/environment filters, refresh, and cursor pagination ordered by terminal
-time and event ID. Environment IDs are absent until connection identity support
-is introduced; old records are not assigned a guessed environment.
+time and event ID. Configuration and accepted remote mutations use the stable current environment ID.
+Account events and requests rejected before resolving an environment leave it absent;
+old records are never assigned a guessed identity.
 
 Each accepted mutation belongs to the audit service task group. Closing a page or
 dropping the IPC waiter does not drop the operation or its terminal record.
@@ -27,10 +28,8 @@ inspect the resource before deciding whether to resubmit. Batch receipts preserv
 success/failure counts rather than equating every successful IPC response with a
 fully successful operation.
 
-Account mutations commit their success record in the same SQLite transaction. If
-recording fails, the account mutation rolls back. Connection configuration still
-uses its existing store; its versioned transaction integration follows with the
-connection settings work. For separately committed configuration or remote changes,
+Account and connection mutations commit their success record in the same SQLite
+transaction. If recording fails, the local mutation rolls back. For remote changes,
 a failed audit write preserves the actual command result and adds `auditWarning`.
 The frontend displays a persistent, dismissible warning. It does not retry the
 operation. An operation error also remains the original error if its audit write
@@ -38,7 +37,7 @@ fails.
 
 Retention runs at startup and hourly, deleting at most 1,000 terminal records older
 than 30 days per pass. The cleanup uses the storage-owned background task group.
-The current schema is version 3; older development schemas are rejected without
+The current schema is version 4; older development schemas are rejected without
 modification. Select a fresh data directory when moving between these development
 formats.
 

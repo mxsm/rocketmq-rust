@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ProxyService } from '../../../services/proxy.service';
 import { dashboardErrorMessage } from '../../../services/invoke';
-import type { ProxyConfigSnapshot } from '../types/proxy.types';
+import type { ProxyHomePageInfo } from '../types/proxy.types';
 
 export const useProxyCatalog = () => {
-    const [snapshot, setSnapshot] = useState<ProxyConfigSnapshot | null>(null);
+    const [snapshot, setSnapshot] = useState<ProxyHomePageInfo | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
     const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -56,8 +56,8 @@ export const useProxyCatalog = () => {
         setPendingAction('add');
 
         try {
-            const result = await ProxyService.addProxyAddr(address);
-            setSnapshot(result.snapshot);
+            const result = await ProxyService.addProxyAddr(address, snapshot?.settings.revision ?? -1);
+            setSnapshot({ ...result.settings.proxy, settings: result.settings });
             setNewAddress('');
             return result.message;
         } catch (error) {
@@ -71,8 +71,8 @@ export const useProxyCatalog = () => {
         setPendingAction(`switch:${address}`);
 
         try {
-            const result = await ProxyService.switchProxyAddr(address);
-            setSnapshot(result.snapshot);
+            const result = await ProxyService.switchProxyAddr(address, snapshot?.settings.revision ?? -1);
+            setSnapshot({ ...result.settings.proxy, settings: result.settings });
             return result.message;
         } catch (error) {
             throw error;
@@ -85,8 +85,8 @@ export const useProxyCatalog = () => {
         setPendingAction(`delete:${address}`);
 
         try {
-            const result = await ProxyService.deleteProxyAddr(address);
-            setSnapshot(result.snapshot);
+            const result = await ProxyService.deleteProxyAddr(address, snapshot?.settings.revision ?? -1);
+            setSnapshot({ ...result.settings.proxy, settings: result.settings });
             return result.message;
         } catch (error) {
             throw error;

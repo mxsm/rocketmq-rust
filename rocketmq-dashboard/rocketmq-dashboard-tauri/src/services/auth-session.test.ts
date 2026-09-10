@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
+import { ConnectionStore } from './connection.store';
 import { AuthService } from './auth.service';
 import { invokeAuthenticatedCommand, subscribeAuditWarning } from './invoke';
 import { SessionStorageService } from './session.storage';
@@ -15,6 +16,8 @@ beforeEach(() => {
         removeItem: (key: string) => entries.delete(key),
     } });
     SessionStorageService.setSessionId('current-token');
+    ConnectionStore.reset();
+    ConnectionStore.accept('current-token', { revision: 0, endpoints: [], currentNameserverId: null, currentProxyId: null, environmentId: null, nameserver: { currentNamesrv: null, namesrvAddrList: [], useVIPChannel: false, useTLS: false }, proxy: { currentProxyAddr: null, proxyAddrList: [] } });
 });
 afterEach(() => { vi.resetAllMocks(); vi.unstubAllGlobals(); });
 
@@ -34,6 +37,7 @@ describe('authoritative session lifecycle', () => {
         let reject!: (reason: unknown) => void;
         vi.mocked(invoke).mockImplementation(() => new Promise((_resolve, rejectRequest) => { reject = rejectRequest; }));
         const request = invokeAuthenticatedCommand('get_topic_list');
+        await Promise.resolve();
         SessionStorageService.setSessionId('new-token');
         reject(failure('auth.session.invalid'));
         await expect(request).rejects.toMatchObject({ code: 'auth.session.invalid' });
@@ -99,5 +103,43 @@ describe('audit warnings', () => {
             expect(warning).toHaveBeenCalledOnce();
             expect(invoke).toHaveBeenCalledTimes(1);
         } finally { unsubscribe(); }
+    });
+});
+
+describe('connection revisions', () => {
+    it('rejects a late read response after a configuration switch', async () => {
+        let resolve!: (value: unknown) => void;
+        vi.mocked(invoke).mockImplementation(() => new Promise((complete) => { resolve = complete; }));
+        const request = invokeAuthenticatedCommand('get_topic_list');
+        await Promise.resolve();
+        const previous = ConnectionStore.getSnapshot()!;
+        ConnectionStore.accept('current-token', { ...previous, revision: 1, environmentId: 'new-environment' });
+        resolve({ topics: ['old-environment-topic'] });
+        await expect(request).rejects.toMatchObject({ code: 'dashboard.configuration_conflict' });
+        expect(invoke).toHaveBeenCalledWith('get_topic_list', { sessionId: 'current-token', expectedRevision: 0 });
+    });
+
+    it('preserves a completed mutation receipt after the view changes', async () => {
+        let resolve!: (value: unknown) => void;
+        vi.mocked(invoke).mockImplementation(() => new Promise((complete) => { resolve = complete; }));
+        const request = invokeAuthenticatedCommand('send_topic_message');
+        await Promise.resolve();
+        ConnectionStore.accept('current-token', { ...ConnectionStore.getSnapshot()!, revision: 1 });
+        resolve({ success: true, messageId: 'already-sent' });
+        await expect(request).resolves.toMatchObject({ success: true, messageId: 'already-sent' });
+        expect(invoke).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not automatically retry a conflicting configuration draft', async () => {
+        vi.mocked(invoke).mockRejectedValue({ code: 'dashboard.configuration_conflict', message: 'Review configuration.', category: 'validation', retryable: false });
+        await expect(invokeAuthenticatedCommand('add_name_server', { address: '127.0.0.2:9876', expectedRevision: 0 })).rejects.toMatchObject({ code: 'dashboard.configuration_conflict' });
+        expect(invoke).toHaveBeenCalledTimes(1);
+    });
+
+    it('a stale settings response cannot roll back the shared identity', () => {
+        const previous = ConnectionStore.getSnapshot()!;
+        ConnectionStore.accept('current-token', { ...previous, revision: 2, environmentId: 'current-environment' });
+        ConnectionStore.accept('current-token', { ...previous, revision: 1, environmentId: 'old-environment' });
+        expect(ConnectionStore.getSnapshot()?.environmentId).toBe('current-environment');
     });
 });

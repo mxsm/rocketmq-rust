@@ -1,3 +1,4 @@
+import { ConnectionStore, type ConnectionSettingsView } from './connection.store';
 import { invoke } from '@tauri-apps/api/core';
 import { SessionStorageService } from './session.storage';
 
@@ -107,7 +108,25 @@ export const invokeSessionCommand = <T>(
     throw error;
 });
 
-export const invokeAuthenticatedCommand = <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+const localCommands = new Set(['change_password', 'get_current_user_profile', 'get_auth_bootstrap_status', 'list_sessions', 'revoke_user_sessions', 'query_audit_events']);
+const connectionWrites = new Set(['add_name_server', 'switch_name_server', 'delete_name_server', 'update_vip_channel', 'update_use_tls', 'add_proxy_addr', 'switch_proxy_addr', 'delete_proxy_addr', 'replace_name_servers']);
+const remoteWrites = new Set(['create_or_update_topic', 'delete_topic', 'delete_topic_by_broker', 'reset_consumer_offset', 'skip_message_accumulate', 'send_topic_message', 'create_or_update_consumer_group', 'delete_consumer_group', 'consume_message_directly', 'resend_dlq_message', 'batch_resend_dlq_message']);
+const pendingSettings = new Map<string, Promise<ConnectionSettingsView>>();
+const ensureSettings = (token: string): Promise<ConnectionSettingsView> => {
+    const current = ConnectionStore.getSnapshot();
+    if (current) return Promise.resolve(current);
+    const pending = pendingSettings.get(token);
+    if (pending) return pending;
+    const loading = invokeSessionCommand<ConnectionSettingsView>('get_connection_settings', token).then((settings) => {
+        ConnectionStore.accept(token, settings);
+        return ConnectionStore.getSnapshot() ?? settings;
+    }).finally(() => pendingSettings.delete(token));
+    pendingSettings.set(token, loading);
+    return loading;
+};
+const configurationChanged = () => new DashboardClientError({ code: 'dashboard.configuration_conflict', category: 'validation', retryable: false, message: 'Connection settings changed. Refresh and review the current configuration.' });
+
+export const invokeAuthenticatedCommand = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
     const sessionId = SessionStorageService.getSessionId();
     if (!sessionId) {
         SessionStorageService.reportAuthenticationFailure(null, 'invalid');
@@ -121,5 +140,31 @@ export const invokeAuthenticatedCommand = <T>(command: string, args?: Record<str
         );
     }
 
-    return invokeSessionCommand<T>(command, sessionId, args);
+    if (localCommands.has(command)) return invokeSessionCommand<T>(command, sessionId, args);
+    if (command === 'get_connection_settings') {
+        const result = await invokeSessionCommand<ConnectionSettingsView>(command, sessionId, args);
+        ConnectionStore.accept(sessionId, result);
+        return result as T;
+    }
+    if (connectionWrites.has(command)) {
+        const result = await invokeSessionCommand<T>(command, sessionId, args);
+        if (result && typeof result === 'object' && 'settings' in result) ConnectionStore.accept(sessionId, result.settings as ConnectionSettingsView);
+        return result;
+    }
+    const settings = await ensureSettings(sessionId);
+    if (SessionStorageService.getSessionId() !== sessionId) throw configurationChanged();
+    let result: T;
+    try {
+        result = await invokeSessionCommand<T>(command, sessionId, { ...args, expectedRevision: settings.revision });
+    } catch (error) {
+        if (isDashboardClientError(error) && error.code === 'dashboard.configuration_conflict') {
+            // Refresh the view identity only. Never replay the rejected operation.
+            try { ConnectionStore.accept(sessionId, await invokeSessionCommand<ConnectionSettingsView>('get_connection_settings', sessionId)); } catch {}
+        }
+        throw error;
+    }
+    // Remote writes retain their actual receipt even if the user later changes views.
+    if (!remoteWrites.has(command) && ConnectionStore.getSnapshot()?.revision !== settings.revision) throw configurationChanged();
+    if (result && typeof result === 'object' && 'settings' in result) ConnectionStore.accept(sessionId, result.settings as ConnectionSettingsView);
+    return result;
 };

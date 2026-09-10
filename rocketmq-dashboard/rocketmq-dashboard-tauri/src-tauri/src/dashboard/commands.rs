@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::cluster::service::ClusterManager;
+use crate::connection::ConnectionManager;
 use crate::dashboard::service;
 use crate::dashboard::types::DashboardBrokerOverviewResponse;
 use crate::dashboard::types::DashboardTopicCurrentResponse;
@@ -28,11 +29,16 @@ pub async fn get_dashboard_broker_overview(
     request: DashboardBrokerOverviewRequest,
     cluster_manager: State<'_, ClusterManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<DashboardBrokerOverviewResponse> {
     authorize_command(&session_id, &session_state).await?;
-    service::get_dashboard_broker_overview(&cluster_manager, request)
+    connection_manager.check_revision(expected_revision)?;
+    let result = service::get_dashboard_broker_overview(&cluster_manager, request)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 
 #[tauri::command]
@@ -40,10 +46,15 @@ pub async fn query_dashboard_topic_current(
     session_id: String,
     topic_manager: State<'_, TopicManager>,
     session_state: State<'_, SessionState>,
+    expected_revision: i64,
+    connection_manager: State<'_, ConnectionManager>,
 ) -> CommandResult<DashboardTopicCurrentResponse> {
     authorize_command(&session_id, &session_state).await?;
-    service::query_dashboard_topic_current(&topic_manager)
+    connection_manager.check_revision(expected_revision)?;
+    let result = service::query_dashboard_topic_current(&topic_manager)
         .await
-        .map_err(Into::into)
+        .map_err(Into::into);
+    connection_manager.check_revision(expected_revision)?;
+    result
 }
 use crate::auth::SessionState;

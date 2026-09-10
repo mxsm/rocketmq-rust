@@ -113,7 +113,9 @@ impl NameServerConfigStore for SqliteNameServerStore {
     }
 }
 
-fn load_snapshot_from_connection(connection: &Connection) -> DashboardCommonResult<NameServerConfigSnapshot> {
+pub(crate) fn load_snapshot_from_connection(
+    connection: &Connection,
+) -> DashboardCommonResult<NameServerConfigSnapshot> {
     let mut statement = connection
         .prepare(
             "
@@ -159,7 +161,7 @@ fn load_snapshot_from_connection(connection: &Connection) -> DashboardCommonResu
     })
 }
 
-fn save_snapshot_to_transaction(
+pub(crate) fn save_snapshot_to_transaction(
     transaction: &Transaction<'_>,
     snapshot: &NameServerConfigSnapshot,
 ) -> DashboardCommonResult<()> {
@@ -217,7 +219,10 @@ fn repair_snapshot_tables(transaction: &Transaction<'_>) -> Result<()> {
     let address_count: i64 =
         transaction.query_row("SELECT COUNT(*) FROM nameserver_addresses", [], |row| row.get(0))?;
 
-    if address_count == 0 {
+    let revision: i64 = transaction.query_row("SELECT revision FROM connection_metadata WHERE id = 1", [], |row| {
+        row.get(0)
+    })?;
+    if address_count == 0 && revision == 0 {
         transaction.execute(
             "
             INSERT INTO nameserver_addresses (address, is_current, sort_order, created_at, updated_at)

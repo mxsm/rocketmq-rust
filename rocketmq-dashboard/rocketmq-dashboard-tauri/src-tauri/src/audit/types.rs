@@ -25,6 +25,7 @@ pub(crate) enum AuditAction {
     AddNameServer,
     SwitchNameServer,
     DeleteNameServer,
+    ReplaceNameServers,
     UpdateVip,
     UpdateTls,
     AddProxy,
@@ -53,6 +54,7 @@ impl AuditAction {
             Self::AddNameServer => "nameserver.add",
             Self::SwitchNameServer => "nameserver.switch",
             Self::DeleteNameServer => "nameserver.delete",
+            Self::ReplaceNameServers => "nameserver.replace",
             Self::UpdateVip => "connection.vip",
             Self::UpdateTls => "connection.tls",
             Self::AddProxy => "proxy.add",
@@ -77,6 +79,7 @@ impl AuditAction {
             Self::AddNameServer
             | Self::SwitchNameServer
             | Self::DeleteNameServer
+            | Self::ReplaceNameServers
             | Self::UpdateVip
             | Self::UpdateTls
             | Self::AddProxy
@@ -295,6 +298,8 @@ pub(crate) struct AuditPage {
 
 #[derive(Clone)]
 pub(crate) struct AuditContext {
+    pub(crate) actor: Option<String>,
+    pub(crate) environment: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     pub(crate) event_id: String,
     pub(crate) request_id: String,
     pub(crate) action: AuditAction,
@@ -309,11 +314,29 @@ impl AuditContext {
             action: self.action.name().into(),
             resource_type: self.action.resource_type().into(),
             resource_name: self.resource_name.clone(),
-            environment_id: None,
+            environment_id: self
+                .environment
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
             outcome: summary.outcome.as_str().into(),
             detail: summary.detail,
             created_at_ms: chrono::Utc::now().timestamp_millis(),
         }
+    }
+    pub(crate) fn set_environment(&self, environment: Option<String>) -> crate::error::DashboardResult<()> {
+        *self
+            .environment
+            .lock()
+            .map_err(|_| crate::error::DashboardError::Internal("audit scope poisoned"))? = environment;
+        Ok(())
+    }
+    pub(crate) fn record_local_success(&self, connection: &rusqlite::Connection) -> crate::error::DashboardResult<()> {
+        let actor = self
+            .actor
+            .as_deref()
+            .ok_or(crate::error::DashboardError::Unauthenticated)?;
+        self.record_success(connection, actor)
     }
     /// Call inside the mutation's transaction so a successful account change always has its audit record.
     pub(crate) fn record_success(
