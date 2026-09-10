@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::VecDeque;
+use std::future::Future;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -27,8 +28,14 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::DefaultTerminal;
 use ratatui::Frame;
+use rocketmq_admin_core::client_adapter::ClientRuntime;
+use rocketmq_admin_core::client_adapter::ClientRuntimeConfig;
+use rocketmq_error::Result as CanonicalResult;
+use rocketmq_runtime::ScopeId;
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
+use tokio::task::JoinError;
+use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 
 use crate::action::Action;
@@ -40,6 +47,7 @@ use crate::state::AppState;
 use crate::state::CommandExecutionState;
 use crate::state::CommandTreeItem;
 use crate::state::FocusArea;
+use crate::view_model::CommandResultViewModel;
 
 pub struct RocketmqTuiApp {
     admin_facade: TuiAdminFacade,
@@ -49,6 +57,7 @@ pub struct RocketmqTuiApp {
     action_rx: mpsc::Receiver<QueuedAction>,
     action_queue_diagnostics: Arc<ActionQueueDiagnostics>,
     running_task: Option<RunningCommandTask>,
+    command_tasks: JoinSet<Option<Action>>,
 }
 
 const ACTION_QUEUE_CAPACITY: usize = 128;
@@ -94,6 +103,12 @@ struct RunningCommandTask {
     abort_handle: AbortHandle,
 }
 
+impl Drop for RunningCommandTask {
+    fn drop(&mut self) {
+        self.abort_handle.abort();
+    }
+}
+
 impl RocketmqTuiApp {
     pub fn new(client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>) -> Self {
         Self::with_admin_facade(TuiAdminFacade::new(client_runtime))
@@ -110,6 +125,7 @@ impl RocketmqTuiApp {
             action_rx,
             action_queue_diagnostics: Arc::new(ActionQueueDiagnostics::default()),
             running_task: None,
+            command_tasks: JoinSet::new(),
         }
     }
 
@@ -197,26 +213,16 @@ fn try_send_progress(
     }
 }
 
-async fn send_required_action(
-    sender: &mpsc::Sender<QueuedAction>,
-    diagnostics: &ActionQueueDiagnostics,
-    action: Action,
-) {
-    match sender.reserve().await {
-        Ok(permit) => {
-            permit.send(diagnostics.enqueue(action));
-            diagnostics.accepted.fetch_add(1, Ordering::Relaxed);
-        }
-        Err(_) => {
-            diagnostics.rejected.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-}
-
 impl RocketmqTuiApp {
     const FRAMES_PER_SECOND: f32 = 30.0;
 
     pub async fn run(mut self, mut terminal: DefaultTerminal) -> anyhow::Result<()> {
+        let result = self.run_events(&mut terminal).await;
+        self.shutdown_commands().await;
+        result
+    }
+
+    async fn run_events(&mut self, terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
         let period = Duration::from_secs_f32(1.0 / Self::FRAMES_PER_SECOND);
         let mut interval = tokio::time::interval(period);
         let mut events = EventStream::new();
@@ -230,6 +236,9 @@ impl RocketmqTuiApp {
                 Some(queued) = self.action_rx.recv() => {
                     self.action_queue_diagnostics.dequeue(queued.id);
                     self.apply_action(queued.action);
+                },
+                Some(completion) = self.command_tasks.join_next(), if !self.command_tasks.is_empty() => {
+                    self.complete_command_task(completion);
                 },
             }
         }
@@ -657,39 +666,108 @@ impl RocketmqTuiApp {
             execution_id,
             command_id: command_id.clone(),
         });
+        let facade = match self.command_facade(execution_id) {
+            Ok(facade) => facade,
+            Err(error) => {
+                self.apply_action(Action::CommandFailed {
+                    execution_id,
+                    command_id,
+                    error: error.to_string(),
+                });
+                return;
+            }
+        };
+        let client_runtime = facade.client_runtime();
         let command = self.state.selected_command().clone();
         let form = self.state.form.clone();
-        let facade = self.admin_facade.clone();
-        let tx = self.action_tx.clone();
-        let diagnostics = Arc::clone(&self.action_queue_diagnostics);
-        let progress_tx = tx.clone();
-        let progress_diagnostics = Arc::clone(&diagnostics);
-        let command_id_for_task = command_id.clone();
-        let command_task = tokio::task::spawn_local(async move {
-            let result = execute_command_with_progress(&facade, &command, &form, move |message| {
+        let progress_tx = self.action_tx.clone();
+        let progress_diagnostics = Arc::clone(&self.action_queue_diagnostics);
+        let operation = async move {
+            execute_command_with_progress(&facade, &command, &form, move |message| {
                 try_send_progress(&progress_tx, &progress_diagnostics, execution_id, message);
             })
-            .await;
-            let action = match result {
+            .await
+        };
+        self.spawn_command_task(execution_id, command_id, client_runtime, operation);
+    }
+
+    fn command_facade(&self, execution_id: u64) -> CanonicalResult<TuiAdminFacade> {
+        let parent = self.admin_facade.client_runtime();
+        let scope = ScopeId::try_new(format!("command-{execution_id}"))
+            .map_err(|_| crate::errors::invariant_violated("invalid command runtime scope"))?;
+        let context = parent
+            .service_context()
+            .try_component(scope)
+            .map_err(|error| rocketmq_error::Error::caused_by(error.descriptor(), error))?;
+        let client_runtime = ClientRuntime::try_new(
+            context,
+            ClientRuntimeConfig::default(),
+            parent.telemetry_handle().clone(),
+        )
+        .map_err(|error| error.into_error())?;
+        Ok(self.admin_facade.with_client_runtime(client_runtime))
+    }
+
+    fn spawn_command_task<F>(
+        &mut self,
+        execution_id: u64,
+        command_id: String,
+        client_runtime: Arc<ClientRuntime>,
+        operation: F,
+    ) where
+        F: Future<Output = CanonicalResult<CommandResultViewModel>> + 'static,
+    {
+        let command_task = tokio::task::spawn_local(operation);
+        let abort_handle = command_task.abort_handle();
+        // The UI may abort the operation, but this owner retains its JoinHandle and
+        // drains its isolated client pool before completing. Shutdown never touches
+        // a subsequent command's connections or the application's client runtime.
+        self.command_tasks.spawn_local(async move {
+            let result = command_task.await;
+            let report = client_runtime.shutdown().await;
+            if !report.is_healthy() {
+                tracing::warn!(execution_id, report = %report.to_json(), "admin command runtime shutdown is unhealthy");
+            }
+            let result = match result {
+                Err(error) if error.is_cancelled() => return None,
+                Err(_) => Err(crate::errors::invariant_violated("admin command task failed")),
+                Ok(result) if report.is_healthy() => result,
+                Ok(_) => Err(crate::errors::invariant_violated(
+                    "admin command runtime shutdown is unhealthy",
+                )),
+            };
+            Some(match result {
                 Ok(result) => Action::CommandSucceeded {
                     execution_id,
-                    command_id: command_id_for_task,
+                    command_id,
                     result,
                 },
                 Err(error) => Action::CommandFailed {
                     execution_id,
-                    command_id: command_id_for_task,
+                    command_id,
                     error: error.to_string(),
                 },
-            };
-            send_required_action(&tx, &diagnostics, action).await;
+            })
         });
-        let abort_handle = command_task.abort_handle();
-        drop(command_task);
         self.running_task = Some(RunningCommandTask {
             execution_id,
             abort_handle,
         });
+    }
+
+    fn complete_command_task(&mut self, completion: Result<Option<Action>, JoinError>) {
+        match completion {
+            Ok(Some(action)) => self.apply_action(action),
+            Ok(None) => {}
+            Err(_) => tracing::error!("admin command cleanup task failed"),
+        }
+    }
+
+    async fn shutdown_commands(&mut self) {
+        self.abort_running_task();
+        while let Some(completion) = self.command_tasks.join_next().await {
+            self.complete_command_task(completion);
+        }
     }
 
     fn is_current_running_execution(&self, execution_id: u64) -> bool {
@@ -850,61 +928,67 @@ mod tests {
     fn starting_command_execution_builds_background_task_without_stack_overflow() {
         let local = tokio::task::LocalSet::new();
 
-        local.block_on(&tokio::runtime::Builder::new_current_thread().build().unwrap(), async {
-            let mut app = RocketmqTuiApp::new(test_client_runtime());
-            app.apply_action(Action::SearchChanged("message.decode_id".to_string()));
-            app.apply_action(Action::CommandSelected("message.decode_id".to_string()));
-            app.state.reset_form_for_selected_command();
-            app.state
-                .form
-                .set_value("message_ids", "7F0000010007D8260BF075769D36C348".to_string());
+        local.block_on(
+            &tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+            async {
+                let mut app = RocketmqTuiApp::new(test_client_runtime());
+                app.apply_action(Action::SearchChanged("message.decode_id".to_string()));
+                app.apply_action(Action::CommandSelected("message.decode_id".to_string()));
+                app.state.reset_form_for_selected_command();
+                app.state
+                    .form
+                    .set_value("message_ids", "7F0000010007D8260BF075769D36C348".to_string());
 
-            app.apply_action(Action::ExecuteRequested);
+                app.apply_action(Action::ExecuteRequested);
 
-            assert!(matches!(app.state.execution, CommandExecutionState::Running { .. }));
-            assert!(app.running_task.is_some());
-            app.abort_running_task();
-        });
+                assert!(matches!(app.state.execution, CommandExecutionState::Running { .. }));
+                assert!(app.running_task.is_some());
+                app.shutdown_commands().await;
+            },
+        );
     }
 
     #[test]
     fn cancel_execution_aborts_tracked_local_task() {
         let local = tokio::task::LocalSet::new();
 
-        local.block_on(&tokio::runtime::Builder::new_current_thread().build().unwrap(), async {
-            let aborted = Rc::new(Cell::new(false));
-            let command_task = tokio::task::spawn_local(AbortProbe {
-                aborted: aborted.clone(),
-            });
-            let abort_handle = command_task.abort_handle();
-            drop(command_task);
-
-            let mut app = RocketmqTuiApp::new(test_client_runtime());
-            app.running_task = Some(RunningCommandTask {
-                execution_id: 7,
-                abort_handle,
-            });
-            app.state.execution = CommandExecutionState::Running {
-                execution_id: 7,
-                command_id: "message.consume".to_string(),
-            };
-
-            app.apply_action(Action::CancelExecution {
-                execution_id: 7,
-                command_id: "message.consume".to_string(),
-            });
-
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
-            while !aborted.get() {
-                assert!(
-                    tokio::time::Instant::now() < deadline,
-                    "abort probe task was not dropped"
+        local.block_on(
+            &tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+            async {
+                let aborted = Rc::new(Cell::new(false));
+                let mut app = RocketmqTuiApp::new(test_client_runtime());
+                let client_runtime = app.command_facade(7).unwrap().client_runtime();
+                app.spawn_command_task(
+                    7,
+                    "message.consume".to_string(),
+                    client_runtime.clone(),
+                    AbortProbe {
+                        aborted: aborted.clone(),
+                    },
                 );
-                tokio::task::yield_now().await;
-            }
+                app.state.execution = CommandExecutionState::Running {
+                    execution_id: 7,
+                    command_id: "message.consume".to_string(),
+                };
 
-            assert!(app.running_task.is_none());
-        });
+                app.apply_action(Action::CancelExecution {
+                    execution_id: 7,
+                    command_id: "message.consume".to_string(),
+                });
+
+                app.shutdown_commands().await;
+                assert!(aborted.get());
+                assert!(client_runtime.is_shutdown());
+                assert!(app.command_tasks.is_empty());
+                assert!(app.running_task.is_none());
+            },
+        );
     }
 
     struct AbortProbe {
@@ -912,7 +996,7 @@ mod tests {
     }
 
     impl Future for AbortProbe {
-        type Output = ();
+        type Output = CanonicalResult<CommandResultViewModel>;
 
         fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
             Poll::Pending
@@ -925,3 +1009,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod command_lifecycle_tests;

@@ -37,7 +37,7 @@ TUI 负责交互、状态、布局和渲染。核心管理请求、校验、RPC 
   - safe 命令直接执行；
   - mutating 命令需要输入 `confirm`；
   - dangerous 命令在可用时需要输入目标值。
-- 后台命令与 UI 事件循环运行在应用的 Tokio `LocalSet` 上；进程持有 `RuntimeOwner` 并注入共享客户端运行时。
+- 后台命令与 UI 事件循环运行在应用的 Tokio `LocalSet` 上；进程持有 `RuntimeOwner`，每次命令在应用的客户端作用域下使用独立的客户端运行时。取消命令会停止操作，TUI 随后等待任务结束并关闭其连接和后台任务；退出时也会等待清理完成。取消不会撤销 Broker 或 NameServer 已接受的请求。
 - 长时间工作流支持进度更新，例如 monitoring 和 message pull。
 - 支持以 table、key/value、JSON、text、operation summary 渲染结构化结果，并支持纵向和横向滚动。
 - 边界测试确保 `rocketmq-admin-tui -> rocketmq-admin-core`，并拒绝依赖 CLI adapter。

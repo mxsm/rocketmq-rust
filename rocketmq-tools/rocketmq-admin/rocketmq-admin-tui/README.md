@@ -45,7 +45,10 @@ requests, validation, RPC orchestration, and structured results stay in
   - mutating commands require typing `confirm`;
   - dangerous commands require typing the target value when available.
 - Command futures run on the application's Tokio `LocalSet`, alongside the UI event loop.
-  The process owns a `RuntimeOwner` and an injected shared client runtime.
+  The process owns a `RuntimeOwner`; each command uses a separate client runtime beneath
+  the application's client scope. Cancelling a command stops its operation while the TUI
+  joins it and closes its connections and background tasks. Exiting waits for this cleanup.
+  Cancellation does not undo requests already accepted by a broker or NameServer.
 - Progress updates for long-running workflows such as monitoring and message
   pull operations.
 - Structured result rendering as tables, key/value rows, JSON, text, or
