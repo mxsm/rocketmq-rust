@@ -54,5 +54,9 @@
   "sidebar.docsSidebar.category.Ecosystem": {
     "message": "生态项目",
     "description": "The label for category 'Ecosystem' in sidebar 'docsSidebar'"
+  },
+  "sidebar.docsSidebar.category.Migration": {
+    "message": "迁移指南",
+    "description": "The label for category 'Migration' in sidebar 'docsSidebar'"
   }
 }

@@ -9,10 +9,10 @@ title: "参考手册入口"
 | 问题 | 权威入口 |
 | --- | --- |
 | 当前源码包含哪些包，最低 Rust 版本是多少？ | [根 manifest](https://github.com/mxsm/rocketmq-rust/blob/main/Cargo.toml) 与[工具链](https://github.com/mxsm/rocketmq-rust/blob/main/rust-toolchain.toml) |
-| Broker 使用哪些文件和设置启动？ | [Broker 配置指南](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-broker/README.md)与[发行示例](https://github.com/mxsm/rocketmq-rust/tree/main/distribution/config/broker) |
-| NameServer 支持哪些参数与合并规则？ | [NameServer 指南](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-namesrv/README.md) |
-| Controller/Proxy 各模式如何启动？ | [Controller](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-controller/README.md) 与 [Proxy](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-proxy/README.md) |
-| 客户端有哪些 builder 与 Cargo feature？ | [客户端 API 指南](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md)与 [manifest](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/Cargo.toml) |
+| Broker 使用哪些文件和设置启动？ | [Broker 配置](../configuration/broker-config.md)与[部署总览](../deployment/overview.md) |
+| NameServer 支持哪些参数与合并规则？ | [服务配置](service-configuration.md#nameserver) |
+| Controller/Proxy 各模式如何启动？ | [服务配置](service-configuration.md)与对应[部署指南](../deployment/overview.md) |
+| 客户端有哪些 builder 与 Cargo feature？ | [客户端配置](../configuration/client-config.md)与 [manifest](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/Cargo.toml) |
 | 发送结果表示什么？ | [生产者结果表](../producer/overview.md)与[规范结果类型](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-model/src/result.rs) |
 | LitePull 提交表示什么？ | [轮询与提交语义](../consumer/pull-consumer.md) |
 | 哪个管理命令接受该选项？ | [Admin CLI](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-tools/rocketmq-admin/rocketmq-admin-cli/README.md) 与对应子命令的 `--help` |
@@ -64,3 +64,12 @@ cargo doc -p rocketmq-client-rust --no-deps --open
 Rust 源码 API、序列化字段、请求/响应码、持久布局、Controller 内部协议和操作行为，是不同兼容面。某一项匹配不能证明其余各项。
 
 [能力矩阵](../overview/capability-matrix.md)记录相关模式/feature 条件。[模块地图](../architecture/module-map.md)帮助定位共享契约变更的所有者。兼容声明应附带准确版本和实际场景，不使用笼统的“完全兼容”标签。
+
+## 参考与迁移页面
+
+- [Features 与平台](./features-platforms.md)：包默认值、原生前置条件和运行时条件。
+- [错误与状态](./errors.md)：稳定标识、边界映射和重试决策。
+- [协议兼容性](./protocol-compatibility.md)：端点、范围、证据及存储边界。
+- [Admin CLI](./admin-cli.md)：命令目录、参数、影响和退出行为。
+- [Java 迁移](../migration/java-to-rust.md)：客户端、集群及数据迁移流程。
+- [Rust API 迁移](../migration/rust-api.md)：公共导入、运行时所有权和 Classic/LitePull 调整。
