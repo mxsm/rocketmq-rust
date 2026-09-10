@@ -396,4 +396,38 @@ mod tests {
         changed.order_topic_conf = Some(CheetahString::from("changed"));
         assert!(route_data.topic_route_data_changed(Some(&changed)));
     }
+
+    #[test]
+    fn numeric_key_normalization_handles_signed_nested_keys_and_whitespace() {
+        let input = r#"{ 12 : { -3 : "value", 4: [1,-2,3] }, -5 : 6 }"#;
+        let normalized = quote_unquoted_numeric_object_keys(input).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&normalized).unwrap(),
+            serde_json::json!({
+                "12": {"-3": "value", "4": [1,-2,3]}, "-5": 6
+            })
+        );
+    }
+
+    #[test]
+    fn numeric_key_normalization_leaves_strings_and_numeric_values_unchanged() {
+        for input in [
+            r#"{"12": 3, "-4": [5,-6]}"#,
+            r#"{"text":"12: and \"-3:\" and \\4:","value":17}"#,
+        ] {
+            assert_eq!(quote_unquoted_numeric_object_keys(input), None);
+        }
+        let input = r#"{12:"-3: and \"4:\" and \\5:", "values":[6,-7]}"#;
+        let normalized = quote_unquoted_numeric_object_keys(input).unwrap();
+        let expected = r#"{"12":"-3: and \"4:\" and \\5:", "values":[6,-7]}"#;
+        assert_eq!(normalized, expected);
+    }
+
+    #[test]
+    fn decode_java_fastjson_accepts_negative_mapping_queue_ids() {
+        let body = br#"{"brokerDatas":[],"filterServerTable":{},"queueDatas":[],"topicQueueMappingByBroker":{"broker":{"topic":"topic","scope":"scope","totalQueues":1,"bname":"broker","epoch":1,"dirty":false,"currIdMap":{-1:2}}}}"#;
+        let decoded = TopicRouteData::decode(body).unwrap();
+        let mapping = &decoded.topic_queue_mapping_by_broker.as_ref().unwrap()["broker"];
+        assert_eq!(mapping.curr_id_map, Some(HashMap::from([(-1, 2)])));
+    }
 }
