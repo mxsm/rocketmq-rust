@@ -460,13 +460,19 @@ async fn consume_directly(
     request: &DirectConsumeRequest,
 ) -> Result<DirectConsumeResult, AdminError> {
     session.ensure_open()?;
+    let consumer_group = require_non_empty("consumerGroup", &request.consumer_group)?;
+    let topic = require_non_empty("topic", &request.topic)?;
+    let message_id = require_non_empty("messageId", &request.message_id)?;
+    // Dashboard lookups accept producer unique IDs as well as physical IDs.
+    // Direct consumption requires the resolved Broker address and store offset.
+    let message = find_raw_message(session, topic, message_id).await?;
     let result = session
         .inner
         .consume_message_directly(
-            require_non_empty("consumerGroup", &request.consumer_group)?.into(),
+            consumer_group.into(),
             request.client_id.as_deref().unwrap_or_default().into(),
-            require_non_empty("topic", &request.topic)?.into(),
-            require_non_empty("messageId", &request.message_id)?.into(),
+            topic.into(),
+            message.msg_id().clone(),
         )
         .await
         .map_err(|error| backend_error("consume_message_directly", error))?;
@@ -523,6 +529,49 @@ fn backend_error(operation: &'static str, error: impl crate::IntoCanonicalError)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires an accepting debug consumer and explicit DASHBOARD_DEBUG_NAMESRV, TOPIC, GROUP, MESSAGE_ID"]
+    fn live_direct_consumption_resolves_unique_id_and_uses_owning_broker() {
+        use crate::client_adapter::{AdminBuilder, ClientRuntime, ClientRuntimeConfig, TelemetryHandle};
+        use rocketmq_runtime::{RuntimeConfig, RuntimeOwner};
+
+        let namesrv = std::env::var("DASHBOARD_DEBUG_NAMESRV").expect("explicit development NameServer");
+        let request = DirectConsumeRequest {
+            topic: std::env::var("DASHBOARD_DEBUG_TOPIC").expect("explicit development Topic"),
+            consumer_group: std::env::var("DASHBOARD_DEBUG_GROUP").expect("explicit debug consumer group"),
+            message_id: std::env::var("DASHBOARD_DEBUG_MESSAGE_ID").expect("producer unique message ID"),
+            client_id: None,
+        };
+        let owner = RuntimeOwner::plan(RuntimeConfig::server_default("live-direct-consumption"))
+            .unwrap()
+            .build()
+            .unwrap();
+        let runtime = ClientRuntime::try_new(
+            owner.root_context().component("client"),
+            ClientRuntimeConfig::default(),
+            TelemetryHandle::noop(),
+        )
+        .unwrap();
+        let result = owner.block_on(async {
+            let mut session = AdminBuilder::new(runtime.clone())
+                .namesrv_addr(namesrv)
+                .vip_channel_enabled(false)
+                .build_and_start()
+                .await?;
+            let result = consume_directly(&session, &request).await;
+            session.shutdown().await;
+            result
+        });
+        assert!(owner.block_on(runtime.shutdown()).is_healthy());
+        assert!(owner.block_on(owner.shutdown_tasks()).is_healthy());
+        assert!(owner.shutdown_background().is_healthy());
+        assert!(
+            result
+                .expect("Broker must forward the physical message to the online consumer")
+                .success
+        );
+    }
 
     #[test]
     #[ignore = "requires DASHBOARD_DEBUG_NAMESRV, DASHBOARD_DEBUG_TRACE_TOPIC, and DASHBOARD_DEBUG_MESSAGE_ID"]
