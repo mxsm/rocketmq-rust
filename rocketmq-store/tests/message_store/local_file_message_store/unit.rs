@@ -4394,6 +4394,39 @@ async fn get_ha_runtime_info_reports_current_commitlog_max_offset() {
 }
 
 #[tokio::test]
+async fn query_message_returns_only_indexed_records_not_adjacent_commitlog_data() {
+    let temp_dir = tempdir().unwrap();
+    let mut store = new_async_flush_test_store(&temp_dir);
+    let topic = CheetahString::from_static_str("scoped-query-topic");
+    let key = CheetahString::from_static_str("scoped-key");
+    for (message_topic, message_key, body) in [
+        ("scoped-query-topic", "scoped-key", "first match"),
+        ("scoped-query-topic", "other-key", "different key"),
+        ("other-topic", "scoped-key", "different topic"),
+        ("scoped-query-topic", "scoped-key", "second match"),
+    ] {
+        let mut message = MessageExtBrokerInner::default();
+        message.set_topic(message_topic.into());
+        message.message_ext_inner.set_queue_id(0);
+        message.set_body(Bytes::copy_from_slice(body.as_bytes()));
+        message.set_keys(message_key.into());
+        assert_eq!(
+            store.put_message(message).await.put_message_status(),
+            PutMessageStatus::PutOk
+        );
+    }
+    store.reput_once().await;
+    let result = store.query_message(&topic, &key, 10, 0, i64::MAX).await.unwrap();
+    let mut data = result.get_message_data().expect("indexed message bytes");
+    let messages = rocketmq_protocol::common::message::message_decoder::decodes_batch(&mut data, true, true);
+    assert_eq!(messages.len(), 2, "only the two indexed records may be returned");
+    assert!(messages.iter().all(|message| message.topic() == &topic));
+    assert_eq!(messages[0].body().unwrap().as_ref(), b"first match");
+    assert_eq!(messages[1].body().unwrap().as_ref(), b"second match");
+    assert_ne!(messages[0].msg_id(), messages[1].msg_id());
+}
+
+#[tokio::test]
 async fn query_message_returns_indexed_message_after_reput() {
     let temp_dir = tempdir().unwrap();
     let mut store = new_async_flush_test_store(&temp_dir);

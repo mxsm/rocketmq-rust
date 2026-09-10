@@ -450,7 +450,10 @@ impl LocalFileMessageStore {
                         warn!("index query returned unreadable message offset {offset}");
                     }
                 }
-                let result = self.commit_log.get_data_with_option(offset, false);
+                // An index offset identifies one message, not the remaining
+                // CommitLog segment. Returning the tail leaks adjacent Topics
+                // and duplicates records when multiple offsets share a segment.
+                let result = self.select_one_message_by_offset(offset);
                 if let Some(sbr) = result {
                     query_message_result.add_message(sbr);
                 }
