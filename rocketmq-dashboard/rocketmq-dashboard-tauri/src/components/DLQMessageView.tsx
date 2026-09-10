@@ -86,7 +86,7 @@ export const DLQMessageView = () => {
     items: consumerItems,
     isInitialLoading: isConsumerCatalogLoading,
     error: consumerCatalogError,
-  } = useConsumerCatalog();
+  } = useConsumerCatalog({ mode: 'name_server' });
 
   const consumerGroupOptions = useMemo(
     () =>

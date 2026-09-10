@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import type { ConsumerQueryScope } from '../types/consumer.types';
+import { ConsumerRequestGeneration, consumerScopeKey } from '../scope';
+import { useEffect, useRef, useState } from 'react';
 import { ConsumerService } from '../../../services/consumer.service';
 import { dashboardErrorMessage } from '../../../services/invoke';
 import type {
@@ -8,7 +10,7 @@ import type {
 
 const REFRESH_LABEL_DELAY_MS = 180;
 
-export const useConsumerCatalog = (address?: string) => {
+export const useConsumerCatalog = (scope: ConsumerQueryScope) => {
     const [response, setResponse] = useState<ConsumerGroupListResponse | null>(null);
     const [isInitialLoading, setIsInitialLoading] = useState(true);
     const [isRefreshPending, setIsRefreshPending] = useState(false);
@@ -16,12 +18,11 @@ export const useConsumerCatalog = (address?: string) => {
     const [refreshingGroup, setRefreshingGroup] = useState('');
     const [error, setError] = useState('');
 
-    const normalizedAddress = useMemo(() => {
-        const value = address?.trim() ?? '';
-        return value.length > 0 ? value : undefined;
-    }, [address]);
+    const generation = useRef(new ConsumerRequestGeneration());
+    const scopeKey = consumerScopeKey(scope);
 
     const load = async (mode: 'initial' | 'refresh' = 'initial') => {
+        const current = generation.current.begin();
         let refreshIndicatorTimer: number | null = null;
 
         if (mode === 'initial') {
@@ -29,7 +30,7 @@ export const useConsumerCatalog = (address?: string) => {
         } else {
             setIsRefreshPending(true);
             refreshIndicatorTimer = window.setTimeout(() => {
-                setIsRefreshing(true);
+                if (current()) setIsRefreshing(true);
             }, REFRESH_LABEL_DELAY_MS);
         }
 
@@ -37,46 +38,54 @@ export const useConsumerCatalog = (address?: string) => {
         try {
             const request = {
                 skipSysGroup: false,
-                address: normalizedAddress,
+                scope,
             };
             const next = mode === 'initial'
                 ? await ConsumerService.queryConsumerGroups(request)
                 : await ConsumerService.refreshAllConsumerGroups(request);
+            if (!current()) return null;
             setResponse(next);
             return next;
         } catch (loadError) {
-            setError(dashboardErrorMessage(loadError, 'Failed to load consumer groups'));
+            if (current()) setError(dashboardErrorMessage(loadError, 'Failed to load consumer groups'));
             return null;
         } finally {
             if (refreshIndicatorTimer !== null) {
                 window.clearTimeout(refreshIndicatorTimer);
             }
-            setIsInitialLoading(false);
-            setIsRefreshPending(false);
-            setIsRefreshing(false);
+            if (current()) {
+                setIsInitialLoading(false);
+                setIsRefreshPending(false);
+                setIsRefreshing(false);
+                setRefreshingGroup('');
+            }
         }
     };
 
     useEffect(() => {
+        setResponse(null);
         void load('initial');
-    }, [normalizedAddress]);
+        return () => generation.current.invalidate();
+    }, [scopeKey]);
 
     const refresh = async () => load('refresh');
 
     const refreshGroup = async (consumerGroup: string) => {
         const group = consumerGroup.trim();
-        if (!group) {
+        if (!group || !response) {
             return false;
         }
 
+        const current = generation.current.begin();
         setRefreshingGroup(group);
         setError('');
         try {
             const item = await ConsumerService.refreshConsumerGroup({
                 consumerGroup: group,
-                address: normalizedAddress,
+                scope,
             });
 
+            if (!current()) return false;
             setResponse((current) => {
                 if (!current) {
                     return current;
@@ -88,10 +97,10 @@ export const useConsumerCatalog = (address?: string) => {
             });
             return true;
         } catch (refreshError) {
-            setError(dashboardErrorMessage(refreshError, 'Failed to refresh consumer group'));
+            if (current()) setError(dashboardErrorMessage(refreshError, 'Failed to refresh consumer group'));
             return false;
         } finally {
-            setRefreshingGroup('');
+            if (current()) { setRefreshingGroup(''); setIsRefreshPending(false); setIsRefreshing(false); }
         }
     };
 

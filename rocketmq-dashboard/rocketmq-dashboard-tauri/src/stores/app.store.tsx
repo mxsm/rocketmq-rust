@@ -1,3 +1,4 @@
+import type { ConsumerQueryScope } from '../features/consumer/types/consumer.types';
 import React, { createContext, useContext, useEffect, useState, useReducer, useRef, useSyncExternalStore, ReactNode } from 'react';
 import { subscribeAuditWarning } from '../services/invoke';
 import { SessionStorageService } from '../services/session.storage';
@@ -15,9 +16,11 @@ interface AppState {
   activeTab: Tab;
   navigation: NavigationLocation;
   canGoBack: boolean;
+  consumerQueryMode: ConsumerQueryScope['mode'];
+  setConsumerQueryMode: (mode: ConsumerQueryScope['mode']) => void;
   goBack: () => void;
   openTopic: (name: string, detail?: Extract<EntityTarget, { kind: 'topic' }>['detail']) => void;
-  openConsumer: (name: string, detail?: Extract<EntityTarget, { kind: 'consumer' }>['detail'], proxyAddress?: string) => void;
+  openConsumer: (name: string, detail?: Extract<EntityTarget, { kind: 'consumer' }>['detail'], scope?: ConsumerQueryScope) => void;
   openBroker: (address: string, detail?: Extract<EntityTarget, { kind: 'broker' }>['detail']) => void;
   pageStates: React.MutableRefObject<Map<number, Record<string, unknown>>>;
   setActiveTab: (tab: Tab) => void;
@@ -39,18 +42,20 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [auditWarning, setAuditWarning] = useState<string | null>(null);
   useEffect(() => subscribeAuditWarning(setAuditWarning), []);
   const [navigationState, navigate] = useReducer(navigationReducer, initialNavigation);
+  const [consumerQueryMode, setConsumerQueryMode] = useState<ConsumerQueryScope['mode']>('name_server');
   const pageStates = useRef(new Map<number, Record<string, unknown>>());
   const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
   const environmentId = settings?.environmentId ?? null;
-  const previousEnvironment = useRef(environmentId);
+  const connectionScope = `${environmentId}:${settings?.currentProxyId ?? ''}`;
+  const previousEnvironment = useRef(connectionScope);
   const activeTab = navigationState.current.tab;
   useEffect(() => {
-    if (previousEnvironment.current !== environmentId) {
-      previousEnvironment.current = environmentId;
+    if (previousEnvironment.current !== connectionScope) {
+      previousEnvironment.current = connectionScope;
       pageStates.current.clear();
       navigate({ type: 'reset', environmentId });
     }
-  }, [environmentId]);
+  }, [connectionScope, environmentId]);
   useEffect(() => {
     const retained = new Set([navigationState.current.id, ...navigationState.history.map((entry) => entry.id)]);
     for (const id of pageStates.current.keys()) if (!retained.has(id)) pageStates.current.delete(id);
@@ -130,9 +135,12 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         canGoBack: navigationState.current.environmentId === environmentId && navigationState.history.length > 0,
         goBack: () => navigate({ type: 'back' }),
         openTopic: (name, detail = 'overview') => navigate({ type: 'open', tab: 'Topic', target: { kind: 'topic', name, detail }, environmentId }),
-        openConsumer: (name, detail = 'overview', proxyAddress) => navigate({ type: 'open', tab: 'Consumer', target: { kind: 'consumer', name, detail, proxyAddress }, environmentId }),
+        openConsumer: (name, detail = 'overview', scope = { mode: 'name_server' }) => {
+          setConsumerQueryMode(scope.mode);
+          navigate({ type: 'open', tab: 'Consumer', target: { kind: 'consumer', name, detail, scope }, environmentId });
+        },
         openBroker: (address, detail = 'overview') => navigate({ type: 'open', tab: 'Cluster', target: { kind: 'broker', address, detail }, environmentId }),
-        pageStates,
+        pageStates, consumerQueryMode, setConsumerQueryMode,
         setActiveTab,
         setAuthSession,
         clearAuthSession,
