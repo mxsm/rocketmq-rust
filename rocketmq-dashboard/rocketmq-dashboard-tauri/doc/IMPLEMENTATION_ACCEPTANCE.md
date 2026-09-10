@@ -36,7 +36,24 @@ integration step records validation and any remaining runtime coverage limits.
 | S22 | Audited Consumer Monitor rule revisions | [10409](https://github.com/mxsm/rocketmq-rust/pull/10409) |
 | S23 | Read-only storage and collector diagnostics | [10411](https://github.com/mxsm/rocketmq-rust/pull/10411) |
 | S24 | Consistent backup, verification, empty-target restore and session revocation | [10413](https://github.com/mxsm/rocketmq-rust/pull/10413) |
-| S25 | Integration acceptance and Windows shutdown stack fix | Current integration PR |
+| S25 | Integration acceptance and Windows shutdown stack fix | [10415](https://github.com/mxsm/rocketmq-rust/pull/10415) |
+
+Live acceptance exposed additional defects, each tracked and squash-merged:
+
+| Behavior | Fix |
+| --- | --- |
+| Broker-forwarded Consumer diagnostics and Rust DLQ origin lookup | [10418](https://github.com/mxsm/rocketmq-rust/pull/10418) |
+| Advertised Broker IP in physical message IDs | [10420](https://github.com/mxsm/rocketmq-rust/pull/10420) |
+| Trace Key lookup and producer/consumer correlation | [10421](https://github.com/mxsm/rocketmq-rust/pull/10421) |
+| Read one CommitLog record per indexed offset | [10423](https://github.com/mxsm/rocketmq-rust/pull/10423) |
+| Resolve unique IDs and forward direct consumption through the owning Broker | [10425](https://github.com/mxsm/rocketmq-rust/pull/10425) |
+| Compile TLS into the desktop and Docker Broker | [10427](https://github.com/mxsm/rocketmq-rust/pull/10427) |
+| Return each indexed physical record once | [10429](https://github.com/mxsm/rocketmq-rust/pull/10429) |
+
+Merge-subject audit: historical PR #10383 has an extra space before `(#10383)`.
+That formatting deviation is recorded; main history has not been rewritten.
+All audited remaining implementation PRs and the live follow-ups use the requested
+`PR title(#number)` subject.
 
 ## Parity mapping
 
@@ -62,7 +79,7 @@ target parameter. Unknown or partial observations are not reported as healthy.
 ## Automated validation
 
 - Frontend production build passed; all 41 tests across 13 Vitest files passed.
-- Backend full library suite passed: 140 tests, with three live ACL tests selected
+- Backend full library suite passed: 141 tests, with three live ACL tests selected
   separately and also passing against the rebuilt local images. The registration coverage test includes every non-auth command and
   checks its dashboard authorization boundary instead of a historical fixed count.
 - The storage CLI passed its independent binary check. Three storage operation
@@ -72,6 +89,11 @@ target parameter. Unknown or partial observations are not reported as healthy.
 - Relevant shared admin/client behavior tests were run with their implementation
   steps. No full root-workspace feature matrix or cross-platform packaging claim
   is made. Vite reports the existing large-bundle advisory.
+- Follow-up regressions passed: three indexed-query tests, two advertised-address
+  tests, three Consumer trace tests, three consumer-selection tests, and explicitly
+  opted-in live diagnostic, Trace query, and direct-consumption tests. The repeated-Key
+  regression failed before the fix and passed afterward. The read-only admin adapter
+  also compiled without TLS; the desktop compiled with TLS enabled.
 
 ## Desktop and cluster verification
 
@@ -80,48 +102,45 @@ WebView and authenticated IPC were used; no mock backend supplied these results.
 
 | Verification | Observed result |
 | --- | --- |
-| Visible account flow | Sign-in, required initial password change, sign-in again, Sessions list, confirmed account-wide revocation and return to sign-in |
+| Visible account flow | Sign-in, required initial password change, sign-in again, Sessions list, confirmed account-wide revocation and return to sign-in; a real 60-second session expired, protected IPC returned auth.session.invalid, and the WebView returned to sign-in |
 | Visible Monitor / Storage pages | Rule create and confirmed delete; available SQLite, actual page capacity, unknown filesystem free space, collector status; consecutive diagnostics refreshes did not change the write timestamp |
-| Connection IPC | Address add/switch/delete, stale revision rejection, invalid atomic replacement rollback, environment-isolated rules, configured Proxy Consumer query |
+| Connection IPC | Address add/switch/delete, stale revision rejection, invalid atomic replacement rollback, environment-isolated rules, configured Proxy Consumer query; VIP enable/disable persisted and read back correctly |
 | Topic and message IPC | Two-Broker create/update, route, SEND_OK receipt, ID/Key lookup, message detail, single-Broker delete and whole-Topic delete |
 | Consumer / Broker IPC | Two-Broker group writes, complete configuration summary, detected differing configuration, reset of four queues, skip to latest, per-target group deletion; Broker configuration write/readback and restoration of the original value; online Rust Consumer RunningInfo available (5 properties, 4 queue entries), JStack available (27,337 characters) after correcting SDK Broker forwarding |
 | Directory and history IPC | Producer directory query without a supplied group, audit filtering/cursor, Broker/Topic stored samples and pagination; history remained readable after restart |
 | Storage CLI / restored desktop | Live backup, verify, restore; restored cached session rejected, new login successful, rules/history retained, restore audit present |
-| New local Rust images | NameServer, Broker, Proxy, and admin CLI rebuilt from local source; ordinary and ACL Compose projects healthy (six containers); two-Broker listing and desktop SEND_OK after replacement |
+| New local Rust images | NameServer, Broker, Proxy, and admin CLI rebuilt from local source; ordinary, ACL, and TLS Compose projects healthy (eight containers); two-Broker listing and desktop SEND_OK after replacement |
 | Isolated ACL integration | Valid/invalid/anonymous credential query behavior, normal/transactional sends, user CRUD, typed policy deletion preserving other entries: all three live tests passed |
 | Exit | The initial real exit exposed a Windows main-thread stack overflow. Heap-pinning the joined SDK shutdown futures fixed it. A 1 MiB-stack lifecycle regression passed; two subsequent real desktop exits returned code 0 |
-| Online Producer and populated DLQ | Producer directory discovered the live group and connection detail returned one Rust client. A rejected message was found by DLQ Key and unique ID; CSV export returned one successful row. Batch resend retained both failures while the separate physical store-host defect remains open |
+| Online Producer and populated DLQ | The visible Producer directory populated the group without manual entry; selecting it and searching its Topic opened one Rust connection. Normal and DLQ physical-ID details passed. Single DLQ resend returned CR_SUCCESS; a mixed batch retained one success and one failure, and the consumer logged both successful deliveries. CSV export returned one successful row |
+| Topic editor and system protection | The real edit modal changed both queue counts from 2 to 3 on two Brokers and retained both successful receipts; configuration readback showed 3/3 with no drift. Selecting a system Topic displayed the protection notice and omitted send/delete/offset actions |
+| Monitor rule revision | Real IPC created a rule, updated thresholds with revision 1, read back revision 2 and the changed values, then deleted it |
+| TLS | With a development CA trusted through SSL_CERT_FILE and certificate verification enabled, the Windows app queried one active TLS Broker without status errors and read 384 configuration entries. OpenSSL independently verified TLS 1.3 and the certificate chain |
+| Indexed query and Trace after replacement | The original keyed message and its DLQ copy each returned exactly one row. Trace returned exactly Pub, SubBefore, and SubAfter for the producer unique ID, with the expected failed first delivery; unrelated Topics and repeated physical records were absent |
 
-Temporary Topic, Consumer group, and Monitor smoke resources were deleted. Both
-Docker clusters remain running for development. The desktop and its temporary
+Temporary Topic, Consumer group, and Monitor smoke resources were deleted. All three
+Docker clusters remain running for development. The bounded debug clients exited
+with code 0 after their owned shutdown. The desktop and its temporary
 Vite process were closed after checking graceful shutdown.
 
-### Remaining runtime coverage
+### Verification limits
 
-- TLS certificate/handshake integration was not exercised; the local fixtures use
-  plaintext remoting. Configuration and credential boundaries have automated tests.
-- Online Rust RunningInfo/JStack were exercised after fixing the diagnostic target
-  in [issue #10416](https://github.com/mxsm/rocketmq-rust/issues/10416). The ignored
-  live SDK regression also passed. Proxy diagnostics remain explicitly unsupported;
-  offline, bounded and truncated branches have focused coverage.
-- Populated DLQ Key/unique-ID lookup and CSV export passed. Rust origin-ID fallback
-  has three focused regression tests. Successful DLQ resend and physical-ID detail
-  remain blocked by [issue #10417](https://github.com/mxsm/rocketmq-rust/issues/10417):
-  Broker metadata encodes the wildcard listener instead of its advertised IP.
-  Mixed failed results were retained correctly. Trace round trips still require
-  the dedicated Trace Topic fixture described in the development README.
-- Topic/Consumer modal interactions were not exhaustively clicked. Their real
-  service/IPC mutations were exercised above, with focused receipt and navigation
-  tests covering result branches. This is not a complete visual or cross-platform
-  packaging certification.
+- Proxy diagnostics remain explicitly unsupported; supported NameServer/Broker
+  diagnostics were exercised with an online Rust consumer. Offline, bounded and
+  truncated branches have focused coverage.
+- The TLS fixture covers server certificate verification, not mutual TLS. The
+  separate ACL fixture covers the configured credential and policy paths.
+- Real modal interactions and service/IPC operations cover the selected smoke
+  scenarios. Every visual combination, cross-platform installer, performance and
+  fault matrix was not exercised and is not claimed by this desktop acceptance.
 
-These limits are not counted as successful live coverage. They do not add SQL
+These limits do not add SQL
 server backends, notifications, distributed leases, or HTTP deployment to the
 desktop scope.
 
 ## Operating references
 
-- [Local Rust cluster](../deploy/dev/README.md) and [isolated ACL fixture](../deploy/dev/acl/README.md)
+- [Local Rust cluster](../deploy/dev/README.md), [ACL fixture](../deploy/dev/acl/README.md), and [TLS fixture](../deploy/dev/tls/README.md)
 - [History](HISTORY.md), [Monitor rules](MONITOR_RULES.md), [storage diagnostics](STORAGE_DIAGNOSTICS.md)
 - [Backup and restore](STORAGE_OPERATIONS.md)
 

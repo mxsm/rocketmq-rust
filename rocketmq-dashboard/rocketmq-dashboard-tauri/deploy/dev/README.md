@@ -34,7 +34,18 @@ service data uses separate named volumes. All published ports bind to host
 loopback; this is an unauthenticated local debugging fixture. ACL and TLS require
 a separately configured secured fixture before claiming authentication coverage.
 The [ACL fixture](acl/README.md) provides isolated credential verification with
-the same local Rust images.
+the same local Rust images. The [TLS fixture](tls/README.md) verifies certificate
+trust and encrypted NameServer/Broker requests with the TLS-enabled local builds.
+
+## Inspect in Docker Desktop
+
+Open **Containers** and expand the arrow beside `rocketmq-tauri-debug`. It contains
+`namesrv`, `broker-a`, `broker-b`, and `proxy`; select a container to inspect its
+logs, published ports, and health. The ACL and TLS fixtures appear as separate
+`rocketmq-tauri-acl-debug` and `rocketmq-tauri-tls-debug` groups.
+
+In the Windows dashboard, select `127.0.0.1:9876` as the NameServer, disable VIP
+and TLS, and open **Cluster** to see the two ordinary development Brokers.
 
 | Desktop setting | Address |
 | --- | --- |

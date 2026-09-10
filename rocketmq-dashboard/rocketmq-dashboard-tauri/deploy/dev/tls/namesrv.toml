@@ -1,0 +1,10 @@
+rocketmqHome = "/var/lib/rocketmq/namesrv"
+kvConfigPath = "/var/lib/rocketmq/namesrv/kvConfig.json"
+configStorePath = "/var/lib/rocketmq/namesrv/namesrv.properties"
+needWaitForService = false
+tls.enable = true
+tls.server.mode = "permissive"
+tls.server.need.client.auth = "none"
+tls.server.authClient = false
+tls.server.certPath = "/certs/server.pem"
+tls.server.keyPath = "/certs/server.key"
