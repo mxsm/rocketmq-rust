@@ -1,0 +1,4 @@
+interface:
+  display_name: "RocketMQ Rust Local Cluster"
+  short_description: "Set up local Broker, Proxy, and Controller HA clusters"
+  default_prompt: "Use $rocketmq-rust-local-cluster to set up a local development cluster from this checkout and verify message delivery."
