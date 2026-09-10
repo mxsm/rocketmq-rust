@@ -64,7 +64,8 @@ const NAV_SECTIONS = [
         title: 'Governance',
         items: [
             {tab: 'ACL', label: 'ACL', icon: Shield},
-            {tab: 'Audit', label: 'Audit', icon: Shield}
+            {tab: 'Audit', label: 'Audit', icon: Shield},
+            {tab: 'Sessions', label: 'Sessions', icon: UserRound}
         ]
     }
 ] as const;
@@ -82,6 +83,7 @@ const PAGE_SUMMARIES: Record<string, string> = {
     DLQ: 'Dead-letter queue search, retry context, and payload inspection.',
     ACL: 'Access-control resources, credentials, and permission posture.',
     Audit: 'Operation history, outcomes, and audit receipts.',
+    Sessions: 'Active, expired, and revoked sessions for your account.',
     Account: 'Local administrator profile, active session, and account security.'
 };
 

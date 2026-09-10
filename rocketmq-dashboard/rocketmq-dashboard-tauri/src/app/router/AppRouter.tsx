@@ -16,17 +16,21 @@ import {MessageTraceView} from '../../components/MessageTraceView';
 import {DLQMessageView} from '../../components/DLQMessageView';
 import {Activity} from 'lucide-react';
 import {AuditPage} from '../../pages/audit/AuditPage';
+import {SessionsPanel} from '../../pages/account/SessionsPanel';
 import {AccountPage} from '../../pages/account/AccountPage';
 
 export const AppRouter = () => {
     const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
-    const { activeTab } = useAppStore();
-    const key = ['NameServer', 'Proxy', 'Account', 'Audit'].includes(activeTab) ? activeTab : `${activeTab}:${settings?.revision ?? 0}`;
-    return <RouteContent key={key} />;
+    const { activeTab, navigation, canGoBack, goBack } = useAppStore();
+    const key = ['NameServer', 'Proxy', 'Account', 'Sessions', 'Audit'].includes(activeTab) ? activeTab : `${activeTab}:${settings?.revision ?? 0}`;
+    return <><div className="flex items-center gap-3 px-6 py-2">
+        {canGoBack && <button type="button" className="text-sm underline" onClick={goBack}>Back</button>}
+        {navigation.target && <span className="text-sm text-gray-500">{navigation.target.kind}: {'name' in navigation.target ? navigation.target.name : navigation.target.address}</span>}
+    </div><RouteContent key={`${key}:${navigation.id}`} /></>;
 };
 
 const RouteContent = () => {
-    const {activeTab} = useAppStore();
+    const {activeTab, currentUser} = useAppStore();
 
     switch (activeTab) {
         case 'NameServer':
@@ -53,6 +57,8 @@ const RouteContent = () => {
             return <ACLView/>;
         case 'Audit':
             return <AuditPage/>;
+        case 'Sessions':
+            return currentUser ? <SessionsPanel username={currentUser.username}/> : null;
         case 'Account':
             return <AccountPage/>;
         default:

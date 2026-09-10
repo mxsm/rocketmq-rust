@@ -1,22 +1,10 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, useReducer, useRef, useSyncExternalStore, ReactNode } from 'react';
 import { subscribeAuditWarning } from '../services/invoke';
 import { SessionStorageService } from '../services/session.storage';
 import type { SessionUser } from '../features/auth/types/auth.types';
 
-type Tab =
-  | 'NameServer'
-  | 'Proxy'
-  | 'Dashboard'
-  | 'Cluster'
-  | 'Topic'
-  | 'Consumer'
-  | 'Producer'
-  | 'Message'
-  | 'MessageTrace'
-  | 'DLQ'
-  | 'ACL'
-  | 'Account'
-  | 'Audit';
+import { ConnectionStore } from '../services/connection.store';
+import { initialNavigation, navigationReducer, type Tab, type EntityTarget, type NavigationLocation } from './navigation';
 
 interface AppState {
   isLoggedIn: boolean;
@@ -25,6 +13,13 @@ interface AppState {
   currentUser: SessionUser | null;
   mustChangePassword: boolean;
   activeTab: Tab;
+  navigation: NavigationLocation;
+  canGoBack: boolean;
+  goBack: () => void;
+  openTopic: (name: string, detail?: Extract<EntityTarget, { kind: 'topic' }>['detail']) => void;
+  openConsumer: (name: string, detail?: Extract<EntityTarget, { kind: 'consumer' }>['detail'], proxyAddress?: string) => void;
+  openBroker: (address: string, detail?: Extract<EntityTarget, { kind: 'broker' }>['detail']) => void;
+  pageStates: React.MutableRefObject<Map<number, Record<string, unknown>>>;
   setActiveTab: (tab: Tab) => void;
   setAuthSession: (sessionId: string, currentUser: SessionUser) => void;
   clearAuthSession: () => void;
@@ -43,7 +38,24 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [auditWarning, setAuditWarning] = useState<string | null>(null);
   useEffect(() => subscribeAuditWarning(setAuditWarning), []);
-  const [activeTab, setActiveTab] = useState<Tab>('Dashboard');
+  const [navigationState, navigate] = useReducer(navigationReducer, initialNavigation);
+  const pageStates = useRef(new Map<number, Record<string, unknown>>());
+  const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
+  const environmentId = settings?.environmentId ?? null;
+  const previousEnvironment = useRef(environmentId);
+  const activeTab = navigationState.current.tab;
+  useEffect(() => {
+    if (previousEnvironment.current !== environmentId) {
+      previousEnvironment.current = environmentId;
+      pageStates.current.clear();
+      navigate({ type: 'reset', environmentId });
+    }
+  }, [environmentId]);
+  useEffect(() => {
+    const retained = new Set([navigationState.current.id, ...navigationState.history.map((entry) => entry.id)]);
+    for (const id of pageStates.current.keys()) if (!retained.has(id)) pageStates.current.delete(id);
+  }, [navigationState]);
+  const setActiveTab = (tab: Tab) => navigate({ type: 'open', tab, environmentId });
 
   const getPageTitle = (tab: Tab) => {
     switch (tab) {
@@ -71,6 +83,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         return 'ACL Management';
       case 'Audit':
         return 'Audit Events';
+      case 'Sessions':
+        return 'Account Sessions';
       case 'Account':
         return 'Account Overview';
       default:
@@ -86,6 +100,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const clearAuthSession = () => {
+    pageStates.current.clear();
+    navigate({ type: 'reset', environmentId: null });
     setSessionId(null);
     setCurrentUser(null);
     setMustChangePassword(false);
@@ -110,6 +126,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         currentUser,
         mustChangePassword,
         activeTab,
+        navigation: navigationState.current.environmentId === environmentId ? navigationState.current : { ...navigationState.current, target: null },
+        canGoBack: navigationState.current.environmentId === environmentId && navigationState.history.length > 0,
+        goBack: () => navigate({ type: 'back' }),
+        openTopic: (name, detail = 'overview') => navigate({ type: 'open', tab: 'Topic', target: { kind: 'topic', name, detail }, environmentId }),
+        openConsumer: (name, detail = 'overview', proxyAddress) => navigate({ type: 'open', tab: 'Consumer', target: { kind: 'consumer', name, detail, proxyAddress }, environmentId }),
+        openBroker: (address, detail = 'overview') => navigate({ type: 'open', tab: 'Cluster', target: { kind: 'broker', address, detail }, environmentId }),
+        pageStates,
         setActiveTab,
         setAuthSession,
         clearAuthSession,
@@ -133,3 +156,20 @@ export const useAppStore = () => {
   }
   return context;
 };
+
+// Each history entry keeps its own list position and selection; secrets never belong here.
+export function useNavigationState<T>(key: string, initial: T | (() => T)) {
+  const { navigation, pageStates } = useAppStore();
+  const id = navigation.id;
+  const [value, setValue] = useState<T>(() => {
+    const saved = pageStates.current.get(id);
+    return saved && key in saved ? saved[key] as T : typeof initial === 'function' ? (initial as () => T)() : initial;
+  });
+  const update: React.Dispatch<React.SetStateAction<T>> = (next) => setValue((previous) => {
+    const resolved = typeof next === 'function' ? (next as (value: T) => T)(previous) : next;
+    const saved = pageStates.current.get(id) ?? {};
+    pageStates.current.set(id, { ...saved, [key]: resolved });
+    return resolved;
+  });
+  return [value, update] as const;
+}

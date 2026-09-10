@@ -1,3 +1,4 @@
+import { useAppStore } from '../../../stores/app.store';
 import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
@@ -50,6 +51,7 @@ export const ConsumerDetailModal = ({
     consumer,
     address,
 }: ConsumerDetailModalProps) => {
+    const { openTopic } = useAppStore();
     const [data, setData] = useState<ConsumerTopicDetailView | null>(null);
     const [selectedTopicName, setSelectedTopicName] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -258,7 +260,7 @@ export const ConsumerDetailModal = ({
                                             <>
                                                 <div className="consumer-topic-detail-panel-header">
                                                     <div>
-                                                        <h4 title={selectedTopic.topic}>{selectedTopic.topic}</h4>
+                                                        <h4 title={selectedTopic.topic}><button type="button" className="underline" onClick={() => openTopic(selectedTopic.topic, 'status')}>{selectedTopic.topic}</button></h4>
                                                         <p>Last consume {formatTimestamp(selectedTopic.lastTimestamp)}</p>
                                                     </div>
                                                     <span className={`consumer-topic-detail-lag-pill ${selectedTopic.diffTotal > 0 ? 'is-warning' : 'is-healthy'}`}>
