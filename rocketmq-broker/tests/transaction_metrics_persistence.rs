@@ -58,6 +58,6 @@ fn rejects_an_unknown_checkpoint_version_without_mutating_it() {
     fs::write(&checkpoint, body).expect("write unsupported checkpoint");
 
     let error = TransactionMetricsProbe::open(&checkpoint).expect_err("unknown version must fail closed");
-    assert!(error.contains("unsupported transaction metrics checkpoint version 99"));
+    assert_eq!(error, "core.configuration.invalid: Configuration value is invalid");
     assert_eq!(fs::read(&checkpoint).expect("checkpoint remains readable"), body);
 }
