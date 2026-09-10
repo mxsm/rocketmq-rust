@@ -1043,13 +1043,18 @@ impl ConsumerAdmin for DefaultMQAdminExtImpl {
         topic: CheetahString,
         msg_id: CheetahString,
     ) -> crate::ClientResult<ConsumeMessageDirectlyResult> {
-        let consumer_connection = self
-            .examine_consumer_connection_info(consumer_group.clone(), None)
-            .await?;
-        let (resolved_client_id, client_addr) =
-            select_consumer_direct_connection(&consumer_group, &consumer_connection, Some(&client_id))?;
         let message =
             ConsumerAdmin::query_message(self, CheetahString::default(), topic.clone(), msg_id.clone()).await?;
+        // The owning Broker resolves this physical offset and forwards the
+        // request over its existing consumer connection. A client's outbound
+        // socket is not an RPC listener; retrying another Broker could consume
+        // a different message at the same offset.
+        let broker_addr = CheetahString::from(message.store_host().to_string());
+        let consumer_connection = self
+            .examine_consumer_connection_info(consumer_group.clone(), Some(broker_addr.clone()))
+            .await?;
+        let (resolved_client_id, _) =
+            select_consumer_direct_connection(&consumer_group, &consumer_connection, Some(&client_id))?;
         let request_header = ConsumeMessageDirectlyResultRequestHeader {
             consumer_group,
             client_id: Some(resolved_client_id),
@@ -1065,7 +1070,7 @@ impl ConsumerAdmin for DefaultMQAdminExtImpl {
             .as_ref()
             .ok_or(crate::ClientError::not_started())?
             .get_mq_client_api_impl()?
-            .consume_message_directly(&client_addr, request_header, &message, self.remoting_timeout_millis()?)
+            .consume_message_directly(&broker_addr, request_header, &message, self.remoting_timeout_millis()?)
             .await
     }
 

@@ -634,7 +634,7 @@ fn select_consumer_direct_connection_errors_when_group_is_offline() {
     let error = select_consumer_direct_connection(&consumer_group, &consumer_connection, None)
         .expect_err("offline group should not resolve a client");
 
-    assert!(error.to_string().contains("NO CONSUMER"));
+    assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
 }
 
 #[test]
