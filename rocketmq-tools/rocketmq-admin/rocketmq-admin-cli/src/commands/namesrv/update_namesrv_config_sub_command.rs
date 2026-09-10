@@ -62,10 +62,15 @@ impl UpdateNamesrvConfigSubCommand {
 impl CommandExecute for UpdateNamesrvConfigSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> CanonicalResult<()> {
-        let result = NameServerService::update_namesrv_config_by_request(self.request()?).await?;
+        let result = NameServerService::update_namesrv_config_by_request_with_credentials(
+            self.request()?,
+            credentials,
+            client_runtime,
+        )
+        .await?;
         Self::print_result(result);
         Ok(())
     }

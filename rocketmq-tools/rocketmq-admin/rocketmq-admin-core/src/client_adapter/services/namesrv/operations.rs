@@ -32,6 +32,7 @@ use super::types::NamesrvConfigUpdateResult;
 use super::types::WritePermRequest;
 use super::types::WritePermResult;
 use super::types::WritePermResultEntry;
+use crate::client_adapter::services::admin::AdminBuilder;
 
 /// NameServer operations service
 pub struct NameServerService;
@@ -46,10 +47,47 @@ impl NameServerService {
         result
     }
 
+    /// Query NameServer configuration using the caller-owned runtime and optional credentials.
+    pub async fn query_namesrv_config_by_request_with_credentials(
+        request: NamesrvConfigQueryRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<NamesrvConfigQueryResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await?;
+        let result = Self::get_namesrv_config(&mut admin, request.namesrv_addrs())
+            .await
+            .map(|configs| NamesrvConfigQueryResult { configs });
+        admin.shutdown().await;
+        result
+    }
+
     pub async fn update_namesrv_config_by_request(
         request: NamesrvConfigUpdateRequest,
     ) -> CanonicalResult<NamesrvConfigUpdateResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
+        let properties = request.properties().clone();
+        let namesrv_addrs = request.namesrv_addrs();
+        let result = Self::update_namesrv_config(&mut admin, properties.clone(), namesrv_addrs.clone())
+            .await
+            .map(|_| NamesrvConfigUpdateResult {
+                properties,
+                namesrv_addrs,
+            });
+        admin.shutdown().await;
+        result
+    }
+
+    /// Update NameServer configuration using the caller-owned runtime and optional credentials.
+    pub async fn update_namesrv_config_by_request_with_credentials(
+        request: NamesrvConfigUpdateRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<NamesrvConfigUpdateResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await?;
         let properties = request.properties().clone();
         let namesrv_addrs = request.namesrv_addrs();
         let result = Self::update_namesrv_config(&mut admin, properties.clone(), namesrv_addrs.clone())
@@ -80,8 +118,53 @@ impl NameServerService {
         result
     }
 
+    /// Create or update NameServer KV config using the caller-owned runtime and optional credentials.
+    pub async fn update_kv_config_by_request_with_credentials(
+        request: KvConfigUpdateRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<KvConfigUpdateResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await?;
+        let result = Self::create_or_update_kv_config(
+            &mut admin,
+            request.namespace().clone(),
+            request.key().clone(),
+            request.value().clone(),
+        )
+        .await
+        .map(|_| KvConfigUpdateResult {
+            namespace: request.namespace().clone(),
+            key: request.key().clone(),
+            value: Some(request.value().clone()),
+        });
+        admin.shutdown().await;
+        result
+    }
+
     pub async fn delete_kv_config_by_request(request: KvConfigDeleteRequest) -> CanonicalResult<KvConfigUpdateResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
+        let result = Self::delete_kv_config(&mut admin, request.namespace().clone(), request.key().clone())
+            .await
+            .map(|_| KvConfigUpdateResult {
+                namespace: request.namespace().clone(),
+                key: request.key().clone(),
+                value: None,
+            });
+        admin.shutdown().await;
+        result
+    }
+
+    /// Delete NameServer KV config using the caller-owned runtime and optional credentials.
+    pub async fn delete_kv_config_by_request_with_credentials(
+        request: KvConfigDeleteRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<KvConfigUpdateResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await?;
         let result = Self::delete_kv_config(&mut admin, request.namespace().clone(), request.key().clone())
             .await
             .map(|_| KvConfigUpdateResult {
@@ -97,8 +180,36 @@ impl NameServerService {
         Self::apply_write_perm_by_request(request, true).await
     }
 
+    /// Add broker write permission using the caller-owned runtime and optional credentials.
+    pub async fn add_write_perm_by_request_with_credentials(
+        request: WritePermRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<WritePermResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await?;
+        let result = Self::apply_write_perm_with_admin(&mut admin, &request, true).await;
+        admin.shutdown().await;
+        result
+    }
+
     pub async fn wipe_write_perm_by_request(request: WritePermRequest) -> CanonicalResult<WritePermResult> {
         Self::apply_write_perm_by_request(request, false).await
+    }
+
+    /// Wipe broker write permission using the caller-owned runtime and optional credentials.
+    pub async fn wipe_write_perm_by_request_with_credentials(
+        request: WritePermRequest,
+        credentials: Option<crate::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+    ) -> CanonicalResult<WritePermResult> {
+        let mut admin = admin_builder_with_credentials(request.admin_builder(), credentials, client_runtime)
+            .build_and_start()
+            .await?;
+        let result = Self::apply_write_perm_with_admin(&mut admin, &request, false).await;
+        admin.shutdown().await;
+        result
     }
 
     async fn apply_write_perm_by_request(
@@ -106,6 +217,16 @@ impl NameServerService {
         add_perm: bool,
     ) -> CanonicalResult<WritePermResult> {
         let mut admin = request.admin_builder().build_and_start().await?;
+        let result = Self::apply_write_perm_with_admin(&mut admin, &request, add_perm).await;
+        admin.shutdown().await;
+        result
+    }
+
+    async fn apply_write_perm_with_admin(
+        admin: &mut DefaultMQAdminExt,
+        request: &WritePermRequest,
+        add_perm: bool,
+    ) -> CanonicalResult<WritePermResult> {
         let mut namesrv_addrs = request.namesrv_addrs();
         if namesrv_addrs.is_empty() {
             namesrv_addrs = admin.get_name_server_address_list().await;
@@ -114,9 +235,9 @@ impl NameServerService {
         let mut entries = Vec::with_capacity(namesrv_addrs.len());
         for namesrv_addr in namesrv_addrs {
             let result = if add_perm {
-                Self::add_write_perm_of_broker(&mut admin, namesrv_addr.clone(), request.broker_name().clone()).await
+                Self::add_write_perm_of_broker(admin, namesrv_addr.clone(), request.broker_name().clone()).await
             } else {
-                Self::wipe_write_perm_of_broker(&mut admin, namesrv_addr.clone(), request.broker_name().clone()).await
+                Self::wipe_write_perm_of_broker(admin, namesrv_addr.clone(), request.broker_name().clone()).await
             };
 
             match result {
@@ -133,7 +254,6 @@ impl NameServerService {
             }
         }
 
-        admin.shutdown().await;
         Ok(WritePermResult {
             broker_name: request.broker_name().clone(),
             entries,
@@ -280,6 +400,18 @@ impl NameServerService {
             .map_err(|error| {
                 crate::client_adapter::services::errors::admin_operation_failed_by("wipe_write_perm_of_broker", error)
             })
+    }
+}
+
+fn admin_builder_with_credentials(
+    builder: AdminBuilder,
+    credentials: Option<crate::core::security::AdminCredentials>,
+    client_runtime: std::sync::Arc<rocketmq_client_rust::ClientRuntime>,
+) -> AdminBuilder {
+    let builder = builder.client_runtime(client_runtime);
+    match credentials {
+        Some(hook) => builder.credentials(hook),
+        None => builder,
     }
 }
 

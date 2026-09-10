@@ -75,10 +75,12 @@ impl UpdateOrderConfSubCommand {
 impl CommandExecute for UpdateOrderConfSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::Result<()> {
-        let result = TopicService::apply_order_conf(self.request()?).await?;
+        let result =
+            TopicService::apply_order_conf_by_request_with_credentials(self.request()?, credentials, client_runtime)
+                .await?;
         Self::print_result(result);
         Ok(())
     }

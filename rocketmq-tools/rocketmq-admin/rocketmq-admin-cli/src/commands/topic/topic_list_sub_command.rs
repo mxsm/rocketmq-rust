@@ -64,10 +64,12 @@ impl TopicListSubCommand {
 impl CommandExecute for TopicListSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> rocketmq_error::Result<()> {
-        let result = TopicService::query_topic_list(self.request()).await?;
+        let result =
+            TopicService::query_topic_list_by_request_with_credentials(self.request(), credentials, client_runtime)
+                .await?;
         self.print_topics(result);
         Ok(())
     }

@@ -44,8 +44,8 @@ impl GetNamesrvConfigSubCommand {
 impl CommandExecute for GetNamesrvConfigSubCommand {
     async fn execute(
         &self,
-        _credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
-        _client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
+        credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
+        client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> CanonicalResult<()> {
         let request = match self.request() {
             Ok(request) => request,
@@ -59,7 +59,9 @@ impl CommandExecute for GetNamesrvConfigSubCommand {
             return Ok(());
         }
 
-        let result = NameServerService::query_namesrv_config(request).await?;
+        let result =
+            NameServerService::query_namesrv_config_by_request_with_credentials(request, credentials, client_runtime)
+                .await?;
         display_configs_with_table(&result.configs);
         Ok(())
     }
