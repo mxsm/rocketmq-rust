@@ -209,6 +209,113 @@ mod tests {
     }
 
     #[test]
+    fn blank_groups_and_topics_preserve_failure_indexes() {
+        let handle = receipt(10, "broker", 1, 10);
+        let inputs = [("", "topic"), (" \t", "topic"), ("group", ""), ("group", "\n ")]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (consumer_group, topic))| BatchAckInput {
+                entry_index: index + 10,
+                consumer_group,
+                topic,
+                receipt_handle: &handle,
+            })
+            .collect::<Vec<_>>();
+        let result = build_batch_ack_requests(&inputs);
+        assert!(result.requests.is_empty());
+        assert_eq!(
+            result
+                .failures
+                .iter()
+                .map(|failure| failure.entry_index)
+                .collect::<Vec<_>>(),
+            vec![10, 11, 12, 13]
+        );
+        for failure in result.failures {
+            assert_eq!(failure.error.code(), rocketmq_error::CORE_ARGUMENT_INVALID.code());
+        }
+    }
+
+    #[test]
+    fn entry_limit_keeps_the_first_request_and_rejects_every_later_input() {
+        let handle = receipt(10, "broker", 1, 10);
+        let inputs = [handle.as_str(), handle.as_str(), "malformed"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, receipt_handle)| BatchAckInput {
+                entry_index: index + 20,
+                consumer_group: "group",
+                topic: "topic",
+                receipt_handle,
+            })
+            .collect::<Vec<_>>();
+        let result = build_batch_ack_requests_with_limits(
+            &inputs,
+            BatchAckBuildLimits {
+                max_entries: 1,
+                ..Default::default()
+            },
+        );
+        assert_eq!(result.requests.len(), 1);
+        assert_eq!(result.requests[0].entry_indexes, vec![20]);
+        assert_eq!(result.requests[0].body.acks[0].bit_set.0.count_ones(), 1);
+        assert_eq!(
+            result
+                .failures
+                .iter()
+                .map(|failure| failure.entry_index)
+                .collect::<Vec<_>>(),
+            vec![21, 22]
+        );
+        for failure in result.failures {
+            assert_eq!(failure.error.code(), rocketmq_error::CORE_ARGUMENT_INVALID.code());
+        }
+    }
+
+    #[test]
+    fn invalid_offset_arithmetic_does_not_discard_valid_requests() {
+        let handles = [
+            receipt(10, "broker", 1, 9),
+            receipt(10, "broker", 1, 11),
+            receipt(i64::MIN, "broker", 1, i64::MAX),
+        ];
+        let inputs = handles
+            .iter()
+            .zip([31, 7, 12])
+            .map(|(receipt_handle, entry_index)| BatchAckInput {
+                entry_index,
+                consumer_group: "group",
+                topic: "topic",
+                receipt_handle,
+            })
+            .collect::<Vec<_>>();
+        let result = build_batch_ack_requests(&inputs);
+        assert_eq!(result.requests.len(), 1);
+        assert_eq!(result.requests[0].broker_name, "broker");
+        assert_eq!(result.requests[0].entry_indexes, vec![7]);
+        assert_eq!(
+            result.requests[0].body.acks[0]
+                .bit_set
+                .0
+                .iter()
+                .by_vals()
+                .collect::<Vec<_>>(),
+            vec![false, true]
+        );
+        assert_eq!(
+            result
+                .failures
+                .iter()
+                .map(|failure| failure.entry_index)
+                .collect::<Vec<_>>(),
+            vec![31, 12]
+        );
+        for failure in result.failures {
+            assert_eq!(failure.error.code(), rocketmq_error::CORE_ARGUMENT_INVALID.code());
+        }
+    }
+
+    #[test]
     fn thirty_two_offsets_share_one_broker_request_and_checkpoint_bitmap() {
         let receipts = (0..32)
             .map(|offset| receipt(10, "broker-a", 1, 10 + offset))
