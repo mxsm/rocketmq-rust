@@ -266,6 +266,6 @@ pub async fn get_history_status(
     session_state: State<'_, SessionState>,
     history: State<'_, HistoryManager>,
 ) -> CommandResult<CollectorStatus> {
-    authorize_command(&session_id, &session_state).await?;
+    session_state.authorize_read_only(&session_id).await?;
     history.status().map_err(Into::into)
 }

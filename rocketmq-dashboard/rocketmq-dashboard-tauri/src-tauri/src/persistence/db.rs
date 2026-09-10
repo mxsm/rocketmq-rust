@@ -61,6 +61,17 @@ pub(crate) fn open_connection(path: &Path) -> DashboardResult<Connection> {
     Ok(connection)
 }
 
+pub(crate) fn open_read_only(path: &Path) -> DashboardResult<Connection> {
+    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection.busy_timeout(Duration::from_secs(5))?;
+    Ok(connection)
+}
+
+enum StorageAccess {
+    ReadOnly,
+    ReadWrite,
+}
+
 #[derive(Clone)]
 pub(crate) struct StorageManager {
     path: Arc<PathBuf>,
@@ -123,6 +134,22 @@ impl StorageManager {
         T: Send + 'static,
         F: FnOnce(&mut Connection) -> DashboardResult<T> + Send + 'static,
     {
+        self.run_with_access(name, StorageAccess::ReadWrite, operation).await
+    }
+
+    pub(crate) async fn read<T, F>(&self, name: &'static str, operation: F) -> DashboardResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection) -> DashboardResult<T> + Send + 'static,
+    {
+        self.run_with_access(name, StorageAccess::ReadOnly, operation).await
+    }
+
+    async fn run_with_access<T, F>(&self, name: &'static str, access: StorageAccess, operation: F) -> DashboardResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection) -> DashboardResult<T> + Send + 'static,
+    {
         let (sender, receiver) = oneshot::channel();
         {
             let accepting = self.accepting.lock().map_err(|_| DashboardError::StorageClosed)?;
@@ -139,7 +166,11 @@ impl StorageManager {
                     let result = executor
                         .spawn_io(name, move || {
                             let _guard = guard;
-                            let result = open_connection(&path).and_then(|mut connection| operation(&mut connection));
+                            let opened = match access {
+                                StorageAccess::ReadWrite => open_connection(&path),
+                                StorageAccess::ReadOnly => open_read_only(&path),
+                            };
+                            let result = opened.and_then(|mut connection| operation(&mut connection));
                             if result.is_ok() {
                                 stats.completed.fetch_add(1, Ordering::Relaxed);
                             } else {

@@ -108,7 +108,7 @@ export const invokeSessionCommand = <T>(
     throw error;
 });
 
-const localCommands = new Set(['change_password', 'get_current_user_profile', 'get_auth_bootstrap_status', 'list_sessions', 'revoke_user_sessions', 'query_audit_events']);
+const localCommands = new Set(['get_storage_status', 'get_history_status', 'change_password', 'get_current_user_profile', 'get_auth_bootstrap_status', 'list_sessions', 'revoke_user_sessions', 'query_audit_events']);
 const connectionWrites = new Set(['add_name_server', 'switch_name_server', 'delete_name_server', 'update_vip_channel', 'update_use_tls', 'add_proxy_addr', 'switch_proxy_addr', 'delete_proxy_addr', 'replace_name_servers']);
 const remoteWrites = new Set(['create_or_update_topic', 'delete_topic', 'delete_topic_by_broker', 'reset_consumer_offset', 'skip_message_accumulate', 'send_topic_message', 'create_or_update_consumer_group', 'delete_consumer_group', 'consume_message_directly', 'resend_dlq_message', 'batch_resend_dlq_message']);
 const pendingSettings = new Map<string, Promise<ConnectionSettingsView>>();
