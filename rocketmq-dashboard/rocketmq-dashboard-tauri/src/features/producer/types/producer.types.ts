@@ -26,3 +26,8 @@ export interface ProducerConnectionQueryRequest {
     topic: string;
     producerGroup: string;
 }
+
+export interface ProducerGroupItem {
+    producerGroup: string;
+    reportedConnectionCount: number;
+}

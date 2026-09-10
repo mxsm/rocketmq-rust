@@ -296,6 +296,7 @@ fn build_application() -> Result<DashboardApplication, i32> {
             message::commands::query_message_trace_by_id,
             message::commands::view_message_trace_detail,
             producer::commands::get_producer_topic_options,
+            producer::commands::list_producer_groups,
             producer::commands::query_producer_connections,
             proxy::commands::get_proxy_home_page,
             proxy::commands::add_proxy_addr,

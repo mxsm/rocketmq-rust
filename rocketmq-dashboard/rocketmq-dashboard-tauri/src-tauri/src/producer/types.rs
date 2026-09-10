@@ -44,3 +44,10 @@ pub(crate) struct ProducerConnectionView {
     pub(crate) connection_count: usize,
     pub(crate) connections: Vec<ProducerConnectionItem>,
 }
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProducerGroupItem {
+    pub(crate) producer_group: String,
+    pub(crate) reported_connection_count: usize,
+}
