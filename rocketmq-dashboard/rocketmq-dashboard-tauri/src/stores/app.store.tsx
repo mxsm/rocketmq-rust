@@ -75,7 +75,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       case 'Topic':
         return 'Topics';
       case 'Consumer':
-        return 'Consumer Management';
+        return 'Consumers';
       case 'Producer':
         return 'Producer Management';
       case 'Message':

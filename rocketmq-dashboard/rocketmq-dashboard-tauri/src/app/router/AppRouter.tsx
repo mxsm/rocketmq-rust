@@ -12,6 +12,7 @@ import {BrokerConfigEditorProvider} from '../../features/cluster/components/Brok
 import {TopicView} from '../../components/TopicView';
 import {TopicActionProvider} from '../../features/topic/components/TopicActionProvider';
 import {ConsumerView} from '../../components/ConsumerView';
+import {ConsumerActionProvider} from '../../features/consumer/components/ConsumerActionProvider';
 import {ProducerView} from '../../components/ProducerView';
 import {MessageView} from '../../components/MessageView';
 import {MessageTraceView} from '../../components/MessageTraceView';
@@ -27,7 +28,7 @@ export const AppRouter = () => {
     const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
     const { activeTab, navigation, sessionId } = useAppStore();
     const key = ['NameServer', 'Proxy', 'Account', 'Sessions', 'Audit'].includes(activeTab) ? activeTab : `${activeTab}:${settings?.revision ?? 0}`;
-    return <BrokerConfigEditorProvider key={sessionId}><TopicActionProvider><RouteContent key={`${key}:${navigation.id}`} /></TopicActionProvider></BrokerConfigEditorProvider>;
+    return <BrokerConfigEditorProvider key={sessionId}><TopicActionProvider><ConsumerActionProvider><RouteContent key={`${key}:${navigation.id}`} /></ConsumerActionProvider></TopicActionProvider></BrokerConfigEditorProvider>;
 };
 
 const RouteContent = () => {

@@ -6,10 +6,14 @@ Create/update uses the validated Consumer batch API without changing configurati
 
 The IPC result contains `operation`, `consumerGroup`, `targets`, `targetCount`, and `success`. Targets preserve Broker and internal-Topic-cleanup outcomes independently. Raw backend errors are replaced with a stable safe code and message. Audit counts reflect partial results.
 
-Editor and Delete dialogs close normally only after full success. Partial or failed outcomes remain visible. Reviewing failed Brokers first refreshes current target state, then selects only those failed Brokers; another explicit submission is required. Cluster selections are cleared for an editor retry so a failed subset cannot silently expand. Cleanup-only failures do not offer a Broker retry. Closing the dialog, changing the entity, or switching connection settings invalidates old callbacks.
+Editor and Delete dialogs require an explicit target review before submission and retain successful, partial, or failed outcomes until dismissed. A cluster selection expands to a visible list of explicit Broker names before review; the submitted request carries no cluster expansion. Clearing the last Broker is invalid. Editing starts from a successfully read, explicitly selected Broker configuration, never from fallback defaults after a failed read.
+
+Reviewing failed Brokers refreshes current target state and selects only failures from the preceding submitted target list. Earlier receipts remain visible, successful Brokers are excluded, and another explicit review and confirmation are required. Cleanup-only failures do not offer a Broker retry. Unconfirmed transport outcomes lock the submitted form; inspect current state before opening another operation.
+
+The authenticated session owns operation dialogs outside the page navigation lifetime. While a write is pending, dismissal and duplicate submission are blocked. Changing the connection or Consumer query scope freezes the original dialog but retains its accepted write acknowledgement. Further reads or writes against a new context are blocked. Session disposal invalidates old callbacks and removes the old receipt. Closing a dialog refreshes its original page only if that page is still mounted in the same connection revision.
 
 ## Validation
 
 - Backend Consumer tests cover protected-name validation, incomplete inventory rejection, result mapping, and error redaction.
 - Admin-core Consumer batch regressions cover unknown targets, subset deletion, partial failures, and cleanup results.
-- Frontend receipt tests cover mixed results, cleanup isolation, and read-only groups; the production frontend build type-checks the integration.
+- Frontend receipt and model tests cover mixed results, cleanup isolation, protected groups, explicit target validation, integer limits, source selection and failed-subset review. Shared operation-controller regressions cover stale reads, accepted writes, disposal and concurrent submission. Browser fixture checks exercise the actual forms and focus behavior; real-cluster acceptance is a separate integration check.
