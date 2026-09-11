@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::test_support::error_assertions::assert_invalid_argument;
+use crate::test_support::error_assertions::client_exception;
+
 #[allow(unused_imports)]
 use super::admin::*;
 #[allow(unused_imports)]
@@ -231,9 +234,7 @@ fn java_long_to_u64_field_rejects_negative_protocol_values() {
     let error =
         java_long_to_u64_field("pullMessage", "nextBeginOffset", -1).expect_err("negative broker offset must not wrap");
 
-    assert!(error
-        .to_string()
-        .contains("pullMessage nextBeginOffset is negative and cannot be represented as Rust u64"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
@@ -271,9 +272,7 @@ fn duration_millis_to_u64_rejects_values_outside_rust_range() {
     let error = duration_millis_to_u64("probeNameServer", Duration::from_secs(u64::MAX))
         .expect_err("duration larger than u64 millis should fail");
 
-    assert!(error
-        .to_string()
-        .contains("probeNameServer timeout exceeds Rust u64 millisecond range"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
@@ -289,7 +288,9 @@ fn controller_leader_address_requires_controller_metadata_leader_like_java() {
     let error = controller_leader_address(GetMetaDataResponseHeader::default())
         .expect_err("controller metadata without leader should be rejected");
 
-    assert!(error.to_string().contains("Controller leader address"));
+    assert!(client_exception(&error)
+        .to_string()
+        .contains("Controller leader address"));
 }
 
 #[test]
@@ -477,7 +478,7 @@ fn create_topic_request_header_rejects_values_outside_java_int_range() {
     let error = create_topic_request_header_like_java(CheetahString::from_static_str("TBW102"), &topic_config)
         .expect_err("Java int overflow should be rejected before encoding");
 
-    assert!(error.to_string().contains("readQueueNums value"));
+    assert_invalid_argument(&error);
 }
 
 #[cfg(feature = "admin-mutation")]
@@ -1132,7 +1133,7 @@ fn consumer_offset_json_from_response_rejects_success_without_body() {
     let error =
         consumer_offset_json_from_response(&response).expect_err("success response without body should be rejected");
 
-    assert!(error
+    assert!(client_exception(&error)
         .to_string()
         .contains("get_all_consumer_offset response body is empty"));
 }
@@ -1227,7 +1228,7 @@ fn decode_cluster_acl_version_info_response_body_rejects_success_without_body() 
     let error = decode_cluster_acl_version_info_response_body(None)
         .expect_err("SUCCESS cluster ACL version response must include a body");
 
-    assert!(error
+    assert!(client_exception(&error)
         .to_string()
         .contains("get_broker_cluster_acl_version_info response body is empty"));
 }
@@ -1239,7 +1240,9 @@ fn reset_offset_table_from_response_rejects_success_without_body_like_java() {
     let error = reset_offset_table_from_response(&response)
         .expect_err("Java invokeBrokerToResetOffset throws when SUCCESS has no body");
 
-    assert!(error.to_string().contains("reset offset response body is empty"));
+    assert!(client_exception(&error)
+        .to_string()
+        .contains("reset offset response body is empty"));
 }
 
 #[test]

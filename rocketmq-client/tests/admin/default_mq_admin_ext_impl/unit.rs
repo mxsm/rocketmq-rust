@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::test_support::error_assertions::assert_context_field;
+use crate::test_support::error_assertions::assert_error;
+use crate::test_support::error_assertions::assert_invalid_argument;
+use crate::test_support::error_assertions::assert_invalid_state;
+
 #[allow(unused_imports)]
 use super::admin_api::*;
 #[allow(unused_imports)]
@@ -85,21 +90,19 @@ use super::DefaultMQAdminExtImpl;
 fn admin_route_not_found_uses_route_descriptor() {
     let error = admin_route_not_found(&CheetahString::from_static_str("RouteTopic"));
 
-    assert_eq!(error.descriptor().code(), rocketmq_error::ROUTE_TOPIC_NOT_FOUND.code());
-    assert!(error.to_string().contains("RouteTopic"));
+    assert_error(&error, &rocketmq_error::ROUTE_TOPIC_NOT_FOUND);
+    assert_context_field(&error, "topic", rocketmq_error::ViewValueRef::Text("RouteTopic"));
 }
 
 #[test]
 fn sync_pull_result_missing_uses_client_invalid_state() {
     let error = sync_pull_result_missing("DefaultMQAdminExtImpl::pull_message_from_queue");
 
-    assert_eq!(
-        error.descriptor().code(),
-        rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE.code()
+    assert_invalid_state(
+        &error,
+        "PullResultExt returned by sync pull_message",
+        "DefaultMQAdminExtImpl::pull_message_from_queue returned None",
     );
-    assert!(error
-        .to_string()
-        .contains("DefaultMQAdminExtImpl::pull_message_from_queue returned None"));
 }
 
 fn new_unstarted_admin() -> DefaultMQAdminExtImpl {
@@ -306,7 +309,7 @@ fn lite_pull_topic_config_update_requires_explicit_positive_queue_nums() {
     let error = lite_pull_topic_config(CheetahString::from("LiteTopic"), 0, 0, 0, 8, true)
         .expect_err("update lite topic should not use queueNum fallback");
 
-    assert!(error.to_string().contains("readQueueNums must be positive"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
@@ -314,7 +317,7 @@ fn lite_pull_topic_config_rejects_negative_topic_sys_flag() {
     let error = lite_pull_topic_config(CheetahString::from("LiteTopic"), 8, -1, 0, 0, false)
         .expect_err("negative topicSysFlag should be rejected");
 
-    assert!(error.to_string().contains("topicSysFlag must be non-negative"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
@@ -327,9 +330,7 @@ fn timestamp_to_java_long_rejects_values_outside_java_range() {
     let error = timestamp_to_java_long("resetOffsetNewConcurrent", i64::MAX as u64 + 1)
         .expect_err("value larger than Java long should be rejected");
 
-    assert!(error
-        .to_string()
-        .contains("resetOffsetNewConcurrent timestamp exceeds Java long range"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
@@ -342,9 +343,7 @@ fn timeout_millis_to_u64_rejects_values_outside_rust_range() {
     let error = timeout_millis_to_u64(Duration::from_secs(u64::MAX))
         .expect_err("duration larger than u64 milliseconds should be rejected");
 
-    assert!(error
-        .to_string()
-        .contains("DefaultMQAdminExt timeoutMillis exceeds Rust u64 millisecond range"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
@@ -357,9 +356,7 @@ fn master_flush_offset_to_java_long_rejects_values_outside_java_range() {
     let error = master_flush_offset_to_java_long(i64::MAX as u64 + 1)
         .expect_err("value larger than Java long should be rejected");
 
-    assert!(error
-        .to_string()
-        .contains("resetMasterFlushOffset offset exceeds Java long range"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
@@ -372,9 +369,7 @@ fn query_consume_queue_index_to_java_long_rejects_values_outside_java_range() {
     let error = query_consume_queue_index_to_java_long(i64::MAX as u64 + 1)
         .expect_err("value larger than Java long should be rejected");
 
-    assert!(error
-        .to_string()
-        .contains("queryConsumeQueue offset exceeds Java long range"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
@@ -387,9 +382,7 @@ fn search_offset_timestamp_to_java_long_rejects_values_outside_java_range() {
     let error = search_offset_timestamp_to_java_long(i64::MAX as u64 + 1)
         .expect_err("value larger than Java long should be rejected");
 
-    assert!(error
-        .to_string()
-        .contains("searchOffset timestamp exceeds Java long range"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
@@ -401,9 +394,7 @@ fn java_long_to_u64_rejects_negative_values_from_broker() {
 
     let error = java_long_to_u64("searchOffset", "offset", -1).expect_err("negative broker offset must not wrap");
 
-    assert!(error
-        .to_string()
-        .contains("searchOffset offset is negative and cannot be represented as Rust u64"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
@@ -843,7 +834,7 @@ fn update_consume_offset_request_header_rejects_offsets_outside_java_long_range(
     let error = update_consume_offset_request_header(CheetahString::from("group-a"), &mq, i64::MAX as u64 + 1)
         .expect_err("offset larger than Java long should be rejected");
 
-    assert!(error.to_string().contains("offset exceeds Java long range"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
@@ -873,7 +864,7 @@ fn lite_pull_update_consumer_offset_rejects_offsets_outside_java_long_range() {
     )
     .expect_err("offset larger than Java long should be rejected");
 
-    assert!(error.to_string().contains("offset exceeds Java long range"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
@@ -898,7 +889,7 @@ fn notify_min_broker_id_change_request_header_rejects_blank_min_broker_addr() {
     let error = notify_min_broker_id_change_request_header(1, CheetahString::new(), None, None)
         .expect_err("blank min broker address should be rejected before remoting");
 
-    assert!(error.to_string().contains("requires minBrokerAddr"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
@@ -1095,9 +1086,7 @@ fn reset_offset_by_queue_id_rejects_offsets_outside_java_long_range() {
     )
     .expect_err("offset larger than Java long should be rejected");
 
-    assert!(error
-        .to_string()
-        .contains("resetOffsetByQueueId offset exceeds Java long range"));
+    assert_invalid_argument(&error);
 }
 
 #[tokio::test]

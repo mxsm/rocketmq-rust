@@ -180,6 +180,7 @@ impl Validators {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::error_assertions::client_exception;
     use std::collections::HashMap;
 
     use bytes::Bytes;
@@ -226,8 +227,7 @@ mod tests {
         let too_long_group = "a".repeat(Validators::GROUP_MAX_LENGTH + 1);
         let result = Validators::check_group(&too_long_group);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
+        assert!(client_exception(&result.unwrap_err())
             .to_string()
             .contains("longer than group max length: 120."));
     }

@@ -1313,6 +1313,7 @@ fn pull_message_service_shutdown_signal_failed() -> ClientError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::error_assertions::assert_invalid_state;
 
     fn test_pop_request(queue_id: i32) -> PopRequest {
         PopRequest::new(
@@ -1416,11 +1417,7 @@ mod tests {
     fn pull_message_service_request_type_mismatch_uses_client_invalid_state() {
         let error = pull_message_service_request_type_mismatch("PullRequest");
 
-        assert_eq!(
-            error.descriptor().code(),
-            rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE.code()
-        );
-        assert!(error.to_string().contains("PullRequest"));
+        assert_invalid_state(&error, "PullRequest", "message request payload type mismatch");
     }
 
     struct MismatchedMessageRequest {
@@ -1456,22 +1453,14 @@ mod tests {
     async fn process_request_reports_pull_downcast_mismatch_as_client_invalid_state() {
         let error = process_mismatched_request(MessageRequestMode::Pull).await;
 
-        assert_eq!(
-            error.descriptor().code(),
-            rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE.code()
-        );
-        assert!(error.to_string().contains("PullRequest"));
+        assert_invalid_state(&error, "PullRequest", "message request payload type mismatch");
     }
 
     #[tokio::test]
     async fn process_request_reports_pop_downcast_mismatch_as_client_invalid_state() {
         let error = process_mismatched_request(MessageRequestMode::Pop).await;
 
-        assert_eq!(
-            error.descriptor().code(),
-            rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE.code()
-        );
-        assert!(error.to_string().contains("PopRequest"));
+        assert_invalid_state(&error, "PopRequest", "message request payload type mismatch");
     }
 
     #[test]

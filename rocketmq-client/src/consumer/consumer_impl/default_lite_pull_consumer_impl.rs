@@ -3600,6 +3600,7 @@ pub async fn run_lite_pull_assignment_registry_probe(iterations: usize) -> LiteP
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::error_assertions::client_exception;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::AtomicUsize;
@@ -3947,7 +3948,7 @@ mod tests {
             .await
             .expect_err("missing self-reference should return an error");
 
-        assert!(error
+        assert!(client_exception(&error)
             .to_string()
             .contains("default_lite_pull_consumer_impl is not initialized"));
     }
@@ -3969,7 +3970,9 @@ mod tests {
             .check_config()
             .expect_err("Java LitePull rejects legacy consumeFromWhere values");
 
-        assert!(error.to_string().contains("Invalid ConsumeFromWhere Value"));
+        assert!(client_exception(&error)
+            .to_string()
+            .contains("Invalid ConsumeFromWhere Value"));
     }
 
     #[test]
@@ -3987,7 +3990,7 @@ mod tests {
             .check_config()
             .expect_err("Java LitePull rejects DEFAULT_CONSUMER_GROUP");
 
-        assert!(error
+        assert!(client_exception(&error)
             .to_string()
             .contains("consumerGroup can not equal DEFAULT_CONSUMER"));
     }
@@ -4009,7 +4012,7 @@ mod tests {
             .check_config()
             .expect_err("Java LitePull rejects consumer suspend timeout below broker suspend timeout");
 
-        assert!(error.to_string().contains(
+        assert!(client_exception(&error).to_string().contains(
             "Long polling mode, the consumer consumerTimeoutMillisWhenSuspend must greater than \
              brokerSuspendMaxTimeMillis"
         ));
@@ -4031,7 +4034,9 @@ mod tests {
             .check_config()
             .expect_err("zero concurrent pull RPCs cannot make progress");
 
-        assert!(error.to_string().contains("pullThreadNums must be greater than 0"));
+        assert!(client_exception(&error)
+            .to_string()
+            .contains("pullThreadNums must be greater than 0"));
     }
 
     #[tokio::test]
@@ -4102,7 +4107,7 @@ mod tests {
         let error = impl_
             .try_set_pull_thread_nums(4)
             .expect_err("running concurrency update should be rejected");
-        assert!(error
+        assert!(client_exception(&error)
             .to_string()
             .contains("pullThreadNums can not be changed after the lite pull consumer has started"));
         assert_eq!(impl_.pull_thread_nums(), 3);
@@ -4135,7 +4140,7 @@ mod tests {
             .set_consumer_group(CheetahString::from_static_str("lite_pull_late_group"))
             .expect_err("consumer group changes after running should be rejected");
 
-        assert!(error
+        assert!(client_exception(&error)
             .to_string()
             .contains("consumerGroup can not be changed after the lite pull consumer has started"));
         assert_eq!(impl_.consumer_group_config().as_str(), "lite_pull_updated_group");
@@ -4222,7 +4227,7 @@ mod tests {
             .set_offset_store(Some(Arc::new(OffsetStore::new_test())))
             .expect_err("offset store changes after running should be rejected");
 
-        assert!(error
+        assert!(client_exception(&error)
             .to_string()
             .contains("offsetStore can not be changed after the lite pull consumer has started"));
     }
@@ -4517,7 +4522,7 @@ mod tests {
             .set_sub_expression_for_assign(topic.clone(), " ")
             .await
             .expect_err("Java LitePull rejects blank assign filter expressions");
-        assert!(blank_error
+        assert!(client_exception(&blank_error)
             .to_string()
             .contains("subExpression can not be null or empty."));
         assert_eq!(*impl_.subscription_type.read().await, SubscriptionType::None);
@@ -4548,7 +4553,7 @@ mod tests {
             .set_sub_expression_for_assign(topic, "TagA")
             .await
             .expect_err("Java LitePull only allows assign filters before start");
-        assert!(running_error
+        assert!(client_exception(&running_error)
             .to_string()
             .contains("setAssignTag only can be called before start."));
     }
@@ -4596,7 +4601,7 @@ mod tests {
             .await
             .expect_err("Java LitePull rejects unassigned queues before querying offsets");
 
-        let message = error.to_string();
+        let message = client_exception(&error).to_string();
         assert!(message.contains("The message queue is not in assigned list"));
         assert!(!message.contains("Client instance not initialized"));
     }

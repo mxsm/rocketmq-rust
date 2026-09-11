@@ -465,6 +465,7 @@ impl DefaultLitePullConsumerBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::error_assertions::client_exception;
 
     fn test_runtime() -> Arc<ClientRuntime> {
         crate::runtime::test_client_runtime("lite-pull-consumer-builder-test")
@@ -475,7 +476,9 @@ mod tests {
         let result = DefaultLitePullConsumerBuilder::new(test_runtime()).build();
         match result {
             Ok(_) => panic!("builder should reject missing consumer group"),
-            Err(error) => assert!(error.to_string().contains("consumer_group is required")),
+            Err(error) => assert!(client_exception(&error)
+                .to_string()
+                .contains("consumer_group is required")),
         }
     }
 
@@ -522,7 +525,9 @@ mod tests {
 
         match result {
             Ok(_) => panic!("Java LitePull rejects legacy consumeFromWhere values"),
-            Err(error) => assert!(error.to_string().contains("Invalid ConsumeFromWhere Value")),
+            Err(error) => assert!(client_exception(&error)
+                .to_string()
+                .contains("Invalid ConsumeFromWhere Value")),
         }
     }
 

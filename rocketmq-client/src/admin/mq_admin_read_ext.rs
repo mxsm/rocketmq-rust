@@ -897,6 +897,7 @@ fn sanitize_broker_logical_target(target: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::error_assertions::assert_invalid_argument;
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -1058,7 +1059,7 @@ mod tests {
         )]);
 
         let error = parse_allowlisted_value::<u64>(&properties, "flushDelayOffsetInterval").unwrap_err();
-        assert!(error.to_string().contains("flushDelayOffsetInterval"));
+        assert_invalid_argument(&error);
     }
 
     #[test]

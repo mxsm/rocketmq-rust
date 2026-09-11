@@ -661,6 +661,8 @@ impl ConsumeRequest {
 #[allow(deprecated)]
 mod tests {
     use super::*;
+    use crate::test_support::error_assertions::assert_invalid_argument;
+    use crate::test_support::error_assertions::assert_not_initialized;
 
     #[tokio::test]
     async fn legacy_pull_consumer_fails_closed_without_runtime() {
@@ -675,9 +677,10 @@ mod tests {
             .await
             .expect_err("detached pull consumer should not start");
 
-        assert!(error.to_string().contains("DefaultMQPullConsumer"));
-        assert!(error.to_string().contains("builder"));
-        assert!(!error.to_string().contains("not supported"));
+        assert_not_initialized(
+            &error,
+            "DefaultMQPullConsumer has no ClientRuntime; create it with DefaultMQPullConsumer::builder",
+        );
     }
 
     #[test]
@@ -699,8 +702,10 @@ mod tests {
             .register_pull_task_callback("TopicA", Callback)
             .expect_err("detached schedule service should require runtime");
 
-        assert!(error.to_string().contains("with_client_runtime"));
-        assert!(!error.to_string().contains("not supported"));
+        assert_not_initialized(
+            &error,
+            "MQPullConsumerScheduleService has no ClientRuntime; use with_client_runtime",
+        );
     }
 
     #[test]
@@ -728,8 +733,7 @@ mod tests {
             .check_local_transaction_state(&MessageExt::default())
             .expect_err("deprecated transaction listener should reject checks");
 
-        assert!(error.to_string().contains("TransactionCheckListener"));
-        assert!(error.to_string().contains("TransactionListener"));
+        assert_invalid_argument(&error);
     }
 
     #[test]
@@ -737,11 +741,11 @@ mod tests {
         assert!(DoNothingClientRemotingProcessor::new().process_request().is_none());
 
         let rebalance_error = RebalanceImpl::new().expect_err("impl-package RebalanceImpl should be unsupported");
-        assert!(rebalance_error.to_string().contains("impl-package type"));
+        assert_invalid_argument(&rebalance_error);
 
         let consume_error = ConsumeRequest::new()
             .run()
             .expect_err("impl-package ConsumeRequest should be unsupported");
-        assert!(consume_error.to_string().contains("ConsumeRequest"));
+        assert_invalid_argument(&consume_error);
     }
 }

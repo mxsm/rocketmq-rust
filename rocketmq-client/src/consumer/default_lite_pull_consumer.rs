@@ -1854,6 +1854,8 @@ impl MQConsumer for DefaultLitePullConsumer {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::error_assertions::assert_not_initialized;
+    use crate::test_support::error_assertions::client_exception;
     use std::any::Any;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -1958,7 +1960,7 @@ mod tests {
             .await
             .expect_err("assignment before start should fail");
 
-        assert!(error.to_string().contains("DefaultLitePullConsumer not started"));
+        assert_not_initialized(&error, "DefaultLitePullConsumer not started. Call start() first.");
     }
 
     #[tokio::test]
@@ -1970,7 +1972,7 @@ mod tests {
             .await
             .expect_err("running info before start should fail");
 
-        assert!(error.to_string().contains("DefaultLitePullConsumer not started"));
+        assert_not_initialized(&error, "DefaultLitePullConsumer not started. Call start() first.");
     }
 
     #[tokio::test]
@@ -2038,9 +2040,7 @@ mod tests {
             .expect_err("earliestMsgStoreTime should enter LitePull path and fail because the consumer is not started");
 
         for error in [search_error, max_error, min_error, earliest_error] {
-            let message = error.to_string();
-            assert!(message.contains("DefaultLitePullConsumer not started"));
-            assert!(!message.contains("not supported by this MQConsumer implementation"));
+            assert_not_initialized(&error, "DefaultLitePullConsumer not started. Call start() first.");
         }
     }
 
@@ -2077,9 +2077,7 @@ mod tests {
                 .expect_err("viewMessage should enter LitePull path and fail because the consumer is not started");
 
         for error in [create_error, create_with_flag_error, query_error, view_error] {
-            let message = error.to_string();
-            assert!(message.contains("DefaultLitePullConsumer not started"));
-            assert!(!message.contains("not supported by this MQConsumer implementation"));
+            assert_not_initialized(&error, "DefaultLitePullConsumer not started. Call start() first.");
         }
     }
 
@@ -2131,7 +2129,9 @@ mod tests {
             .await
             .expect_err("empty manual assignment should be rejected");
 
-        assert!(error.to_string().contains("Message queues can not be null or empty."));
+        assert!(client_exception(&error)
+            .to_string()
+            .contains("Message queues can not be null or empty."));
     }
 
     #[tokio::test]
@@ -2152,11 +2152,12 @@ mod tests {
             .await
             .expect_err("min offset before start should fail");
 
-        assert!(earliest_error
-            .to_string()
-            .contains("DefaultLitePullConsumer not started"));
-        assert!(max_error.to_string().contains("DefaultLitePullConsumer not started"));
-        assert!(min_error.to_string().contains("DefaultLitePullConsumer not started"));
+        assert_not_initialized(
+            &earliest_error,
+            "DefaultLitePullConsumer not started. Call start() first.",
+        );
+        assert_not_initialized(&max_error, "DefaultLitePullConsumer not started. Call start() first.");
+        assert_not_initialized(&min_error, "DefaultLitePullConsumer not started. Call start() first.");
     }
 
     #[tokio::test]
@@ -2270,7 +2271,9 @@ mod tests {
             .set_sub_expression_for_assign("TopicA", " ")
             .await
             .expect_err("blank assign filter should be rejected");
-        assert!(error.to_string().contains("subExpression can not be null or empty."));
+        assert!(client_exception(&error)
+            .to_string()
+            .contains("subExpression can not be null or empty."));
 
         consumer
             .set_sub_expression_for_assign("TopicA", "TagA")
@@ -2503,7 +2506,9 @@ mod tests {
             .set_consume_from_where(ConsumeFromWhere::ConsumeFromMaxOffset)
             .await
             .expect_err("Java LitePull rejects legacy consumeFromWhere values");
-        assert!(error.to_string().contains("Invalid ConsumeFromWhere Value"));
+        assert!(client_exception(&error)
+            .to_string()
+            .contains("Invalid ConsumeFromWhere Value"));
         assert_eq!(
             consumer.consume_from_where().await,
             ConsumeFromWhere::ConsumeFromFirstOffset

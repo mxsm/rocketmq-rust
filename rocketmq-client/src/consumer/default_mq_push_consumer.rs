@@ -1427,6 +1427,7 @@ impl DefaultMQPushConsumer {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::error_assertions::assert_not_initialized;
     use std::any::Any;
     use std::collections::HashSet;
     use std::sync::atomic::AtomicUsize;
@@ -1562,7 +1563,7 @@ mod tests {
             .await
             .expect_err("subscribe without impl should fail");
 
-        assert!(error.to_string().contains("DefaultMQPushConsumerImpl"));
+        assert_not_initialized(&error, "DefaultMQPushConsumerImpl");
     }
 
     #[tokio::test]
@@ -1583,9 +1584,9 @@ mod tests {
             .await
             .expect_err("viewMessage without impl should fail");
 
-        assert!(max_error.to_string().contains("DefaultMQPushConsumerImpl"));
-        assert!(query_error.to_string().contains("DefaultMQPushConsumerImpl"));
-        assert!(view_error.to_string().contains("DefaultMQPushConsumerImpl"));
+        assert_not_initialized(&max_error, "DefaultMQPushConsumerImpl");
+        assert_not_initialized(&query_error, "DefaultMQPushConsumerImpl");
+        assert_not_initialized(&view_error, "DefaultMQPushConsumerImpl");
     }
 
     #[tokio::test]
@@ -1600,7 +1601,7 @@ mod tests {
             .await
             .expect_err("running info without impl should fail");
 
-        assert!(error.to_string().contains("DefaultMQPushConsumerImpl"));
+        assert_not_initialized(&error, "DefaultMQPushConsumerImpl");
     }
 
     #[tokio::test]
@@ -1860,7 +1861,7 @@ mod tests {
             .register_consume_message_hook(TestConsumeHook)
             .expect_err("hook registration without impl should fail");
 
-        assert!(error.to_string().contains("DefaultMQPushConsumerImpl"));
+        assert_not_initialized(&error, "DefaultMQPushConsumerImpl");
     }
 
     #[test]

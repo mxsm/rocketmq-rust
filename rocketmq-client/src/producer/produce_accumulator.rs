@@ -1029,6 +1029,7 @@ pub async fn run_produce_accumulator_guard_lifecycle_probe(
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::error_assertions::client_exception;
     use std::future::pending;
     use std::sync::atomic::Ordering;
 
@@ -1609,7 +1610,7 @@ mod tests {
 
         let error = split_send_results(&send_result, 2).expect_err("mismatched per-message ids are illegal");
 
-        assert!(error.to_string().contains("sendResult is illegal"));
+        assert!(client_exception(&error).to_string().contains("sendResult is illegal"));
     }
 
     #[test]
@@ -1624,7 +1625,7 @@ mod tests {
 
         let error = split_send_results(&send_result, 2).expect_err("per-message msg id requires offset msg id");
 
-        assert!(error.to_string().contains("sendResult is illegal"));
+        assert!(client_exception(&error).to_string().contains("sendResult is illegal"));
     }
 
     #[test]
@@ -1639,7 +1640,7 @@ mod tests {
 
         let error = split_send_results(&send_result, 2).expect_err("missing msg id is illegal");
 
-        assert!(error.to_string().contains("sendResult is illegal"));
+        assert!(client_exception(&error).to_string().contains("sendResult is illegal"));
     }
 }
 

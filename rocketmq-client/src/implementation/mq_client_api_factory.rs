@@ -324,6 +324,7 @@ pub async fn run_namesrv_refresh_lifecycle_probe(service_context: ChildServiceCo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::error_assertions::assert_invalid_argument;
     use std::future::pending;
 
     struct DropFlag(Arc<AtomicBool>);
@@ -343,7 +344,7 @@ mod tests {
         let error = validate_nameserver_access_config(&NameserverAccessConfig::default())
             .expect_err("missing namesrvAddr and namesrvDomain should be invalid");
 
-        assert!(error.to_string().contains("NamesrvAddr is not configured"));
+        assert_invalid_argument(&error);
     }
 
     #[test]
@@ -372,7 +373,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(error.to_string().contains("requires at least one MQClientAPIImpl"));
+        assert_invalid_argument(&error);
     }
 
     #[tokio::test]

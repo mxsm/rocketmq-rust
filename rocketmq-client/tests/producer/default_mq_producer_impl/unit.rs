@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::test_support::error_assertions::assert_context_field;
+use crate::test_support::error_assertions::assert_error;
+use crate::test_support::error_assertions::assert_invalid_argument;
+use crate::test_support::error_assertions::client_exception;
+
 #[allow(unused_imports)]
 use super::lifecycle::*;
 #[allow(unused_imports)]
@@ -282,17 +287,23 @@ async fn running_is_published_only_after_async_start_initialization() {
 
 #[test]
 fn request_cause_from_error_uses_typed_error() {
-    let error = DefaultMQProducerImpl::request_cause_from_error(&ClientError::from_shared(Arc::new(
-        rocketmq_error::Error::caused_by(
-            &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
-            std::io::Error::other("send failed"),
-        ),
+    let source = ClientError::from_shared(Arc::new(rocketmq_error::Error::caused_by(
+        &rocketmq_error::TRANSPORT_CONNECTION_FAILED,
+        std::io::Error::other("send failed"),
     )));
+    let error = DefaultMQProducerImpl::request_cause_from_error(&source);
 
-    assert!(error.is(&rocketmq_error::PROTOCOL_RESPONSE_FAILED));
+    assert_error(&error, &rocketmq_error::PROTOCOL_RESPONSE_FAILED);
+    assert_context_field(
+        &error,
+        "operation",
+        rocketmq_error::ViewValueRef::Text("request_response_callback"),
+    );
+    let retained = error.source_ref::<ClientError>().expect("retained client error");
+    assert!(Arc::ptr_eq(source.shared_error(), retained.shared_error()));
     assert_eq!(
-        error.to_string(),
-        "Response request_response_callback failed: transport.connection.failed: Transport connection operation failed"
+        error.source_ref::<std::io::Error>().expect("retained I/O cause").kind(),
+        std::io::ErrorKind::Other
     );
 }
 
@@ -473,7 +484,7 @@ impl TransactionListener for ThreadRecordingTransactionListener {
 }
 
 struct CapturingSendHook {
-    exception_message: Arc<std::sync::Mutex<Option<String>>>,
+    exception: Arc<std::sync::Mutex<Option<Arc<ClientError>>>>,
 }
 
 impl SendMessageHook for CapturingSendHook {
@@ -487,37 +498,39 @@ impl SendMessageHook for CapturingSendHook {
         let Some(exception) = context.as_ref().and_then(|context| context.exception.as_ref()) else {
             return;
         };
-        *self
-            .exception_message
-            .lock()
-            .expect("exception message lock should not be poisoned") = Some(exception.to_string());
+        *self.exception.lock().expect("exception lock should not be poisoned") = Some(exception.clone());
     }
 }
 
 #[test]
 fn send_message_after_hook_observes_exception_like_java() {
     let producer = running_producer_without_client();
-    let exception_message = Arc::new(std::sync::Mutex::new(None));
+    let exception = Arc::new(std::sync::Mutex::new(None));
     let hook: Arc<dyn SendMessageHook> = Arc::new(CapturingSendHook {
-        exception_message: exception_message.clone(),
+        exception: exception.clone(),
     });
     *producer.send_message_hook_list.write() = vec![hook].into();
+    let original = DefaultMQProducerImpl::context_error("sendKernelImpl exception".to_string());
     let context = Some(SendMessageContext {
-        exception: Some(DefaultMQProducerImpl::context_error(
-            "sendKernelImpl exception".to_string(),
-        )),
+        exception: Some(original.clone()),
         ..Default::default()
     });
 
     producer.execute_send_message_hook_after(&context);
 
-    assert_eq!(
-        exception_message
-            .lock()
-            .expect("exception message lock should not be poisoned")
-            .as_deref(),
-        Some("Response send_message failed: sendKernelImpl exception")
+    let captured = exception
+        .lock()
+        .expect("exception lock should not be poisoned")
+        .clone()
+        .expect("hook must observe the exception");
+    assert!(Arc::ptr_eq(&captured, &original));
+    assert_error(&captured, &rocketmq_error::PROTOCOL_RESPONSE_FAILED);
+    assert_context_field(
+        &captured,
+        "operation",
+        rocketmq_error::ViewValueRef::Text("send_message"),
     );
+    assert_context_field(&captured, "reason", rocketmq_error::ViewValueRef::Redacted);
 }
 
 #[tokio::test]
@@ -595,9 +608,9 @@ async fn producer_selector_paths_without_client_return_error_instead_of_panickin
 
     let fetch_result = producer.fetch_publish_message_queues(&"TopicTest".into()).await;
     assert!(fetch_result.is_err());
-    assert!(fetch_result
-        .err()
-        .is_some_and(|error| error.to_string().contains("MQClientInstance is not available")));
+    assert!(fetch_result.err().is_some_and(|error| client_exception(&error)
+        .to_string()
+        .contains("MQClientInstance is not available")));
 }
 
 #[tokio::test]
@@ -1139,8 +1152,12 @@ async fn send_oneway_with_message_queue_does_not_reject_topic_mismatch_before_ke
     let result = producer.send_oneway_with_message_queue(msg, mq).await;
 
     let error = result.expect_err("kernel path should fail without a client instance");
-    assert!(error.to_string().contains("MQClientInstance is not available"));
-    assert!(!error.to_string().contains("is not equal with message queue topic"));
+    assert!(client_exception(&error)
+        .to_string()
+        .contains("MQClientInstance is not available"));
+    assert!(!client_exception(&error)
+        .to_string()
+        .contains("is not equal with message queue topic"));
 }
 
 #[tokio::test]
@@ -1154,21 +1171,23 @@ async fn sync_send_to_queue_topic_mismatch_uses_java_error_message() {
         .await
         .expect_err("topic mismatch should fail before broker lookup");
 
-    assert!(error.to_string().contains("message's topic not equal mq's topic"));
+    assert!(client_exception(&error)
+        .to_string()
+        .contains("message's topic not equal mq's topic"));
 }
 
 #[tokio::test]
 async fn async_send_to_queue_validates_message_before_kernel_like_java() {
     let producer = running_producer_arc_with_self_inner();
     let notify = Arc::new(tokio::sync::Notify::new());
-    let seen_error = Arc::new(std::sync::Mutex::new(None::<String>));
+    let seen_error = Arc::new(std::sync::Mutex::new(None::<ClientError>));
     let notify_for_callback = notify.clone();
     let seen_for_callback = seen_error.clone();
     let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&ClientError>| {
         if let Some(error) = error {
             *seen_for_callback
                 .lock()
-                .expect("seen error lock should not be poisoned") = Some(error.to_string());
+                .expect("seen error lock should not be poisoned") = Some(error.clone());
             notify_for_callback.notify_one();
         }
     });
@@ -1188,22 +1207,23 @@ async fn async_send_to_queue_validates_message_before_kernel_like_java() {
         .expect("seen error lock should not be poisoned")
         .clone()
         .expect("callback should record validation error");
-    assert!(error.contains("message body is null") || error.contains("message body length is zero"));
-    assert!(!error.contains("MQClientInstance is not available"));
+    let exception = client_exception(&error);
+    let message = exception.error_message().expect("message validation detail");
+    assert!(message.contains("message body is null") || message.contains("message body length is zero"));
 }
 
 #[tokio::test]
 async fn async_send_to_queue_topic_mismatch_uses_java_callback_error_message() {
     let producer = running_producer_arc_with_self_inner();
     let notify = Arc::new(tokio::sync::Notify::new());
-    let seen_error = Arc::new(std::sync::Mutex::new(None::<String>));
+    let seen_error = Arc::new(std::sync::Mutex::new(None::<ClientError>));
     let notify_for_callback = notify.clone();
     let seen_for_callback = seen_error.clone();
     let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&ClientError>| {
         if let Some(error) = error {
             *seen_for_callback
                 .lock()
-                .expect("seen error lock should not be poisoned") = Some(error.to_string());
+                .expect("seen error lock should not be poisoned") = Some(error.clone());
             notify_for_callback.notify_one();
         }
     });
@@ -1223,25 +1243,24 @@ async fn async_send_to_queue_topic_mismatch_uses_java_callback_error_message() {
         .expect("seen error lock should not be poisoned")
         .clone()
         .expect("callback should record topic mismatch");
-    assert!(
-        error.contains("Topic of the message does not match its target message queue"),
-        "unexpected callback error: {error}"
+    assert_eq!(
+        client_exception(&error).error_message(),
+        Some("Topic of the message does not match its target message queue")
     );
-    assert!(!error.contains("MQClientInstance is not available"));
 }
 
 #[tokio::test]
 async fn async_send_with_callback_reports_kernel_error_to_callback() {
     let producer = running_producer_arc_with_self_inner();
     let notify = Arc::new(tokio::sync::Notify::new());
-    let seen_error = Arc::new(std::sync::Mutex::new(None::<String>));
+    let seen_error = Arc::new(std::sync::Mutex::new(None::<ClientError>));
     let notify_for_callback = notify.clone();
     let seen_for_callback = seen_error.clone();
     let callback: ArcSendCallback = Arc::new(move |_result: Option<&SendResult>, error: Option<&ClientError>| {
         if let Some(error) = error {
             *seen_for_callback
                 .lock()
-                .expect("seen error lock should not be poisoned") = Some(error.to_string());
+                .expect("seen error lock should not be poisoned") = Some(error.clone());
             notify_for_callback.notify_one();
         }
     });
@@ -1263,7 +1282,10 @@ async fn async_send_with_callback_reports_kernel_error_to_callback() {
         .expect("seen error lock should not be poisoned")
         .clone()
         .expect("callback should record kernel error");
-    assert!(error.contains("MQClientInstance is not available"));
+    assert!(client_exception(&error)
+        .error_message()
+        .unwrap()
+        .contains("MQClientInstance is not available"));
 }
 
 #[tokio::test]
@@ -1410,9 +1432,9 @@ async fn producer_request_prepare_without_client_returns_error_instead_of_panick
     let result = producer.prepare_send_request(&mut msg, 3000).await;
 
     assert!(result.is_err());
-    assert!(result
-        .err()
-        .is_some_and(|error| error.to_string().contains("MQClientInstance is not available")));
+    assert!(result.err().is_some_and(|error| client_exception(&error)
+        .to_string()
+        .contains("MQClientInstance is not available")));
 }
 
 #[test]
@@ -1548,19 +1570,19 @@ fn transaction_env_rejects_invalid_java_executor_config() {
     let producer = running_producer_without_client();
 
     let min_over_max = producer.init_transaction_env(2, 1, 3);
-    assert!(min_over_max
-        .err()
-        .is_some_and(|error| error.to_string().contains("min size cannot exceed max size")));
+    assert!(min_over_max.err().is_some_and(|error| client_exception(&error)
+        .to_string()
+        .contains("min size cannot exceed max size")));
 
     let zero_pool = producer.init_transaction_env(0, 1, 3);
     assert!(zero_pool
         .err()
-        .is_some_and(|error| error.to_string().contains("must be greater than 0")));
+        .is_some_and(|error| client_exception(&error).to_string().contains("must be greater than 0")));
 
     let zero_hold = producer.init_transaction_env(1, 1, 0);
-    assert!(zero_hold
-        .err()
-        .is_some_and(|error| error.to_string().contains("hold max must be greater than 0")));
+    assert!(zero_hold.err().is_some_and(|error| client_exception(&error)
+        .to_string()
+        .contains("hold max must be greater than 0")));
 }
 
 #[tokio::test]
@@ -1572,7 +1594,7 @@ async fn transaction_send_without_impl_listener_fails_before_send_like_java() {
 
     assert!(result
         .err()
-        .is_some_and(|error| error.to_string().contains("tranExecutor is null")));
+        .is_some_and(|error| client_exception(&error).to_string().contains("tranExecutor is null")));
 }
 
 #[test]
@@ -1598,7 +1620,7 @@ async fn transaction_send_delay_millis_fails_before_send_like_java() {
     let result = producer.send_message_in_transaction(msg, None).await;
 
     assert!(result.err().is_some_and(|error| {
-        error
+        client_exception(&error)
             .to_string()
             .contains("Transactional messages do not support delayed delivery")
     }));
@@ -1713,9 +1735,7 @@ fn end_transaction_send_result_queue_offset_must_fit_java_long() {
         DefaultMQProducerImpl::u64_to_java_long_field("endTransaction", "tranStateTableOffset", i64::MAX as u64 + 1)
             .expect_err("queue offsets larger than Java long must not wrap");
 
-    assert!(error
-        .to_string()
-        .contains("endTransaction tranStateTableOffset exceeds Java long range"));
+    assert_invalid_argument(&error);
 }
 
 #[test]
