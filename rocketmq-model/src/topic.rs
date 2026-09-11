@@ -322,7 +322,7 @@ impl TopicConfig {
     }
 
     pub fn decode(&mut self, input: &str) -> bool {
-        let parts: Vec<&str> = input.split(Self::SEPARATOR).collect();
+        let parts: Vec<&str> = input.splitn(6, Self::SEPARATOR).collect();
         if parts.len() < 5 {
             return false;
         }
