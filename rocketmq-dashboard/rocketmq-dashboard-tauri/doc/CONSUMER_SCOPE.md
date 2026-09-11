@@ -10,13 +10,24 @@ NameServer endpoint ID is rejected. Revision checks still surround the query.
 
 The mode preference survives module navigation and connection revision refreshes.
 Each history entry retains its mode. Changing scope remounts the catalog and
-closes old detail dialogs. Request generations reject callbacks from previous
-scopes, superseded refreshes, and disposed pages. A missing Proxy prevents Proxy
+its inline progress, connection and configuration views. Read resources reject callbacks from previous
+scopes and disposed pages while coalescing concurrent reads. A missing Proxy prevents Proxy
 queries and links to connection settings; NameServer mode remains available.
 
 Consumer configuration reads still take a separate direct Broker address. The
 DLQ group picker explicitly uses NameServer discovery. Neither treats a direct
 Broker target as a Proxy scope.
+
+The catalog preserves an explicitly selected group when filters or refreshes
+remove it, showing a filtered-out or unavailable state instead of selecting a
+different group automatically. Its zero progress/client defaults are not proof
+of zero lag or an offline client: inspect the dedicated progress or connection
+result for the current group. Refresh failures retain the last successful
+observation time and block mutations based on stale catalog data.
+
+Accepted write dialogs belong to the authenticated session. A scope or connection
+change freezes further work in the dialog while preserving the original write
+receipt; it does not retarget the request or silently discard the acknowledgement.
 
 ## Proxy settings workflow
 

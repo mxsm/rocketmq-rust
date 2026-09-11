@@ -1,6 +1,6 @@
 # Consumer diagnostics
 
-The client connection view exposes a manual diagnostic panel with separate Running information and Request thread stack actions. Opening the panel never requests JStack. Switching client, group, scope, or closing the dialog discards old results and invalidates late callbacks. Results remain in component memory only.
+The inline Connections tab exposes a manual diagnostic panel with separate Running information and Request thread stack actions. Opening the panel never requests JStack. Switching client, group, scope, or leaving the connection view discards old results and invalidates late callbacks. Responses must match both the requested group and client. A synchronous request guard prevents concurrent diagnostic submissions. Results remain in component memory only.
 
 Both authenticated commands validate the current connection revision and the configured Consumer scope. NameServer mode checks the client in current connections before calling `ConsumerDiagnosticAdmin`. Proxy mode reports unsupported: that trait cannot express a forwarding address, so the application does not silently use NameServer routing for a Proxy selection.
 

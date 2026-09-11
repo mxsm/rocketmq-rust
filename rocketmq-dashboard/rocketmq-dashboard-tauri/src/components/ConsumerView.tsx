@@ -1,534 +1,124 @@
-import { isReadOnlyConsumer } from '../features/consumer/mutation';
-import { motion } from 'motion/react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { Activity, ChevronDown, LockKeyhole, Plus } from 'lucide-react';
 import { ConnectionStore } from '../services/connection.store';
 import { getConnectionSettings } from '../services/connection.service';
-import { resolveConsumerScope, consumerScopeKey } from '../features/consumer/scope';
-import type { ConsumerQueryScope } from '../features/consumer/types/consumer.types';
 import { useAppStore, useNavigationState } from '../stores/app.store';
-import { findEntity } from '../stores/navigation';
-import React, { useEffect, useMemo, useState, useRef, useSyncExternalStore } from 'react';
-import { Users, Settings, Trash2, Search, Check, RefreshCw, Plus, Clock, FileText, Activity, Network, Cpu, AlertCircle, LoaderCircle } from 'lucide-react';
-import { toast } from 'sonner@2.0.3';
-import { Pagination } from './Pagination';
+import { usePageRefresh } from '../app/layout/pageToolbar';
 import { useConsumerCatalog } from '../features/consumer/hooks/useConsumerCatalog';
-import { ConsumerClientModal } from '../features/consumer/components/ConsumerClientModal';
-import { ConsumerConfigModal } from '../features/consumer/components/ConsumerConfigModal';
-import { ConsumerDeleteModal } from '../features/consumer/components/ConsumerDeleteModal';
-import { ConsumerDetailModal } from '../features/consumer/components/ConsumerDetailModal';
-import { ConsumerEditorModal } from '../features/consumer/components/ConsumerEditorModal';
-import type { ConsumerGroupListItem, ConsumerMutationResult } from '../features/consumer/types/consumer.types';
+import { ConsumerDetails, useConsumerDetails, type ConsumerDetailTab } from '../features/consumer/components/ConsumerDetails';
+import { useConsumerAction, type ConsumerAction } from '../features/consumer/consumerActionContext';
+import { consumerScopeKey, resolveConsumerScope } from '../features/consumer/scope';
+import { consumerCount, consumerTimestamp } from '../features/consumer/consumerModel';
+import { isReadOnlyConsumer } from '../features/consumer/mutation';
+import type { ConsumerQueryScope } from '../features/consumer/types/consumer.types';
+import { PageSection } from './layout/PageSection';
+import { PageState } from './layout/PageState';
+import { StatusBadge } from './layout/StatusBadge';
+import { Button } from './ui/LegacyButton';
+import { Input } from './ui/LegacyInput';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuCheckboxItem } from './ui/dropdown-menu';
+import { Pagination } from './Pagination';
+import '../features/consumer/consumer.css';
 
-export const ConsumerView = () => {
-  const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
-  const { consumerQueryMode, setConsumerQueryMode, setActiveTab, navigation } = useAppStore();
-  const [queryMode, setQueryMode] = useNavigationState<ConsumerQueryScope['mode']>('queryMode', navigation.target?.kind === 'consumer' ? navigation.target.scope.mode : consumerQueryMode);
-  const changeMode = (mode: ConsumerQueryScope['mode']) => { setQueryMode(mode); setConsumerQueryMode(mode); };
-  const [settingsError, setSettingsError] = useState('');
-  useEffect(() => {
-    let active = true;
-    if (!settings) void getConnectionSettings().catch(() => { if (active) setSettingsError('Unable to load connection settings.'); });
-    return () => { active = false; };
-  }, [settings]);
-  const scope = useMemo(() => resolveConsumerScope(settings, queryMode), [settings, queryMode]);
-  if (!settings) return <p role="status" className="p-6">{settingsError || 'Loading connection settings...'}</p>;
-  if (!scope) return <div className="p-6 space-y-3"><p role="alert">Select a Proxy in connection settings before using Proxy mode.</p><button type="button" className="underline mr-4" onClick={() => setActiveTab('Proxy')}>Configure Proxy</button><button type="button" className="underline" onClick={() => changeMode('name_server')}>Use NameServer</button></div>;
-  return <ConsumerCatalog key={consumerScopeKey(scope)} scope={scope} proxyAddress={settings.proxy.currentProxyAddr} changeMode={changeMode} />;
-};
-
-const ConsumerCatalog = ({ scope, proxyAddress, changeMode }: { scope: ConsumerQueryScope; proxyAddress: string | null; changeMode: (mode: ConsumerQueryScope['mode']) => void }) => {
-  const { navigation, openConsumer, goBack, setActiveTab } = useAppStore();
-  const target = navigation.target?.kind === 'consumer' && consumerScopeKey(navigation.target.scope) === consumerScopeKey(scope) ? navigation.target : null;
-  const openedTarget = useRef(false);
-
-  const [searchTerm, setSearchTerm] = useNavigationState(`search:${consumerScopeKey(scope)}`, '');
-  const [filters, setFilters] = useNavigationState<Record<string, boolean>>(`filters:${consumerScopeKey(scope)}`, {
-    NORMAL: true,
-    FIFO: !!target,
-    SYSTEM: true,
-  });
-  const enableProxy = scope.mode === 'proxy';
-  const [detailModal, setDetailModal] = useState<{ isOpen: boolean, consumer: ConsumerGroupListItem | null }>({isOpen: false, consumer: null});
-  const [configModal, setConfigModal] = useState<{ isOpen: boolean, consumer: ConsumerGroupListItem | null }>({isOpen: false, consumer: null});
-  const [clientModal, setClientModal] = useState<{ isOpen: boolean, consumer: ConsumerGroupListItem | null }>({isOpen: false, consumer: null});
-  const [editorModal, setEditorModal] = useState<{ isOpen: boolean, consumer: ConsumerGroupListItem | null, preferredBrokerAddress?: string }>({isOpen: false, consumer: null});
-  const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean, consumer: ConsumerGroupListItem | null }>({isOpen: false, consumer: null});
-  const [selectedGroup, setSelectedGroup] = useNavigationState(`selection:${consumerScopeKey(scope)}`, target?.name ?? '');
-  const [currentPage, setCurrentPage] = useNavigationState(`page:${consumerScopeKey(scope)}`, 1);
-  const itemsPerPage = 6;
-  const {
-    items,
-    summary,
-    response,
-    isInitialLoading,
-    isRefreshPending,
-    isRefreshing,
-    refreshingGroup,
-    error,
-    refresh,
-    refreshGroup,
-  } = useConsumerCatalog(scope);
-
-  const activeCategories = useMemo(
-    () => Object.entries(filters).filter(([, value]) => value).map(([key]) => key),
-    [filters],
-  );
-
-  const filteredConsumers = useMemo(() => {
-    const normalizedTerm = searchTerm.trim().toLowerCase();
-    return items.filter((consumer) => {
-      const matchesSearch =
-        normalizedTerm.length === 0 ||
-        consumer.displayGroupName.toLowerCase().includes(normalizedTerm) ||
-        consumer.rawGroupName.toLowerCase().includes(normalizedTerm);
-      const matchesCategory =
-        activeCategories.length === 0 || activeCategories.includes(consumer.category);
-      return matchesSearch && matchesCategory;
-    });
-  }, [activeCategories, items, searchTerm]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredConsumers.length / itemsPerPage));
-  const currentConsumers = filteredConsumers.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage,
-  );
-  const selectedConsumer = findEntity(target ? items : filteredConsumers, (consumer) => consumer.rawGroupName, selectedGroup || null);
-  const targetMissing = target && response && !isInitialLoading && !error && !items.some((item) => item.rawGroupName === target.name);
-  const activeClientCount = items.reduce((total, consumer) => total + consumer.connectionCount, 0);
-  const totalLag = items.reduce((total, consumer) => total + consumer.diffTotal, 0);
-  const lagHealthClass = selectedConsumer && selectedConsumer.diffTotal > 0 ? 'is-warning' : 'is-healthy';
-
-  useEffect(() => {
-    if (response && currentPage > totalPages) {
-      setCurrentPage(totalPages);
-    }
-  }, [currentPage, totalPages]);
-
-  useEffect(() => {
-    if (target || !response) return;
-    if (filteredConsumers.length === 0) {
-      setSelectedGroup('');
-      return;
-    }
-    if (!filteredConsumers.some((consumer) => consumer.rawGroupName === selectedGroup)) {
-      setSelectedGroup(filteredConsumers[0].rawGroupName);
-    }
-  }, [filteredConsumers, selectedGroup]);
-
-  useEffect(() => {
-    if (!target || openedTarget.current || !response || isInitialLoading) return;
-    const consumer = items.find((item) => item.rawGroupName === target.name);
-    if (!consumer) return;
-    openedTarget.current = true;
-    const setters = { progress: setDetailModal, config: setConfigModal, clients: setClientModal };
-    if (target.detail !== 'overview') setters[target.detail]({ isOpen: true, consumer });
-  }, [target, response, isInitialLoading, items]);
-
-  const toggleFilter = (key: string) => {
-    setCurrentPage(1);
-    setFilters((current) => ({...current, [key]: !current[key]}));
-  };
-
-  const goToPage = (page: number) => {
-    if (page >= 1 && page <= totalPages) {
-      setCurrentPage(page);
-    }
-  };
-
-  const handleEditorSaved = async (result: ConsumerMutationResult) => {
-    if (result.success) setEditorModal({isOpen: false, consumer: null});
-    await refresh();
-  };
-
-  const handleDeleteSaved = async (result: ConsumerMutationResult) => {
-    if (result.success) setDeleteModal({isOpen: false, consumer: null});
-    await refresh();
-  };
-
-  const handleEditFromConfig = (consumer: ConsumerGroupListItem, preferredBrokerAddress?: string) => {
-    if (isReadOnlyConsumer(consumer)) return;
-    setConfigModal({isOpen: false, consumer: null});
-    setEditorModal({isOpen: true, consumer, preferredBrokerAddress});
-  };
-
-  const formatUpdatedTime = (timestamp: number) => {
-    if (!Number.isFinite(timestamp) || timestamp <= 0) {
-      return '-';
-    }
-    return new Date(timestamp).toLocaleTimeString();
-  };
-
-  const getCategoryClass = (category: string) => {
-    if (category === 'SYSTEM') {
-      return 'is-system';
-    }
-    if (category === 'FIFO') {
-      return 'is-fifo';
-    }
-    return 'is-normal';
-  };
-
-  return (
-    <div className="consumer-page">
-      {targetMissing && <p role="alert" className="p-4 text-red-600">Consumer group not found: {target.name}</p>}
-      <ConsumerDetailModal
-        isOpen={detailModal.isOpen}
-        onClose={() => { setDetailModal({isOpen: false, consumer: null}); if (target) goBack(); }}
-        consumer={detailModal.consumer}
-        scope={scope}
-      />
-      <ConsumerConfigModal
-        isOpen={configModal.isOpen}
-        onClose={() => { setConfigModal({isOpen: false, consumer: null}); if (target) goBack(); }}
-        consumer={configModal.consumer}
-        onEdit={handleEditFromConfig}
-      />
-      <ConsumerClientModal
-        isOpen={clientModal.isOpen}
-        onClose={() => { setClientModal({isOpen: false, consumer: null}); if (target) goBack(); }}
-        consumer={clientModal.consumer}
-        scope={scope}
-      />
-      <ConsumerEditorModal
-        isOpen={editorModal.isOpen}
-        onClose={() => setEditorModal({isOpen: false, consumer: null})}
-        consumer={editorModal.consumer}
-        preferredBrokerAddress={editorModal.preferredBrokerAddress}
-        onSaved={(result) => void handleEditorSaved(result)}
-      />
-      <ConsumerDeleteModal
-        isOpen={deleteModal.isOpen}
-        onClose={() => setDeleteModal({isOpen: false, consumer: null})}
-        consumer={deleteModal.consumer}
-        onDeleted={(result) => void handleDeleteSaved(result)}
-      />
-
-      <section className="consumer-summary-grid" aria-label="Consumer summary">
-        <div className="topic-summary-card">
-          <div>
-            <span>Consumer Groups</span>
-            <strong>{summary?.totalGroups ?? items.length}</strong>
-            <small>{summary?.normalGroups ?? 0} normal / {summary?.systemGroups ?? 0} system</small>
-          </div>
-          <span className="topic-summary-icon">
-            <Users className="topic-icon" aria-hidden="true"/>
-          </span>
-        </div>
-        <div className="topic-summary-card is-success">
-          <div>
-            <span>Active Clients</span>
-            <strong>{activeClientCount}</strong>
-            <small>connected consumers</small>
-          </div>
-          <span className="topic-summary-icon">
-            <Network className="topic-icon" aria-hidden="true"/>
-          </span>
-        </div>
-        <div className={`topic-summary-card ${totalLag > 0 ? 'is-warning' : 'is-blue'}`}>
-          <div>
-            <span>Total Lag</span>
-            <strong>{totalLag}</strong>
-            <small>{totalLag > 0 ? 'queue pressure detected' : 'no queue pressure'}</small>
-          </div>
-          <span className="topic-summary-icon">
-            <Activity className="topic-icon" aria-hidden="true"/>
-          </span>
-        </div>
-        <div className="topic-summary-card is-blue">
-          <div>
-            <span>Transport</span>
-            <strong>{response?.useVipChannel ? 'VIP' : 'Direct'}</strong>
-            <small>{response?.useVipChannel ? 'VIP on' : 'VIP off'} / {response?.useTls ? 'TLS on' : 'TLS off'}</small>
-          </div>
-          <span className="topic-summary-icon">
-            <Cpu className="topic-icon" aria-hidden="true"/>
-          </span>
-        </div>
-      </section>
-
-      <section className="consumer-command-panel" aria-label="Consumer filters and actions">
-        <div className="consumer-command-copy is-compact">
-          <span>Scope</span>
-          <div className="consumer-scope-pills" aria-label="Consumer catalog filter scope">
-            <b>Local filters</b>
-            <b>{enableProxy ? 'Proxy source' : 'NameServer source'}</b>
-          </div>
-        </div>
-
-        <div className="consumer-query-controls">
-          <label className="consumer-search-field">
-            <Search className="topic-icon" aria-hidden="true"/>
-            <input
-              type="text"
-              placeholder="SubscriptionGroup..."
-              value={searchTerm}
-              onChange={(event) => {
-                setSearchTerm(event.target.value);
-                setCurrentPage(1);
-              }}
-            />
-          </label>
-
-          <div className="consumer-filter-row" aria-label="Consumer group category filters">
-            {Object.entries(filters).map(([key, value]) => (
-              <button
-                type="button"
-                key={key}
-                onClick={() => toggleFilter(key)}
-                className={`consumer-filter-chip ${value ? 'is-active' : ''} ${getCategoryClass(key)}`}
-              >
-                {value && <Check className="topic-icon" aria-hidden="true"/>}
-                <span>{key}</span>
-              </button>
-            ))}
-          </div>
-
-          <div className="consumer-proxy-control">
-            <span>{enableProxy ? 'Proxy' : 'Saved Proxy'}</span>
-            <span>{proxyAddress ?? 'Not configured'}</span>
-            <button type="button" className="underline" onClick={() => setActiveTab('Proxy')}>Configure</button>
-          </div>
-
-          <button
-            type="button"
-            className={`consumer-proxy-toggle ${enableProxy ? 'is-on' : ''}`}
-            aria-pressed={enableProxy}
-            disabled={!proxyAddress && !enableProxy}
-            onClick={() => changeMode(enableProxy ? 'name_server' : 'proxy')}
-          >
-            <span>Enable Proxy</span>
-            <i aria-hidden="true"/>
-          </button>
-
-          <button
-            type="button"
-            className="topic-action-button is-status consumer-add-button"
-            onClick={() => setEditorModal({isOpen: true, consumer: null})}
-          >
-            <Plus className="topic-icon" aria-hidden="true"/>
-            <span>Add / Update</span>
-          </button>
-
-          <button
-            type="button"
-            className="topic-action-button consumer-refresh-button"
-            onClick={() => void refresh()}
-            disabled={isRefreshPending || isInitialLoading}
-            title={isRefreshing ? 'Refreshing...' : 'Refresh consumer groups'}
-          >
-            {isRefreshing ? (
-              <LoaderCircle className="topic-icon consumer-spin" aria-hidden="true"/>
-            ) : (
-              <RefreshCw className={`topic-icon ${isRefreshPending ? 'consumer-tilt' : ''}`} aria-hidden="true"/>
-            )}
-            <span className="sr-only">Refresh</span>
-          </button>
-        </div>
-      </section>
-
-      {error && (
-        <div className="consumer-alert" role="alert">
-          <AlertCircle className="topic-icon" aria-hidden="true"/>
-          <span>{error}</span>
-        </div>
-      )}
-
-      {response && (
-        <section className="consumer-scope-strip" aria-label="Consumer source details">
-          <div>
-            <span>NameServer:</span>
-            <strong>{response.currentNamesrv}</strong>
-            <i aria-hidden="true">/</i>
-            <span>Total</span>
-            <strong>{summary?.totalGroups ?? 0}</strong>
-            <i aria-hidden="true">/</i>
-            <span>NORMAL</span>
-            <strong>{summary?.normalGroups ?? 0}</strong>
-            <i aria-hidden="true">/</i>
-            <span>FIFO</span>
-            <strong>{summary?.fifoGroups ?? 0}</strong>
-            <i aria-hidden="true">/</i>
-            <span>SYSTEM</span>
-            <strong>{summary?.systemGroups ?? 0}</strong>
-          </div>
-          <b>{response.useVipChannel ? 'VIP ON' : 'VIP OFF'} / {response.useTls ? 'TLS ON' : 'TLS OFF'}</b>
-        </section>
-      )}
-
-      {isInitialLoading ? (
-        <div className="consumer-loading-state">
-          <LoaderCircle className="topic-icon consumer-spin" aria-hidden="true"/>
-          <span>Loading consumer groups...</span>
-        </div>
-      ) : filteredConsumers.length === 0 ? (
-        <div className="consumer-empty-state">
-          <Search className="topic-icon" aria-hidden="true"/>
-          <strong>No consumer groups matched</strong>
-          <span>Adjust the search term or category filters to inspect another subscription group.</span>
-        </div>
-      ) : (
-        <section className="consumer-workspace">
-          <div className="consumer-panel consumer-list-panel">
-            <div className="topic-panel-header">
-              <div>
-                <h2>Consumer Catalog</h2>
-                <p>Subscription groups ranked by lag, clients, and lifecycle category.</p>
-              </div>
-              <div className="topic-panel-meta">
-                <span>{filteredConsumers.length} visible</span>
-              </div>
+const detailTabs = [['overview', 'Overview'], ['progress', 'Progress'], ['clients', 'Connections'], ['config', 'Configuration'], ['reset', 'Reset offset']] as const;
+const pageSize = 6;
+export function ConsumerView() {
+    const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
+    const { consumerQueryMode, setConsumerQueryMode, setActiveTab, navigation } = useAppStore();
+    const [mode, setMode] = useNavigationState<ConsumerQueryScope['mode']>('queryMode', navigation.target?.kind === 'consumer' ? navigation.target.scope.mode : consumerQueryMode);
+    const [error, setError] = useState('');
+    const changeMode = (value: ConsumerQueryScope['mode']) => { setMode(value); setConsumerQueryMode(value); };
+    useEffect(() => { let active = true; if (!settings) void getConnectionSettings().catch(() => { if (active) setError('Connection settings could not be read.'); }); return () => { active = false; }; }, [settings]);
+    const scope = useMemo(() => resolveConsumerScope(settings, mode), [settings, mode]);
+    if (!settings) return <PageState kind={error ? 'error' : 'loading'} title={error || 'Reading connection settings'} />;
+    if (!scope) return <PageState kind="empty" title="Select a Proxy to use Proxy query mode" description="The selected endpoint must be present in the connection settings."
+        action={<div className="ops-consumer-actions"><Button onClick={() => setActiveTab('Proxy')}>Configure Proxy</Button><Button variant="outline" onClick={() => changeMode('name_server')}>Use NameServer</Button></div>} />;
+    return <ConsumerCatalog key={consumerScopeKey(scope)} scope={scope} endpoint={scope.mode === 'proxy' ? settings.proxy.currentProxyAddr ?? '' : settings.nameserver.currentNamesrv ?? ''} changeMode={changeMode} />;
+}
+function ConsumerCatalog({ scope, endpoint, changeMode }: { scope: ConsumerQueryScope; endpoint: string; changeMode: (mode: ConsumerQueryScope['mode']) => void }) {
+    const { navigation, setActiveTab } = useAppStore();
+    const target = navigation.target?.kind === 'consumer' && consumerScopeKey(navigation.target.scope) === consumerScopeKey(scope) ? navigation.target : null;
+    const prefix = consumerScopeKey(scope);
+    const [search, setSearch] = useNavigationState('search:' + prefix, '');
+    const [categories, setCategories] = useNavigationState<Record<string, boolean>>('filters:' + prefix, { NORMAL: true, FIFO: true, SYSTEM: true });
+    const [selection, setSelection] = useNavigationState<string | null>('selection:' + prefix, target?.name ?? null);
+    const [tab, setTab] = useNavigationState<ConsumerDetailTab>('detail:' + prefix, target?.detail ?? 'overview');
+    const [page, setPage] = useNavigationState('page:' + prefix, 1);
+    const catalog = useConsumerCatalog(scope);
+    const open = useConsumerAction();
+    const alive = useRef(false);
+    useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+    const filtered = useMemo(() => catalog.items.filter(item => (categories[item.category] ?? true) &&
+        (item.rawGroupName.toLowerCase().includes(search.trim().toLowerCase()) || item.displayGroupName.toLowerCase().includes(search.trim().toLowerCase()))), [catalog.data, search, categories]);
+    const selected = selection === null ? catalog.items[0] : catalog.items.find(item => item.rawGroupName === selection);
+    useEffect(() => { if (selection === null && selected) setSelection(selected.rawGroupName); }, [selection, selected]);
+    const visible = selected && filtered.some(item => item.rawGroupName === selected.rawGroupName) ? selected : null;
+    const detail = useConsumerDetails(visible?.rawGroupName ?? null, scope, tab);
+    const refresh = useCallback(() => { void catalog.refresh(); void detail.read(); }, [catalog.refresh, detail.read]);
+    const blocked = catalog.pending || Boolean(catalog.error) || !catalog.data;
+    const onAction = useCallback((action: ConsumerAction) => {
+        if (blocked) return;
+        const revision = ConnectionStore.getSnapshot()?.revision;
+        open(action, () => { if (alive.current && ConnectionStore.getSnapshot()?.revision === revision) refresh(); });
+    }, [blocked, open, refresh]);
+    const createAction = useMemo(() => <Button icon={Plus} disabled={blocked} onClick={() => onAction({ kind: 'create', scope })}>Create Group</Button>, [blocked, onAction, scope]);
+    const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
+    const observedAt = visible ? catalog.receivedAt !== null && detail.receivedAt !== null ? Math.min(catalog.receivedAt, detail.receivedAt) : null : catalog.receivedAt;
+    useEffect(() => { if (!catalog.pending && !detail.pending && !catalog.error && !detail.error) setRefreshedAt(observedAt); }, [observedAt, catalog.pending, detail.pending, catalog.error, detail.error]);
+    usePageRefresh({ refresh, pending: catalog.pending || detail.pending, refreshedAt, actions: createAction });
+    const pages = Math.ceil(filtered.length / pageSize);
+    const currentPage = Math.max(1, Math.min(page, pages || 1));
+    const items = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+    const filteredOut = Boolean(search || Object.values(categories).some(value => !value));
+    const clear = () => { setSearch(''); setCategories({ NORMAL: true, FIFO: true, SYSTEM: true }); setPage(1); };
+    const protectedGroup = isReadOnlyConsumer(visible ?? null);
+    const mutationBlocked = blocked || protectedGroup;
+    return <div className="ops-consumers"><section className="ops-consumer-filters" aria-label="Consumer query filters">
+        <div className="ops-consumer-scope"><span>Query scope</span><div role="group" aria-label="Consumer query mode">
+            <Button variant={scope.mode === 'name_server' ? 'primary' : 'outline'} aria-pressed={scope.mode === 'name_server'} onClick={() => changeMode('name_server')}>NameServer</Button>
+            <Button variant={scope.mode === 'proxy' ? 'primary' : 'outline'} aria-pressed={scope.mode === 'proxy'} onClick={() => changeMode('proxy')}>Proxy</Button></div></div>
+        <div className="ops-consumer-endpoint"><span>{scope.mode === 'proxy' ? 'Configured Proxy' : 'NameServer'}</span><button type="button" className="ops-consumer-link" title={endpoint} onClick={() => setActiveTab(scope.mode === 'proxy' ? 'Proxy' : 'NameServer')}>{endpoint || 'Not configured'}</button></div>
+        <Input label="Search Consumer group" placeholder="Search Consumer group…" value={search} onChange={event => { setSearch(event.target.value); setPage(1); }} />
+        <DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" icon={ChevronDown} aria-label="Filter Consumer categories">{Object.values(categories).every(Boolean) ? 'All types' : 'Filter types'}</Button></DropdownMenuTrigger>
+            <DropdownMenuContent>{Object.entries(categories).map(([name, checked]) => <DropdownMenuCheckboxItem key={name} checked={checked} onSelect={event => event.preventDefault()} onCheckedChange={value => { setCategories({ ...categories, [name]: value }); setPage(1); }}>{name}</DropdownMenuCheckboxItem>)}</DropdownMenuContent></DropdownMenu>
+        {filteredOut && <Button variant="outline" onClick={clear}>Clear filters</Button>}
+    </section>
+        {catalog.pending && <PageState kind="loading" title={catalog.data ? 'Refreshing Consumer catalog' : 'Reading Consumer catalog'} />}
+        {catalog.error && <PageState kind="error" title="Consumer catalog could not be refreshed" description={catalog.error + (catalog.data ? ' Showing the last successful read.' : '')} action={<Button variant="outline" disabled={catalog.pending} onClick={() => void catalog.refresh()}>Retry catalog</Button>} />}
+        <section className="ops-consumer-directory" aria-label="Consumer groups"><div className="ops-consumer-scroll" role="region" aria-label="Consumer group list" tabIndex={0}><table>
+            <thead><tr>{['Consumer group', 'Clients', 'Type', 'Catalog lag', 'Connection observation', 'Catalog updated'].map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead>
+            <tbody>{items.map(item => <tr key={item.rawGroupName} data-selected={item.rawGroupName === visible?.rawGroupName}><th scope="row"><button type="button" className="ops-consumer-choice" title={item.rawGroupName} aria-pressed={item.rawGroupName === visible?.rawGroupName} onClick={() => setSelection(item.rawGroupName)}>
+                {isReadOnlyConsumer(item) && <LockKeyhole size={15} aria-hidden="true" />}<span>{item.displayGroupName}</span></button></th><td>{consumerCount(item.connectionCount)}</td><td>{item.category}</td>
+                <td>{item.diffTotal > 0 ? consumerCount(item.diffTotal) : 'Not verified'}</td><td><StatusBadge tone={item.connectionCount > 0 ? 'success' : 'neutral'}>{item.connectionCount > 0 ? 'Clients observed' : 'Not confirmed'}</StatusBadge></td><td>{consumerTimestamp(item.updateTimestamp)}</td></tr>)}</tbody>
+        </table></div>
+            {catalog.data && !items.length && <PageState kind="empty" title={filteredOut ? 'No groups match these filters' : 'No Consumer groups returned'} />}
+            <div className="ops-consumer-directory-footer"><p className="ops-consumer-note">Zero values may mean unavailable observations. Inspect progress or connections to verify.</p>
+                {pages > 0 && <span className="ops-consumer-note">{(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, filtered.length)} of {filtered.length}</span>}
+                {pages > 1 && <Pagination currentPage={currentPage} totalPages={pages} onPageChange={setPage} disabled={catalog.pending} />}
             </div>
-
-            <div className="consumer-list">
-              {currentConsumers.map((consumer, index) => {
-                const selected = selectedConsumer?.rawGroupName === consumer.rawGroupName;
-                return (
-                  <motion.button
-                    type="button"
-                    key={consumer.rawGroupName}
-                    initial={{opacity: 0, y: 14}}
-                    animate={{opacity: 1, y: 0}}
-                    transition={{duration: 0.24, delay: index * 0.03}}
-                    className={`consumer-row ${selected ? 'is-selected' : ''} ${getCategoryClass(consumer.category)}`}
-                    onClick={() => setSelectedGroup(consumer.rawGroupName)}
-                  >
-                    <span className="consumer-row-main">
-                      <span className="consumer-row-icon">
-                        <Users className="topic-icon" aria-hidden="true"/>
-                      </span>
-                      <span className="consumer-row-copy">
-                        <strong title={consumer.displayGroupName}>{consumer.displayGroupName}</strong>
-                        <span>{consumer.rawGroupName}</span>
-                      </span>
-                    </span>
-                    <span className="consumer-badge-stack">
-                      <b className="is-model">{consumer.messageModel}</b>
-                      <b className="is-type">{consumer.consumeType}</b>
-                      <b className={getCategoryClass(consumer.category)}>{consumer.category}</b>
-                    </span>
-                    <span className="consumer-row-metric">
-                      <span>TPS</span>
-                      <strong>{consumer.consumeTps}</strong>
-                    </span>
-                    <span className={`consumer-row-metric ${consumer.diffTotal > 0 ? 'is-warning' : ''}`}>
-                      <span>Lag</span>
-                      <strong>{consumer.diffTotal}</strong>
-                    </span>
-                    <span className="consumer-row-metric">
-                      <span>Clients</span>
-                      <strong>{consumer.connectionCount}</strong>
-                    </span>
-                    <span className="consumer-row-updated">
-                      <Clock className="topic-icon" aria-hidden="true"/>
-                      {formatUpdatedTime(consumer.updateTimestamp)}
-                    </span>
-                  </motion.button>
-                );
-              })}
-            </div>
-          </div>
-
-          <aside className="consumer-panel consumer-inspector-panel" aria-label="Selected consumer group">
-            {selectedConsumer ? (
-              <>
-                <div className="consumer-inspector-header">
-                  <span>Selected Consumer</span>
-                  <strong>{selectedConsumer.displayGroupName}</strong>
-                  <small>{selectedConsumer.rawGroupName}</small>
-                  <div className="consumer-badge-stack">
-                    <b className="is-model">{selectedConsumer.messageModel}</b>
-                    <b className="is-type">{selectedConsumer.consumeType}</b>
-                    <b className={getCategoryClass(selectedConsumer.category)}>{selectedConsumer.category}</b>
-                  </div>
-                </div>
-
-                <div className={`consumer-health-card ${lagHealthClass}`}>
-                  <span>Lag health</span>
-                  <strong>{selectedConsumer.diffTotal > 0 ? 'Lagging' : 'Healthy'}</strong>
-                  <small>
-                    {selectedConsumer.diffTotal > 0
-                      ? 'This group has queue backlog and needs inspection.'
-                      : 'No queue pressure reported by this group.'}
-                  </small>
-                </div>
-
-                <div className="consumer-detail-grid">
-                  <div>
-                    <span>TPS</span>
-                    <strong>{selectedConsumer.consumeTps}</strong>
-                  </div>
-                  <div>
-                    <span>Lag</span>
-                    <strong>{selectedConsumer.diffTotal}</strong>
-                  </div>
-                  <div>
-                    <span>Clients</span>
-                    <strong>{selectedConsumer.connectionCount}</strong>
-                  </div>
-                  <div>
-                    <span>Version</span>
-                    <strong>{selectedConsumer.versionDesc}</strong>
-                  </div>
-                  <div>
-                    <span>Brokers</span>
-                    <strong>{selectedConsumer.brokerNames.length || '-'}</strong>
-                  </div>
-                  <div>
-                    <span>Updated</span>
-                    <strong>{formatUpdatedTime(selectedConsumer.updateTimestamp)}</strong>
-                  </div>
-                </div>
-
-                <div className="consumer-action-grid">
-                  <button type="button" className="topic-action-button" onClick={() => openConsumer(selectedConsumer.rawGroupName, 'clients', scope)}>
-                    <Users className="topic-icon" aria-hidden="true"/>
-                    <span>Client</span>
-                  </button>
-                  <button type="button" className="topic-action-button" onClick={() => openConsumer(selectedConsumer.rawGroupName, 'progress', scope)}>
-                    <FileText className="topic-icon" aria-hidden="true"/>
-                    <span>Detail</span>
-                  </button>
-                  <button type="button" className="topic-action-button" onClick={() => openConsumer(selectedConsumer.rawGroupName, 'config', scope)}>
-                    <Settings className="topic-icon" aria-hidden="true"/>
-                    <span>Config</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="topic-action-button"
-                    onClick={() => void refreshGroup(selectedConsumer.rawGroupName)}
-                    disabled={refreshingGroup === selectedConsumer.rawGroupName}
-                  >
-                    {refreshingGroup === selectedConsumer.rawGroupName ? (
-                      <LoaderCircle className="topic-icon consumer-spin" aria-hidden="true"/>
-                    ) : (
-                      <RefreshCw className="topic-icon" aria-hidden="true"/>
-                    )}
-                    <span>Sync</span>
-                  </button>
-                  <button type="button" className="topic-action-button is-danger" disabled={isReadOnlyConsumer(selectedConsumer)} title={isReadOnlyConsumer(selectedConsumer) ? "System Consumer groups are read-only." : undefined} onClick={() => setDeleteModal({isOpen: true, consumer: selectedConsumer})}>
-                    <Trash2 className="topic-icon" aria-hidden="true"/>
-                    <span>Delete</span>
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="consumer-empty-state is-compact">
-                <Users className="topic-icon" aria-hidden="true"/>
-                <strong>No consumer selected</strong>
-                <span>Select a consumer group from the catalog to inspect actions.</span>
-              </div>
-            )}
-          </aside>
+            {visible && !items.some(item => item.rawGroupName === visible.rawGroupName) && <Button variant="ghost" onClick={() => setPage(Math.floor(filtered.findIndex(item => item.rawGroupName === visible.rawGroupName) / pageSize) + 1)}>Show selected group in list</Button>}
         </section>
-      )}
-
-      <footer className="consumer-footer">
-        <span>Consumer group data is read-only until Add/Update, Config, or Delete opens a scoped mutation flow.</span>
-        <Pagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          onPageChange={goToPage}
-        />
-      </footer>
-    </div>
-  );
-};
+        {visible ? <PageSection className="ops-consumer-inspector" title={visible.displayGroupName} description="Lag reflects available Broker observations."
+            action={<div className="ops-consumer-actions"><Button variant="outline" icon={Activity} onClick={() => setTab('clients')}>Client diagnostics</Button>
+                <Button variant="outline" disabled={mutationBlocked} onClick={() => onAction({ kind: 'edit', consumer: visible, scope })}>Edit group</Button>
+                <DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" icon={ChevronDown} aria-label="More Consumer actions">More</Button></DropdownMenuTrigger><DropdownMenuContent align="end">
+                    <DropdownMenuItem disabled={catalog.pending} onSelect={() => { void catalog.refreshGroup(visible.rawGroupName); void detail.read(); }}>Refresh selected group</DropdownMenuItem>
+                    <DropdownMenuItem disabled={mutationBlocked || scope.mode === 'proxy'} onSelect={() => setTab('reset')}>Reset offset</DropdownMenuItem>
+                    <DropdownMenuItem variant="destructive" disabled={mutationBlocked} onSelect={() => onAction({ kind: 'delete', consumer: visible, scope })}>Delete group</DropdownMenuItem>
+                </DropdownMenuContent></DropdownMenu></div>}>
+            {protectedGroup && <p className="ops-consumer-note">This system Consumer group is read-only.</p>}
+            <Tabs value={tab} onValueChange={value => setTab(value as ConsumerDetailTab)}><TabsList className="ops-tabs-underlined" aria-label="Consumer detail view">{detailTabs.map(([value, label]) => <TabsTrigger key={value} value={value} disabled={value === 'reset' && protectedGroup}>{label}</TabsTrigger>)}</TabsList>
+                {detailTabs.map(([value]) => <TabsContent key={value} value={value}>
+                    {detail.pending && <PageState kind="loading" title="Reading Consumer details" />}
+                    {detail.error && <PageState kind="error" title="Consumer detail read failed" description={detail.error + (detail.data ? ' Showing the last successful read.' : '')} action={<Button variant="outline" disabled={detail.pending} onClick={() => void detail.read()}>Retry details</Button>} />}
+                    <ConsumerDetails key={visible.rawGroupName + ':' + value} consumer={visible} scope={scope} tab={value} data={detail.data} blocked={blocked || detail.pending || Boolean(detail.error)} mutationBlocked={mutationBlocked} onTab={setTab}
+                        onEdit={address => { if (!detail.pending && !detail.error) onAction({ kind: 'edit', consumer: visible, scope, address }); }}
+                        onReset={topic => { if (!detail.pending && !detail.error) onAction({ kind: 'reset', consumer: visible, scope, topic }); }} />
+                    {detail.receivedAt && <p className="ops-consumer-note">{detail.pending || detail.error ? 'Last successful detail read: ' : 'Detail read: '}{consumerTimestamp(detail.receivedAt)}</p>}
+                </TabsContent>)}
+            </Tabs>
+        </PageSection> : <PageState kind="empty" title={selected ? 'Selected group is outside these filters' : selection ? 'Selected group is unavailable' : 'Select a Consumer group'}
+            description={selection ? 'Saved selection: ' + selection + '. Choose another group explicitly or clear filters.' : 'Select a group to inspect progress, connections and configuration.'} action={selected && filteredOut ? <Button variant="outline" onClick={clear}>Clear filters</Button> : undefined} />}
+    </div>;
+}
