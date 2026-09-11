@@ -183,7 +183,41 @@ impl AttributeUtil {
 #[cfg(test)]
 mod tests {
 
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+
+    use crate::common::attribute::bool_attribute::BooleanAttribute;
+    use crate::common::attribute::string_attribute::StringAttribute;
+    use crate::common::attribute::Attribute;
+    use crate::ModelContractViolation;
+
     use super::*;
+
+    fn all_attributes() -> HashMap<CheetahString, Arc<dyn Attribute>> {
+        let mut all = HashMap::new();
+        all.insert(
+            CheetahString::from("immutable"),
+            Arc::new(StringAttribute::new("immutable".into(), false)) as Arc<dyn Attribute>,
+        );
+        all.insert(
+            CheetahString::from("mutable"),
+            Arc::new(StringAttribute::new("mutable".into(), true)) as Arc<dyn Attribute>,
+        );
+        all.insert(
+            CheetahString::from("remove"),
+            Arc::new(StringAttribute::new("remove".into(), true)) as Arc<dyn Attribute>,
+        );
+        all.insert(
+            CheetahString::from("added"),
+            Arc::new(StringAttribute::new("added".into(), true)) as Arc<dyn Attribute>,
+        );
+        all.insert(
+            CheetahString::from("enabled"),
+            Arc::new(BooleanAttribute::new("enabled".into(), true, false)) as Arc<dyn Attribute>,
+        );
+        all
+    }
 
     #[test]
     fn alter_current_attributes_create_only_supports_add() {
@@ -227,6 +261,99 @@ mod tests {
         assert_eq!(
             result.unwrap_err().to_string(),
             "attribute operation key has an unsupported form"
+        );
+    }
+
+    #[test]
+    fn immutable_attributes_can_be_created_but_not_updated_or_deleted() {
+        let all = all_attributes();
+        let current_attributes = HashMap::new();
+        let create = HashMap::from([(CheetahString::from("+immutable"), CheetahString::from("initial"))]);
+
+        let created = AttributeUtil::alter_current_attributes(true, &all, &current_attributes, &create).unwrap();
+        assert_eq!(created.get("immutable"), Some(&CheetahString::from("initial")));
+
+        let update = HashMap::from([(CheetahString::from("+immutable"), CheetahString::from("changed"))]);
+        assert_eq!(
+            AttributeUtil::alter_current_attributes(false, &all, &created, &update),
+            Err(ModelContractViolation::AttributeUpdateTargetsImmutableAttribute)
+        );
+
+        let delete = HashMap::from([(CheetahString::from("-immutable"), CheetahString::new())]);
+        assert_eq!(
+            AttributeUtil::alter_current_attributes(false, &all, &created, &delete),
+            Err(ModelContractViolation::AttributeUpdateTargetsImmutableAttribute)
+        );
+    }
+
+    #[test]
+    fn mixed_add_update_delete_returns_all_remaining_attributes() {
+        let all = all_attributes();
+        let current_attributes = HashMap::from([
+            (CheetahString::from("mutable"), CheetahString::from("old")),
+            (CheetahString::from("remove"), CheetahString::from("gone")),
+            (CheetahString::from("enabled"), CheetahString::from("true")),
+        ]);
+        let operations = HashMap::from([
+            (CheetahString::from("+mutable"), CheetahString::from("new")),
+            (CheetahString::from("+added"), CheetahString::from("value")),
+            (CheetahString::from("-remove"), CheetahString::from("unused")),
+        ]);
+        let expected = HashMap::from([
+            (CheetahString::from("mutable"), CheetahString::from("new")),
+            (CheetahString::from("added"), CheetahString::from("value")),
+            (CheetahString::from("enabled"), CheetahString::from("true")),
+        ]);
+
+        assert_eq!(
+            AttributeUtil::alter_current_attributes(false, &all, &current_attributes, &operations).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn unsupported_keys_and_invalid_boolean_values_are_rejected() {
+        let all = all_attributes();
+        let current_attributes = HashMap::new();
+
+        let unsupported = HashMap::from([(CheetahString::from("+missing"), CheetahString::from("value"))]);
+        assert_eq!(
+            AttributeUtil::alter_current_attributes(false, &all, &current_attributes, &unsupported),
+            Err(ModelContractViolation::AttributeOperationTargetsUnsupportedKey)
+        );
+
+        let invalid_boolean = HashMap::from([(CheetahString::from("+enabled"), CheetahString::from("yes"))]);
+        assert_eq!(
+            AttributeUtil::alter_current_attributes(false, &all, &current_attributes, &invalid_boolean),
+            Err(ModelContractViolation::AttributeValueDoesNotSatisfyRules)
+        );
+    }
+
+    #[test]
+    fn opposing_operations_for_one_key_are_rejected_as_duplicates() {
+        let all = all_attributes();
+        let current_attributes = HashMap::from([(CheetahString::from("mutable"), CheetahString::from("old"))]);
+        let operations = HashMap::from([
+            (CheetahString::from("+mutable"), CheetahString::from("new")),
+            (CheetahString::from("-mutable"), CheetahString::from("ignored")),
+        ]);
+
+        assert_eq!(
+            AttributeUtil::alter_current_attributes(false, &all, &current_attributes, &operations),
+            Err(ModelContractViolation::AttributeOperationSetContainsDuplicateKey)
+        );
+    }
+
+    #[test]
+    fn deleting_a_boolean_attribute_does_not_validate_the_delete_value() {
+        let all = all_attributes();
+        let current_attributes = HashMap::from([(CheetahString::from("enabled"), CheetahString::from("true"))]);
+        let delete = HashMap::from([(CheetahString::from("-enabled"), CheetahString::from("not-a-boolean"))]);
+
+        assert!(
+            AttributeUtil::alter_current_attributes(false, &all, &current_attributes, &delete)
+                .unwrap()
+                .is_empty()
         );
     }
 }
