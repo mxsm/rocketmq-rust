@@ -35,7 +35,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
             <AppSidebar onSignOut={() => setConfirmSignOut(true)} signingOut={signingOut} />
             <section className="desktop-main">
                 <EnvironmentToolbar settings={settings} />
-                <main className="desktop-content dashboard-main" id="main-content">
+                <main className="desktop-content dashboard-main" id="main-content" tabIndex={-1}>
                     <div className="desktop-page-heading">
                         {canGoBack && <button type="button" className="desktop-back" onClick={goBack} aria-label="Back"><ArrowLeft /></button>}
                         <div><h1>{pageTitle}</h1><p>{pageDescriptions[activeTab]}</p>

@@ -29,7 +29,7 @@ export const pageDescriptions: Record<Tab, string> = {
     Dashboard: 'Operational overview of your RocketMQ cluster',
     NameServer: 'Manage routing endpoints and connection settings',
     Proxy: 'Manage endpoints for scoped Consumer queries',
-    Cluster: 'Brokers, runtime status, and configuration',
+    Cluster: 'Broker availability, roles and runtime configuration',
     Topic: 'Manage topics, queues, and message operations',
     Consumer: 'Consumer groups, progress, and client diagnostics',
     Producer: 'Discover producer groups and inspect connections',

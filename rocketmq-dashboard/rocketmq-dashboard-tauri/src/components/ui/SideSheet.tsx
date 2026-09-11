@@ -4,6 +4,8 @@ import { PageState } from '../layout/PageState';
 import { toast } from 'sonner';
 import { Activity, Check, Copy, ListFilter, Search, Settings2, X } from 'lucide-react';
 
+import { DETAIL_CATEGORIES, categorizeDetailKey } from './detailCategories';
+
 type SheetType = 'Status' | 'Config' | null;
 
 interface SideSheetProps {
@@ -21,60 +23,6 @@ interface DetailEntry {
   category: string;
   valueType: 'boolean' | 'empty' | 'number' | 'text';
 }
-
-const CATEGORY_ORDER = ['All', 'Broker', 'Runtime', 'Storage', 'Messaging', 'Security', 'Other'];
-
-const categorizeKey = (key: string) => {
-  const normalized = key.toLowerCase();
-
-  if (normalized.includes('acl') || normalized.includes('auth') || normalized.includes('permission')) {
-    return 'Security';
-  }
-
-  if (
-    normalized.includes('disk') ||
-    normalized.includes('commitlog') ||
-    normalized.includes('consumequeue') ||
-    normalized.includes('flush') ||
-    normalized.includes('store')
-  ) {
-    return 'Storage';
-  }
-
-  if (
-    normalized.includes('topic') ||
-    normalized.includes('message') ||
-    normalized.includes('queue') ||
-    normalized.includes('subscription') ||
-    normalized.includes('dispatch')
-  ) {
-    return 'Messaging';
-  }
-
-  if (
-    normalized.includes('tps') ||
-    normalized.includes('ratio') ||
-    normalized.includes('offset') ||
-    normalized.includes('time') ||
-    normalized.includes('timestamp') ||
-    normalized.includes('active')
-  ) {
-    return 'Runtime';
-  }
-
-  if (
-    normalized.includes('broker') ||
-    normalized.includes('name') ||
-    normalized.includes('addr') ||
-    normalized.includes('port') ||
-    normalized.includes('cluster') ||
-    normalized.includes('version')
-  ) {
-    return 'Broker';
-  }
-
-  return 'Other';
-};
 
 const getValueType = (value: string): DetailEntry['valueType'] => {
   const normalized = value.trim().toLowerCase();
@@ -128,7 +76,7 @@ export const SideSheet = ({ isOpen, onClose, title, data, type, actions }: SideS
         return {
           key,
           value: stringValue,
-          category: categorizeKey(key),
+          category: categorizeDetailKey(key),
           valueType: getValueType(stringValue),
         };
       }),
@@ -142,7 +90,7 @@ export const SideSheet = ({ isOpen, onClose, title, data, type, actions }: SideS
 
   const categorySummary = useMemo(
     () =>
-      CATEGORY_ORDER.map((category) => ({
+      DETAIL_CATEGORIES.map((category) => ({
         name: category,
         count: category === 'All' ? entries.length : entries.filter((entry) => entry.category === category).length,
       })).filter((category) => category.name === 'All' || category.count > 0),

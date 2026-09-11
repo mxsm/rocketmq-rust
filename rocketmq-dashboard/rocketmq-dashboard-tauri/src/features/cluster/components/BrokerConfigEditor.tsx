@@ -1,107 +1,104 @@
-import { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
-import { ClusterService } from '../../../services/cluster.service';
-import { dashboardErrorMessage } from '../../../services/invoke';
-import type { BrokerConfigUpdateResult, ClusterBrokerCardItem } from '../types/cluster.types';
-import { changedBrokerConfig } from '../config';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { ConnectionStore } from '../../../services/connection.store';
+import { Button } from '../../../components/ui/LegacyButton';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../../components/ui/dialog';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '../../../components/ui/tabs';
+import { PageState } from '../../../components/layout/PageState';
+import { BrokerEntries } from './BrokerEntries';
+import { createBrokerConfigController } from '../brokerConfigController';
+import type { BrokerIdentity } from '../brokerIdentity';
 
-export function BrokerConfigEditor({ broker, onClose, onReadBack }: {
-    broker: ClusterBrokerCardItem; onClose: () => void; onReadBack: (entries: Record<string, string>) => void;
+export function BrokerConfigEditor({ broker, revision, environmentId, onClose, onReturnFocus }: {
+    broker: BrokerIdentity; revision: number; environmentId: string | null;
+    onClose: () => void; onReturnFocus: () => void;
 }) {
-    const [original, setOriginal] = useState<Record<string, string> | null>(null);
-    const [text, setText] = useState('');
-    const [error, setError] = useState('');
-    const [busy, setBusy] = useState(false);
-    const [pending, setPending] = useState<Record<string, string> | null>(null);
-    const [result, setResult] = useState<BrokerConfigUpdateResult | null>(null);
-    const [writeUnknown, setWriteUnknown] = useState(false);
-    const generation = useRef(0);
-
-    const refresh = async () => {
-        const current = ++generation.current;
-        setBusy(true);
-        setError('');
-        setPending(null);
-        try {
-            const config = await ClusterService.getClusterBrokerConfig({ brokerAddr: broker.address });
-            if (current !== generation.current) return;
-            setOriginal(config.entries);
-            setText(JSON.stringify(config.entries, null, 2));
-            setWriteUnknown(false);
-            onReadBack(config.entries);
-        } catch (error) {
-            if (current === generation.current) setError(dashboardErrorMessage(error, 'Unable to read current Broker configuration.'));
-        } finally { if (current === generation.current) setBusy(false); }
-    };
+    const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
+    const controller = useMemo(() => createBrokerConfigController({ broker,
+        isCurrent: () => {
+            const current = ConnectionStore.getSnapshot();
+            return current?.revision === revision && current.environmentId === environmentId;
+        } }), [broker, revision, environmentId]);
+    const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+    const [mode, setMode] = useState('fields');
+    const bodyRef = useRef<HTMLDivElement>(null);
+    const { original, text, pending, receipt, operation, error, requiresRead } = state;
+    const busy = operation !== 'idle';
+    const contextChanged = state.contextChanged || settings?.revision !== revision || settings.environmentId !== environmentId;
+    const disabled = busy || contextChanged || requiresRead || !original;
     useEffect(() => {
-        void refresh();
-        return () => { generation.current++; };
-    }, [broker.address]);
-
-    const review = () => {
-        if (!original || busy || writeUnknown) return;
+        controller.start();
+        void controller.refresh();
+        return controller.stop;
+    }, [controller]);
+    useEffect(() => controller.observeContext(), [controller, settings?.revision, settings?.environmentId]);
+    useEffect(() => {
+        if (error || receipt || pending || contextChanged) bodyRef.current?.scrollTo({ top: 0 });
+    }, [error, receipt, pending, contextChanged]);
+    const draft = useMemo<Record<string, string> | null>(() => {
         try {
-            const patch = changedBrokerConfig(text, original);
-            if (!Object.keys(patch).length) throw new Error('No configuration values have changed.');
-            setPending(patch);
-            setError('');
-        } catch (error) { setError(error instanceof Error ? error.message : 'Invalid configuration JSON.'); }
-    };
-    const submit = async () => {
-        if (!pending || busy) return;
-        const current = ++generation.current;
-        setBusy(true);
-        setError('');
-        setResult(null);
-        try {
-            const receipt = await ClusterService.updateBrokerConfig({ clusterName: broker.clusterName,
-                brokerName: broker.brokerName, brokerId: broker.brokerId, brokerAddr: broker.address, entries: pending });
-            if (current !== generation.current) return;
-            setResult(receipt);
-            setPending(null);
-            if (receipt.entries) {
-                setOriginal(receipt.entries);
-                setText(JSON.stringify(receipt.entries, null, 2));
-                onReadBack(receipt.entries);
-            } else setWriteUnknown(true);
-        } catch (error) {
-            if (current !== generation.current) return;
-            setPending(null);
-            setWriteUnknown(true);
-            setError(dashboardErrorMessage(error, 'Write result was not confirmed. Refresh the Broker before another change.'));
-        } finally { if (current === generation.current) setBusy(false); }
-    };
-    return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-5">
-        <section role="dialog" aria-modal="true" aria-labelledby="broker-config-editor-title"
-            className="flex max-h-[90vh] w-full max-w-4xl flex-col gap-4 overflow-auto rounded-xl bg-white p-6 shadow-xl dark:bg-gray-900 dark:text-gray-100">
-            <header className="flex items-start justify-between gap-4"><div>
-                <h2 id="broker-config-editor-title" className="text-xl font-semibold">Edit Broker configuration</h2>
-                <p className="font-mono text-sm">{broker.clusterName} / {broker.brokerName} / {broker.brokerId} · {broker.address}</p>
-            </div><button aria-label="Close editor" onClick={onClose}><X /></button></header>
-            {error && <p role="alert" className="text-red-600 dark:text-red-400">{error}</p>}
-            {result && <div role="status" className="rounded border p-3 text-sm">
-                <strong>{result.written ? 'Broker acknowledged the write.' : 'Write was not confirmed.'}</strong>
-                <p>{result.readBack === 'confirmed' ? 'Read-back matches every submitted value.' : result.readBack === 'different'
-                    ? 'Read-back differs from the submitted values. Review the current configuration below.'
-                    : 'Read-back failed. The acknowledged write remains applied. Refresh before another change.'}</p>
-                <p>Submitted keys: {result.changedKeys.join(', ')}</p>
-            </div>}
-            <label className="flex min-h-0 flex-1 flex-col gap-2 text-sm">Configuration JSON · string values
-                <textarea aria-label="Broker configuration JSON" value={text} disabled={busy || !original || Boolean(pending) || writeUnknown}
-                    onChange={event => { setText(event.target.value); setResult(null); }} spellCheck={false}
-                    className="min-h-64 w-full rounded border bg-transparent p-3 font-mono text-sm" />
-            </label>
-            {pending && <section aria-label="Confirm Broker changes" className="rounded border border-amber-400 p-4 text-sm">
-                <h3 className="font-semibold">Confirm changes on {broker.brokerName} [{broker.brokerId}] at {broker.address}</h3>
-                <ul className="my-3 max-h-40 overflow-auto">{Object.keys(pending).map(key => <li key={key} className="font-mono">{key}: {original?.[key] ?? '(not set)'} → {pending[key]}</li>)}</ul>
-                <p>Only these keys will be submitted.</p>
-                <div className="mt-3 flex gap-3"><button disabled={busy} onClick={() => setPending(null)}>Back to editing</button>
-                    <button disabled={busy} onClick={() => void submit()} className="rounded bg-blue-600 px-4 py-2 text-white">{busy ? 'Applying…' : 'Confirm and apply'}</button></div>
-            </section>}
-            <footer className="flex justify-end gap-3 text-sm">
-                <button disabled={busy} onClick={() => void refresh()} className="rounded border px-4 py-2">Refresh current configuration</button>
-                <button disabled={busy || !original || Boolean(pending) || writeUnknown} onClick={review} className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50">Review changes</button>
-            </footer>
-        </section>
-    </div>;
+            const parsed: unknown = JSON.parse(text);
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+                && Object.values(parsed).every(value => typeof value === 'string') ? parsed as Record<string, string> : null;
+        } catch { return null; }
+    }, [text]);
+    const readBackMessage = receipt?.readBack === 'confirmed'
+        ? 'Readback matches every submitted value.'
+        : receipt?.readBack === 'different' ? 'Readback differs. Review the returned values before another change.'
+            : 'Readback was unavailable. An acknowledged write is not retried. Read the current configuration before another change.';
+    return <Dialog open onOpenChange={open => { if (!open && !busy) onClose(); }}>
+        <DialogContent className="ops-broker-editor" showCloseButton={!busy}
+            onCloseAutoFocus={event => { event.preventDefault(); onReturnFocus(); }}
+            onEscapeKeyDown={event => { if (busy) event.preventDefault(); }}
+            onInteractOutside={event => { if (busy) event.preventDefault(); }}>
+            <DialogHeader><DialogTitle>Edit Broker configuration</DialogTitle>
+                <DialogDescription>Only changed values are submitted to the selected Broker.</DialogDescription>
+            </DialogHeader>
+            <div className="ops-broker-editor-target"><strong>{broker.brokerName} [{broker.brokerId}]</strong>
+                <span>{broker.clusterName} · {broker.address}</span><small>Environment {environmentId ?? 'Not configured'} · Connection revision {revision}</small></div>
+            <form className="ops-broker-editor-form" onSubmit={event => {
+                event.preventDefault();
+                event.currentTarget.closest<HTMLElement>('[role="dialog"]')?.focus();
+                if (pending) void controller.submit(); else controller.review();
+            }}>
+                <div className="ops-broker-editor-body" ref={bodyRef}>
+                    {contextChanged && <PageState kind="stale" title="Connection context changed"
+                        description="This dialog retains the original Broker and operation result. Close it and select a Broker in the current environment before editing again." />}
+                    {error && <PageState kind="error" title="Configuration operation could not complete" description={error} />}
+                    {receipt && <section className="ops-broker-receipt" aria-label="Broker configuration receipt" role="status">
+                        <strong>{receipt.written ? 'Broker acknowledged the write.' : 'Write was not confirmed.'}</strong>
+                        <p>{readBackMessage}</p><p>Submitted keys: <code>{receipt.changedKeys.join(', ')}</code></p>
+                    </section>}
+                    {operation === 'reading' && <PageState kind="loading" title="Reading current Broker configuration" />}
+                    {pending ? <section aria-label="Confirm Broker changes" className="ops-broker-review">
+                        <h3>Review changes for {broker.brokerName}</h3>
+                        <p>Only the following keys will be submitted to {broker.address}.</p>
+                        <div className="ops-cluster-table-scroll" role="region" aria-label="Configuration changes" tabIndex={0}>
+                            <table className="ops-broker-diff"><thead><tr><th scope="col">Key</th><th scope="col">Before</th><th scope="col">After</th></tr></thead>
+                                <tbody>{Object.entries(pending).map(([key, value]) => <tr key={key}><th scope="row">{key}</th>
+                                    <td><code>{original?.[key] ?? '(not set)'}</code></td><td><code>{value}</code></td></tr>)}</tbody>
+                            </table>
+                        </div>
+                    </section> : original && <Tabs value={mode} onValueChange={setMode}>
+                        <TabsList aria-label="Configuration editor mode"><TabsTrigger value="fields">Fields</TabsTrigger><TabsTrigger value="json">JSON</TabsTrigger></TabsList>
+                        <TabsContent value="fields">{draft ? <BrokerEntries entries={draft} disabled={disabled}
+                            onChange={(key, value) => controller.setText(JSON.stringify({ ...draft, [key]: value }, null, 2))} />
+                            : <PageState kind="error" title="Field view needs a JSON object of string values" description="Correct the JSON in the JSON tab before continuing." />}</TabsContent>
+                        <TabsContent value="json"><label className="ops-broker-json"><span>Configuration JSON · string values</span>
+                            <textarea aria-label="Broker configuration JSON" value={text} readOnly={disabled} spellCheck={false}
+                                onChange={event => controller.setText(event.target.value)} /></label>
+                            <p className="ops-cluster-muted">Add properties through JSON. Removing existing keys is not supported.</p>
+                        </TabsContent>
+                    </Tabs>}
+                </div>
+                <DialogFooter>
+                    <Button variant="outline" disabled={busy} onClick={onClose}>Close</Button>
+                    {!pending && <Button variant="outline" disabled={busy || contextChanged} onClick={() => void controller.refresh()}>
+                        {!requiresRead && original && text !== JSON.stringify(original, null, 2) ? 'Reload and discard draft' : 'Read current configuration'}</Button>}
+                    {pending ? <><Button variant="outline" disabled={busy || contextChanged} onClick={controller.editAgain}>Back to editing</Button>
+                        <Button type="submit" disabled={disabled}>{operation === 'writing' ? 'Applying…' : 'Confirm and apply'}</Button></>
+                        : <Button type="submit" disabled={disabled}>Review changes</Button>}
+                </DialogFooter>
+            </form>
+        </DialogContent>
+    </Dialog>;
 }
