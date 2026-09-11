@@ -1,110 +1,22 @@
-import { useCallback, useEffect, useState } from 'react';
-import { ProxyService } from '../../../services/proxy.service';
-import { dashboardErrorMessage } from '../../../services/invoke';
-import type { ProxyHomePageInfo } from '../types/proxy.types';
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { ConnectionStore } from '../../../services/connection.store';
+import { createProxyController } from '../proxyController';
 
 export const useProxyCatalog = () => {
-    const [snapshot, setSnapshot] = useState<ProxyHomePageInfo | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [loadError, setLoadError] = useState('');
-    const [pendingAction, setPendingAction] = useState<string | null>(null);
-    const [newAddress, setNewAddress] = useState('');
-
-    const loadHomePage = useCallback(async () => {
-        try {
-            const nextSnapshot = await ProxyService.getHomePageInfo();
-            setSnapshot(nextSnapshot);
-            setLoadError('');
-            return nextSnapshot;
-        } catch (error) {
-            const errorMessage = dashboardErrorMessage(error, 'Proxy operation failed');
-            setLoadError(errorMessage);
-            throw error;
-        }
-    }, []);
-
+    const controller = useMemo(createProxyController, []);
+    const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+    const shared = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
     useEffect(() => {
-        let isMounted = true;
-
-        const loadInitialState = async () => {
-            try {
-                await loadHomePage();
-            } catch (error) {
-                if (isMounted) {
-                    setLoadError(dashboardErrorMessage(error, 'Proxy operation failed'));
-                }
-            } finally {
-                if (isMounted) {
-                    setIsLoading(false);
-                }
-            }
-        };
-
-        void loadInitialState();
-
-        return () => {
-            isMounted = false;
-        };
-    }, [loadHomePage]);
-
-    const addProxy = async () => {
-        const address = newAddress.trim();
-        if (!address) {
-            throw new Error('Please enter a valid Proxy address');
-        }
-
-        setPendingAction('add');
-
-        try {
-            const result = await ProxyService.addProxyAddr(address, snapshot?.settings.revision ?? -1);
-            setSnapshot({ ...result.settings.proxy, settings: result.settings });
-            setNewAddress('');
-            return result.message;
-        } catch (error) {
-            throw error;
-        } finally {
-            setPendingAction(null);
-        }
-    };
-
-    const switchProxy = async (address: string) => {
-        setPendingAction(`switch:${address}`);
-
-        try {
-            const result = await ProxyService.switchProxyAddr(address, snapshot?.settings.revision ?? -1);
-            setSnapshot({ ...result.settings.proxy, settings: result.settings });
-            return result.message;
-        } catch (error) {
-            throw error;
-        } finally {
-            setPendingAction(null);
-        }
-    };
-
-    const deleteProxy = async (address: string) => {
-        setPendingAction(`delete:${address}`);
-
-        try {
-            const result = await ProxyService.deleteProxyAddr(address, snapshot?.settings.revision ?? -1);
-            setSnapshot({ ...result.settings.proxy, settings: result.settings });
-            return result.message;
-        } catch (error) {
-            throw error;
-        } finally {
-            setPendingAction(null);
-        }
-    };
-
-    return {
-        snapshot,
-        isLoading,
-        loadError,
-        pendingAction,
-        newAddress,
-        setNewAddress,
-        loadHomePage,
-        addProxy,
-        switchProxy,
-        deleteProxy,
-    };
+        controller.start();
+        void controller.refresh();
+        const interval = window.setInterval(() => { void controller.refresh(); }, 5_000);
+        return () => { window.clearInterval(interval); controller.stop(); };
+    }, [controller]);
+    useEffect(() => {
+        controller.observeRevision(shared?.revision);
+    }, [controller, shared?.revision, state.settings?.revision, state.pendingChange]);
+    const refresh = useCallback(() => { void controller.refresh(true); }, [controller]);
+    const externalChange = Boolean(shared && state.settings && shared.revision > state.settings.revision && !state.pendingChange);
+    return { ...state, needsReview: state.needsReview || externalChange, refresh,
+        submit: controller.submit, dismissChangeError: controller.dismissChangeError };
 };

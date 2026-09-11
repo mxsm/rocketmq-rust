@@ -67,7 +67,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       case 'NameServer':
         return 'NameServer';
       case 'Proxy':
-        return 'Proxy Management';
+        return 'Proxy';
       case 'Dashboard':
         return 'System Dashboard';
       case 'Cluster':

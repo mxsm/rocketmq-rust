@@ -250,7 +250,7 @@ const ConsumerCatalog = ({ scope, proxyAddress, changeMode }: { scope: ConsumerQ
           <span>Scope</span>
           <div className="consumer-scope-pills" aria-label="Consumer catalog filter scope">
             <b>Local filters</b>
-            <b>Proxy source</b>
+            <b>{enableProxy ? 'Proxy source' : 'NameServer source'}</b>
           </div>
         </div>
 
@@ -283,7 +283,7 @@ const ConsumerCatalog = ({ scope, proxyAddress, changeMode }: { scope: ConsumerQ
           </div>
 
           <div className="consumer-proxy-control">
-            <span>Proxy</span>
+            <span>{enableProxy ? 'Proxy' : 'Saved Proxy'}</span>
             <span>{proxyAddress ?? 'Not configured'}</span>
             <button type="button" className="underline" onClick={() => setActiveTab('Proxy')}>Configure</button>
           </div>
@@ -291,6 +291,7 @@ const ConsumerCatalog = ({ scope, proxyAddress, changeMode }: { scope: ConsumerQ
           <button
             type="button"
             className={`consumer-proxy-toggle ${enableProxy ? 'is-on' : ''}`}
+            aria-pressed={enableProxy}
             disabled={!proxyAddress && !enableProxy}
             onClick={() => changeMode(enableProxy ? 'name_server' : 'proxy')}
           >
