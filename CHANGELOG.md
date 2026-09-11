@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **test(model):** Add direct hex codec boundary coverage ([#10450](https://github.com/mxsm/rocketmq-rust/issues/10450)).
 - **test(remoting):** Add comprehensive test coverage for `QueryMessageResponseHeader` including integration with RemotingCommand, boundary checks, and error handling
 - **feat(tools):** Add `broker` command group with `GetBrokerConfigSubCommand` for querying broker configuration by broker address or cluster, with optional `--keyPattern` regex filtering
 - **feat(tools):** Add `CleanExpiredCQSubCommand` under broker commands with broker/cluster/topic target scan, dry-run preview, and cleanup summary reporting
