@@ -32,7 +32,8 @@
 .desktop-refresh:hover { background: var(--ops-primary-hover); }
 .desktop-refresh:disabled { opacity: .6; cursor: default; }
 .desktop-content { flex: 1; min-height: 0; overflow: auto; padding: 24px; }
-.desktop-page-heading { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 24px; }
+.desktop-page-heading { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; margin-bottom: 24px; }
+.desktop-page-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; align-self: center; }
 .desktop-page-heading > div { min-width: 0; }
 .desktop-page-heading h1 { font-size: 28px; line-height: 1.2; font-weight: 650; letter-spacing: -.5px; margin: 0 0 6px; }
 .desktop-page-heading p { color: var(--ops-muted); font-size: 14px; margin: 0; }

@@ -1,0 +1,51 @@
+.ops-nameserver { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+.ops-nameserver-current { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 24px; padding: 18px 22px; border: 1px solid var(--ops-border); border-radius: 12px; background: var(--ops-panel); }
+.ops-nameserver-current > div { min-width: 0; }
+.ops-nameserver-current > div > span { display: block; color: var(--ops-muted); font-size: 13px; margin-bottom: 8px; }
+.ops-nameserver-current-value { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.ops-nameserver-current-value > strong { font-size: 27px; line-height: 1.2; font-weight: 650; letter-spacing: -.4px; overflow-wrap: anywhere; }
+.ops-nameserver .ops-status-badge { font-size: 13px; padding: 4px 10px; }
+.ops-nameserver-revision { border-left: 1px solid var(--ops-border); padding-left: 24px; }
+.ops-nameserver-revision > strong { font-size: 20px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.ops-nameserver .ops-page-section { padding: 18px; }
+.ops-nameserver .ops-section-header { margin-bottom: 14px; }
+.ops-nameserver-table-scroll { position: relative; overflow: auto; border: 1px solid var(--ops-border); border-radius: 8px; }
+.ops-nameserver-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 14px; }
+.ops-nameserver-table th, .ops-nameserver-table td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--ops-border); vertical-align: middle; }
+.ops-nameserver-table thead th { background: var(--ops-panel-strong); color: var(--ops-muted); font-weight: 400; }
+.ops-nameserver-table thead th:first-child { width: 34%; }
+.ops-nameserver-table thead th:nth-child(2) { width: 17%; }
+.ops-nameserver-table thead th:nth-child(3) { width: 24%; }
+.ops-nameserver-table tbody th { font-weight: 400; }
+.ops-nameserver-table tbody tr:last-child > * { border-bottom: 0; }
+.ops-nameserver-address { overflow-wrap: anywhere; font-family: var(--ops-font-mono); font-size: 13px; }
+.ops-nameserver-current-value > strong, .ops-nameserver-table .ops-nameserver-address { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 100%; }
+.ops-nameserver-address-details { margin-top: 8px; font-size: 12px; }
+.ops-nameserver-address-details summary { color: var(--ops-accent-strong); cursor: pointer; }
+.ops-nameserver-address-details code { display: block; margin-top: 8px; max-height: 120px; overflow: auto; overflow-wrap: anywhere; font-family: var(--ops-font-mono); font-size: 12px; font-weight: 400; line-height: 1.5; }
+.ops-nameserver-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ops-nameserver-row-actions > button:first-child { color: var(--ops-accent-strong); border-color: var(--ops-accent-strong); }
+.ops-nameserver-row-actions .ops-nameserver-delete { color: var(--ops-danger); }
+.ops-nameserver-no-action { color: var(--ops-muted); }
+.ops-nameserver-probe-note { color: var(--ops-muted); font-size: 12px; line-height: 1.5; margin: 12px 0 0; }
+.ops-nameserver-settings { border: 1px solid var(--ops-border); border-radius: 8px; }
+.ops-nameserver-setting { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px; }
+.ops-nameserver-setting + .ops-nameserver-setting { border-top: 1px solid var(--ops-border); }
+.ops-nameserver-setting > div { min-width: 0; }
+.ops-nameserver-setting strong { font-size: 14px; font-weight: 600; }
+.ops-nameserver-setting p { color: var(--ops-muted); font-size: 13px; line-height: 1.5; margin: 4px 0 0; }
+.ops-nameserver-setting > button, .ops-nameserver-setting > [data-slot="badge"] { flex-shrink: 0; }
+.ops-nameserver-note, .ops-nameserver-receipt { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border: 1px solid var(--ops-border); border-radius: 10px; background: var(--ops-panel); font-size: 13px; color: var(--ops-muted); }
+.ops-nameserver-note > svg, .ops-nameserver-receipt > svg { width: 20px; height: 20px; flex-shrink: 0; color: var(--ops-accent-strong); }
+.ops-nameserver-receipt > svg { color: var(--ops-success); }
+.ops-nameserver-receipt > span { overflow-wrap: anywhere; color: var(--ops-text); }
+.ops-nameserver-receipt small { color: var(--ops-muted); }
+.ops-nameserver-form { display: grid; gap: 16px; min-width: 0; }
+.ops-nameserver-form-revision, .ops-nameserver-pending { color: var(--ops-muted); font-size: 13px; }
+.ops-nameserver-error-actions { display: flex; gap: 8px; margin-top: 8px; }
+@media (max-width: 1050px) {
+    .ops-nameserver-table { min-width: 690px; }
+    .ops-nameserver-current { grid-template-columns: minmax(0, 1fr) auto; gap: 16px; padding: 18px; }
+    .ops-nameserver-current-value > strong { font-size: 23px; }
+    .ops-nameserver-revision { padding-left: 16px; }
+}

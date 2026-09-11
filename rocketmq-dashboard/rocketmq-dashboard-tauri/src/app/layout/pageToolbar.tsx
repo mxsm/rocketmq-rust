@@ -4,6 +4,7 @@ export interface PageToolbarState {
     refresh: () => void;
     pending: boolean;
     refreshedAt?: number | null;
+    actions?: ReactNode;
 }
 
 export function createPageToolbarStore() {
@@ -41,9 +42,14 @@ export function PageToolbarProvider({ scope, children }: { scope: string; childr
 }
 
 /** Register the current page's existing read action, never an unrelated global reload. */
-export function usePageRefresh({ refresh, pending, refreshedAt }: PageToolbarState) {
+export function usePageRefresh({ refresh, pending, refreshedAt, actions }: PageToolbarState) {
     const store = useContext(ToolbarContext);
-    useLayoutEffect(() => store?.register({ refresh, pending, refreshedAt }), [store, refresh, pending, refreshedAt]);
+    useLayoutEffect(() => store?.register({ refresh, pending, refreshedAt, actions }), [store, refresh, pending, refreshedAt, actions]);
+}
+
+export function PageHeadingActions() {
+    const toolbar = usePageToolbar();
+    return toolbar?.actions ? <div className="desktop-page-actions">{toolbar.actions}</div> : null;
 }
 
 export function usePageToolbar() {
