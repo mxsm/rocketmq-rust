@@ -54,7 +54,7 @@ zstd = "0.14"
 criterion = { version = "0.8", features = ["html_reports"] }
 serde_json.workspace = true
 sysinfo.workspace = true
-trybuild = "=1.0.120"
+trybuild = "=1.0.121"
 
 [[bench]]
 name = "request_header_codec"
