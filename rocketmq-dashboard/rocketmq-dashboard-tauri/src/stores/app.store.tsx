@@ -73,7 +73,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       case 'Cluster':
         return 'Cluster';
       case 'Topic':
-        return 'Topic Management';
+        return 'Topics';
       case 'Consumer':
         return 'Consumer Management';
       case 'Producer':
