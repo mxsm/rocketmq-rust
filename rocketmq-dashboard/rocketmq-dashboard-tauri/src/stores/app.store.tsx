@@ -65,7 +65,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const getPageTitle = (tab: Tab) => {
     switch (tab) {
       case 'NameServer':
-        return 'NameServer Management';
+        return 'NameServer';
       case 'Proxy':
         return 'Proxy Management';
       case 'Dashboard':

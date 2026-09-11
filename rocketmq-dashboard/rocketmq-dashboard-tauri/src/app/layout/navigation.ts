@@ -27,7 +27,7 @@ export const navigationSections = [
 
 export const pageDescriptions: Record<Tab, string> = {
     Dashboard: 'Operational overview of your RocketMQ cluster',
-    NameServer: 'Connection endpoints and client settings',
+    NameServer: 'Manage routing endpoints and connection settings',
     Proxy: 'Proxy endpoints and query configuration',
     Cluster: 'Brokers, runtime status, and configuration',
     Topic: 'Manage topics, queues, and message operations',

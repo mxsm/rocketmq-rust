@@ -28,6 +28,27 @@ the shared revision changes. A completed write receipt is preserved even if the
 user changes views. Configuration pages retain drafts and require review when a
 poll detects a newer revision.
 
+## NameServer page observations and changes
+
+The current endpoint is a configuration selection, separate from reachability.
+The page displays the latest probe result and the local time the results were
+received, not a server heartbeat timestamp. A failed probe can indicate transport
+or authentication failure. Missing evidence is shown as not probed; a failed
+refresh keeps the previous evidence explicitly marked as previous.
+
+Reads are coalesced and polling is suspended during writes or revision review.
+A successful mutation immediately applies its returned settings and retains its
+receipt even if the following probe fails. Previous probes are discarded whenever
+the configuration revision changes. Retired page requests cannot update the
+current view.
+
+Conflicts retain the address draft or failed change. Reloading settings does not
+resubmit it. The operator reviews the current revision before explicitly trying
+again; endpoint additions and deletions reopen their forms for review. The page
+requires selecting another endpoint before deleting the current one, even though
+the backend also supports removing a current endpoint with fallback selection.
+VIP changes the Broker request port, independently of the TLS option.
+
 ## Atomic NameServer replacement (A03)
 
 The backend command and typed frontend service are implemented. A bulk editor is

@@ -7,7 +7,7 @@ import { ConnectionStore } from '../../services/connection.store';
 import { SignOutConfirmDialog, useAuth } from '../../features/auth';
 import { AppSidebar } from './AppSidebar';
 import { EnvironmentToolbar } from './EnvironmentToolbar';
-import { PageToolbarProvider } from './pageToolbar';
+import { PageHeadingActions, PageToolbarProvider } from './pageToolbar';
 import { pageDescriptions } from './navigation';
 
 export function MainLayout({ children }: { children: ReactNode }) {
@@ -41,6 +41,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
                         <div><h1>{pageTitle}</h1><p>{pageDescriptions[activeTab]}</p>
                             {targetName && <p className="desktop-target" title={targetName}>{target?.kind}: {targetName}</p>}
                         </div>
+                        <PageHeadingActions />
                     </div>
                     {children}
                 </main>
