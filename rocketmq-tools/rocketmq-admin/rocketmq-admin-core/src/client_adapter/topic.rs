@@ -692,6 +692,30 @@ mod query;
 
 use query::*;
 
+impl crate::core::topic::TopicSkipMutationAdmin for AdminSession {
+    fn skip_accumulated<'a>(
+        &'a mut self,
+        request: &'a crate::core::topic::SkipTopicAccumulatedRequest,
+    ) -> AdminFuture<'a, TopicMutationOutcome> {
+        Box::pin(async move {
+            self.ensure_open()?;
+            let affected_queues = rocketmq_client_rust::MQAdminMutationExt::skip_accumulated_message(
+                &self.inner,
+                request.cluster_name().map(CheetahString::from),
+                CheetahString::from(request.topic()),
+                CheetahString::from(request.consumer_group()),
+                request.force(),
+            )
+            .await
+            .map_err(|error| backend_error("skip_accumulated_message", error))?;
+            Ok(TopicMutationOutcome {
+                message: "Accumulated messages were skipped to the latest offsets.".into(),
+                target_count: affected_queues,
+            })
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::build_order_conf;
@@ -751,29 +775,5 @@ mod tests {
         assert_eq!(build_order_conf(&brokers, 8), "broker-a:8;broker-b:8");
         assert_eq!(normalize_message_type(None), "NORMAL");
         assert_eq!(normalize_message_type(Some("transaction")), "TRANSACTION");
-    }
-}
-
-impl crate::core::topic::TopicSkipMutationAdmin for AdminSession {
-    fn skip_accumulated<'a>(
-        &'a mut self,
-        request: &'a crate::core::topic::SkipTopicAccumulatedRequest,
-    ) -> AdminFuture<'a, TopicMutationOutcome> {
-        Box::pin(async move {
-            self.ensure_open()?;
-            let affected_queues = rocketmq_client_rust::MQAdminMutationExt::skip_accumulated_message(
-                &self.inner,
-                request.cluster_name().map(CheetahString::from),
-                CheetahString::from(request.topic()),
-                CheetahString::from(request.consumer_group()),
-                request.force(),
-            )
-            .await
-            .map_err(|error| backend_error("skip_accumulated_message", error))?;
-            Ok(TopicMutationOutcome {
-                message: "Accumulated messages were skipped to the latest offsets.".into(),
-                target_count: affected_queues,
-            })
-        })
     }
 }
