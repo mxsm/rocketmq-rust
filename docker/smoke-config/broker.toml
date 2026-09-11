@@ -3,7 +3,7 @@
 
 [broker]
 listenPort = 10911
-brokerIp1 = "127.0.0.1"
+brokerIp1 = "rocketmq-broker"
 storePathRootDir = "/var/lib/rocketmq/broker"
 namesrvAddr = "rocketmq-namesrv:9876"
 autoCreateTopicEnable = false
@@ -14,7 +14,7 @@ brokerClusterName = "ContainerSmoke"
 brokerId = 0
 
 [broker.brokerServerConfig]
-bindAddress = "127.0.0.1"
+bindAddress = "0.0.0.0"
 
 [store]
 storePathRootDir = "/var/lib/rocketmq/broker"

@@ -72,6 +72,34 @@ function Assert-ServiceImageBinaries {
     }
 }
 
+function Initialize-HelperSmokeConfig {
+    param(
+        [string]$SourcePath,
+        [string]$DestinationPath,
+        [object]$SmokeNetwork
+    )
+
+    New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
+    Copy-Item -Path (Join-Path $SourcePath "*") -Destination $DestinationPath -Force
+    $networkNameServerAddress = "$($SmokeNetwork.namesrv_alias):$($SmokeNetwork.namesrv_port)"
+    $loopbackNameServerAddress = "127.0.0.1:$($SmokeNetwork.namesrv_port)"
+    foreach ($configName in @("broker.toml", "proxy.toml", "mcp.toml")) {
+        $configPath = Join-Path $DestinationPath $configName
+        $configText = (Get-Content -Raw -LiteralPath $configPath).Replace(
+            $networkNameServerAddress,
+            $loopbackNameServerAddress
+        )
+        if ($configName -eq "broker.toml") {
+            # Helpers share a network namespace and use the loopback-only profile.
+            $configText = $configText.Replace(
+                'brokerIp1 = "' + $SmokeNetwork.broker_alias + '"',
+                'brokerIp1 = "127.0.0.1"'
+            ).Replace('bindAddress = "0.0.0.0"', 'bindAddress = "127.0.0.1"')
+        }
+        [System.IO.File]::WriteAllText($configPath, $configText, [System.Text.UTF8Encoding]::new($false))
+    }
+}
+
 function Start-ServiceSmokeContainer {
     param(
         [Parameter(Mandatory = $true)]
@@ -210,18 +238,8 @@ try {
     $env:COSIGN_PASSWORD = [Convert]::ToBase64String($randomBytes)
     Invoke-Checked cosign generate-key-pair --output-key-prefix $keyPrefix
 
-    New-Item -ItemType Directory -Force -Path $helperSmokeConfigPath | Out-Null
-    Copy-Item -Path (Join-Path $smokeConfigPath "*") -Destination $helperSmokeConfigPath -Force
-    $networkNameServerAddress = "$($policy.smoke_network.namesrv_alias):$($policy.smoke_network.namesrv_port)"
-    $loopbackNameServerAddress = "127.0.0.1:$($policy.smoke_network.namesrv_port)"
-    foreach ($configName in @("broker.toml", "proxy.toml", "mcp.toml")) {
-        $configPath = Join-Path $helperSmokeConfigPath $configName
-        $configText = (Get-Content -Raw -LiteralPath $configPath).Replace(
-            $networkNameServerAddress,
-            $loopbackNameServerAddress
-        )
-        [System.IO.File]::WriteAllText($configPath, $configText, [System.Text.UTF8Encoding]::new($false))
-    }
+    Initialize-HelperSmokeConfig -SourcePath $smokeConfigPath -DestinationPath $helperSmokeConfigPath `
+        -SmokeNetwork $policy.smoke_network
 
     $nameServerImageRef = "rocketmq-rust/namesrv:verification"
     Invoke-Checked docker buildx build --load --file $dockerfilePath --target namesrv --tag $nameServerImageRef --build-arg "SOURCE_REVISION=$sourceCommit" --build-arg "SOURCE_VERSION=$sourceVersion" $root
@@ -480,14 +498,12 @@ try {
     Invoke-Checked docker network create $smokeNetwork
     $smokeNetworkCreated = $true
 
-    $namesrvAlias = $policy.smoke_network.namesrv_alias
+    $dependencyAliases = @{
+        namesrv = $policy.smoke_network.namesrv_alias
+        broker = $policy.smoke_network.broker_alias
+    }
     foreach ($dependencyServiceName in @($policy.smoke_network.dependency_chain)) {
-        $networkAlias = if ($dependencyServiceName -eq "namesrv") {
-            $namesrvAlias
-        }
-        else {
-            ""
-        }
+        $networkAlias = $dependencyAliases[$dependencyServiceName]
         $containerId = Start-ServiceSmokeContainer `
             -ImageRef "rocketmq-rust/$($dependencyServiceName):verification" `
             -NetworkName $smokeNetwork `

@@ -7,6 +7,7 @@
   "smoke_network": {
     "network_prefix": "rocketmq-service-smoke",
     "namesrv_alias": "rocketmq-namesrv",
+    "broker_alias": "rocketmq-broker",
     "namesrv_port": 9876,
     "dependency_chain": ["namesrv", "broker"],
     "dependent_services": ["proxy", "mcp"]
