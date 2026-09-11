@@ -18,6 +18,28 @@ Consumer configuration reads still take a separate direct Broker address. The
 DLQ group picker explicitly uses NameServer discovery. Neither treats a direct
 Broker target as a Proxy scope.
 
+## Proxy settings workflow
+
+The Proxy page separates the current endpoint, the saved endpoint list, and the
+Consumer query mode. Choosing **Use** changes the saved selection without
+changing the mode. **Open Consumers** starts a new catalog entry in the selected
+mode, using the current endpoint identity for Proxy queries. The Consumer page
+labels the actual source; a saved Proxy address alone does not imply Proxy mode.
+
+Proxy refresh reloads connection configuration, not endpoint health. The page
+coalesces configuration reads and rejects stale responses. An external revision
+or a configuration conflict blocks further changes until the user reloads and
+reviews the current settings. Add/delete dialogs preserve the proposed target;
+reviewing settings does not automatically retry a rejected mutation. An accepted
+change keeps its revision and receipt even when the following read fails.
+
+Deleting the current Proxy uses the backend's returned selection (the first
+remaining saved endpoint, or no selection). The confirmation identifies this
+effect. Removing the last endpoint keeps the user's mode preference, disables
+Proxy queries, and offers an explicit switch to NameServer mode. It does not
+stop a Proxy process. Submission disables repeated actions and keeps the dialog
+open until the mutation resolves.
+
 Validation: `cargo test --lib consumer::` from `src-tauri`, and `npm run build`
 plus focused Consumer scope, navigation, and authenticated invocation tests from
 the app root. The development cluster's Proxy is `127.0.0.1:8080`; select it in
