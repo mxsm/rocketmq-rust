@@ -799,6 +799,91 @@ else {
                     )
                     self.assertEqual(expected, actual)
 
+    def test_service_binary_ownership_ignores_host_globs_and_fails_closed(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        self.assertIsNotNone(powershell, "PowerShell is required to validate container scripts")
+        harness = r"""
+param([string]$SourcePath, [string]$PythonPath)
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $SourcePath, [ref]$tokens, [ref]$parseErrors
+)
+if ($parseErrors.Count -ne 0) {
+    throw "failed to parse service image script: $($parseErrors[0].Message)"
+}
+foreach ($functionName in @("Invoke-Captured", "Assert-ServiceImageBinaries")) {
+    $definition = $ast.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq $functionName
+    }, $true)
+    if ($null -eq $definition) {
+        throw "missing helper: $functionName"
+    }
+    Invoke-Expression $definition.Extent.Text
+}
+# Python executes the fixture named 'run', preserving the real native argument
+# binding path (a PowerShell mock function would hide Unix wildcard expansion).
+Set-Alias -Name docker -Value $PythonPath
+Assert-ServiceImageBinaries -ServiceName broker -ImageRef test-image -ExpectedBinary rocketmq-broker-rust
+"""
+        probe = r"""
+import json
+import sys
+from pathlib import Path
+
+expected = [
+    "--rm", "--network", "none", "--entrypoint", "/usr/bin/find", "test-image",
+    "/usr/local/bin", "-maxdepth", "1", "-type", "f", "-printf", "%f\\n",
+]
+if sys.argv[1:] != expected:
+    sys.exit("unexpected container find arguments: " + repr(sys.argv[1:]))
+fixture = json.loads(Path("fixture.json").read_text(encoding="utf-8"))
+print("\n".join(fixture["binaries"]))
+sys.exit(fixture["exit_code"])
+"""
+        cases = (
+            ("owner", ["rocketmq-broker-rust"], 0, None),
+            ("unrelated", ["helper", "RocketMQ-helper", "rocketmq-broker-rust"], 0, None),
+            ("extra", ["rocketmq-broker-rust", "rocketmq-namesrv-rust"], 0, "owner boundary"),
+            ("wrong", ["rocketmq-namesrv-rust"], 0, "owner boundary"),
+            ("missing", ["helper"], 0, "owner boundary"),
+            ("empty", [], 0, "owner boundary"),
+            ("command-failure", ["rocketmq-broker-rust"], 3, "failed with exit code 3"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            # These host paths must never become arguments to the container's find.
+            for name in ("rocketmq-ai", "rocketmq-auth"):
+                (temporary / name).mkdir()
+            harness_path = temporary / "binary-ownership-harness.ps1"
+            harness_path.write_text(harness, encoding="utf-8")
+            (temporary / "run").write_text(probe, encoding="utf-8")
+            for name, binaries, exit_code, error in cases:
+                with self.subTest(case=name):
+                    (temporary / "fixture.json").write_text(
+                        json.dumps({"binaries": binaries, "exit_code": exit_code}), encoding="utf-8"
+                    )
+                    result = subprocess.run(
+                        [
+                            powershell, "-NoProfile", "-File", str(harness_path),
+                            str(ROOT / "scripts" / "service-image-contract.ps1"), sys.executable,
+                        ],
+                        cwd=temporary,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        check=False,
+                    )
+                    if error is None:
+                        self.assertEqual(0, result.returncode, result.stderr)
+                    else:
+                        self.assertNotEqual(0, result.returncode)
+                        self.assertIn(error, result.stderr)
+
     def test_native_runner_parameter_collision_is_rejected(self) -> None:
         supply_script = self.supply_script.replace("[string]$Executable", "[string]$Command", 1)
         findings = self.audit(supply_script=supply_script)
