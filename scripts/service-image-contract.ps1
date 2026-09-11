@@ -52,6 +52,26 @@ function Invoke-Captured {
     return $output
 }
 
+function Assert-ServiceImageBinaries {
+    param(
+        [string]$ServiceName,
+        [string]$ImageRef,
+        [string]$ExpectedBinary
+    )
+
+    # Splatting native arguments on Unix loses quoting and expands wildcards
+    # against the host checkout. Filter the container's filenames in PowerShell.
+    $ownedBinaries = @(
+        (Invoke-Captured docker run --rm --network none --entrypoint /usr/bin/find $ImageRef `
+            /usr/local/bin -maxdepth 1 -type f -printf '%f\n'
+        ).Split("`n", [System.StringSplitOptions]::RemoveEmptyEntries) |
+            Where-Object { $_ -clike "rocketmq-*" }
+    )
+    if ($ownedBinaries.Count -ne 1 -or $ownedBinaries[0] -ne $ExpectedBinary) {
+        throw "$ServiceName runtime image contains binaries outside its owner boundary: $($ownedBinaries -join ',')"
+    }
+}
+
 function Start-ServiceSmokeContainer {
     param(
         [Parameter(Mandatory = $true)]
@@ -274,13 +294,7 @@ try {
             }
         }
 
-        $ownedBinaries = (
-            Invoke-Captured docker run --rm --network none --entrypoint /usr/bin/find $imageRef `
-                /usr/local/bin -maxdepth 1 -type f -name "rocketmq-*" -printf '%f\n'
-        ).Split("`n", [System.StringSplitOptions]::RemoveEmptyEntries)
-        if ($ownedBinaries.Count -ne 1 -or $ownedBinaries[0] -ne $service.binary) {
-            throw "$serviceName runtime image contains binaries outside its owner boundary: $($ownedBinaries -join ',')"
-        }
+        Assert-ServiceImageBinaries -ServiceName $serviceName -ImageRef $imageRef -ExpectedBinary $service.binary
 
         $missingConfigExitCode = 0
         $previousErrorActionPreference = $ErrorActionPreference
