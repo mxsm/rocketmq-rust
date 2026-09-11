@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(model):** Return `0` for CRC32 ranges whose `offset + length` overflows instead of panicking ([#10448](https://github.com/mxsm/rocketmq-rust/issues/10448)).
 - **docs(protocol):** Add missing Apache 2.0 headers to protocol Rust sources and compile-test fixtures ([#10061](https://github.com/mxsm/rocketmq-rust/issues/10061)).
 - **docs(proxy):** Add the missing Apache 2.0 headers to proxy runtime compile-test fixtures ([#10062](https://github.com/mxsm/rocketmq-rust/issues/10062)).
 - **docs(store):** Add the missing Apache 2.0 header to the store context compile-test fixture ([#10069](https://github.com/mxsm/rocketmq-rust/issues/10069)).

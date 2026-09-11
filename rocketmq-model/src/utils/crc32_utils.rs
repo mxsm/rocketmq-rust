@@ -65,7 +65,7 @@ pub fn crc32(array: &[u8]) -> u32 {
 ///
 /// CRC32 checksum as u32 (masked with 0x7FFFFFFF)
 ///
-/// # Panics
+/// # Returns
 ///
 /// Returns 0 if offset or length are invalid (instead of panicking)
 ///
@@ -80,7 +80,7 @@ pub fn crc32(array: &[u8]) -> u32 {
 /// ```
 #[inline]
 pub fn crc32_range(array: &[u8], offset: usize, length: usize) -> u32 {
-    if array.is_empty() || offset >= array.len() || offset + length > array.len() {
+    if array.is_empty() || offset >= array.len() || length > array.len() - offset {
         return 0;
     }
 
@@ -303,6 +303,15 @@ mod tests {
         assert_eq!(crc32_range(&buf, 0, 0), 0);
     }
 
+    #[test]
+    fn test_crc32_range_overflowing_length_returns_zero() {
+        // offset in bounds, length = usize::MAX -> offset + length overflows;
+        // must return 0 instead of panicking.
+        let buf = [1, 2, 3, 4, 5];
+        assert_eq!(crc32_range(&buf, 1, usize::MAX), 0);
+        assert_eq!(crc32_range(&[1, 2], 1, usize::MAX), 0);
+    }
+
     // ========== crc32_bytes() tests ==========
 
     #[test]
@@ -365,6 +374,11 @@ mod tests {
         let buf = [1, 2, 3, 4, 5];
         assert_eq!(crc32_bytes_offset(&buf, 0, 10), 0);
         assert_eq!(crc32_bytes_offset(&buf, 10, 1), 0);
+    }
+
+    #[test]
+    fn test_crc32_bytes_offset_overflowing_length_returns_zero() {
+        assert_eq!(crc32_bytes_offset(&[1, 2], 1, usize::MAX), 0);
     }
 
     // ========== crc32_bytebuffer() tests ==========
