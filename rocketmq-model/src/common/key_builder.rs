@@ -64,7 +64,7 @@ impl KeyBuilder {
 
     pub fn parse_normal_topic_default(retry_topic: &str) -> String {
         if KeyBuilder::is_pop_retry_topic_v2(retry_topic) {
-            let result: Vec<&str> = retry_topic.split(POP_RETRY_REGEX_SEPARATOR_V2).collect();
+            let result: Vec<&str> = retry_topic.split(POP_RETRY_SEPARATOR_V2).collect();
             if result.len() == 2 {
                 return result[1].to_string();
             }
@@ -74,7 +74,7 @@ impl KeyBuilder {
 
     pub fn parse_group(retry_topic: &str) -> String {
         if KeyBuilder::is_pop_retry_topic_v2(retry_topic) {
-            let result: Vec<&str> = retry_topic.split(POP_RETRY_REGEX_SEPARATOR_V2).collect();
+            let result: Vec<&str> = retry_topic.split(POP_RETRY_SEPARATOR_V2).collect();
             if result.len() == 2 {
                 return result[0][RETRY_GROUP_TOPIC_PREFIX.len()..].to_string();
             }
@@ -112,5 +112,40 @@ impl KeyBuilder {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeyBuilder;
+
+    #[test]
+    fn pop_retry_v2_builder_round_trips() {
+        let retry = KeyBuilder::build_pop_retry_topic_v2("orders", "workers");
+        assert_eq!(retry, "%RETRY%workers+orders");
+        assert_eq!(KeyBuilder::parse_normal_topic_default(&retry), "orders");
+        assert_eq!(KeyBuilder::parse_group(&retry), "workers");
+    }
+
+    #[test]
+    fn literal_v2_topic_is_parsed() {
+        assert_eq!(
+            KeyBuilder::parse_normal_topic_default("%RETRY%workers+orders"),
+            "orders"
+        );
+        assert_eq!(KeyBuilder::parse_group("%RETRY%workers+orders"), "workers");
+    }
+
+    #[test]
+    fn non_v2_and_multiple_separator_fallbacks_are_preserved() {
+        for topic in ["orders", "%RETRY%workers_orders", "%RETRY%workers+orders+extra"] {
+            assert_eq!(KeyBuilder::parse_normal_topic_default(topic), topic);
+        }
+        assert_eq!(KeyBuilder::parse_group("%RETRY%workers"), "workers");
+        assert_eq!(KeyBuilder::parse_group("%RETRY%workers_orders"), "workers_orders");
+        assert_eq!(
+            KeyBuilder::parse_group("%RETRY%workers+orders+extra"),
+            "workers+orders+extra"
+        );
     }
 }
