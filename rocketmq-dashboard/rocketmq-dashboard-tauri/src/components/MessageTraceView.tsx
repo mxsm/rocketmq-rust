@@ -25,6 +25,7 @@ import type { MessageTraceDetail, MessageTraceNode } from '../features/message-t
 import { MessageService } from '../services/message.service';
 import { MessageTraceService } from '../services/message-trace.service';
 import { dashboardErrorMessage } from '../services/invoke';
+import { useAppStore } from '../stores/app.store';
 
 const DEFAULT_TRACE_TOPIC = 'RMQ_SYS_TRACE_TOPIC';
 
@@ -369,11 +370,13 @@ const TraceDetailModal = ({ isOpen, onClose, traceTopic, message }: TraceDetailM
 };
 
 export const MessageTraceView = () => {
-  const [subTab, setSubTab] = useState<TraceSearchTab>('MessageKey');
+  const { navigation } = useAppStore();
+  const target = navigation.target?.kind === 'trace' ? navigation.target : null;
+  const [subTab, setSubTab] = useState<TraceSearchTab>(target ? 'MessageID' : 'MessageKey');
   const [traceTopic, setTraceTopic] = useState(DEFAULT_TRACE_TOPIC);
-  const [topic, setTopic] = useState('');
+  const [topic, setTopic] = useState(target?.topic ?? '');
   const [key, setKey] = useState('');
-  const [msgId, setMsgId] = useState('');
+  const [msgId, setMsgId] = useState(target?.name ?? '');
   const [searchResults, setSearchResults] = useState<MessageSummary[]>([]);
   const [selectedTrace, setSelectedTrace] = useState<MessageSummary | null>(null);
   const [isSearching, setIsSearching] = useState(false);

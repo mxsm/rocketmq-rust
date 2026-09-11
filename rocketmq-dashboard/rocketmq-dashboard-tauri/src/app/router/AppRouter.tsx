@@ -15,6 +15,7 @@ import {ConsumerView} from '../../components/ConsumerView';
 import {ConsumerActionProvider} from '../../features/consumer/components/ConsumerActionProvider';
 import {ProducerView} from '../../components/ProducerView';
 import {MessageView} from '../../components/MessageView';
+import {MessageActionProvider} from '../../features/message/components/MessageActionProvider';
 import {MessageTraceView} from '../../components/MessageTraceView';
 import {DLQMessageView} from '../../components/DLQMessageView';
 import {Activity} from 'lucide-react';
@@ -28,7 +29,7 @@ export const AppRouter = () => {
     const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
     const { activeTab, navigation, sessionId } = useAppStore();
     const key = ['NameServer', 'Proxy', 'Account', 'Sessions', 'Audit'].includes(activeTab) ? activeTab : `${activeTab}:${settings?.revision ?? 0}`;
-    return <BrokerConfigEditorProvider key={sessionId}><TopicActionProvider><ConsumerActionProvider><RouteContent key={`${key}:${navigation.id}`} /></ConsumerActionProvider></TopicActionProvider></BrokerConfigEditorProvider>;
+    return <BrokerConfigEditorProvider key={sessionId}><TopicActionProvider><ConsumerActionProvider><MessageActionProvider><RouteContent key={`${key}:${navigation.id}`} /></MessageActionProvider></ConsumerActionProvider></TopicActionProvider></BrokerConfigEditorProvider>;
 };
 
 const RouteContent = () => {
