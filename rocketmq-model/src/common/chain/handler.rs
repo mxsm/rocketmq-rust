@@ -32,20 +32,24 @@ use super::HandlerChain;
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```
 /// use rocketmq_model::common::chain::{Handler, HandlerChain};
 ///
-/// struct MyHandler;
-///
-/// impl Handler<Request, Response> for MyHandler {
-///     fn handle(&self, request: Request, chain: &HandlerChain<Request, Response>) -> Option<Response> {
-///         // Process the request
-///         println!("Processing request: {:?}", request);
-///         
-///         // Optionally delegate to next handler in chain
-///         chain.handle(request)
+/// struct NonNegative;
+/// impl Handler<i32, i32> for NonNegative {
+///     fn handle(&self, request: i32, chain: &HandlerChain<i32, i32>) -> Option<i32> {
+///         if request >= 0 {
+///             Some(request)
+///         } else {
+///             chain.handle(request)
+///         }
 ///     }
 /// }
+///
+/// let mut chain = HandlerChain::create().add_next(Box::new(NonNegative));
+/// assert_eq!(chain.handle(3), Some(3));
+/// chain.reset();
+/// assert_eq!(chain.handle(-1), None);
 /// ```
 pub trait Handler<T, R> {
     /// Handle a request and optionally delegate to the next handler in the chain.
@@ -59,19 +63,11 @@ pub trait Handler<T, R> {
     ///
     /// An `Option<R>` containing the response, or `None` if no response is produced
     ///
-    /// # Examples
+    /// The chain advances its cursor before invoking this method. Calling
+    /// [`HandlerChain::handle`] delegates to the next handler; returning directly
+    /// stops processing for this call. Later calls continue at the current cursor
+    /// until [`HandlerChain::reset`] is called explicitly.
     ///
-    /// ```rust,ignore
-    /// fn handle(&self, request: Request, chain: &HandlerChain<Request, Response>) -> Option<Response> {
-    ///     // Pre-processing logic
-    ///     let modified_request = preprocess(request);
-    ///     
-    ///     // Delegate to next handler
-    ///     let response = chain.handle(modified_request);
-    ///     
-    ///     // Post-processing logic
-    ///     response.map(|r| postprocess(r))
-    /// }
-    /// ```
+    /// See [`HandlerChain`] for a complete delegation example.
     fn handle(&self, t: T, chain: &HandlerChain<T, R>) -> Option<R>;
 }
