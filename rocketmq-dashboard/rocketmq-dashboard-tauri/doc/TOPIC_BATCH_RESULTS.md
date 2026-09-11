@@ -23,7 +23,11 @@ failed Brokers into a review draft. A partially successful create becomes an
 explicit update draft; an entirely failed create retains create intent. Nothing
 is retried automatically. A failed whole-Topic deletion can be reviewed one
 failed Cluster at a time without repeating successful Cluster targets. The
-success receipt stays visible until the user closes it.
+success receipt stays visible until the user closes it. Review drafts keep prior
+receipts visible and lock their target selection to the failed subset. The user
+must review and confirm again; opening a failed-target draft does not dispatch a
+write. A connection change freezes that draft while retaining its original
+environment and any accepted write result.
 
 Validation: focused backend Topic and audit tests, production frontend build,
 and the receipt rendering tests. The fake batch projection checks one successful

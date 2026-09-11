@@ -1,0 +1,87 @@
+.ops-topics { display: grid; gap: 18px; min-width: 0; }
+.ops-topic-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 14px; padding: 12px 16px; border: 1px solid var(--ops-border); border-radius: var(--ops-radius); background: var(--ops-panel); }
+.ops-topic-filters > .ops-field { flex: 1.5 1 180px; min-width: 0; }
+.ops-topic-filters > .ops-topic-select { flex: 1 1 115px; min-width: 0; }
+.ops-topic-select { display: grid; gap: 6px; color: var(--ops-muted); font-size: 13px; min-width: 0; }
+.ops-topic-select select, .ops-topic-select input, .ops-topic-select textarea {
+    width: 100%; min-width: 0; min-height: var(--ops-control-height); padding: 8px 10px; border: 1px solid var(--ops-border-strong);
+    border-radius: 8px; background: var(--ops-panel-soft); color: var(--ops-text); font: 14px/1.5 var(--ops-font);
+}
+.ops-topic-select textarea { resize: vertical; font-family: var(--ops-font-mono); }
+.ops-topic-workspace { display: grid; grid-template-columns: minmax(300px, 2fr) minmax(0, 3fr); align-items: start; gap: 16px; min-width: 0; }
+.ops-topics .ops-page-section { padding: 16px; min-width: 0; }
+.ops-topic-directory { min-height: 680px; display: flex; flex-direction: column; }
+.ops-topic-directory > .ops-section-header { flex-shrink: 0; }
+.ops-topic-table-scroll { overflow: auto; min-width: 0; border: 1px solid var(--ops-border); border-radius: 8px; }
+.ops-topic-table-scroll table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+.ops-topic-table-scroll th, .ops-topic-table-scroll td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--ops-border); vertical-align: top; overflow-wrap: anywhere; }
+.ops-topic-table-scroll thead th { background: var(--ops-panel-strong); color: var(--ops-muted); font-weight: 400; }
+.ops-topic-table-scroll tbody th { background: transparent; font-weight: 500; }
+.ops-topic-table-scroll tbody tr:last-child > * { border-bottom: 0; }
+.ops-topic-table-scroll tr[data-selected="true"] { background: var(--ops-accent-soft); }
+.ops-topic-table-scroll small { display: block; color: var(--ops-muted); margin-top: 4px; }
+.ops-topic-directory > .ops-topic-table-scroll { flex: 1; }
+.ops-topic-directory table th:first-child { width: 45%; }
+.ops-topic-directory table th:nth-child(2) { width: 31%; }
+.ops-topic-directory table th:last-child { width: 24%; }
+.ops-topic-choice { display: flex; align-items: center; gap: 8px; text-align: left; width: 100%; padding: 0; border: 0; background: transparent; color: var(--ops-text); font: 500 14px/1.5 var(--ops-font); cursor: pointer; }
+.ops-topic-choice span { min-width: 0; overflow-wrap: anywhere; }
+.ops-topic-choice svg { flex-shrink: 0; }
+.ops-topic-directory-footer { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-between; align-items: center; margin-top: 16px; }
+.ops-topic-directory-footer > p { flex-basis: 100%; }
+.ops-topic-note { font-size: 12px; color: var(--ops-muted); line-height: 1.6; overflow-wrap: anywhere; margin: 0; }
+.ops-topic-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.ops-topic-inspector > .ops-section-header { flex-wrap: wrap; align-items: start; }
+.ops-topic-inspector > .ops-section-header > div:first-child { flex: 1 1 180px; min-width: 0; }
+.ops-topic-inspector > .ops-section-header > .ops-section-actions { flex: 0 0 auto; max-width: 100%; }
+.ops-topic-inspector .ops-section-header h2 { overflow-wrap: anywhere; }
+.ops-topic-inspector > .ops-section-header h2 { font-size: 22px; }
+.ops-topic-inspector .ops-section-header { margin-bottom: 12px; }
+.ops-topic-inspector [data-slot="tabs-list"] { display: flex; width: 100%; overflow-x: auto; justify-content: start; }
+.ops-topic-inspector [data-slot="tabs-trigger"] { flex: 0 0 auto; white-space: nowrap; border-radius: 0; box-shadow: none; }
+.ops-topic-inspector [data-slot="tabs-content"] { display: grid; gap: 14px; min-width: 0; }
+.ops-topic-inspector [data-slot="tabs-content"][data-state="inactive"] { display: none; }
+.ops-topic-detail-panels { display: grid; gap: 16px; min-width: 0; }
+.ops-topic-detail-panels .ops-section-header { flex-wrap: wrap; gap: 8px; }
+.ops-topic-detail-panels .ops-topic-table-scroll table { min-width: 460px; }
+.ops-topic-properties { margin: 0; font-size: 14px; line-height: 1.4; }
+.ops-topic-properties > div { display: grid; grid-template-columns: minmax(100px, 38%) minmax(0, 1fr); gap: 16px; padding: 6px 0; border-bottom: 1px solid var(--ops-border); }
+.ops-topic-detail-panels [aria-label="Topic Broker routes"] table { min-width: 600px; }
+.ops-topic-detail-panels [aria-label="Topic Broker routes"] th:first-child { width: 25%; }
+.ops-topic-detail-panels [aria-label="Topic Broker routes"] th:nth-child(2) { width: 30%; }
+.ops-topic-properties > div:last-child { border-bottom: 0; }
+.ops-topic-properties dt { color: var(--ops-muted); overflow-wrap: anywhere; }
+.ops-topic-properties dd { margin: 0; max-height: 240px; overflow: auto; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.ops-topic-code { max-width: 100%; max-height: 280px; overflow: auto; padding: 12px; border: 1px solid var(--ops-border); border-radius: 8px; background: var(--ops-panel-soft); color: var(--ops-text); font: 12px/1.6 var(--ops-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ops-topic-link { display: block; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--ops-accent); font: 12px/1.6 var(--ops-font-mono); cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.ops-topic-action[data-slot="dialog-content"] { display: flex; flex-direction: column; gap: 14px; width: min(780px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); }
+.ops-topic-action-target { display: grid; gap: 4px; font-size: 13px; overflow-wrap: anywhere; }
+.ops-topic-action-target span { color: var(--ops-muted); font-size: 12px; }
+.ops-topic-action-target strong { max-height: 96px; overflow: auto; }
+.ops-topic-copy { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; }
+.ops-topic-copy button { white-space: normal; height: auto; text-align: left; }
+.ops-topic-detail-panels [aria-label="Topic queue offsets"] table { min-width: 760px; }
+.ops-topic-action-form { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+.ops-topic-action-body { display: grid; gap: 16px; overflow: auto; min-height: 0; padding: 2px; font-size: 14px; }
+.ops-topic-action-body h3 { font-size: 16px; margin: 0 0 10px; overflow-wrap: anywhere; }
+.ops-topic-action-body p { overflow-wrap: anywhere; }
+.ops-topic-action [data-slot="dialog-footer"] { flex-shrink: 0; flex-wrap: wrap; }
+.ops-topic-fields { display: grid; gap: 16px; min-width: 0; border: 0; padding: 0; margin: 0; }
+.ops-topic-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.ops-topic-targets { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--ops-border); border-radius: 8px; min-width: 0; }
+.ops-topic-targets label, .ops-topic-check { display: flex; align-items: start; gap: 8px; overflow-wrap: anywhere; min-width: 0; }
+.ops-topic-targets input, .ops-topic-check input { flex-shrink: 0; margin-top: 4px; accent-color: var(--ops-accent-strong); }
+.ops-topic-receipt { padding: 14px; border: 1px solid var(--ops-border); border-radius: 8px; background: var(--ops-panel-soft); }
+.ops-topic-action [aria-label="Topic operation receipt"] { margin: 0; max-height: none; overflow: visible; border-color: var(--ops-border); }
+.ops-topic-action [aria-label="Topic operation receipt"] table { min-width: 460px; }
+.ops-topic-action [aria-label="Topic operation receipt"] td { overflow-wrap: anywhere; vertical-align: top; }
+@media (max-width: 1160px) {
+    .ops-topic-workspace { grid-template-columns: minmax(0, 1fr); }
+    .ops-topic-directory { min-height: 0; }
+    .ops-topic-directory > .ops-topic-table-scroll { max-height: 360px; }
+}
+@media (max-width: 700px) {
+    .ops-topic-inspector > .ops-section-header { flex-wrap: wrap; }
+    .ops-topic-form-grid { grid-template-columns: minmax(0, 1fr); }
+    .ops-topic-properties > div { grid-template-columns: minmax(80px, 35%) minmax(0, 1fr); gap: 10px; }
+}
