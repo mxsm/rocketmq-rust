@@ -587,6 +587,50 @@ class ContainerFoundationTests(unittest.TestCase):
         policy["smoke_network"]["dependency_chain"].remove("broker")
         self.assertTrue(any("smoke network contract" in finding for finding in self.audit(policy=policy)))
 
+    def test_proxy_smoke_cluster_names_must_match_broker_identity(self) -> None:
+        fields = (
+            ("broker.toml", "brokerClusterName"),
+            ("proxy.toml", "brokerClusterName"),
+            ("proxy.toml", "clusterName"),
+        )
+        for config_name, field in fields:
+            with self.subTest(config=config_name, field=field):
+                mismatched = dict(self.smoke_configs)
+                original = f'{field} = "ContainerSmoke"'
+                self.assertIn(original, mismatched[config_name])
+                mismatched[config_name] = mismatched[config_name].replace(
+                    original, f'{field} = "DefaultCluster"', 1
+                )
+                self.assertIn(
+                    "Proxy smoke cluster and auth cluster names must match the Broker identity",
+                    self.audit(smoke_configs=mismatched),
+                )
+
+        renamed = {
+            name: source.replace('"ContainerSmoke"', '"RenamedSmokeCluster"')
+            for name, source in self.smoke_configs.items()
+        }
+        self.assertEqual([], self.audit(smoke_configs=renamed))
+
+    def test_smoke_cluster_names_must_be_explicit_non_blank_strings(self) -> None:
+        fields = (
+            ("broker.toml", "brokerClusterName", "broker.brokerIdentity.brokerClusterName"),
+            ("proxy.toml", "brokerClusterName", "cluster.brokerClusterName"),
+            ("proxy.toml", "clusterName", "auth.clusterName"),
+        )
+        for config_name, field, field_path in fields:
+            for value in (None, '""', '"   "', "123"):
+                with self.subTest(config=config_name, field=field, value=value):
+                    invalid = dict(self.smoke_configs)
+                    original = f'{field} = "ContainerSmoke"'
+                    self.assertIn(original, invalid[config_name])
+                    replacement = "" if value is None else f"{field} = {value}"
+                    invalid[config_name] = invalid[config_name].replace(original, replacement, 1)
+                    self.assertIn(
+                        f"service smoke config must declare a non-blank cluster name: {config_name} {field_path}",
+                        self.audit(smoke_configs=invalid),
+                    )
+
     def test_missing_read_only_or_signature_verification_is_rejected(self) -> None:
         no_read_only = self.supply_script.replace("--read-only", "--read-write", 1)
         self.assertTrue(any("--read-only" in finding for finding in self.audit(supply_script=no_read_only)))
