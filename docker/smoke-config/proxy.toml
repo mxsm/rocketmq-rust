@@ -15,3 +15,8 @@ listenAddr = "127.0.0.1:8080"
 
 [cluster]
 namesrvAddr = "rocketmq-namesrv:9876"
+brokerClusterName = "ContainerSmoke"
+
+[auth]
+# Proxy bootstrap uses this value to select the cluster for Broker readiness checks.
+clusterName = "ContainerSmoke"

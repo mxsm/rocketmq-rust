@@ -145,6 +145,21 @@ def audit_foundation(
         elif address(parsed_smoke_configs[name]) != expected_namesrv_address:
             findings.append(f"{name} must use the isolated smoke NameServer alias")
 
+    broker_identity = parsed_smoke_configs.get("broker.toml", {}).get("broker", {}).get("brokerIdentity", {})
+    proxy_config = parsed_smoke_configs.get("proxy.toml", {})
+    smoke_cluster_names = {
+        "broker.toml broker.brokerIdentity.brokerClusterName": broker_identity.get("brokerClusterName"),
+        "proxy.toml cluster.brokerClusterName": proxy_config.get("cluster", {}).get("brokerClusterName"),
+        # Proxy bootstrap overrides the cluster adapter with auth.clusterName.
+        "proxy.toml auth.clusterName": proxy_config.get("auth", {}).get("clusterName"),
+    }
+    for field, cluster_name in smoke_cluster_names.items():
+        if not isinstance(cluster_name, str) or not cluster_name.strip():
+            findings.append(f"service smoke config must declare a non-blank cluster name: {field}")
+    if all(isinstance(name, str) and name.strip() for name in smoke_cluster_names.values()):
+        if len(set(smoke_cluster_names.values())) != 1:
+            findings.append("Proxy smoke cluster and auth cluster names must match the Broker identity")
+
     builder_ref = policy["base_images"]["builder"]["reference"]
     runtime_ref = policy["base_images"]["runtime"]["reference"]
     for name, reference in (("builder", builder_ref), ("runtime", runtime_ref)):
