@@ -38,18 +38,36 @@ pub struct BooleanAttribute {
 }
 
 impl BooleanAttribute {
-    /// Create a new enum attribute with the specified properties
+    /// Create a new boolean attribute with the specified properties
     ///
     /// # Arguments
     ///
     /// * `name` - The name of the attribute
     /// * `changeable` - Whether the attribute can be changed after creation
-    /// * `universe` - Set of valid values this attribute can take
-    /// * `default_value` - Default value for this attribute (must be in universe)
+    /// * `default_value` - Default boolean value for this attribute
     ///
     /// # Returns
     ///
-    /// A new EnumAttribute instance, or an error if the default value is not in the universe
+    /// A new `BooleanAttribute` instance
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use cheetah_string::CheetahString;
+    /// use rocketmq_model::common::attribute::bool_attribute::BooleanAttribute;
+    /// use rocketmq_model::common::attribute::Attribute;
+    ///
+    /// let attr = BooleanAttribute::new(
+    ///     CheetahString::from_static_str("enabled"),
+    ///     true,
+    ///     false
+    /// );
+    /// assert_eq!(attr.default_value(), false);
+    ///
+    /// // Verify accepts valid boolean strings
+    /// assert!(attr.verify("true").is_ok());
+    /// assert!(attr.verify("FALSE").is_ok());
+    /// ```
     pub fn new(name: CheetahString, changeable: bool, default_value: bool) -> Self {
         Self {
             attribute: AttributeBase::new(name, changeable),
@@ -65,8 +83,35 @@ impl BooleanAttribute {
 
     /// Parse a string value to boolean
     ///
-    /// Returns Ok(bool) if the string is "true" or "false" (case insensitive),
-    /// or an Err with a descriptive message otherwise.
+    /// Accepts "true" or "false" case-insensitively. Whitespace is not trimmed.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The string value to parse
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(bool)` - The parsed boolean value
+    /// * `Err(String)` - An error message if the value is not "true" or "false"
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input string is not "true" or "false" (case-insensitive).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rocketmq_model::common::attribute::bool_attribute::BooleanAttribute;
+    ///
+    /// // Case-insensitive parsing
+    /// assert_eq!(BooleanAttribute::parse_bool("true").unwrap(), true);
+    /// assert_eq!(BooleanAttribute::parse_bool("TRUE").unwrap(), true);
+    /// assert_eq!(BooleanAttribute::parse_bool("False").unwrap(), false);
+    ///
+    /// // Invalid values return errors
+    /// assert!(BooleanAttribute::parse_bool("yes").is_err());
+    /// assert!(BooleanAttribute::parse_bool(" true").is_err()); // whitespace not trimmed
+    /// ```
     pub fn parse_bool(value: &str) -> Result<bool, String> {
         match value.to_lowercase().as_str() {
             "true" => Ok(true),
