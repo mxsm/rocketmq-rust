@@ -511,6 +511,7 @@ mod tests {
     use crate::nameserver_discovery::dns::DnsResolutionError;
     use crate::nameserver_discovery::dns::LookupFuture;
     use crate::nameserver_discovery::DnsName;
+    use crate::test_support::error_assertions::assert_error;
 
     struct BlockingAfterInitialLookup {
         calls: AtomicUsize,
@@ -709,6 +710,9 @@ mod tests {
     async fn initial_dns_failure_prevents_start_without_spawning_a_task() {
         let parent = crate::runtime::test_service_context("nameserver-discovery-initial-failure-test");
         let initial_components = parent.task_group().component_count();
+        let initial_tasks = parent.task_group().task_count();
+        let published = Arc::new(AtomicUsize::new(0));
+        let publish_count = published.clone();
         let config =
             NameServerDiscoveryConfig::new(super::super::NameServerSource::dns("namesrv.default.svc", 9876).unwrap());
         let result = NameServerDiscoverySupervisor::start_with_resolver(
@@ -717,11 +721,16 @@ mod tests {
             "client-a",
             Arc::new(AlwaysFailingLookup),
             ClientMetrics::noop(),
-            Arc::new(|_| {}),
+            Arc::new(move |_| {
+                publish_count.fetch_add(1, Ordering::AcqRel);
+            }),
         )
         .await;
 
-        assert!(matches!(result, Err(error) if error.is(&rocketmq_error::CORE_CONFIGURATION_INVALID)));
+        let error = result.err().expect("initial DNS failure must prevent startup");
+        assert_error(&error, &rocketmq_error::TRANSPORT_DNS_FAILED);
+        assert_eq!(published.load(Ordering::Acquire), 0);
+        assert_eq!(parent.task_group().task_count(), initial_tasks);
         assert_eq!(parent.task_group().component_count(), initial_components);
     }
 }
