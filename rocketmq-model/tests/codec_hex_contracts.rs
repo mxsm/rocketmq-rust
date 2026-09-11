@@ -26,9 +26,11 @@ fn bytes_and_mixed_case_hex_have_expected_values() {
 #[test]
 fn every_byte_round_trips_and_empty_inputs_keep_their_distinction() {
     let corpus: Vec<u8> = (0..=u8::MAX).collect();
+    let expected: String = corpus.iter().map(|byte| format!("{byte:02X}")).collect();
 
     assert_eq!(bytes_to_string(&corpus).len(), corpus.len() * 2);
-    assert_eq!(string_to_bytes(&bytes_to_string(&corpus)), Some(corpus));
+    assert_eq!(bytes_to_string(&corpus), expected);
+    assert_eq!(string_to_bytes(&expected), Some(corpus));
     assert_eq!(bytes_to_string(&[]), "");
     assert_eq!(string_to_bytes(""), None);
 }
