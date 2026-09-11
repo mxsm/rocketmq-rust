@@ -90,6 +90,70 @@ class KubernetesAssetsGuardTests(unittest.TestCase):
     def test_repository_contract_passes(self) -> None:
         self.run_guard(expect_success=True)
 
+    def test_every_service_config_requires_its_file_otlp_endpoint(self) -> None:
+        path = self.root / "distribution/kubernetes/base/manifest.yaml"
+        source = path.read_text(encoding="utf-8")
+        keys = (
+            *(f"rocketmq-broker-{ordinal}.toml" for ordinal in range(3)),
+            *(f"rocketmq-controller-{ordinal}.toml" for ordinal in range(3)),
+            "namesrv.toml", "proxy.toml", "mcp.toml",
+        )
+        endpoint = '    endpoint = "http://otel-collector.observability.svc.cluster.local:4317"\n'
+        for key in keys:
+            with self.subTest(config=key):
+                start = source.index(f"  {key}: |-\n")
+                endpoint_start = source.index(endpoint, start)
+                path.write_text(source[:endpoint_start] + source[endpoint_start + len(endpoint):], encoding="utf-8")
+                result = self.run_guard(expect_success=False)
+                self.assertIn(f"/{key} observability.otlp file settings drifted", result.stderr)
+
+    def test_observability_file_settings_drift_is_rejected(self) -> None:
+        path = self.root / "distribution/kubernetes/base/manifest.yaml"
+        source = path.read_text(encoding="utf-8")
+        cases = (
+            ("metrics", '[observability.metrics]\n    exporter = "disable"', '[observability.metrics]\n    exporter = "otlp"'),
+            ("traces", '[observability.traces]\n    exporter = "disable"', '[observability.traces]\n    exporter = "otlp"'),
+            ("logs", '[observability.logs]\n    exporter = "disable"', '[observability.logs]\n    exporter = "otlp"'),
+            ("otlp", 'protocol = "grpc"', 'protocol = "http/protobuf"'),
+            ("prometheus", 'port = 5557', 'port = 5558'),
+        )
+        for section, old, new in cases:
+            with self.subTest(section=section):
+                path.write_text(source, encoding="utf-8")
+                self.mutate_document_text(
+                    "distribution/kubernetes/base/manifest.yaml", "ConfigMap", "rocketmq-namesrv-config", old, new
+                )
+                result = self.run_guard(expect_success=False)
+                self.assertIn(f"namesrv.toml observability.{section} file settings drifted", result.stderr)
+
+    def test_telemetry_environment_must_not_override_canonical_files(self) -> None:
+        path = self.root / "distribution/kubernetes/base/manifest.yaml"
+        source = path.read_text(encoding="utf-8")
+        names = (
+            "ROCKETMQ_METRICS_ENABLED", "ROCKETMQ_METRICS_EXPORTER",
+            "ROCKETMQ_METRICS_BIND_ADDR", "ROCKETMQ_METRICS_PATH",
+            "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_PROTOCOL",
+        )
+        for name in names:
+            with self.subTest(variable=name):
+                path.write_text(source, encoding="utf-8")
+                self.mutate_document_text(
+                    "distribution/kubernetes/base/manifest.yaml", "StatefulSet", "rocketmq-broker",
+                    "- {name: OTEL_SERVICE_NAME, value: rocketmq-broker}",
+                    f'- {{name: "{name}", value: "unexpected-override"}}',
+                )
+                result = self.run_guard(expect_success=False)
+                self.assertIn(f"must not override observability file settings with {name}", result.stderr)
+
+    def test_required_otlp_network_policy_is_still_enforced(self) -> None:
+        self.mutate_text(
+            "distribution/kubernetes/base/manifest.yaml",
+            "name: rocketmq-otel-egress",
+            "name: unrelated-egress",
+        )
+        result = self.run_guard(expect_success=False)
+        self.assertIn("NetworkPolicy set drifted", result.stderr)
+
     def test_nameserver_discovery_must_remain_opt_in_by_default(self) -> None:
         self.mutate_text(
             "distribution/helm/rocketmq-rust/values.yaml",

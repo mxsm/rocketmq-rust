@@ -26,7 +26,16 @@ from pathlib import Path
 from typing import Any
 
 
-EXPECTED_RESOURCE_COUNT = 45
+# The canonical profile disables the five Prometheus Services and scrape policy.
+EXPECTED_RESOURCE_COUNT = 39
+TELEMETRY_OVERRIDE_ENVIRONMENT = (
+    "ROCKETMQ_METRICS_ENABLED",
+    "ROCKETMQ_METRICS_EXPORTER",
+    "ROCKETMQ_METRICS_BIND_ADDR",
+    "ROCKETMQ_METRICS_PATH",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+)
 LOCAL_IMAGE_TAG = "local"
 CONTROLLER_SERVICE_IPS = ("10.96.0.201", "10.96.0.202", "10.96.0.203")
 EXPECTED_CONTAINER_AUXILIARY_PORTS = {
@@ -199,15 +208,41 @@ def extract_literal_block(document: Document, key: str) -> str | None:
     return "\n".join(body).rstrip() + "\n"
 
 
-def require_valid_toml(guard: Guard, label: str, document: Document, key: str) -> None:
+def require_valid_toml(guard: Guard, label: str, document: Document, key: str) -> dict[str, Any] | None:
     source = extract_literal_block(document, key)
     guard.require(source is not None, f"{label}: missing config literal {document.name}/{key}")
     if source is None:
         return
     try:
-        tomllib.loads(source)
+        return tomllib.loads(source)
     except tomllib.TOMLDecodeError as error:
         guard.errors.append(f"{label}: invalid TOML in {document.name}/{key}: {error}")
+        return None
+
+
+def require_service_config(guard: Guard, label: str, document: Document, key: str) -> None:
+    config = require_valid_toml(guard, label, document, key)
+    if config is None:
+        return
+    observability = config.get("observability")
+    if not isinstance(observability, dict):
+        guard.errors.append(f"{label}: {document.name}/{key} missing observability file configuration")
+        return
+    expected = {
+        "metrics": {"exporter": "disable"},
+        "traces": {"exporter": "disable"},
+        "logs": {"exporter": "disable"},
+        "otlp": {
+            "endpoint": "http://otel-collector.observability.svc.cluster.local:4317",
+            "protocol": "grpc",
+        },
+        "prometheus": {"host": "0.0.0.0", "port": 5557, "path": "/metrics"},
+    }
+    for section, settings in expected.items():
+        guard.require(
+            observability.get(section) == settings,
+            f"{label}: {document.name}/{key} observability.{section} file settings drifted",
+        )
 
 
 def require_security_bootstrap_environment(guard: Guard, label: str, text: str) -> None:
@@ -597,9 +632,13 @@ def validate_workload(guard: Guard, label: str, document: Document, service: str
         "type: RuntimeDefault",
         "- ALL",
         "mountPath: /var/run/secrets/rocketmq",
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
     ):
         guard.require(snippet in text, f"{label}: {service} missing security/topology contract {snippet}")
+    for name in TELEMETRY_OVERRIDE_ENVIRONMENT:
+        guard.require(
+            re.search(rf"\bname:\s*[\"']?{name}[\"']?(?=[\s,}}])", text) is None,
+            f"{label}: {service} must not override observability file settings with {name}",
+        )
     if expected["replicas"] > 1:
         guard.require(
             "topologyKey: kubernetes.io/hostname" in text,
@@ -778,24 +817,24 @@ def validate_render(guard: Guard, label: str, text: str) -> dict[str, Any]:
             if peer_service is not None:
                 guard.require(f"clusterIP: {address}" in peer_service.text, f"{label}: Controller Service IP {ordinal} drifted")
                 guard.require("statefulset.kubernetes.io/pod-name:" in peer_service.text, f"{label}: Controller Service selector drifted")
-            require_valid_toml(guard, label, controller_config, f"rocketmq-controller-{ordinal}.toml")
+            require_service_config(guard, label, controller_config, f"rocketmq-controller-{ordinal}.toml")
 
     broker_config = find_document(documents, "ConfigMap", "rocketmq-broker-config")
     guard.require(broker_config is not None, f"{label}: broker config map missing")
     if broker_config is not None:
         for ordinal in range(EXPECTED_SERVICES["broker"]["replicas"]):
-            require_valid_toml(guard, label, broker_config, f"rocketmq-broker-{ordinal}.toml")
+            require_service_config(guard, label, broker_config, f"rocketmq-broker-{ordinal}.toml")
 
     for service in ("namesrv", "proxy"):
         config = find_document(documents, "ConfigMap", f"rocketmq-{service}-config")
         guard.require(config is not None, f"{label}: {service} config map missing")
         if config is not None:
-            require_valid_toml(guard, label, config, f"{service}.toml")
+            require_service_config(guard, label, config, f"{service}.toml")
 
     mcp_config = find_document(documents, "ConfigMap", "rocketmq-mcp-config")
     guard.require(mcp_config is not None, f"{label}: MCP secure config missing")
     if mcp_config is not None:
-        require_valid_toml(guard, label, mcp_config, "mcp.toml")
+        require_service_config(guard, label, mcp_config, "mcp.toml")
         require_valid_toml(guard, label, mcp_config, "permissions.toml")
         for snippet in (
             'transport = "streamable-http"',
@@ -832,7 +871,6 @@ def validate_render(guard: Guard, label: str, text: str) -> dict[str, Any]:
         "rocketmq-namesrv",
         "rocketmq-proxy",
         "rocketmq-mcp",
-        "rocketmq-metrics-scrape",
     }
     guard.require(network_policy_names == expected_network_policies, f"{label}: NetworkPolicy set drifted")
     return summary
