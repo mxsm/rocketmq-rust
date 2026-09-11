@@ -125,6 +125,7 @@ def audit_foundation(
     expected_smoke_network = {
         "network_prefix": "rocketmq-service-smoke",
         "namesrv_alias": "rocketmq-namesrv",
+        "broker_alias": "rocketmq-broker",
         "namesrv_port": 9876,
         "dependency_chain": ["namesrv", "broker"],
         "dependent_services": ["proxy", "mcp"],
@@ -145,7 +146,13 @@ def audit_foundation(
         elif address(parsed_smoke_configs[name]) != expected_namesrv_address:
             findings.append(f"{name} must use the isolated smoke NameServer alias")
 
-    broker_identity = parsed_smoke_configs.get("broker.toml", {}).get("broker", {}).get("brokerIdentity", {})
+    broker_config = parsed_smoke_configs.get("broker.toml", {}).get("broker", {})
+    if broker_config.get("brokerIp1") != expected_smoke_network["broker_alias"]:
+        findings.append("broker.toml must advertise the isolated smoke Broker alias")
+    if broker_config.get("brokerServerConfig", {}).get("bindAddress") != "0.0.0.0":
+        findings.append("broker.toml must listen on the container network interface")
+
+    broker_identity = broker_config.get("brokerIdentity", {})
     proxy_config = parsed_smoke_configs.get("proxy.toml", {})
     smoke_cluster_names = {
         "broker.toml broker.brokerIdentity.brokerClusterName": broker_identity.get("brokerClusterName"),
@@ -480,6 +487,9 @@ def audit_foundation(
         "-NetworkAlias $networkAlias",
         "--volumes",
         "$policy.smoke_network.namesrv_alias",
+        "broker = $policy.smoke_network.broker_alias",
+        "$networkAlias = $dependencyAliases[$dependencyServiceName]",
+        "Initialize-HelperSmokeConfig -SourcePath $smokeConfigPath -DestinationPath $helperSmokeConfigPath",
         "$policy.smoke_network.dependency_chain",
         "$service.data_path",
         "--entrypoint /usr/bin/find",

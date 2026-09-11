@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -586,6 +587,91 @@ class ContainerFoundationTests(unittest.TestCase):
         policy = copy.deepcopy(self.policy)
         policy["smoke_network"]["dependency_chain"].remove("broker")
         self.assertTrue(any("smoke network contract" in finding for finding in self.audit(policy=policy)))
+
+    def test_broker_smoke_network_addresses_must_be_reachable(self) -> None:
+        cases = (
+            ('brokerIp1 = "rocketmq-broker"', 'brokerIp1 = "127.0.0.1"', "advertise the isolated smoke Broker alias"),
+            ('bindAddress = "0.0.0.0"', 'bindAddress = "127.0.0.1"', "listen on the container network interface"),
+        )
+        for original, replacement, expected in cases:
+            with self.subTest(field=original):
+                invalid = dict(self.smoke_configs)
+                self.assertIn(original, invalid["broker.toml"])
+                invalid["broker.toml"] = invalid["broker.toml"].replace(original, replacement, 1)
+                self.assertTrue(any(expected in finding for finding in self.audit(smoke_configs=invalid)))
+
+        missing_alias = self.service_script.replace("broker = $policy.smoke_network.broker_alias", 'broker = ""', 1)
+        self.assertTrue(any("broker_alias" in finding for finding in self.audit(service_script=missing_alias)))
+        policy = copy.deepcopy(self.policy)
+        policy["smoke_network"].pop("broker_alias")
+        self.assertTrue(any("smoke network contract" in finding for finding in self.audit(policy=policy)))
+
+    def test_helper_smoke_config_uses_loopback_and_preserves_bridge_fixtures(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        self.assertIsNotNone(powershell, "PowerShell is required to validate container scripts")
+        harness = r"""
+param([string]$ScriptPath, [string]$PolicyPath, [string]$SourcePath, [string]$DestinationPath)
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $ScriptPath, [ref]$tokens, [ref]$parseErrors
+)
+if ($parseErrors.Count -ne 0) {
+    throw "failed to parse service image script: $($parseErrors[0].Message)"
+}
+$definition = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq "Initialize-HelperSmokeConfig"
+}, $true)
+if ($null -eq $definition) {
+    throw "missing helper configuration generator"
+}
+Invoke-Expression $definition.Extent.Text
+$policy = Get-Content -Raw -LiteralPath $PolicyPath | ConvertFrom-Json
+Initialize-HelperSmokeConfig -SourcePath $SourcePath -DestinationPath $DestinationPath -SmokeNetwork $policy.smoke_network
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            source_path = temporary / "bridge"
+            source_path.mkdir()
+            destination_path = temporary / "helper"
+            for name, source in self.smoke_configs.items():
+                (source_path / name).write_text(source, encoding="utf-8")
+            harness_path = temporary / "helper-config-harness.ps1"
+            harness_path.write_text(harness, encoding="utf-8")
+            result = subprocess.run(
+                [
+                    powershell, "-NoProfile", "-File", str(harness_path),
+                    str(ROOT / "scripts" / "service-image-contract.ps1"),
+                    str(ROOT / "docker" / "container-policy.json"),
+                    str(source_path), str(destination_path),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(set(self.smoke_configs), {path.name for path in destination_path.iterdir()})
+            for name, source in self.smoke_configs.items():
+                with self.subTest(config=name):
+                    self.assertEqual(source, (source_path / name).read_text(encoding="utf-8"))
+                    expected = tomllib.loads(source)
+                    address = f"127.0.0.1:{self.policy['smoke_network']['namesrv_port']}"
+                    if name == "broker.toml":
+                        expected["broker"]["namesrvAddr"] = address
+                        expected["broker"]["brokerIp1"] = "127.0.0.1"
+                        expected["broker"]["brokerServerConfig"]["bindAddress"] = "127.0.0.1"
+                    elif name == "proxy.toml":
+                        expected["cluster"]["namesrvAddr"] = address
+                    elif name == "mcp.toml":
+                        expected["clusters"][0]["namesrv_addr"] = address
+                    actual = tomllib.loads((destination_path / name).read_text(encoding="utf-8"))
+                    self.assertEqual(expected, actual)
 
     def test_proxy_smoke_cluster_names_must_match_broker_identity(self) -> None:
         fields = (
