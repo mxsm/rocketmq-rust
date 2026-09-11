@@ -1,43 +1,27 @@
 import React from 'react';
-import {motion} from 'motion/react';
+import { Button as ControlButton } from './button';
 
-interface ButtonProps {
-    children: React.ReactNode;
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
     variant?: 'primary' | 'secondary' | 'ghost' | 'accent' | 'danger' | 'outline';
-    onClick?: () => void;
     icon?: React.ElementType;
     iconClassName?: string;
-    className?: string;
-    disabled?: boolean;
 }
 
-export const Button = ({
-    children,
-    variant = 'primary',
-    onClick,
-    icon: Icon,
-    iconClassName = "",
-    className = "",
-    disabled
-}: ButtonProps) => {
-    const variants = {
-        primary: "ops-button-primary",
-        secondary: "ops-button-secondary",
-        ghost: "ops-button-ghost",
-        accent: "ops-button-accent",
-        danger: "ops-button-danger",
-        outline: "ops-button-outline"
-    };
+const variants = {
+    primary: 'default',
+    secondary: 'secondary',
+    ghost: 'ghost',
+    accent: 'default',
+    danger: 'destructive',
+    outline: 'outline',
+} as const;
 
-    return (
-        <motion.button
-            whileTap={{scale: 0.98}}
-            onClick={onClick}
-            disabled={disabled}
-            className={`ops-button ${variants[variant]} ${className}`}
-        >
-            {Icon && <Icon className={`ops-button-icon ${iconClassName}`}/>}
+export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+    ({ children, variant = 'primary', icon: Icon, iconClassName = '', ...props }, ref) => (
+        <ControlButton {...props} ref={ref} variant={variants[variant]}>
+            {Icon && <Icon aria-hidden="true" className={`ops-button-icon ${iconClassName}`} />}
             {children}
-        </motion.button>
-    );
-};
+        </ControlButton>
+    ),
+);
+Button.displayName = 'LegacyButton';

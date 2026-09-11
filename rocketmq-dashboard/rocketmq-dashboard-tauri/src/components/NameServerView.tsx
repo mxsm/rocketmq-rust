@@ -108,7 +108,7 @@ const SecurityRow = ({
                 <small>{description}</small>
             </span>
         </div>
-        <Toggle checked={checked} onChange={onChange} disabled={disabled} />
+        <Toggle aria-label={label} checked={checked} onChange={onChange} disabled={disabled} />
     </div>
 );
 

@@ -1,71 +1,41 @@
 import React from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { Button } from './ui/button';
 
 interface PaginationProps {
-  currentPage: number;
-  totalPages: number;
-  onPageChange: (page: number) => void;
-  className?: string;
+    currentPage: number;
+    totalPages: number;
+    onPageChange: (page: number) => void;
+    className?: string;
+    disabled?: boolean;
 }
 
-export const Pagination: React.FC<PaginationProps> = ({ 
-  currentPage, 
-  totalPages, 
-  onPageChange,
-  className = ""
-}) => {
-  // Generate page numbers to display
-  const getPageNumbers = () => {
-    const pages = [];
-    // Simple logic for now: show all pages if total is small, otherwise ... (user image shows 1, 2, 3, 4, 5)
-    // We'll stick to a max of 5 pages for simplicity or implement a sliding window if needed.
-    // Given the user image shows 1-5, let's assume we show a range around current page.
-    
-    // For this implementation, I'll show up to 5 pages.
-    const maxVisible = 5;
-    let start = Math.max(1, currentPage - Math.floor(maxVisible / 2));
-    let end = Math.min(totalPages, start + maxVisible - 1);
-    
-    if (end - start + 1 < maxVisible) {
-      start = Math.max(1, end - maxVisible + 1);
-    }
-
-    for (let i = start; i <= end; i++) {
-      pages.push(i);
-    }
-    return pages;
-  };
-
-  return (
-    <div className={`ops-pagination ${className}`}>
-      <button
-        onClick={() => onPageChange(currentPage - 1)}
-        disabled={currentPage === 1}
-        className="ops-page-button"
-        aria-label="Previous page"
-      >
-        <ChevronLeft className="w-5 h-5" />
-      </button>
-
-      {getPageNumbers().map((page) => (
-        <button
-          key={page}
-          onClick={() => onPageChange(page)}
-          className={`ops-page-button ${currentPage === page ? 'is-active' : ''}`}
-          aria-current={currentPage === page ? 'page' : undefined}
-        >
-          {page}
-        </button>
-      ))}
-
-      <button
-        onClick={() => onPageChange(currentPage + 1)}
-        disabled={currentPage === totalPages}
-        className="ops-page-button"
-        aria-label="Next page"
-      >
-        <ChevronRight className="w-5 h-5" />
-      </button>
-    </div>
-  );
+export const Pagination = ({
+    currentPage, totalPages, onPageChange, className = '', disabled = false,
+}: PaginationProps) => {
+    const total = Number.isFinite(totalPages) ? Math.max(0, Math.floor(totalPages)) : 0;
+    const validPage = Number.isInteger(currentPage) && currentPage >= 1 && currentPage <= total;
+    const start = Math.max(1, Math.min(currentPage - 2, total - 4));
+    const pages = validPage ? Array.from({ length: Math.min(5, total) }, (_, index) => start + index) : [];
+    const selectPage = (page: number) => {
+        if (!disabled && validPage && page >= 1 && page <= total && page !== currentPage) onPageChange(page);
+    };
+    return (
+        <nav aria-label="Pagination" className={`ops-pagination ${className}`}>
+            <Button variant="outline" size="icon" onClick={() => selectPage(currentPage - 1)}
+                disabled={disabled || !validPage || currentPage <= 1} aria-label="Previous page">
+                <ChevronLeft aria-hidden="true" />
+            </Button>
+            {pages.map(page => (
+                <Button key={page} variant={page === currentPage ? 'default' : 'ghost'} size="icon"
+                    disabled={disabled} aria-label={`Page ${page}`}
+                    aria-current={page === currentPage ? 'page' : undefined}
+                    onClick={() => selectPage(page)}>{page}</Button>
+            ))}
+            <Button variant="outline" size="icon" onClick={() => selectPage(currentPage + 1)}
+                disabled={disabled || !validPage || currentPage >= total} aria-label="Next page">
+                <ChevronRight aria-hidden="true" />
+            </Button>
+        </nav>
+    );
 };
