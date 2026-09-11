@@ -5,6 +5,7 @@
   import "./styles/redesign.css";
   import "./styles/tokens.css";
   import "./styles/shell.css";
+  import "./styles/controls.css";
 
   createRoot(document.getElementById("root")!).render(<App />);
   

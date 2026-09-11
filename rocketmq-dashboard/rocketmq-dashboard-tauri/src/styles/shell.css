@@ -1,4 +1,4 @@
-.desktop-shell { height: 100dvh; min-height: 0; }
+.app-shell.desktop-shell { display: flex; flex-direction: row; height: 100dvh; min-height: 0; overflow: hidden; }
 .desktop-sidebar { display: flex; flex-direction: column; width: 240px; min-width: 240px; background: var(--ops-sidebar); border-right: 1px solid var(--ops-border); }
 .desktop-brand { display: flex; align-items: center; gap: 10px; padding: 20px 18px; min-height: 72px; }
 .desktop-brand img { width: 30px; height: 34px; object-fit: contain; }

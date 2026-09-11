@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
-import { Activity, Check, Copy, Database, ListFilter, Search, Settings2, X } from 'lucide-react';
+import { Sheet, SheetContent, SheetTitle, SheetDescription, SheetClose } from './sheet';
+import { PageState } from '../layout/PageState';
+import { toast } from 'sonner';
+import { Activity, Check, Copy, ListFilter, Search, Settings2, X } from 'lucide-react';
 
 type SheetType = 'Status' | 'Config' | null;
 
@@ -165,8 +167,10 @@ export const SideSheet = ({ isOpen, onClose, title, data, type, actions }: SideS
     try {
       await navigator.clipboard.writeText(value);
       setCopiedKey(key);
-      window.setTimeout(() => setCopiedKey(''), 1200);
-    } catch {}
+
+    } catch {
+      toast.error('Unable to copy details. Select and copy the value manually.');
+    }
   };
 
   const handleCopyAll = async () => {
@@ -177,24 +181,8 @@ export const SideSheet = ({ isOpen, onClose, title, data, type, actions }: SideS
   const Icon = sheetType === 'Status' ? Activity : Settings2;
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 0.46 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="ops-sheet-backdrop"
-          />
-          <motion.aside
-            initial={{ x: '100%' }}
-            animate={{ x: 0 }}
-            exit={{ x: '100%' }}
-            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            className={`ops-sheet ops-detail-sheet is-${sheetType.toLowerCase()}`}
-            aria-label={`${sheetType} details`}
-          >
+    <Sheet open={isOpen} onOpenChange={open => { if (!open) onClose(); }}>
+      <SheetContent showCloseButton={false} className={`ops-sheet ops-detail-sheet is-${sheetType.toLowerCase()}`}>
             <header className="ops-detail-header">
               <div className="ops-detail-title-wrap">
                 <span className="ops-detail-icon">
@@ -202,16 +190,16 @@ export const SideSheet = ({ isOpen, onClose, title, data, type, actions }: SideS
                 </span>
                 <div>
                   <span className="ops-detail-kicker">{sheetType} Inspector</span>
-                  <h2 className="ops-sheet-title">{title}</h2>
-                  <p>
+                  <SheetTitle className="ops-sheet-title">{title}</SheetTitle>
+                  <SheetDescription>
                     {brokerAddr ? `${brokerAddr} · ` : ''}
                     {extractBrokerLabel(title)} · {entries.length} entries · {filledCount} filled
-                  </p>
+                  </SheetDescription>
                 </div>
               </div>
-              <button onClick={onClose} className="ops-icon-button ops-detail-close" aria-label="Close details">
+              <SheetClose asChild><button type="button" className="ops-icon-button ops-detail-close" aria-label="Close details">
                 <X className="ops-detail-close-icon" />
-              </button>
+              </button></SheetClose>
             </header>
 
             <section className="ops-detail-toolbar" aria-label="Detail filters">
@@ -261,6 +249,7 @@ export const SideSheet = ({ isOpen, onClose, title, data, type, actions }: SideS
                     type="button"
                     key={category.name}
                     onClick={() => setActiveCategory(category.name)}
+                    aria-pressed={activeCategory === category.name}
                     className={activeCategory === category.name ? 'is-active' : undefined}
                   >
                     <span>{category.name}</span>
@@ -295,16 +284,12 @@ export const SideSheet = ({ isOpen, onClose, title, data, type, actions }: SideS
                       </article>
                     ))
                   ) : (
-                    <div className="ops-detail-no-results">
-                      Try another key, value, or category filter.
-                    </div>
+                    <PageState kind="empty" title="No matching entries" description="Try another key, value, or category filter." />
                   )}
                 </div>
               </section>
             </div>
-          </motion.aside>
-        </>
-      )}
-    </AnimatePresence>
+      </SheetContent>
+    </Sheet>
   );
 };

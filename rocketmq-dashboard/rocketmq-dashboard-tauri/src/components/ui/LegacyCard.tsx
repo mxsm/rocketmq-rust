@@ -10,7 +10,7 @@ interface CardProps {
 
 export const Card = ({ children, className = "", title, description, headerAction }: CardProps) => (
   <div className={`ops-card ${className}`}>
-    {(title || description) && (
+    {(title || description || headerAction) && (
       <div className="ops-card-header">
         <div>
           {title && <h3 className="ops-card-title">{title}</h3>}
