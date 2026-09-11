@@ -71,7 +71,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       case 'Dashboard':
         return 'System Dashboard';
       case 'Cluster':
-        return 'Cluster Management';
+        return 'Cluster';
       case 'Topic':
         return 'Topic Management';
       case 'Consumer':

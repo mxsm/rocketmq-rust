@@ -8,6 +8,7 @@ import {ACLView} from '../../components/ACLView';
 import {NameServerView} from '../../components/NameServerView';
 import {ProxyView} from '../../components/ProxyView';
 import {ClusterView} from '../../components/ClusterView';
+import {BrokerConfigEditorProvider} from '../../features/cluster/components/BrokerConfigEditorProvider';
 import {TopicView} from '../../components/TopicView';
 import {ConsumerView} from '../../components/ConsumerView';
 import {ProducerView} from '../../components/ProducerView';
@@ -23,9 +24,9 @@ import {AccountPage} from '../../pages/account/AccountPage';
 
 export const AppRouter = () => {
     const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
-    const { activeTab, navigation } = useAppStore();
+    const { activeTab, navigation, sessionId } = useAppStore();
     const key = ['NameServer', 'Proxy', 'Account', 'Sessions', 'Audit'].includes(activeTab) ? activeTab : `${activeTab}:${settings?.revision ?? 0}`;
-    return <RouteContent key={`${key}:${navigation.id}`} />;
+    return <BrokerConfigEditorProvider key={sessionId}><RouteContent key={`${key}:${navigation.id}`} /></BrokerConfigEditorProvider>;
 };
 
 const RouteContent = () => {

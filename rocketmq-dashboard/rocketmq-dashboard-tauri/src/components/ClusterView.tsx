@@ -1,664 +1,158 @@
-import { BrokerConfigEditor } from '../features/cluster/components/BrokerConfigEditor';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Pencil, X } from 'lucide-react';
 import { useAppStore, useNavigationState } from '../stores/app.store';
-import React, { useEffect, useMemo, useState, useRef, type ReactNode } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
-import {
-  Activity,
-  AlertTriangle,
-  ArrowDownCircle,
-  ArrowUpCircle,
-  Check,
-  ChevronDown,
-  Clock,
-  Crown,
-  Database,
-  Gauge,
-  GitBranch,
-  HardDrive,
-  Layers3,
-  Link2,
-  Network,
-  RefreshCw,
-  Server,
-  ShieldCheck,
-} from 'lucide-react';
-import { toast } from 'sonner@2.0.3';
-import { Button } from '../components/ui/LegacyButton';
-import { SideSheet } from './ui/SideSheet';
+import { ConnectionStore } from '../services/connection.store';
+import { ClusterService } from '../services/cluster.service';
+import { useReadResource } from '../hooks/useReadResource';
+import { usePageRefresh } from '../app/layout/pageToolbar';
 import { useClusterCatalog } from '../features/cluster/hooks/useClusterCatalog';
+import { brokerIdentity, brokerKey, brokerState, brokerRate, brokerTps, type BrokerIdentity } from '../features/cluster/brokerIdentity';
+import { BrokerEntries } from '../features/cluster/components/BrokerEntries';
+import { useBrokerConfigEditor } from '../features/cluster/brokerConfigEditorContext';
 import type { ClusterBrokerCardItem } from '../features/cluster/types/cluster.types';
-import { dashboardErrorMessage } from '../services/invoke';
+import { Button } from './ui/LegacyButton';
+import { Input } from './ui/LegacyInput';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
+import { PageSection } from './layout/PageSection';
+import { PageState } from './layout/PageState';
+import { StatusBadge } from './layout/StatusBadge';
+import '../features/cluster/cluster.css';
 
-const formatNumber = (value: number) => value.toLocaleString();
-const formatTps = (value: number) => value.toFixed(2);
+function BrokerStatus({ broker }: { broker: ClusterBrokerCardItem }) {
+    const state = brokerState(broker);
+    return <StatusBadge tone={state === 'Active' ? 'success' : state === 'Unavailable' ? 'danger' : state === 'Inactive' ? 'warning' : 'neutral'}>{state}</StatusBadge>;
+}
 
-const ClusterSummaryCard = ({
-  label,
-  value,
-  hint,
-  tone,
-  icon,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-  tone: 'info' | 'violet' | 'success' | 'warning';
-  icon: ReactNode;
-}) => (
-  <article className={`cluster-summary-card is-${tone}`}>
-    <div>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{hint}</small>
-    </div>
-    <div className="cluster-summary-icon" aria-hidden="true">
-      {icon}
-    </div>
-  </article>
-);
-
-const BrokerTpsTile = ({
-  label,
-  value,
-  percent,
-  tone,
-  icon,
-}: {
-  label: string;
-  value: number;
-  percent: number;
-  tone: 'produce' | 'consume';
-  icon: ReactNode;
-}) => (
-  <div className={`cluster-tps-tile is-${tone}`}>
-    <div className="cluster-tps-tile-header">
-      <span>{label}</span>
-      {icon}
-    </div>
-    <strong>{formatTps(value)}</strong>
-    <div className="cluster-tps-track">
-      <span style={{ width: `${Math.min(Math.max(percent, 0), 100)}%` }} />
-    </div>
-  </div>
-);
+const counterText = (broker: ClusterBrokerCardItem, value: number, keys: string[]) =>
+    !broker.statusLoadError && keys.every(key => /^-?\d+$/.test(broker.rawStatus[key]?.trim() ?? '')) && Number.isFinite(value) ? value.toLocaleString() : 'Unknown';
 
 export const ClusterView = () => {
-  const { navigation, openBroker, goBack } = useAppStore();
-  const target = navigation.target?.kind === 'broker' ? navigation.target : null;
-  const openedTarget = useRef(false);
-  const sheetGeneration = useRef(0);
-  const [configBroker, setConfigBroker] = useState<ClusterBrokerCardItem | null>(null);
-  const [editorOpen, setEditorOpen] = useState(false);
-  useEffect(() => () => { sheetGeneration.current += 1; }, []);
-  const {
-    data,
-    isLoading,
-    isRefreshing,
-    loadError,
-    pendingConfigAddr,
-    pendingStatusAddr,
-    refresh,
-    getBrokerConfig,
-    getBrokerStatus,
-  } = useClusterCatalog();
-  const [selectedCluster, setSelectedCluster] = useNavigationState('cluster', '');
-  const [isSelectOpen, setIsSelectOpen] = useState(false);
-  const [detailSheet, setDetailSheet] = useState<{
-    isOpen: boolean;
-    type: 'Status' | 'Config' | null;
-    title: string;
-    data: Record<string, string>;
-  }>({
-    isOpen: false,
-    type: null,
-    title: '',
-    data: {},
-  });
+    const { navigation, setActiveTab } = useAppStore();
+    const target = navigation.target?.kind === 'broker' ? navigation.target : null;
+    const catalog = useClusterCatalog();
+    const data = catalog.data;
+    const [selectedCluster, setSelectedCluster] = useNavigationState('cluster', '');
+    const [query, setQuery] = useNavigationState('brokerSearch', '');
+    const [selection, setSelection] = useNavigationState<BrokerIdentity | null>('selectedBroker', null);
+    const [detailMode, setDetailMode] = useNavigationState<'status' | 'config'>('brokerDetail', target?.detail === 'status' ? 'status' : 'config');
+    const alive = useRef(false);
+    useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+    const openEditor = useBrokerConfigEditor();
+    const items = data?.items ?? [];
+    const requested = selection ? items.find(item => brokerKey(item) === brokerKey(selection))
+        : target ? items.find(item => item.address === target.address) : undefined;
+    const cluster = selectedCluster || selection?.clusterName || requested?.clusterName || (target ? '' : data?.clusters[0]) || '';
+    const clusterItems = useMemo(() => items.filter(item => item.clusterName === cluster)
+        .sort((a, b) => a.brokerName.localeCompare(b.brokerName) || a.brokerId - b.brokerId), [data?.items, cluster]);
+    const filtered = clusterItems.filter(item => (item.brokerName + ' ' + item.address).toLowerCase().includes(query.trim().toLowerCase()));
+    const selected = selection || target ? requested : clusterItems[0];
+    const selectedVisible = selected && filtered.some(item => brokerKey(item) === brokerKey(selected)) ? selected : null;
+    const missing = Boolean((selection || target) && data && !catalog.pending && !catalog.error && !selected);
+    useEffect(() => { if (!selection && selected) setSelection(brokerIdentity(selected)); }, [selection, selected]);
+    const identity = selectedVisible ? brokerKey(selectedVisible) : '';
+    const address = selectedVisible?.address ?? '';
+    const loadDetail = useCallback(async () => {
+        const result = await (detailMode === 'config' ? ClusterService.getClusterBrokerConfig({ brokerAddr: address })
+            : ClusterService.getClusterBrokerStatus({ brokerAddr: address }));
+        if (result.brokerAddr !== address) throw new Error('Unexpected Broker response');
+        return result;
+    }, [identity, address, detailMode]);
+    const details = useReadResource(selectedVisible ? loadDetail : null, detailMode === 'config' ? 'Broker configuration could not be read.' : 'Broker runtime could not be read.');
+    const refresh = useCallback(() => { void catalog.refresh(); void details.read(); }, [catalog.refresh, details.read]);
+    const observedAt = selectedVisible ? catalog.receivedAt !== null && details.receivedAt !== null
+        ? Math.min(catalog.receivedAt, details.receivedAt) : null : catalog.receivedAt;
+    const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
+    useEffect(() => {
+        if (!catalog.pending && !details.pending && !catalog.error && !details.error) setRefreshedAt(observedAt);
+    }, [catalog.pending, details.pending, catalog.error, details.error, observedAt]);
+    usePageRefresh({ refresh, pending: catalog.pending || details.pending, refreshedAt });
+    const editConfiguration = () => {
+        if (!selectedVisible || detailMode !== 'config' || !details.data || details.error || details.pending) return;
+        const revision = ConnectionStore.getSnapshot()?.revision;
+        openEditor(selectedVisible, () => {
+            if (alive.current && ConnectionStore.getSnapshot()?.revision === revision) void details.read();
+        });
+    };
 
-  useEffect(() => {
-    if (target) {
-      setSelectedCluster(data?.items.find((item) => item.address === target.address)?.clusterName ?? '');
-      return;
-    }
-    if (!data?.clusters.length) {
-      setSelectedCluster('');
-      return;
-    }
-
-    setSelectedCluster((previous) =>
-      previous && data.clusters.includes(previous) ? previous : data.clusters[0]
-    );
-  }, [data?.clusters]);
-
-  const visibleCluster = selectedCluster || (target ? '' : data?.clusters[0]) || '';
-  const targetMissing = target && data && !isLoading && !loadError && !data.items.some((item) => item.address === target.address);
-
-  const clusterData = useMemo(
-    () => (data?.items ?? []).filter((broker) => broker.clusterName === visibleCluster),
-    [data?.items, visibleCluster]
-  );
-
-  const sortedClusterData = useMemo(
-    () =>
-      [...clusterData].sort((left, right) => {
-        const leftMaster = left.role.toUpperCase() === 'MASTER' ? 1 : 0;
-        const rightMaster = right.role.toUpperCase() === 'MASTER' ? 1 : 0;
-        if (leftMaster !== rightMaster) {
-          return rightMaster - leftMaster;
-        }
-
-        if (left.isActive !== right.isActive) {
-          return Number(right.isActive) - Number(left.isActive);
-        }
-
-        return left.brokerName.localeCompare(right.brokerName);
-      }),
-    [clusterData]
-  );
-
-  const clusterMetrics = useMemo(
-    () =>
-      clusterData.reduce(
-        (acc, broker) => ({
-          produceTps: acc.produceTps + broker.produceTps,
-          consumeTps: acc.consumeTps + broker.consumeTps,
-          todayProduce: acc.todayProduce + broker.todayProduce,
-          todayConsume: acc.todayConsume + broker.todayConsume,
-          yesterdayProduce: acc.yesterdayProduce + broker.yesterdayProduce,
-          yesterdayConsume: acc.yesterdayConsume + broker.yesterdayConsume,
-          masters: acc.masters + (broker.role.toUpperCase() === 'MASTER' ? 1 : 0),
-          slaves: acc.slaves + (broker.role.toUpperCase() === 'SLAVE' ? 1 : 0),
-          active: acc.active + (broker.isActive ? 1 : 0),
-          errors: acc.errors + (broker.statusLoadError ? 1 : 0),
-        }),
-        {
-          produceTps: 0,
-          consumeTps: 0,
-          todayProduce: 0,
-          todayConsume: 0,
-          yesterdayProduce: 0,
-          yesterdayConsume: 0,
-          masters: 0,
-          slaves: 0,
-          active: 0,
-          errors: 0,
-        }
-      ),
-    [clusterData]
-  );
-
-  const allSystemsOperational =
-    clusterData.length > 0 && clusterData.every((broker) => broker.isActive && !broker.statusLoadError);
-
-  const strongestBroker = useMemo(
-    () =>
-      sortedClusterData.reduce<ClusterBrokerCardItem | null>((selected, broker) => {
-        if (!selected) {
-          return broker;
-        }
-
-        const selectedTps = selected.produceTps + selected.consumeTps;
-        const currentTps = broker.produceTps + broker.consumeTps;
-        return currentTps > selectedTps ? broker : selected;
-      }, null),
-    [sortedClusterData]
-  );
-
-  const maxBrokerTps = Math.max(
-    ...clusterData.flatMap((broker) => [broker.produceTps, broker.consumeTps]),
-    1
-  );
-
-  const clusterHealthTone = allSystemsOperational ? 'is-healthy' : clusterData.length ? 'is-warning' : 'is-muted';
-  const clusterHealthLabel = allSystemsOperational
-    ? 'All systems operational'
-    : clusterData.length
-      ? 'Cluster requires attention'
-      : loadError
-        ? 'Unable to load cluster data'
-        : 'No brokers available';
-
-  const openStatusSheet = async (brokerData: ClusterBrokerCardItem) => {
-    const generation = ++sheetGeneration.current;
-    setEditorOpen(false);
-    setConfigBroker(null);
-    setDetailSheet({
-      isOpen: true,
-      type: 'Status',
-      title: `Status [${brokerData.brokerName}][${brokerData.brokerId}]`,
-      data: {
-        brokerAddr: brokerData.address,
-        state: 'Loading broker status...',
-      },
-    });
-
-    try {
-      const status = await getBrokerStatus(brokerData.address);
-      if (generation !== sheetGeneration.current) return;
-      setDetailSheet({
-        isOpen: true,
-        type: 'Status',
-        title: `Status [${brokerData.brokerName}][${brokerData.brokerId}]`,
-        data: {
-          brokerAddr: status.brokerAddr,
-          ...status.entries,
-        },
-      });
-    } catch (error) {
-      if (generation !== sheetGeneration.current) return;
-      const message = dashboardErrorMessage(error, 'Failed to load broker status');
-      setDetailSheet({
-        isOpen: true,
-        type: 'Status',
-        title: `Status [${brokerData.brokerName}][${brokerData.brokerId}]`,
-        data: {
-          brokerAddr: brokerData.address,
-          error: message,
-        },
-      });
-      toast.error(message);
-    }
-  };
-
-  const openConfigSheet = async (brokerData: ClusterBrokerCardItem) => {
-    const generation = ++sheetGeneration.current;
-    setEditorOpen(false);
-    setConfigBroker(brokerData);
-    setDetailSheet({
-      isOpen: true,
-      type: 'Config',
-      title: `Config [${brokerData.brokerName}][${brokerData.brokerId}]`,
-      data: {
-        brokerAddr: brokerData.address,
-        state: 'Loading broker config...',
-      },
-    });
-
-    try {
-      const config = await getBrokerConfig(brokerData.address);
-      if (generation !== sheetGeneration.current) return;
-      setDetailSheet({
-        isOpen: true,
-        type: 'Config',
-        title: `Config [${brokerData.brokerName}][${brokerData.brokerId}]`,
-        data: {
-          brokerAddr: config.brokerAddr,
-          ...config.entries,
-        },
-      });
-    } catch (error) {
-      if (generation !== sheetGeneration.current) return;
-      const message = dashboardErrorMessage(error, 'Failed to load broker config');
-      setDetailSheet({
-        isOpen: true,
-        type: 'Config',
-        title: `Config [${brokerData.brokerName}][${brokerData.brokerId}]`,
-        data: {
-          brokerAddr: brokerData.address,
-          error: message,
-        },
-      });
-      toast.error(message);
-    }
-  };
-
-  useEffect(() => {
-    if (!target || openedTarget.current || !data || isLoading) return;
-    const broker = data.items.find((item) => item.address === target.address);
-    if (!broker) return;
-    openedTarget.current = true;
-    if (target.detail === 'status') void openStatusSheet(broker);
-    if (target.detail === 'config') void openConfigSheet(broker);
-  }, [target, data, isLoading]);
-
-  const handleRefresh = async () => {
-    try {
-      await refresh();
-      toast.success('Cluster status refreshed');
-    } catch (error) {
-      const message = dashboardErrorMessage(error, 'Failed to refresh cluster status');
-      toast.error(message);
-    }
-  };
-
-  return (
-    <div className="cluster-page">
-      {targetMissing && <p role="alert" className="p-4 text-red-600">Broker not found: {target.address}</p>}
-      <SideSheet
-        isOpen={detailSheet.isOpen}
-        onClose={() => { setEditorOpen(false); sheetGeneration.current += 1; setDetailSheet({ ...detailSheet, isOpen: false }); if (target) goBack(); }}
-        title={detailSheet.title}
-        data={detailSheet.data}
-        type={detailSheet.type}
-        actions={detailSheet.type === 'Config' && configBroker ? <button className="ops-detail-tool-button" onClick={() => setEditorOpen(true)}>Edit configuration</button> : undefined}
-      />
-
-      {editorOpen && configBroker && detailSheet.isOpen && <BrokerConfigEditor key={configBroker.address} broker={configBroker}
-        onClose={() => setEditorOpen(false)} onReadBack={(entries) => setDetailSheet(current => ({ ...current, data: { brokerAddr: configBroker.address, ...entries } }))} />}
-      <section className="cluster-command-panel" aria-label="Cluster controls">
-        <div className="cluster-select-shell">
-          <button
-            type="button"
-            disabled={!data?.clusters.length}
-            onClick={() => setIsSelectOpen(!isSelectOpen)}
-            onBlur={() => setTimeout(() => setIsSelectOpen(false), 180)}
-            className={`cluster-select-trigger ${isSelectOpen ? 'is-open' : ''}`}
-          >
-            <span className="cluster-select-icon">
-              <Server className="cluster-icon" />
-            </span>
-            <span className="cluster-select-copy">
-              <span>Current Cluster</span>
-              <strong>
-                {visibleCluster || (isLoading ? 'Loading...' : 'No Clusters')}
-                <ChevronDown className={`cluster-icon ${isSelectOpen ? 'is-open' : ''}`} />
-              </strong>
-            </span>
-          </button>
-
-          <AnimatePresence>
-            {isSelectOpen && (
-              <motion.div
-                initial={{ opacity: 0, y: 8, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                transition={{ duration: 0.16 }}
-                className="cluster-select-menu"
-              >
-                {(data?.clusters ?? []).map((cluster) => (
-                  <button
-                    type="button"
-                    key={cluster}
-                    onClick={() => {
-                      setSelectedCluster(cluster);
-                      setIsSelectOpen(false);
-                    }}
-                    className={visibleCluster === cluster ? 'is-selected' : undefined}
-                  >
-                    <span>{cluster}</span>
-                    {visibleCluster === cluster ? <Check className="cluster-icon" /> : null}
-                  </button>
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        <div className={`cluster-health-chip ${clusterHealthTone}`}>
-          <span />
-          {clusterHealthLabel}
-        </div>
-
-        <Button variant="ghost" onClick={() => void handleRefresh()} disabled={isRefreshing}>
-          <RefreshCw className={`ops-button-icon ${isRefreshing ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
-      </section>
-
-      {loadError && !data ? (
-        <section className="cluster-alert is-error">
-          <AlertTriangle className="cluster-icon" />
-          <div>
-            <strong>Failed to load cluster data</strong>
-            <span>{loadError}</span>
-          </div>
-          <Button variant="secondary" onClick={() => void handleRefresh()}>
-            Retry
-          </Button>
+    return <div className="ops-cluster">
+        <section className="ops-cluster-filters" aria-label="Cluster filters">
+            <label className="ops-cluster-select"><span>Cluster</span><select value={cluster} disabled={!data?.clusters.length}
+                onChange={event => {
+                    const next = event.target.value; setSelectedCluster(next); setQuery('');
+                    const first = items.find(item => item.clusterName === next);
+                    setSelection(first ? brokerIdentity(first) : null);
+                }}>
+                {!cluster && <option value="">{catalog.pending ? 'Loading clusters…' : 'No cluster selected'}</option>}
+                {cluster && !data?.clusters.includes(cluster) && <option value={cluster}>{cluster} · unavailable</option>}
+                {(data?.clusters ?? []).map(name => <option key={name} value={name}>{name}</option>)}
+            </select></label>
+            <Input label="Filter Broker" placeholder="Broker name or address" value={query} onChange={event => setQuery(event.target.value)} />
+            {query && <Button variant="ghost" icon={X} aria-label="Clear Broker filter" onClick={() => setQuery('')}>Clear</Button>}
         </section>
-      ) : null}
-
-      {!loadError && !isLoading && clusterData.length === 0 ? (
-        <section className="cluster-empty-state">
-          <Network className="cluster-empty-icon" />
-          <strong>No brokers found for this cluster</strong>
-          <span>Select another cluster or verify the current NameServer is reachable.</span>
-        </section>
-      ) : null}
-
-      {data ? (
-        <section className="cluster-summary-grid" aria-label="Cluster summary">
-          <ClusterSummaryCard
-            label="Clusters"
-            value={formatNumber(data.summary.totalClusters)}
-            hint={visibleCluster || 'No cluster selected'}
-            tone="info"
-            icon={<Layers3 className="cluster-icon" />}
-          />
-          <ClusterSummaryCard
-            label="Brokers"
-            value={formatNumber(clusterData.length || data.summary.totalBrokers)}
-            hint={`${clusterMetrics.masters || data.summary.totalMasters} master / ${clusterMetrics.slaves || data.summary.totalSlaves} slave`}
-            tone="violet"
-            icon={<Server className="cluster-icon" />}
-          />
-          <ClusterSummaryCard
-            label="Active Brokers"
-            value={formatNumber(clusterMetrics.active)}
-            hint={`${Math.max(clusterData.length - clusterMetrics.active, 0)} inactive`}
-            tone="success"
-            icon={<ShieldCheck className="cluster-icon" />}
-          />
-          <ClusterSummaryCard
-            label="NameServer"
-            value={data.currentNamesrv || 'Not Selected'}
-            hint={`VIP ${data.useVipChannel ? 'On' : 'Off'} / TLS ${data.useTls ? 'On' : 'Off'}`}
-            tone="warning"
-            icon={<Link2 className="cluster-icon" />}
-          />
-        </section>
-      ) : null}
-
-      {data ? (
-        <section className="cluster-workspace">
-          <div className="cluster-panel cluster-topology-panel">
-            <div className="cluster-panel-header">
-              <div>
-                <h2>Broker Topology</h2>
-                <p>Cluster roles, node health, and routing context.</p>
-              </div>
-              <Network className="cluster-panel-icon" />
+        {catalog.error && <PageState kind="error" title={data ? 'Cluster refresh failed' : 'Unable to load cluster data'} description={data
+            ? catalog.error + ' Showing the last successful catalog read.' : catalog.error}
+            action={<Button variant="outline" disabled={catalog.pending} onClick={() => void catalog.refresh()}>Retry catalog</Button>} />}
+        {catalog.pending && <PageState kind="loading" title={data ? 'Refreshing cluster data' : 'Loading clusters and Brokers'} />}
+        <dl className="ops-cluster-summary" aria-label="Selected cluster summary">
+            <div><dd>{data ? data.clusters.length : '—'}</dd><dt>Clusters</dt></div>
+            <div><dd>{data ? clusterItems.length : '—'}</dd><dt>Brokers</dt></div>
+            <div><dd>{data ? clusterItems.filter(item => item.role.toUpperCase() === 'MASTER').length : '—'}</dd><dt>Masters</dt></div>
+            <div><dd>{data ? clusterItems.filter(item => item.role.toUpperCase() === 'SLAVE').length : '—'}</dd><dt>Slaves</dt></div>
+        </dl>
+        {missing && <PageState kind="partial" title="Selected Broker is no longer available"
+            description={<>{selection?.brokerName ?? target?.address} is not in the current catalog. Select a Broker explicitly before viewing or editing another target.</>}
+            action={<Button variant="outline" onClick={() => setActiveTab('Cluster')}>Open cluster list</Button>} />}
+        <PageSection title="Brokers" description={'Brokers in the selected cluster and their basic information.'}>
+            <div className="ops-cluster-table-scroll" role="region" aria-label="Broker inventory" tabIndex={0}>
+                <table className="ops-cluster-broker-table"><thead><tr><th scope="col">Broker name</th><th scope="col">Role</th><th scope="col">Address</th>
+                    <th scope="col">Status</th><th scope="col">Produce + consume TPS</th><th scope="col">Refreshed</th></tr></thead>
+                    <tbody>{filtered.map(broker => <tr key={brokerKey(broker)} data-selected={selectedVisible && brokerKey(selectedVisible) === brokerKey(broker)}>
+                        <th scope="row"><label className="ops-cluster-broker-choice"><input type="radio" name="cluster-broker"
+                            checked={Boolean(selectedVisible && brokerKey(selectedVisible) === brokerKey(broker))}
+                            onChange={() => setSelection(brokerIdentity(broker))} aria-label={'Select ' + broker.brokerName + ' at ' + broker.address} />
+                            <strong>{broker.brokerName}</strong></label></th>
+                        <td><StatusBadge tone={broker.role.toUpperCase() === 'MASTER' ? 'accent' : 'neutral'}>{broker.role || 'Unknown'}</StatusBadge></td>
+                        <td><code>{broker.address}</code></td><td><BrokerStatus broker={broker} /></td>
+                        <td className="ops-cluster-number">{brokerTps(broker)?.toFixed(2) ?? 'Unknown'}</td>
+                        <td>{catalog.receivedAt ? new Date(catalog.receivedAt).toLocaleTimeString() : 'Not read'}</td>
+                    </tr>)}</tbody>
+                </table>
             </div>
-
-            <div className="cluster-topology-map">
-              <div className="cluster-hub-card">
-                <span>Cluster</span>
-                <strong>{visibleCluster || 'No cluster selected'}</strong>
-                <small>
-                  {formatNumber(clusterData.length)} brokers, {formatNumber(clusterMetrics.masters)} masters
-                </small>
-                <div className={`cluster-hub-status ${clusterHealthTone}`}>
-                  <span />
-                  {clusterHealthLabel}
-                </div>
-              </div>
-
-              <div className="cluster-topology-links" aria-hidden="true">
-                <span />
-              </div>
-
-              <div className="cluster-node-list">
-                {sortedClusterData.length ? (
-                  sortedClusterData.map((broker) => {
-                    const isMaster = broker.role.toUpperCase() === 'MASTER';
-                    return (
-                      <div
-                        key={`${broker.clusterName}-${broker.brokerName}-${broker.brokerId}-topology`}
-                        className={`cluster-node-card ${isMaster ? 'is-master' : 'is-slave'} ${broker.isActive ? 'is-active' : 'is-inactive'}`}
-                      >
-                        <div className="cluster-node-main">
-                          <span className="cluster-node-status" />
-                          <div>
-                            <strong>{broker.brokerName}</strong>
-                            <small>{broker.address}</small>
-                          </div>
-                        </div>
-                        <div className="cluster-node-meta">
-                          <span>{broker.role || 'Unknown'}</span>
-                          <span>{broker.version || 'Unknown version'}</span>
-                        </div>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="cluster-node-empty">No broker nodes</div>
-                )}
-              </div>
+            {data && !filtered.length && <PageState kind="empty" title={query ? 'No Brokers match this filter' : 'No Brokers in this cluster'}
+                description={query ? 'Clear the filter to return to the saved selection.' : 'Select another cluster or check the NameServer connection.'} />}
+            <div className="ops-cluster-table-note"><span>{filtered.length} shown{data ? ' / ' + clusterItems.length + ' in this cluster' : ''} · Refreshed times are dashboard reads.</span>
+                {data && <span>NameServer: {data.currentNamesrv || 'Not selected'} · VIP {data.useVipChannel ? 'on' : 'off'} · TLS {data.useTls ? 'on' : 'off'}</span>}</div>
+        </PageSection>
+        {selectedVisible ? <PageSection title="Broker details" description="Configuration and runtime information for the selected Broker."
+            action={detailMode === 'config' && <Button icon={Pencil} onClick={editConfiguration}
+                disabled={!details.data || Boolean(details.error) || details.pending || catalog.pending || Boolean(catalog.error)}>Edit configuration</Button>}>
+            <div className="ops-cluster-detail-identity"><h3>{selectedVisible.brokerName}</h3><BrokerStatus broker={selectedVisible} />
+                <dl><div><dt>Address</dt><dd>{selectedVisible.address}</dd></div><div><dt>Role / ID</dt><dd>{selectedVisible.role || 'Unknown'} / {selectedVisible.brokerId}</dd></div>
+                    <div><dt>Version</dt><dd>{selectedVisible.version || 'Unknown'}</dd></div></dl>
             </div>
-          </div>
-
-          <aside className="cluster-panel cluster-inspector-panel">
-            <div className="cluster-panel-header">
-              <div>
-                <h2>Broker Inspector</h2>
-                <p>Runtime counters for the selected cluster.</p>
-              </div>
-              <Gauge className="cluster-panel-icon" />
-            </div>
-
-            <div className="cluster-inspector-focus">
-              <span>Lead broker</span>
-              <strong>{strongestBroker?.brokerName ?? 'No broker'}</strong>
-              <small>{strongestBroker?.address ?? data.currentNamesrv ?? 'No endpoint selected'}</small>
-            </div>
-
-            <div className="cluster-inspector-grid">
-              <div>
-                <span>Produce TPS</span>
-                <strong>{formatTps(clusterMetrics.produceTps)}</strong>
-              </div>
-              <div>
-                <span>Consume TPS</span>
-                <strong>{formatTps(clusterMetrics.consumeTps)}</strong>
-              </div>
-              <div>
-                <span>Today produced</span>
-                <strong>{formatNumber(clusterMetrics.todayProduce)}</strong>
-              </div>
-              <div>
-                <span>Status errors</span>
-                <strong>{formatNumber(clusterMetrics.errors)}</strong>
-              </div>
-            </div>
-          </aside>
-        </section>
-      ) : null}
-
-      {sortedClusterData.length ? (
-        <section className="cluster-broker-grid" aria-label="Broker inventory">
-          {sortedClusterData.map((broker, index) => {
-            const isMaster = broker.role.toUpperCase() === 'MASTER';
-            const brokerHasAttention = !broker.isActive || Boolean(broker.statusLoadError);
-
-            return (
-              <motion.article
-                key={`${broker.clusterName}-${broker.brokerName}-${broker.brokerId}`}
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.06, type: 'spring', stiffness: 180, damping: 22 }}
-                className={`cluster-broker-card ${isMaster ? 'is-master' : 'is-slave'} ${brokerHasAttention ? 'is-attention' : ''}`}
-              >
-                <div className="cluster-broker-header">
-                  <div className="cluster-broker-title">
-                    <div>
-                      <h3>{broker.brokerName}</h3>
-                      <span>
-                        <Server className="cluster-icon" />
-                        {broker.address}
-                        <i />
-                        ID {broker.brokerId}
-                      </span>
-                    </div>
-                    <div className={`cluster-role-badge ${isMaster ? 'is-master' : 'is-slave'}`}>
-                      {isMaster ? <Crown className="cluster-icon" /> : <GitBranch className="cluster-icon" />}
-                      {isMaster ? 'Master' : broker.role || 'Replica'}
-                    </div>
-                  </div>
-                  <div className="cluster-broker-version">{broker.version || 'Unknown version'}</div>
-                </div>
-
-                <div className="cluster-broker-body">
-                  <div className="cluster-broker-section-title">
-                    <Activity className="cluster-icon" />
-                    Real-time TPS
-                  </div>
-                  <div className="cluster-broker-tps-grid">
-                    <BrokerTpsTile
-                      label="Produce"
-                      value={broker.produceTps}
-                      percent={(broker.produceTps / maxBrokerTps) * 100}
-                      tone="produce"
-                      icon={<ArrowUpCircle className="cluster-icon" />}
-                    />
-                    <BrokerTpsTile
-                      label="Consume"
-                      value={broker.consumeTps}
-                      percent={(broker.consumeTps / maxBrokerTps) * 100}
-                      tone="consume"
-                      icon={<ArrowDownCircle className="cluster-icon" />}
-                    />
-                  </div>
-
-                  <div className="cluster-broker-section-title">
-                    <Database className="cluster-icon" />
-                    Message Statistics
-                  </div>
-                  <div className="cluster-message-panel">
-                    <div className="cluster-message-row">
-                      <div>
-                        <Clock className="cluster-icon" />
-                        <strong>Today</strong>
-                      </div>
-                      <span>
-                        <small>Produce</small>
-                        {formatNumber(broker.todayProduce)}
-                      </span>
-                      <span>
-                        <small>Consume</small>
-                        {formatNumber(broker.todayConsume)}
-                      </span>
-                    </div>
-                    <div className="cluster-message-row is-muted">
-                      <div>
-                        <HardDrive className="cluster-icon" />
-                        <strong>Yesterday</strong>
-                      </div>
-                      <span>{formatNumber(broker.yesterdayProduce)}</span>
-                      <span>{formatNumber(broker.yesterdayConsume)}</span>
-                    </div>
-                  </div>
-
-                  {broker.statusLoadError ? (
-                    <div className="cluster-broker-warning">
-                      <AlertTriangle className="cluster-icon" />
-                      <span>Runtime stats could not be loaded: {broker.statusLoadError}</span>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="cluster-broker-actions">
-                  <Button
-                    variant="secondary"
-                    onClick={() => openBroker(broker.address, 'status')}
-                    className="cluster-action-button"
-                    disabled={pendingStatusAddr === broker.address}
-                  >
-                    {pendingStatusAddr === broker.address ? 'Loading...' : 'Status'}
-                  </Button>
-                  <Button
-                    variant="primary"
-                    onClick={() => openBroker(broker.address, 'config')}
-                    className="cluster-action-button"
-                    disabled={pendingConfigAddr === broker.address}
-                  >
-                    {pendingConfigAddr === broker.address ? 'Loading...' : 'Config'}
-                  </Button>
-                </div>
-              </motion.article>
-            );
-          })}
-        </section>
-      ) : null}
-    </div>
-  );
+            {selectedVisible.statusLoadError && <PageState kind="partial" title="Broker runtime was unavailable" description={selectedVisible.statusLoadError} />}
+            <Tabs value={detailMode} onValueChange={value => setDetailMode(value === 'status' ? 'status' : 'config')}>
+                <TabsList aria-label="Broker detail view"><TabsTrigger value="status">Runtime</TabsTrigger><TabsTrigger value="config">Configuration</TabsTrigger></TabsList>
+                {(['status', 'config'] as const).map(mode => <TabsContent key={mode} value={mode}>
+                    {details.pending && <PageState kind="loading" title={'Reading Broker ' + (mode === 'config' ? 'configuration' : 'runtime')} />}
+                    {details.error && <PageState kind="error" title="Broker details could not be refreshed" description={details.error}
+                        action={<Button variant="outline" disabled={details.pending} onClick={() => void details.read()}>Retry details</Button>} />}
+                    {details.data && <><p className="ops-cluster-detail-note">{details.error || details.pending ? 'Last successful detail read: ' : 'Detail read: '}
+                        {details.receivedAt ? new Date(details.receivedAt).toLocaleTimeString() : 'Not read'}{mode === 'config' ? ' · Only changed configuration values are submitted.' : ''}</p>
+                        {mode === 'status' && <><p className="ops-cluster-detail-note">Catalog counters · {catalog.receivedAt ? new Date(catalog.receivedAt).toLocaleTimeString() : 'Not read'}</p><dl className="ops-cluster-counters">
+                            {[
+                                ['Produce TPS', brokerRate(selectedVisible, 'produce')?.toFixed(2) ?? 'Unknown'],
+                                ['Consume TPS', brokerRate(selectedVisible, 'consume')?.toFixed(2) ?? 'Unknown'],
+                                ['Today produced', counterText(selectedVisible, selectedVisible.todayProduce, ['msgPutTotalTodayMorning', 'msgPutTotalTodayNow'])],
+                                ['Today consumed', counterText(selectedVisible, selectedVisible.todayConsume, ['msgGetTotalTodayMorning', 'msgGetTotalTodayNow'])],
+                                ['Yesterday produced', counterText(selectedVisible, selectedVisible.yesterdayProduce, ['msgPutTotalYesterdayMorning', 'msgPutTotalTodayMorning'])],
+                                ['Yesterday consumed', counterText(selectedVisible, selectedVisible.yesterdayConsume, ['msgGetTotalYesterdayMorning', 'msgGetTotalTodayMorning'])],
+                            ].map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}
+                        </dl></>}
+                        <BrokerEntries key={identity + ':' + mode} entries={details.data.entries} /></>}
+                </TabsContent>)}
+            </Tabs>
+        </PageSection> : <PageState kind="empty" title={selected && query ? 'Selected Broker is outside the filter' : 'Select a Broker to inspect details'}
+            description={selected && query ? 'Clear the filter to inspect the selected Broker, or explicitly select another row.' : 'Configuration edits always use the selected Broker identity.'} />}
+    </div>;
 };
