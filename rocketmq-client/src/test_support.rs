@@ -17,6 +17,9 @@
 //! This module is excluded from default production builds. Consumers must opt
 //! in with the `test-support` feature.
 
+#[cfg(test)]
+pub(crate) mod error_assertions;
+
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;

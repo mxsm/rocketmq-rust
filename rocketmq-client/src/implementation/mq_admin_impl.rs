@@ -608,6 +608,8 @@ impl MQAdminImpl {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::error_assertions::assert_invalid_argument;
+    use crate::test_support::error_assertions::client_exception;
     use std::collections::VecDeque;
     use std::future::Future;
     use std::pin::Pin;
@@ -823,7 +825,7 @@ mod tests {
         assert_eq!(after.0 - before.0, 1, "outer route discovery remains one request");
         assert_eq!(after.1 - before.1, CREATE_TOPIC_ATTEMPTS as usize);
         assert!(
-            error.to_string().contains("terminal-attempt-5"),
+            client_exception(&error).to_string().contains("terminal-attempt-5"),
             "budget exhaustion must return the last broker response: {error}"
         );
 
@@ -916,9 +918,7 @@ mod tests {
         )
         .expect_err("begin timestamp outside Java long range should fail");
 
-        assert!(error
-            .to_string()
-            .contains("queryMessage begin timestamp exceeds Java long range"));
+        assert_invalid_argument(&error);
     }
 
     #[test]
@@ -931,9 +931,7 @@ mod tests {
         let error = MQAdminImpl::timestamp_to_java_long("searchOffset", i64::MAX as u64 + 1)
             .expect_err("timestamp outside Java long range should fail");
 
-        assert!(error
-            .to_string()
-            .contains("searchOffset timestamp exceeds Java long range"));
+        assert_invalid_argument(&error);
     }
 
     #[test]
@@ -947,9 +945,7 @@ mod tests {
         let error = MQAdminImpl::java_long_to_u64("queryMessage", "indexLastUpdateTimestamp", -1)
             .expect_err("negative timestamp should not wrap");
 
-        assert!(error
-            .to_string()
-            .contains("queryMessage indexLastUpdateTimestamp is negative and cannot be represented as Rust u64"));
+        assert_invalid_argument(&error);
     }
 
     #[test]

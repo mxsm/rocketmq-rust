@@ -103,6 +103,7 @@ impl MessageUtil {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::error_assertions::client_exception;
 
     #[test]
     fn create_reply_message_uses_java_reply_topic_and_copies_request_properties() {
@@ -152,6 +153,11 @@ mod tests {
         let error =
             MessageUtil::create_reply_message(&request, b"reply-body").expect_err("missing cluster should fail");
 
-        assert!(error.to_string().contains(MessageConst::PROPERTY_CLUSTER));
+        let exception = client_exception(&error);
+        assert_eq!(
+            exception.response_code(),
+            ClientErrorCode::CREATE_REPLY_MESSAGE_EXCEPTION
+        );
+        assert!(exception.to_string().contains(MessageConst::PROPERTY_CLUSTER));
     }
 }

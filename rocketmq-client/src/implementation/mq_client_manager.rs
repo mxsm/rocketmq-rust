@@ -312,6 +312,7 @@ impl ClientPool {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::error_assertions::client_exception;
     use cheetah_string::CheetahString;
     use rocketmq_protocol::protocol::SerializeType;
 
@@ -386,7 +387,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(error
+        assert!(client_exception(&error)
             .to_string()
             .contains("ClientPool configuration conflicts with an existing client-id owner"));
     }

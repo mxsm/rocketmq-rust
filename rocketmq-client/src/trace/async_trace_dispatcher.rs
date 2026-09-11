@@ -1099,6 +1099,8 @@ pub async fn run_trace_worker_lifecycle_probe(service_context: ChildServiceConte
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::error_assertions::assert_context_field;
+    use crate::test_support::error_assertions::assert_error;
 
     fn test_runtime() -> Arc<ClientRuntime> {
         crate::runtime::test_client_runtime("async-trace-dispatcher-test")
@@ -1127,11 +1129,17 @@ mod tests {
     fn trace_dispatcher_flush_timeout_uses_timeout_descriptor() {
         let error = trace_dispatcher_flush_timeout();
 
-        assert_eq!(
-            error.descriptor().code(),
-            rocketmq_error::CORE_OPERATION_TIMED_OUT.code()
+        assert_error(&error, &rocketmq_error::CORE_OPERATION_TIMED_OUT);
+        assert_context_field(
+            &error,
+            "operation",
+            rocketmq_error::ViewValueRef::Text("trace_dispatcher_flush"),
         );
-        assert!(error.to_string().contains("trace_dispatcher_flush"));
+        assert_context_field(
+            &error,
+            "timeout_ms",
+            rocketmq_error::ViewValueRef::U64(TRACE_WORKER_FLUSH_TIMEOUT.as_millis() as u64),
+        );
     }
 
     #[test]

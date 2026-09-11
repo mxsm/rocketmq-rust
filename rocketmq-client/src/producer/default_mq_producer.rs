@@ -2616,6 +2616,8 @@ mod facade_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::error_assertions::assert_invalid_argument;
+    use crate::test_support::error_assertions::client_exception;
     use crate::ClientResult;
     use bytes::Bytes;
     use rocketmq_model::common::message::message_single::Message;
@@ -2724,11 +2726,7 @@ mod tests {
         let result = producer.send_batch(vec![msg1, msg2]).await;
 
         let err = result.expect_err("delayed batch message should be rejected before send");
-        assert!(
-            err.to_string()
-                .contains("Delayed messages are not supported for batching"),
-            "unexpected error message: {err}"
-        );
+        assert_invalid_argument(&err);
     }
 
     #[tokio::test]
@@ -2748,7 +2746,8 @@ mod tests {
 
         let err = result.expect_err("DefaultMQProducer should reject transaction sends");
         assert!(
-            err.to_string()
+            client_exception(&err)
+                .to_string()
                 .contains("sendMessageInTransaction not implement, please use TransactionMQProducer class"),
             "unexpected error message: {err}"
         );

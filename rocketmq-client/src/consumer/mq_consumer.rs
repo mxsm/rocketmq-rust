@@ -116,6 +116,7 @@ pub trait MQConsumer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::error_assertions::assert_invalid_argument;
 
     struct CustomConsumer;
 
@@ -144,7 +145,6 @@ mod tests {
             .await
             .expect_err("default MQAdmin facade should be unsupported");
 
-        assert!(error.to_string().contains("maxOffset"));
-        assert!(error.to_string().contains("MQConsumer implementation"));
+        assert_invalid_argument(&error);
     }
 }

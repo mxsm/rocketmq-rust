@@ -2422,6 +2422,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::error_assertions::client_exception;
     use std::sync::Arc;
 
     use bytes::Bytes;
@@ -2676,7 +2677,7 @@ mod tests {
 
         assert!(result
             .err()
-            .is_some_and(|error| error.to_string().contains("has been created before")));
+            .is_some_and(|error| client_exception(&error).to_string().contains("has been created before")));
         assert_eq!(duplicate_consumer.service_state(), ServiceState::CreateJust);
         assert!(duplicate_consumer
             .consume_message_service()
@@ -2778,7 +2779,7 @@ mod tests {
             .check_config()
             .expect_err("invalid consume timestamp should fail before start");
 
-        let message = error.to_string();
+        let message = client_exception(&error).to_string();
         assert!(message.contains("consumeTimestamp is invalid"));
         assert!(message.contains("yyyyMMddHHmmss"));
     }
@@ -2791,7 +2792,9 @@ mod tests {
             .check_config()
             .expect_err("missing consume timestamp should return a typed config error");
 
-        assert!(error.to_string().contains("consumeTimestamp is invalid"));
+        assert!(client_exception(&error)
+            .to_string()
+            .contains("consumeTimestamp is invalid"));
     }
 
     #[tokio::test]

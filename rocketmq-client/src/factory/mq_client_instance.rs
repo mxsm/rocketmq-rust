@@ -3005,6 +3005,8 @@ pub fn run_heartbeat_route_index_probe(
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::error_assertions::assert_invalid_state;
+    use crate::test_support::error_assertions::client_exception;
     use std::collections::VecDeque;
     use std::future::Future;
     use std::pin::Pin;
@@ -3278,13 +3280,11 @@ mod tests {
     fn sync_pull_result_missing_uses_client_invalid_state() {
         let error = sync_pull_result_missing("MQClientInstance::pull_message");
 
-        assert_eq!(
-            error.descriptor().code(),
-            rocketmq_error::CLIENT_LIFECYCLE_INVALID_STATE.code()
+        assert_invalid_state(
+            &error,
+            "PullResultExt returned by sync pull_message",
+            "MQClientInstance::pull_message returned None",
         );
-        assert!(error
-            .to_string()
-            .contains("MQClientInstance::pull_message returned None"));
     }
 
     #[tokio::test]
@@ -3578,7 +3578,9 @@ mod tests {
             .start()
             .await
             .expect_err("a client whose registration admission is closed must not start");
-        assert!(error.to_string().contains("producer registration admission is closed"));
+        assert!(client_exception(&error)
+            .to_string()
+            .contains("producer registration admission is closed"));
         assert_eq!(instance.service_state(), ServiceState::CreateJust);
     }
 
