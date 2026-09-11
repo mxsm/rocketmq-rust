@@ -22,6 +22,7 @@ interface AppState {
   openTopic: (name: string, detail?: Extract<EntityTarget, { kind: 'topic' }>['detail']) => void;
   openConsumer: (name: string, detail?: Extract<EntityTarget, { kind: 'consumer' }>['detail'], scope?: ConsumerQueryScope) => void;
   openBroker: (address: string, detail?: Extract<EntityTarget, { kind: 'broker' }>['detail']) => void;
+  openTrace: (messageId: string, topic: string) => void;
   pageStates: React.MutableRefObject<Map<number, Record<string, unknown>>>;
   setActiveTab: (tab: Tab) => void;
   setAuthSession: (sessionId: string, currentUser: SessionUser) => void;
@@ -79,7 +80,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       case 'Producer':
         return 'Producers';
       case 'Message':
-        return 'Message Query';
+        return 'Messages';
       case 'MessageTrace':
         return 'Message Trace';
       case 'DLQ':
@@ -140,6 +141,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
           navigate({ type: 'open', tab: 'Consumer', target: { kind: 'consumer', name, detail, scope }, environmentId });
         },
         openBroker: (address, detail = 'overview') => navigate({ type: 'open', tab: 'Cluster', target: { kind: 'broker', address, detail }, environmentId }),
+        openTrace: (name, topic) => navigate({ type: 'open', tab: 'MessageTrace', target: { kind: 'trace', name, topic }, environmentId }),
         pageStates, consumerQueryMode, setConsumerQueryMode,
         setActiveTab,
         setAuthSession,

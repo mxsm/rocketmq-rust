@@ -1,592 +1,100 @@
-import { useEffect, useMemo, useState } from 'react';
-import {
-  AlertCircle,
-  Calendar,
-  ChevronDown,
-  Clock3,
-  Copy,
-  FileText,
-  Hash,
-  Info,
-  KeyRound,
-  Layers,
-  Search,
-  Tag,
-} from 'lucide-react';
-import { motion } from 'motion/react';
-import { toast } from 'sonner@2.0.3';
-import { MessageDetailModal } from './MessageDetailModal';
-import { Pagination } from './Pagination';
-import { useTopicCatalog } from '../features/topic/hooks/useTopicCatalog';
-import type { MessageSummary } from '../features/message/types/message.types';
+import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore } from 'react';
+import { Copy, Search } from 'lucide-react';
+import { ConnectionStore } from '../services/connection.store';
 import { MessageService } from '../services/message.service';
-import { dashboardErrorMessage } from '../services/invoke';
+import { useNavigationState } from '../stores/app.store';
+import { useTopicCatalog } from '../features/topic/hooks/useTopicCatalog';
+import { buildMessageQuery, createMessageQueryController, type MessageQueryDraft } from '../features/message/messageQuery';
+import { messageIdentity, messageTimestamp, visibleMessageText } from '../features/message/messageModel';
+import { MessageInspector, copyMessageValue } from '../features/message/components/MessageInspector';
+import { usePageRefresh } from '../app/layout/pageToolbar';
+import { PageSection } from './layout/PageSection';
+import { PageState } from './layout/PageState';
+import { Button } from './ui/LegacyButton';
+import { Input } from './ui/LegacyInput';
+import { Pagination } from './Pagination';
+import '../features/message/message.css';
 
-type MessageTab = 'Topic' | 'Message Key' | 'Message ID';
-
-const DEFAULT_PAGE_SIZE = 12;
-
-const defaultPagination = {
-  currentPage: 1,
-  pageSize: DEFAULT_PAGE_SIZE,
-  totalPages: 0,
-  totalElements: 0,
+const localTime = (timestamp: number) => {
+    const date = new Date(timestamp);
+    return new Date(timestamp - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 19);
 };
+const initialDraft = (): MessageQueryDraft => ({ mode: 'key', topic: '', key: '', messageId: '', begin: localTime(Date.now() - 3_600_000), end: localTime(Date.now()) });
+const modes = [['key', 'By Key'], ['id', 'By ID'], ['time', 'By Time']] as const;
 
-const pad = (value: number) => value.toString().padStart(2, '0');
-
-const formatDateTimeInput = (date: Date) =>
-  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(
-    date.getMinutes(),
-  )}:${pad(date.getSeconds())}`;
-
-const formatMessageTimestamp = (value: number) => {
-  if (!value) {
-    return '-';
-  }
-  return new Date(value).toLocaleString();
-};
-
-export const MessageView = () => {
-  const [activeTab, setActiveTab] = useState<MessageTab>('Topic');
-  const [topic, setTopic] = useState('');
-  const [msgKey, setMsgKey] = useState('');
-  const [msgId, setMsgId] = useState('');
-  const [startDate, setStartDate] = useState(() => formatDateTimeInput(new Date(Date.now() - 60 * 60 * 1000)));
-  const [endDate, setEndDate] = useState(() => formatDateTimeInput(new Date()));
-  const [messages, setMessages] = useState<MessageSummary[]>([]);
-  const [selectedMessage, setSelectedMessage] = useState<MessageSummary | null>(null);
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchError, setSearchError] = useState('');
-  const [hasSearched, setHasSearched] = useState(false);
-  const [topicTaskId, setTopicTaskId] = useState('');
-  const [topicPagination, setTopicPagination] = useState(defaultPagination);
-  const { data: topicCatalog, isLoading: isTopicCatalogLoading, error: topicCatalogError } = useTopicCatalog();
-
-  const availableTopics = useMemo(
-    () => topicCatalog?.items.map((item) => item.topic) ?? [],
-    [topicCatalog],
-  );
-
-  useEffect(() => {
-    if (!topic && availableTopics.length > 0) {
-      setTopic(availableTopics[0]);
-    }
-  }, [availableTopics, topic]);
-
-  useEffect(() => {
-    setMessages([]);
-    setSelectedMessage(null);
-    setSearchError('');
-    setHasSearched(false);
-    setTopicTaskId('');
-    setTopicPagination(defaultPagination);
-  }, [activeTab]);
-
-  const resetTopicPagingState = () => {
-    setMessages([]);
-    setSelectedMessage(null);
-    setSearchError('');
-    setHasSearched(false);
-    setTopicTaskId('');
-    setTopicPagination(defaultPagination);
-  };
-
-  const parseDateTimeInput = (value: string): number | null => {
-    const normalized = value.trim().replace(' ', 'T');
-    if (!normalized) {
-      return null;
-    }
-
-    const parsed = new Date(normalized);
-    const timestamp = parsed.getTime();
-    return Number.isNaN(timestamp) ? null : timestamp;
-  };
-
-  const queryTopicPage = async (pageNum = 1) => {
-    if (!topic.trim()) {
-      setSearchError('Topic is required.');
-      return;
-    }
-
-    const begin = parseDateTimeInput(startDate);
-    const end = parseDateTimeInput(endDate);
-    if (begin === null || end === null) {
-      setSearchError('Begin and end must be valid date-time strings.');
-      return;
-    }
-    if (end < begin) {
-      setSearchError('End time must be greater than or equal to begin time.');
-      return;
-    }
-
-    setIsSearching(true);
-    setSearchError('');
-    setHasSearched(true);
-
-    try {
-      const response = await MessageService.queryMessagePageByTopic({
-        topic: topic.trim(),
-        begin,
-        end,
-        pageNum,
-        pageSize: topicPagination.pageSize,
-        taskId: topicTaskId || undefined,
-      });
-
-      setMessages(response.page.content);
-      setTopicTaskId(response.taskId);
-      setTopicPagination({
-        currentPage: response.page.number + 1,
-        pageSize: response.page.size,
-        totalPages: response.page.totalPages,
-        totalElements: response.page.totalElements,
-      });
-    } catch (error) {
-      setMessages([]);
-      setSearchError(dashboardErrorMessage(error, 'Failed to query messages by topic.'));
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  const handleSearch = async () => {
-    if (activeTab === 'Topic') {
-      await queryTopicPage(1);
-      return;
-    }
-
-    if (!topic.trim()) {
-      setSearchError('Topic is required.');
-      return;
-    }
-
-    if (activeTab === 'Message Key' && !msgKey.trim()) {
-      setSearchError('Message Key is required.');
-      return;
-    }
-
-    if (activeTab === 'Message ID' && !msgId.trim()) {
-      setSearchError('Message ID is required.');
-      return;
-    }
-
-    if (activeTab === 'Message ID') {
-      setSearchError('');
-      setHasSearched(false);
-      setMessages([]);
-      setSelectedMessage({
-        topic: topic.trim(),
-        msgId: msgId.trim(),
-        queryMsgId: msgId.trim(),
-        tags: null,
-        keys: null,
-        storeTimestamp: 0,
-      });
-      return;
-    }
-
-    setIsSearching(true);
-    setSearchError('');
-    setHasSearched(true);
-
-    try {
-      const response = activeTab === 'Message Key'
-        ? await MessageService.queryMessageByTopicKey({
-            topic: topic.trim(),
-            key: msgKey.trim(),
-          })
-        : await MessageService.queryMessageById({
-            topic: topic.trim(),
-            messageId: msgId.trim(),
-          });
-
-      setMessages(response.items);
-    } catch (error) {
-      setMessages([]);
-      setSearchError(dashboardErrorMessage(error, 'Failed to query messages.'));
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  const renderTopicSelector = () => (
-    <label className="message-query-field is-topic">
-      <span>Topic</span>
-      <div className="message-select-wrap">
-        <select
-          value={topic}
-          onChange={(event) => {
-            setTopic(event.target.value);
-            if (activeTab === 'Topic') {
-              resetTopicPagingState();
-            }
-          }}
-        >
-          {availableTopics.length === 0 ? (
-            <option value="">
-              {isTopicCatalogLoading ? 'Loading topics...' : 'No topics'}
-            </option>
-          ) : (
-            availableTopics.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))
-          )}
-        </select>
-        <ChevronDown className="message-query-icon" aria-hidden="true" />
-      </div>
-    </label>
-  );
-
-  const renderSearchArea = () => {
-    switch (activeTab) {
-      case 'Topic':
-        return (
-          <>
-            {renderTopicSelector()}
-            <div className="message-query-divider" />
-            <DateTimeField
-              label="Begin"
-              value={startDate}
-              onChange={(value) => {
-                setStartDate(value);
-                resetTopicPagingState();
-              }}
-            />
-            <DateTimeField
-              label="End"
-              value={endDate}
-              onChange={(value) => {
-                setEndDate(value);
-                resetTopicPagingState();
-              }}
-            />
-          </>
-        );
-      case 'Message Key':
-        return (
-          <>
-            {renderTopicSelector()}
-            <div className="message-query-divider" />
-            <TextQueryField
-              label="Key"
-              value={msgKey}
-              placeholder="Enter Message Key..."
-              onChange={setMsgKey}
-            />
-            <span className="message-query-limit">Only returns up to 64 messages</span>
-          </>
-        );
-      case 'Message ID':
-        return (
-          <>
-            {renderTopicSelector()}
-            <div className="message-query-divider" />
-            <TextQueryField
-              label="Message ID"
-              mono
-              value={msgId}
-              placeholder="Enter Message ID..."
-              onChange={setMsgId}
-            />
-          </>
-        );
-      default:
-        return null;
-    }
-  };
-
-  const renderEmptyCopy = () => {
-    if (activeTab === 'Topic') {
-      return 'Select a topic and time window to load paged results.';
-    }
-    if (activeTab === 'Message Key') {
-      return 'Enter a topic and message key to start searching.';
-    }
-    return 'Enter a topic and message id to open the real detail dialog directly.';
-  };
-
-  const statusText = activeTab === 'Topic'
-    ? hasSearched
-      ? `${messages.length} item(s) on page ${topicPagination.currentPage} / ${Math.max(topicPagination.totalPages, 1)}`
-      : 'ready'
-    : activeTab === 'Message ID'
-      ? selectedMessage
-        ? 'detail open'
-        : 'ready'
-      : hasSearched
-        ? `${messages.length} result(s)`
-        : 'ready';
-
-  const helperText = activeTab === 'Topic'
-    ? 'Topic query follows dynamic time defaults plus real topic/time pagination with backend taskId continuity.'
-    : activeTab === 'Message Key'
-      ? 'Message Key uses the real query path and returns up to 64 messages, matching the Java dashboard behavior.'
-      : 'Message ID opens the real detail dialog directly, while list results stay in the compact card layout.';
-
-  const pageWindowLabel = hasSearched && activeTab === 'Topic'
-    ? `${topicPagination.currentPage}/${Math.max(topicPagination.totalPages, 1)}`
-    : 'Ready';
-
-  return (
-    <div className="message-page">
-      <MessageDetailModal
-        isOpen={!!selectedMessage}
-        onClose={() => setSelectedMessage(null)}
-        message={selectedMessage}
-      />
-
-      <section className="message-mode-strip" aria-label="Message query mode">
-        {(['Topic', 'Message Key', 'Message ID'] as MessageTab[]).map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            onClick={() => setActiveTab(tab)}
-            className={`message-mode-button ${activeTab === tab ? 'is-active' : ''}`}
-          >
-            {tab}
-          </button>
-        ))}
-      </section>
-
-      <section className="message-query-surface" aria-label="Message search controls">
-        <div className="message-query-fields">
-          {renderSearchArea()}
-        </div>
-
-        <button
-          type="button"
-          onClick={() => void handleSearch()}
-          disabled={isSearching || isTopicCatalogLoading}
-          className="message-search-button"
-        >
-          <Search className="topic-icon" aria-hidden="true" />
-          {isSearching ? 'Searching' : 'Search'}
-        </button>
-      </section>
-
-      {topicCatalogError ? (
-        <MessageAlert tone="warning" message={`Failed to load topic catalog: ${topicCatalogError}`} />
-      ) : null}
-
-      {searchError ? <MessageAlert tone="danger" message={searchError} /> : null}
-
-      <section className="message-info-strip" aria-label="Message query status">
-        <div>
-          <Info className="topic-icon" aria-hidden="true" />
-          <span>{helperText}</span>
-        </div>
-        <strong>{statusText}</strong>
-      </section>
-
-      <section className="message-summary-grid" aria-label="Message query summary">
-        <MessageKpiCard label="Mode" value={activeTab} note="active query path" tone="blue" icon={Layers} />
-        <MessageKpiCard label="Results" value={String(messages.length)} note="current result set" tone="cyan" icon={FileText} />
-        <MessageKpiCard label="Topic" value={topic || '-'} note="selected source" tone="green" icon={Tag} />
-        <MessageKpiCard label="Page" value={pageWindowLabel} note="task continuity" tone="violet" icon={Hash} />
-      </section>
-
-      {isSearching ? (
-        <MessageState icon={Search} title="Querying messages" copy="The broker query is running for the selected mode and scope." active />
-      ) : messages.length > 0 ? (
-        <>
-          <section className="message-result-grid" aria-label="Message search results">
-            {messages.map((message, index) => (
-              <MessageResultCard
-                key={`${message.topic}-${message.msgId}`}
-                message={message}
-                index={index}
-                formatTimestamp={formatMessageTimestamp}
-                onOpen={() => setSelectedMessage(message)}
-              />
-            ))}
-          </section>
-
-          {activeTab === 'Topic' && topicPagination.totalPages > 1 ? (
-            <div className="message-pagination-wrap">
-              <Pagination
-                currentPage={topicPagination.currentPage}
-                totalPages={topicPagination.totalPages}
-                onPageChange={(page) => void queryTopicPage(page)}
-              />
+export function MessageView() {
+    const [draft, storeDraft] = useNavigationState<MessageQueryDraft>('messageQuery', initialDraft);
+    const [selection, setSelection] = useState<string | null>(null);
+    const [localPage, setLocalPage] = useState(1);
+    const [validation, setValidation] = useState('');
+    const [hasSearched, setHasSearched] = useState(false);
+    const topics = useTopicCatalog();
+    const topicsId = useId();
+    const controller = useMemo(() => {
+        const original = ConnectionStore.getSnapshot();
+        return createMessageQueryController(MessageService, () => {
+            const current = ConnectionStore.getSnapshot();
+            return current?.revision === original?.revision && current?.environmentId === original?.environmentId;
+        });
+    }, []);
+    const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+    useEffect(() => { controller.start(); return controller.stop; }, [controller]);
+    const update = (patch: Partial<MessageQueryDraft>) => {
+        controller.reset(); setSelection(null); setLocalPage(1); setValidation(''); setHasSearched(false);
+        storeDraft({ ...draft, ...patch });
+    };
+    const query = useCallback(() => {
+        try {
+            const request = buildMessageQuery(draft);
+            setValidation(''); setHasSearched(true); setLocalPage(1);
+            void controller.read(request, 1, true);
+        } catch (error) { setValidation((error as Error).message); }
+    }, [controller, draft]);
+    const refresh = useCallback(() => { void topics.refresh(); if (hasSearched) query(); }, [topics.refresh, hasSearched, query]);
+    usePageRefresh({ refresh, pending: topics.pending || state.pending, refreshedAt: state.receivedAt });
+    const result = state.result;
+    const selected = result?.items.find(item => messageIdentity(item) === selection);
+    useEffect(() => { if (selection === null && result?.items[0]) setSelection(messageIdentity(result.items[0])); }, [selection, result]);
+    const timeMode = result?.query.mode === 'time';
+    const pageCount = timeMode ? result.totalPages : Math.ceil((result?.items.length ?? 0) / 12);
+    const page = timeMode ? result.page : Math.min(localPage, Math.max(1, pageCount));
+    const rows = result ? timeMode ? result.items : result.items.slice((page - 1) * 12, page * 12) : [];
+    return <div className="ops-messages">
+        <section className="ops-message-query" aria-label="Message query">
+            <div className="ops-message-query-heading"><div className="ops-message-modes" role="group" aria-label="Message query mode">{modes.map(([mode, label]) => <Button key={mode} variant={draft.mode === mode ? 'primary' : 'ghost'} aria-pressed={draft.mode === mode} onClick={() => { if (mode !== draft.mode) update({ mode }); }}>{label}</Button>)}</div>
+                {draft.mode === 'key' && <p className="ops-message-note">Key lookup returns up to 64 indexed messages.</p>}
+                {draft.mode === 'time' && <p className="ops-message-note">Local time: {Intl.DateTimeFormat().resolvedOptions().timeZone}. Refresh starts a new scan.</p>}
             </div>
-          ) : null}
-        </>
-      ) : hasSearched ? (
-        <MessageState icon={Search} title="No matching messages" copy="Check the current topic, time range, key, or message id." />
-      ) : (
-        <MessageState icon={Search} title="Search is ready" copy={renderEmptyCopy()} />
-      )}
-    </div>
-  );
-};
-
-const DateTimeField = ({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-}) => (
-  <label className="message-query-field is-time">
-    <span>{label}</span>
-    <div className="message-input-wrap">
-      <input value={value} onChange={(event) => onChange(event.target.value)} />
-      <Calendar className="message-query-icon" aria-hidden="true" />
-    </div>
-  </label>
-);
-
-const TextQueryField = ({
-  label,
-  value,
-  placeholder,
-  mono = false,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  placeholder: string;
-  mono?: boolean;
-  onChange: (value: string) => void;
-}) => (
-  <label className="message-query-field is-text">
-    <span>{label}</span>
-    <input
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      placeholder={placeholder}
-      className={mono ? 'is-mono' : ''}
-    />
-  </label>
-);
-
-const MessageAlert = ({ tone, message }: { tone: 'warning' | 'danger'; message: string }) => (
-  <div className={`message-alert is-${tone}`}>
-    <AlertCircle className="topic-icon" aria-hidden="true" />
-    <span>{message}</span>
-  </div>
-);
-
-const MessageKpiCard = ({
-  label,
-  value,
-  note,
-  tone,
-  icon: Icon,
-}: {
-  label: string;
-  value: string;
-  note: string;
-  tone: 'blue' | 'cyan' | 'green' | 'violet';
-  icon: typeof Layers;
-}) => (
-  <article className={`message-kpi-card is-${tone}`}>
-    <div>
-      <span>{label}</span>
-      <strong title={value}>{value}</strong>
-      <small>{note}</small>
-    </div>
-    <Icon className="topic-icon" aria-hidden="true" />
-  </article>
-);
-
-const MessageResultCard = ({
-  message,
-  index,
-  formatTimestamp,
-  onOpen,
-}: {
-  message: MessageSummary;
-  index: number;
-  formatTimestamp: (timestamp: number) => string;
-  onOpen: () => void;
-}) => (
-  <motion.article
-    initial={{ opacity: 0, y: 14 }}
-    animate={{ opacity: 1, y: 0 }}
-    transition={{ duration: 0.22, delay: Math.min(index * 0.025, 0.22) }}
-    className="message-result-card"
-  >
-    <div className="message-result-head">
-      <span className="message-result-icon">
-        <FileText className="topic-icon" aria-hidden="true" />
-      </span>
-      <div>
-        <span>Message ID</span>
-        <strong title={message.msgId}>{message.msgId}</strong>
-      </div>
-      <button
-        type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          navigator.clipboard.writeText(message.msgId);
-          toast.success('Copied message ID');
-        }}
-        className="message-copy-button"
-        aria-label="Copy message id"
-      >
-        <Copy className="topic-icon" aria-hidden="true" />
-      </button>
-    </div>
-
-    <div className="message-result-body">
-      <MessageMeta icon={Tag} label="Tag" value={message.tags || '-'} tone="blue" />
-      <MessageMeta icon={KeyRound} label="Key" value={message.keys || '-'} tone="amber" mono />
-      <MessageMeta icon={Clock3} label="Store Time" value={formatTimestamp(message.storeTimestamp)} tone="green" mono />
-    </div>
-
-    <div className="message-result-footer">
-      <button type="button" onClick={onOpen} className="message-detail-button">
-        <FileText className="topic-icon" aria-hidden="true" />
-        View Details
-      </button>
-    </div>
-  </motion.article>
-);
-
-const MessageMeta = ({
-  icon: Icon,
-  label,
-  value,
-  tone,
-  mono = false,
-}: {
-  icon: typeof Tag;
-  label: string;
-  value: string;
-  tone: 'blue' | 'amber' | 'green';
-  mono?: boolean;
-}) => (
-  <div className={`message-meta is-${tone}`}>
-    <span className="message-meta-icon">
-      <Icon className="topic-icon" aria-hidden="true" />
-    </span>
-    <div>
-      <span>{label}</span>
-      <strong className={mono ? 'is-mono' : ''} title={value}>{value}</strong>
-    </div>
-  </div>
-);
-
-const MessageState = ({
-  icon: Icon,
-  title,
-  copy,
-  active = false,
-}: {
-  icon: typeof Search;
-  title: string;
-  copy: string;
-  active?: boolean;
-}) => (
-  <div className={`message-state ${active ? 'is-active' : ''}`}>
-    <Icon className="topic-icon" aria-hidden="true" />
-    <strong>{title}</strong>
-    <span>{copy}</span>
-  </div>
-);
+            <form className="ops-message-query-fields" onSubmit={event => { event.preventDefault(); query(); }}>
+                <Input label="Topic" placeholder="Choose or enter a Topic" list={topicsId} value={draft.topic} onChange={event => update({ topic: event.target.value })} required />
+                <datalist id={topicsId}>{topics.data?.items.map(item => <option key={item.topic} value={item.topic} />)}</datalist>
+                {draft.mode === 'key' && <Input label="Key" value={draft.key} onChange={event => update({ key: event.target.value })} required />}
+                {draft.mode === 'id' && <Input label="Message ID" value={draft.messageId} onChange={event => update({ messageId: event.target.value })} required />}
+                {draft.mode === 'time' && <><Input label="Begin" type="datetime-local" step={1} value={draft.begin} onChange={event => update({ begin: event.target.value })} required />
+                    <Input label="End" type="datetime-local" step={1} value={draft.end} onChange={event => update({ end: event.target.value })} required /></>}
+                <Button type="submit" icon={Search} disabled={state.pending}>{state.pending ? 'Querying…' : 'Query'}</Button>
+            </form>
+            {draft.mode === 'id' && <p className="ops-message-note">A physical message ID contains a Broker address that must be reachable from this app. Unique IDs may resolve to a different physical ID.</p>}
+            {topics.error && <p className="ops-message-note">Topic suggestions are unavailable. Manual Topic input remains available.</p>}
+            {validation && <PageState kind="error" title="Check query conditions" description={validation} />}
+        </section>
+        <PageSection title="Query results" description={result ? `${result.total.toLocaleString()} ${result.total === 1 ? 'message' : 'messages'} · Topic: ${result.query.topic} · Last successful query: ${new Date(state.receivedAt!).toLocaleString()}` : 'Run a query to inspect matching messages.'}>
+            {state.pending && <PageState kind="loading" title="Reading messages" />}
+            {state.error && <PageState kind="error" title="Message query failed" description={state.error + (result ? ' Showing the last successful result.' : '')} />}
+            {!hasSearched && <PageState kind="empty" title="No query yet" description="Select a query mode and enter its required conditions." />}
+            {result && <>
+                <div className="ops-message-scroll" role="region" aria-label="Message results" tabIndex={0}><table><thead><tr>
+                    {['Message ID', 'Topic', 'Tags', 'Keys', 'Store time'].map(label => <th scope="col" key={label}>{label}</th>)}
+                </tr></thead><tbody>{rows.map(message => <tr key={messageIdentity(message)} data-selected={messageIdentity(message) === selection}>
+                    <th scope="row"><div className="ops-message-result-id"><button type="button" className="ops-message-choice" title={message.msgId} aria-pressed={messageIdentity(message) === selection} onClick={() => setSelection(messageIdentity(message))}>{visibleMessageText(message.msgId)}</button>
+                        <Button variant="ghost" icon={Copy} aria-label={'Copy message ID ' + message.msgId} onClick={() => { void copyMessageValue(message.msgId, 'Message ID'); }} /></div></th>
+                    <td>{visibleMessageText(message.topic)}</td><td>{visibleMessageText(message.tags || 'Not reported')}</td><td>{visibleMessageText(message.keys || 'Not reported')}</td><td>{messageTimestamp(message.storeTimestamp)}</td>
+                </tr>)}</tbody></table></div>
+                {!rows.length && <PageState kind="empty" title="No matching messages returned" description="The query completed without reporting matching messages on this page." />}
+                {pageCount > 1 && <Pagination currentPage={page} totalPages={pageCount} disabled={state.pending} onPageChange={value => { if (timeMode) void controller.read(result.query, value); else setLocalPage(value); }} />}
+            </>}
+        </PageSection>
+        {selected ? <MessageInspector key={messageIdentity(selected)} message={selected} disabled={state.pending || Boolean(state.error)} />
+            : result && <PageState kind="empty" title={selection ? 'Selected message is not in the returned page' : 'Select a message'} description="Choose a returned record explicitly to inspect its body and delivery metadata." />}
+    </div>;
+}
