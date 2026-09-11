@@ -36,16 +36,35 @@ pub use handler::Handler;
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```
 /// use rocketmq_model::common::chain::{Handler, HandlerChain};
 ///
-/// let chain = HandlerChain::<Request, Response>::create()
-///     .add_next(Box::new(ValidationHandler))
-///     .add_next(Box::new(AuthenticationHandler))
-///     .add_next(Box::new(ProcessingHandler));
+/// struct Increment;
+/// struct Double;
 ///
-/// let response = chain.handle(request);
+/// impl Handler<i32, i32> for Increment {
+///     fn handle(&self, request: i32, chain: &HandlerChain<i32, i32>) -> Option<i32> {
+///         chain.handle(request + 1)
+///     }
+/// }
+///
+/// impl Handler<i32, i32> for Double {
+///     fn handle(&self, request: i32, _chain: &HandlerChain<i32, i32>) -> Option<i32> {
+///         Some(request * 2)
+///     }
+/// }
+///
+/// let chain = HandlerChain::create()
+///     .add_next(Box::new(Increment))
+///     .add_next(Box::new(Double));
+/// assert_eq!(chain.handle(3), Some(8));
+/// assert_eq!(chain.handle(3), None);
 /// ```
+///
+/// The cursor advances before each handler is called. Handlers delegate explicitly
+/// through [`Self::handle`]; returning a response without delegation stops that call.
+/// Later calls continue at the current cursor. Independent requests require an
+/// explicit [`Self::reset`] when reusing the chain.
 pub struct HandlerChain<T, R> {
     /// List of handlers in the chain
     handlers: Vec<Box<dyn Handler<T, R>>>,
@@ -64,8 +83,12 @@ impl<T, R> HandlerChain<T, R> {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
-    /// let chain = HandlerChain::<Request, Response>::create();
+    /// ```
+    /// use rocketmq_model::common::chain::HandlerChain;
+    ///
+    /// let chain = HandlerChain::<i32, i32>::create();
+    /// assert!(chain.is_empty());
+    /// assert_eq!(chain.handle(1), None);
     /// ```
     pub fn create() -> Self {
         Self {
@@ -86,13 +109,7 @@ impl<T, R> HandlerChain<T, R> {
     ///
     /// Self for method chaining
     ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let chain = HandlerChain::create()
-    ///     .add_next(Box::new(FirstHandler))
-    ///     .add_next(Box::new(SecondHandler));
-    /// ```
+    /// See [`HandlerChain`] for a complete example with delegating and terminal handlers.
     pub fn add_next(mut self, handler: Box<dyn Handler<T, R>>) -> Self {
         self.handlers.push(handler);
         self
@@ -113,22 +130,10 @@ impl<T, R> HandlerChain<T, R> {
     /// An `Option<R>` containing the response, or `None` if no handlers
     /// are left or no response is produced
     ///
-    /// # Implementation Note
-    ///
-    /// Uses Cell to store current_index, achieving interior mutability. This allows
-    /// modifying the index while holding an immutable borrow of self, avoiding
-    /// borrow conflicts and unsafe code.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// let mut chain = HandlerChain::create()
-    ///     .add_next(Box::new(MyHandler));
-    ///
-    /// if let Some(response) = chain.handle(request) {
-    ///     println!("Got response: {:?}", response);
-    /// }
-    /// ```
+    /// The cursor advances before invoking the selected handler. Returning a response
+    /// without calling `chain.handle` leaves later handlers for a subsequent call.
+    /// The cursor is not reset automatically, even if a handler returns `None`.
+    /// See [`HandlerChain`] for delegation and [`Self::reset`] for reuse.
     pub fn handle(&self, t: T) -> Option<R> {
         let index = self.current_index.get();
         if index < self.handlers.len() {
@@ -149,13 +154,21 @@ impl<T, R> HandlerChain<T, R> {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
-    /// let mut chain = HandlerChain::create()
-    ///     .add_next(Box::new(MyHandler));
+    /// ```
+    /// use rocketmq_model::common::chain::{Handler, HandlerChain};
     ///
-    /// chain.handle(request1);
+    /// struct Echo;
+    /// impl Handler<i32, i32> for Echo {
+    ///     fn handle(&self, request: i32, _chain: &HandlerChain<i32, i32>) -> Option<i32> {
+    ///         Some(request)
+    ///     }
+    /// }
+    ///
+    /// let mut chain = HandlerChain::create().add_next(Box::new(Echo));
+    /// assert_eq!(chain.handle(7), Some(7));
+    /// assert_eq!(chain.handle(8), None);
     /// chain.reset();
-    /// chain.handle(request2); // Start from first handler again
+    /// assert_eq!(chain.handle(8), Some(8));
     /// ```
     pub fn reset(&mut self) {
         self.current_index.set(0);
