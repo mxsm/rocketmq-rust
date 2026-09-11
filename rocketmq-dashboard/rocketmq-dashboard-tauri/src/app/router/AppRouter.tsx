@@ -23,12 +23,9 @@ import {AccountPage} from '../../pages/account/AccountPage';
 
 export const AppRouter = () => {
     const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
-    const { activeTab, navigation, canGoBack, goBack } = useAppStore();
+    const { activeTab, navigation } = useAppStore();
     const key = ['NameServer', 'Proxy', 'Account', 'Sessions', 'Audit'].includes(activeTab) ? activeTab : `${activeTab}:${settings?.revision ?? 0}`;
-    return <><div className="flex items-center gap-3 px-6 py-2">
-        {canGoBack && <button type="button" className="text-sm underline" onClick={goBack}>Back</button>}
-        {navigation.target && <span className="text-sm text-gray-500">{navigation.target.kind}: {'name' in navigation.target ? navigation.target.name : navigation.target.address}</span>}
-    </div><RouteContent key={`${key}:${navigation.id}`} /></>;
+    return <RouteContent key={`${key}:${navigation.id}`} />;
 };
 
 const RouteContent = () => {
