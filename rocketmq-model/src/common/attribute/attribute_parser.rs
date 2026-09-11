@@ -126,17 +126,26 @@ mod tests {
         assert_eq!(result, "");
     }
 
-    // #[test]
-    // fn test_parse_to_string_valid_map() {
-    //     let mut attributes = HashMap::new();
-    //     attributes.insert("+key1".to_string(), "value1".to_string());
-    //     attributes.insert("+key2".to_string(), "value2".to_string());
-    //     attributes.insert("-key3".to_string(), "".to_string());
-
-    //     let result = AttributeParser::parse_to_string(&attributes);
-    //     assert!(
-    //         result == "+key1=value1,+key2=value2,-key3"
-    //             || result == "+key2=value2,+key1=value1,-key3"
-    //     );
-    // }
+    #[test]
+    fn test_parse_to_string_nonempty_operations_round_trip() {
+        for (operations, mut expected) in [
+            (
+                vec![("+key1", "hello 世界"), ("+key2", "value2"), ("-key3", "")],
+                vec!["+key1=hello 世界", "+key2=value2", "-key3"],
+            ),
+            (vec![("+key1", "hello 世界")], vec!["+key1=hello 世界"]),
+            (vec![("-key3", "")], vec!["-key3"]),
+        ] {
+            let attributes = operations
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect();
+            let result = AttributeParser::parse_to_string(&attributes);
+            let mut tokens: Vec<_> = result.split(',').collect();
+            tokens.sort_unstable();
+            expected.sort_unstable();
+            assert_eq!(tokens, expected);
+            assert_eq!(AttributeParser::parse_to_map(&result).unwrap(), attributes);
+        }
+    }
 }
