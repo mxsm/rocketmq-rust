@@ -115,7 +115,7 @@ export const MainLayout = ({children}: MainLayoutProps) => {
     };
 
     return (
-        <div className={`app-shell ${isDark ? 'dark' : ''}`}>
+        <div className="app-shell">
             <Toaster position="bottom-right" theme={isDark ? 'dark' : 'light'}/>
 
             <aside className="app-sidebar">

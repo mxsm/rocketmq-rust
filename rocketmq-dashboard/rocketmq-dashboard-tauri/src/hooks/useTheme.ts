@@ -1,24 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useSyncExternalStore } from 'react';
+import { ThemeStore } from '../stores/theme';
 
 export function useTheme() {
-  const [isDark, setIsDark] = useState(false);
-
-  useEffect(() => {
-    // Check initial preference
-    if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      setIsDark(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (isDark) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [isDark]);
-
-  const toggleTheme = () => setIsDark(!isDark);
-
-  return { isDark, toggleTheme };
+  const theme = useSyncExternalStore(ThemeStore.subscribe, ThemeStore.getSnapshot, ThemeStore.getServerSnapshot);
+  return { theme, isDark: theme === 'dark', toggleTheme: ThemeStore.toggle, setTheme: ThemeStore.setTheme };
 }
