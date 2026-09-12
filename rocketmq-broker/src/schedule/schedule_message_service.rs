@@ -67,6 +67,7 @@ use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::MessageStoreConfig;
 use rocketmq_store::PutMessageResult;
 use rocketmq_store::PutMessageStatus;
+use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
@@ -502,14 +503,24 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         this: Arc<Self>,
         persist_initial_delay: Duration,
     ) -> Result<()> {
-        Self::start_internal(this, persist_initial_delay, true).await
+        Self::start_internal(this, persist_initial_delay, true, None).await
     }
 
-    pub(crate) async fn start_persist_task_for_probe(this: Arc<Self>, persist_initial_delay: Duration) -> Result<()> {
-        Self::start_internal(this, persist_initial_delay, false).await
+    pub(crate) async fn start_persist_task_for_probe(
+        this: Arc<Self>,
+        persist_initial_delay: Duration,
+    ) -> Result<oneshot::Receiver<Result<()>>> {
+        let (first_persist, completion) = oneshot::channel();
+        Self::start_internal(this, persist_initial_delay, false, Some(first_persist)).await?;
+        Ok(completion)
     }
 
-    async fn start_internal(this: Arc<Self>, persist_initial_delay: Duration, start_delivery: bool) -> Result<()> {
+    async fn start_internal(
+        this: Arc<Self>,
+        persist_initial_delay: Duration,
+        start_delivery: bool,
+        first_persist: Option<oneshot::Sender<Result<()>>>,
+    ) -> Result<()> {
         let mut lifecycle = this.lifecycle.lock().await;
         if lifecycle.finalized {
             return Err(schedule_message_service_startup_failed("service is already finalized"));
@@ -587,6 +598,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
                 &scheduled_tasks,
                 activation_rx,
                 persist_initial_delay,
+                first_persist,
             )
         }
         .await;
@@ -621,6 +633,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         scheduled_tasks: &ScheduledTaskGroup,
         activation: watch::Receiver<bool>,
         initial_delay: Duration,
+        mut first_persist: Option<oneshot::Sender<Result<()>>>,
     ) -> Result<()> {
         let service = Arc::downgrade(this);
         let context = run_context.clone();
@@ -634,6 +647,7 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
                 let service = service.clone();
                 let context = context.clone();
                 let mut activation = activation.clone();
+                let first_persist = first_persist.take();
                 async move {
                     if !wait_for_schedule_activation(&mut activation, &context.cancellation).await {
                         return;
@@ -641,12 +655,16 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
                     let Some(service) = service.upgrade() else {
                         return;
                     };
-                    if let Err(error) = service.persist_generation(&context).await {
+                    let result = service.persist_generation(&context).await;
+                    if let Err(error) = &result {
                         warn!(
                             ?error,
                             generation = context.generation,
                             "failed to persist schedule offsets"
                         );
+                    }
+                    if let Some(completion) = first_persist {
+                        let _ = completion.send(result);
                     }
                 }
             })
@@ -2392,6 +2410,58 @@ mod tests {
             let persisted: DelayOffsetSerializeWrapper = serde_json::from_str(&encoded).unwrap();
             assert_eq!(persisted.offset_table().unwrap().get(&1), Some(&11));
         }
+    }
+
+    #[tokio::test]
+    async fn persistence_probe_completion_waits_for_the_offset_write() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_string_lossy().into_owned();
+        let mut runtime = BrokerRuntime::new(
+            Arc::new(BrokerConfig {
+                store_path_root_dir: root.clone().into(),
+                ..BrokerConfig::default()
+            }),
+            Arc::new(MessageStoreConfig {
+                store_path_root_dir: root.into(),
+                ..MessageStoreConfig::default()
+            }),
+        );
+        let service = runtime
+            .runtime_state_mut()
+            .schedule_message_service_for_test()
+            .unwrap()
+            .clone();
+        service.offset_state.update_offset(1, 7, 1, 0);
+        let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let writer_release = Arc::clone(&release);
+        let (entered_tx, entered_rx) = oneshot::channel();
+        *service.before_persist_write.lock() = Some(Box::new(move || {
+            let _ = entered_tx.send(());
+            let (lock, ready) = &*writer_release;
+            let guard = lock.lock().unwrap();
+            drop(ready.wait_while(guard, |released| !*released).unwrap());
+        }));
+        let mut completion = ScheduleMessageService::start_persist_task_for_probe(service.clone(), Duration::ZERO)
+            .await
+            .unwrap();
+        let entered = tokio::time::timeout(Duration::from_secs(5), entered_rx).await;
+        let pending = completion.try_recv();
+        // Release the writer before any assertion so a failed test cannot strand it.
+        let (lock, ready) = &*release;
+        *lock.lock().unwrap() = true;
+        ready.notify_all();
+        let completed = tokio::time::timeout(Duration::from_secs(5), completion).await;
+        // Read before shutdown can create the file through its final persistence pass.
+        let encoded = std::fs::read_to_string(service.config_file_path());
+        let shutdown = service.shutdown().await;
+
+        assert!(entered.is_ok_and(|result| result.is_ok()));
+        assert!(matches!(pending, Err(oneshot::error::TryRecvError::Empty)));
+        completed.unwrap().unwrap().unwrap();
+        let persisted: DelayOffsetSerializeWrapper = serde_json::from_str(&encoded.unwrap()).unwrap();
+        assert_eq!(persisted.offset_table().unwrap().get(&1), Some(&7));
+        shutdown.unwrap();
+        assert_eq!(service.task_count(), 0);
     }
 
     #[tokio::test]

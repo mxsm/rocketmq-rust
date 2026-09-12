@@ -1107,8 +1107,9 @@ async fn blocking_shutdown_hook_cannot_extend_the_absolute_deadline() {
     signal.notify_all();
 
     let report = result.expect("shutdown must return while the hook remains blocked");
-    assert!(report.deadline.timed_out);
     let _ = context.shutdown_tasks(Duration::from_secs(1)).await;
+    assert!(report.deadline.timed_out, "{report:?}");
+    assert!(!report.is_healthy(), "{report:?}");
 }
 
 #[test]

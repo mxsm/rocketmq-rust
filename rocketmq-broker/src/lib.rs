@@ -1081,24 +1081,31 @@ pub mod bench_support {
             .expect("schedule message service should be configured")
             .clone();
 
-        crate::schedule::schedule_message_service::ScheduleMessageService::start_persist_task_for_probe(
-            service.clone(),
-            Duration::ZERO,
-        )
-        .await
-        .expect("broker schedule persist task should start");
+        let first_persist =
+            crate::schedule::schedule_message_service::ScheduleMessageService::start_persist_task_for_probe(
+                service.clone(),
+                Duration::ZERO,
+            )
+            .await
+            .expect("broker schedule persist task should start");
 
-        let mut snapshots = service.schedule_snapshot();
-        for _ in 0..100 {
-            if snapshots
-                .iter()
-                .any(|snapshot| snapshot.runs > 0 && snapshot.active_runs == 0)
-            {
-                break;
+        // Wait for the actual write, then let the scheduler account for its completed run.
+        // The timeout bounds a broken probe; it is not a fixed warm-up period.
+        let completed_snapshots = tokio::time::timeout(Duration::from_secs(5), async {
+            first_persist.await.ok()?.ok()?;
+            loop {
+                let snapshots = service.schedule_snapshot();
+                if snapshots.iter().any(|snapshot| snapshot.runs > 0) {
+                    return Some(snapshots);
+                }
+                tokio::task::yield_now().await;
             }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-            snapshots = service.schedule_snapshot();
-        }
+        })
+        .await
+        .ok()
+        .flatten();
+        let first_persist_completed = completed_snapshots.is_some();
+        let snapshots = completed_snapshots.unwrap_or_else(|| service.schedule_snapshot());
 
         let scheduled_runs = snapshots.iter().map(|snapshot| snapshot.runs).sum();
         let scheduled_skips = snapshots.iter().map(|snapshot| snapshot.skips).sum();
@@ -1113,7 +1120,8 @@ pub mod bench_support {
             .expect("broker schedule persist task should shutdown");
         let shutdown_elapsed_us = shutdown_started_at.elapsed().as_micros();
         let task_count_after_shutdown = service.task_count();
-        let healthy = scheduled_runs > 0
+        let healthy = first_persist_completed
+            && scheduled_runs > 0
             && scheduled_overlaps == 0
             && scheduled_failures == 0
             && task_count_before_shutdown > 0
@@ -1198,11 +1206,9 @@ mod bench_support_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn broker_schedule_persistence_lifecycle_probe_reports_clean_shutdown() {
-        let root = std::env::temp_dir().join(format!(
-            "rocketmq-rust-broker-schedule-persist-probe-{}",
-            rocketmq_runtime::common::time_utils::current_millis()
-        ));
-        let probe = super::bench_support::run_broker_schedule_persistence_lifecycle_probe(root).await;
+        let root = tempfile::tempdir().expect("schedule persistence probe temp directory");
+        let probe =
+            super::bench_support::run_broker_schedule_persistence_lifecycle_probe(root.path().to_path_buf()).await;
 
         assert!(probe.healthy, "{probe:?}");
         assert!(probe.persisted_offset_file, "{probe:?}");
