@@ -101,7 +101,7 @@ impl NameServerAddressUtils {
         } else {
             let start = endpoint.rfind('/').map_or(0, |index| index + 1);
             let dot_pos = endpoint.find('.').unwrap_or(endpoint.len());
-            Some(endpoint[start..dot_pos].to_string())
+            endpoint.get(start..dot_pos).map(str::to_owned)
         }
     }
 
@@ -148,6 +148,18 @@ mod tests {
             Some("MQ_INST_abc_def")
         );
         assert_eq!(NameServerAddressUtils::parse_instance_id_from_endpoint(""), None);
+    }
+
+    #[test]
+    fn parse_instance_id_from_endpoint_returns_none_instead_of_panicking_when_last_slash_is_after_first_dot() {
+        assert_eq!(
+            NameServerAddressUtils::parse_instance_id_from_endpoint("http://example.com/MQ_INST_abc_def"),
+            None
+        );
+        assert_eq!(
+            NameServerAddressUtils::parse_instance_id_from_endpoint("http://example.com/"),
+            None
+        );
     }
 
     #[test]
