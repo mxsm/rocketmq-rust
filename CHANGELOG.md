@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **test(client):** Cover recovery after malformed client trace records: a truncated record placed between two valid ones, truncated Pub/SubBefore/SubAfter/EndTransaction/Recall records, corrupted required timestamp/cost/retry-count fields, and unknown types with repeated separators — all skipped without disrupting neighboring valid records ([#10536](https://github.com/mxsm/rocketmq-rust/issues/10536)).
 - **test(client):** Cover optional reply metadata and reply body ownership in `MessageUtil::create_reply_message`: cluster-only requests leaving reply-to/correlation-ID/TTL absent, each optional property copied independently, unrelated request properties not inherited, and the reply body copied independently of the caller's buffer including the empty-body case ([#10535](https://github.com/mxsm/rocketmq-rust/issues/10535)).
 - **test(client):** Cover DNS grammar boundaries in legacy NameServer target parsing: 63/64-byte label limits, 253/254-byte total-name limits, empty/hyphen-bounded label rejection with interior hyphen/underscore acceptance, and case/trailing-dot deduplication order ([#10533](https://github.com/mxsm/rocketmq-rust/issues/10533)).
 - **test(client):** Cover conjunction of multiple producer queue filters in `select_one_message_queue_filters`: intersection selection, empty-intersection rejection, order-independence, and recovery after an all-rejected call ([#10532](https://github.com/mxsm/rocketmq-rust/issues/10532)).
