@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **test(client):** Cover DNS grammar boundaries in legacy NameServer target parsing: 63/64-byte label limits, 253/254-byte total-name limits, empty/hyphen-bounded label rejection with interior hyphen/underscore acceptance, and case/trailing-dot deduplication order ([#10533](https://github.com/mxsm/rocketmq-rust/issues/10533)).
 - **test(client):** Cover conjunction of multiple producer queue filters in `select_one_message_queue_filters`: intersection selection, empty-intersection rejection, order-independence, and recovery after an all-rejected call ([#10532](https://github.com/mxsm/rocketmq-rust/issues/10532)).
 - **test(client):** Cover ordinary-topic route conversion permission and master filtering: writable queues with a master broker, exclusion of read-only/unknown-broker/slave-only queues from publish info, subscribe info's readable-only selection without a master requirement, and independent read/write queue counts ([#10531](https://github.com/mxsm/rocketmq-rust/issues/10531)).
 - **test(client):** Cover `OffsetSerialize`/`OffsetSerializeWrapper` round trips: full JSON persistence with signed and `i32::MAX`-exceeding offsets, discarding one invalid queue key while keeping valid entries, and an empty table round-tripping under the `offsetTable` field ([#10530](https://github.com/mxsm/rocketmq-rust/issues/10530)).
