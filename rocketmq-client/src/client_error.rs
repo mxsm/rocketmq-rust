@@ -452,3 +452,71 @@ impl StdError for ClientError {
         Some(self.0.as_ref())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn into_error_unwraps_sole_owner_preserving_descriptor_and_typed_cause() {
+        let io_error = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
+        let client_error = ClientError::response_process_source("some.operation", io_error);
+        let descriptor = client_error.descriptor();
+
+        let error = client_error.into_error();
+
+        assert_eq!(error.descriptor().code(), descriptor.code());
+        let cause = StdError::source(&error).expect("typed cause retained for sole owner");
+        let io_cause = cause.downcast_ref::<std::io::Error>().expect("io error cause retained");
+        assert_eq!(io_cause.kind(), std::io::ErrorKind::ConnectionReset);
+    }
+
+    #[test]
+    fn into_error_wraps_shared_owner_preserving_typed_cause_through_extra_layer() {
+        let io_error = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
+        let client_error = ClientError::response_process_source("some.operation", io_error);
+        let descriptor = client_error.descriptor();
+        let clone = client_error.clone();
+
+        let error = client_error.into_error();
+
+        assert_eq!(error.descriptor().code(), descriptor.code());
+        let outer_source = StdError::source(&error).expect("wrapper source present for shared owner");
+        let wrapped_client_error = outer_source
+            .downcast_ref::<ClientError>()
+            .expect("wrapped ClientError retained as the extra layer's source");
+        let io_cause = wrapped_client_error
+            .source_ref::<std::io::Error>()
+            .expect("original typed cause reachable through the extra wrapper");
+        assert_eq!(io_cause.kind(), std::io::ErrorKind::ConnectionReset);
+        drop(clone);
+    }
+
+    #[test]
+    fn into_error_leaves_retained_clone_usable_with_unchanged_shared_identity() {
+        let client_error = ClientError::illegal_argument("boom");
+        let clone = client_error.clone();
+        let original_shared_ptr = Arc::as_ptr(clone.shared_error());
+
+        let _ = client_error.into_error();
+
+        assert!(clone.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
+        assert_eq!(Arc::as_ptr(clone.shared_error()), original_shared_ptr);
+    }
+
+    #[test]
+    fn from_shared_and_into_shared_error_round_trip_preserves_arc_identity() {
+        let canonical: SharedError = Arc::new(Error::new(&rocketmq_error::CORE_ARGUMENT_INVALID));
+        let client_error = ClientError::from_shared(Arc::clone(&canonical));
+
+        let shared = client_error.into_shared_error();
+
+        assert!(Arc::ptr_eq(&canonical, &shared));
+    }
+
+    #[test]
+    fn source_ref_returns_none_for_unrelated_source_type() {
+        let client_error = ClientError::illegal_argument("boom");
+        assert!(client_error.source_ref::<std::io::Error>().is_none());
+    }
+}

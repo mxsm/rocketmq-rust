@@ -160,4 +160,105 @@ mod tests {
         );
         assert!(exception.to_string().contains(MessageConst::PROPERTY_CLUSTER));
     }
+
+    fn request_with_cluster_only() -> Message {
+        let mut request = Message::default();
+        MessageAccessor::put_property(
+            &mut request,
+            PROPERTY_CLUSTER.clone(),
+            CheetahString::from_static_str("ClusterA"),
+        );
+        request
+    }
+
+    #[test]
+    fn create_reply_message_with_only_cluster_leaves_optional_properties_absent() {
+        let request = request_with_cluster_only();
+
+        let reply = MessageUtil::create_reply_message(&request, b"body").expect("reply should be created");
+
+        assert_eq!(reply.property(&PROPERTY_MESSAGE_REPLY_TO_CLIENT), None);
+        assert_eq!(reply.property(&PROPERTY_CORRELATION_ID), None);
+        assert_eq!(reply.property(&PROPERTY_MESSAGE_TTL), None);
+        assert_eq!(MessageUtil::get_reply_to_client(&reply), None);
+    }
+
+    #[test]
+    fn create_reply_message_copies_each_optional_property_independently() {
+        let mut reply_to_only = request_with_cluster_only();
+        MessageAccessor::put_property(
+            &mut reply_to_only,
+            PROPERTY_MESSAGE_REPLY_TO_CLIENT.clone(),
+            CheetahString::from_static_str("client-1"),
+        );
+        let reply = MessageUtil::create_reply_message(&reply_to_only, b"body").expect("reply should be created");
+        assert_eq!(
+            MessageUtil::get_reply_to_client(&reply),
+            Some(CheetahString::from_static_str("client-1"))
+        );
+        assert_eq!(reply.property(&PROPERTY_CORRELATION_ID), None);
+        assert_eq!(reply.property(&PROPERTY_MESSAGE_TTL), None);
+
+        let mut correlation_only = request_with_cluster_only();
+        MessageAccessor::put_property(
+            &mut correlation_only,
+            PROPERTY_CORRELATION_ID.clone(),
+            CheetahString::from_static_str("corr-1"),
+        );
+        let reply = MessageUtil::create_reply_message(&correlation_only, b"body").expect("reply should be created");
+        assert_eq!(MessageUtil::get_reply_to_client(&reply), None);
+        assert_eq!(reply.property(&PROPERTY_CORRELATION_ID), Some("corr-1"));
+        assert_eq!(reply.property(&PROPERTY_MESSAGE_TTL), None);
+
+        let mut ttl_only = request_with_cluster_only();
+        MessageAccessor::put_property(
+            &mut ttl_only,
+            PROPERTY_MESSAGE_TTL.clone(),
+            CheetahString::from_static_str("5000"),
+        );
+        let reply = MessageUtil::create_reply_message(&ttl_only, b"body").expect("reply should be created");
+        assert_eq!(MessageUtil::get_reply_to_client(&reply), None);
+        assert_eq!(reply.property(&PROPERTY_CORRELATION_ID), None);
+        assert_eq!(reply.property(&PROPERTY_MESSAGE_TTL), Some("5000"));
+    }
+
+    #[test]
+    fn create_reply_message_uses_supplied_body_and_ignores_unrelated_request_properties() {
+        let mut request = request_with_cluster_only();
+        request.set_body(Some(Bytes::copy_from_slice(b"request-body")));
+        MessageAccessor::put_property(
+            &mut request,
+            CheetahString::from_static_str("customKey"),
+            CheetahString::from_static_str("customValue"),
+        );
+
+        let reply = MessageUtil::create_reply_message(&request, b"reply-body-supplied")
+            .expect("reply message should be created");
+
+        assert_eq!(
+            reply.body().as_ref().map(|body| body.as_ref()),
+            Some(b"reply-body-supplied".as_slice())
+        );
+        assert_eq!(reply.property(&CheetahString::from_static_str("customKey")), None);
+    }
+
+    #[test]
+    fn create_reply_message_copies_body_independently_of_caller_buffer_and_supports_empty_body() {
+        let request = request_with_cluster_only();
+
+        let mut buffer = vec![1u8, 2, 3];
+        let reply = MessageUtil::create_reply_message(&request, &buffer).expect("reply should be created");
+        buffer[0] = 99;
+        buffer.push(4);
+        assert_eq!(
+            reply.body().as_ref().map(|body| body.as_ref()),
+            Some([1u8, 2, 3].as_slice())
+        );
+
+        let empty_reply = MessageUtil::create_reply_message(&request, &[]).expect("empty body reply should be created");
+        assert_eq!(
+            empty_reply.body().as_ref().map(|body| body.as_ref()),
+            Some([].as_slice())
+        );
+    }
 }

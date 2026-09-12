@@ -185,6 +185,7 @@ mod tests {
 
     use bytes::Bytes;
     use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::message::message_accessor::MessageAccessor;
     use rocketmq_model::common::message::message_single::Message;
 
     use super::*;
@@ -210,6 +211,86 @@ mod tests {
 
         assert!(Validators::check_message(Some(&exact), &producer_config).is_ok());
         assert!(Validators::check_message(Some(&oversized), &producer_config).is_err());
+    }
+
+    #[test]
+    fn check_message_rejects_absent_message() {
+        let producer_config = ProducerConfig::default();
+
+        let error =
+            Validators::check_message(None::<&Message>, &producer_config).expect_err("absent message is rejected");
+
+        assert_eq!(
+            client_exception(&error).response_code(),
+            ResponseCode::MessageIllegal as i32
+        );
+    }
+
+    #[test]
+    fn check_message_rejects_missing_and_empty_body_with_the_same_code() {
+        let producer_config = ProducerConfig::default();
+
+        let no_body = Message::builder().topic("TopicTest").build_unchecked();
+        let error = Validators::check_message(Some(&no_body), &producer_config).expect_err("missing body is rejected");
+        assert_eq!(
+            client_exception(&error).response_code(),
+            ResponseCode::MessageIllegal as i32
+        );
+
+        let empty_body = Message::builder()
+            .topic("TopicTest")
+            .body(Bytes::new())
+            .build_unchecked();
+        let error = Validators::check_message(Some(&empty_body), &producer_config).expect_err("empty body is rejected");
+        assert_eq!(
+            client_exception(&error).response_code(),
+            ResponseCode::MessageIllegal as i32
+        );
+    }
+
+    #[test]
+    fn check_message_rejects_multi_dispatch_property_containing_path_separator() {
+        let producer_config = ProducerConfig::default();
+        let mut msg = Message::builder()
+            .topic("TopicTest")
+            .body(Bytes::from_static(b"body"))
+            .build_unchecked();
+        let separator = std::path::MAIN_SEPARATOR;
+        MessageAccessor::put_property(
+            &mut msg,
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
+            CheetahString::from_string(format!("queue-a{separator}queue-b")),
+        );
+
+        let error = Validators::check_message(Some(&msg), &producer_config)
+            .expect_err("multi-dispatch value containing the path separator is rejected");
+
+        assert_eq!(
+            client_exception(&error).response_code(),
+            ResponseCode::MessageIllegal as i32
+        );
+    }
+
+    #[test]
+    fn check_message_accepts_multi_dispatch_property_without_separator_or_absent() {
+        let producer_config = ProducerConfig::default();
+
+        let plain = Message::builder()
+            .topic("TopicTest")
+            .body(Bytes::from_static(b"body"))
+            .build_unchecked();
+        assert!(Validators::check_message(Some(&plain), &producer_config).is_ok());
+
+        let mut with_property = Message::builder()
+            .topic("TopicTest")
+            .body(Bytes::from_static(b"body"))
+            .build_unchecked();
+        MessageAccessor::put_property(
+            &mut with_property,
+            CheetahString::from_static_str(MessageConst::PROPERTY_INNER_MULTI_DISPATCH),
+            CheetahString::from_static_str("queue-a,queue-b"),
+        );
+        assert!(Validators::check_message(Some(&with_property), &producer_config).is_ok());
     }
 
     #[test]

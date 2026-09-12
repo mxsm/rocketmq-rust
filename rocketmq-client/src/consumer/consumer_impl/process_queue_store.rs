@@ -314,3 +314,92 @@ impl ContiguousOffsetStore {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg() -> Arc<MessageExt> {
+        Arc::new(MessageExt::default())
+    }
+
+    #[test]
+    fn insert_and_drain_both_at_i64_max_boundary_without_overflow() {
+        let mut store = ProcessQueueMessageStore::new();
+        store.insert(i64::MAX - 1, msg());
+        store.insert(i64::MAX, msg());
+
+        assert_eq!(store.len(), 2);
+        assert!(store.contains_key(&(i64::MAX - 1)));
+        assert!(store.contains_key(&i64::MAX));
+        assert_eq!(store.offset_span(), Some((i64::MAX - 1, i64::MAX)));
+
+        let (first_offset, _) = store.pop_first().expect("first entry at i64::MAX - 1");
+        assert_eq!(first_offset, i64::MAX - 1);
+        let (second_offset, _) = store.pop_first().expect("second entry at i64::MAX");
+        assert_eq!(second_offset, i64::MAX);
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn insert_in_reverse_order_at_i64_min_boundary_prepends_correctly() {
+        let mut store = ProcessQueueMessageStore::new();
+        store.insert(i64::MIN + 1, msg());
+        store.insert(i64::MIN, msg());
+
+        assert_eq!(store.len(), 2);
+        assert_eq!(store.offset_span(), Some((i64::MIN, i64::MIN + 1)));
+
+        let (front_offset, _) = store.first().expect("front entry at i64::MIN");
+        assert_eq!(front_offset, i64::MIN);
+
+        let (popped_first, _) = store.pop_first().expect("pop i64::MIN first");
+        assert_eq!(popped_first, i64::MIN);
+        let (popped_second, _) = store.pop_first().expect("pop i64::MIN + 1 second");
+        assert_eq!(popped_second, i64::MIN + 1);
+    }
+
+    #[test]
+    fn insert_both_integer_extremes_falls_back_to_sparse_storage_preserving_both_keys() {
+        let mut store = ProcessQueueMessageStore::new();
+        store.insert(i64::MIN, msg());
+        store.insert(i64::MAX, msg());
+
+        assert_eq!(store.storage_kind(), "btree");
+        assert_eq!(store.len(), 2);
+        assert!(store.contains_key(&i64::MIN));
+        assert!(store.contains_key(&i64::MAX));
+        assert_eq!(store.offset_span(), Some((i64::MIN, i64::MAX)));
+    }
+
+    #[test]
+    fn ordinary_offset_after_clearing_extreme_offset_store_has_no_stale_base_offset() {
+        let mut store = ProcessQueueMessageStore::new();
+        store.insert(i64::MAX, msg());
+
+        store.clear();
+        store.insert(5, msg());
+
+        assert_eq!(store.storage_kind(), "contiguous");
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.offset_span(), Some((5, 5)));
+        assert!(store.contains_key(&5));
+        assert!(!store.contains_key(&i64::MAX));
+    }
+
+    #[test]
+    fn ordinary_offset_after_draining_extreme_offset_store_has_no_stale_base_offset() {
+        let mut store = ProcessQueueMessageStore::new();
+        store.insert(i64::MAX, msg());
+        store.pop_first();
+        assert!(store.is_empty());
+
+        store.insert(7, msg());
+
+        assert_eq!(store.storage_kind(), "contiguous");
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.offset_span(), Some((7, 7)));
+        assert!(store.contains_key(&7));
+        assert!(!store.contains_key(&i64::MAX));
+    }
+}

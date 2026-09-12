@@ -79,3 +79,59 @@ impl ControllableOffset {
         self.value.load(Ordering::SeqCst)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unfrozen_offset_accepts_lower_value_only_without_increase_only() {
+        let offset = ControllableOffset::new(10);
+
+        offset.update(5, true);
+        assert_eq!(offset.get_offset(), 10);
+
+        offset.update(5, false);
+        assert_eq!(offset.get_offset(), 5);
+    }
+
+    #[test]
+    fn update_and_freeze_locks_the_value_against_later_updates() {
+        let offset = ControllableOffset::new(10);
+
+        offset.update_and_freeze(20);
+        assert_eq!(offset.get_offset(), 20);
+
+        offset.update(30, true);
+        assert_eq!(offset.get_offset(), 20);
+
+        offset.update(5, false);
+        assert_eq!(offset.get_offset(), 20);
+
+        offset.update_unconditionally(40);
+        assert_eq!(offset.get_offset(), 20);
+    }
+
+    #[test]
+    fn new_frozen_rejects_both_update_modes_immediately() {
+        let offset = ControllableOffset::new_frozen(10);
+
+        offset.update(20, true);
+        assert_eq!(offset.get_offset(), 10);
+
+        offset.update(5, false);
+        assert_eq!(offset.get_offset(), 10);
+    }
+
+    #[test]
+    fn second_update_and_freeze_changes_the_frozen_value() {
+        let offset = ControllableOffset::new(10);
+
+        offset.update_and_freeze(20);
+        offset.update_and_freeze(7);
+        assert_eq!(offset.get_offset(), 7);
+
+        offset.update_unconditionally(100);
+        assert_eq!(offset.get_offset(), 7);
+    }
+}
