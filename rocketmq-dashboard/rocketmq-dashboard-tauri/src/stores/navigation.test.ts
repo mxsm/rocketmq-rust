@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { findEntity, initialNavigation, navigationReducer } from './navigation';
 
 describe('entity navigation', () => {
+    it('opens the business message from a trace and returns to that exact trace entry', () => {
+        const trace = navigationReducer(initialNavigation, { type: 'open', tab: 'MessageTrace', environmentId: 'env-a', target: { kind: 'trace', name: 'unique-1', topic: 'orders' } });
+        const message = navigationReducer(trace, { type: 'open', tab: 'Message', environmentId: 'env-a', target: { kind: 'message', name: 'unique-1', topic: 'orders' } });
+        expect(message.current.target).toEqual({ kind: 'message', name: 'unique-1', topic: 'orders' });
+        expect(navigationReducer(message, { type: 'back' }).current).toEqual(trace.current);
+        expect(navigationReducer(message, { type: 'reset', environmentId: 'env-b' }).current.target).toBeNull();
+    });
     it('returns from Trace to the original message query and clears Trace identity across environments', () => {
         const messages = navigationReducer(initialNavigation, { type: 'open', tab: 'Message', environmentId: 'env-a' });
         const trace = navigationReducer(messages, { type: 'open', tab: 'MessageTrace', environmentId: 'env-a', target: { kind: 'trace', name: 'unique-1', topic: 'orders.events' } });
