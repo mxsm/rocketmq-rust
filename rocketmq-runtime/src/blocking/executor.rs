@@ -22,6 +22,7 @@ use dashmap::DashMap;
 use tokio::sync::Semaphore;
 
 use super::admission::GlobalBlockingBudget;
+use super::admission::GlobalBlockingPermit;
 use super::diagnostics::BlockingTaskMeta;
 use super::BlockingExecutorSnapshot;
 use super::BlockingKind;
@@ -82,16 +83,21 @@ impl Drop for QueuedBlockingTaskGuard {
     }
 }
 
-struct RunningBlockingTaskGuard<R>
+/// An admitted operation whose actual completion outlives any individual wait.
+///
+/// The owner may retain this ticket after `wait_until` expires and call `wait`
+/// to observe the real result. Dropping it abandons observation, not execution.
+pub(crate) struct BlockingTask<R>
 where
     R: Send + 'static,
 {
     join_handle: Option<tokio::task::JoinHandle<R>>,
     tasks: Arc<DashMap<BlockingTaskId, BlockingTaskMeta>>,
     task_id: BlockingTaskId,
+    wait_deadline: Instant,
 }
 
-impl<R> RunningBlockingTaskGuard<R>
+impl<R> BlockingTask<R>
 where
     R: Send + 'static,
 {
@@ -99,31 +105,46 @@ where
         join_handle: tokio::task::JoinHandle<R>,
         tasks: Arc<DashMap<BlockingTaskId, BlockingTaskMeta>>,
         task_id: BlockingTaskId,
+        wait_deadline: Instant,
     ) -> Self {
         Self {
             join_handle: Some(join_handle),
             tasks,
             task_id,
+            wait_deadline,
         }
     }
 
-    fn join_handle(&mut self) -> Option<&mut tokio::task::JoinHandle<R>> {
-        self.join_handle.as_mut()
+    /// Waits for real execution completion without changing ownership on drop.
+    pub(crate) async fn wait(&mut self) -> RuntimeResult<R> {
+        let Some(join_handle) = self.join_handle.as_mut() else {
+            return Err(RuntimeError::context_unavailable(
+                crate::RuntimeOperation::RunBlockingTask,
+            ));
+        };
+        let result = join_handle.await;
+        self.join_handle.take();
+        result.map_err(|error| RuntimeError::join(crate::RuntimeOperation::RunBlockingTask, error))
     }
 
-    fn disarm(&mut self) {
-        self.join_handle.take();
+    async fn wait_until(&mut self, deadline: Instant) -> RuntimeResult<R> {
+        match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), self.wait()).await {
+            Ok(result) => result,
+            Err(_elapsed) => {
+                self.mark_timed_out();
+                Err(RuntimeError::timed_out(crate::RuntimeOperation::BlockingTask))
+            }
+        }
     }
 
     fn mark_timed_out(&mut self) {
         if let Some(mut meta) = self.tasks.get_mut(&self.task_id) {
             meta.state = BlockingTaskState::TimedOutStillRunning;
         }
-        self.join_handle.take();
     }
 }
 
-impl<R> Drop for RunningBlockingTaskGuard<R>
+impl<R> Drop for BlockingTask<R>
 where
     R: Send + 'static,
 {
@@ -131,6 +152,29 @@ where
         if self.join_handle.is_some() {
             self.mark_timed_out();
         }
+    }
+}
+
+// Field order also governs cancellation before Tokio invokes the closure:
+// destroy user captures, return execution capacity, then remove diagnostics.
+struct BlockingWork<F> {
+    operation: F,
+    permit: GlobalBlockingPermit,
+    completion: BlockingCompletionGuard,
+}
+
+impl<F> BlockingWork<F> {
+    fn run<R>(self) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        // Reverse local destruction order preserves the same ordering on panic.
+        let completion = self.completion;
+        let permit = self.permit;
+        let result = (self.operation)();
+        drop(permit);
+        drop(completion);
+        result
     }
 }
 
@@ -193,7 +237,22 @@ impl BlockingExecutor {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.spawn(name, BlockingKind::ShortIo, operation).await
+        let task = self.submit_io(name, operation).await?;
+        self.wait_for_caller(task).await
+    }
+
+    /// Admits short I/O and returns its execution-owned completion ticket.
+    pub(crate) async fn submit_io<F, R>(
+        &self,
+        name: impl Into<Arc<str>>,
+        operation: F,
+    ) -> RuntimeResult<BlockingTask<R>>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.submit_inner(name.into(), BlockingKind::ShortIo, None, operation)
+            .await
     }
 
     /// Runs short blocking I/O without admitting or waiting for work beyond `deadline`.
@@ -219,7 +278,10 @@ impl BlockingExecutor {
         self.spawn_inner(name.into(), kind, None, operation).await
     }
 
-    /// Runs blocking work while bounding queue admission and execution by one absolute deadline.
+    /// Runs blocking work with one absolute deadline for admission and waiting.
+    ///
+    /// Expiry stops waiting; an already running closure retains its capacity
+    /// until it exits and may still produce side effects.
     pub async fn spawn_until<F, R>(
         &self,
         name: impl Into<Arc<str>>,
@@ -241,6 +303,39 @@ impl BlockingExecutor {
         deadline: Option<ShutdownDeadline>,
         operation: F,
     ) -> RuntimeResult<R>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let task = self.submit_inner(name, kind, deadline, operation).await?;
+        self.wait_for_caller(task).await
+    }
+
+    async fn wait_for_caller<R: Send + 'static>(&self, mut task: BlockingTask<R>) -> RuntimeResult<R> {
+        let task_id = task.task_id;
+        let started_at = Instant::now();
+        let deadline = task.wait_deadline;
+        let result = task.wait_until(deadline).await;
+        if result.is_ok() {
+            let elapsed = started_at.elapsed();
+            if elapsed > self.policy.warn_after {
+                tracing::warn!(
+                    task_id = task_id.as_u64(),
+                    elapsed_ms = elapsed.as_millis(),
+                    "blocking task exceeded warn_after"
+                );
+            }
+        }
+        result
+    }
+
+    async fn submit_inner<F, R>(
+        &self,
+        name: Arc<str>,
+        kind: BlockingKind,
+        deadline: Option<ShutdownDeadline>,
+        operation: F,
+    ) -> RuntimeResult<BlockingTask<R>>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
@@ -301,44 +396,21 @@ impl BlockingExecutor {
         }
         queued_task_guard.disarm();
 
-        let tasks = self.tasks.clone();
-        let completion_tasks = tasks.clone();
-        let join_handle = tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            let _completion = BlockingCompletionGuard {
-                tasks: completion_tasks,
+        let work = BlockingWork {
+            operation,
+            permit,
+            completion: BlockingCompletionGuard {
+                tasks: self.tasks.clone(),
                 task_id,
-            };
-            operation()
-        });
-        let mut running_task_guard = RunningBlockingTaskGuard::new(join_handle, tasks, task_id);
-        let Some(join_handle) = running_task_guard.join_handle() else {
-            return Err(RuntimeError::internal_failure(crate::RuntimeOperation::RunBlockingTask));
+            },
         };
-
-        match tokio::time::timeout_at(tokio::time::Instant::from_std(task_deadline), join_handle).await {
-            Ok(Ok(value)) => {
-                running_task_guard.disarm();
-                let elapsed = started_at.elapsed();
-                if elapsed > self.policy.warn_after {
-                    tracing::warn!(
-                        task_id = task_id.as_u64(),
-                        task_name = %name,
-                        elapsed_ms = elapsed.as_millis(),
-                        "blocking task exceeded warn_after"
-                    );
-                }
-                Ok(value)
-            }
-            Ok(Err(error)) => {
-                running_task_guard.disarm();
-                Err(RuntimeError::join(crate::RuntimeOperation::RunBlockingTask, error))
-            }
-            Err(_elapsed) => {
-                running_task_guard.mark_timed_out();
-                Err(RuntimeError::timed_out(crate::RuntimeOperation::BlockingTask))
-            }
-        }
+        let join_handle = tokio::task::spawn_blocking(move || work.run());
+        Ok(BlockingTask::new(
+            join_handle,
+            self.tasks.clone(),
+            task_id,
+            task_deadline,
+        ))
     }
 
     /// Returns the snapshot.
@@ -409,3 +481,6 @@ fn phase_deadline(started_at: Instant, policy_timeout: Duration, operation_deadl
         .unwrap_or(operation_deadline)
         .min(operation_deadline)
 }
+
+#[cfg(test)]
+mod tests;
