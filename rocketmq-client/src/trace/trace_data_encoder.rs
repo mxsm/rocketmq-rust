@@ -901,4 +901,245 @@ mod tests {
         );
         assert_eq!(TraceDataEncoder::parse_transaction_state("INVALID"), None);
     }
+
+    fn raw_record(ctx: &TraceContext) -> String {
+        TraceDataEncoder::encoder_from_context_bean(ctx)
+            .unwrap()
+            .trans_data
+            .to_string()
+    }
+
+    /// Replaces one `CONTENT_SPLITOR`-delimited field of an encoded record, preserving its
+    /// trailing `FIELD_SPLITOR` terminator if present.
+    fn corrupt_field(record: &str, field_index: usize, replacement: &str) -> String {
+        let has_trailing_field_splitor = record.ends_with(TraceConstants::FIELD_SPLITOR);
+        let body = if has_trailing_field_splitor {
+            &record[..record.len() - TraceConstants::FIELD_SPLITOR.len_utf8()]
+        } else {
+            record
+        };
+        let mut fields: Vec<&str> = body.split(TraceConstants::CONTENT_SPLITOR).collect();
+        fields[field_index] = replacement;
+        let mut joined = fields.join(&TraceConstants::CONTENT_SPLITOR.to_string());
+        if has_trailing_field_splitor {
+            joined.push(TraceConstants::FIELD_SPLITOR);
+        }
+        joined
+    }
+
+    #[test]
+    fn decode_malformed_truncated_record_between_two_valid_records_keeps_both_valid_ones_in_order() {
+        let pub_ctx = TraceContext {
+            trace_type: Some(TraceType::Pub),
+            time_stamp: 111,
+            region_id: CheetahString::from("r1"),
+            group_name: CheetahString::from("g1"),
+            cost_time: 10,
+            is_success: true,
+            trace_beans: Some(vec![TraceBean {
+                topic: CheetahString::from("topic-1"),
+                msg_id: CheetahString::from("msg-1"),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let sub_before_ctx = TraceContext {
+            trace_type: Some(TraceType::SubBefore),
+            time_stamp: 222,
+            region_id: CheetahString::from("r2"),
+            group_name: CheetahString::from("g2"),
+            request_id: CheetahString::from("req-2"),
+            trace_beans: Some(vec![TraceBean {
+                msg_id: CheetahString::from("msg-2"),
+                retry_times: 1,
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+
+        let pub_raw = raw_record(&pub_ctx);
+        let sub_before_raw = raw_record(&sub_before_ctx);
+        // Fewer than the 12 fields `decode_pub_context` requires.
+        let truncated = format!("Pub{sep}123{sep}region", sep = TraceConstants::CONTENT_SPLITOR);
+
+        let combined = format!(
+            "{pub_raw}{truncated}{sep}{sub_before_raw}",
+            sep = TraceConstants::FIELD_SPLITOR
+        );
+        let decoded = TraceDataEncoder::decoder_from_trace_data_string(&combined);
+
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].trace_type, Some(TraceType::Pub));
+        assert_eq!(
+            decoded[0].trace_beans.as_ref().unwrap()[0].msg_id,
+            CheetahString::from("msg-1")
+        );
+        assert_eq!(decoded[1].trace_type, Some(TraceType::SubBefore));
+        assert_eq!(
+            decoded[1].trace_beans.as_ref().unwrap()[0].msg_id,
+            CheetahString::from("msg-2")
+        );
+    }
+
+    #[test]
+    fn decode_malformed_truncated_records_of_every_type_are_skipped() {
+        let sep = TraceConstants::CONTENT_SPLITOR;
+        let truncated_records = [
+            format!("Pub{sep}1{sep}region{sep}group{sep}topic"),
+            format!("SubBefore{sep}1{sep}region{sep}group"),
+            format!("SubAfter{sep}req{sep}msg"),
+            format!("EndTransaction{sep}1{sep}region{sep}group{sep}topic"),
+            format!("Recall{sep}1{sep}region"),
+        ];
+
+        for truncated in truncated_records {
+            let decoded = TraceDataEncoder::decoder_from_trace_data_string(&truncated);
+            assert!(
+                decoded.is_empty(),
+                "expected truncated record to be skipped: {truncated:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_malformed_corrupted_timestamp_is_skipped_but_following_valid_record_decodes() {
+        let pub_ctx = TraceContext {
+            trace_type: Some(TraceType::Pub),
+            time_stamp: 111,
+            region_id: CheetahString::from("r1"),
+            group_name: CheetahString::from("g1"),
+            cost_time: 10,
+            is_success: true,
+            trace_beans: Some(vec![TraceBean {
+                topic: CheetahString::from("topic-1"),
+                msg_id: CheetahString::from("msg-1"),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let corrupted_pub = corrupt_field(&raw_record(&pub_ctx), 1, "not-a-number");
+
+        let recall_ctx = TraceContext {
+            trace_type: Some(TraceType::Recall),
+            time_stamp: 333,
+            region_id: CheetahString::from("r3"),
+            group_name: CheetahString::from("g3"),
+            is_success: true,
+            trace_beans: Some(vec![TraceBean {
+                topic: CheetahString::from("topic-3"),
+                msg_id: CheetahString::from("msg-3"),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let recall_raw = raw_record(&recall_ctx);
+
+        let combined = format!("{corrupted_pub}{recall_raw}");
+        let decoded = TraceDataEncoder::decoder_from_trace_data_string(&combined);
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].trace_type, Some(TraceType::Recall));
+        assert_eq!(
+            decoded[0].trace_beans.as_ref().unwrap()[0].msg_id,
+            CheetahString::from("msg-3")
+        );
+    }
+
+    #[test]
+    fn decode_malformed_corrupted_cost_time_is_skipped_but_following_valid_record_decodes() {
+        let pub_ctx = TraceContext {
+            trace_type: Some(TraceType::Pub),
+            time_stamp: 111,
+            region_id: CheetahString::from("r1"),
+            group_name: CheetahString::from("g1"),
+            cost_time: 10,
+            is_success: true,
+            trace_beans: Some(vec![TraceBean {
+                topic: CheetahString::from("topic-1"),
+                msg_id: CheetahString::from("msg-1"),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        // cost_time is field index 10 for a Pub record.
+        let corrupted_pub = corrupt_field(&raw_record(&pub_ctx), 10, "not-a-number");
+
+        let sub_before_ctx = TraceContext {
+            trace_type: Some(TraceType::SubBefore),
+            time_stamp: 222,
+            region_id: CheetahString::from("r2"),
+            group_name: CheetahString::from("g2"),
+            request_id: CheetahString::from("req-2"),
+            trace_beans: Some(vec![TraceBean {
+                msg_id: CheetahString::from("msg-2"),
+                retry_times: 1,
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let sub_before_raw = raw_record(&sub_before_ctx);
+
+        let combined = format!("{corrupted_pub}{sub_before_raw}");
+        let decoded = TraceDataEncoder::decoder_from_trace_data_string(&combined);
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].trace_type, Some(TraceType::SubBefore));
+    }
+
+    #[test]
+    fn decode_malformed_corrupted_retry_times_is_skipped_but_following_valid_record_decodes() {
+        let sub_before_ctx = TraceContext {
+            trace_type: Some(TraceType::SubBefore),
+            time_stamp: 222,
+            region_id: CheetahString::from("r2"),
+            group_name: CheetahString::from("g2"),
+            request_id: CheetahString::from("req-2"),
+            trace_beans: Some(vec![TraceBean {
+                msg_id: CheetahString::from("msg-2"),
+                retry_times: 1,
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        // retry_times is field index 6 for a SubBefore record.
+        let corrupted_sub_before = corrupt_field(&raw_record(&sub_before_ctx), 6, "not-a-number");
+
+        let pub_ctx = TraceContext {
+            trace_type: Some(TraceType::Pub),
+            time_stamp: 111,
+            region_id: CheetahString::from("r1"),
+            group_name: CheetahString::from("g1"),
+            cost_time: 10,
+            is_success: true,
+            trace_beans: Some(vec![TraceBean {
+                topic: CheetahString::from("topic-1"),
+                msg_id: CheetahString::from("msg-1"),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let pub_raw = raw_record(&pub_ctx);
+
+        let combined = format!("{corrupted_sub_before}{pub_raw}");
+        let decoded = TraceDataEncoder::decoder_from_trace_data_string(&combined);
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].trace_type, Some(TraceType::Pub));
+    }
+
+    #[test]
+    fn decode_malformed_unknown_type_and_repeated_separators_create_no_contexts() {
+        let unknown = format!(
+            "Bogus{content_sep}foo{content_sep}bar",
+            content_sep = TraceConstants::CONTENT_SPLITOR
+        );
+        let combined = format!(
+            "{unknown}{field_sep}{field_sep}{field_sep}",
+            field_sep = TraceConstants::FIELD_SPLITOR
+        );
+
+        let decoded = TraceDataEncoder::decoder_from_trace_data_string(&combined);
+
+        assert!(decoded.is_empty());
+    }
 }
