@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { Toaster } from '../../components/ui/sonner';
@@ -16,6 +16,14 @@ export function MainLayout({ children }: { children: ReactNode }) {
     const { logout } = useAuth();
     const [confirmSignOut, setConfirmSignOut] = useState(false);
     const [signingOut, setSigningOut] = useState(false);
+    const contentRef = useRef<HTMLElement>(null);
+    useLayoutEffect(() => {
+        // The shared scroll container survives navigation; each page starts at its heading.
+        if (contentRef.current) {
+            contentRef.current.scrollTop = 0;
+            contentRef.current.scrollLeft = 0;
+        }
+    }, [activeTab]);
     const target = navigation.target;
     // Message and trace links prefill editable queries; their current identity lives in the page.
     const targetName = target && target.kind !== 'trace' && target.kind !== 'message' ? ('name' in target ? target.name : target.address) : null;
@@ -36,7 +44,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
             <AppSidebar onSignOut={() => setConfirmSignOut(true)} signingOut={signingOut} />
             <section className="desktop-main">
                 <EnvironmentToolbar settings={settings} />
-                <main className="desktop-content" id="main-content" tabIndex={-1}>
+                <main ref={contentRef} className="desktop-content" id="main-content" tabIndex={-1}>
                     <div className="desktop-page-heading">
                         {canGoBack && <button type="button" className="desktop-back" onClick={goBack} aria-label="Back"><ArrowLeft /></button>}
                         <div><h1>{pageTitle}</h1><p>{pageDescriptions[activeTab]}</p>
