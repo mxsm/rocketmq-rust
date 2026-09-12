@@ -37,16 +37,41 @@ use rocketmq_model::common::message::MessageTrait;
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```
 /// use rocketmq_client_rust::MessageQueueSelector;
 /// use rocketmq_model::common::message::message_queue::MessageQueue;
 /// use rocketmq_model::common::message::message_single::Message;
 ///
-/// // Closures automatically implement MessageQueueSelector
+/// // Closures automatically implement MessageQueueSelector. Order IDs are signed, so guard
+/// // against an empty queue list before indexing and use `rem_euclid` so a negative order ID
+/// // still maps into the valid queue range instead of producing a negative remainder.
 /// let selector = |mqs: &[MessageQueue], _msg: &Message, order_id: &i64| {
-///     let index = (*order_id % mqs.len() as i64) as usize;
+///     if mqs.is_empty() {
+///         return None;
+///     }
+///     let index = order_id.rem_euclid(mqs.len() as i64) as usize;
 ///     mqs.get(index).cloned()
 /// };
+///
+/// let msg = Message::builder()
+///     .topic("TopicTest")
+///     .body_slice(b"body")
+///     .build_unchecked();
+///
+/// assert_eq!(selector.select(&[], &msg, &7), None);
+///
+/// let mqs = vec![
+///     MessageQueue::from_parts("TopicTest", "broker-a", 0),
+///     MessageQueue::from_parts("TopicTest", "broker-a", 1),
+///     MessageQueue::from_parts("TopicTest", "broker-a", 2),
+/// ];
+/// assert_eq!(selector.select(&mqs, &msg, &1), Some(mqs[1].clone()));
+/// assert_eq!(selector.select(&mqs, &msg, &-1), Some(mqs[2].clone()));
+///
+/// let first = selector.select(&mqs, &msg, &i64::MIN);
+/// let second = selector.select(&mqs, &msg, &i64::MIN);
+/// assert_eq!(first, second);
+/// assert!(first.is_some_and(|mq| mqs.contains(&mq)));
 /// ```
 pub trait MessageQueueSelector<M: MessageTrait, A>: Send + Sync {
     /// Selects a message queue from the provided list.
@@ -95,15 +120,36 @@ where
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```
 /// use rocketmq_client_rust::MessageQueueSelectorFn;
+/// use rocketmq_model::common::message::message_queue::MessageQueue;
+/// use rocketmq_model::common::message::message_single::Message;
 /// use std::sync::Arc;
 ///
-/// let selector: MessageQueueSelectorFn = Arc::new(|mqs, _msg, arg| {
+/// let selector: MessageQueueSelectorFn = Arc::new(|mqs: &[MessageQueue], _msg, arg| {
+///     if mqs.is_empty() {
+///         return None;
+///     }
 ///     let order_id = arg.downcast_ref::<i64>()?;
-///     let index = (*order_id % mqs.len() as i64) as usize;
+///     let index = order_id.rem_euclid(mqs.len() as i64) as usize;
 ///     mqs.get(index).cloned()
 /// });
+///
+/// let msg = Message::builder()
+///     .topic("TopicTest")
+///     .body_slice(b"body")
+///     .build_unchecked();
+///
+/// assert_eq!(selector(&[], &msg, &7i64), None);
+///
+/// let mqs = vec![
+///     MessageQueue::from_parts("TopicTest", "broker-a", 0),
+///     MessageQueue::from_parts("TopicTest", "broker-a", 1),
+/// ];
+/// assert_eq!(selector(&mqs, &msg, &1i64), Some(mqs[1].clone()));
+///
+/// // An argument that cannot downcast to `i64` still returns `None`.
+/// assert_eq!(selector(&mqs, &msg, &"not-an-i64"), None);
 /// ```
 pub type MessageQueueSelectorFn =
     Arc<dyn Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync>;
