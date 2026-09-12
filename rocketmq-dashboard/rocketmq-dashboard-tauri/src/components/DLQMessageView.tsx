@@ -1,816 +1,118 @@
-import { ConsumerRequestGeneration } from '../features/consumer/scope';
-import { failedDlqSelection, dlqQueryTaskId } from '../features/dlq/receipts';
-import type { DlqBatchResendMessageResponse } from '../features/dlq/types/dlq.types';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { motion } from 'motion/react';
-import { toast } from 'sonner@2.0.3';
-import {
-  AlertCircle,
-  ArrowUpRight,
-  Calendar,
-  Clock,
-  FileText,
-  Hash,
-  Info,
-  Key,
-  Search,
-  Send,
-  Tag,
-  Users,
-} from 'lucide-react';
-import { MessageDetailModal } from './MessageDetailModal';
-import { Pagination } from './Pagination';
-import { Input } from './ui/input';
+import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore } from 'react';
+import { Download, Send } from 'lucide-react';
+import { ConnectionStore } from '../services/connection.store';
+import { useNavigationState } from '../stores/app.store';
 import { useConsumerCatalog } from '../features/consumer/hooks/useConsumerCatalog';
+import { buildDlqQuery, createDlqQueryController, dlqGroup, type DlqQueryDraft } from '../features/dlq/dlqQuery';
+import { messageLookup, messageTimestamp, visibleMessageText } from '../features/message/messageModel';
+import { useDlqActions } from '../features/dlq/dlqActionContext';
+import { failedDlqSelection } from '../features/dlq/receipts';
+import { DlqReceiptPanel } from '../features/dlq/components/DlqReceiptPanel';
+import { DlqMessageDialog } from '../features/dlq/components/DlqMessageDialog';
 import type { DlqMessageSummary } from '../features/dlq/types/dlq.types';
-import { DlqService } from '../services/dlq.service';
-import { dashboardErrorMessage } from '../services/invoke';
-
-type DlqTab = 'Consumer' | 'Key' | 'Message ID';
-
-const DEFAULT_PAGE_SIZE = 20;
-
-const defaultPagination = {
-  currentPage: 1,
-  pageSize: DEFAULT_PAGE_SIZE,
-  totalPages: 0,
-  totalElements: 0,
-};
-
-const EMPTY_SELECTED_IDS = new Set<string>();
-
-const pad = (value: number) => value.toString().padStart(2, '0');
-
-const formatDateTimeInput = (date: Date) =>
-  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(
-    date.getMinutes(),
-  )}:${pad(date.getSeconds())}`;
-
-const toSummary = (detail: Awaited<ReturnType<typeof DlqService.viewDlqMessageDetail>>): DlqMessageSummary => ({
-  topic: detail.topic,
-  msgId: detail.properties.UNIQ_KEY?.trim() || detail.msgId,
-  queryMsgId: detail.msgId,
-  tags: detail.properties.TAGS ?? null,
-  keys: detail.properties.KEYS ?? null,
-  storeTimestamp: detail.storeTimestamp ?? 0,
-});
-
-const downloadExportPayload = (fileName: string, mimeType: string, content: string) => {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-  URL.revokeObjectURL(url);
-};
-
-export const DLQMessageView = () => {
-  const [activeTab, setActiveTab] = useState<DlqTab>('Consumer');
-  const [consumerGroup, setConsumerGroup] = useState('');
-  const [messageId, setMessageId] = useState('');
-  const [messageKey, setMessageKey] = useState('');
-  const [clientId, setClientId] = useState('');
-  const [receipt, setReceipt] = useState<DlqBatchResendMessageResponse | null>(null);
-  const queryGeneration = useRef(new ConsumerRequestGeneration());
-  const writeGeneration = useRef(new ConsumerRequestGeneration());
-  useEffect(() => {
-    writeGeneration.current.invalidate(); setReceipt(null);
-    setIsBatchResending(false); setResendingMessageId(null);
-    return () => { writeGeneration.current.invalidate(); queryGeneration.current.invalidate(); };
-  }, [consumerGroup]);
-  const [beginTime, setBeginTime] = useState(formatDateTimeInput(new Date(Date.now() - 3 * 60 * 60 * 1000)));
-  const [endTime, setEndTime] = useState(formatDateTimeInput(new Date()));
-  const [messages, setMessages] = useState<DlqMessageSummary[]>([]);
-  const [selectedMessage, setSelectedMessage] = useState<DlqMessageSummary | null>(null);
-  const [searchError, setSearchError] = useState('');
-  const [hasSearched, setHasSearched] = useState(false);
-  const [isSearching, setIsSearching] = useState(false);
-  const [resendingMessageId, setResendingMessageId] = useState<string | null>(null);
-  const [exportingMessageId, setExportingMessageId] = useState<string | null>(null);
-  const [isBatchResending, setIsBatchResending] = useState(false);
-  const [isBatchExporting, setIsBatchExporting] = useState(false);
-  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(EMPTY_SELECTED_IDS);
-  const [taskId, setTaskId] = useState('');
-  const [pagination, setPagination] = useState(defaultPagination);
-  const {
-    items: consumerItems,
-    isInitialLoading: isConsumerCatalogLoading,
-    error: consumerCatalogError,
-  } = useConsumerCatalog({ mode: 'name_server' });
-
-  const consumerGroupOptions = useMemo(
-    () =>
-      consumerItems
-        .filter((item) => item.category !== 'SYSTEM')
-        .map((item) => item.rawGroupName),
-    [consumerItems],
-  );
-
-  useEffect(() => {
-    if (!consumerGroup && consumerGroupOptions.length > 0) {
-      setConsumerGroup(consumerGroupOptions[0]);
-    }
-  }, [consumerGroupOptions, consumerGroup]);
-
-  useEffect(() => {
-    setIsSearching(false);
-    setMessages([]);
-    setSelectedMessage(null);
-    setSearchError('');
-    setHasSearched(false);
-    setSelectedMessageIds(EMPTY_SELECTED_IDS);
-    setTaskId('');
-    setPagination(defaultPagination);
-  }, [activeTab]);
-
-  useEffect(() => { queryGeneration.current.invalidate(); return () => queryGeneration.current.invalidate(); }, [activeTab, consumerGroup, messageId, messageKey, beginTime, endTime]);
-
-  const formatTimestamp = (value: number) => {
-    if (!value) {
-      return '-';
-    }
-    return new Date(value).toLocaleString();
-  };
-
-  const parseDateTimeInput = (value: string): number | null => {
-    const normalized = value.trim().replace(' ', 'T');
-    if (!normalized) {
-      return null;
-    }
-
-    const parsed = new Date(normalized);
-    const timestamp = parsed.getTime();
-    return Number.isNaN(timestamp) ? null : timestamp;
-  };
-
-  const resetConsumerPagingState = () => {
-    queryGeneration.current.invalidate();
-    setIsSearching(false);
-    setMessages([]);
-    setSelectedMessage(null);
-    setSearchError('');
-    setHasSearched(false);
-    setSelectedMessageIds(EMPTY_SELECTED_IDS);
-    setTaskId('');
-    setPagination(defaultPagination);
-  };
-
-  const queryDlqPage = async (pageNum = 1) => {
-    if (!consumerGroup.trim()) {
-      setSearchError('Consumer group is required.');
-      return;
-    }
-
-    if (activeTab === 'Key' && !messageKey.trim()) { setSearchError('Message Key is required.'); return; }
-    const begin = activeTab === 'Key' ? 0 : parseDateTimeInput(beginTime);
-    const end = activeTab === 'Key' ? Date.now() : parseDateTimeInput(endTime);
-    if (begin === null || end === null) {
-      setSearchError('Begin and end must be valid date-time strings.');
-      return;
-    }
-    if (end < begin) {
-      setSearchError('End time must be greater than or equal to begin time.');
-      return;
-    }
-
-    const isCurrent = queryGeneration.current.begin();
-    setIsSearching(true);
-    setSearchError('');
-    setHasSearched(true);
-
-    try {
-      const response = await DlqService.queryDlqMessageByConsumerGroup({
-        consumerGroup: consumerGroup.trim(),
-        begin,
-        end,
-        pageNum,
-        pageSize: pagination.pageSize,
-        taskId: dlqQueryTaskId(activeTab, pageNum, taskId),
-        key: activeTab === 'Key' ? messageKey.trim() : undefined,
-      });
-
-      if (!isCurrent()) return;
-      setMessages(response.page.content);
-      setSelectedMessageIds(EMPTY_SELECTED_IDS);
-      setTaskId(response.taskId);
-      setPagination({
-        currentPage: response.page.number + 1,
-        pageSize: response.page.size,
-        totalPages: response.page.totalPages,
-        totalElements: response.page.totalElements,
-      });
-    } catch (error) {
-      if (!isCurrent()) return;
-      setMessages([]);
-      setSearchError(dashboardErrorMessage(error, 'Failed to query DLQ messages.'));
-    } finally {
-      if (isCurrent()) setIsSearching(false);
-    }
-  };
-
-  const queryDlqByMessageId = async () => {
-    if (!consumerGroup.trim()) {
-      setSearchError('Consumer group is required.');
-      return;
-    }
-    if (!messageId.trim()) {
-      setSearchError('Message ID is required.');
-      return;
-    }
-
-    const isCurrent = queryGeneration.current.begin();
-    setIsSearching(true);
-    setSearchError('');
-    setHasSearched(true);
-    setSelectedMessageIds(EMPTY_SELECTED_IDS);
-    setTaskId('');
-    setPagination(defaultPagination);
-
-    try {
-      const detail = await DlqService.viewDlqMessageDetail({
-        consumerGroup: consumerGroup.trim(),
-        messageId: messageId.trim(),
-      });
-      if (!isCurrent()) return;
-      setMessages([toSummary(detail)]);
-    } catch (error) {
-      if (!isCurrent()) return;
-      setMessages([]);
-      setSearchError(dashboardErrorMessage(error, 'Failed to query DLQ message detail.'));
-    } finally {
-      if (isCurrent()) setIsSearching(false);
-    }
-  };
-
-  const handleSearch = async () => {
-    if (activeTab !== 'Message ID') {
-      await queryDlqPage(1);
-      return;
-    }
-
-    await queryDlqByMessageId();
-  };
-
-  const handleResend = async (message: DlqMessageSummary) => {
-    if (isBatchResending || resendingMessageId) return;
-    const normalizedConsumerGroup = consumerGroup.trim();
-    if (!normalizedConsumerGroup) {
-      setSearchError('Consumer group is required.');
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Request direct consume for DLQ message ${message.msgId} in consumer group ${normalizedConsumerGroup}, ClientId ${clientId.trim() || 'automatic'}?`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    const isCurrent = writeGeneration.current.begin();
-    setResendingMessageId(message.queryMsgId);
-    setSearchError('');
-
-    try {
-      const result = await DlqService.resendDlqMessage({
-        consumerGroup: normalizedConsumerGroup,
-        messageId: message.queryMsgId,
-        clientId: clientId.trim() || undefined,
-      });
-
-      if (!isCurrent()) return;
-      setReceipt({ items: [result], total: 1, successCount: Number(result.success), failureCount: Number(!result.success) });
-      if (result.success) {
-        toast.success(result.message);
-      } else {
-        toast.error(result.message);
-      }
-    } catch (error) {
-      if (!isCurrent()) return;
-      const messageText = dashboardErrorMessage(error, 'Failed to resend DLQ message.');
-      toast.error(messageText);
-      setSearchError(messageText);
-    } finally {
-      if (isCurrent()) setResendingMessageId(null);
-    }
-  };
-
-  const isMessageSelected = (message: DlqMessageSummary) => selectedMessageIds.has(message.queryMsgId);
-
-  const allVisibleSelected =
-    messages.length > 0 && messages.every((message) => selectedMessageIds.has(message.queryMsgId));
-
-  const toggleMessageSelection = (message: DlqMessageSummary) => {
-    setSelectedMessageIds((current) => {
-      const next = new Set(current);
-      if (next.has(message.queryMsgId)) {
-        next.delete(message.queryMsgId);
-      } else {
-        next.add(message.queryMsgId);
-      }
-      return next;
-    });
-  };
-
-  const toggleSelectAllVisible = () => {
-    setSelectedMessageIds((current) => {
-      if (messages.length === 0) {
-        return current;
-      }
-
-      const next = new Set(current);
-      if (messages.every((message) => next.has(message.queryMsgId))) {
-        messages.forEach((message) => next.delete(message.queryMsgId));
-      } else {
-        messages.forEach((message) => next.add(message.queryMsgId));
-      }
-      return next;
-    });
-  };
-
-  const handleBatchResend = async () => {
-    if (isBatchResending || resendingMessageId) return;
-    const normalizedConsumerGroup = consumerGroup.trim();
-    if (!normalizedConsumerGroup) {
-      setSearchError('Consumer group is required.');
-      return;
-    }
-
-    const selectedMessages = messages.filter((message) => selectedMessageIds.has(message.queryMsgId));
-    if (selectedMessages.length === 0) {
-      setSearchError('Select at least one DLQ message to resend.');
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Request direct consume for ${selectedMessages.length} DLQ message(s) in consumer group ${normalizedConsumerGroup}, ClientId ${clientId.trim() || 'automatic'}?`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    const isCurrent = writeGeneration.current.begin();
-    setIsBatchResending(true);
-    setSearchError('');
-
-    try {
-      const response = await DlqService.batchResendDlqMessage({
-        messages: selectedMessages.map((message) => ({
-          consumerGroup: normalizedConsumerGroup,
-          messageId: message.queryMsgId,
-          clientId: clientId.trim() || undefined,
-        })),
-      });
-
-      if (!isCurrent()) return;
-      setReceipt(response);
-      if (response.failureCount === 0) {
-        toast.success(`Batch resend completed for ${response.successCount} DLQ message(s).`);
-      } else if (response.successCount === 0) {
-        const failureMessage =
-          response.items.find((item) => !item.success)?.remark ??
-          `Batch resend failed for ${response.failureCount} DLQ message(s).`;
-        toast.error(failureMessage);
-        setSearchError(failureMessage);
-      } else {
-        const firstFailure = response.items.find((item) => !item.success)?.remark;
-        toast.warning(
-          `Batch resend completed with ${response.successCount} success and ${response.failureCount} failure(s).`,
-        );
-        if (firstFailure) {
-          setSearchError(firstFailure);
-        }
-      }
-
-      setSelectedMessageIds(EMPTY_SELECTED_IDS);
-    } catch (error) {
-      if (!isCurrent()) return;
-      const messageText = dashboardErrorMessage(error, 'Failed to batch resend DLQ messages.');
-      toast.error(messageText);
-      setSearchError(messageText);
-    } finally {
-      if (isCurrent()) setIsBatchResending(false);
-    }
-  };
-
-  const handleExport = async (message: DlqMessageSummary) => {
-    const normalizedConsumerGroup = consumerGroup.trim();
-    if (!normalizedConsumerGroup) {
-      setSearchError('Consumer group is required.');
-      return;
-    }
-
-    setExportingMessageId(message.queryMsgId);
-    setSearchError('');
-
-    try {
-      const payload = await DlqService.exportDlqMessage({
-        consumerGroup: normalizedConsumerGroup,
-        messageId: message.queryMsgId,
-      });
-      downloadExportPayload(payload.fileName, payload.mimeType, payload.content);
-      toast.success(`Exported DLQ message ${message.msgId}.`);
-    } catch (error) {
-      const messageText = dashboardErrorMessage(error, 'Failed to export DLQ message.');
-      toast.error(messageText);
-      setSearchError(messageText);
-    } finally {
-      setExportingMessageId(null);
-    }
-  };
-
-  const handleBatchExport = async () => {
-    const normalizedConsumerGroup = consumerGroup.trim();
-    if (!normalizedConsumerGroup) {
-      setSearchError('Consumer group is required.');
-      return;
-    }
-
-    const selectedMessages = messages.filter((message) => selectedMessageIds.has(message.queryMsgId));
-    if (selectedMessages.length === 0) {
-      setSearchError('Select at least one DLQ message to export.');
-      return;
-    }
-
-    setIsBatchExporting(true);
-    setSearchError('');
-
-    try {
-      const payload = await DlqService.batchExportDlqMessage({
-        messages: selectedMessages.map((message) => ({
-          consumerGroup: normalizedConsumerGroup,
-          messageId: message.queryMsgId,
-        })),
-      });
-
-      downloadExportPayload(payload.fileName, payload.mimeType, payload.content);
-
-      if (payload.failureCount === 0) {
-        toast.success(`Batch export completed for ${payload.successCount} DLQ message(s).`);
-      } else if (payload.successCount === 0) {
-        const failureMessage = `Batch export completed with ${payload.failureCount} failure row(s).`;
-        toast.warning(failureMessage);
-        setSearchError(failureMessage);
-      } else {
-        const partialMessage = `Batch export completed with ${payload.successCount} success and ${payload.failureCount} failure row(s).`;
-        toast.warning(partialMessage);
-        setSearchError(partialMessage);
-      }
-
-      setSelectedMessageIds(EMPTY_SELECTED_IDS);
-    } catch (error) {
-      const messageText = dashboardErrorMessage(error, 'Failed to batch export DLQ messages.');
-      toast.error(messageText);
-      setSearchError(messageText);
-    } finally {
-      setIsBatchExporting(false);
-    }
-  };
-
-  const renderEmptyCopy = () => {
-    if (activeTab === 'Consumer') {
-      return 'Enter a consumer group and time range to search DLQ messages.';
-    }
-    return activeTab === 'Key' ? 'Enter a Consumer group and exact message Key.' : 'Enter a consumer group and message id to load the DLQ message detail.';
-  };
-
-  return (
-    <div className="mx-auto max-w-[1600px] space-y-6 pb-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <MessageDetailModal
-        isOpen={!!selectedMessage}
-        onClose={() => setSelectedMessage(null)}
-        message={selectedMessage}
-      />
-
-      {receipt && <section aria-label="DLQ resend receipts" className="rounded border border-blue-300 p-4 mb-4 overflow-auto">
-        <h3>Latest resend receipt: {receipt.successCount} succeeded / {receipt.failureCount} failed</h3>
-        <table className="w-full text-left text-sm"><thead><tr><th>DLQ request ID</th><th>Original ID / Topic</th><th>Group</th><th>Success</th><th>Consume result</th><th>Remark</th></tr></thead><tbody>
-          {receipt.items.map((item, index) => <tr key={`${item.requestMessageId ?? item.msgId}:${index}`}><td>{item.requestMessageId ?? item.msgId}</td><td>{item.msgId} / {item.topic}</td><td>{item.consumerGroup}</td><td>{String(item.success)}</td><td>{item.consumeResult ?? 'Not confirmed'}</td><td>{item.remark || item.message}</td></tr>)}
-        </tbody></table>
-        <button type="button" disabled={isBatchResending || Boolean(resendingMessageId)} onClick={() => {
-          const failed = failedDlqSelection(receipt, consumerGroup.trim(), messages);
-          setSelectedMessageIds(failed);
-          setSearchError(failed.size ? 'Only visible failed messages are selected. Review and confirm Batch resend to retry.' : 'No failed messages from this receipt are visible in the current query. Refresh or query their IDs first.');
-        }}>Select only failed messages for review</button>
-      </section>}
-      <details className="mb-4"><summary>Advanced resend target</summary><label>Optional ClientId <Input value={clientId} onChange={event => setClientId(event.target.value)} placeholder="Automatic client selection when empty" /></label></details>
-      <p className="text-sm mb-3">Select a query mode: Message ID and Key are exact queries with no time-page cursor. Key returns at most 64 matches. CSV exports include only explicitly selected messages.</p>
-      <div className="mb-8 flex justify-center">
-        <div className="inline-flex rounded-xl bg-gray-100 p-1 shadow-inner dark:bg-gray-800">
-          {(['Consumer', 'Key', 'Message ID'] as DlqTab[]).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`rounded-lg px-6 py-2 text-sm font-medium transition-all duration-200 ${
-                activeTab === tab
-                  ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-white'
-                  : 'text-gray-500 hover:bg-gray-200/50 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700/50 dark:hover:text-gray-200'
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex items-start gap-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900/40 dark:bg-blue-900/20 dark:text-blue-200">
-        <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>Single-message export and resend are available. Batch resend and batch export are available.</div>
-      </div>
-
-      <div className="sticky top-0 z-20 flex flex-col justify-between gap-4 rounded-2xl border border-gray-100 bg-white/90 p-4 shadow-sm backdrop-blur-xl transition-colors dark:border-gray-800 dark:bg-gray-900/90 xl:flex-row xl:items-center">
-        <div className="flex flex-1 flex-wrap items-center gap-4">
-          <div className="flex min-w-[260px] flex-1 items-center space-x-2">
-            <span className="whitespace-nowrap text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-              Consumer Group:
-            </span>
-            <div className="relative flex-1">
-              <Input
-                value={consumerGroup}
-                onChange={(event) => {
-                  setConsumerGroup(event.target.value);
-                  writeGeneration.current.invalidate();
-                  resetConsumerPagingState();
-                }}
-                list="dlq-consumer-group-options"
-                placeholder={isConsumerCatalogLoading ? 'Loading consumer groups...' : 'Enter consumer group...'}
-                className="border-gray-200 bg-gray-50 pr-10 font-mono text-gray-900 placeholder:text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-              />
-              <Users className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-              <datalist id="dlq-consumer-group-options">
-                {consumerGroupOptions.map((item) => (
-                  <option key={item} value={item} />
-                ))}
-              </datalist>
-            </div>
-          </div>
-
-          {activeTab === 'Consumer' ? (
-            <>
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">Begin:</span>
-                <div className="relative">
-                  <Input
-                    value={beginTime}
-                    onChange={(event) => {
-                      setBeginTime(event.target.value);
-                      resetConsumerPagingState();
-                    }}
-                    className="w-48 border-gray-200 bg-gray-50 font-mono text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                  />
-                  <Calendar className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">End:</span>
-                <div className="relative">
-                  <Input
-                    value={endTime}
-                    onChange={(event) => {
-                      setEndTime(event.target.value);
-                      resetConsumerPagingState();
-                    }}
-                    className="w-48 border-gray-200 bg-gray-50 font-mono text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                  />
-                  <Calendar className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="flex min-w-[320px] flex-1 items-center space-x-2">
-              <span className="whitespace-nowrap text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                {activeTab === 'Key' ? 'Message Key:' : 'Message ID:'}
-              </span>
-              <div className="relative flex-1">
-                <Input
-                  value={activeTab === 'Key' ? messageKey : messageId}
-                  onChange={(event) => { if (activeTab === 'Key') setMessageKey(event.target.value); else setMessageId(event.target.value); resetConsumerPagingState(); }}
-                  placeholder={activeTab === 'Key' ? 'Enter Message Key...' : 'Enter Message ID...'}
-                  className="border-gray-200 bg-gray-50 pr-10 font-mono text-gray-900 placeholder:text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                />
-                <Hash className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={() => void handleSearch()}
-            disabled={isSearching}
-            className="flex items-center rounded-xl bg-gray-900 px-6 py-2 text-sm font-medium text-white shadow-md transition-all hover:bg-gray-800 hover:shadow-lg active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 dark:border dark:border-gray-700 dark:bg-gray-900 dark:text-white dark:hover:bg-gray-800"
-          >
-            <Search className="mr-2 h-4 w-4" />
-            {isSearching ? 'SEARCHING...' : 'SEARCH'}
-          </button>
-
-
-            <>
-              <button
-                onClick={() => void handleBatchResend()}
-                disabled={isBatchResending || Boolean(resendingMessageId) || isBatchExporting || selectedMessageIds.size === 0}
-                className="flex items-center rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:border-amber-800 dark:hover:bg-amber-900/30"
-              >
-                <Send className="mr-2 h-4 w-4" />
-                {isBatchResending ? 'Batch Resending...' : `Batch Resend${selectedMessageIds.size > 0 ? ` (${selectedMessageIds.size})` : ''}`}
-              </button>
-              <button
-                onClick={() => void handleBatchExport()}
-                disabled={isBatchExporting || isBatchResending || selectedMessageIds.size === 0}
-                className="flex items-center rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-blue-800 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
-              >
-                <ArrowUpRight className="mr-2 h-4 w-4" />
-                {isBatchExporting ? 'Batch Exporting...' : `Batch Export${selectedMessageIds.size > 0 ? ` (${selectedMessageIds.size})` : ''}`}
-              </button>
-            </>
-
-        </div>
-      </div>
-
-      {consumerCatalogError ? (
-        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>Failed to load consumer groups: {consumerCatalogError}. Manual input is still available.</div>
-        </div>
-      ) : null}
-
-      {searchError ? (
-        <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>{searchError}</div>
-        </div>
-      ) : null}
-
-      <div>
-        {messages.length > 0 ? (
-          <>
-
-              <div className="mb-4 flex items-center justify-between rounded-2xl border border-gray-100 bg-white px-4 py-3 text-sm text-gray-600 shadow-sm dark:border-gray-800 dark:bg-gray-900 dark:text-gray-300">
-                <label className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={allVisibleSelected}
-                    onChange={toggleSelectAllVisible}
-                    className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-500 dark:border-gray-600 dark:bg-gray-800"
-                  />
-                  <span>Select all messages on this page</span>
-                </label>
-                <span className="text-xs font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500">
-                  {selectedMessageIds.size} selected
-                </span>
-              </div>
-
-
-            <div className="grid grid-cols-1 gap-6 md:grid-cols-2 2xl:grid-cols-3">
-            {messages.map((message, index) => (
-              <motion.div
-                key={`${message.topic}-${message.queryMsgId}`}
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.04 }}
-                className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm transition-all duration-200 hover:border-blue-200 hover:shadow-md dark:border-gray-800 dark:bg-gray-900 dark:hover:border-blue-800"
-              >
-                <div className="border-b border-gray-100 bg-gradient-to-br from-gray-50/70 to-white px-5 py-4 dark:border-gray-800 dark:from-gray-800/50 dark:to-gray-900">
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-                      Message ID
-                    </span>
-                    <div className="flex items-center gap-3">
-
-                        <input
-                          type="checkbox"
-                          checked={isMessageSelected(message)}
-                          onChange={() => toggleMessageSelection(message)}
-                          className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-500 dark:border-gray-600 dark:bg-gray-800"
-                        />
-
-                      <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-red-500 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
-                        DLQ
-                      </span>
-                    </div>
-                  </div>
-                  <p className="break-all font-mono text-sm font-bold text-gray-900 dark:text-white">{message.msgId}</p>
-                </div>
-
-                <div className="space-y-4 p-5">
-                  <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-800/40">
-                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-                      Topic
-                    </div>
-                    <div className="break-all font-mono text-xs text-gray-700 dark:text-gray-300">{message.topic}</div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-800/40">
-                      <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-                        <Tag className="h-3.5 w-3.5" />
-                        Tags
-                      </div>
-                      <div className="break-all font-mono text-xs text-gray-700 dark:text-gray-300">
-                        {message.tags || '-'}
-                      </div>
-                    </div>
-
-                    <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-800/40">
-                      <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-                        <Key className="h-3.5 w-3.5" />
-                        Keys
-                      </div>
-                      <div className="break-all font-mono text-xs text-gray-700 dark:text-gray-300">
-                        {message.keys || '-'}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center rounded-xl border border-gray-100 bg-gray-50/50 p-3 dark:border-gray-800 dark:bg-gray-800/40">
-                    <Clock className="mr-2.5 h-4 w-4 text-gray-400 dark:text-gray-500" />
-                    <div>
-                      <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-                        Store Time
-                      </div>
-                      <div className="font-mono text-sm text-gray-900 dark:text-white">
-                        {formatTimestamp(message.storeTimestamp)}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="border-t border-gray-100 bg-gray-50/30 px-5 py-3 dark:border-gray-800 dark:bg-gray-800/30">
-                  <div className="grid grid-cols-3 gap-3">
-                    <button
-                      onClick={() => void handleResend(message)}
-                      disabled={
-                        resendingMessageId === message.queryMsgId ||
-                        exportingMessageId === message.queryMsgId ||
-                        isBatchResending ||
-                        isBatchExporting
-                      }
-                      className="flex items-center justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:border-amber-800 dark:hover:bg-amber-900/30"
-                    >
-                      <Send className="mr-1.5 h-4 w-4" />
-                      {resendingMessageId === message.queryMsgId ? 'Resending...' : 'Resend'}
-                    </button>
-                    <button
-                      onClick={() => void handleExport(message)}
-                      disabled={
-                        exportingMessageId === message.queryMsgId ||
-                        resendingMessageId === message.queryMsgId ||
-                        isBatchResending ||
-                        isBatchExporting
-                      }
-                      className="flex items-center justify-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-blue-800 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
-                    >
-                      <ArrowUpRight className="mr-1.5 h-4 w-4" />
-                      {exportingMessageId === message.queryMsgId ? 'Exporting...' : 'Export'}
-                    </button>
-                    <button
-                      onClick={() => setSelectedMessage(message)}
-                      className="flex items-center justify-center rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-blue-800 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
-                    >
-                      <FileText className="mr-1.5 h-4 w-4" />
-                      Detail
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            ))}
-            </div>
-          </>
-        ) : hasSearched ? (
-          <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-gray-200 bg-white py-20 text-center text-gray-500 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400">
-            <div className="mb-4 rounded-full bg-gray-50 p-4 dark:bg-gray-800">
-              <Search className="h-8 w-8 opacity-30" />
-            </div>
-            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">No DLQ messages matched this query.</p>
-            <p className="mt-1 text-xs opacity-70">Check the consumer group, time range, or message id and try again.</p>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-gray-200 bg-white py-20 text-center text-gray-500 dark:border-gray-800 dark:bg-gray-900 dark:text-gray-400">
-            <div className="mb-4 rounded-full bg-gray-50 p-4 dark:bg-gray-800">
-              <Info className="h-8 w-8 opacity-30" />
-            </div>
-            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">DLQ query is ready.</p>
-            <p className="mt-1 text-xs opacity-70">{renderEmptyCopy()}</p>
-          </div>
-        )}
-
-        {activeTab === 'Consumer' && pagination.totalPages > 1 ? (
-          <div className="mt-6 flex items-center justify-center">
-            <Pagination
-              currentPage={pagination.currentPage}
-              totalPages={pagination.totalPages}
-              onPageChange={(page) => {
-                if (!isSearching) {
-                  void queryDlqPage(page);
-                }
-              }}
-            />
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-};
+import { usePageRefresh } from '../app/layout/pageToolbar';
+import { PageSection } from './layout/PageSection';
+import { PageState } from './layout/PageState';
+import { Button } from './ui/LegacyButton';
+import { Input } from './ui/LegacyInput';
+import { Pagination } from './Pagination';
+import '../features/message/message.css';
+import '../features/dlq/dlq.css';
+
+const localTime = (timestamp: number) => new Date(timestamp - new Date(timestamp).getTimezoneOffset() * 60_000).toISOString().slice(0, 19);
+const initialDraft = (): DlqQueryDraft => ({ mode: 'key', consumerGroup: '', key: '', messageId: '', begin: localTime(Date.now() - 3 * 3_600_000), end: localTime(Date.now()) });
+const modes = [['key', 'By Key'], ['id', 'By ID'], ['time', 'By Time']] as const;
+const rowId = (message: DlqMessageSummary) => messageLookup(message).messageId;
+
+export function DLQMessageView() {
+    const [draft, storeDraft] = useNavigationState<DlqQueryDraft>('dlqQuery', initialDraft);
+    const [clientId, setClientId] = useNavigationState<string>('dlqClient', () => '');
+    const [selected, setSelected] = useState<Set<string>>(new Set());
+    const [detail, setDetail] = useState<DlqMessageSummary | null>(null);
+    const [localPage, setLocalPage] = useState(1);
+    const [validation, setValidation] = useState('');
+    const [reviewNote, setReviewNote] = useState('');
+    const [hasSearched, setHasSearched] = useState(false);
+    const catalog = useConsumerCatalog({ mode: 'name_server' });
+    const groupsId = useId();
+    const actions = useDlqActions();
+    const context = useMemo(() => {
+        const settings = ConnectionStore.getSnapshot();
+        return { revision: settings?.revision ?? 0, environmentId: settings?.environmentId ?? null };
+    }, []);
+    const controller = useMemo(() => {
+        return createDlqQueryController(() => {
+            const current = ConnectionStore.getSnapshot();
+            return current?.revision === context.revision && current?.environmentId === context.environmentId;
+        });
+    }, [context]);
+    const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+    useEffect(() => { controller.start(); return controller.stop; }, [controller]);
+    useEffect(() => { setSelected(new Set()); setReviewNote(''); }, [state.result, actions.receipt]);
+    const update = (patch: Partial<DlqQueryDraft>) => {
+        controller.reset(); setSelected(new Set()); setDetail(null); setLocalPage(1); setValidation(''); setReviewNote(''); setHasSearched(false);
+        storeDraft({ ...draft, ...patch });
+    };
+    const query = useCallback(() => {
+        try {
+            const request = buildDlqQuery(draft);
+            setValidation(''); setHasSearched(true); setLocalPage(1); setDetail(null); setSelected(new Set());
+            void controller.read(request, 1, true);
+        } catch (error) { setValidation((error as Error).message); }
+    }, [controller, draft]);
+    const refresh = useCallback(() => { void catalog.refresh(); if (hasSearched) query(); }, [catalog.refresh, hasSearched, query]);
+    usePageRefresh({ refresh, pending: catalog.pending || state.pending, refreshedAt: state.receivedAt });
+    const result = state.result;
+    const group = result ? dlqGroup(result.query.topic) : '';
+    const timeMode = result?.query.mode === 'time';
+    const pageCount = timeMode ? result.totalPages : Math.ceil((result?.items.length ?? 0) / 12);
+    const page = timeMode ? result.page : Math.min(localPage, Math.max(1, pageCount));
+    const items = result ? timeMode ? result.items : result.items.slice((page - 1) * 12, page * 12) : [];
+    const rows = [...new Map(items.map(message => [rowId(message), message])).values()];
+    const selectedRows = rows.filter(message => selected.has(rowId(message)));
+    const blocked = state.pending || Boolean(state.error);
+    const failed = actions.receipt ? failedDlqSelection(actions.receipt, ConnectionStore.getSnapshot()?.environmentId ?? null, group, rows) : new Set<string>();
+    const allSelected = rows.length > 0 && selectedRows.length === rows.length;
+    return <div className="ops-dlq">
+        <section className="ops-dlq-query" aria-label="Dead-letter query"><form onSubmit={event => { event.preventDefault(); query(); }}>
+            <Input label="Consumer group" list={groupsId} placeholder="Choose or enter a group" value={draft.consumerGroup} onChange={event => update({ consumerGroup: event.target.value })} required />
+            <datalist id={groupsId}>{catalog.data?.items.filter(item => item.category !== 'SYSTEM').map(item => <option key={item.rawGroupName} value={item.rawGroupName} />)}</datalist>
+            <div className="ops-dlq-mode"><span>Query mode</span><div className="ops-message-modes" role="group" aria-label="DLQ query mode">{modes.map(([mode, label]) => <Button key={mode} variant={draft.mode === mode ? 'primary' : 'ghost'} aria-pressed={draft.mode === mode} onClick={() => { if (mode !== draft.mode) update({ mode }); }}>{label}</Button>)}</div></div>
+            {draft.mode === 'key' && <Input label="Key" value={draft.key} onChange={event => update({ key: event.target.value })} required />}
+            {draft.mode === 'id' && <Input label="Message ID" value={draft.messageId} onChange={event => update({ messageId: event.target.value })} required />}
+            {draft.mode === 'time' && <><Input label="Begin" type="datetime-local" step={1} value={draft.begin} onChange={event => update({ begin: event.target.value })} required />
+                <Input label="End" type="datetime-local" step={1} value={draft.end} onChange={event => update({ end: event.target.value })} required /></>}
+            <Input label="Client ID (optional)" placeholder="Selected by Broker" value={clientId} onChange={event => setClientId(event.target.value)} />
+            <Button type="submit" disabled={state.pending}>{state.pending ? 'Querying…' : 'Query'}</Button>
+        </form>
+            <p className="ops-message-note">{draft.mode === 'time' ? `Local time: ${Intl.DateTimeFormat().resolvedOptions().timeZone}. Refresh starts a new scan.` : draft.mode === 'key' ? 'Key lookup returns up to 64 indexed messages.' : 'Query a DLQ physical or unique message ID.'} Client ID applies only to resend.</p>
+            {catalog.error && <p className="ops-message-note">Consumer suggestions are unavailable. Manual group input remains available.</p>}
+            {validation && <PageState kind="error" title="Check query conditions" description={validation} />}
+        </section>
+        <PageSection title={result ? `${result.total.toLocaleString()} messages found` : 'Dead-letter messages'} description={result ? `Consumer group: ${group} · Last successful query: ${new Date(state.receivedAt!).toLocaleString()}` : 'Query a Consumer group to inspect its dead-letter queue.'}>
+            {state.pending && <PageState kind="loading" title="Reading dead-letter messages" />}
+            {state.error && <PageState kind="error" title="DLQ query failed" description={state.error + (result ? ' Showing the last successful result; actions are disabled.' : '')} />}
+            {!hasSearched && <PageState kind="empty" title="No query yet" />}
+            {result && <>
+                <div className="ops-message-scroll" role="region" aria-label="Dead-letter results" tabIndex={0}><table><thead><tr>
+                    <th scope="col" className="ops-dlq-check"><input type="checkbox" aria-label="Select all messages on this page" checked={allSelected} disabled={blocked || !rows.length} onChange={() => { setReviewNote(''); setSelected(allSelected ? new Set() : new Set(rows.map(rowId))); }} /></th>
+                    {['DLQ request ID', 'DLQ Topic', 'Store time', 'Actions'].map(label => <th scope="col" key={label}>{label}</th>)}
+                </tr></thead><tbody>{rows.map(message => <tr key={rowId(message)} data-selected={selected.has(rowId(message))}>
+                    <td className="ops-dlq-check"><input type="checkbox" aria-label={'Select message ' + rowId(message)} checked={selected.has(rowId(message))} disabled={blocked} onChange={() => { setReviewNote(''); setSelected(current => { const next = new Set(current); if (next.has(rowId(message))) next.delete(rowId(message)); else next.add(rowId(message)); return next; }); }} /></td>
+                    <th scope="row"><button type="button" className="ops-message-choice" disabled={blocked} onClick={() => setDetail(message)} title={rowId(message)}>{visibleMessageText(rowId(message))}</button></th>
+                    <td>{visibleMessageText(message.topic)}</td>
+                    <td>{messageTimestamp(message.storeTimestamp)}</td><td><div className="ops-dlq-row-actions"><Button variant="outline" disabled={blocked} onClick={() => setDetail(message)}>Detail</Button>
+                        <Button variant="outline" disabled={blocked} onClick={() => actions.open({ action: 'resend', group, messages: [message], clientId, context })}>Resend</Button>
+                        <Button variant="outline" disabled={blocked} onClick={() => actions.open({ action: 'export', group, messages: [message], clientId: '', context })}>Export</Button></div></td>
+                </tr>)}</tbody></table></div>
+                {!rows.length && <PageState kind="empty" title="No matching dead-letter messages" />}
+                {pageCount > 1 && <Pagination currentPage={page} totalPages={pageCount} disabled={state.pending} onPageChange={value => { setSelected(new Set()); setDetail(null); if (timeMode) void controller.read(result.query, value); else setLocalPage(value); }} />}
+                <div className="ops-dlq-selection"><span>{selectedRows.length} selected</span><div className="ops-message-actions"><Button icon={Send} disabled={blocked || !selectedRows.length} onClick={() => actions.open({ action: 'resend', group, messages: selectedRows, clientId, context })}>Resend selected</Button>
+                    <Button variant="outline" icon={Download} disabled={blocked || !selectedRows.length} onClick={() => actions.open({ action: 'export', group, messages: selectedRows, clientId: '', context })}>Export CSV</Button></div></div>
+                {reviewNote && <p role="status" className="ops-message-note">{reviewNote}</p>}
+            </>}
+        </PageSection>
+        <DlqReceiptPanel receipt={actions.receipt} canReview={!blocked && failed.size > 0} review={() => { setSelected(failed); setReviewNote(`${failed.size} failed targets selected. Review the targets and confirm before resending.`); }} />
+        {detail && <DlqMessageDialog message={detail} group={group} close={() => setDetail(null)} />}
+    </div>;
+}

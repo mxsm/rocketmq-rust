@@ -35,7 +35,7 @@ export const pageDescriptions: Record<Tab, string> = {
     Producer: 'Discover producer groups and inspect connections',
     Message: 'Find messages by key, ID, or time',
     MessageTrace: 'Follow message publication and consumption',
-    DLQ: 'Inspect dead-letter messages and resend results',
+    DLQ: 'Review failures before replaying messages',
     ACL: 'Broker users and resource policies',
     Storage: 'Local database information and collector diagnostics',
     Monitors: 'Consumer group thresholds for this environment',

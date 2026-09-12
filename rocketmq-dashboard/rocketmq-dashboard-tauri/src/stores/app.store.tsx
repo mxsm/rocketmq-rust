@@ -85,7 +85,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       case 'MessageTrace':
         return 'Message Trace';
       case 'DLQ':
-        return 'DLQ Message Management';
+        return 'Dead-letter messages';
       case 'ACL':
         return 'ACL Management';
       case 'Audit':
