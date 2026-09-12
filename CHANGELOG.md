@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **test(client):** Cover `RemoteBrokerOffsetStore` memory-only reads and topic snapshot isolation: `ReadFromMemory` distinguishing an absent queue from a stored zero offset, `MemoryFirstThenStore` returning a cached value without a network fallback, `clone_offset_table` filtering by exact topic across overlapping broker/queue IDs, and returned snapshots staying isolated from later store mutations ([#10540](https://github.com/mxsm/rocketmq-rust/issues/10540)).
 - **docs(model):** Fix BooleanAttribute constructor documentation that incorrectly described enum attribute parameters and return type; add accurate Rustdoc with executable examples ([#10455](https://github.com/mxsm/rocketmq-rust/issues/10455)).
 - **fix(model):** Return `0` for CRC32 ranges whose `offset + length` overflows instead of panicking ([#10448](https://github.com/mxsm/rocketmq-rust/issues/10448)).
 - **docs(protocol):** Add missing Apache 2.0 headers to protocol Rust sources and compile-test fixtures ([#10061](https://github.com/mxsm/rocketmq-rust/issues/10061)).
