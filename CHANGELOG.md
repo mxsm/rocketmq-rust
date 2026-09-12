@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **test(client):** Cover `ControllableOffset` freeze and overwrite semantics: unfrozen increase-only vs. unconditional updates, `update_and_freeze` locking out later updates, `new_frozen` rejecting both update modes, and re-freezing to a new value ([#10529](https://github.com/mxsm/rocketmq-rust/issues/10529)).
 - **docs(model):** Fix BooleanAttribute constructor documentation that incorrectly described enum attribute parameters and return type; add accurate Rustdoc with executable examples ([#10455](https://github.com/mxsm/rocketmq-rust/issues/10455)).
 - **fix(model):** Return `0` for CRC32 ranges whose `offset + length` overflows instead of panicking ([#10448](https://github.com/mxsm/rocketmq-rust/issues/10448)).
 - **docs(protocol):** Add missing Apache 2.0 headers to protocol Rust sources and compile-test fixtures ([#10061](https://github.com/mxsm/rocketmq-rust/issues/10061)).
