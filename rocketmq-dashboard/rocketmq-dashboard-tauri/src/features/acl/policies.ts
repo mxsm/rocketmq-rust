@@ -4,7 +4,7 @@ export const policyIdentity = (policy: AclPolicy, entry: AclPolicyEntry) => JSON
 export function policyDeleteRequest(scope: AclScope, policy: AclPolicy, entry: AclPolicyEntry): AclPolicyDelete {
     const kind = policyType(policy.policyType);
     if (!policy.subject?.trim() || !entry.resource?.trim() || !kind) throw new Error('An exact subject, policy type and resource are required.');
-    return { scope, subject: policy.subject, policyType: kind, resource: entry.resource };
+    return { scope: { ...scope }, subject: policy.subject, policyType: kind, resource: entry.resource };
 }
 export function policyDraft(policy: AclPolicy): AclPolicyDraft {
     const kind = policyType(policy.policyType);
