@@ -14,6 +14,8 @@
 
 //! Loom model for the TaskGroup registration, cancellation, and join invariants.
 
+use loom::sync::atomic::AtomicBool;
+use loom::sync::atomic::Ordering;
 use loom::sync::Arc;
 use loom::sync::Mutex;
 use loom::thread;
@@ -37,20 +39,10 @@ struct TaskGroupModel {
 }
 
 #[derive(Debug)]
-struct RemovalModel {
+struct CompletionModel {
     registered: bool,
-    removals: usize,
-}
-
-impl RemovalModel {
-    fn remove_once(&mut self) -> bool {
-        if !self.registered {
-            return false;
-        }
-        self.registered = false;
-        self.removals += 1;
-        true
-    }
+    abort_requested: bool,
+    settled: usize,
 }
 
 #[derive(Debug)]
@@ -199,31 +191,64 @@ fn ha_reconnect_child_lease_racing_with_shutdown_is_tracked_or_rejected() {
 }
 
 #[test]
-fn completion_racing_with_abort_removes_the_task_once() {
+fn abort_and_report_racing_with_completion_preserve_resource_settlement() {
     loom::model(|| {
-        let removal = Arc::new(Mutex::new(RemovalModel {
+        let state = Arc::new(Mutex::new(CompletionModel {
             registered: true,
-            removals: 0,
+            abort_requested: false,
+            settled: 0,
         }));
+        let resource_live = Arc::new(AtomicBool::new(true));
+        let done = Arc::new(AtomicBool::new(false));
 
-        let completed_removal = Arc::clone(&removal);
+        let completed_state = Arc::clone(&state);
+        let completed_resource = Arc::clone(&resource_live);
+        let completed_done = Arc::clone(&done);
         let completion = thread::spawn(move || {
-            thread::yield_now();
-            completed_removal.lock().expect("completion removal lock").remove_once()
+            // Both normal return and executor cancellation destroy the future
+            // before the sole finalizer settles the registry and publishes done.
+            completed_resource.store(false, Ordering::Relaxed);
+            {
+                let mut state = completed_state.lock().expect("settlement lock");
+                assert!(state.registered);
+                state.settled += 1;
+                state.registered = false;
+            }
+            completed_done.store(true, Ordering::Release);
         });
 
-        let aborted_removal = Arc::clone(&removal);
+        let aborted_state = Arc::clone(&state);
         let abort = thread::spawn(move || {
-            thread::yield_now();
-            aborted_removal.lock().expect("abort removal lock").remove_once()
+            let mut state = aborted_state.lock().expect("abort request lock");
+            if state.registered {
+                state.abort_requested = true;
+                assert_eq!(state.settled, 0, "requesting abort does not settle a live task");
+            }
         });
 
-        let completed = completion.join().expect("completion thread");
-        let aborted = abort.join().expect("abort thread");
-        let removal = removal.lock().expect("final removal lock");
-        assert_ne!(completed, aborted, "exactly one racing path must remove the task");
-        assert!(!removal.registered);
-        assert_eq!(removal.removals, 1);
+        let observed_state = Arc::clone(&state);
+        let observed_done = Arc::clone(&done);
+        let observed_resource = Arc::clone(&resource_live);
+        let observer = thread::spawn(move || {
+            let done = observed_done.load(Ordering::Acquire);
+            if done {
+                assert!(!observed_resource.load(Ordering::Relaxed));
+            }
+            // The report uses the same settlement gate as the finalizer.
+            let state = observed_state.lock().expect("report lock");
+            assert_eq!(usize::from(state.registered) + state.settled, 1);
+            if done {
+                assert!(!state.registered);
+                assert_eq!(state.settled, 1);
+            }
+        });
+
+        completion.join().expect("completion thread");
+        abort.join().expect("abort thread");
+        observer.join().expect("observer thread");
+        let state = state.lock().expect("final state lock");
+        assert!(!state.registered);
+        assert_eq!(state.settled, 1);
     });
 }
 

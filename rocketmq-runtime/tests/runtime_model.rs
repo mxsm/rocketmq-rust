@@ -677,23 +677,27 @@ async fn task_group_shutdown_now_aborts_without_async_wait() {
     let context = RuntimeContext::from_current("task-group-shutdown-now-test");
     let group = context.service_context("service").task_group().clone();
 
-    group
-        .spawn_service("pending-task", async move {
+    let (task_id, handle) = group
+        .spawn_service_with_handle("pending-task", async move {
             std::future::pending::<()>().await;
         })
         .unwrap();
 
     let report = group.shutdown_now();
-    assert_eq!(report.aborted, 1, "{}", report.to_json());
-    assert_eq!(report.leaked, 0, "{}", report.to_json());
+    assert_eq!(report.aborted, 0, "{}", report.to_json());
+    assert_eq!(report.leaked, 1, "{}", report.to_json());
+    assert!(group.contains_task(task_id));
     assert_eq!(
         group.lifecycle_state(),
         rocketmq_runtime::TaskGroupLifecycleState::ShutdownCompleted
     );
     assert!(group.spawn_service("late-task", async {}).is_err());
 
+    assert!(handle.await.unwrap_err().is_cancelled());
+    assert!(!group.contains_task(task_id));
     let second_report = group.shutdown(Duration::from_secs(1)).await;
-    assert_eq!(second_report.aborted, 1, "{}", second_report.to_json());
+    assert_eq!(second_report.aborted, 0, "{}", second_report.to_json());
+    assert_eq!(second_report.leaked, 1, "{}", second_report.to_json());
 }
 
 #[tokio::test]
@@ -1656,10 +1660,9 @@ fn runtime_owner_shutdown_background_closes_root_group_without_drop_fallback() {
     let report = owner.shutdown_background();
 
     assert!(
-        report
-            .children
-            .iter()
-            .any(|child| { child.name == "owner-background-test" && child.cancelled + child.aborted == 1 }),
+        report.children.iter().any(|child| {
+            child.name == "owner-background-test" && child.cancelled + child.aborted + child.leaked == 1
+        }),
         "{}",
         report.to_json()
     );
