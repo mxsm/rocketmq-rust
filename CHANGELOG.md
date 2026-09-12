@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **test(client):** Cover `ControllableOffset` freeze and overwrite semantics: unfrozen increase-only vs. unconditional updates, `update_and_freeze` locking out later updates, `new_frozen` rejecting both update modes, and re-freezing to a new value ([#10529](https://github.com/mxsm/rocketmq-rust/issues/10529)).
+- **fix(client):** Return `None` instead of panicking in `NameServerAddressUtils::parse_instance_id_from_endpoint` when the last slash occurs after the first dot ([#10528](https://github.com/mxsm/rocketmq-rust/issues/10528)).
+- **test(client):** Cover malformed and failed client offset responses: invalid UTF-8 bodies, non-success responses with inspectable response codes, and malformed reset-offset JSON with and without a remark ([#10534](https://github.com/mxsm/rocketmq-rust/issues/10534)).
 - **docs(model):** Fix BooleanAttribute constructor documentation that incorrectly described enum attribute parameters and return type; add accurate Rustdoc with executable examples ([#10455](https://github.com/mxsm/rocketmq-rust/issues/10455)).
 - **fix(model):** Return `0` for CRC32 ranges whose `offset + length` overflows instead of panicking ([#10448](https://github.com/mxsm/rocketmq-rust/issues/10448)).
 - **docs(protocol):** Add missing Apache 2.0 headers to protocol Rust sources and compile-test fixtures ([#10061](https://github.com/mxsm/rocketmq-rust/issues/10061)).
