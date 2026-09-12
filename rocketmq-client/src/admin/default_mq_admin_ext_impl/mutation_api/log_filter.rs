@@ -203,4 +203,90 @@ mod tests {
             Some("operation-1")
         );
     }
+
+    #[test]
+    fn ttl_accepts_inclusive_boundaries_and_rejects_just_outside_them() {
+        let with_ttl = |ttl: u32| {
+            set_properties(
+                &"127.0.0.1:10911".into(),
+                &"rocketmq_broker::processor".into(),
+                &"DEBUG".into(),
+                ttl,
+                &"operation-1".into(),
+            )
+        };
+
+        assert!(with_ttl(60).is_ok());
+        assert!(with_ttl(900).is_ok());
+        assert!(with_ttl(59).is_err());
+        assert!(with_ttl(901).is_err());
+    }
+
+    #[test]
+    fn operation_id_accepts_128_bytes_preserved_exactly_and_rejects_129_bytes() {
+        let id_128 = "a".repeat(128);
+        let properties = set_properties(
+            &"127.0.0.1:10911".into(),
+            &"rocketmq_broker::processor".into(),
+            &"DEBUG".into(),
+            120,
+            &id_128.as_str().into(),
+        )
+        .expect("128-byte operation id should be accepted");
+        assert_eq!(
+            properties.get("logFilterRequestId").map(CheetahString::as_str),
+            Some(id_128.as_str())
+        );
+
+        let id_129 = "a".repeat(129);
+        assert!(set_properties(
+            &"127.0.0.1:10911".into(),
+            &"rocketmq_broker::processor".into(),
+            &"DEBUG".into(),
+            120,
+            &id_129.as_str().into(),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn operation_id_rejects_empty_whitespace_control_and_unsupported_punctuation_in_set_and_restore() {
+        for invalid in ["", "op 1", "op\t1", "op\u{0007}1", "op@1", "op#1", "op!1"] {
+            assert!(
+                set_properties(
+                    &"127.0.0.1:10911".into(),
+                    &"rocketmq_broker::processor".into(),
+                    &"DEBUG".into(),
+                    120,
+                    &invalid.into(),
+                )
+                .is_err(),
+                "expected set_properties to reject operation id {invalid:?}"
+            );
+            assert!(
+                restore_properties(&"127.0.0.1:10911".into(), &invalid.into()).is_err(),
+                "expected restore_properties to reject operation id {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn info_level_converts_to_lowercase_and_restore_has_no_log_filter_directive() {
+        let properties = set_properties(
+            &"127.0.0.1:10911".into(),
+            &"rocketmq_broker::processor".into(),
+            &"INFO".into(),
+            120,
+            &"operation-1".into(),
+        )
+        .expect("info level should be accepted");
+        assert_eq!(
+            properties.get("logFilter").map(CheetahString::as_str),
+            Some("info,rocketmq_broker::processor=info")
+        );
+
+        let restored =
+            restore_properties(&"127.0.0.1:10911".into(), &"operation-1".into()).expect("restore properties");
+        assert!(!restored.contains_key("logFilter"));
+    }
 }
