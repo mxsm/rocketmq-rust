@@ -15,6 +15,8 @@
 mod admin;
 pub(crate) mod commands;
 mod db;
+#[cfg(test)]
+mod live_tests;
 mod service;
 mod types;
 pub(crate) use service::ConnectionManager;

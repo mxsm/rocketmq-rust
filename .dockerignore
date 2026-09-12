@@ -67,6 +67,7 @@ docs/
 *.seed
 *.pid.lock
 rocketmq-ai/rocketmq-sre/deploy/dev/fixtures/*.pem
+rocketmq-dashboard/rocketmq-dashboard-tauri/deploy/dev/tls/certs/
 
 # Rust specific
 **/*.rs.bk

@@ -55,6 +55,20 @@ Broker listener:
 '' | openssl s_client -connect 127.0.0.1:33911 -CAfile certs/ca.pem -verify_return_error -brief
 ```
 
+To verify the desktop's Rust connection path, run from `src-tauri/` after both
+services are healthy:
+
+```powershell
+$env:SSL_CERT_FILE = (Resolve-Path ../deploy/dev/tls/certs/ca.pem).Path
+cargo test --locked --lib local_tls_cluster_queries_require_encryption -- --ignored
+```
+
+The test reads the registered TLS Broker, its configuration and runtime status
+using the desktop connection builder, then confirms plaintext administration is
+rejected by the enforcing Broker. It does not change Broker configuration or
+disable certificate verification. This transport check does not replace the
+Windows UI walkthrough.
+
 Stop with `docker compose down`; named data volumes are retained. This fixture
 verifies server TLS, not mutual TLS or ACL. Use the [ACL fixture](../acl/README.md)
 for credential and policy tests.
