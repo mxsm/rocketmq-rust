@@ -1,0 +1,24 @@
+.ops-sessions { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.ops-sessions-page { min-height: calc(100dvh - 210px); }
+.ops-session-note { display: flex; align-items: flex-start; gap: 14px; padding: 20px; background: var(--ops-panel); border: 1px solid var(--ops-border); border-radius: var(--ops-radius); color: var(--ops-muted); font-size: 14px; }
+.ops-session-note svg { flex: none; color: var(--ops-text); }
+.ops-session-note strong { color: var(--ops-text); font-weight: 500; overflow-wrap: anywhere; }
+.ops-session-panel { min-width: 0; border: 1px solid var(--ops-border); border-radius: var(--ops-radius); background: var(--ops-panel); overflow: hidden; }
+.ops-session-table-scroll { overflow: auto; min-width: 0; }
+.ops-session-table { width: 100%; min-width: 860px; border-collapse: collapse; font-size: 13px; text-align: left; }
+.ops-session-table th { padding: 17px 20px; color: var(--ops-muted); font-weight: 500; }
+.ops-session-table td { padding: 15px 20px; border-top: 1px solid var(--ops-border); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ops-session-table tr[data-current="true"] { background: var(--ops-panel-strong); }
+.ops-session-identity { display: flex; gap: 14px; align-items: center; }
+.ops-session-id { font-family: var(--ops-font-mono); font-weight: 600; }
+.ops-session-revoked-at { display: block; margin-top: 5px; font-size: 12px; color: var(--ops-muted); }
+.ops-session-pagination { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 14px 18px; border-top: 1px solid var(--ops-border); color: var(--ops-muted); font-size: 13px; }
+.ops-session-pagination .ops-session-count { margin-left: auto; }
+.ops-session-account { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 22px; border-top: 1px solid var(--ops-border); }
+.ops-session-account h2, .ops-session-embedded-heading { font-size: 16px; font-weight: 600; }
+.ops-session-account p { color: var(--ops-muted); font-size: 13px; margin-top: 4px; }
+.ops-session-inline-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+@media (max-width: 650px) {
+  .ops-session-note { padding: 16px; }
+  .ops-session-pagination .ops-session-count { width: 100%; margin-left: 0; }
+}

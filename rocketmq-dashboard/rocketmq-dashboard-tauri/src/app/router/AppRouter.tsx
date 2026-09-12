@@ -26,13 +26,14 @@ import {MonitorPage} from '../../pages/monitor/MonitorPage';
 import {MonitorActionProvider} from '../../pages/monitor/MonitorActionProvider';
 import {AuditPage} from '../../pages/audit/AuditPage';
 import {SessionsPanel} from '../../pages/account/SessionsPanel';
+import {SessionRevokeProvider} from '../../pages/account/SessionRevokeProvider';
 import {AccountPage} from '../../pages/account/AccountPage';
 
 export const AppRouter = () => {
     const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
     const { activeTab, navigation, sessionId } = useAppStore();
     const key = ['NameServer', 'Proxy', 'Account', 'Sessions', 'Audit'].includes(activeTab) ? activeTab : `${activeTab}:${settings?.revision ?? 0}`;
-    return <BrokerConfigEditorProvider key={sessionId}><TopicActionProvider><ConsumerActionProvider><MessageActionProvider><DlqActionProvider><AclActionProvider><MonitorActionProvider><RouteContent key={`${key}:${navigation.id}`} /></MonitorActionProvider></AclActionProvider></DlqActionProvider></MessageActionProvider></ConsumerActionProvider></TopicActionProvider></BrokerConfigEditorProvider>;
+    return <BrokerConfigEditorProvider key={sessionId}><TopicActionProvider><ConsumerActionProvider><MessageActionProvider><DlqActionProvider><AclActionProvider><MonitorActionProvider><SessionRevokeProvider><RouteContent key={`${key}:${navigation.id}`} /></SessionRevokeProvider></MonitorActionProvider></AclActionProvider></DlqActionProvider></MessageActionProvider></ConsumerActionProvider></TopicActionProvider></BrokerConfigEditorProvider>;
 };
 
 const RouteContent = () => {
