@@ -95,7 +95,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       case 'Monitors':
         return 'Consumer monitors';
       case 'Sessions':
-        return 'Account Sessions';
+        return 'Sessions';
       case 'Account':
         return 'Account Overview';
       default:

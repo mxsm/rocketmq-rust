@@ -46,7 +46,7 @@ export class AuthService {
     static async revokeUserSessions(username: string): Promise<RevokeSessionsResponse> {
         const sessionId = SessionStorageService.getSessionId();
         const result = await invokeAuthenticatedCommand<RevokeSessionsResponse>('revoke_user_sessions', { username });
-        if (result.currentSessionRevoked) SessionStorageService.reportAuthenticationFailure(sessionId, 'invalid');
+        if (result.currentSessionRevoked === true) SessionStorageService.reportAuthenticationFailure(sessionId, 'invalid');
         return result;
     }
 

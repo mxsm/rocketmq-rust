@@ -73,6 +73,28 @@ describe('authoritative session lifecycle', () => {
         } finally { unsubscribe(); }
     });
 
+    it('does not log out on failed or unconfirmed revocation', async () => {
+        vi.mocked(invoke).mockRejectedValueOnce({ code: 'dashboard.storage_unavailable', message: 'Storage unavailable.', category: 'unavailable', retryable: false });
+        await expect(AuthService.revokeUserSessions('admin')).rejects.toBeDefined();
+        expect(SessionStorageService.getSessionId()).toBe('current-token');
+        for (const currentSessionRevoked of [false, 'false', undefined]) {
+            vi.mocked(invoke).mockResolvedValueOnce({ revokedCount: 0, currentSessionRevoked });
+            await AuthService.revokeUserSessions('admin');
+            expect(SessionStorageService.getSessionId()).toBe('current-token');
+        }
+    });
+
+    it('does not invalidate a newer login when an old revocation completes', async () => {
+        let resolve!: (value: unknown) => void;
+        vi.mocked(invoke).mockImplementation(() => new Promise(complete => { resolve = complete; }));
+        const pending = AuthService.revokeUserSessions('admin');
+        SessionStorageService.setSessionId('new-token');
+        resolve({ revokedCount: 2, currentSessionRevoked: true });
+        await pending;
+        expect(SessionStorageService.getSessionId()).toBe('new-token');
+        expect(invoke).toHaveBeenCalledTimes(1);
+    });
+
     it('successful password changes require a new login', async () => {
         vi.mocked(invoke).mockResolvedValue({ message: 'Password changed' });
         await AuthService.changePassword({ oldPassword: 'old-secret', newPassword: 'new-secret' });

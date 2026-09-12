@@ -1,94 +1,52 @@
-import { useEffect, useRef, useState } from 'react';
-import { AuthService, type SessionPage } from '../../services/auth.service';
-import { dashboardErrorMessage } from '../../services/invoke';
-import { Button } from '../../components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
-import { SignOutConfirmDialog } from '../../features/auth';
+import { useCallback } from 'react';
+import { ArrowRight, Info, LogOut } from 'lucide-react';
+import { AuthService } from '../../services/auth.service';
+import { useReadResource } from '../../hooks/useReadResource';
+import { useAppStore, useNavigationState } from '../../stores/app.store';
+import { usePageRefresh } from '../../app/layout/pageToolbar';
+import { Button } from '../../components/ui/LegacyButton';
+import { PageState } from '../../components/layout/PageState';
+import { useSessionRevoke } from './SessionRevokeProvider';
+import { SessionTable } from './SessionTable';
+import { sessionCursorHistory } from './sessionModel';
+import './sessions.css';
 
-const timestamp = (value: number) => new Date(value).toLocaleString();
-
-export const SessionsPanel = ({ username }: { username: string }) => {
-    const [page, setPage] = useState<SessionPage | null>(null);
-    const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
-    const [refresh, setRefresh] = useState(0);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState('');
-    const [confirm, setConfirm] = useState(false);
-    const [revoking, setRevoking] = useState(false);
-    const mounted = useRef(false);
-    const cursor = cursors[cursors.length - 1];
-
-    useEffect(() => {
-        mounted.current = true;
-        return () => { mounted.current = false; };
-    }, []);
-
-    useEffect(() => {
-        let active = true;
-        setLoading(true);
-        setError('');
-        setPage(null);
-        void AuthService.listSessions(username, cursor).then((result) => {
-            if (active) setPage(result);
-        }).catch((failure: unknown) => {
-            if (active) setError(dashboardErrorMessage(failure, 'Could not load sessions.'));
-        }).finally(() => { if (active) setLoading(false); });
-        return () => { active = false; };
-    }, [username, cursor, refresh]);
-
-    const revoke = async () => {
-        setRevoking(true);
-        setError('');
-        try {
-            await AuthService.revokeUserSessions(username);
-        } catch (failure) {
-            if (mounted.current) setError(dashboardErrorMessage(failure, 'Could not revoke sessions.'));
-        } finally {
-            if (mounted.current) { setRevoking(false); setConfirm(false); }
-        }
-    };
-
-    return (
-        <Card className="ops-card account-card" id="sessions">
-            <CardHeader>
-                <CardTitle>Sessions</CardTitle>
-                <CardDescription>Sessions for {username}. Activity updates the last visit, without extending expiry.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 !pb-8">
-                <div className="flex flex-wrap gap-3">
-                    <Button variant="outline" disabled={loading || revoking} onClick={() => { setCursors([undefined]); setRefresh((value) => value + 1); }}>Refresh sessions</Button>
-                    <Button variant="outline" className="ops-button ops-button-danger" disabled={revoking} onClick={() => setConfirm(true)}>Sign out all sessions</Button>
-                </div>
-                {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-                {loading ? <p role="status">Loading sessions¡­</p> : page && (
-                    <>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left text-sm">
-                                <caption className="sr-only">Local account sessions for {username}</caption>
-                                <thead><tr>{['Session', 'Created', 'Expires', 'Last visit', 'Status'].map((label) => <th key={label} scope="col" className="p-3">{label}</th>)}</tr></thead>
-                                <tbody>{page.items.map((session) => (
-                                    <tr key={session.id} className="border-t border-gray-200 dark:border-gray-700">
-                                        <td className="p-3"><span className="font-mono" title={session.id}>{session.id.slice(0, 8)}</span>{session.current && <span className="ml-2 text-sky-600">Current</span>}</td>
-                                        <td className="p-3 whitespace-nowrap">{timestamp(session.createdAtMs)}</td>
-                                        <td className="p-3 whitespace-nowrap">{timestamp(session.expiresAtMs)}</td>
-                                        <td className="p-3 whitespace-nowrap">{timestamp(session.lastSeenAtMs)}</td>
-                                        <td className="p-3">{session.revokedAtMs !== null ? `Revoked ${timestamp(session.revokedAtMs)}` : session.expiresAtMs <= Date.now() ? 'Expired' : 'Active'}</td>
-                                    </tr>
-                                ))}</tbody>
-                            </table>
-                            {page.items.length === 0 && <p className="p-3">No sessions found.</p>}
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <Button variant="outline" disabled={cursors.length === 1} onClick={() => setCursors((values) => values.slice(0, -1))}>Previous</Button>
-                            <span>Page {cursors.length}</span>
-                            <Button variant="outline" disabled={!page.nextCursor} onClick={() => { if (page.nextCursor) setCursors((values) => [...values, page.nextCursor!]); }}>Next</Button>
-                        </div>
-                    </>
-                )}
-                <SignOutConfirmDialog open={confirm} isSubmitting={revoking} title="Sign out all sessions?"
-                    description={`All sessions for ${username}, including this one, will be revoked. Sign in again to continue.`}
-                    onCancel={() => { if (!revoking) setConfirm(false); }} onConfirm={() => void revoke()} />
-            </CardContent>
-        </Card>
-    );
-};
+function SessionsToolbar({ refresh, pending, refreshedAt, username }: { refresh: () => void; pending: boolean; refreshedAt: number | null; username: string }) {
+    const revoke = useSessionRevoke();
+    usePageRefresh({ refresh, pending, refreshedAt, actions: <Button variant="danger" icon={LogOut} disabled={revoke.pending} onClick={() => revoke.open(username)}>Sign out all sessions</Button> });
+    return null;
+}
+function SessionList({ username }: { username: string }) {
+    const app = useAppStore();
+    const isPage = app.activeTab === 'Sessions';
+    const revoke = useSessionRevoke();
+    const [location, setLocation] = useNavigationState(`sessions:${username}`, () => ({ cursors: [undefined] as Array<string | undefined>, generation: 0 }));
+    const cursor = location.cursors[location.cursors.length - 1];
+    const load = useCallback(() => AuthService.listSessions(username, cursor), [username, cursor, location.generation]);
+    const page = useReadResource(load, 'Account sessions could not be loaded.');
+    const refresh = useCallback(() => setLocation(previous => ({ cursors: [undefined], generation: previous.generation + 1 })), [setLocation]);
+    const next = page.data?.nextCursor ?? null;
+    const busy = page.pending || revoke.pending;
+    return <section className={`ops-sessions ${isPage ? 'ops-sessions-page' : ''}`} id="sessions" aria-label="Account sessions">
+        {isPage ? <SessionsToolbar refresh={refresh} pending={busy} refreshedAt={page.receivedAt} username={username} /> :
+            <><h2 className="ops-session-embedded-heading">Sessions</h2><div className="ops-session-inline-actions"><Button variant="outline" disabled={busy} onClick={refresh}>Refresh sessions</Button><Button variant="danger" icon={LogOut} disabled={revoke.pending} onClick={() => revoke.open(username)}>Sign out all sessions</Button></div></>}
+        <div className="ops-session-note"><Info aria-hidden="true" size={22} /><p>Local dashboard sessions for <strong>{username}</strong>. Activity updates the last visit without extending expiry. Signing out all sessions includes this session.</p></div>
+        {page.pending && <PageState kind="loading" title="Loading account sessions" />}
+        {page.error && <PageState kind="error" title="Session query failed" description={page.error} action={<Button variant="outline" disabled={busy} onClick={() => { void page.read(); }}>Retry this page</Button>} />}
+        {(page.data || location.cursors.length > 1) && <div className="ops-session-panel">
+            {page.data && <div className="ops-session-table-scroll" role="region" tabIndex={0} aria-label="Session records" aria-busy={page.pending}><SessionTable items={page.data.items} username={username} /></div>}
+            {!page.pending && !page.error && page.data?.items.length === 0 && <PageState kind="empty" title="No sessions on this page" description="Refresh to load the current session records." />}
+            <nav className="ops-session-pagination" aria-label="Session pagination">
+                <Button variant="outline" disabled={busy || location.cursors.length === 1} onClick={() => setLocation(previous => ({ ...previous, cursors: previous.cursors.slice(0, -1) }))}>Previous</Button>
+                <span>Page {location.cursors.length}</span>
+                <Button variant="outline" disabled={busy || Boolean(page.error) || !next || location.cursors.includes(next)} onClick={() => setLocation(previous => ({ ...previous, cursors: sessionCursorHistory(previous.cursors, next) }))}>Next</Button>
+                {page.data && <span className="ops-session-count">{page.data.items.length} {page.data.items.length === 1 ? 'record' : 'records'} on this page</span>}
+            </nav>
+        </div>}
+        {isPage && <div className="ops-session-account"><div><h2>Account</h2><p>Manage your account password and security settings.</p></div>
+            <Button variant="ghost" icon={ArrowRight} onClick={() => app.setActiveTab('Account')}>Manage account</Button></div>}
+    </section>;
+}
+export function SessionsPanel({ username }: { username: string }) {
+    return <SessionList key={username} username={username} />;
+}

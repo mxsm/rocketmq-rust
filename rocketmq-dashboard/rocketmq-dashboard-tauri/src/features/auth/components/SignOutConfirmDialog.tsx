@@ -1,6 +1,7 @@
 import React from 'react';
 import { LogOut } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
+import { PageState } from '../../../components/layout/PageState';
 import {
     AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
     AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -11,12 +12,14 @@ interface SignOutConfirmDialogProps {
     title: string;
     description: string;
     isSubmitting?: boolean;
+    error?: string;
+    confirmLabel?: string;
     onConfirm: () => void | Promise<void>;
     onCancel: () => void;
 }
 
 export const SignOutConfirmDialog = ({
-    open, title, description, isSubmitting = false, onConfirm, onCancel,
+    open, title, description, isSubmitting = false, error, confirmLabel = 'Sign Out', onConfirm, onCancel,
 }: SignOutConfirmDialogProps) => (
     <AlertDialog open={open} onOpenChange={nextOpen => { if (!nextOpen && !isSubmitting) onCancel(); }}>
         <AlertDialogContent aria-busy={isSubmitting}
@@ -32,12 +35,13 @@ export const SignOutConfirmDialog = ({
                 <AlertDialogTitle>{title}</AlertDialogTitle>
                 <AlertDialogDescription>{description}</AlertDialogDescription>
             </AlertDialogHeader>
+            {error && <PageState kind="error" title="Sign out was not confirmed" description={error} />}
             <AlertDialogFooter>
                 <AlertDialogCancel disabled={isSubmitting}>Cancel</AlertDialogCancel>
                 <Button variant="destructive" disabled={isSubmitting} aria-busy={isSubmitting}
                     onClick={() => { if (!isSubmitting) void onConfirm(); }}>
                     <LogOut aria-hidden="true" />
-                    {isSubmitting ? 'Signing Out...' : 'Sign Out'}
+                    {isSubmitting ? 'Signing Out...' : confirmLabel}
                 </Button>
             </AlertDialogFooter>
         </AlertDialogContent>
