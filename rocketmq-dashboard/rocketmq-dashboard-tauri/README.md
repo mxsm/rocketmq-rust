@@ -44,7 +44,7 @@ old location. The new database bootstraps the administrator as described above.
 Unversioned or unsupported databases are rejected without deleting or rebuilding
 them; choose a new data directory to start fresh.
 
-Sessions expire after eight hours by default (`DASHBOARD_TAURI_SESSION_TTL_SECS` overrides this). Password changes revoke all sessions and require a new login. Account ¡ú Sessions lists safe identifiers and can sign out the entire account.
+Sessions expire after eight hours by default (`DASHBOARD_TAURI_SESSION_TTL_SECS` overrides this). Password changes revoke all sessions and require a new login. The Sessions page lists safe identifiers and can sign out the entire account.
 
 The current fresh schema is version 4; version 1/2/3 development databases are not migrated. Select a new data directory when changing from an older format.
 
