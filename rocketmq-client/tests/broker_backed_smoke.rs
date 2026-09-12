@@ -417,9 +417,12 @@ fn strict_skip_error_fails_when_broker_smoke_is_required() {
     let error = strict_skip_error("missing smoke env", true)
         .expect_err("strict broker-backed smoke mode should fail on missing environment");
 
-    let message = error.to_string();
-    assert!(message.contains("missing smoke env"));
-    assert!(message.contains(REQUIRE_BROKER_BACKED_SMOKE));
+    let descriptor = &rocketmq_error::CORE_ARGUMENT_INVALID;
+    assert!(error.is(descriptor));
+    assert_eq!(
+        error.to_string(),
+        format!("{}: {}", descriptor.code(), descriptor.public_message())
+    );
 }
 
 struct CommitTransactionListener;
