@@ -446,6 +446,9 @@ impl MetadataIoReceipt {
     /// Waits for this generation, or a newer coalesced generation, to become
     /// durable without extending the caller's absolute deadline.
     ///
+    /// Expiry abandons this observation. Accepted writes retain their ordering
+    /// and byte charge until actual completion, and may still become durable.
+    ///
     /// # Errors
     ///
     /// Returns an operational runtime failure if persistence cannot complete.
@@ -861,17 +864,22 @@ async fn process_resource(
     let Some(request) = take_next_request(inner, &resource) else {
         return false;
     };
-    let target = request.target.clone();
-    let bytes = request.bytes.clone();
-    let generation = request.generation;
+    let MetadataWriteRequest {
+        target,
+        bytes,
+        generation,
+        ..
+    } = request;
     let worker_file_system = file_system.clone();
     let result = match blocking
-        .spawn_io(format!("metadata-io:{resource}"), move || {
+        .submit_io(format!("metadata-io:{resource}"), move || {
             worker_file_system.persist_atomic(&target, &bytes)
         })
         .await
     {
-        Ok(result) => result,
+        // A caller/lane wait timeout cannot transfer write ownership: Tokio
+        // may still be running this closure. Receipts have their own deadlines.
+        Ok(mut task) => task.wait().await.and_then(|result| result),
         Err(source) => Err(source),
     };
     finish_request(inner, &resource, generation, result)
