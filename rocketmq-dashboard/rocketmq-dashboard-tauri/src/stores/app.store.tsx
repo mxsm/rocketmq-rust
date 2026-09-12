@@ -91,7 +91,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       case 'Storage':
         return 'Storage & diagnostics';
       case 'Audit':
-        return 'Audit Events';
+        return 'Audit log';
       case 'Monitors':
         return 'Consumer monitors';
       case 'Sessions':

@@ -48,6 +48,7 @@
   background: var(--ops-panel-soft);
   color: var(--ops-text);
   font: 400 14px/1.4 var(--ops-font);
+  color-scheme: inherit;
 }
 .ops-input, [data-slot="textarea"] { display: block; width: 100%; }
 .ops-input::placeholder, [data-slot="textarea"]::placeholder { color: var(--ops-subtle); }

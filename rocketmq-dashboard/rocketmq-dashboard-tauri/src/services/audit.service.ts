@@ -7,7 +7,7 @@ export interface AuditQuery {
 export interface AuditEvent {
     eventId: string; requestId: string; actor: string | null; action: string;
     resourceType: string; resourceName: string | null; environmentId: string | null;
-    outcome: AuditOutcome; createdAtMs: number;
+    outcome: string; createdAtMs: number;
     detail: { resultUnknown: boolean; errorCode?: string; successCount?: number; failureCount?: number };
 }
 export interface AuditPage { items: AuditEvent[]; nextCursor: string | null }

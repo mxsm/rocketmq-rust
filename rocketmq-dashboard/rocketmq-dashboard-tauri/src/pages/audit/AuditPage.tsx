@@ -1,65 +1,68 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { queryAuditEvents, type AuditPage as AuditResultPage, type AuditQuery, type AuditOutcome } from '../../services/audit.service';
-import { dashboardErrorMessage } from '../../services/invoke';
-import { Button } from '../../components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
+import { useCallback, useState } from 'react';
+import { ArrowDown, ChevronRight } from 'lucide-react';
+import { queryAuditEvents } from '../../services/audit.service';
+import { useReadResource } from '../../hooks/useReadResource';
+import { useNavigationState } from '../../stores/app.store';
+import { usePageRefresh } from '../../app/layout/pageToolbar';
+import { Button } from '../../components/ui/LegacyButton';
+import { PageState } from '../../components/layout/PageState';
+import { StatusBadge } from '../../components/layout/StatusBadge';
+import { AuditFilters } from './AuditFilters';
+import { AuditDetails } from './AuditDetails';
+import { auditOutcome, auditQuery, auditTimestamp, emptyAuditFilters, initialAuditLocation, navigateAudit } from './auditModel';
+import './audit.css';
 
-export const AuditPage = () => {
-    const [query, setQuery] = useState<AuditQuery>({ limit: 50 });
-    const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
-    const [refresh, setRefresh] = useState(0);
-    const [page, setPage] = useState<AuditResultPage | null>(null);
-    const [error, setError] = useState('');
-    const [loading, setLoading] = useState(true);
-    const cursor = cursors[cursors.length - 1];
-    useEffect(() => {
-        let active = true;
-        setLoading(true); setError(''); setPage(null);
-        void queryAuditEvents({ ...query, cursor }).then((result) => { if (active) setPage(result); })
-            .catch((failure: unknown) => { if (active) setError(dashboardErrorMessage(failure, 'Could not load audit events.')); })
-            .finally(() => { if (active) setLoading(false); });
-        return () => { active = false; };
-    }, [query, cursor, refresh]);
+const initialView = () => ({ draft: emptyAuditFilters(), applied: emptyAuditFilters(), location: initialAuditLocation(), selected: null as string | null });
 
-    const apply = (event: FormEvent<HTMLFormElement>) => {
-        event.preventDefault();
-        const data = new FormData(event.currentTarget);
-        const text = (key: string) => String(data.get(key) ?? '').trim() || undefined;
-        const from = text('from'); const to = text('to');
-        const fromMs = from ? new Date(from).getTime() : undefined;
-        const toMs = to ? new Date(to).getTime() : undefined;
-        if ((fromMs !== undefined && !Number.isFinite(fromMs)) || (toMs !== undefined && !Number.isFinite(toMs)) || (fromMs !== undefined && toMs !== undefined && fromMs > toMs)) {
-            setError('Choose a valid time range.'); return;
-        }
-        setCursors([undefined]);
-        setQuery({ fromMs, toMs, actor: text('actor'), action: text('action'), outcome: text('outcome') as AuditOutcome | undefined, environmentId: text('environmentId'), limit: 50 });
+export function AuditPage() {
+    const [view, setView] = useNavigationState('auditView', initialView);
+    const [validation, setValidation] = useState('');
+    const cursor = view.location.cursors[view.location.cursors.length - 1];
+    const load = useCallback(() => queryAuditEvents({ ...view.location.query, cursor }), [view.location.query, view.location.generation, cursor]);
+    const page = useReadResource(load, 'Audit events could not be loaded.');
+    const refresh = useCallback(() => setView(previous => ({ ...previous, location: navigateAudit(previous.location, { kind: 'refresh' }), selected: null })), [setView]);
+    usePageRefresh({ refresh, pending: page.pending, refreshedAt: page.receivedAt });
+    const apply = () => {
+        try {
+            const query = auditQuery(view.draft);
+            setValidation('');
+            setView(previous => ({ ...previous, applied: { ...previous.draft }, location: navigateAudit(previous.location, { kind: 'apply', query }), selected: null }));
+        } catch (error) { setValidation(error instanceof Error ? error.message : 'Choose valid audit filters.'); }
     };
-    const inputClass = 'mt-1 w-full rounded-lg border border-gray-300 bg-transparent px-3 py-2 dark:border-gray-600';
-    return <Card className="ops-card">
-        <CardHeader><CardTitle>Audit events</CardTitle><CardDescription>Terminal outcomes of local and RocketMQ administration. Unknown means the remote result could not be confirmed; review the actual resource before resubmitting.</CardDescription></CardHeader>
-        <CardContent className="space-y-5">
-            <form onSubmit={apply} className="grid gap-3 md:grid-cols-3">
-                <label className="text-sm">From<input name="from" type="datetime-local" className={inputClass} /></label>
-                <label className="text-sm">To<input name="to" type="datetime-local" className={inputClass} /></label>
-                <label className="text-sm">Actor<input name="actor" placeholder="Exact username" className={inputClass} /></label>
-                <label className="text-sm">Action<input name="action" placeholder="e.g. topic.delete" className={inputClass} /></label>
-                <label className="text-sm">Outcome<select name="outcome" className={inputClass}><option value="">All outcomes</option>{['success', 'rejected', 'failed', 'partial', 'unknown'].map((outcome) => <option key={outcome}>{outcome}</option>)}</select></label>
-                <label className="text-sm">Environment ID<input name="environmentId" placeholder="Exact ID, if recorded" className={inputClass} /></label>
-                <div className="flex gap-3"><Button type="submit" disabled={loading}>Apply filters</Button><Button type="button" variant="outline" disabled={loading} onClick={() => { setCursors([undefined]); setRefresh((value) => value + 1); }}>Refresh</Button></div>
-            </form>
-            {error && <p role="alert" className="text-red-600">{error}</p>}
-            {loading ? <p role="status">Loading audit events¡­</p> : page && <>
-                <div className="overflow-x-auto"><table className="w-full text-left text-sm">
-                    <caption className="sr-only">Filtered audit events, newest first</caption>
-                    <thead><tr>{['Time', 'Actor', 'Action', 'Resource', 'Environment', 'Outcome', 'Details'].map((label) => <th scope="col" className="p-3" key={label}>{label}</th>)}</tr></thead>
-                    <tbody>{page.items.map((event) => <tr key={event.eventId} className="border-t border-gray-200 dark:border-gray-700">
-                        <td className="p-3 whitespace-nowrap">{new Date(event.createdAtMs).toLocaleString()}</td><td className="p-3">{event.actor ?? 'Unauthenticated'}</td><td className="p-3 font-mono">{event.action}</td>
-                        <td className="p-3">{event.resourceType}{event.resourceName && `: ${event.resourceName}`}</td><td className="p-3">{event.environmentId ?? 'Not recorded'}</td><td className="p-3 font-medium">{event.outcome}</td>
-                        <td className="p-3"><details><summary className="cursor-pointer">View receipt</summary><p className="mt-2 break-all font-mono text-xs">Request: {event.requestId}</p>{event.detail.resultUnknown && <p className="text-amber-700">Remote outcome unknown. No automatic retry was performed.</p>}{event.detail.errorCode && <p>{event.detail.errorCode}</p>}{event.detail.successCount !== undefined && <p>Succeeded: {event.detail.successCount}</p>}{event.detail.failureCount !== undefined && <p>Failed: {event.detail.failureCount}</p>}</details></td>
-                    </tr>)}</tbody>
-                </table>{page.items.length === 0 && <p className="p-3">No matching audit events.</p>}</div>
-                <div className="flex items-center gap-3"><Button variant="outline" disabled={cursors.length === 1} onClick={() => setCursors((values) => values.slice(0, -1))}>Previous</Button><span>Page {cursors.length}</span><Button variant="outline" disabled={!page.nextCursor} onClick={() => { const next = page.nextCursor; if (next) setCursors((values) => [...values, next]); }}>Next</Button></div>
-            </>}
-        </CardContent>
-    </Card>;
-};
+    const reset = () => {
+        setValidation('');
+        setView(previous => ({ ...initialView(), location: navigateAudit(previous.location, { kind: 'apply', query: { limit: 50 } }) }));
+    };
+    const selected = page.data?.items.find(event => event.eventId === view.selected) ?? null;
+    const usable = Boolean(page.data) && !page.pending && !page.error;
+    const next = page.data?.nextCursor ?? null;
+    return <div className="ops-audit">
+        <AuditFilters filters={view.draft} pending={page.pending} error={validation} changed={JSON.stringify(view.draft) !== JSON.stringify(view.applied)}
+            onChange={draft => setView(previous => ({ ...previous, draft }))} apply={apply} reset={reset} />
+        {page.pending && <PageState kind="loading" title="Loading audit events" />}
+        {page.error && <PageState kind="error" title="Audit query failed" description={page.error} action={<Button variant="outline" onClick={() => { void page.read(); }}>Retry this page</Button>} />}
+        {page.data && <div className="ops-audit-table-wrap" role="region" tabIndex={0} aria-label="Audit events" aria-busy={page.pending}>
+            <table className="ops-audit-table"><caption className="sr-only">Filtered audit records, newest first</caption>
+                <thead><tr><th scope="col">Time <ArrowDown aria-hidden="true" size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /></th>
+                    <th scope="col">Actor</th><th scope="col">Action</th><th scope="col">Resource</th><th scope="col">Outcome</th><th scope="col">Details</th></tr></thead>
+                <tbody>{page.data.items.map(event => {
+                    const outcome = auditOutcome(event.outcome, event.detail?.resultUnknown === true);
+                    return <tr key={event.eventId} data-selected={event.eventId === view.selected}>
+                        <td>{auditTimestamp(event.createdAtMs)}</td><td><span className="ops-audit-cell" tabIndex={0}>{event.actor ?? 'Not recorded'}</span></td>
+                        <td><span className="ops-audit-cell" tabIndex={0}>{event.action}</span></td><td><span className="ops-audit-cell" tabIndex={0}>{event.resourceName ?? 'Not recorded'}</span></td>
+                        <td><StatusBadge tone={outcome.tone}>{outcome.label}</StatusBadge></td>
+                        <td><Button variant="ghost" icon={ChevronRight} disabled={!usable} aria-label={`View ${event.action} audit record ${event.eventId}`} aria-expanded={event.eventId === view.selected}
+                            onClick={() => setView(previous => ({ ...previous, selected: event.eventId }))}>View</Button></td>
+                    </tr>;
+                })}</tbody>
+            </table>
+        </div>}
+        {usable && page.data?.items.length === 0 && <PageState kind="empty" title="No matching audit events" description="Change the exact filters or time range to inspect other records." />}
+        {selected && <AuditDetails event={selected} />}
+        {(page.data || view.location.cursors.length > 1) && <nav className="ops-audit-pagination" aria-label="Audit pagination">
+            <Button variant="outline" disabled={page.pending || view.location.cursors.length === 1} onClick={() => setView(previous => ({ ...previous, location: navigateAudit(previous.location, { kind: 'previous' }), selected: null }))}>Previous</Button>
+            <span>Page {view.location.cursors.length}</span>
+            <Button variant="outline" disabled={!usable || !next || view.location.cursors.includes(next)} onClick={() => setView(previous => ({ ...previous, location: navigateAudit(previous.location, { kind: 'next', cursor: next }), selected: null }))}>Next</Button>
+        </nav>}
+    </div>;
+}
