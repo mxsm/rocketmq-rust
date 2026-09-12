@@ -279,6 +279,10 @@ impl TaskGroup {
         self.inner.id
     }
 
+    pub(crate) fn runtime(&self) -> &RuntimeHandle {
+        &self.inner.runtime
+    }
+
     /// Returns the parent id.
     pub fn parent_id(&self) -> Option<TaskGroupId> {
         self.inner.parent_id

@@ -33,6 +33,7 @@ use super::BlockingTaskState;
 use crate::error::RuntimeContractViolation;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
+use crate::handle::RuntimeHandle;
 use crate::shutdown_deadline::ShutdownDeadline;
 use crate::task_group::TaskGroup;
 
@@ -40,12 +41,15 @@ use crate::task_group::TaskGroup;
 /// admission budget.
 ///
 /// Cloning this value shares queue state and capacity; it never creates a new
-/// owner. Cancellation while queued removes the task immediately. Cancellation
+/// owner. Execution always uses the injected owner's Tokio runtime, including
+/// when the submission future is polled by a different runtime.
+/// Cancellation while queued removes the task immediately. Cancellation
 /// or timeout after execution begins leaves the admission permit inside the
 /// actual blocking closure, so capacity is released only when that closure
 /// exits.
 #[derive(Debug, Clone)]
 pub struct BlockingExecutor {
+    runtime: RuntimeHandle,
     policy: Arc<BlockingPoolPolicy>,
     lane: BlockingLane,
     budget: GlobalBlockingBudget,
@@ -195,13 +199,14 @@ impl BlockingExecutor {
     /// Runtime composition roots use one shared budget through
     /// `new_managed`; this constructor preserves the existing public test and
     /// adapter surface by assigning the executor its own exact capacity.
-    pub fn new(policy: BlockingPoolPolicy, _owner_group: TaskGroup) -> Result<Self, RuntimeContractViolation> {
+    pub fn new(policy: BlockingPoolPolicy, owner_group: TaskGroup) -> Result<Self, RuntimeContractViolation> {
         policy.validate()?;
         let capacity = policy.max_concurrency;
         Ok(Self::new_with_budget(
             policy,
             BlockingLane::StorageIo,
             GlobalBlockingBudget::isolated(capacity),
+            owner_group.runtime().clone(),
         ))
     }
 
@@ -209,13 +214,20 @@ impl BlockingExecutor {
         policy: BlockingPoolPolicy,
         lane: BlockingLane,
         budget: GlobalBlockingBudget,
+        runtime: RuntimeHandle,
     ) -> Result<Self, RuntimeContractViolation> {
         policy.validate()?;
-        Ok(Self::new_with_budget(policy, lane, budget))
+        Ok(Self::new_with_budget(policy, lane, budget, runtime))
     }
 
-    fn new_with_budget(policy: BlockingPoolPolicy, lane: BlockingLane, budget: GlobalBlockingBudget) -> Self {
+    fn new_with_budget(
+        policy: BlockingPoolPolicy,
+        lane: BlockingLane,
+        budget: GlobalBlockingBudget,
+        runtime: RuntimeHandle,
+    ) -> Self {
         Self {
+            runtime,
             queue_permits: Arc::new(Semaphore::new(policy.max_queue_depth)),
             policy: Arc::new(policy),
             lane,
@@ -404,7 +416,7 @@ impl BlockingExecutor {
                 task_id,
             },
         };
-        let join_handle = tokio::task::spawn_blocking(move || work.run());
+        let join_handle = self.runtime.tokio_handle().spawn_blocking(move || work.run());
         Ok(BlockingTask::new(
             join_handle,
             self.tasks.clone(),

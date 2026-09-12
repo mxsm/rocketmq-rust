@@ -120,14 +120,24 @@ struct BlockingLanes {
 }
 
 impl BlockingLanes {
-    fn new(policies: BlockingLanePolicies, global_capacity: usize) -> Self {
+    fn new(policies: BlockingLanePolicies, global_capacity: usize, runtime: RuntimeHandle) -> Self {
         let budget = GlobalBlockingBudget::managed(global_capacity, &policies);
         Self {
-            storage_io: BlockingExecutor::new_managed(policies.storage_io, BlockingLane::StorageIo, budget.clone())
-                .expect("RuntimeConfig validates storage blocking policy before root context construction"),
-            metadata_io: BlockingExecutor::new_managed(policies.metadata_io, BlockingLane::MetadataIo, budget.clone())
-                .expect("RuntimeConfig validates metadata blocking policy before root context construction"),
-            cpu_crypto: BlockingExecutor::new_managed(policies.cpu_crypto, BlockingLane::CpuCrypto, budget)
+            storage_io: BlockingExecutor::new_managed(
+                policies.storage_io,
+                BlockingLane::StorageIo,
+                budget.clone(),
+                runtime.clone(),
+            )
+            .expect("RuntimeConfig validates storage blocking policy before root context construction"),
+            metadata_io: BlockingExecutor::new_managed(
+                policies.metadata_io,
+                BlockingLane::MetadataIo,
+                budget.clone(),
+                runtime.clone(),
+            )
+            .expect("RuntimeConfig validates metadata blocking policy before root context construction"),
+            cpu_crypto: BlockingExecutor::new_managed(policies.cpu_crypto, BlockingLane::CpuCrypto, budget, runtime)
                 .expect("RuntimeConfig validates CPU blocking policy before root context construction"),
         }
     }
@@ -177,7 +187,7 @@ impl RootServiceContext {
         diagnostics: RuntimeDiagnostics,
         resources: RuntimeResources,
     ) -> Self {
-        let blocking_lanes = BlockingLanes::new(blocking_policies, global_blocking_capacity);
+        let blocking_lanes = BlockingLanes::new(blocking_policies, global_blocking_capacity, runtime.clone());
         Self {
             name,
             runtime,
