@@ -37,7 +37,7 @@ export const pageDescriptions: Record<Tab, string> = {
     MessageTrace: 'Follow message publication and consumption',
     DLQ: 'Review failures before replaying messages',
     ACL: 'Broker users and resource policies',
-    Storage: 'Local database information and collector diagnostics',
+    Storage: 'Local SQLite database information and diagnostics (read-only)',
     Monitors: 'Consumer group thresholds for this environment',
     Audit: 'Review actions and their recorded outcomes',
     Sessions: 'Manage your local dashboard sessions',
