@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { Activity, Copy, Play, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { MessageService } from '../../../services/message.service';
@@ -19,18 +19,20 @@ export async function copyMessageValue(value: string, label: string) {
     catch { toast.error(label + ' could not be copied'); }
 }
 
-export function MessageInspector({ message, disabled = false }: { message: MessageSummary; disabled?: boolean }) {
+export function MessageInspector({ message, disabled = false, loadDetail, actions }: {
+    message: MessageSummary; disabled?: boolean; loadDetail?: () => Promise<MessageDetail>; actions?: ReactNode;
+}) {
     const { openTrace } = useAppStore();
     const consume = useDirectConsume();
     const request = messageLookup(message);
-    const load = useCallback(async () => checkMessageDetail(await MessageService.viewMessageDetail(request), message), [request.topic, request.messageId]);
+    const load = useCallback(async () => checkMessageDetail(await (loadDetail ? loadDetail() : MessageService.viewMessageDetail(request)), message), [request.topic, request.messageId, loadDetail]);
     const detail = useReadResource(load, 'Message detail could not be read.');
     const [tab, setTab] = useState('body');
     const blocked = disabled || detail.pending || Boolean(detail.error) || !detail.data;
     return <PageSection title="Message detail" description="Selected message data and delivery metadata." className="ops-message-inspector"
         action={<div className="ops-message-actions"><Button variant="outline" icon={RefreshCw} disabled={detail.pending} onClick={() => { void detail.read(); }}>Refresh detail</Button>
-            <Button variant="outline" icon={Activity} disabled={blocked} onClick={() => { if (detail.data) openTrace(traceMessageIdentity(detail.data, message), message.topic); }}>View trace</Button>
-            <Button variant="outline" icon={Play} disabled={blocked} onClick={() => consume(message)}>Direct consume</Button></div>}>
+            {actions === undefined ? <><Button variant="outline" icon={Activity} disabled={blocked} onClick={() => { if (detail.data) openTrace(traceMessageIdentity(detail.data, message), message.topic); }}>View trace</Button>
+            <Button variant="outline" icon={Play} disabled={blocked} onClick={() => consume(message)}>Direct consume</Button></> : actions}</div>}>
         {detail.pending && <PageState kind="loading" title="Reading message detail" />}
         {detail.error && <PageState kind="error" title="Message detail unavailable" description={detail.error + (detail.data ? ' Showing the last successful read.' : '')} />}
         {detail.data && <>
@@ -42,7 +44,7 @@ export function MessageInspector({ message, disabled = false }: { message: Messa
                 <TabsList className="ops-tabs-underlined" aria-label="Message detail view"><TabsTrigger value="body">Body</TabsTrigger><TabsTrigger value="properties">Properties</TabsTrigger><TabsTrigger value="delivery">Delivery</TabsTrigger></TabsList>
                 <TabsContent value="body"><MessageBody detail={detail.data} /></TabsContent>
                 <TabsContent value="properties"><MessageProperties detail={detail.data} /></TabsContent>
-                <TabsContent value="delivery"><MessageDelivery detail={detail.data} message={message} disabled={blocked} /></TabsContent>
+                <TabsContent value="delivery"><MessageDelivery detail={detail.data} message={message} disabled={blocked} showActions={actions === undefined} /></TabsContent>
             </Tabs>
             <p className="ops-message-note">Last successful detail read: {new Date(detail.receivedAt!).toLocaleString()}</p>
         </>}
@@ -74,7 +76,7 @@ function MessageProperties({ detail }: { detail: MessageDetail }) {
     </div>;
 }
 
-function MessageDelivery({ detail, message, disabled }: { detail: MessageDetail; message: MessageSummary; disabled: boolean }) {
+function MessageDelivery({ detail, message, disabled, showActions }: { detail: MessageDetail; message: MessageSummary; disabled: boolean; showActions: boolean }) {
     const consume = useDirectConsume();
     return <div className="ops-message-stack"><dl className="ops-message-properties">{[
         ['Message ID', detail.msgId], ['Query ID', message.queryMsgId || message.msgId], ['Topic', detail.topic],
@@ -87,9 +89,9 @@ function MessageDelivery({ detail, message, disabled }: { detail: MessageDetail;
     ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd tabIndex={value.length > 200 ? 0 : undefined}>{visibleMessageText(value)}
         {['Message ID', 'Query ID', 'Topic'].includes(label) && <Button variant="ghost" icon={Copy} aria-label={'Copy ' + label} onClick={() => { void copyMessageValue(value, label); }}>Copy</Button>}</dd></div>)}</dl>
         <h3>Consumer delivery records</h3>
-        {detail.messageTrackList?.length ? <div className="ops-message-scroll" role="region" aria-label="Consumer delivery records" tabIndex={0}><table><thead><tr><th scope="col">Consumer group</th><th scope="col">Reported state</th><th scope="col">Detail</th><th scope="col">Action</th></tr></thead><tbody>
+        {detail.messageTrackList?.length ? <div className="ops-message-scroll" role="region" aria-label="Consumer delivery records" tabIndex={0}><table><thead><tr><th scope="col">Consumer group</th><th scope="col">Reported state</th><th scope="col">Detail</th>{showActions && <th scope="col">Action</th>}</tr></thead><tbody>
             {detail.messageTrackList.map((track, index) => <tr key={track.consumerGroup + ':' + index}><th scope="row">{track.consumerGroup}</th><td>{track.trackType || 'Unknown'}</td><td>{track.exceptionDesc || 'None reported'}</td>
-                <td><Button variant="outline" disabled={disabled} onClick={() => consume(message, track.consumerGroup)}>Direct consume</Button></td></tr>)}
+                {showActions && <td><Button variant="outline" disabled={disabled} onClick={() => consume(message, track.consumerGroup)}>Direct consume</Button></td>}</tr>)}
         </tbody></table></div> : <PageState kind="empty" title="No Consumer delivery records returned" description="No delivery state can be inferred from missing records." />}
     </div>;
 }

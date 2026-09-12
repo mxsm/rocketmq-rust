@@ -1,0 +1,28 @@
+.ops-dlq { display: grid; gap: 22px; min-width: 0; }
+.ops-dlq-query { padding: 18px; border: 1px solid var(--ops-border); border-radius: 12px; background: var(--ops-panel); }
+.ops-dlq-query > .ops-message-note { margin: 6px 0 0; }
+.ops-dlq-query form { display: flex; align-items: end; flex-wrap: wrap; gap: 16px; }
+.ops-dlq-query form > .ops-field { flex: 1 1 180px; min-width: 0; }
+.ops-dlq-mode { display: grid; gap: 8px; font-size: 12px; color: var(--ops-muted); }
+.ops-dlq-mode .ops-message-modes > button { min-width: 75px; }
+.ops-dlq .ops-section-header { margin-bottom: 16px; }
+.ops-dlq .ops-message-scroll table { min-width: 850px; }
+.ops-dlq .ops-message-scroll td, .ops-dlq .ops-message-scroll tbody th { padding: 12px 14px; }
+.ops-dlq .ops-message-scroll thead th { font-size: 13px; }
+.ops-dlq .ops-message-scroll small { display: block; color: var(--ops-muted); font-size: 12px; margin-top: 4px; }
+.ops-dlq .ops-message-scroll tbody th { font-family: var(--ops-font-mono); font-size: 13px; }
+.ops-dlq .ops-dlq-check { width: 42px; padding: 12px; }
+.ops-dlq input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--ops-accent); cursor: pointer; }
+.ops-dlq .ops-dlq-row-actions { display: flex; gap: 4px; }
+.ops-dlq-row-actions button { padding: 4px 8px; min-width: 0; min-height: 32px; font-size: 12px; }
+.ops-dlq-selection { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; border: 1px solid var(--ops-border); border-radius: 8px; padding: 14px; margin-top: 16px; font-size: 14px; }
+.ops-dlq .ops-dlq-result { min-width: 140px; }
+.ops-dlq-outcome { display: inline-flex; white-space: nowrap; border-radius: 5px; padding: 3px 9px; background: var(--ops-panel-soft); font-size: 13px; }
+.ops-dlq-outcome[data-outcome="success"] { color: var(--ops-success); background: var(--ops-success-soft); }
+.ops-dlq-outcome[data-outcome="failed"] { color: var(--ops-danger); background: var(--ops-danger-soft); }
+.ops-dlq-outcome[data-outcome="unknown"] { color: var(--ops-warning); background: var(--ops-warning-soft); }
+.ops-dlq-reported { margin-top: 12px; color: var(--ops-muted); font-size: 12px; }
+.ops-dlq-reported summary { cursor: pointer; }
+.ops-dlq-reported pre { max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ops-dlq-value { display: block; max-height: 128px; overflow: auto; overflow-wrap: anywhere; }
+@media (max-width: 900px) { .ops-dlq-query { padding: 16px; } .ops-dlq-query form > .ops-field { flex-basis: 220px; } }
