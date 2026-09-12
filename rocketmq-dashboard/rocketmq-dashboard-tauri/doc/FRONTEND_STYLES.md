@@ -15,7 +15,7 @@ The desktop shell and migrated pages use document-level `--ops-*` tokens. Add pa
 | `styles/controls.css` | Shared `ops-*` controls, table primitives, status/empty/error states, pagination and Radix portal behavior. It also owns the shared behavioral overrides for the compatibility detail sheet. |
 | Feature/page CSS | Locally imported layout for the owning page, dialog or inspector. `styles/auth.css` is imported by the authentication layout and password dialog. |
 
-The former `redesign.css` is removed after all page migrations have been combined. Its old `app-*`, `auth-*`, `dashboard-*`, NameServer/Proxy/Cluster and messaging/ACL/account selectors have no remaining component consumers. The shell no longer carries `app-shell`, `dashboard-main` or `app-nav-*` aliases. Unused legacy page animations and duplicate pagination rules are removed; pagination is styled in `controls.css`.
+The former `redesign.css` is removed after all page migrations have been combined. The restored login owns its `auth-*` selectors in `styles/auth.css` and `styles/auth-scene.css`; the latter contains the decorative control-console scene. Its earlier presentation does not restore global shell or page overrides. The shell no longer carries `app-shell`, `dashboard-main` or `app-nav-*` aliases. Unused legacy page animations and duplicate pagination rules are removed; pagination is styled in `controls.css`.
 
 Keep the `LegacyButton`, `LegacyInput` and other consumed adapters: their filenames preserve existing import paths, while their rendered controls already use the shared design tokens. The Radix/Tailwind variable bridge remains necessary for utility-based controls and must not be removed solely because its comment mentions migration.
 
