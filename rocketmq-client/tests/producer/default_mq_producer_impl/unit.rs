@@ -34,6 +34,8 @@ use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::transaction_listener::TransactionListener;
 use bytes::Bytes;
 
+mod targeted_route;
+
 struct CountingCompressor {
     calls: AtomicUsize,
 }

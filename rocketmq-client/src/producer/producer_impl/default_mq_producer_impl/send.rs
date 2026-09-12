@@ -677,9 +677,19 @@ impl DefaultMQProducerImpl {
         #[cfg(feature = "observability")]
         let telemetry_handle = client_instance.telemetry_handle();
 
-        // Get broker info with a single lookup path
-        let broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
-        let Some(mut broker_addr) = client_instance.find_broker_address_in_publish(broker_name.as_ref()) else {
+        let mut broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
+        let mut broker_addr = client_instance.find_broker_address_in_publish(broker_name.as_ref());
+        if broker_addr.is_none() && topic_publish_info.is_none() {
+            // Explicit queues can be sent before this producer has discovered any routes.
+            // Refresh once within the send deadline, keeping the caller's queue and leaving
+            // route retries for automatically selected queues to the existing retry owner.
+            client_instance
+                .refresh_topic_route_info_once(msg.topic(), deadline)
+                .await?;
+            broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
+            broker_addr = client_instance.find_broker_address_in_publish(broker_name.as_ref());
+        }
+        let Some(mut broker_addr) = broker_addr else {
             return Err(RetryInput::RouteUnavailable);
         };
         broker_addr = mix_all::broker_vip_channel(runtime.client_config.vip_channel_enabled, broker_addr.as_str());
