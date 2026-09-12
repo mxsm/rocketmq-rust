@@ -208,4 +208,62 @@ mod tests {
             );
         }
     }
+
+    fn label(len: usize) -> String {
+        "a".repeat(len)
+    }
+
+    #[test]
+    fn validates_dns_label_length_boundary() {
+        let host_63 = format!("{}.example.com", label(63));
+        let parsed = parse_legacy_namesrv_addr(&format!("{host_63}:9876")).expect("63-byte label should be accepted");
+        assert_eq!(parsed.canonical(), format!("{host_63}:9876"));
+
+        let host_64 = format!("{}.example.com", label(64));
+        let error =
+            parse_legacy_namesrv_addr(&format!("{host_64}:9876")).expect_err("64-byte label should be rejected");
+        assert!(error.is(&rocketmq_error::CORE_CONFIGURATION_INVALID));
+    }
+
+    #[test]
+    fn validates_total_dns_name_length_boundary_with_labels_within_limit() {
+        let host_253 = format!("{}.{}.{}.{}", label(63), label(63), label(63), label(61));
+        assert_eq!(host_253.len(), 253);
+        let parsed = parse_legacy_namesrv_addr(&format!("{host_253}:9876")).expect("253-byte name should be accepted");
+        assert_eq!(parsed.canonical(), format!("{host_253}:9876"));
+
+        let host_254 = format!("{}.{}.{}.{}", label(63), label(63), label(63), label(62));
+        assert_eq!(host_254.len(), 254);
+        let error =
+            parse_legacy_namesrv_addr(&format!("{host_254}:9876")).expect_err("254-byte name should be rejected");
+        assert!(error.is(&rocketmq_error::CORE_CONFIGURATION_INVALID));
+    }
+
+    #[test]
+    fn rejects_empty_and_hyphen_bounded_labels_while_accepting_interior_hyphen_and_underscore() {
+        for value in [
+            "ns..example:9876",
+            ".ns.example:9876",
+            "-ns.example:9876",
+            "ns-.example:9876",
+        ] {
+            let error = parse_legacy_namesrv_addr(value).expect_err(value);
+            assert!(
+                error.is(&rocketmq_error::CORE_CONFIGURATION_INVALID),
+                "unexpected error for {value}: {error:?}"
+            );
+        }
+
+        let parsed = parse_legacy_namesrv_addr("ns-a_b.example:9876")
+            .expect("interior hyphen and underscore should be accepted");
+        assert_eq!(parsed.canonical(), "ns-a_b.example:9876");
+    }
+
+    #[test]
+    fn deduplicates_case_and_trailing_dot_variants_without_reordering_other_targets() {
+        let parsed = parse_legacy_namesrv_addr("NS-A.Example.COM:9876;ns-b:9876;ns-a.example.com.:9876")
+            .expect("mixed case / trailing dot variants should normalize and dedupe");
+
+        assert_eq!(parsed.authorities(), ["ns-a.example.com:9876", "ns-b:9876"]);
+    }
 }

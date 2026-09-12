@@ -1258,6 +1258,73 @@ fn reset_offset_table_from_response_decodes_java_body() {
 }
 
 #[test]
+fn consumer_offset_json_from_response_rejects_invalid_utf8_body() {
+    let response = RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+        .set_body(bytes::Bytes::from_static(&[0xff, 0xfe, 0xfd]));
+
+    let error = consumer_offset_json_from_response(&response).expect_err("invalid UTF-8 body should be rejected");
+
+    assert!(error.is(&rocketmq_error::PROTOCOL_RESPONSE_FAILED));
+    assert!(error.source_ref::<std::str::Utf8Error>().is_some());
+}
+
+#[test]
+fn consumer_offset_json_from_response_passes_through_raw_non_json_utf8_text() {
+    let response =
+        RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_body("just plain text, not json");
+
+    let json = consumer_offset_json_from_response(&response)
+        .expect("raw valid utf8 text should pass through without json validation");
+
+    assert_eq!(json.as_str(), "just plain text, not json");
+}
+
+#[test]
+fn consumer_offset_json_from_response_rejects_non_success_with_inspectable_code() {
+    let response = RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemError, "broker busy");
+
+    let error = consumer_offset_json_from_response(&response).expect_err("non-success response should be rejected");
+
+    let exception = client_exception(&error);
+    assert_eq!(exception.response_code(), ResponseCode::SystemError.to_i32());
+}
+
+#[test]
+fn reset_offset_table_from_response_rejects_non_success_with_inspectable_code() {
+    let response = RemotingCommand::create_response_command_with_code_remark(ResponseCode::SystemError, "broker busy");
+
+    let error = reset_offset_table_from_response(&response).expect_err("non-success response should be rejected");
+
+    let exception = client_exception(&error);
+    assert_eq!(exception.response_code(), ResponseCode::SystemError.to_i32());
+}
+
+#[test]
+fn reset_offset_table_from_response_rejects_malformed_json_without_remark() {
+    let response =
+        RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_body("{not valid json");
+
+    let error = reset_offset_table_from_response(&response)
+        .expect_err("malformed reset offset body should be rejected, not panic");
+
+    assert!(client_exception(&error)
+        .to_string()
+        .contains("decode ResetOffsetBody failed"));
+}
+
+#[test]
+fn reset_offset_table_from_response_rejects_malformed_json_with_remark() {
+    let response =
+        RemotingCommand::create_response_command_with_code_remark(ResponseCode::Success, "broker diagnostic")
+            .set_body("{not valid json");
+
+    let error = reset_offset_table_from_response(&response)
+        .expect_err("malformed reset offset body should be rejected, not panic");
+
+    assert!(client_exception(&error).to_string().contains("broker diagnostic"));
+}
+
+#[test]
 fn async_retry_request_reuses_final_attempt_after_first_failure() {
     let retry_key = CheetahString::from_static_str("retry-key");
     let retry_value = CheetahString::from_static_str("retry-value");
