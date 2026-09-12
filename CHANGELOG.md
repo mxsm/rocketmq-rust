@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **test(client):** Cover `ProcessQueueMessageStore` at integer offset boundaries: contiguous insert/drain at `i64::MAX`, reverse-order prepend at `i64::MIN`, sparse fallback preserving both integer extremes, and no stale base offset after clearing or draining an extreme-offset store ([#10537](https://github.com/mxsm/rocketmq-rust/issues/10537)).
 - **docs(model):** Fix BooleanAttribute constructor documentation that incorrectly described enum attribute parameters and return type; add accurate Rustdoc with executable examples ([#10455](https://github.com/mxsm/rocketmq-rust/issues/10455)).
 - **fix(model):** Return `0` for CRC32 ranges whose `offset + length` overflows instead of panicking ([#10448](https://github.com/mxsm/rocketmq-rust/issues/10448)).
 - **docs(protocol):** Add missing Apache 2.0 headers to protocol Rust sources and compile-test fixtures ([#10061](https://github.com/mxsm/rocketmq-rust/issues/10061)).
