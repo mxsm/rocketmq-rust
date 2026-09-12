@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::future::Future;
-use std::panic::AssertUnwindSafe;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::AtomicUsize;
@@ -22,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use dashmap::mapref::entry::Entry;
 use futures::future::join_all;
 use futures::future::BoxFuture;
 use futures::future::FutureExt;
@@ -41,9 +41,11 @@ use crate::shutdown_report::ShutdownAnnotation;
 use crate::shutdown_report::ShutdownReport;
 use crate::shutdown_report::TaskSnapshot;
 
+mod completion;
 mod registry;
 mod shutdown;
 
+use completion::TaskExecution;
 use registry::ActiveTaskRegistry;
 use shutdown::ShutdownCoordinator;
 
@@ -201,6 +203,7 @@ struct TaskGroupInner {
     panicked: AtomicUsize,
     lifecycle: AtomicU8,
     spawn_gate: Mutex<()>,
+    settlement_gate: Mutex<()>,
     shutdown: ShutdownCoordinator,
 }
 
@@ -216,6 +219,7 @@ struct TaskMeta {
     detached: bool,
     detached_policy: Option<DetachedTaskPolicy>,
     abort_handle: Option<AbortHandle>,
+    abort_requested: bool,
     completion: Arc<TaskCompletion>,
 }
 
@@ -223,10 +227,6 @@ struct TaskMeta {
 struct TaskCompletion {
     done: AtomicU8,
     notify: Notify,
-}
-
-struct TaskCompletionGuard {
-    completion: Arc<TaskCompletion>,
 }
 
 impl TaskCompletion {
@@ -255,12 +255,6 @@ impl TaskCompletion {
             }
             notified.await;
         }
-    }
-}
-
-impl Drop for TaskCompletionGuard {
-    fn drop(&mut self) {
-        self.completion.mark_done();
     }
 }
 
@@ -535,12 +529,18 @@ impl TaskGroup {
         self.inner.cancellation_token.cancel();
     }
 
-    /// Returns the abort task.
+    /// Requests cancellation of an active task without waiting for destruction.
+    ///
+    /// Returns whether the task was still registered. Its record and resources
+    /// remain owned until the executor destroys the future.
     pub fn abort_task(&self, task_id: TaskId) -> bool {
         self.abort_task_inner(task_id).is_some()
     }
 
-    /// Returns the abort task and wait.
+    /// Requests cancellation and waits until the user future is destroyed.
+    ///
+    /// Returns `false` if the task was already absent or the wait expired.
+    /// A timeout does not remove the task's record or confirm cancellation.
     pub async fn abort_task_and_wait(&self, task_id: TaskId, timeout: Duration) -> bool {
         let Some(completion) = self.abort_task_inner(task_id) else {
             return false;
@@ -683,36 +683,12 @@ impl TaskGroup {
                 detached: detached_policy.is_some(),
                 detached_policy,
                 abort_handle: None,
+                abort_requested: false,
                 completion: completion.clone(),
             },
         );
 
-        let inner = self.inner.clone();
-        let token = inner.cancellation_token.clone();
-        let wrapped = async move {
-            let _completion_guard = TaskCompletionGuard {
-                completion: completion.clone(),
-            };
-            let result = AssertUnwindSafe(future).catch_unwind().await;
-            match result {
-                Ok(()) if token.is_cancelled() => {
-                    inner.finish_task(task_id, TaskResult::Cancelled);
-                    completion.mark_done();
-                }
-                Ok(()) => {
-                    inner.finish_task(task_id, TaskResult::Completed);
-                    completion.mark_done();
-                }
-                Err(error) => {
-                    tracing::error!(task_id = task_id.as_u64(), ?error, "task panicked");
-                    inner.finish_task(task_id, TaskResult::Panicked);
-                    completion.mark_done();
-                    if propagate_panic {
-                        std::panic::resume_unwind(error);
-                    }
-                }
-            }
-        };
+        let wrapped = TaskExecution::new(future, self.inner.clone(), task_id, completion, propagate_panic).run();
 
         let join_handle = if detached_policy.is_some() {
             self.inner.runtime.spawn_owned(wrapped)
@@ -721,21 +697,32 @@ impl TaskGroup {
         };
         let abort_handle = join_handle.abort_handle();
 
-        if let Some(mut meta) = self.inner.registry.tasks.get_mut(&task_id) {
+        let abort_requested = if let Some(mut meta) = self.inner.registry.tasks.get_mut(&task_id) {
             meta.abort_handle = Some(abort_handle);
             meta.state = TaskState::Running;
+            meta.abort_requested
+        } else {
+            false
+        };
+        // A diagnostic reader can discover the registered ID before this
+        // handle is installed. Honor any cancellation requested in that gap.
+        if abort_requested {
+            join_handle.abort();
         }
 
         Ok((task_id, join_handle))
     }
 
     fn abort_task_inner(&self, task_id: TaskId) -> Option<Arc<TaskCompletion>> {
-        let (_, meta) = self.inner.registry.tasks.remove(&task_id)?;
-        if let Some(abort_handle) = meta.abort_handle {
+        let (abort_handle, completion) = {
+            let mut meta = self.inner.registry.tasks.get_mut(&task_id)?;
+            meta.abort_requested = true;
+            (meta.abort_handle.clone(), meta.completion.clone())
+        };
+        if let Some(abort_handle) = abort_handle {
             abort_handle.abort();
         }
-        self.inner.aborted.fetch_add(1, Ordering::Relaxed);
-        Some(meta.completion)
+        Some(completion)
     }
 
     async fn shutdown_inner(&self) -> ShutdownReport {
@@ -776,23 +763,16 @@ impl TaskGroup {
         let (child_reports, timed_out) = tokio::join!(child_reports, tracked_shutdown);
 
         let mut report = ShutdownReport::new(self.inner.name.to_string(), started_at.elapsed());
-        report.completed = self.inner.completed.load(Ordering::Relaxed);
-        report.cancelled = self.inner.cancelled.load(Ordering::Relaxed);
-        report.panicked = self.inner.panicked.load(Ordering::Relaxed);
         report.children = child_reports;
+        self.record_task_outcomes(&mut report);
 
-        let aborted = self.inner.aborted.load(Ordering::Relaxed) + self.remove_aborted_tasks();
-        report.aborted = aborted;
+        let aborted = report.aborted;
         if aborted > 0 {
             report.annotations.push(ShutdownAnnotation::new(format!(
-                "aborted {aborted} tracked tasks after shutdown timeout"
+                "confirmed cancellation of {aborted} aborted tasks"
             )));
         }
 
-        let remaining = self.remaining_snapshots(TaskState::Leaked);
-        report.detached_still_running = remaining.iter().filter(|task| task.detached).count();
-        report.leaked = remaining.iter().filter(|task| !task.detached).count();
-        report.remaining_tasks = remaining;
         if timed_out {
             report.timed_out = aborted + report.leaked;
         }
@@ -828,23 +808,15 @@ impl TaskGroup {
         self.abort_tracked_tasks();
 
         let mut report = ShutdownReport::new(self.inner.name.to_string(), started_at.elapsed());
-        report.completed = self.inner.completed.load(Ordering::Relaxed);
-        report.cancelled = self.inner.cancelled.load(Ordering::Relaxed);
-        report.panicked = self.inner.panicked.load(Ordering::Relaxed);
         report.children = child_reports;
+        self.record_task_outcomes(&mut report);
 
-        let aborted = self.inner.aborted.load(Ordering::Relaxed) + self.remove_aborted_tasks();
-        report.aborted = aborted;
+        let aborted = report.aborted;
         if aborted > 0 {
             report.annotations.push(ShutdownAnnotation::new(format!(
-                "aborted {aborted} tracked tasks during immediate shutdown"
+                "confirmed cancellation of {aborted} aborted tasks"
             )));
         }
-
-        let remaining = self.remaining_snapshots(TaskState::Leaked);
-        report.detached_still_running = remaining.iter().filter(|task| task.detached).count();
-        report.leaked = remaining.iter().filter(|task| !task.detached).count();
-        report.remaining_tasks = remaining;
 
         if report.detached_still_running > 0 {
             report.annotations.push(ShutdownAnnotation::new(format!(
@@ -862,7 +834,7 @@ impl TaskGroup {
             if entry.detached {
                 continue;
             }
-            entry.state = TaskState::Aborted;
+            entry.abort_requested = true;
             if let Some(abort_handle) = &entry.abort_handle {
                 abort_handle.abort();
             }
@@ -874,36 +846,37 @@ impl TaskGroup {
             if entry.detached_policy != Some(DetachedTaskPolicy::AbortOnShutdown) {
                 continue;
             }
-            entry.state = TaskState::Aborted;
+            entry.abort_requested = true;
             if let Some(abort_handle) = &entry.abort_handle {
                 abort_handle.abort();
             }
         }
     }
 
-    fn remove_aborted_tasks(&self) -> usize {
-        let aborted_ids = self
-            .inner
-            .registry
-            .tasks
-            .iter()
-            .filter_map(|entry| (entry.state == TaskState::Aborted).then_some(*entry.key()))
-            .collect::<Vec<_>>();
-
-        for task_id in &aborted_ids {
-            self.inner.registry.tasks.remove(task_id);
+    fn record_task_outcomes(&self, report: &mut ShutdownReport) {
+        // Snapshot counters and active records together: a concurrent finalizer
+        // must not make a task disappear between these two observations.
+        let _settlement = self.inner.settlement_gate.lock();
+        report.completed = self.inner.completed.load(Ordering::Relaxed);
+        report.cancelled = self.inner.cancelled.load(Ordering::Relaxed);
+        report.panicked = self.inner.panicked.load(Ordering::Relaxed);
+        report.aborted = self.inner.aborted.load(Ordering::Relaxed);
+        let mut requested = 0;
+        for entry in self.inner.registry.tasks.iter() {
+            requested += usize::from(entry.abort_requested);
+            let task = entry.snapshot(TaskState::Leaked);
+            if task.detached {
+                report.detached_still_running += 1;
+            } else {
+                report.leaked += 1;
+            }
+            report.remaining_tasks.push(task);
         }
-
-        aborted_ids.len()
-    }
-
-    fn remaining_snapshots(&self, state: TaskState) -> Vec<TaskSnapshot> {
-        self.inner
-            .registry
-            .tasks
-            .iter()
-            .map(|entry| entry.value().snapshot(state))
-            .collect()
+        if requested > 0 {
+            report.annotations.push(ShutdownAnnotation::new(format!(
+                "abort requested for {requested} tasks whose destruction is not yet confirmed"
+            )));
+        }
     }
 }
 
@@ -934,6 +907,7 @@ impl TaskGroupInner {
             panicked: AtomicUsize::new(0),
             lifecycle: AtomicU8::new(STATE_OPEN),
             spawn_gate: Mutex::new(()),
+            settlement_gate: Mutex::new(()),
             shutdown: ShutdownCoordinator::new(),
         }
     }
@@ -955,14 +929,10 @@ impl TaskGroupInner {
     }
 
     fn finish_task(&self, task_id: TaskId, result: TaskResult) {
-        let Some((_, meta)) = self.registry.tasks.remove(&task_id) else {
+        let _settlement = self.settlement_gate.lock();
+        let Entry::Occupied(entry) = self.registry.tasks.entry(task_id) else {
             return;
         };
-
-        if meta.state == TaskState::Aborted {
-            self.aborted.fetch_add(1, Ordering::Relaxed);
-            return;
-        }
 
         match result {
             TaskResult::Completed => {
@@ -975,8 +945,13 @@ impl TaskGroupInner {
                 self.panicked.fetch_add(1, Ordering::Relaxed);
                 self.mark_poisoned_if_open();
             }
-            TaskResult::Aborted => {}
+            TaskResult::Aborted => {
+                self.aborted.fetch_add(1, Ordering::Relaxed);
+            }
         }
+        // A missing record is also treated as finished by wait_task. Publish
+        // the counters before removing it, after user resources were dropped.
+        entry.remove();
     }
 }
 
