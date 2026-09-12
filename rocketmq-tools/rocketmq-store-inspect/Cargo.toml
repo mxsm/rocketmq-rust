@@ -35,7 +35,7 @@ rocketmq-store-rocksdb = { workspace = true }
 
 
 clap           = { version = "4.6.1", features = ["derive"] }
-tabled         = "0.21.0"
+tabled         = "0.22.0"
 bytes          = { workspace = true }
 cheetah-string = { workspace = true }
 config         = { workspace = true }
