@@ -38,8 +38,7 @@
 
 .ops-field { width: 100%; min-width: 0; }
 .ops-field-label { display: block; margin-bottom: 6px; color: var(--ops-muted); font-size: 13px; font-weight: 500; }
-.ops-input, [data-slot="textarea"], [data-slot="select-trigger"],
-:where(.dashboard-main input:not([type="checkbox"]):not([type="radio"]), .dashboard-main select, .dashboard-main textarea) {
+.ops-input, [data-slot="textarea"], [data-slot="select-trigger"] {
   min-width: 0;
   min-height: var(--ops-control-height);
   padding: 8px 12px;
@@ -98,9 +97,9 @@
 .ops-split-pane { display: grid; grid-template-columns: minmax(260px, 2fr) minmax(0, 3fr); align-items: start; gap: 16px; }
 .ops-split-pane > * { min-width: 0; }
 
-:where(.dashboard-main table, .ops-table, [data-slot="table"]) { width: 100%; border-collapse: collapse; color: var(--ops-text); font-size: 14px; }
-:where(.dashboard-main th, .ops-table th, [data-slot="table-head"]) { padding: 12px 14px; border-bottom: 1px solid var(--ops-border); background: var(--ops-panel-strong); color: var(--ops-muted); font-weight: 500; font-size: 13px; text-align: left; }
-:where(.dashboard-main td, .ops-table td, [data-slot="table-cell"]) { height: var(--ops-row-height); padding: 12px 14px; border-bottom: 1px solid var(--ops-border); vertical-align: middle; }
+:where(.ops-table, [data-slot="table"]) { width: 100%; border-collapse: collapse; color: var(--ops-text); font-size: 14px; }
+:where(.ops-table th, [data-slot="table-head"]) { padding: 12px 14px; border-bottom: 1px solid var(--ops-border); background: var(--ops-panel-strong); color: var(--ops-muted); font-weight: 500; font-size: 13px; text-align: left; }
+:where(.ops-table td, [data-slot="table-cell"]) { height: var(--ops-row-height); padding: 12px 14px; border-bottom: 1px solid var(--ops-border); vertical-align: middle; }
 [data-slot="table-container"] { max-width: 100%; overflow-x: auto; }
 [data-slot="table-body"] [data-slot="table-row"]:hover { background: var(--ops-accent-hover); }
 [data-slot="table-row"][data-state="selected"] { background: var(--ops-accent-soft); }

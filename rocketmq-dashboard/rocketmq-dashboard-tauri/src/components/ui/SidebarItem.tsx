@@ -11,10 +11,10 @@ export const SidebarItem = ({ icon: Icon, label, active, onClick }: SidebarItemP
   <button
     type="button"
     onClick={onClick}
-    className={`app-nav-item ${active ? 'is-active' : ''}`}
+    className={`desktop-nav-item ${active ? 'is-active' : ''}`}
     aria-current={active ? 'page' : undefined}
   >
-    <Icon className="app-nav-icon" />
-    <span className="app-nav-label">{label}</span>
+    <Icon className="desktop-nav-icon" aria-hidden="true" />
+    <span>{label}</span>
   </button>
 );
