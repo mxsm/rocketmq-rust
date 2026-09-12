@@ -29,6 +29,7 @@ fn executor() -> BlockingExecutor {
         },
         BlockingLane::StorageIo,
         GlobalBlockingBudget::isolated(1),
+        RuntimeHandle::new(tokio::runtime::Handle::current()),
     )
 }
 
