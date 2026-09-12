@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **test(client):** Cover ordinary-topic route conversion permission and master filtering: writable queues with a master broker, exclusion of read-only/unknown-broker/slave-only queues from publish info, subscribe info's readable-only selection without a master requirement, and independent read/write queue counts ([#10531](https://github.com/mxsm/rocketmq-rust/issues/10531)).
 - **test(client):** Cover `OffsetSerialize`/`OffsetSerializeWrapper` round trips: full JSON persistence with signed and `i32::MAX`-exceeding offsets, discarding one invalid queue key while keeping valid entries, and an empty table round-tripping under the `offsetTable` field ([#10530](https://github.com/mxsm/rocketmq-rust/issues/10530)).
 - **test(client):** Cover `ControllableOffset` freeze and overwrite semantics: unfrozen increase-only vs. unconditional updates, `update_and_freeze` locking out later updates, `new_frozen` rejecting both update modes, and re-freezing to a new value ([#10529](https://github.com/mxsm/rocketmq-rust/issues/10529)).
 - **fix(client):** Return `None` instead of panicking in `NameServerAddressUtils::parse_instance_id_from_endpoint` when the last slash occurs after the first dot ([#10528](https://github.com/mxsm/rocketmq-rust/issues/10528)).

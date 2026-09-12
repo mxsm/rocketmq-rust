@@ -136,3 +136,156 @@ pub fn topic_route_data2topic_subscribe_info(topic: &str, route: &TopicRouteData
 pub fn topic_route_data2_topic_subscribe_info(topic: &str, route: &TopicRouteData) -> HashSet<MessageQueue> {
     topic_route_data2topic_subscribe_info(topic, route)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_protocol::protocol::route::route_data_view::BrokerData;
+    use rocketmq_protocol::protocol::route::route_data_view::QueueData;
+
+    use super::*;
+
+    #[test]
+    fn topic_route_data2topic_publish_info_selects_writable_queue_with_master_broker() {
+        let mut route = TopicRouteData {
+            order_topic_conf: None,
+            queue_datas: vec![QueueData::new(
+                CheetahString::from("broker-a"),
+                2,
+                3,
+                PermName::PERM_READ | PermName::PERM_WRITE,
+                0,
+            )],
+            broker_datas: vec![BrokerData::new(
+                CheetahString::from("cluster-a"),
+                CheetahString::from("broker-a"),
+                HashMap::from([(mix_all::MASTER_ID, CheetahString::from("127.0.0.1:10911"))]),
+                None,
+            )],
+            ..Default::default()
+        };
+
+        let info = topic_route_data2topic_publish_info("TopicA", &mut route);
+
+        let mut queues = info.message_queue_list.clone();
+        queues.sort_by_key(|queue| queue.queue_id());
+        assert_eq!(
+            queues,
+            vec![
+                MessageQueue::from_parts("TopicA", "broker-a", 0),
+                MessageQueue::from_parts("TopicA", "broker-a", 1),
+                MessageQueue::from_parts("TopicA", "broker-a", 2),
+            ]
+        );
+    }
+
+    #[test]
+    fn topic_route_data2topic_publish_info_excludes_non_writable_and_master_missing_queues() {
+        let mut route = TopicRouteData {
+            order_topic_conf: None,
+            queue_datas: vec![
+                QueueData::new(CheetahString::from("broker-readonly"), 2, 2, PermName::PERM_READ, 0),
+                QueueData::new(
+                    CheetahString::from("broker-unknown"),
+                    2,
+                    2,
+                    PermName::PERM_READ | PermName::PERM_WRITE,
+                    0,
+                ),
+                QueueData::new(
+                    CheetahString::from("broker-slave-only"),
+                    2,
+                    2,
+                    PermName::PERM_READ | PermName::PERM_WRITE,
+                    0,
+                ),
+            ],
+            broker_datas: vec![
+                BrokerData::new(
+                    CheetahString::from("cluster-a"),
+                    CheetahString::from("broker-readonly"),
+                    HashMap::from([(mix_all::MASTER_ID, CheetahString::from("127.0.0.1:10911"))]),
+                    None,
+                ),
+                BrokerData::new(
+                    CheetahString::from("cluster-a"),
+                    CheetahString::from("broker-slave-only"),
+                    HashMap::from([(1u64, CheetahString::from("127.0.0.1:10912"))]),
+                    None,
+                ),
+            ],
+            ..Default::default()
+        };
+
+        let info = topic_route_data2topic_publish_info("TopicA", &mut route);
+
+        assert!(info.message_queue_list.is_empty());
+    }
+
+    #[test]
+    fn topic_route_data2topic_subscribe_info_selects_readable_queues_without_master_requirement() {
+        let route = TopicRouteData {
+            order_topic_conf: None,
+            queue_datas: vec![
+                QueueData::new(
+                    CheetahString::from("broker-no-master-metadata"),
+                    2,
+                    2,
+                    PermName::PERM_READ | PermName::PERM_WRITE,
+                    0,
+                ),
+                QueueData::new(CheetahString::from("broker-write-only"), 2, 2, PermName::PERM_WRITE, 0),
+            ],
+            broker_datas: vec![],
+            ..Default::default()
+        };
+
+        let queues = topic_route_data2topic_subscribe_info("TopicA", &route);
+
+        assert_eq!(
+            queues,
+            HashSet::from([
+                MessageQueue::from_parts("TopicA", "broker-no-master-metadata", 0),
+                MessageQueue::from_parts("TopicA", "broker-no-master-metadata", 1),
+            ])
+        );
+    }
+
+    #[test]
+    fn topic_route_data2topic_publish_and_subscribe_info_respect_independent_queue_counts() {
+        let mut route = TopicRouteData {
+            order_topic_conf: None,
+            queue_datas: vec![QueueData::new(
+                CheetahString::from("broker-a"),
+                0,
+                3,
+                PermName::PERM_READ | PermName::PERM_WRITE,
+                0,
+            )],
+            broker_datas: vec![BrokerData::new(
+                CheetahString::from("cluster-a"),
+                CheetahString::from("broker-a"),
+                HashMap::from([(mix_all::MASTER_ID, CheetahString::from("127.0.0.1:10911"))]),
+                None,
+            )],
+            ..Default::default()
+        };
+
+        let publish_info = topic_route_data2topic_publish_info("TopicA", &mut route);
+        let mut publish_queues = publish_info.message_queue_list.clone();
+        publish_queues.sort_by_key(|queue| queue.queue_id());
+        assert_eq!(
+            publish_queues,
+            vec![
+                MessageQueue::from_parts("TopicA", "broker-a", 0),
+                MessageQueue::from_parts("TopicA", "broker-a", 1),
+                MessageQueue::from_parts("TopicA", "broker-a", 2),
+            ]
+        );
+
+        let subscribe_info = topic_route_data2topic_subscribe_info("TopicA", &route);
+        assert!(subscribe_info.is_empty());
+    }
+}
