@@ -17,5 +17,5 @@ export interface SaveMonitorRule {
 export const MonitorService = {
     list: (): Promise<MonitorRule[]> => invokeAuthenticatedCommand('list_consumer_monitor_rules'),
     save: (request: SaveMonitorRule): Promise<{ message: string }> => invokeAuthenticatedCommand('save_consumer_monitor_rule', { request }),
-    delete: (rule: MonitorRule): Promise<{ message: string }> => invokeAuthenticatedCommand('delete_consumer_monitor_rule', { request: { consumerGroup: rule.consumerGroup, expectedRevision: rule.revision } }),
+    delete: (rule: Pick<MonitorRule, 'consumerGroup' | 'revision'>): Promise<{ message: string }> => invokeAuthenticatedCommand('delete_consumer_monitor_rule', { request: { consumerGroup: rule.consumerGroup, expectedRevision: rule.revision } }),
 };
