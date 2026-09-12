@@ -17,9 +17,11 @@
 
 use std::time::Duration;
 
+use rocketmq_client_rust::ClientError;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_client_rust::DefaultMQPullConsumer;
+use rocketmq_client_rust::MQClientException;
 use rocketmq_client_rust::MQPullConsumerScheduleService;
 use rocketmq_client_rust::MessageQueueListener;
 use rocketmq_client_rust::MessageSelector;
@@ -29,9 +31,47 @@ use rocketmq_client_rust::PullTaskContext;
 use rocketmq_client_rust::PullTaskImpl;
 use rocketmq_client_rust::RebalancePullImpl;
 use rocketmq_client_rust::TelemetryHandle;
+use rocketmq_error::fields;
+use rocketmq_error::ErrorContext;
+use rocketmq_error::ErrorDescriptor;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeOwner;
+
+#[track_caller]
+fn assert_error(error: &ClientError, descriptor: &'static ErrorDescriptor) {
+    assert_eq!(error.code(), descriptor.code());
+    assert_eq!(
+        error.to_string(),
+        format!("{}: {}", descriptor.code(), descriptor.public_message())
+    );
+    error.public_view().expect("valid public error context");
+    error.diagnostic_view().expect("valid diagnostic error context");
+}
+
+#[track_caller]
+fn assert_not_initialized(error: &ClientError, component: &str) {
+    assert_error(error, &rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED);
+    assert_eq!(
+        error.context(),
+        &ErrorContext::new().with_text(fields::COMPONENT_NAME, component)
+    );
+}
+
+#[track_caller]
+fn assert_client_exception(error: &ClientError, message: &str) {
+    assert_error(error, &rocketmq_error::CORE_ARGUMENT_INVALID);
+    assert_eq!(
+        error.context(),
+        &ErrorContext::new().with_secret_presence(fields::MESSAGE_PRESENT)
+    );
+    assert_eq!(error.public_view().unwrap().fields().count(), 0);
+    // Java compatibility text is retained in the typed source, not public rendering.
+    let source = error
+        .source_ref::<MQClientException>()
+        .expect("retained Java client exception");
+    assert_eq!(source.error_message(), Some(message));
+}
 
 fn client_runtime(owner: &RuntimeOwner, scope: &'static str) -> std::sync::Arc<ClientRuntime> {
     ClientRuntime::try_new(
@@ -97,15 +137,13 @@ fn configured_facade_fails_closed_before_start_without_unsupported_error() {
             Ok(_) => panic!("pull before start must fail closed"),
             Err(error) => error,
         };
-        assert!(pull_error.to_string().contains("not started"));
-        assert!(!pull_error.to_string().contains("not supported"));
+        assert_not_initialized(&pull_error, "DefaultMQPullConsumer not started. Call start() first.");
 
         let queue_error = consumer
             .fetch_subscribe_message_queues("TopicA")
             .await
             .expect_err("queue lookup before start must fail closed");
-        assert!(queue_error.to_string().contains("not started"));
-        assert!(!queue_error.to_string().contains("not supported"));
+        assert_not_initialized(&queue_error, "DefaultMQPullConsumer not started. Call start() first.");
 
         let report = runtime.shutdown().await;
         assert!(report.is_healthy(), "{}", report.to_json());
@@ -125,8 +163,10 @@ fn detached_legacy_constructor_reports_missing_runtime_instead_of_unsupported() 
 
     owner.block_on(async {
         let error = consumer.start().await.expect_err("detached facade has no runtime");
-        assert!(error.to_string().contains("builder"));
-        assert!(!error.to_string().contains("not supported"));
+        assert_not_initialized(
+            &error,
+            "DefaultMQPullConsumer has no ClientRuntime; create it with DefaultMQPullConsumer::builder",
+        );
     });
     owner
         .shutdown_runtime_blocking()
@@ -142,8 +182,10 @@ fn schedule_compatibility_types_are_live_or_fail_closed() {
     let register_error = service
         .register_pull_task_callback("TopicA", Callback)
         .expect_err("detached schedule service must require a runtime");
-    assert!(register_error.to_string().contains("with_client_runtime"));
-    assert!(!register_error.to_string().contains("not supported"));
+    assert_not_initialized(
+        &register_error,
+        "MQPullConsumerScheduleService has no ClientRuntime; use with_client_runtime",
+    );
 
     let mut context = PullTaskContext::new();
     assert_eq!(context.get_pull_next_delay_time_millis(), 200);
@@ -184,7 +226,7 @@ fn configured_facade_owns_start_and_shutdown_lifecycle() {
             .start()
             .await
             .expect_err("second start must fail deterministically");
-        assert!(repeated_start.to_string().contains("already started"));
+        assert_client_exception(&repeated_start, "DefaultMQPullConsumer already started");
         consumer
             .shutdown()
             .await
@@ -269,7 +311,7 @@ fn configured_schedule_service_cancels_and_joins_its_coordinator() {
             .start()
             .await
             .expect_err("second start must fail deterministically");
-        assert!(repeated_start.to_string().contains("already started"));
+        assert_client_exception(&repeated_start, "MQPullConsumerScheduleService already started");
         service
             .shutdown()
             .await
