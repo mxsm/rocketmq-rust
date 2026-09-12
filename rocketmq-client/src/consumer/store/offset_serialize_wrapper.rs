@@ -64,3 +64,99 @@ impl From<OffsetSerialize> for OffsetSerializeWrapper {
         Self { offset_table }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocketmq_protocol::protocol::RemotingSerializable;
+
+    fn queue_key(topic: &str, broker: &str, queue_id: i32) -> String {
+        MessageQueue::from_parts(topic, broker, queue_id)
+            .serialize_json()
+            .expect("queue should serialize to JSON")
+    }
+
+    #[test]
+    fn offset_table_round_trips_through_json_with_signed_offsets_and_keys() {
+        let queue_a = MessageQueue::from_parts("topic-a", "broker-a", 0);
+        let queue_b = MessageQueue::from_parts("topic-b", "broker-b", 1);
+
+        let mut wrapper = OffsetSerializeWrapper::default();
+        wrapper.offset_table.insert(queue_a.clone(), AtomicI64::new(-42));
+        wrapper.offset_table.insert(queue_b.clone(), AtomicI64::new(100));
+
+        let serialize: OffsetSerialize = wrapper.into();
+        let json = serialize.serialize_json().expect("offset serialize should encode");
+        let decoded = OffsetSerialize::decode_str(&json).expect("offset serialize should decode");
+        let round_tripped: OffsetSerializeWrapper = decoded.into();
+
+        assert_eq!(round_tripped.offset_table.len(), 2);
+        assert_eq!(
+            round_tripped
+                .offset_table
+                .get(&queue_a)
+                .map(|v| v.load(Ordering::Relaxed)),
+            Some(-42)
+        );
+        assert_eq!(
+            round_tripped
+                .offset_table
+                .get(&queue_b)
+                .map(|v| v.load(Ordering::Relaxed)),
+            Some(100)
+        );
+    }
+
+    #[test]
+    fn offset_larger_than_i32_max_is_not_narrowed() {
+        let queue = MessageQueue::from_parts("topic-a", "broker-a", 0);
+        let large_offset = i64::from(i32::MAX) + 1000;
+
+        let mut wrapper = OffsetSerializeWrapper::default();
+        wrapper.offset_table.insert(queue.clone(), AtomicI64::new(large_offset));
+
+        let serialize: OffsetSerialize = wrapper.into();
+        let json = serialize.serialize_json().expect("offset serialize should encode");
+        let decoded = OffsetSerialize::decode_str(&json).expect("offset serialize should decode");
+        let round_tripped: OffsetSerializeWrapper = decoded.into();
+
+        assert_eq!(
+            round_tripped
+                .offset_table
+                .get(&queue)
+                .map(|v| v.load(Ordering::Relaxed)),
+            Some(large_offset)
+        );
+    }
+
+    #[test]
+    fn invalid_queue_key_is_skipped_while_valid_entries_are_kept() {
+        let queue = MessageQueue::from_parts("topic-a", "broker-a", 0);
+        let mut offset_table = HashMap::new();
+        offset_table.insert(queue_key("topic-a", "broker-a", 0), 7);
+        offset_table.insert("not a valid message queue key".to_string(), 99);
+        let serialize = OffsetSerialize { offset_table };
+
+        let wrapper: OffsetSerializeWrapper = serialize.into();
+
+        assert_eq!(wrapper.offset_table.len(), 1);
+        assert_eq!(
+            wrapper.offset_table.get(&queue).map(|v| v.load(Ordering::Relaxed)),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn empty_offset_table_round_trips_with_persisted_field_name() {
+        let wrapper = OffsetSerializeWrapper::default();
+
+        let serialize: OffsetSerialize = wrapper.into();
+        let json = serialize.serialize_json().expect("offset serialize should encode");
+
+        assert!(json.contains("\"offsetTable\""));
+        let decoded = OffsetSerialize::decode_str(&json).expect("offset serialize should decode");
+        let round_tripped: OffsetSerializeWrapper = decoded.into();
+
+        assert!(round_tripped.offset_table.is_empty());
+    }
+}
