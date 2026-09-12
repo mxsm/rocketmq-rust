@@ -248,6 +248,70 @@ fn select_with_filters_matches_and_no_match() {
     assert!(out.is_none());
 }
 
+fn multi_filter_test_queues() -> Vec<MessageQueue> {
+    vec![
+        MessageQueue::from_parts("t", "b1", 0),
+        MessageQueue::from_parts("t", "b1", 1),
+        MessageQueue::from_parts("t", "b2", 0),
+        MessageQueue::from_parts("t", "b2", 1),
+    ]
+}
+
+#[test]
+fn multi_filter_intersection_selects_the_only_matching_queue() {
+    let mut tpi = TopicPublishInfo::new();
+    tpi.message_queue_list = multi_filter_test_queues();
+
+    let broker_filter = |mq: &MessageQueue| mq.broker_name() == "b1";
+    let queue_id_filter = |mq: &MessageQueue| mq.queue_id() == 1;
+    let expected = MessageQueue::from_parts("t", "b1", 1);
+
+    for _ in 0..tpi.message_queue_list.len() {
+        let out = tpi.select_one_message_queue_filters(&[&broker_filter, &queue_id_filter]);
+        assert_eq!(out, Some(expected.clone()));
+    }
+}
+
+#[test]
+fn multi_filter_empty_intersection_returns_none() {
+    let mut tpi = TopicPublishInfo::new();
+    tpi.message_queue_list = multi_filter_test_queues();
+
+    let broker_filter = |mq: &MessageQueue| mq.broker_name() == "b1";
+    let unmatched_queue_id_filter = |mq: &MessageQueue| mq.queue_id() == 5;
+
+    let out = tpi.select_one_message_queue_filters(&[&broker_filter, &unmatched_queue_id_filter]);
+    assert!(out.is_none());
+}
+
+#[test]
+fn multi_filter_reversed_order_respects_the_same_intersection() {
+    let mut tpi = TopicPublishInfo::new();
+    tpi.message_queue_list = multi_filter_test_queues();
+
+    let broker_filter = |mq: &MessageQueue| mq.broker_name() == "b2";
+    let queue_id_filter = |mq: &MessageQueue| mq.queue_id() == 0;
+    let expected = MessageQueue::from_parts("t", "b2", 0);
+
+    for _ in 0..tpi.message_queue_list.len() {
+        let out = tpi.select_one_message_queue_filters(&[&queue_id_filter, &broker_filter]);
+        assert_eq!(out, Some(expected.clone()));
+    }
+}
+
+#[test]
+fn multi_filter_permissive_call_still_selects_after_an_all_rejected_call() {
+    let mut tpi = TopicPublishInfo::new();
+    tpi.message_queue_list = multi_filter_test_queues();
+
+    let reject_all = |_: &MessageQueue| false;
+    assert!(tpi.select_one_message_queue_filters(&[&reject_all]).is_none());
+
+    let broker_filter = |mq: &MessageQueue| mq.broker_name() == "b1";
+    let out = tpi.select_one_message_queue_filters(&[&broker_filter]);
+    assert!(out.is_some_and(|mq| mq.broker_name() == "b1"));
+}
+
 #[test]
 fn get_write_queue_nums_by_broker_matches_java_route_lookup() {
     let mut tpi = TopicPublishInfo::new();

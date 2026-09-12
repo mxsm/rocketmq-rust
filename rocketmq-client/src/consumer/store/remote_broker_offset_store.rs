@@ -385,4 +385,62 @@ mod tests {
 
         assert!(store.offset_needs_persist(&mq, 10).await);
     }
+
+    #[tokio::test]
+    async fn read_from_memory_distinguishes_absent_queue_from_stored_zero_offset() {
+        let store = new_store();
+        let absent_mq = message_queue();
+        let zero_mq = MessageQueue::from_parts("topic-a", "broker-a", 1);
+
+        assert_eq!(store.read_offset(&absent_mq, ReadOffsetType::ReadFromMemory).await, -1);
+
+        store.update_offset(&zero_mq, 0, false).await;
+        assert_eq!(store.read_offset(&zero_mq, ReadOffsetType::ReadFromMemory).await, 0);
+    }
+
+    #[tokio::test]
+    async fn memory_first_then_store_returns_cached_value_without_network_fallback() {
+        let store = new_store();
+        let mq = message_queue();
+        store.update_offset(&mq, 42, false).await;
+
+        let offset = store.read_offset(&mq, ReadOffsetType::MemoryFirstThenStore).await;
+
+        assert_eq!(offset, 42);
+    }
+
+    #[tokio::test]
+    async fn clone_offset_table_filters_by_exact_topic_with_overlapping_broker_and_queue_ids() {
+        let store = new_store();
+        let topic_a_q0 = MessageQueue::from_parts("topic-a", "broker-a", 0);
+        let topic_b_q0 = MessageQueue::from_parts("topic-b", "broker-a", 0);
+
+        store.update_offset(&topic_a_q0, 5, false).await;
+        store.update_offset(&topic_b_q0, 9, false).await;
+
+        let table = store.clone_offset_table("topic-a").await;
+
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.get(&topic_a_q0), Some(&5));
+
+        let missing = store.clone_offset_table("topic-missing").await;
+        assert!(missing.is_empty());
+    }
+
+    #[tokio::test]
+    async fn clone_offset_table_snapshot_is_isolated_from_later_store_mutations() {
+        let store = new_store();
+        let mq = message_queue();
+        store.update_offset(&mq, 1, false).await;
+
+        let mut snapshot = store.clone_offset_table("topic-a").await;
+        snapshot.insert(mq.clone(), 999);
+        assert_eq!(store.read_offset(&mq, ReadOffsetType::ReadFromMemory).await, 1);
+
+        let snapshot_before_mutation = store.clone_offset_table("topic-a").await;
+        store.update_offset(&mq, 2, false).await;
+        store.remove_offset(&mq).await;
+
+        assert_eq!(snapshot_before_mutation.get(&mq), Some(&1));
+    }
 }
