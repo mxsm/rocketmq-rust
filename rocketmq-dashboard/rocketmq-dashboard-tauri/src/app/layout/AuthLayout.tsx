@@ -1,16 +1,6 @@
-import React from 'react';
+import type { ReactNode } from 'react';
+import '../../styles/auth.css';
 
-interface AuthLayoutProps {
-  children: React.ReactNode;
+export function AuthLayout({ children }: { children: ReactNode }) {
+    return <main className="ops-auth-layout"><div className="ops-auth-shell">{children}</div></main>;
 }
-
-export const AuthLayout = ({ children }: AuthLayoutProps) => {
-  return (
-    <div className="auth-console">
-      <div className="auth-console-grid" aria-hidden="true" />
-      <div className="auth-shell">
-        {children}
-      </div>
-    </div>
-  );
-};

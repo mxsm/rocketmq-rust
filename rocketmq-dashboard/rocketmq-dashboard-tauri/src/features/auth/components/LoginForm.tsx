@@ -1,126 +1,21 @@
-import React, { useState } from 'react';
-import { motion } from 'motion/react';
-import { User, Lock, ArrowRight, Loader2 } from 'lucide-react';
+import { useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import { ErrorAlert } from './ErrorAlert';
+import { Input } from '../../../components/ui/LegacyInput';
+import { Button } from '../../../components/ui/LegacyButton';
+import { PageState } from '../../../components/layout/PageState';
 
-export const LoginForm: React.FC = () => {
+export function LoginForm() {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
-    const { isLoading, error, shake, login, clearError } = useAuth();
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        await login({ username, password });
-    };
-
-    return (
-        <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{
-                opacity: 1,
-                y: 0,
-                x: shake ? [0, -10, 10, -10, 10, -5, 5, 0] : 0,
-            }}
-            transition={{
-                opacity: { duration: 0.8, delay: 0.2, ease: 'easeOut' },
-                y: { duration: 0.8, delay: 0.2, ease: 'easeOut' },
-                x: { duration: 0.65 },
-            }}
-            className="auth-form-wrap"
-        >
-            <div className="auth-card">
-                <span className="auth-card-light" aria-hidden="true" />
-                <div className="auth-card-header">
-                    <div className="auth-form-kicker-row">
-                        <span className="auth-form-kicker">Admin access</span>
-                        <span className="auth-form-chip">Local session</span>
-                    </div>
-                    <h1>
-                        Sign in to your account
-                    </h1>
-                    <p>
-                        Use the local administrator credentials to access the dashboard.
-                    </p>
-                </div>
-
-                <form onSubmit={handleSubmit} className="auth-form">
-                    <div className="auth-fields">
-                        <div className="auth-field">
-                            <label>
-                                Username
-                            </label>
-                            <div className="relative">
-                                <div className="auth-field-icon">
-                                    <User className="h-4 w-4" />
-                                </div>
-                                <input
-                                    type="text"
-                                    value={username}
-                                    onChange={(e) => {
-                                        setUsername(e.target.value);
-                                        if (error) {
-                                            clearError();
-                                        }
-                                    }}
-                                    className="auth-input"
-                                    placeholder="Enter your username"
-                                    required
-                                    disabled={isLoading}
-                                />
-                            </div>
-                        </div>
-
-                        <div className="auth-field">
-                            <label>
-                                Password
-                            </label>
-                            <div className="relative">
-                                <div className="auth-field-icon">
-                                    <Lock className="h-4 w-4" />
-                                </div>
-                                <input
-                                    type="password"
-                                    value={password}
-                                    onChange={(e) => {
-                                        setPassword(e.target.value);
-                                        if (error) {
-                                            clearError();
-                                        }
-                                    }}
-                                    className="auth-input"
-                                    placeholder="Enter your password"
-                                    required
-                                    disabled={isLoading}
-                                />
-                            </div>
-                        </div>
-                    </div>
-
-                    <ErrorAlert message={error} title="Login Failed" onClose={clearError} />
-
-                    <button
-                        type="submit"
-                        disabled={isLoading}
-                        className="auth-submit"
-                    >
-                        {isLoading ? (
-                            <Loader2 className="w-5 h-5 animate-spin" />
-                        ) : (
-                            <>
-                                Sign In
-                                <ArrowRight className="ml-2 w-4 h-4" />
-                            </>
-                        )}
-                    </button>
-                </form>
-
-                <div className="auth-footnote">
-                    <p>
-                        First-time login requires a password change before the dashboard becomes available.
-                    </p>
-                </div>
-            </div>
-        </motion.div>
-    );
-};
+    const { isLoading, error, login, clearError } = useAuth();
+    return <section className="ops-auth-card" aria-labelledby="login-title">
+        <h1 id="login-title">Sign in</h1><p>Use your local dashboard account.</p>
+        <form onSubmit={event => { event.preventDefault(); if (!isLoading) void login({ username, password }); }}>
+            <Input label="Username" autoComplete="username" required disabled={isLoading} value={username} onChange={event => { setUsername(event.target.value); clearError(); }} />
+            <Input label="Password" type="password" autoComplete="current-password" required disabled={isLoading} value={password} onChange={event => { setPassword(event.target.value); clearError(); }} />
+            {error && <PageState kind="error" title="Sign-in failed" description={error} />}
+            <Button type="submit" disabled={isLoading}>{isLoading ? 'Signing in…' : 'Sign in'}</Button>
+        </form>
+        <p className="ops-auth-footnote">First-time sign-in requires a password change before the dashboard becomes available.</p>
+    </section>;
+}

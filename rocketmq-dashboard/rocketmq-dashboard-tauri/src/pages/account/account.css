@@ -1,0 +1,17 @@
+.ops-account { display: grid; gap: 22px; min-width: 0; }
+.ops-account-summary, .ops-account-section { padding: 22px; min-width: 0; border: 1px solid var(--ops-border); border-radius: var(--ops-radius); background: var(--ops-panel); }
+.ops-account-summary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 20px; align-items: center; }
+.ops-account-identity { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; min-width: 0; }
+.ops-account-avatar { display: grid; place-items: center; width: 52px; height: 52px; background: var(--ops-panel-strong); border: 1px solid var(--ops-border); border-radius: 12px; flex: none; }
+.ops-account-identity h2 { font-size: 22px; font-weight: 600; max-width: min(450px, 70vw); overflow-wrap: anywhere; }
+.ops-account-note { color: var(--ops-muted); font-size: 13px; }
+.ops-account-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.ops-account-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.ops-account-section h2 { font-size: 16px; font-weight: 600; margin-bottom: 20px; }
+.ops-account-section dl { display: grid; gap: 16px; font-size: 14px; }
+.ops-account-section dl > div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 18px; }
+.ops-account-section dt { color: var(--ops-muted); }
+.ops-account-section dd { margin: 0; overflow-wrap: anywhere; max-height: 120px; overflow: auto; font-variant-numeric: tabular-nums; }
+.ops-account-notice { font-size: 13px; line-height: 1.6; color: var(--ops-muted); margin-top: 20px; }
+@media (max-width: 1000px) { .ops-account-columns { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) { .ops-account-summary, .ops-account-section { padding: 16px; } }
