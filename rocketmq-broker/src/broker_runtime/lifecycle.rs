@@ -83,9 +83,17 @@ impl BrokerRuntime {
         &mut self,
         deadline: ShutdownDeadline,
     ) -> BrokerBasicServiceShutdownReport {
+        let started = Instant::now();
         let progress = BrokerShutdownProgress::new();
         match await_shutdown_deadline(deadline, self.shutdown_basic_service_inner(deadline, progress.clone())).await {
-            Ok(report) => report,
+            Ok(mut report) => {
+                // An inner deadline can resolve before the outer timer is polled. Preserve
+                // the component reports, but still account for the exhausted total budget.
+                if deadline.is_expired() {
+                    report.deadline = BrokerShutdownComponentReport::timed_out("shutdown_deadline", started.elapsed());
+                }
+                report
+            }
             Err(elapsed) => {
                 warn!(
                     elapsed_ms = elapsed.as_millis(),
