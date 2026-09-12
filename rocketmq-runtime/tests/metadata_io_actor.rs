@@ -21,6 +21,7 @@ use std::sync::Condvar;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::LocalMetadataFileSystem;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataFileSystem;
@@ -401,4 +402,142 @@ fn local_filesystem_atomically_replaces_target_and_cleans_temporary_file() {
         .map(|entry| entry.unwrap().file_name())
         .collect::<Vec<_>>();
     assert_eq!(entries, vec![target.file_name().unwrap()]);
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FirstWriteOutcome {
+    Success,
+    Failure,
+    Panic,
+}
+
+#[derive(Debug)]
+struct LateCompletionFileSystem {
+    gate: Arc<Gate>,
+    outcome: FirstWriteOutcome,
+    writes: Mutex<Vec<Vec<u8>>>,
+}
+
+impl MetadataFileSystem for LateCompletionFileSystem {
+    fn persist_atomic(&self, _target: &Path, bytes: &[u8]) -> RuntimeResult<()> {
+        if bytes == b"one" {
+            self.gate.wait();
+            match self.outcome {
+                FirstWriteOutcome::Success => {}
+                FirstWriteOutcome::Failure => {
+                    return Err(RuntimeError::io(
+                        MetadataIoOperation::WriteTemporary.runtime_operation(),
+                        io::Error::other("late write failure"),
+                    ));
+                }
+                FirstWriteOutcome::Panic => panic!("late write panic"),
+            }
+        }
+        self.writes.lock().unwrap().push(bytes.to_vec());
+        Ok(())
+    }
+}
+
+struct ReleaseGateOnDrop(Arc<Gate>);
+
+impl Drop for ReleaseGateOnDrop {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+async fn verify_late_write_order(outcome: FirstWriteOutcome) {
+    let file_system = Arc::new(LateCompletionFileSystem {
+        gate: Arc::new(Gate::default()),
+        outcome,
+        writes: Mutex::new(Vec::new()),
+    });
+    let _release_on_failure = ReleaseGateOnDrop(file_system.gate.clone());
+    let context = RuntimeContext::try_from_current_with_blocking_policy(
+        "metadata-late-completion",
+        BlockingPoolPolicy {
+            max_concurrency: 2,
+            task_timeout: Duration::from_secs(1),
+            ..BlockingPoolPolicy::default()
+        },
+    )
+    .unwrap();
+    let actor = config(2, 6)
+        .into_plan()
+        .unwrap()
+        .start_with_file_system(&context.service_context("metadata"), file_system.clone())
+        .unwrap();
+    let deadline = MetadataDeadline::after(Duration::from_secs(60));
+    let started = file_system.gate.started.notified();
+    let first = accepted(actor.submit(request("routes", 1, b"one"), deadline).unwrap());
+    started.await;
+    let late_observer = accepted(actor.submit(request("routes", 1, b"one"), deadline).unwrap());
+
+    tokio::time::advance(Duration::from_secs(2)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+        first
+            .wait_until(MetadataDeadline::after(Duration::ZERO))
+            .await
+            .unwrap_err()
+            .condition(),
+        rocketmq_error::CanonicalCondition::DeadlineExceeded
+    );
+    let second = accepted(actor.submit(request("routes", 2, b"two"), deadline).unwrap());
+    let late_result = late_observer.wait_until(deadline);
+    tokio::pin!(late_result);
+    assert!(futures::poll!(&mut late_result).is_pending());
+
+    let snapshot = actor.snapshot();
+    assert_eq!(snapshot.pending_operations, 2);
+    assert_eq!(snapshot.pending_bytes, 6);
+    assert_eq!(snapshot.resources[0].in_flight_generation, Some(1.into()));
+    assert_eq!(snapshot.resources[0].queued_generation, Some(2.into()));
+    assert_eq!(snapshot.resources[0].durable_generation, None);
+    assert!(file_system.writes.lock().unwrap().is_empty());
+
+    // Stopping the actor must retain the real in-flight write and its charge.
+    let stopped = actor.shutdown_until(MetadataDeadline::after(Duration::ZERO)).await;
+    assert!(stopped.timed_out);
+    assert_eq!(stopped.pending_bytes, 6);
+    assert_eq!(stopped.pending_operations, 2);
+
+    file_system.gate.release();
+    match outcome {
+        FirstWriteOutcome::Success => assert_eq!(late_result.await.unwrap(), 1.into()),
+        FirstWriteOutcome::Failure => assert_eq!(
+            late_result.await.unwrap_err().operation(),
+            MetadataIoOperation::WriteTemporary.runtime_operation()
+        ),
+        FirstWriteOutcome::Panic => assert_eq!(
+            late_result.await.unwrap_err().operation(),
+            rocketmq_runtime::RuntimeOperation::RunBlockingTask
+        ),
+    }
+    assert_eq!(second.wait_until(deadline).await.unwrap(), 2.into());
+    let drained = actor.shutdown_until(deadline).await;
+    assert!(!drained.timed_out);
+    assert_eq!(drained.pending_operations, 0);
+    assert_eq!(drained.pending_bytes, 0);
+    assert_eq!(actor.snapshot().resources[0].durable_generation, Some(2.into()));
+    let expected = match outcome {
+        FirstWriteOutcome::Success => vec![b"one".to_vec(), b"two".to_vec()],
+        FirstWriteOutcome::Failure | FirstWriteOutcome::Panic => vec![b"two".to_vec()],
+    };
+    assert_eq!(*file_system.writes.lock().unwrap(), expected);
+}
+
+#[tokio::test(start_paused = true)]
+async fn late_success_preserves_write_order_after_observer_and_lane_deadlines() {
+    verify_late_write_order(FirstWriteOutcome::Success).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn late_failure_preserves_write_order_after_observer_and_lane_deadlines() {
+    verify_late_write_order(FirstWriteOutcome::Failure).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn late_panic_preserves_write_order_after_observer_and_lane_deadlines() {
+    verify_late_write_order(FirstWriteOutcome::Panic).await;
 }
