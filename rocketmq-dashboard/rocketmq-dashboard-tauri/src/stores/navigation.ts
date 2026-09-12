@@ -7,7 +7,8 @@ export type EntityTarget =
     | { kind: 'topic'; name: string; detail: 'overview' | 'status' | 'route' | 'consumers' | 'config' }
     | { kind: 'consumer'; name: string; detail: 'overview' | 'progress' | 'clients' | 'config'; scope: ConsumerQueryScope }
     | { kind: 'broker'; address: string; detail: 'overview' | 'status' | 'config' }
-    | { kind: 'trace'; name: string; topic: string };
+    | { kind: 'trace'; name: string; topic: string }
+    | { kind: 'message'; name: string; topic: string };
 
 export interface NavigationLocation {
     id: number;

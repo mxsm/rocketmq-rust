@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore 
 import { Copy, Search } from 'lucide-react';
 import { ConnectionStore } from '../services/connection.store';
 import { MessageService } from '../services/message.service';
-import { useNavigationState } from '../stores/app.store';
+import { useAppStore, useNavigationState } from '../stores/app.store';
 import { useTopicCatalog } from '../features/topic/hooks/useTopicCatalog';
 import { buildMessageQuery, createMessageQueryController, type MessageQueryDraft } from '../features/message/messageQuery';
 import { messageIdentity, messageTimestamp, visibleMessageText } from '../features/message/messageModel';
@@ -23,7 +23,10 @@ const initialDraft = (): MessageQueryDraft => ({ mode: 'key', topic: '', key: ''
 const modes = [['key', 'By Key'], ['id', 'By ID'], ['time', 'By Time']] as const;
 
 export function MessageView() {
-    const [draft, storeDraft] = useNavigationState<MessageQueryDraft>('messageQuery', initialDraft);
+    const { navigation } = useAppStore();
+    const target = navigation.target?.kind === 'message' ? navigation.target : null;
+    const [draft, storeDraft] = useNavigationState<MessageQueryDraft>('messageQuery', () => target
+        ? { ...initialDraft(), mode: 'id', topic: target.topic, messageId: target.name } : initialDraft());
     const [selection, setSelection] = useState<string | null>(null);
     const [localPage, setLocalPage] = useState(1);
     const [validation, setValidation] = useState('');

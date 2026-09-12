@@ -17,7 +17,8 @@ export function MainLayout({ children }: { children: ReactNode }) {
     const [confirmSignOut, setConfirmSignOut] = useState(false);
     const [signingOut, setSigningOut] = useState(false);
     const target = navigation.target;
-    const targetName = target ? ('name' in target ? target.name : target.address) : null;
+    // Message and trace links prefill editable queries; their current identity lives in the page.
+    const targetName = target && target.kind !== 'trace' && target.kind !== 'message' ? ('name' in target ? target.name : target.address) : null;
     const handleSignOut = async () => {
         if (signingOut) return;
         setSigningOut(true);
