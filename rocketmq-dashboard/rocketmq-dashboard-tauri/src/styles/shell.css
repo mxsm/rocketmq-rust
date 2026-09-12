@@ -1,4 +1,4 @@
-.app-shell.desktop-shell { display: flex; flex-direction: row; height: 100dvh; min-height: 0; overflow: hidden; }
+.desktop-shell { display: flex; flex-direction: row; height: 100dvh; min-height: 0; overflow: hidden; background: var(--ops-bg); color: var(--ops-text); }
 .desktop-sidebar { display: flex; flex-direction: column; width: 240px; min-width: 240px; background: var(--ops-sidebar); border-right: 1px solid var(--ops-border); }
 .desktop-brand { display: flex; align-items: center; gap: 10px; padding: 20px 18px; min-height: 72px; }
 .desktop-brand img { width: 30px; height: 34px; object-fit: contain; }
@@ -6,10 +6,11 @@
 .desktop-navigation { flex: 1; min-height: 0; overflow-y: auto; padding: 0 12px 12px; }
 .desktop-navigation section + section { margin-top: 22px; }
 .desktop-navigation h2 { font-size: 12px; font-weight: 400; color: var(--ops-muted); margin: 0 10px 8px; }
-.desktop-navigation .app-nav-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 38px; margin: 3px 0; padding: 8px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--ops-text); font-size: 14px; font-weight: 400; cursor: pointer; }
-.desktop-navigation .app-nav-item:hover { background: var(--ops-panel-strong); }
-.desktop-navigation .app-nav-item.is-active { background: var(--ops-primary-fill); color: #fff; }
-.desktop-navigation .app-nav-icon { width: 18px; height: 18px; color: inherit; flex-shrink: 0; }
+.desktop-navigation .desktop-nav-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 38px; margin: 3px 0; padding: 8px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--ops-text); font-size: 14px; font-weight: 400; cursor: pointer; }
+.desktop-navigation .desktop-nav-item:hover { background: var(--ops-panel-strong); }
+.desktop-navigation .desktop-nav-item.is-active { background: var(--ops-primary-fill); color: #fff; }
+.desktop-navigation .desktop-nav-icon { width: 18px; height: 18px; color: inherit; flex-shrink: 0; }
+.desktop-navigation .desktop-nav-item > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .desktop-sidebar-footer { padding: 12px; border-top: 1px solid var(--ops-border); }
 .desktop-theme, .desktop-account { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ops-text); text-align: left; cursor: pointer; }
 .desktop-theme:hover, .desktop-account:hover { background: var(--ops-panel-strong); }
@@ -57,6 +58,6 @@
   .desktop-brand img { width: 24px; }
   .desktop-content { padding: 18px; }
   .desktop-toolbar { padding: 10px 18px; }
-  .desktop-navigation .app-nav-item { padding: 8px; gap: 8px; }
+  .desktop-navigation .desktop-nav-item { padding: 8px; gap: 8px; }
 }
 @media (prefers-reduced-motion: reduce) { .is-refreshing { animation: none; } }

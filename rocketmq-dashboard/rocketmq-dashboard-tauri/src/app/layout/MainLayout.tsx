@@ -31,12 +31,12 @@ export function MainLayout({ children }: { children: ReactNode }) {
         }
     };
     return <PageToolbarProvider scope={navigation.id + ':' + (settings?.revision ?? 0)}>
-        <div className="app-shell desktop-shell">
+        <div className="desktop-shell">
             <Toaster position="bottom-right" />
             <AppSidebar onSignOut={() => setConfirmSignOut(true)} signingOut={signingOut} />
             <section className="desktop-main">
                 <EnvironmentToolbar settings={settings} />
-                <main className="desktop-content dashboard-main" id="main-content" tabIndex={-1}>
+                <main className="desktop-content" id="main-content" tabIndex={-1}>
                     <div className="desktop-page-heading">
                         {canGoBack && <button type="button" className="desktop-back" onClick={goBack} aria-label="Back"><ArrowLeft /></button>}
                         <div><h1>{pageTitle}</h1><p>{pageDescriptions[activeTab]}</p>

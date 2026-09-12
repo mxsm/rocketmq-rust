@@ -114,6 +114,10 @@
   --sidebar-ring: var(--ops-accent-ring);
 }
 
+html, body, #root {
+  min-height: 100%;
+}
+
 body {
   background: var(--ops-bg);
   color: var(--ops-text);
