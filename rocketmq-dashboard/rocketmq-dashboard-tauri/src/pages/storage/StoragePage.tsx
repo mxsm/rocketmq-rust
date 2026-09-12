@@ -1,69 +1,97 @@
-import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { StorageService, type StorageStatus } from '../../services/storage.service';
-import { HistoryService, type CollectorStatus } from '../../services/history.service';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { ArrowRight, CircleCheck, CircleHelp, CircleX } from 'lucide-react';
+import { StorageService } from '../../services/storage.service';
+import { HistoryService } from '../../services/history.service';
 import { ConnectionStore } from '../../services/connection.store';
-import { dashboardErrorMessage } from '../../services/invoke';
+import { getConnectionSettings } from '../../services/connection.service';
+import { useReadResource } from '../../hooks/useReadResource';
+import { usePageRefresh } from '../../app/layout/pageToolbar';
 import { useAppStore } from '../../stores/app.store';
+import { Button } from '../../components/ui/LegacyButton';
+import { PageState } from '../../components/layout/PageState';
+import { DiagnosticSection } from './DiagnosticSection';
+import { diagnosticBytes, diagnosticCount, diagnosticTime, observationAge } from './storageModel';
+import './storage.css';
 
-const time = (value: number | null) => value === null ? 'Not observed' : new Date(value).toLocaleString();
-const bytes = (value: number | null) => value === null ? 'Unknown / unavailable' : `${value.toLocaleString()} bytes`;
+function Bytes({ value }: { value: number | null }) {
+    const measurement = diagnosticBytes(value);
+    return <span title={measurement.exact}>{measurement.display}</span>;
+}
 
 export const StoragePage = () => {
-    const [status, setStatus] = useState<StorageStatus | null>(null);
-    const [collector, setCollector] = useState<CollectorStatus | null>(null);
-    const [error, setError] = useState('');
-    const [collectorError, setCollectorError] = useState('');
-    const [busy, setBusy] = useState(false);
-    const [now, setNow] = useState(Date.now());
-    const generation = useRef(0);
+    const storage = useReadResource(StorageService.status, 'Storage status could not be read.');
+    const history = useReadResource(HistoryService.status, 'History collector status could not be read.');
     const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
+    const connection = useReadResource(settings ? null : getConnectionSettings, 'Connection settings could not be read.');
     const { setActiveTab } = useAppStore();
-    const refresh = async () => {
-        const current = ++generation.current;
-        setBusy(true); setError(''); setCollectorError('');
-        const [storage, history] = await Promise.allSettled([StorageService.status(), HistoryService.status()]);
-        if (current !== generation.current) return;
-        if (storage.status === 'fulfilled') setStatus(storage.value);
-        else setError(dashboardErrorMessage(storage.reason, 'Storage status could not be read.'));
-        if (history.status === 'fulfilled') setCollector(history.value);
-        else setCollectorError(dashboardErrorMessage(history.reason, 'Collector status could not be read.'));
-        setNow(Date.now()); setBusy(false);
-    };
+    const [, updateClock] = useState(0);
+    const now = Date.now();
+    const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
+    const refresh = useCallback(() => { void storage.read(); void history.read(); if (!settings) void connection.read(); }, [storage.read, history.read, connection.read, settings]);
     useEffect(() => {
-        void refresh();
-        const timer = window.setInterval(() => setNow(Date.now()), 15_000);
-        return () => { generation.current++; window.clearInterval(timer); };
+        const timer = window.setInterval(() => updateClock(value => value + 1), 15_000);
+        return () => window.clearInterval(timer);
     }, []);
-    const stale = status && (Boolean(error) || now - status.checkedAtMs >= 60_000);
-    return <section className="p-6 space-y-5">
-        <div className="flex justify-between"><h2 className="text-xl font-semibold">Storage and diagnostics</h2><button disabled={busy} onClick={() => void refresh()}>{busy ? 'Checking…' : 'Refresh / retry'}</button></div>
-        {error && <p role="alert" className="text-red-600">{error}</p>}
-        {stale && <p role="status" className="text-amber-600">This is an older snapshot. Refresh before relying on these values.</p>}
-        {status && <div className="rounded border p-4 space-y-2">
-            <h3 className="font-semibold">Local database: {status.available ? 'Available' : 'Unavailable'}</h3>
-            {status.error && <p role="alert" className="text-red-600">{status.error}</p>}
-            <dl className="grid grid-cols-2 gap-2 text-sm">
-                <dt>Backend / mode</dt><dd>{status.backend} / {status.mode}</dd>
-                <dt>Schema version</dt><dd>{status.schemaVersion ?? 'Unknown'}</dd>
-                <dt>Observation started</dt><dd>{time(status.observedSinceMs)}</dd>
-                <dt>Last check</dt><dd>{time(status.checkedAtMs)}</dd>
-                <dt>Latest committed write</dt><dd>{time(status.lastWriteMs)}</dd>
-                <dt>Allocated database pages</dt><dd>{bytes(status.databaseBytes)}</dd>
-                <dt>Reusable database pages</dt><dd>{bytes(status.reusableBytes)}</dd>
-                <dt>Filesystem free space</dt><dd>{bytes(status.diskFreeBytes)}</dd>
-            </dl>
-            <p className="text-sm text-gray-500">Page sizes describe the SQLite database, excluding WAL and filesystem overhead. Free disk space is not measured. Refreshing diagnostics does not create a write.</p>
-        </div>}
-        <div className="rounded border p-4 space-y-2">
-            <h3 className="font-semibold">History collector</h3>
-            {collectorError && <p role="alert" className="text-red-600">{collectorError}{collector ? ' Previously loaded values are shown below.' : ''}</p>}
-            {collector && <><p>Interval {collector.intervalSeconds}s · Retention {collector.retentionDays} days</p><p>Last sample: {time(collector.lastSampleMs)} · Last write: {time(collector.lastWriteMs)}</p>{collector.lastError && <p className="text-amber-600">{collector.lastError}</p>}</>}
-        </div>
-        <div className="rounded border p-4 space-y-2">
-            <h3 className="font-semibold">Connection configuration</h3>
-            <p>{settings?.environmentId ? `Environment selected · configuration revision ${settings.revision}` : 'No NameServer environment selected'}</p>
-            <p className="text-sm text-gray-500">Database availability and saved connection settings do not establish Broker reachability. Use Dashboard or Cluster to query the cluster.</p>
-            <div className="flex gap-4"><button onClick={() => setActiveTab('NameServer')}>NameServer settings</button><button onClick={() => setActiveTab('Cluster')}>Query Cluster</button></div>
-        </div>
-    </section>;
+    useEffect(() => {
+        if (!storage.pending && !history.pending && !storage.error && !history.error && storage.receivedAt !== null && history.receivedAt !== null) {
+            setRefreshedAt(Math.min(storage.receivedAt, history.receivedAt));
+        }
+    }, [storage.pending, history.pending, storage.error, history.error, storage.receivedAt, history.receivedAt]);
+    usePageRefresh({ refresh, pending: storage.pending || history.pending || connection.pending, refreshedAt });
+    const status = storage.data;
+    const collector = history.data;
+    const age = observationAge(status?.checkedAtMs, now);
+    const previous = Boolean(storage.error || age !== 'current');
+    const available = status?.available === true;
+    const HealthIcon = previous ? CircleHelp : available ? CircleCheck : CircleX;
+    const endpoint = settings?.endpoints.find(endpoint => endpoint.endpointId === settings.currentNameserverId && endpoint.kind === 'name_server')?.address ?? settings?.nameserver.currentNamesrv;
+    const collectorAge = observationAge(history.receivedAt, now);
+    return <div className="ops-storage">
+        {storage.pending && <PageState kind="loading" title={status ? 'Refreshing local diagnostics' : 'Reading local diagnostics'} />}
+        {storage.error && <PageState kind="error" title="Storage diagnostics could not be refreshed" description={storage.error + (status ? ' The last successful observation is retained.' : '')}
+            action={<Button variant="outline" disabled={storage.pending} onClick={() => { void storage.read(); }}>Retry storage</Button>} />}
+        {status && <>
+            <section className="ops-storage-health" data-tone={previous ? 'warning' : !available ? 'danger' : status.error ? 'warning' : 'success'} aria-label="Local database availability">
+                <HealthIcon aria-hidden="true" /><div><h2>{previous ? available ? 'Local database available at last check' : 'Local database unavailable at last check' : available ? 'Local database available' : 'Local database unavailable'}</h2>
+                    <p>{status.backend === 'sqlite' ? 'SQLite' : status.backend || 'Unknown backend'} / {status.mode === 'singleNode' ? 'Single node' : status.mode || 'Unknown mode'} · Schema version {diagnosticCount(status.schemaVersion)}</p>
+                </div>
+            </section>
+            {status.error && <PageState kind="error" title="Local database check reported an error" description={status.error} />}
+            {age === 'stale' && <PageState kind="stale" title="Older storage observation" description="This check is at least one minute old. Refresh before relying on these values." />}
+            {age === 'unknown' && <PageState kind="partial" title="Observation age is unknown" description="The reported check time is unavailable or ahead of the local clock." />}
+            <DiagnosticSection title="Storage" rows={[
+                ['Allocated database pages', <Bytes value={status.databaseBytes} />],
+                ['Reusable pages', <Bytes value={status.reusableBytes} />],
+                ['Filesystem free space', <Bytes value={status.diskFreeBytes} />],
+            ]} note="Page allocation excludes WAL and filesystem overhead. An unmeasured value is not a zero or a disk-usage percentage." />
+            <DiagnosticSection title="Activity" rows={[
+                ['Observed since', diagnosticTime(status.observedSinceMs)], ['Last check', diagnosticTime(status.checkedAtMs)],
+                ['Latest committed write', diagnosticTime(status.lastWriteMs)],
+            ]} note="Refreshing diagnostics does not create a write. The committed-write time comes from local storage activity." />
+        </>}
+        <DiagnosticSection title="History collector" rows={collector ? [
+            ['Interval', diagnosticCount(collector.intervalSeconds, 's')], ['Retention', diagnosticCount(collector.retentionDays, 'days')],
+            ['Last sample', diagnosticTime(collector.lastSampleMs)], ['Last write', diagnosticTime(collector.lastWriteMs)],
+        ] : undefined} note={<>
+            {collector && !history.error && !collector.lastError && (collector.lastSampleMs === null ? 'No sample observed yet. ' : 'No collector error reported. ')}
+            These are local collector observations. The status does not identify the sampled environment.
+        </>}>
+            {history.pending && <PageState kind="loading" title="Reading collector status" />}
+            {history.error && <PageState kind="error" title="Collector status could not be refreshed" description={history.error + (collector ? ' Previously observed values remain above.' : '')}
+                action={<Button variant="outline" disabled={history.pending} onClick={() => { void history.read(); }}>Retry collector</Button>} />}
+            {collector?.lastError && <PageState kind="partial" title="History collection reported an error" description={collector.lastError} />}
+            {collector && collectorAge === 'stale' && <PageState kind="stale" title="Older collector observation" description="Refresh to read the current collector status." />}
+        </DiagnosticSection>
+        <DiagnosticSection title="Connection context" rows={settings ? [
+            ['Environment', <span className="ops-storage-value" tabIndex={(settings.environmentId?.length ?? 0) > 160 ? 0 : undefined}>{settings.environmentId ?? 'No environment selected'}</span>],
+            ['NameServer', <span className="ops-storage-value ops-storage-address" tabIndex={(endpoint?.length ?? 0) > 160 ? 0 : undefined}>{endpoint || 'Not configured'}</span>],
+            ['Configuration revision', diagnosticCount(settings.revision)],
+        ] : undefined} note={<>
+            Database availability and saved connection settings do not establish Broker reachability.
+            <div className="ops-storage-actions"><Button variant="ghost" icon={ArrowRight} onClick={() => setActiveTab('NameServer')}>NameServer settings</Button><Button variant="ghost" icon={ArrowRight} onClick={() => setActiveTab('Cluster')}>Open cluster</Button></div>
+        </>}>
+            {connection.pending && <PageState kind="loading" title="Reading connection context" />}
+            {connection.error && <PageState kind="error" title="Connection context unavailable" description={connection.error} action={<Button variant="outline" onClick={() => { void connection.read(); }}>Retry connection</Button>} />}
+        </DiagnosticSection>
+    </div>;
 };

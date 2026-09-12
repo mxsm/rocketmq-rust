@@ -88,6 +88,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         return 'Dead-letter messages';
       case 'ACL':
         return 'Access control';
+      case 'Storage':
+        return 'Storage & diagnostics';
       case 'Audit':
         return 'Audit Events';
       case 'Sessions':
