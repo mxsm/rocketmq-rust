@@ -10,9 +10,8 @@ const AppContent = () => {
 
   if (isBootstrappingAuth) {
     return (
-      <div className="auth-boot">
-        <div className="auth-boot-panel">
-          <div className="auth-boot-spinner" />
+      <div className="ops-auth-layout">
+        <div className="ops-auth-restoring" role="status">
           <p>Restoring session</p>
         </div>
       </div>

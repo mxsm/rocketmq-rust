@@ -1,0 +1,21 @@
+.ops-auth-layout { min-height: 100dvh; padding: 40px 24px; display: grid; place-items: center; background: var(--ops-bg); color: var(--ops-text); }
+.ops-auth-shell { width: min(920px, 100%); min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 420px); gap: 64px; align-items: center; }
+.ops-auth-brand img { object-fit: contain; margin-bottom: 24px; }
+.ops-auth-brand h2 { font-size: clamp(28px, 3vw, 40px); font-weight: 600; line-height: 1.2; letter-spacing: -.025em; }
+.ops-auth-brand p { margin-top: 20px; color: var(--ops-muted); font-size: 15px; line-height: 1.7; }
+.ops-auth-card { min-width: 0; padding: 28px; border: 1px solid var(--ops-border); border-radius: var(--ops-radius); background: var(--ops-panel); }
+.ops-auth-card h1 { font-size: 26px; font-weight: 600; line-height: 1.3; }
+.ops-auth-card > p { margin-top: 8px; color: var(--ops-muted); font-size: 14px; }
+.ops-auth-card form, .ops-auth-password-form { display: grid; gap: 20px; }
+.ops-auth-card form { margin-top: 26px; }
+.ops-auth-card > .ops-auth-footnote { margin-top: 22px; font-size: 12px; line-height: 1.6; }
+.ops-auth-restoring { padding: 24px; color: var(--ops-muted); border: 1px solid var(--ops-border); border-radius: var(--ops-radius); background: var(--ops-panel); }
+@media (max-width: 780px) {
+  .ops-auth-layout { padding: 24px 16px; }
+  .ops-auth-shell { grid-template-columns: minmax(0, 440px); justify-content: center; gap: 28px; }
+  .ops-auth-brand { display: grid; grid-template-columns: 48px 1fr; gap: 8px 16px; align-items: center; }
+  .ops-auth-brand img { width: 48px; height: 48px; margin: 0; }
+  .ops-auth-brand h2 { font-size: 24px; }
+  .ops-auth-brand h2 br { display: none; }
+  .ops-auth-brand p { grid-column: 1 / -1; margin: 4px 0 0; font-size: 13px; }
+}
