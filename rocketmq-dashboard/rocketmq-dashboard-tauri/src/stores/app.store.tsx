@@ -87,7 +87,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       case 'DLQ':
         return 'Dead-letter messages';
       case 'ACL':
-        return 'ACL Management';
+        return 'Access control';
       case 'Audit':
         return 'Audit Events';
       case 'Sessions':

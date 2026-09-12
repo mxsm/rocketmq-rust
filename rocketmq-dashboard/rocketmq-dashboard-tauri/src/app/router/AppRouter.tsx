@@ -5,6 +5,7 @@ import {DashboardPage} from '../../pages/dashboard/DashboardPage';
 
 // Import Views
 import {ACLView} from '../../components/ACLView';
+import {AclActionProvider} from '../../features/acl/components/AclActionProvider';
 import {NameServerView} from '../../components/NameServerView';
 import {ProxyView} from '../../components/ProxyView';
 import {ClusterView} from '../../components/ClusterView';
@@ -30,7 +31,7 @@ export const AppRouter = () => {
     const settings = useSyncExternalStore(ConnectionStore.subscribe, ConnectionStore.getSnapshot, () => null);
     const { activeTab, navigation, sessionId } = useAppStore();
     const key = ['NameServer', 'Proxy', 'Account', 'Sessions', 'Audit'].includes(activeTab) ? activeTab : `${activeTab}:${settings?.revision ?? 0}`;
-    return <BrokerConfigEditorProvider key={sessionId}><TopicActionProvider><ConsumerActionProvider><MessageActionProvider><DlqActionProvider><RouteContent key={`${key}:${navigation.id}`} /></DlqActionProvider></MessageActionProvider></ConsumerActionProvider></TopicActionProvider></BrokerConfigEditorProvider>;
+    return <BrokerConfigEditorProvider key={sessionId}><TopicActionProvider><ConsumerActionProvider><MessageActionProvider><DlqActionProvider><AclActionProvider><RouteContent key={`${key}:${navigation.id}`} /></AclActionProvider></DlqActionProvider></MessageActionProvider></ConsumerActionProvider></TopicActionProvider></BrokerConfigEditorProvider>;
 };
 
 const RouteContent = () => {
