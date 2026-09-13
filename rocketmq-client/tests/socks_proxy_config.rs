@@ -15,6 +15,8 @@
 #![recursion_limit = "256"]
 
 use rocketmq_client_rust::ClientConfig;
+use rocketmq_error::fields;
+use rocketmq_error::ErrorContext;
 
 #[test]
 fn client_config_parses_proxy_json_once_into_the_transport_model() {
@@ -37,6 +39,13 @@ fn client_config_parses_proxy_json_once_into_the_transport_model() {
     let error = client
         .parse_socks_proxy_config()
         .expect_err("partial authentication must be rejected before transport startup");
-    assert!(error.to_string().contains("username and password"));
+    assert!(error.is(&rocketmq_error::CORE_CONFIGURATION_INVALID));
+    assert_eq!(
+        error.context(),
+        &ErrorContext::new()
+            .with_text(fields::KEY, "com.rocketmq.socks.proxy.config")
+            .with_secret_presence(fields::VALUE_PRESENT)
+            .with_secret_presence(fields::REASON_PRESENT)
+    );
     assert!(!error.to_string().contains("secret"));
 }

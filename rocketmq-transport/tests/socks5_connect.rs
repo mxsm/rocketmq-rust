@@ -19,6 +19,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_error::fields;
+use rocketmq_error::ErrorContext;
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::SocksProxyConfig;
 #[cfg(feature = "tls")]
@@ -147,7 +149,14 @@ fn proxy_rules_are_validated_and_choose_the_most_specific_match() {
     let partial_auth =
         SocksProxyConfig::parse_java_json(r#"{"0.0.0.0/0":{"addr":"127.0.0.1:1080","username":"alice"}}"#)
             .expect_err("partial auth must fail");
-    assert!(partial_auth.to_string().contains("username and password"));
+    assert_eq!(partial_auth.code(), rocketmq_error::CORE_CONFIGURATION_INVALID.code());
+    assert_eq!(
+        partial_auth.context(),
+        &ErrorContext::new()
+            .with_text(fields::KEY, "com.rocketmq.socks.proxy.config")
+            .with_secret_presence(fields::VALUE_PRESENT)
+            .with_secret_presence(fields::REASON_PRESENT)
+    );
 }
 
 #[cfg(feature = "tls")]
