@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::broker::metadata_reconciliation::MetadataWriteConclusion;
 use crate::client::manager::consumer_manager::ConsumerAssignmentView;
 
 use crate::load_balance::message_request_mode_manager::MessageRequestModeCasError;
@@ -565,25 +566,39 @@ impl QueryAssignmentProcessor {
                     .set_remark(CheetahString::from_static_str("retry topic is not allowed to set mode")),
             ));
         }
-        self.message_request_mode_manager.set_message_request_mode(
-            request_body.topic.clone(),
-            request_body.consumer_group.clone(),
-            request_body,
-        );
-        if let Some(metadata_io) = &self.metadata_io {
+        let topic = request_body.topic.clone();
+        let consumer_group = request_body.consumer_group.clone();
+        self.message_request_mode_manager
+            .set_message_request_mode(topic.clone(), consumer_group.clone(), request_body);
+        let conclusion = if let Some(metadata_io) = &self.metadata_io {
             let content = self.message_request_mode_manager.encode_pretty(true);
-            metadata_io
-                .submit_next_durable(
+            let observation = metadata_io
+                .submit_next_observed(
                     "broker.message-request-mode",
                     self.message_request_mode_manager.config_file_path(),
                     content.into_bytes(),
                     MetadataDeadline::after(Duration::from_secs(5)),
                 )
                 .await
-                .map_err(crate::runtime_to_rocketmq_error)
-                .and_then(crate::require_metadata_durability)?;
+                .map_err(crate::runtime_to_rocketmq_error)?;
+            conclude_request_mode_write(observation)
         } else {
-            self.message_request_mode_manager.persist()?;
+            match self.message_request_mode_manager.persist() {
+                Ok(()) => MetadataWriteConclusion::BlockingPersisted,
+                Err(error) => MetadataWriteConclusion::FailedBeforeCommit(error),
+            }
+        };
+        // The mode is already applied in memory. A non-durable write leaves the
+        // key marked so a later supervised compare and set reports a dirty
+        // persistence state instead of building on a state whose durability is
+        // unknown. The unconditional setter has no marker of its own, which is
+        // why this path has to set one.
+        if conclusion.retains_dirty_marker() {
+            self.message_request_mode_manager
+                .mark_supervised_dirty(&topic, &consumer_group);
+        }
+        if let Some(error) = crate::broker::metadata_reconciliation::conclusion_error(&conclusion) {
+            return Err(error);
         }
         Ok(Some(
             self.command_factory
@@ -760,9 +775,13 @@ impl QueryAssignmentProcessor {
             ),
         };
         if requires_persistence {
-            let persisted = if let Some(metadata_io) = &self.metadata_io {
-                metadata_io
-                    .submit_next_durable(
+            // The supervised compare and set already applied the mode in memory,
+            // so anything other than a durable conclusion keeps the per-key
+            // marker and the next attempt reports a dirty persistence state
+            // instead of building on a state whose durability is unknown.
+            let conclusion = if let Some(metadata_io) = &self.metadata_io {
+                match metadata_io
+                    .submit_next_observed(
                         "broker.message-request-mode",
                         self.message_request_mode_manager.config_file_path(),
                         self.message_request_mode_manager.encode_pretty(true).into_bytes(),
@@ -770,18 +789,24 @@ impl QueryAssignmentProcessor {
                     )
                     .await
                     .map_err(crate::runtime_to_rocketmq_error)
-                    .and_then(crate::require_metadata_durability)
+                {
+                    Ok(observation) => conclude_request_mode_write(observation),
+                    Err(error) => MetadataWriteConclusion::FailedBeforeCommit(error),
+                }
             } else {
-                self.message_request_mode_manager.persist()
+                match self.message_request_mode_manager.persist() {
+                    Ok(()) => MetadataWriteConclusion::BlockingPersisted,
+                    Err(error) => MetadataWriteConclusion::FailedBeforeCommit(error),
+                }
             };
-            if persisted.is_err() {
+            if !conclusion.is_durable() {
                 code = ResponseCode::SystemError;
                 persistence = MutationPersistenceState::Failed;
             }
             self.message_request_mode_manager.complete_supervised_persistence(
                 &CheetahString::from(&body.topic),
                 &CheetahString::from(&body.consumer_group),
-                persisted.is_ok(),
+                &conclusion,
             );
         }
         let current = current.map(|value| SupervisedMessageRequestMode {
@@ -803,6 +828,11 @@ impl QueryAssignmentProcessor {
             ),
         ))
     }
+}
+
+/// Classifies one observed `broker.message-request-mode` write.
+fn conclude_request_mode_write(observation: rocketmq_runtime::MetadataIoCommitObservation) -> MetadataWriteConclusion {
+    crate::broker::metadata_reconciliation::conclude_metadata_write("broker.message-request-mode", observation)
 }
 
 fn supervised_request_mode_target_is_valid(topic: &str, consumer_group: &str) -> bool {

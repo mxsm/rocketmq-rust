@@ -21,6 +21,7 @@ mod credential_rotation;
 mod error;
 mod layered_authorization;
 mod maintenance;
+mod metadata_snapshot;
 mod migration;
 mod permission;
 mod provider_owner;

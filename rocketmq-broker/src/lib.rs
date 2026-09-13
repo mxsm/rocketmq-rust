@@ -373,17 +373,22 @@ pub(crate) fn runtime_to_rocketmq_error(
     crate::broker_error::internal("metadata_io", error)
 }
 
-pub(crate) fn require_metadata_durability(
-    outcome: rocketmq_runtime::MetadataIoDurabilityOutcome,
-) -> crate::broker_error::BrokerResult<()> {
-    match outcome {
-        rocketmq_runtime::MetadataIoDurabilityOutcome::Durable(_) => Ok(()),
-        rocketmq_runtime::MetadataIoDurabilityOutcome::TargetConflict(request) => {
-            Err(crate::broker_error::storage_write_failed(
-                request.target().display().to_string(),
-                "metadata resource target conflict",
-            ))
-        }
+/// Classifies one observed metadata write and fails on a non-durable conclusion.
+///
+/// An `Err` from the actor call means the request was never admitted, so the
+/// caller may safely discard its change. Every other case reaches this helper
+/// as an observation, including an observation timeout that leaves the write
+/// unconfirmed. Prefer [`crate::broker::metadata_reconciliation::conclude_metadata_write`]
+/// when the caller has to distinguish an unconfirmed replacement from a
+/// definite pre-commit failure.
+pub(crate) fn require_metadata_conclusion(
+    resource: &'static str,
+    observation: rocketmq_runtime::MetadataIoCommitObservation,
+) -> crate::broker_error::BrokerResult<crate::broker::metadata_reconciliation::MetadataWriteConclusion> {
+    let conclusion = crate::broker::metadata_reconciliation::conclude_metadata_write(resource, observation);
+    match crate::broker::metadata_reconciliation::conclusion_error(&conclusion) {
+        Some(error) => Err(error),
+        None => Ok(conclusion),
     }
 }
 

@@ -23,12 +23,15 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataGeneration;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_runtime::MetadataIoDurabilityOutcome;
 use tokio::fs;
 
 use crate::authentication::model::user::User;
 use crate::config::AuthConfig;
+use crate::metadata_snapshot::classify_snapshot_persistence;
+use crate::metadata_snapshot::ReconciliationGeneration;
+use crate::metadata_snapshot::SnapshotPersistence;
 use crate::AuthFailureKind;
 use crate::AuthOperation;
 use crate::AuthServiceError;
@@ -43,13 +46,20 @@ pub struct LocalAuthenticationMetadataProvider {
     storage_path: Option<PathBuf>,
     write_lock: Arc<tokio::sync::Mutex<()>>,
     metadata_io: Option<MetadataIoActor>,
+    /// The one user snapshot generation whose durability was not confirmed.
+    reconciliation: ReconciliationGeneration,
 }
 
 impl LocalAuthenticationMetadataProvider {
     pub(crate) async fn flush_shared(&self) -> AuthServiceResult<()> {
         let _writer = self.write_lock.lock().await;
         let users = self.storage.read().await.clone();
-        self.persist_users(&users).await
+        // A flush re-encodes memory that is already published, so only the
+        // reported error matters here.
+        match self.persist_users(&users).await.into_error() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     pub(crate) async fn close_shared(&self) -> AuthServiceResult<()> {
@@ -64,6 +74,7 @@ impl LocalAuthenticationMetadataProvider {
             storage: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             storage_path: None,
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
+            reconciliation: ReconciliationGeneration::default(),
             metadata_io: None,
         }
     }
@@ -85,34 +96,68 @@ impl LocalAuthenticationMetadataProvider {
             storage: Arc::new(tokio::sync::RwLock::new(users)),
             storage_path,
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
+            reconciliation: ReconciliationGeneration::default(),
             metadata_io,
         })
     }
 
-    async fn persist_users(&self, users: &HashMap<String, User>) -> AuthServiceResult<()> {
+    /// Writes the user snapshot and reports what the provider confirmed.
+    ///
+    /// The result is not an error type on purpose: a caller publishes the
+    /// accepted change even when the replacement is unconfirmed, and only a
+    /// definite pre-commit failure may hold it back.
+    async fn persist_users(&self, users: &HashMap<String, User>) -> SnapshotPersistence {
         let Some(path) = &self.storage_path else {
-            return Ok(());
+            return SnapshotPersistence::Durable {
+                generation: MetadataGeneration::new(0),
+            };
         };
-        let content = serde_json::to_vec_pretty(users).map_err(|source| {
-            AuthServiceError::with_source(AuthOperation::EncodeMetadata, AuthFailureKind::InvalidData, source)
-        })?;
+        let content = match serde_json::to_vec_pretty(users) {
+            Ok(content) => content,
+            Err(source) => {
+                return SnapshotPersistence::NotWritten(AuthServiceError::with_source(
+                    AuthOperation::EncodeMetadata,
+                    AuthFailureKind::InvalidData,
+                    source,
+                ));
+            }
+        };
         if let Some(metadata_io) = &self.metadata_io {
-            match metadata_io
-                .submit_next_durable(
+            let persistence = match metadata_io
+                .submit_next_observed(
                     "auth.authentication-users",
                     path,
                     content,
                     MetadataDeadline::after(std::time::Duration::from_secs(5)),
                 )
                 .await
-                .map_err(AuthServiceError::metadata_io)?
             {
-                MetadataIoDurabilityOutcome::Durable(_) => Ok(()),
-                MetadataIoDurabilityOutcome::TargetConflict(_) => Err(AuthServiceError::storage_conflict()),
+                Ok(observation) => classify_snapshot_persistence(observation),
+                Err(error) => SnapshotPersistence::NotWritten(AuthServiceError::metadata_io(error)),
+            };
+            match &persistence {
+                SnapshotPersistence::Durable { generation } => self.reconciliation.release(*generation),
+                SnapshotPersistence::Unconfirmed { generation, .. } => self.reconciliation.record(*generation),
+                SnapshotPersistence::NotWritten(_) => {}
             }
-        } else {
-            write_users_snapshot(path, content).await
+            return persistence;
         }
+        match write_users_snapshot(path, content).await {
+            Ok(()) => SnapshotPersistence::Durable {
+                generation: MetadataGeneration::new(0),
+            },
+            Err(error) => SnapshotPersistence::NotWritten(error),
+        }
+    }
+
+    /// Returns whether a metadata write is still unconfirmed.
+    pub fn reconciliation_required(&self) -> bool {
+        self.reconciliation.required()
+    }
+
+    /// Returns the generation whose durability was not confirmed.
+    pub fn reconciliation_generation(&self) -> Option<MetadataGeneration> {
+        self.reconciliation.generation()
     }
 
     async fn mutate_users<F>(&self, mutation: F) -> AuthServiceResult<()>
@@ -125,10 +170,20 @@ impl LocalAuthenticationMetadataProvider {
             storage.clone()
         };
         mutation(&mut snapshot)?;
-        self.persist_users(&snapshot).await?;
+        let persistence = self.persist_users(&snapshot).await;
+        if !persistence.may_have_written() {
+            return Err(persistence
+                .into_error()
+                .expect("not-written persistence carries its error"));
+        }
+        // Published even when unconfirmed: memory must not be older than a file
+        // that may already hold the change.
         let mut storage = self.storage.write().await;
         *storage = snapshot;
-        Ok(())
+        match persistence.into_error() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 

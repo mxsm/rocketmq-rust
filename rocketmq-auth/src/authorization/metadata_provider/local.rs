@@ -30,8 +30,8 @@ use std::sync::RwLockWriteGuard;
 use std::time::Duration;
 
 use rocketmq_runtime::MetadataDeadline;
+use rocketmq_runtime::MetadataGeneration;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_runtime::MetadataIoDurabilityOutcome;
 use rocketmq_runtime::MonotonicClock;
 use rocketmq_runtime::SystemMonotonicClock;
 use rocketmq_security_api::Action;
@@ -51,6 +51,9 @@ use crate::authorization::model::policy::Policy;
 use crate::authorization::model::policy_entry::PolicyEntry;
 use crate::authorization::model::resource::Resource;
 use crate::config::AuthConfig;
+use crate::metadata_snapshot::classify_snapshot_persistence;
+use crate::metadata_snapshot::ReconciliationGeneration;
+use crate::metadata_snapshot::SnapshotPersistence;
 use crate::runtime_bridge::AuthBlockingExecutor;
 use crate::AuthFailureKind;
 use crate::AuthOperation;
@@ -117,6 +120,9 @@ pub struct LocalAuthorizationMetadataProvider {
     /// generation with `Release`; refill readers use `Acquire` before reading and while holding the
     /// cache publication lock.
     storage_generation: AtomicU64,
+
+    /// The one ACL snapshot generation whose durability was not confirmed.
+    reconciliation: ReconciliationGeneration,
 
     /// Initialization state
     initialized: Arc<RwLock<bool>>,
@@ -209,7 +215,12 @@ impl LocalAuthorizationMetadataProvider {
     pub(crate) async fn flush_shared(&self) -> AuthServiceResult<()> {
         let _writer = self.write_lock.lock().await;
         let snapshot = self.storage_read()?.clone();
-        self.persist_storage_snapshot(&snapshot).await
+        // A flush re-encodes memory that is already published, so only the
+        // reported error matters here.
+        match self.persist_storage_snapshot(&snapshot).await.into_error() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     pub(crate) async fn close_shared(&self) -> AuthServiceResult<()> {
@@ -232,6 +243,7 @@ impl LocalAuthorizationMetadataProvider {
             cache_config: CacheConfig::default(),
             clock: Arc::new(SystemMonotonicClock::new()),
             storage_generation: AtomicU64::new(0),
+            reconciliation: ReconciliationGeneration::default(),
             initialized: Arc::new(RwLock::new(false)),
             write_lock: Arc::new(tokio::sync::Mutex::new(())),
             blocking: AuthBlockingExecutor::default(),
@@ -298,40 +310,75 @@ impl LocalAuthorizationMetadataProvider {
         Ok(storage.get(subject_key).cloned())
     }
 
-    async fn persist_storage_snapshot(&self, snapshot: &HashMap<String, Acl>) -> AuthServiceResult<()> {
+    /// Writes one ACL snapshot and reports what the provider confirmed.
+    ///
+    /// The result is not an error type on purpose: a caller has to publish the
+    /// accepted change even when the replacement is unconfirmed, and only a
+    /// definite pre-commit failure may hold it back.
+    async fn persist_storage_snapshot(&self, snapshot: &HashMap<String, Acl>) -> SnapshotPersistence {
         let Some(path) = &self.storage_path else {
-            return Ok(());
+            return SnapshotPersistence::Durable {
+                generation: MetadataGeneration::new(0),
+            };
         };
-        let content = encode_acl_snapshot(snapshot)?;
+        let content = match encode_acl_snapshot(snapshot) {
+            Ok(content) => content,
+            Err(error) => return SnapshotPersistence::NotWritten(error),
+        };
         if let Some(metadata_io) = &self.metadata_io {
-            match metadata_io
-                .submit_next_durable(
+            let persistence = match metadata_io
+                .submit_next_observed(
                     "auth.authorization-acls",
                     path,
                     content,
                     MetadataDeadline::after(Duration::from_secs(5)),
                 )
                 .await
-                .map_err(AuthServiceError::metadata_io)?
             {
-                MetadataIoDurabilityOutcome::Durable(_) => return Ok(()),
-                MetadataIoDurabilityOutcome::TargetConflict(request) => {
-                    let _ = request;
-                    return Err(AuthServiceError::storage_conflict());
+                Ok(observation) => classify_snapshot_persistence(observation),
+                Err(error) => SnapshotPersistence::NotWritten(AuthServiceError::metadata_io(error)),
+            };
+            // The record is released by evidence: a later confirmed generation
+            // at least as new as the recorded one resolves it.
+            match &persistence {
+                SnapshotPersistence::Durable { generation } => {
+                    self.reconciliation.release(*generation);
                 }
+                SnapshotPersistence::Unconfirmed { generation, .. } => {
+                    self.reconciliation.record(*generation);
+                }
+                SnapshotPersistence::NotWritten(_) => {}
             }
+            return persistence;
         }
         let path = path.clone();
         let path_display = path.display().to_string();
-        self.blocking
+        match self
+            .blocking
             .spawn_io("auth.authorization.write_acl_snapshot", move || {
                 write_acl_snapshot(&path, &content)
             })
             .await
-            .map_err(|error| {
+        {
+            Ok(Ok(())) => SnapshotPersistence::Durable {
+                generation: MetadataGeneration::new(0),
+            },
+            Ok(Err(error)) => SnapshotPersistence::NotWritten(error),
+            Err(error) => {
                 let _ = path_display;
-                AuthServiceError::storage_write_failed(error)
-            })?
+                SnapshotPersistence::NotWritten(AuthServiceError::storage_write_failed(error))
+            }
+        }
+    }
+
+    /// Returns whether a metadata write is still unconfirmed.
+    pub fn reconciliation_required(&self) -> bool {
+        self.reconciliation.required()
+    }
+
+    /// Returns the generation whose durability was not confirmed.
+    pub fn reconciliation_generation(&self) -> Option<MetadataGeneration> {
+        self.reconciliation.generation()
     }
 
     fn replace_storage(&self, snapshot: HashMap<String, Acl>) -> AuthServiceResult<()> {
@@ -793,7 +840,16 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
         }
         snapshot.insert(subject_key.clone(), acl.clone());
 
-        self.persist_storage_snapshot(&snapshot).await?;
+        let persistence = self.persist_storage_snapshot(&snapshot).await;
+        if !persistence.may_have_written() {
+            return Err(persistence
+                .into_error()
+                .expect("not-written persistence carries its error"));
+        }
+        // The change is published even when the replacement is unconfirmed.
+        // Dropping it would leave memory older than a file that may already
+        // contain it, and the next mutation would write that older snapshot
+        // over the newer durable state.
         self.commit_storage_snapshot(
             snapshot,
             CacheCommit::Store {
@@ -801,9 +857,13 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
                 acl,
             },
         )?;
-
-        debug!("ACL created successfully for subject: {}", subject_key);
-        Ok(())
+        match persistence.into_error() {
+            Some(error) => Err(error),
+            None => {
+                debug!("ACL created successfully for subject: {}", subject_key);
+                Ok(())
+            }
+        }
     }
 
     async fn delete_acl<S: Subject + Send + Sync>(&self, subject: &S) -> AuthServiceResult<()> {
@@ -818,16 +878,28 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
             storage.clone()
         };
         snapshot.remove(subject_key);
-        self.persist_storage_snapshot(&snapshot).await?;
+        let persistence = self.persist_storage_snapshot(&snapshot).await;
+        if !persistence.may_have_written() {
+            return Err(persistence
+                .into_error()
+                .expect("not-written persistence carries its error"));
+        }
+        // A revocation is applied to memory even when the replacement is
+        // unconfirmed, so a deleted ACL is never silently reinstated by the
+        // next snapshot.
         self.commit_storage_snapshot(
             snapshot,
             CacheCommit::Remove {
                 subject_key: subject_key.to_string(),
             },
         )?;
-
-        debug!("ACL deleted successfully for subject: {}", subject_key);
-        Ok(())
+        match persistence.into_error() {
+            Some(error) => Err(error),
+            None => {
+                debug!("ACL deleted successfully for subject: {}", subject_key);
+                Ok(())
+            }
+        }
     }
 
     async fn update_acl(&self, acl: Acl) -> AuthServiceResult<()> {
@@ -842,7 +914,12 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
             storage.clone()
         };
         snapshot.insert(subject_key.clone(), acl.clone());
-        self.persist_storage_snapshot(&snapshot).await?;
+        let persistence = self.persist_storage_snapshot(&snapshot).await;
+        if !persistence.may_have_written() {
+            return Err(persistence
+                .into_error()
+                .expect("not-written persistence carries its error"));
+        }
         self.commit_storage_snapshot(
             snapshot,
             CacheCommit::Store {
@@ -850,9 +927,13 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
                 acl,
             },
         )?;
-
-        debug!("ACL updated successfully for subject: {}", subject_key);
-        Ok(())
+        match persistence.into_error() {
+            Some(error) => Err(error),
+            None => {
+                debug!("ACL updated successfully for subject: {}", subject_key);
+                Ok(())
+            }
+        }
     }
 
     fn get_acl<S: Subject + Send + Sync>(
@@ -1491,5 +1572,105 @@ mod tests {
         assert_eq!(error.kind(), AuthFailureKind::InvalidData);
         assert_eq!(error.operation(), AuthOperation::DecodeMetadata);
         assert!(!error.to_string().contains("acls.json"));
+    }
+
+    /// Fails after the target was replaced, which the actor reports as an
+    /// unconfirmed replacement.
+    #[derive(Debug)]
+    struct UnconfirmedReplacementFileSystem;
+
+    impl rocketmq_runtime::MetadataFileSystem for UnconfirmedReplacementFileSystem {
+        fn persist_atomic(&self, _target: &Path, _bytes: &[u8]) -> rocketmq_runtime::RuntimeResult<()> {
+            Err(rocketmq_runtime::RuntimeError::io(
+                rocketmq_runtime::MetadataIoOperation::SyncParent.runtime_operation(),
+                std::io::Error::other("injected parent directory sync failure"),
+            ))
+        }
+    }
+
+    /// Fails before the target was replaced.
+    #[derive(Debug)]
+    struct FailedBeforeCommitFileSystem;
+
+    impl rocketmq_runtime::MetadataFileSystem for FailedBeforeCommitFileSystem {
+        fn persist_atomic(&self, _target: &Path, _bytes: &[u8]) -> rocketmq_runtime::RuntimeResult<()> {
+            Err(rocketmq_runtime::RuntimeError::io(
+                rocketmq_runtime::MetadataIoOperation::WriteTemporary.runtime_operation(),
+                std::io::Error::other("injected temporary write failure"),
+            ))
+        }
+    }
+
+    fn file_system_metadata_io_actor(
+        name: &str,
+        file_system: Arc<dyn rocketmq_runtime::MetadataFileSystem>,
+    ) -> MetadataIoActor {
+        let context = rocketmq_runtime::RuntimeContext::try_from_current(name).unwrap();
+        rocketmq_runtime::MetadataIoConfig::default()
+            .into_plan()
+            .expect("default metadata I/O config is valid")
+            .start_with_file_system(&context.service_context("auth.authorization-metadata"), file_system)
+            .unwrap()
+    }
+
+    fn provider_over(
+        name: &str,
+        temp: &TempDir,
+        file_system: Arc<dyn rocketmq_runtime::MetadataFileSystem>,
+    ) -> LocalAuthorizationMetadataProvider {
+        let config = AuthConfig {
+            auth_config_path: CheetahString::from_string(temp.path().join("auth.json").to_string_lossy().into_owned()),
+            ..AuthConfig::default()
+        };
+        let mut provider =
+            LocalAuthorizationMetadataProvider::with_metadata_io(file_system_metadata_io_actor(name, file_system));
+        provider.initialize(config, None).unwrap();
+        provider
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_acl_replacement_publishes_memory_and_records_the_generation() {
+        let temp = TempDir::new().unwrap();
+        let provider = provider_over(
+            "auth-unconfirmed-acl",
+            &temp,
+            Arc::new(UnconfirmedReplacementFileSystem),
+        );
+        assert!(!provider.reconciliation_required());
+
+        let error = provider
+            .create_acl(acl_for_topic("alice", "topic-a"))
+            .await
+            .expect_err("an unconfirmed replacement reports an error");
+        assert!(!error.to_string().is_empty());
+
+        // The target may already hold the change, so memory must not be older
+        // than it. Dropping the snapshot here is what let the next mutation
+        // write the older state over the newer file.
+        assert_eq!(
+            provider.storage_read().unwrap().len(),
+            1,
+            "an unconfirmed replacement must not be rolled back in memory"
+        );
+        assert!(provider.reconciliation_required());
+        assert!(provider.reconciliation_generation().is_some());
+    }
+
+    #[tokio::test]
+    async fn failed_before_commit_acl_write_keeps_memory_and_reconciliation_clear() {
+        let temp = TempDir::new().unwrap();
+        let provider = provider_over("auth-pre-commit-acl", &temp, Arc::new(FailedBeforeCommitFileSystem));
+
+        provider
+            .create_acl(acl_for_topic("alice", "topic-a"))
+            .await
+            .expect_err("a definite pre-commit failure reports an error");
+
+        assert!(
+            provider.storage_read().unwrap().is_empty(),
+            "a change that provably never reached the file must not be published"
+        );
+        assert!(!provider.reconciliation_required());
+        assert!(provider.reconciliation_generation().is_none());
     }
 }

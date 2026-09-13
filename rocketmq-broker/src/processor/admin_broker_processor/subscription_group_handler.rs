@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::broker::metadata_reconciliation::MetadataWriteConclusion;
 use rocketmq_model::common::constant::PermName;
 use rocketmq_model::common::mix_all::is_sys_consumer_group;
 use rocketmq_protocol::code::request_code::RequestCode;
@@ -431,15 +432,22 @@ impl SubscriptionGroupHandler {
                     ),
             ));
         }
-        let persistence = runtime.subscription_group_manager().persist_supervised_snapshot().await;
-        runtime.subscription_group_manager().complete_supervised_persistence(
-            &header.group,
-            version,
-            persistence.is_ok(),
-        );
-        let (code, persistence) = if persistence.is_ok() {
+        let conclusion = match runtime.subscription_group_manager().persist_supervised_snapshot().await {
+            Ok(conclusion) => conclusion,
+            // A request that was never admitted, or that failed before the
+            // target was replaced, is a definite pre-commit failure: the file
+            // does not contain the change, so a newer snapshot may supersede it.
+            Err(error) => MetadataWriteConclusion::FailedBeforeCommit(error),
+        };
+        runtime
+            .subscription_group_manager()
+            .complete_supervised_persistence(&header.group, version, &conclusion);
+        let (code, persistence) = if conclusion.is_durable() {
             (ResponseCode::Success, MutationPersistenceState::Persisted)
         } else {
+            // An unconfirmed replacement is reported as failed to the client;
+            // the per-group marker keeps the next compare and set from
+            // building on a state whose durability is unknown.
             (ResponseCode::SystemError, MutationPersistenceState::Failed)
         };
         Ok(Some(

@@ -466,19 +466,31 @@ pub enum MetadataIoCommitAdmissionOutcome {
 ///
 /// Unlike [`MetadataIoCommitOutcome`], this models the case where the caller
 /// stopped observing before the persistence protocol reached a terminal
-/// conclusion. An [`Self::Unobserved`] generation is not evidence that the
-/// write did not happen: the admitted snapshot keeps its ordering and byte
-/// charge, so it may still become durable, fail, or end unconfirmed after the
-/// caller's deadline. Business owners must treat that generation as
-/// unconfirmed rather than as a definite failure.
+/// conclusion. An unobserved generation is not evidence that the write did not
+/// happen: the admitted snapshot keeps its ordering and byte charge, so it may
+/// still become durable, fail, or end unconfirmed after the caller's deadline.
+/// Business owners must treat that generation as unconfirmed rather than as a
+/// definite failure.
+///
+/// Every conclusion except a target conflict carries the observed generation,
+/// so a caller can record the change identity and later resolve it against
+/// [`MetadataIoActor::confirmed_durable_generation`].
 #[derive(Debug)]
 pub enum MetadataIoCommitObservation {
     /// The persistence protocol reached a terminal conclusion within the
     /// caller's deadline.
-    Settled(MetadataIoCommitOutcome),
-    /// The caller stopped observing first. The returned generation identifies
-    /// the change whose durability was not confirmed.
-    Unobserved(MetadataGeneration),
+    Settled {
+        /// The generation the caller observed.
+        generation: MetadataGeneration,
+        /// The conclusion the actor delivered.
+        outcome: MetadataIoCommitOutcome,
+    },
+    /// The caller stopped observing first. The generation identifies the
+    /// change whose durability was not confirmed.
+    Unobserved {
+        /// The generation whose durability was not confirmed.
+        generation: MetadataGeneration,
+    },
     /// The request was not admitted because the resource is bound to a
     /// different process-local target.
     TargetConflict(MetadataWriteRequest),
@@ -493,11 +505,11 @@ impl MetadataIoCommitObservation {
     #[must_use]
     pub fn requires_reconciliation(&self) -> bool {
         match self {
-            MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::Durable(_))
-            | MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::FailedBeforeCommit(_))
-            | MetadataIoCommitObservation::TargetConflict(_) => false,
-            MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::CommitOutcomeUnknown(_))
-            | MetadataIoCommitObservation::Unobserved(_) => true,
+            MetadataIoCommitObservation::Settled { outcome, .. } => {
+                matches!(outcome, MetadataIoCommitOutcome::CommitOutcomeUnknown(_))
+            }
+            MetadataIoCommitObservation::Unobserved { .. } => true,
+            MetadataIoCommitObservation::TargetConflict(_) => false,
         }
     }
 
@@ -505,8 +517,18 @@ impl MetadataIoCommitObservation {
     #[must_use]
     pub fn settled(self) -> Option<MetadataIoCommitOutcome> {
         match self {
-            MetadataIoCommitObservation::Settled(outcome) => Some(outcome),
-            MetadataIoCommitObservation::Unobserved(_) | MetadataIoCommitObservation::TargetConflict(_) => None,
+            MetadataIoCommitObservation::Settled { outcome, .. } => Some(outcome),
+            MetadataIoCommitObservation::Unobserved { .. } | MetadataIoCommitObservation::TargetConflict(_) => None,
+        }
+    }
+
+    /// Returns the observed generation, or `None` for a target conflict.
+    #[must_use]
+    pub const fn generation(&self) -> Option<MetadataGeneration> {
+        match self {
+            MetadataIoCommitObservation::Settled { generation, .. }
+            | MetadataIoCommitObservation::Unobserved { generation } => Some(*generation),
+            MetadataIoCommitObservation::TargetConflict(_) => None,
         }
     }
 
@@ -514,8 +536,8 @@ impl MetadataIoCommitObservation {
     #[must_use]
     pub const fn unobserved_generation(&self) -> Option<MetadataGeneration> {
         match self {
-            MetadataIoCommitObservation::Unobserved(generation) => Some(*generation),
-            MetadataIoCommitObservation::Settled(_) | MetadataIoCommitObservation::TargetConflict(_) => None,
+            MetadataIoCommitObservation::Unobserved { generation } => Some(*generation),
+            MetadataIoCommitObservation::Settled { .. } | MetadataIoCommitObservation::TargetConflict(_) => None,
         }
     }
 }
@@ -582,18 +604,19 @@ impl MetadataIoReceipt {
     pub async fn observe_until(self, deadline: MetadataDeadline) -> MetadataIoCommitObservation {
         let generation = self.generation;
         match self.conclude(deadline).await {
-            ReceiptConclusion::Delivered(Ok(outcome)) => MetadataIoCommitObservation::Settled(outcome),
+            ReceiptConclusion::Delivered(Ok(outcome)) => MetadataIoCommitObservation::Settled { generation, outcome },
             // The actor delivered the worker-stopped error, which it only
             // produces for a generation that never ran. That is a definite
             // pre-commit failure rather than an unconfirmed replacement.
-            ReceiptConclusion::Delivered(Err(error)) => {
-                MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::FailedBeforeCommit(error))
-            }
+            ReceiptConclusion::Delivered(Err(error)) => MetadataIoCommitObservation::Settled {
+                generation,
+                outcome: MetadataIoCommitOutcome::FailedBeforeCommit(error),
+            },
             // A stopped coordinator and an elapsed deadline are both
             // "no conclusion observed": a submitted closure may still be
             // running, and the target may still change.
             ReceiptConclusion::CoordinatorStopped | ReceiptConclusion::Expired => {
-                MetadataIoCommitObservation::Unobserved(generation)
+                MetadataIoCommitObservation::Unobserved { generation }
             }
         }
     }
@@ -1609,8 +1632,14 @@ mod tests {
         };
 
         let confirmed = [
-            MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::Durable(MetadataGeneration::new(7))),
-            MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::FailedBeforeCommit(step_error())),
+            MetadataIoCommitObservation::Settled {
+                generation: MetadataGeneration::new(7),
+                outcome: MetadataIoCommitOutcome::Durable(MetadataGeneration::new(7)),
+            },
+            MetadataIoCommitObservation::Settled {
+                generation: MetadataGeneration::new(7),
+                outcome: MetadataIoCommitOutcome::FailedBeforeCommit(step_error()),
+            },
         ];
         for observation in confirmed {
             assert!(
@@ -1618,16 +1647,23 @@ mod tests {
                 "a settled conclusion cannot require reconciliation"
             );
             assert_eq!(observation.unobserved_generation(), None);
+            assert_eq!(observation.generation(), Some(MetadataGeneration::new(7)));
         }
 
-        let unconfirmed =
-            MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::CommitOutcomeUnknown(step_error()));
+        let unconfirmed = MetadataIoCommitObservation::Settled {
+            generation: MetadataGeneration::new(7),
+            outcome: MetadataIoCommitOutcome::CommitOutcomeUnknown(step_error()),
+        };
         assert!(unconfirmed.requires_reconciliation());
+        assert_eq!(unconfirmed.generation(), Some(MetadataGeneration::new(7)));
         assert!(unconfirmed.settled().is_some());
 
-        let unobserved = MetadataIoCommitObservation::Unobserved(MetadataGeneration::new(9));
+        let unobserved = MetadataIoCommitObservation::Unobserved {
+            generation: MetadataGeneration::new(9),
+        };
         assert!(unobserved.requires_reconciliation());
         assert_eq!(unobserved.unobserved_generation(), Some(MetadataGeneration::new(9)));
+        assert_eq!(unobserved.generation(), Some(MetadataGeneration::new(9)));
         assert!(unobserved.settled().is_none());
     }
 
@@ -1641,6 +1677,7 @@ mod tests {
         ));
         assert!(!conflict.requires_reconciliation());
         assert_eq!(conflict.unobserved_generation(), None);
+        assert_eq!(conflict.generation(), None);
         assert!(conflict.settled().is_none());
     }
 }

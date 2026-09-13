@@ -237,12 +237,23 @@ impl SubscriptionGroupManager {
     }
 
     /// Persists a supervised mutation durably so its wire outcome can report applied truth.
-    pub(crate) async fn persist_supervised_snapshot(&self) -> crate::broker_error::BrokerResult<()> {
+    ///
+    /// The caller receives the real conclusion, because a supervised compare
+    /// and set has to keep its per-key marker when the replacement is
+    /// unconfirmed. The legacy `persist` path reports the same conclusion
+    /// shape so both paths agree.
+    pub(crate) async fn persist_supervised_snapshot(
+        &self,
+    ) -> crate::broker_error::BrokerResult<crate::broker::metadata_reconciliation::MetadataWriteConclusion> {
+        // The blocking paths complete before they return, so they are
+        // persisted; they carry no generation identity.
         let Some(metadata_io) = self.metadata_io.as_ref() else {
-            return self.persist();
+            self.persist()?;
+            return Ok(crate::broker::metadata_reconciliation::MetadataWriteConclusion::BlockingPersisted);
         };
         if !self.supports_metadata_io_actor() {
-            return self.persist();
+            self.persist()?;
+            return Ok(crate::broker::metadata_reconciliation::MetadataWriteConclusion::BlockingPersisted);
         }
         let content = self.encode_pretty(true);
         if content.is_empty() {
@@ -251,16 +262,16 @@ impl SubscriptionGroupManager {
                 "encoded supervised snapshot is empty",
             ));
         }
-        metadata_io
-            .submit_next_durable(
+        let observation = metadata_io
+            .submit_next_observed(
                 "broker.subscription-group",
                 self.config_file_path(),
                 content.into_bytes(),
                 MetadataDeadline::after(Duration::from_secs(5)),
             )
             .await
-            .map_err(crate::runtime_to_rocketmq_error)
-            .and_then(crate::require_metadata_durability)
+            .map_err(crate::runtime_to_rocketmq_error)?;
+        crate::require_metadata_conclusion("broker.subscription-group", observation)
     }
 
     #[cfg(feature = "rocksdb_store")]
@@ -1009,8 +1020,19 @@ impl SubscriptionGroupManager {
         Ok(SubscriptionGroupConfigCasOutcome::Applied(update))
     }
 
-    pub(crate) fn complete_supervised_persistence(&self, group: &CheetahString, version: u64, persisted: bool) {
-        if !persisted {
+    /// Releases the per-group marker only for a conclusion known to be durable.
+    ///
+    /// A supervised compare and set must not build a newer state on one whose
+    /// durability is unknown, so every other conclusion keeps the marker. That
+    /// includes an unconfirmed replacement, which the caller now receives as
+    /// such instead of as an undifferentiated failure.
+    pub(crate) fn complete_supervised_persistence(
+        &self,
+        group: &CheetahString,
+        version: u64,
+        conclusion: &crate::broker::metadata_reconciliation::MetadataWriteConclusion,
+    ) {
+        if conclusion.retains_dirty_marker() {
             return;
         }
         if self
@@ -1681,6 +1703,14 @@ impl SubscriptionGroupWrapperInner {
 mod tests {
     use super::*;
 
+    fn persisted_conclusion() -> crate::broker::metadata_reconciliation::MetadataWriteConclusion {
+        crate::broker::metadata_reconciliation::MetadataWriteConclusion::BlockingPersisted
+    }
+
+    fn unconfirmed_conclusion() -> crate::broker::metadata_reconciliation::MetadataWriteConclusion {
+        crate::broker::metadata_reconciliation::MetadataWriteConclusion::unconfirmed_for_test()
+    }
+
     fn expect_applied(outcome: SubscriptionGroupConfigCasOutcome) -> SubscriptionGroupConfigUpdate {
         match outcome {
             SubscriptionGroupConfigCasOutcome::Applied(update) => update,
@@ -2102,7 +2132,7 @@ mod tests {
                 actual_version: Some(actual_version),
             } if actual_version == version
         ));
-        manager.complete_supervised_persistence(&group, version, true);
+        manager.complete_supervised_persistence(&group, version, &persisted_conclusion());
 
         let mut replacement = SubscriptionGroupConfig::new(group.clone());
         replacement.set_consume_enable(false);
@@ -2115,7 +2145,7 @@ mod tests {
         assert!(!updated.config.consume_enable());
         assert_eq!(updated.config.retry_queue_nums(), 4);
         assert!(updated.changed);
-        manager.complete_supervised_persistence(&group, version + 1, true);
+        manager.complete_supervised_persistence(&group, version + 1, &persisted_conclusion());
         assert_eq!(
             updated
                 .config
@@ -2177,7 +2207,7 @@ mod tests {
                 .expect("create"),
         );
         let version = u64::try_from(created.data_version.counter()).expect("version");
-        manager.complete_supervised_persistence(&group, version, false);
+        manager.complete_supervised_persistence(&group, version, &unconfirmed_conclusion());
         assert_eq!(manager.supervised_dirty_version(&group), Some(version));
         let mut different = created.config.as_ref().clone();
         different.set_consume_enable(false);

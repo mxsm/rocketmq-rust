@@ -520,21 +520,30 @@ async fn process_batch(
             .submit_next_observed(KV_RESOURCE, target, bytes, deadline)
             .await
         {
-            Ok(MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::Durable(_))) => {}
-            Ok(MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::FailedBeforeCommit(error))) => {
+            Ok(MetadataIoCommitObservation::Settled {
+                outcome: MetadataIoCommitOutcome::Durable(_),
+                ..
+            }) => {}
+            Ok(MetadataIoCommitObservation::Settled {
+                outcome: MetadataIoCommitOutcome::FailedBeforeCommit(error),
+                ..
+            }) => {
                 metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
                 finish_batch_with_error(inner, batch, KvCommitError::Metadata(error));
                 record_kv_snapshot(metrics, inner);
                 return;
             }
-            Ok(MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::CommitOutcomeUnknown(error))) => {
+            Ok(MetadataIoCommitObservation::Settled {
+                outcome: MetadataIoCommitOutcome::CommitOutcomeUnknown(error),
+                ..
+            }) => {
                 inner.reconciliation_required.store(true, Ordering::Release);
                 metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
                 finish_batch_with_error(inner, batch, KvCommitError::CommitOutcomeUnknown(error));
                 record_kv_snapshot(metrics, inner);
                 return;
             }
-            Ok(MetadataIoCommitObservation::Unobserved(_generation)) => {
+            Ok(MetadataIoCommitObservation::Unobserved { .. }) => {
                 // The batch stopped being observed but may still reach the
                 // durable file, so the in-memory table keeps the previous
                 // value and the sticky gate stays closed. Reporting it as an
