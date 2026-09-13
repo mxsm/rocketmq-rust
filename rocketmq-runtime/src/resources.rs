@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metadata_target::MetadataTargetRegistry;
 use crate::resource_budget::BudgetLimit;
 use crate::resource_budget::FullPolicy;
 use crate::resource_budget::ProcessMemoryLimit;
@@ -27,6 +28,7 @@ use crate::resource_budget::ResourceBudgetTree;
 pub struct RuntimeResources {
     memory_limit: ProcessMemoryLimit,
     process_budget: ResourceBudget,
+    metadata_targets: MetadataTargetRegistry,
 }
 
 impl RuntimeResources {
@@ -41,6 +43,7 @@ impl RuntimeResources {
         Self {
             memory_limit,
             process_budget,
+            metadata_targets: MetadataTargetRegistry::new(),
         }
     }
 
@@ -54,5 +57,9 @@ impl RuntimeResources {
     #[must_use]
     pub fn process_budget(&self) -> ResourceBudget {
         self.process_budget.clone()
+    }
+
+    pub(crate) fn metadata_targets(&self) -> MetadataTargetRegistry {
+        self.metadata_targets.clone()
     }
 }

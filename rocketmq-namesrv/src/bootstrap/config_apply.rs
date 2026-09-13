@@ -19,7 +19,8 @@ use std::time::Duration;
 use crate::NameServerResult;
 use cheetah_string::CheetahString;
 use rocketmq_runtime::MetadataDeadline;
-use rocketmq_runtime::MetadataIoDurabilityOutcome;
+use rocketmq_runtime::MetadataIoCommitAdmissionOutcome;
+use rocketmq_runtime::MetadataIoCommitOutcome;
 use rocketmq_runtime::MetadataWriteRequest;
 
 use crate::config::is_tls_config_key;
@@ -49,6 +50,7 @@ pub(super) struct ConfigGenerationState {
     desired_generation: u64,
     durable_generation: u64,
     effective_generation: u64,
+    reconciliation_required: bool,
 }
 
 impl ConfigGenerationState {
@@ -58,6 +60,7 @@ impl ConfigGenerationState {
             desired_generation: 0,
             durable_generation: 0,
             effective_generation: 0,
+            reconciliation_required: false,
         }
     }
 }
@@ -68,14 +71,20 @@ pub(crate) async fn apply_runtime_updates(
 ) -> NameServerResult<ConfigApplyOutcome> {
     let _transaction_guard = runtime.config_transaction_lock.lock().await;
     let classified = classify_runtime_updates(updates)?;
-    let (current_desired, previous_generation, previous_effective_generation) = {
+    let (current_desired, previous_generation, previous_effective_generation, reconciliation_required) = {
         let generations = runtime.config_generations.read();
         (
             Arc::clone(&generations.desired),
             generations.desired_generation,
             generations.effective_generation,
+            generations.reconciliation_required,
         )
     };
+    if reconciliation_required {
+        return Err(crate::namesrv_error::storage_write(std::io::Error::other(
+            "NameServer configuration commit requires reconciliation",
+        )));
+    }
 
     let desired = apply_to_snapshot(&current_desired, &classified, false)?;
     let effective = apply_to_snapshot(&runtime.config_snapshot(), &classified, true)?;
@@ -97,15 +106,22 @@ pub(crate) async fn apply_runtime_updates(
         .map_err(|error| crate::namesrv_error::storage_write(error.clone()))?;
     let deadline = MetadataDeadline::after(CONFIG_PERSIST_TIMEOUT);
     let durable_generation = match actor
-        .submit_durable(
+        .submit_commit(
             MetadataWriteRequest::new(CONFIG_RESOURCE, desired_generation, &target, desired_bytes),
             deadline,
         )
         .await
         .map_err(crate::namesrv_error::storage_write)?
     {
-        MetadataIoDurabilityOutcome::Durable(generation) => generation.get(),
-        MetadataIoDurabilityOutcome::TargetConflict(_request) => {
+        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::Durable(generation)) => generation.get(),
+        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::FailedBeforeCommit(error)) => {
+            return Err(crate::namesrv_error::storage_write(error));
+        }
+        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::CommitOutcomeUnknown(error)) => {
+            runtime.config_generations.write().reconciliation_required = true;
+            return Err(crate::namesrv_error::storage_write(error));
+        }
+        MetadataIoCommitAdmissionOutcome::TargetConflict(_request) => {
             return Err(crate::namesrv_error::storage_write(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 "metadata resource target conflict",

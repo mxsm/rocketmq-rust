@@ -37,7 +37,10 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_runtime::MetadataIoDurabilityOutcome;
+use rocketmq_runtime::MetadataIoCommitAdmissionOutcome;
+use rocketmq_runtime::MetadataIoCommitOutcome;
+#[cfg(test)]
+use rocketmq_runtime::MetadataIoOperation;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeOperation;
 use rocketmq_runtime::RuntimeResult;
@@ -118,6 +121,7 @@ pub(crate) struct KvCommitReceipt {
 #[derive(Clone, Debug)]
 enum KvCommitError {
     Metadata(RuntimeError),
+    CommitOutcomeUnknown(RuntimeError),
     MetadataTargetConflict,
     Serialization(SharedError),
     WorkerStopped,
@@ -127,6 +131,7 @@ impl KvCommitError {
     fn into_error(self) -> SharedError {
         match self {
             Self::Metadata(error) => crate::runtime_error(error),
+            Self::CommitOutcomeUnknown(error) => crate::runtime_error(error),
             Self::MetadataTargetConflict => crate::namesrv_error::storage_write(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 "metadata resource target conflict",
@@ -180,6 +185,7 @@ pub(crate) struct KvMutationSnapshot {
     pub(crate) applied_generation: u64,
     pub(crate) persist_count: u64,
     pub(crate) worker_finished: bool,
+    pub(crate) reconciliation_required: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -207,6 +213,7 @@ struct MutationServiceInner {
     applied_generation: AtomicU64,
     persist_count: AtomicU64,
     worker_finished: AtomicBool,
+    reconciliation_required: AtomicBool,
     max_pending_bytes: usize,
     shutdown: CancellationToken,
     finished: Notify,
@@ -240,6 +247,7 @@ impl KvMutationService {
             applied_generation: AtomicU64::new(0),
             persist_count: AtomicU64::new(0),
             worker_finished: AtomicBool::new(false),
+            reconciliation_required: AtomicBool::new(false),
             max_pending_bytes,
             shutdown: CancellationToken::new(),
             finished: Notify::new(),
@@ -281,6 +289,11 @@ impl KvMutationService {
             self.metrics.record_kv_event(NameServerKvEvent::Closed);
             return Err(crate::runtime_error(RuntimeError::context_unavailable(
                 RuntimeOperation::KvMutationWorker,
+            )));
+        }
+        if self.inner.reconciliation_required.load(Ordering::Acquire) {
+            return Err(crate::namesrv_error::storage_write(std::io::Error::other(
+                "NameServer KV metadata commit requires reconciliation",
             )));
         }
 
@@ -362,6 +375,7 @@ impl KvMutationService {
             applied_generation: self.inner.applied_generation.load(Ordering::Acquire),
             persist_count: self.inner.persist_count.load(Ordering::Relaxed),
             worker_finished: self.inner.worker_finished.load(Ordering::Acquire),
+            reconciliation_required: self.inner.reconciliation_required.load(Ordering::Acquire),
         }
     }
 }
@@ -503,11 +517,24 @@ async fn process_batch(
             }
         };
         match metadata_io
-            .submit_next_durable(KV_RESOURCE, target, bytes, deadline)
+            .submit_next_commit(KV_RESOURCE, target, bytes, deadline)
             .await
         {
-            Ok(MetadataIoDurabilityOutcome::Durable(_)) => {}
-            Ok(MetadataIoDurabilityOutcome::TargetConflict(_request)) => {
+            Ok(MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::Durable(_))) => {}
+            Ok(MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::FailedBeforeCommit(error))) => {
+                metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
+                finish_batch_with_error(inner, batch, KvCommitError::Metadata(error));
+                record_kv_snapshot(metrics, inner);
+                return;
+            }
+            Ok(MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::CommitOutcomeUnknown(error))) => {
+                inner.reconciliation_required.store(true, Ordering::Release);
+                metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
+                finish_batch_with_error(inner, batch, KvCommitError::CommitOutcomeUnknown(error));
+                record_kv_snapshot(metrics, inner);
+                return;
+            }
+            Ok(MetadataIoCommitAdmissionOutcome::TargetConflict(_request)) => {
                 metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
                 finish_batch_with_error(inner, batch, KvCommitError::MetadataTargetConflict);
                 record_kv_snapshot(metrics, inner);
@@ -667,6 +694,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct RecordingFileSystem {
         fail: AtomicBool,
+        failure_operation: Mutex<Option<MetadataIoOperation>>,
         writes: AtomicUsize,
         last_bytes: Mutex<Vec<u8>>,
     }
@@ -675,7 +703,14 @@ mod tests {
         fn persist_atomic(&self, _target: &std::path::Path, bytes: &[u8]) -> rocketmq_runtime::RuntimeResult<()> {
             self.writes.fetch_add(1, Ordering::Relaxed);
             if self.fail.load(Ordering::Acquire) {
-                return Err(RuntimeError::internal_failure(RuntimeOperation::KvPersistenceFault));
+                let operation = *self.failure_operation.lock();
+                return match operation {
+                    Some(operation) => Err(RuntimeError::io(
+                        operation.runtime_operation(),
+                        std::io::Error::other("injected KV persistence failure"),
+                    )),
+                    None => Err(RuntimeError::internal_failure(RuntimeOperation::KvPersistenceFault)),
+                };
             }
             *self.last_bytes.lock() = bytes.to_vec();
             Ok(())
@@ -741,7 +776,7 @@ mod tests {
             .await
             .expect_err("injected persistence failure should reach the caller");
 
-        assert!(error.to_string().contains("injected KV persistence failure"));
+        assert_eq!(error.condition(), rocketmq_error::CanonicalCondition::Internal);
         assert_eq!(
             table.get("ns").and_then(|values| values.get("key").cloned()).as_deref(),
             Some("old")
@@ -750,6 +785,34 @@ mod tests {
         assert_eq!(snapshot.desired_generation, 1);
         assert_eq!(snapshot.durable_generation, 0);
         assert_eq!(snapshot.applied_generation, 0);
+        let _ = service.shutdown_until(deadline).await;
+        let _ = actor.shutdown_until(deadline).await;
+    }
+
+    #[tokio::test]
+    async fn unknown_commit_outcome_blocks_further_kv_mutations() {
+        let table = Arc::new(ConfigTable::new());
+        let file_system = Arc::new(RecordingFileSystem::default());
+        file_system.fail.store(true, Ordering::Release);
+        *file_system.failure_operation.lock() = Some(MetadataIoOperation::SyncParent);
+        let (_context, actor, service, _root) =
+            start_service("kv-reconciliation-test", file_system, Arc::clone(&table), 8, 8);
+        let deadline = MetadataDeadline::after(Duration::from_secs(5));
+
+        let error = service
+            .submit(put("ns", "key", "new"), deadline)
+            .unwrap()
+            .wait_until(deadline)
+            .await
+            .unwrap_err();
+        assert!(!error.to_string().is_empty());
+        assert!(service.snapshot().reconciliation_required);
+
+        let blocked = service
+            .submit(put("ns", "key", "newer"), deadline)
+            .expect_err("reconciliation-required state must reject new mutations");
+        assert!(!blocked.to_string().is_empty());
+        assert!(table.get("ns").is_none());
         let _ = service.shutdown_until(deadline).await;
         let _ = actor.shutdown_until(deadline).await;
     }
@@ -821,7 +884,7 @@ mod tests {
         let full = service
             .submit(put("ns", "two", "value"), deadline)
             .expect_err("a full command queue should fail immediately");
-        assert!(full.to_string().contains("queue is full"));
+        assert_eq!(full.condition(), rocketmq_error::CanonicalCondition::ResourceExhausted);
 
         accepted.wait_until(deadline).await.unwrap();
         let _ = service.shutdown_until(deadline).await;
