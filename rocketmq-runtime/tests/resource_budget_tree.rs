@@ -23,6 +23,8 @@ use rocketmq_runtime::BudgetClass;
 use rocketmq_runtime::BudgetDimension;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::BudgetedQueue;
+use rocketmq_runtime::DynamicKeyAdmissionRejection;
+use rocketmq_runtime::DynamicKeyRegistrationFailure;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::MonotonicClock;
 use rocketmq_runtime::PermitRebindOutcome;
@@ -769,4 +771,228 @@ async fn cancelled_waiter_and_panicking_owner_restore_metrics_and_permits() {
     assert_eq!(budget.snapshot().current_count, 0);
     assert_eq!(budget.snapshot().current_bytes, 0);
     assert_eq!(budget.snapshot().admitted_count, budget.snapshot().released_count);
+}
+
+#[tokio::test]
+async fn retiring_a_dynamic_key_waits_for_the_real_reservation() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 64, FullPolicy::Reject)).expect("root budget");
+    let key = tree
+        .root()
+        .register_dynamic_child("ordering-key", limit(2, 32, FullPolicy::Reject))
+        .expect("dynamic key");
+    let permit = key.try_acquire(8, BudgetClass::Data).expect("key permit");
+    let budget = key.budget();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let key_clone = key.clone();
+    let retirement = tokio::spawn(async move { key_clone.retire_until(deadline).await });
+    // Let the retirement observe the live reservation and park on the release
+    // notification instead of racing the drop below.
+    tokio::task::yield_now().await;
+    assert!(
+        !retirement.is_finished(),
+        "a closed handle is not proof that the work stopped, so retirement must still be waiting"
+    );
+
+    drop(permit);
+    let outcome = retirement.await.expect("retirement task");
+    assert!(
+        outcome.released,
+        "retirement must be woken by the real release instead of assuming the closed handle stopped the work"
+    );
+    assert_eq!(outcome.outstanding_reservations, 0);
+    assert_eq!(budget.snapshot().current_count, 0);
+    assert!(key.is_closed());
+}
+
+#[tokio::test]
+async fn a_retired_key_reports_outstanding_work_and_keeps_its_name_reserved() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 64, FullPolicy::Reject)).expect("root budget");
+    let key = tree
+        .root()
+        .register_dynamic_child("ordering-key", limit(2, 32, FullPolicy::Reject))
+        .expect("dynamic key");
+    let permit = key.try_acquire(8, BudgetClass::Data).expect("key permit");
+
+    // An elapsed deadline reports the real remaining work instead of releasing
+    // the registration.
+    let outstanding = key.retire_until(tokio::time::Instant::now()).await;
+    assert!(!outstanding.released);
+    assert_eq!(outstanding.outstanding_reservations, 1);
+    assert_eq!(outstanding.outstanding_bytes, 8);
+
+    // The name stays reserved, so the next generation cannot run beside the one
+    // it would replace.
+    assert!(matches!(
+        tree.root()
+            .register_dynamic_child("ordering-key", limit(2, 32, FullPolicy::Reject)),
+        Err(DynamicKeyRegistrationFailure::NameInUse { .. })
+    ));
+
+    drop(permit);
+    let retired = key.retire_until(tokio::time::Instant::now()).await;
+    assert!(retired.released);
+    assert_eq!(retired.outstanding_reservations, 0);
+
+    // The name is free again, and the replacement is a new identity.
+    let replacement = tree
+        .root()
+        .register_dynamic_child("ordering-key", limit(2, 32, FullPolicy::Reject))
+        .expect("the released name should be reusable");
+    assert_ne!(replacement.generation(), key.generation());
+}
+
+#[tokio::test]
+async fn a_closed_dynamic_key_refuses_new_admissions() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 64, FullPolicy::Reject)).expect("root budget");
+    let key = tree
+        .root()
+        .register_dynamic_child("ordering-key", limit(2, 32, FullPolicy::Reject))
+        .expect("dynamic key");
+    assert!(!key.is_closed());
+    assert!(key.try_acquire(8, BudgetClass::Data).is_ok());
+
+    key.close();
+    assert!(key.is_closed());
+    assert!(matches!(
+        key.try_acquire(8, BudgetClass::Data),
+        Err(DynamicKeyAdmissionRejection::Closed)
+    ));
+}
+
+#[tokio::test]
+async fn the_dynamic_key_registry_is_bounded() {
+    let tree = ResourceBudgetTree::with_clock_and_key_capacity(
+        "process",
+        limit(4, 64, FullPolicy::Reject),
+        Arc::new(ManualClock::default()),
+        1,
+    )
+    .expect("root budget");
+    let first = tree
+        .root()
+        .register_dynamic_child("first", limit(1, 16, FullPolicy::Reject))
+        .expect("first key");
+
+    assert!(matches!(
+        tree.root()
+            .register_dynamic_child("second", limit(1, 16, FullPolicy::Reject)),
+        Err(DynamicKeyRegistrationFailure::CapacityExhausted { max_entries: 1 })
+    ));
+
+    // Retiring the first key releases its slot instead of leaving an
+    // unreachable registration behind.
+    assert!(first.retire_until(tokio::time::Instant::now()).await.released);
+    assert!(tree
+        .root()
+        .register_dynamic_child("second", limit(1, 16, FullPolicy::Reject))
+        .is_ok());
+}
+
+#[test]
+fn budgeted_push_charges_the_shared_ancestor_exactly_once() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 64, FullPolicy::Reject)).expect("root budget");
+    let component = tree
+        .root()
+        .child("component", limit(4, 32, FullPolicy::Reject))
+        .expect("component budget");
+    let queue = BudgetedQueue::new(component.clone());
+
+    // The caller admits the payload at its own boundary before the item exists
+    // in the queue.
+    let permit = component.try_acquire_data(12).expect("ingress permit");
+    queue
+        .try_push_budgeted("payload", permit)
+        .expect("same-tree push should not report a foreign permit");
+
+    assert_eq!(tree.root().snapshot().current_bytes, 12);
+    assert_eq!(component.snapshot().current_bytes, 12);
+    assert_eq!(queue.snapshot().retained_bytes, 12);
+
+    // The pop path carries the same charge, so consuming the item releases it
+    // once rather than twice.
+    let owned = queue.try_pop_budgeted().expect("owned item");
+    assert_eq!(owned.retained_bytes(), 12);
+    assert_eq!(tree.root().snapshot().current_bytes, 12);
+    drop(owned);
+    assert_eq!(tree.root().snapshot().current_bytes, 0);
+    assert_eq!(component.snapshot().current_bytes, 0);
+}
+
+#[test]
+fn budgeted_push_rebinds_a_permit_acquired_from_an_ancestor() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 64, FullPolicy::Reject)).expect("root budget");
+    let component = tree
+        .root()
+        .child("component", limit(4, 32, FullPolicy::Reject))
+        .expect("component budget");
+    let queue = BudgetedQueue::new(component.clone());
+
+    let permit = tree.root().try_acquire_data(9).expect("ancestor permit");
+    queue
+        .try_push_budgeted("payload", permit)
+        .expect("an ancestor permit belongs to the same tree");
+
+    // The reservation now covers the component as well, and the shared root is
+    // still charged once.
+    assert_eq!(tree.root().snapshot().current_bytes, 9);
+    assert_eq!(component.snapshot().current_bytes, 9);
+
+    drop(queue.try_pop_budgeted().expect("owned item"));
+    assert_eq!(tree.root().snapshot().current_bytes, 0);
+    assert_eq!(component.snapshot().current_bytes, 0);
+}
+
+#[test]
+fn budgeted_push_returns_a_foreign_permit_unchanged() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 64, FullPolicy::Reject)).expect("root budget");
+    let component = tree
+        .root()
+        .child("component", limit(4, 32, FullPolicy::Reject))
+        .expect("component budget");
+    let queue = BudgetedQueue::new(component);
+
+    let other = ResourceBudgetTree::new("other", limit(4, 64, FullPolicy::Reject)).expect("other budget");
+    let foreign = other.root().try_acquire_data(7).expect("foreign permit");
+
+    let returned = queue
+        .try_push_budgeted("payload", foreign)
+        .expect_err("a permit from another tree must be reported");
+    assert_eq!(returned.item, "payload");
+    // The caller still owns the charge, so refusing the push must not release it.
+    assert_eq!(returned.permit.bytes(), 7);
+    assert_eq!(other.root().snapshot().current_bytes, 7);
+    assert!(queue.is_empty());
+
+    drop(returned);
+    assert_eq!(other.root().snapshot().current_bytes, 0);
+}
+
+#[test]
+fn budgeted_push_reports_a_rejection_without_retaining_a_charge() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 64, FullPolicy::Reject)).expect("root budget");
+    let component = tree
+        .root()
+        .child("component", limit(1, 8, FullPolicy::Reject))
+        .expect("component budget");
+    let queue = BudgetedQueue::new(component.clone());
+
+    // The component's only byte of capacity is already committed, so the
+    // rebind to the queue's own budget has nothing left to move into.
+    let held = component.try_acquire_data(8).expect("hold component capacity");
+    let permit = tree.root().try_acquire_data(4).expect("ancestor permit");
+
+    let (item, rejection) = rejected(
+        queue
+            .try_push_budgeted("payload", permit)
+            .expect("the permit belongs to this tree"),
+    );
+    assert_eq!(item, "payload");
+    assert!(matches!(rejection, QueuePushRejection::BudgetExhausted(_)));
+    assert!(queue.is_empty());
+    // The rejected push released its transferred charge, so only the held
+    // reservation remains.
+    assert_eq!(tree.root().snapshot().current_bytes, 8);
+    drop(held);
+    assert_eq!(tree.root().snapshot().current_bytes, 0);
 }

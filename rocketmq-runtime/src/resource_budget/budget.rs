@@ -22,6 +22,9 @@ use tokio::sync::Notify;
 
 use super::clock::MonotonicClock;
 use super::clock::SystemMonotonicClock;
+use super::dynamic::DynamicBudgetKey;
+use super::dynamic::DynamicKeyRegistrationFailure;
+use super::dynamic::DynamicKeyRegistry;
 use super::limit::BudgetClass;
 use super::limit::BudgetDimension;
 use super::limit::BudgetLimit;
@@ -144,8 +147,27 @@ impl ResourceBudgetTree {
                 node: Arc::clone(&node),
                 chain: Arc::from([node]),
                 capacity_notify,
+                keys: DynamicKeyRegistry::new(),
             },
         })
+    }
+
+    /// Creates a tree whose dynamic key registry holds at most `max_entries`
+    /// names.
+    ///
+    /// # Errors
+    ///
+    /// Returns a contract violation when the root name is blank or malformed,
+    /// or when its budget limit is invalid.
+    pub fn with_clock_and_key_capacity(
+        name: impl Into<String>,
+        limit: BudgetLimit,
+        clock: Arc<dyn MonotonicClock>,
+        max_entries: usize,
+    ) -> Result<Self, crate::RuntimeContractViolation> {
+        let mut tree = Self::with_clock(name, limit, clock)?;
+        tree.root.keys = DynamicKeyRegistry::with_max_entries(max_entries);
+        Ok(tree)
     }
 
     #[must_use]
@@ -161,6 +183,7 @@ pub struct ResourceBudget {
     node: Arc<BudgetNode>,
     chain: Arc<[Arc<BudgetNode>]>,
     capacity_notify: Arc<Notify>,
+    keys: DynamicKeyRegistry,
 }
 
 impl fmt::Debug for ResourceBudget {
@@ -192,7 +215,35 @@ impl ResourceBudget {
             node,
             chain: Arc::from(chain),
             capacity_notify: Arc::clone(&self.capacity_notify),
+            keys: self.keys.clone(),
         })
+    }
+
+    /// Registers a bounded dynamic child key under this budget.
+    ///
+    /// The key owns a child budget and holds its name reserved until
+    /// [`DynamicBudgetKey::retire_until`] observes that the child has no
+    /// reservations left. A name that is already held cannot be registered
+    /// again, so a retired generation never runs beside the one that replaced
+    /// it. Use [`Self::child`] when the key does not need a retirement
+    /// lifecycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DynamicKeyRegistrationFailure`] when the child contract is
+    /// invalid, the name is still held, or the tree holds its maximum number of
+    /// dynamic keys.
+    pub fn register_dynamic_child(
+        &self,
+        name: impl Into<String>,
+        limit: BudgetLimit,
+    ) -> Result<DynamicBudgetKey, DynamicKeyRegistrationFailure> {
+        let name = validated_name(name.into()).map_err(DynamicKeyRegistrationFailure::Invalid)?;
+        let child = self
+            .child(name.as_str(), limit)
+            .map_err(DynamicKeyRegistrationFailure::Invalid)?;
+        let name: Arc<str> = Arc::clone(&child.node.path);
+        self.keys.register(child, name)
     }
 
     /// Attempts to acquire.
