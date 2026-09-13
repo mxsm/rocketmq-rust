@@ -206,3 +206,41 @@ async fn panic_settles_execution_and_destroys_user_resources() {
     assert_eq!(executor.spawn_io("after-panic", || 7).await.unwrap(), 7);
     assert_released(&executor);
 }
+
+#[tokio::test]
+async fn expired_drain_deadline_prevents_user_closure_from_starting() {
+    let executor = executor();
+    let task_id = BlockingTaskId(1);
+    executor.tasks.insert(
+        task_id,
+        BlockingTaskMeta {
+            id: task_id,
+            name: Arc::from("expired-drain-work"),
+            kind: BlockingKind::ShortIo,
+            state: BlockingTaskState::Running,
+            queued_at: Instant::now(),
+            started_at: Some(Instant::now()),
+        },
+    );
+    let permit = executor
+        .budget
+        .acquire(BlockingLane::StorageIo, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    let called = Arc::new(AtomicBool::new(false));
+    let operation_called = Arc::clone(&called);
+    let work = BlockingWork {
+        operation: move || operation_called.store(true, Ordering::Release),
+        permit,
+        completion: BlockingCompletionGuard {
+            tasks: Arc::clone(&executor.tasks),
+            task_id,
+        },
+        execution_deadline: Some(ShutdownDeadline::after(Duration::ZERO)),
+    };
+
+    let error = work.run().unwrap_err();
+    assert_eq!(error.condition(), CanonicalCondition::DeadlineExceeded);
+    assert!(!called.load(Ordering::Acquire));
+    assert_released(&executor);
+}

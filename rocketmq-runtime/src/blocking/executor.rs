@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use dashmap::DashMap;
+use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 
 use super::admission::GlobalBlockingBudget;
@@ -36,6 +39,7 @@ use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
 use crate::shutdown_deadline::ShutdownDeadline;
 use crate::task_group::TaskGroup;
+use crate::task_group::TaskGroupLifecycleState;
 
 /// Runs short blocking work through a bounded lane and one root-owned global
 /// admission budget.
@@ -57,6 +61,126 @@ pub struct BlockingExecutor {
     tasks: Arc<DashMap<BlockingTaskId, BlockingTaskMeta>>,
     next_task_id: Arc<AtomicU64>,
     rejected: Arc<AtomicU64>,
+    admission: BlockingAdmission,
+}
+
+#[derive(Debug, Clone)]
+enum BlockingAdmission {
+    Unscoped,
+    Scope(TaskGroup),
+    Drain(Arc<DrainLeaseState>),
+}
+
+#[derive(Debug)]
+struct DrainLeaseState {
+    scope: TaskGroup,
+    deadline: ShutdownDeadline,
+    remaining: AtomicUsize,
+}
+
+impl DrainLeaseState {
+    fn effective_deadline(&self) -> ShutdownDeadline {
+        self.scope
+            .shutdown_deadline()
+            .map_or(self.deadline, |scope_deadline| self.deadline.earliest(scope_deadline))
+    }
+}
+
+/// A bounded authority for I/O required by an operation already accepted by a
+/// service scope.
+///
+/// A lease is created while its scope is open. It may then be used during that
+/// scope's shutdown, but only until its original deadline or an earlier
+/// shutdown deadline installed on that scope, and only for its reserved number
+/// of submissions. It is deliberately not cloneable: moving it preserves one
+/// shared, non-expandable allowance.
+#[derive(Debug)]
+pub struct BlockingDrainLease {
+    executor: BlockingExecutor,
+}
+
+impl BlockingDrainLease {
+    /// Runs one short I/O operation under this lease.
+    ///
+    /// The existing lane capacity and deadline policy still apply. A running
+    /// closure retains its execution permit until it exits. This does not
+    /// reopen the scope's ordinary admission.
+    pub async fn spawn_io<F, R>(&self, name: impl Into<Arc<str>>, operation: F) -> RuntimeResult<R>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.executor.spawn_io(name, operation).await
+    }
+
+    /// Runs one short I/O operation without extending this lease's deadline.
+    pub async fn spawn_io_until<F, R>(
+        &self,
+        name: impl Into<Arc<str>>,
+        deadline: ShutdownDeadline,
+        operation: F,
+    ) -> RuntimeResult<R>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.executor.spawn_io_until(name, deadline, operation).await
+    }
+
+    /// Returns the number of submissions that this lease can still admit.
+    #[must_use]
+    pub fn remaining_operations(&self) -> usize {
+        let BlockingAdmission::Drain(state) = &self.executor.admission else {
+            return 0;
+        };
+        state.remaining.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Debug)]
+struct DrainReservation {
+    state: Option<Arc<DrainLeaseState>>,
+}
+
+impl DrainReservation {
+    const fn none() -> Self {
+        Self { state: None }
+    }
+
+    fn committed(mut self) {
+        self.state.take();
+    }
+}
+
+impl Drop for DrainReservation {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            state.remaining.fetch_add(1, Ordering::Release);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AdmissionFailure {
+    ScopeClosed,
+    LeaseExpired,
+    LeaseExhausted,
+    QueueCapacityExhausted,
+    QueueDeadlineExpired,
+}
+
+impl AdmissionFailure {
+    fn into_error(self) -> RuntimeError {
+        match self {
+            Self::ScopeClosed => RuntimeError::context_unavailable(crate::RuntimeOperation::BlockingQueueAdmission),
+            Self::LeaseExpired | Self::QueueDeadlineExpired => {
+                RuntimeError::timed_out(crate::RuntimeOperation::BlockingQueueAdmission)
+            }
+            Self::LeaseExhausted | Self::QueueCapacityExhausted => {
+                RuntimeError::capacity(crate::RuntimeOperation::BlockingQueueAdmission)
+            }
+        }
+    }
 }
 
 struct QueuedBlockingTaskGuard {
@@ -95,7 +219,7 @@ pub(crate) struct BlockingTask<R>
 where
     R: Send + 'static,
 {
-    join_handle: Option<tokio::task::JoinHandle<R>>,
+    join_handle: Option<tokio::task::JoinHandle<RuntimeResult<R>>>,
     tasks: Arc<DashMap<BlockingTaskId, BlockingTaskMeta>>,
     task_id: BlockingTaskId,
     wait_deadline: Instant,
@@ -106,7 +230,7 @@ where
     R: Send + 'static,
 {
     fn new(
-        join_handle: tokio::task::JoinHandle<R>,
+        join_handle: tokio::task::JoinHandle<RuntimeResult<R>>,
         tasks: Arc<DashMap<BlockingTaskId, BlockingTaskMeta>>,
         task_id: BlockingTaskId,
         wait_deadline: Instant,
@@ -128,7 +252,7 @@ where
         };
         let result = join_handle.await;
         self.join_handle.take();
-        result.map_err(|error| RuntimeError::join(crate::RuntimeOperation::RunBlockingTask, error))
+        result.map_err(|error| RuntimeError::join(crate::RuntimeOperation::RunBlockingTask, error))?
     }
 
     async fn wait_until(&mut self, deadline: Instant) -> RuntimeResult<R> {
@@ -165,17 +289,22 @@ struct BlockingWork<F> {
     operation: F,
     permit: GlobalBlockingPermit,
     completion: BlockingCompletionGuard,
+    execution_deadline: Option<ShutdownDeadline>,
 }
 
 impl<F> BlockingWork<F> {
-    fn run<R>(self) -> R
+    fn run<R>(self) -> RuntimeResult<R>
     where
         F: FnOnce() -> R,
     {
         // Reverse local destruction order preserves the same ordering on panic.
         let completion = self.completion;
         let permit = self.permit;
-        let result = (self.operation)();
+        let result = if self.execution_deadline.is_some_and(ShutdownDeadline::is_expired) {
+            Err(RuntimeError::timed_out(crate::RuntimeOperation::BlockingTaskDeadline))
+        } else {
+            Ok((self.operation)())
+        };
         drop(permit);
         drop(completion);
         result
@@ -207,7 +336,8 @@ impl BlockingExecutor {
             BlockingLane::StorageIo,
             GlobalBlockingBudget::isolated(capacity),
             owner_group.runtime().clone(),
-        ))
+        )
+        .scoped_to(owner_group))
     }
 
     pub(crate) fn new_managed(
@@ -235,7 +365,52 @@ impl BlockingExecutor {
             tasks: Arc::new(DashMap::new()),
             next_task_id: Arc::new(AtomicU64::new(1)),
             rejected: Arc::new(AtomicU64::new(0)),
+            admission: BlockingAdmission::Unscoped,
         }
+    }
+
+    pub(crate) fn scoped_to(&self, scope: TaskGroup) -> Self {
+        let mut scoped = self.clone();
+        scoped.admission = BlockingAdmission::Scope(scope);
+        scoped
+    }
+
+    /// Reserves a bounded blocking-I/O allowance for work already accepted by
+    /// this executor's service scope, or for that owner's finalization slot.
+    ///
+    /// The scope must still be open when the lease is created. The lease never
+    /// extends `deadline` or a shutdown deadline later installed on its scope,
+    /// and its non-zero submission allowance is shared if the lease is moved
+    /// through application-owned shutdown code.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable failure when this executor is unscoped or its
+    /// scope is no longer open, and a timeout failure when `deadline` expired.
+    pub fn try_drain_lease(
+        &self,
+        deadline: ShutdownDeadline,
+        max_operations: NonZeroUsize,
+    ) -> RuntimeResult<BlockingDrainLease> {
+        let BlockingAdmission::Scope(scope) = &self.admission else {
+            return Err(AdmissionFailure::ScopeClosed.into_error());
+        };
+        if !scope_is_open(scope) {
+            return Err(AdmissionFailure::ScopeClosed.into_error());
+        }
+        let deadline = scope
+            .shutdown_deadline()
+            .map_or(deadline, |scope_deadline| deadline.earliest(scope_deadline));
+        if deadline.is_expired() {
+            return Err(AdmissionFailure::LeaseExpired.into_error());
+        }
+        let mut leased = self.clone();
+        leased.admission = BlockingAdmission::Drain(Arc::new(DrainLeaseState {
+            scope: scope.clone(),
+            deadline,
+            remaining: AtomicUsize::new(max_operations.get()),
+        }));
+        Ok(BlockingDrainLease { executor: leased })
     }
 
     /// Returns the policy.
@@ -356,12 +531,18 @@ impl BlockingExecutor {
             self.rejected.fetch_add(1, Ordering::Relaxed);
             return Err(RuntimeError::unsupported(crate::RuntimeOperation::BlockingExecutorKind));
         }
-        if deadline.is_some_and(ShutdownDeadline::is_expired) {
+        let caller_deadline = deadline;
+        let admission_deadline = self.admission.effective_deadline(caller_deadline);
+        if admission_deadline.is_some_and(ShutdownDeadline::is_expired) {
             self.rejected.fetch_add(1, Ordering::Relaxed);
             return Err(RuntimeError::timed_out(crate::RuntimeOperation::BlockingQueueAdmission));
         }
+        let drain_reservation = self.admission.reserve().map_err(|failure| {
+            self.rejected.fetch_add(1, Ordering::Relaxed);
+            failure.into_error()
+        })?;
         let submitted_at = Instant::now();
-        let operation_deadline = deadline.map_or_else(
+        let operation_deadline = admission_deadline.map_or_else(
             || {
                 submitted_at
                     .checked_add(self.policy.queue_timeout.saturating_add(self.policy.task_timeout))
@@ -369,10 +550,11 @@ impl BlockingExecutor {
             },
             ShutdownDeadline::instant,
         );
+        let queue_deadline = phase_deadline(submitted_at, self.policy.queue_timeout, operation_deadline);
 
-        let queue_permit = self.queue_permits.clone().try_acquire_owned().map_err(|_error| {
+        let queue_permit = self.acquire_queue_permit(queue_deadline).await.map_err(|failure| {
             self.rejected.fetch_add(1, Ordering::Relaxed);
-            RuntimeError::capacity(crate::RuntimeOperation::BlockingQueueAdmission)
+            failure.into_error()
         })?;
         let task_id = BlockingTaskId(self.next_task_id.fetch_add(1, Ordering::Relaxed));
         self.tasks.insert(
@@ -388,17 +570,27 @@ impl BlockingExecutor {
         );
         let queued_task_guard = QueuedBlockingTaskGuard::new(self.tasks.clone(), task_id);
 
-        let queue_deadline = phase_deadline(submitted_at, self.policy.queue_timeout, operation_deadline);
-        let permit = self.budget.acquire(self.lane, queue_deadline).await.map_err(|()| {
+        let permit = self.admit(queue_deadline).await.map_err(|failure| {
             self.rejected.fetch_add(1, Ordering::Relaxed);
-            RuntimeError::timed_out(crate::RuntimeOperation::BlockingQueueAdmission)
+            failure.into_error()
         })?;
         drop(queue_permit);
 
-        let task_deadline = phase_deadline(Instant::now(), self.policy.task_timeout, operation_deadline);
-        if task_deadline <= Instant::now() {
+        let execution_deadline = self.admission.effective_deadline(caller_deadline);
+        let current_operation_deadline = execution_deadline.map_or(operation_deadline, ShutdownDeadline::instant);
+        let task_deadline = phase_deadline(Instant::now(), self.policy.task_timeout, current_operation_deadline);
+        if task_deadline <= Instant::now()
+            || execution_deadline.is_some_and(ShutdownDeadline::is_expired)
+            || !self.admission.still_valid()
+        {
             self.rejected.fetch_add(1, Ordering::Relaxed);
-            return Err(RuntimeError::timed_out(crate::RuntimeOperation::BlockingTaskDeadline));
+            return Err(
+                if task_deadline <= Instant::now() || execution_deadline.is_some_and(ShutdownDeadline::is_expired) {
+                    RuntimeError::timed_out(crate::RuntimeOperation::BlockingTaskDeadline)
+                } else {
+                    AdmissionFailure::ScopeClosed.into_error()
+                },
+            );
         }
 
         let started_at = Instant::now();
@@ -415,14 +607,76 @@ impl BlockingExecutor {
                 tasks: self.tasks.clone(),
                 task_id,
             },
+            execution_deadline,
         };
         let join_handle = self.runtime.tokio_handle().spawn_blocking(move || work.run());
+        drain_reservation.committed();
         Ok(BlockingTask::new(
             join_handle,
             self.tasks.clone(),
             task_id,
             task_deadline,
         ))
+    }
+
+    async fn acquire_queue_permit(&self, deadline: Instant) -> Result<OwnedSemaphorePermit, AdmissionFailure> {
+        if !matches!(&self.admission, BlockingAdmission::Drain(_)) {
+            return self
+                .queue_permits
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_error| AdmissionFailure::QueueCapacityExhausted);
+        }
+
+        let deadline = self.admission.effective_instant(deadline);
+        match tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            self.queue_permits.clone().acquire_owned(),
+        )
+        .await
+        {
+            Ok(Ok(permit)) => Ok(permit),
+            Ok(Err(_closed)) => Err(AdmissionFailure::QueueDeadlineExpired),
+            Err(_elapsed) => Err(AdmissionFailure::QueueDeadlineExpired),
+        }
+    }
+
+    async fn admit(&self, deadline: Instant) -> Result<GlobalBlockingPermit, AdmissionFailure> {
+        match &self.admission {
+            BlockingAdmission::Scope(scope) => {
+                if !scope_is_open(scope) {
+                    return Err(AdmissionFailure::ScopeClosed);
+                }
+                let cancellation = scope.cancellation_token();
+                let permit = tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => return Err(AdmissionFailure::ScopeClosed),
+                    permit = self.budget.acquire(self.lane, deadline) => {
+                        permit.map_err(|()| AdmissionFailure::QueueDeadlineExpired)?
+                    }
+                };
+                if !scope_is_open(scope) {
+                    drop(permit);
+                    return Err(AdmissionFailure::ScopeClosed);
+                }
+                Ok(permit)
+            }
+            BlockingAdmission::Drain(state) => {
+                if state.effective_deadline().is_expired() {
+                    return Err(AdmissionFailure::LeaseExpired);
+                }
+                let deadline = self.admission.effective_instant(deadline);
+                self.budget
+                    .acquire(self.lane, deadline)
+                    .await
+                    .map_err(|()| AdmissionFailure::QueueDeadlineExpired)
+            }
+            BlockingAdmission::Unscoped => self
+                .budget
+                .acquire(self.lane, deadline)
+                .await
+                .map_err(|()| AdmissionFailure::QueueDeadlineExpired),
+        }
     }
 
     /// Returns the snapshot.
@@ -485,6 +739,76 @@ impl BlockingExecutor {
             })
             .count()
     }
+}
+
+impl BlockingAdmission {
+    fn effective_deadline(&self, deadline: Option<ShutdownDeadline>) -> Option<ShutdownDeadline> {
+        match self {
+            Self::Unscoped => deadline,
+            Self::Scope(scope) => bound_deadline(deadline, scope.shutdown_deadline()),
+            Self::Drain(state) => bound_deadline(deadline, Some(state.effective_deadline())),
+        }
+    }
+
+    fn reserve(&self) -> Result<DrainReservation, AdmissionFailure> {
+        match self {
+            Self::Unscoped => Ok(DrainReservation::none()),
+            Self::Scope(scope) => {
+                if scope_is_open(scope) {
+                    Ok(DrainReservation::none())
+                } else {
+                    Err(AdmissionFailure::ScopeClosed)
+                }
+            }
+            Self::Drain(state) => {
+                if state.effective_deadline().is_expired() {
+                    return Err(AdmissionFailure::LeaseExpired);
+                }
+                let reserved = state
+                    .remaining
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                        remaining.checked_sub(1)
+                    });
+                if reserved.is_err() {
+                    return Err(AdmissionFailure::LeaseExhausted);
+                }
+                Ok(DrainReservation {
+                    state: Some(Arc::clone(state)),
+                })
+            }
+        }
+    }
+
+    fn still_valid(&self) -> bool {
+        match self {
+            Self::Unscoped => true,
+            Self::Scope(scope) => {
+                scope_is_open(scope) && !scope.shutdown_deadline().is_some_and(ShutdownDeadline::is_expired)
+            }
+            Self::Drain(state) => !state.effective_deadline().is_expired(),
+        }
+    }
+
+    fn effective_instant(&self, deadline: Instant) -> Instant {
+        self.effective_deadline(Some(ShutdownDeadline::at(deadline)))
+            .map_or(deadline, ShutdownDeadline::instant)
+    }
+}
+
+fn bound_deadline(
+    deadline: Option<ShutdownDeadline>,
+    scope_deadline: Option<ShutdownDeadline>,
+) -> Option<ShutdownDeadline> {
+    match (deadline, scope_deadline) {
+        (Some(deadline), Some(scope_deadline)) => Some(deadline.earliest(scope_deadline)),
+        (Some(deadline), None) => Some(deadline),
+        (None, Some(scope_deadline)) => Some(scope_deadline),
+        (None, None) => None,
+    }
+}
+
+fn scope_is_open(scope: &TaskGroup) -> bool {
+    scope.lifecycle_state() == TaskGroupLifecycleState::Open && !scope.cancellation_token().is_cancelled()
 }
 
 fn phase_deadline(started_at: Instant, policy_timeout: Duration, operation_deadline: Instant) -> Instant {

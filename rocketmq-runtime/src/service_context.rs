@@ -120,7 +120,7 @@ struct BlockingLanes {
 }
 
 impl BlockingLanes {
-    fn new(policies: BlockingLanePolicies, global_capacity: usize, runtime: RuntimeHandle) -> Self {
+    fn new(policies: BlockingLanePolicies, global_capacity: usize, runtime: RuntimeHandle, scope: &TaskGroup) -> Self {
         let budget = GlobalBlockingBudget::managed(global_capacity, &policies);
         Self {
             storage_io: BlockingExecutor::new_managed(
@@ -129,16 +129,27 @@ impl BlockingLanes {
                 budget.clone(),
                 runtime.clone(),
             )
-            .expect("RuntimeConfig validates storage blocking policy before root context construction"),
+            .expect("RuntimeConfig validates storage blocking policy before root context construction")
+            .scoped_to(scope.clone()),
             metadata_io: BlockingExecutor::new_managed(
                 policies.metadata_io,
                 BlockingLane::MetadataIo,
                 budget.clone(),
                 runtime.clone(),
             )
-            .expect("RuntimeConfig validates metadata blocking policy before root context construction"),
+            .expect("RuntimeConfig validates metadata blocking policy before root context construction")
+            .scoped_to(scope.clone()),
             cpu_crypto: BlockingExecutor::new_managed(policies.cpu_crypto, BlockingLane::CpuCrypto, budget, runtime)
-                .expect("RuntimeConfig validates CPU blocking policy before root context construction"),
+                .expect("RuntimeConfig validates CPU blocking policy before root context construction")
+                .scoped_to(scope.clone()),
+        }
+    }
+
+    fn scoped_to(&self, scope: &TaskGroup) -> Self {
+        Self {
+            storage_io: self.storage_io.scoped_to(scope.clone()),
+            metadata_io: self.metadata_io.scoped_to(scope.clone()),
+            cpu_crypto: self.cpu_crypto.scoped_to(scope.clone()),
         }
     }
 
@@ -187,7 +198,12 @@ impl RootServiceContext {
         diagnostics: RuntimeDiagnostics,
         resources: RuntimeResources,
     ) -> Self {
-        let blocking_lanes = BlockingLanes::new(blocking_policies, global_blocking_capacity, runtime.clone());
+        let blocking_lanes = BlockingLanes::new(
+            blocking_policies,
+            global_blocking_capacity,
+            runtime.clone(),
+            &task_group,
+        );
         Self {
             name,
             runtime,
@@ -292,10 +308,11 @@ impl ChildServiceContext {
         resources: RuntimeResources,
     ) -> Self {
         let name = scope.into_inner();
+        let task_group = parent_group.component(name.clone());
         Self {
             name: name.clone(),
-            task_group: parent_group.component(name),
-            blocking_lanes,
+            task_group: task_group.clone(),
+            blocking_lanes: blocking_lanes.scoped_to(&task_group),
             diagnostics,
             resources,
             _sealed: Arc::new(ChildContextSeal),
@@ -310,10 +327,11 @@ impl ChildServiceContext {
         resources: RuntimeResources,
     ) -> RuntimeResult<Self> {
         let name = scope.into_inner();
+        let task_group = parent_group.try_child(name.clone())?;
         Ok(Self {
             name: name.clone(),
-            task_group: parent_group.try_child(name)?,
-            blocking_lanes,
+            task_group: task_group.clone(),
+            blocking_lanes: blocking_lanes.scoped_to(&task_group),
             diagnostics,
             resources,
             _sealed: Arc::new(ChildContextSeal),
