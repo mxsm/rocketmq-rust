@@ -351,6 +351,15 @@ impl McpApp {
         let client_report = self.client_runtime.shutdown_until(deadline).await;
         let client_healthy = client_report.is_healthy();
         client_report.log_if_unhealthy();
+        let telemetry_guard = self.telemetry.lock().unwrap_or_else(|error| error.into_inner()).take();
+        let telemetry = match telemetry_guard {
+            Some(guard) => Some(
+                guard
+                    .shutdown_with_service_context(&self.service_context, deadline.remaining())
+                    .await,
+            ),
+            None => None,
+        };
         let runtime = Some(self.service_context.task_group().shutdown_until(deadline).await);
         let runtime_healthy = runtime
             .as_ref()
@@ -371,15 +380,6 @@ impl McpApp {
                 rocketmq_observability::metrics::runtime::RuntimeLifecycleReason::Internal
             },
         );
-        let telemetry_guard = self.telemetry.lock().unwrap_or_else(|error| error.into_inner()).take();
-        let telemetry = match telemetry_guard {
-            Some(guard) => Some(
-                guard
-                    .shutdown_with_service_context(&self.service_context, deadline.remaining())
-                    .await,
-            ),
-            None => None,
-        };
         McpShutdownReport {
             audit,
             runtime,
