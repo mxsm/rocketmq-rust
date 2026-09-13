@@ -45,6 +45,9 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::metadata_target::MetadataTargetRegistration;
+use crate::metadata_target::MetadataTargetRegistrationOutcome;
+use crate::metadata_target::MetadataTargetRegistry;
 use crate::BlockingExecutor;
 use crate::ChildServiceContext;
 use crate::RuntimeContractPolicy;
@@ -411,7 +414,7 @@ pub struct MetadataIoShutdownReport {
 #[derive(Debug)]
 pub struct MetadataIoReceipt {
     generation: MetadataGeneration,
-    durable: oneshot::Receiver<RuntimeResult<MetadataGeneration>>,
+    durable: oneshot::Receiver<RuntimeResult<MetadataIoCommitOutcome>>,
 }
 
 /// The normal admission result for one metadata write request.
@@ -436,6 +439,29 @@ pub enum MetadataIoDurabilityOutcome {
     TargetConflict(MetadataWriteRequest),
 }
 
+/// The real persistence conclusion for an accepted metadata snapshot.
+#[derive(Debug, Clone)]
+pub enum MetadataIoCommitOutcome {
+    /// The snapshot or a newer coalesced snapshot completed the persistence
+    /// protocol and is durable.
+    Durable(MetadataGeneration),
+    /// The target file was not replaced.
+    FailedBeforeCommit(RuntimeError),
+    /// The target may have been replaced, but the durability protocol did not
+    /// complete. The caller must reconcile before publishing or retrying.
+    CommitOutcomeUnknown(RuntimeError),
+}
+
+/// Result of waiting for a committed metadata snapshot.
+#[derive(Debug)]
+pub enum MetadataIoCommitAdmissionOutcome {
+    /// The accepted snapshot reached a terminal persistence conclusion.
+    Completed(MetadataIoCommitOutcome),
+    /// The request was not admitted because the resource or target has a
+    /// different process-local writer binding.
+    TargetConflict(MetadataWriteRequest),
+}
+
 impl MetadataIoReceipt {
     /// Returns the accepted resource generation.
     #[must_use]
@@ -452,7 +478,7 @@ impl MetadataIoReceipt {
     /// # Errors
     ///
     /// Returns an operational runtime failure if persistence cannot complete.
-    pub async fn wait_until(self, deadline: MetadataDeadline) -> RuntimeResult<MetadataGeneration> {
+    pub async fn wait_until_outcome(self, deadline: MetadataDeadline) -> RuntimeResult<MetadataIoCommitOutcome> {
         if deadline.is_expired() {
             return Err(RuntimeError::timed_out(crate::RuntimeOperation::WaitForDurableMetadata));
         }
@@ -462,6 +488,23 @@ impl MetadataIoReceipt {
                 crate::RuntimeOperation::MetadataWorkerStopped,
             )),
             Err(_elapsed) => Err(RuntimeError::timed_out(crate::RuntimeOperation::WaitForDurableMetadata)),
+        }
+    }
+
+    /// Waits for this generation, or a newer coalesced generation, to become
+    /// durable without extending the caller's absolute deadline.
+    ///
+    /// Expiry abandons this observation. Accepted writes retain their ordering
+    /// and byte charge until actual completion, and may still become durable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational runtime failure if persistence cannot complete.
+    pub async fn wait_until(self, deadline: MetadataDeadline) -> RuntimeResult<MetadataGeneration> {
+        match self.wait_until_outcome(deadline).await? {
+            MetadataIoCommitOutcome::Durable(generation) => Ok(generation),
+            MetadataIoCommitOutcome::FailedBeforeCommit(source)
+            | MetadataIoCommitOutcome::CommitOutcomeUnknown(source) => Err(source),
         }
     }
 }
@@ -476,6 +519,7 @@ pub struct MetadataIoActor {
 #[derive(Debug)]
 struct ActorInner {
     config: MetadataIoConfig,
+    targets: MetadataTargetRegistry,
     next_generation: AtomicU64,
     state: Mutex<ActorState>,
     shutdown: Notify,
@@ -494,10 +538,17 @@ struct ActorState {
 #[derive(Debug, Default)]
 struct ResourceState {
     target: Option<Arc<Path>>,
+    target_registration: Option<MetadataTargetRegistration>,
     durable_generation: Option<MetadataGeneration>,
     in_flight: Option<WorkMeta>,
-    queued: Option<MetadataWriteRequest>,
+    queued: Option<QueuedMetadataWrite>,
     waiters: Vec<GenerationWaiter>,
+}
+
+#[derive(Debug)]
+struct QueuedMetadataWrite {
+    request: MetadataWriteRequest,
+    registration: MetadataTargetRegistration,
 }
 
 #[derive(Debug, Clone)]
@@ -509,7 +560,7 @@ struct WorkMeta {
 #[derive(Debug)]
 struct GenerationWaiter {
     generation: MetadataGeneration,
-    sender: oneshot::Sender<RuntimeResult<MetadataGeneration>>,
+    sender: oneshot::Sender<RuntimeResult<MetadataIoCommitOutcome>>,
 }
 
 impl MetadataIoActor {
@@ -520,9 +571,11 @@ impl MetadataIoActor {
     ) -> RuntimeResult<Self> {
         let task_group = service_context.component("metadata-io").task_group().clone();
         let blocking = service_context.metadata_io().clone();
+        let targets = service_context.resources().metadata_targets();
         let (sender, receiver) = mpsc::channel(config.max_pending_operations);
         let inner = Arc::new(ActorInner {
             config,
+            targets,
             next_generation: AtomicU64::new(1),
             state: Mutex::new(ActorState {
                 accepting: true,
@@ -579,18 +632,15 @@ impl MetadataIoActor {
             ));
         }
 
+        let Some(target_registration) = ensure_target_registration(&mut state, &self.inner.targets, &request)? else {
+            return Ok(MetadataIoAdmissionOutcome::TargetConflict(request));
+        };
+
         let existing = state.resources.get(&resource);
         if let Some(existing) = existing {
-            if let Some(target) = &existing.target {
-                if target.as_ref() != request.target.as_ref()
-                    && (existing.in_flight.is_some() || existing.queued.is_some())
-                {
-                    return Ok(MetadataIoAdmissionOutcome::TargetConflict(request));
-                }
-            }
             if let Some(durable_generation) = existing.durable_generation {
                 if generation <= durable_generation {
-                    let _ = waiter_sender.send(Ok(durable_generation));
+                    let _ = waiter_sender.send(Ok(MetadataIoCommitOutcome::Durable(durable_generation)));
                     return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
                         generation,
                         durable,
@@ -615,7 +665,7 @@ impl MetadataIoActor {
                 }
             }
             if let Some(queued) = &existing.queued {
-                if generation <= queued.generation {
+                if generation <= queued.request.generation {
                     let Some(resource_state) = state.resources.get_mut(&resource) else {
                         return Err(RuntimeError::context_unavailable(
                             crate::RuntimeOperation::MetadataWorkerStopped,
@@ -635,7 +685,7 @@ impl MetadataIoActor {
 
         let old_queued_bytes = existing
             .and_then(|resource_state| resource_state.queued.as_ref())
-            .map_or(0, MetadataWriteRequest::len);
+            .map_or(0, |queued| queued.request.len());
         let adds_operation = existing.is_none_or(|resource_state| resource_state.queued.is_none());
         let needs_queue_token =
             existing.is_none_or(|resource_state| resource_state.in_flight.is_none() && resource_state.queued.is_none());
@@ -665,7 +715,11 @@ impl MetadataIoActor {
         state.pending_bytes = next_bytes;
         let resource_state = state.resources.entry(resource.clone()).or_default();
         resource_state.target = Some(request.target.clone());
-        resource_state.queued = Some(request);
+        resource_state.target_registration = Some(target_registration.clone());
+        resource_state.queued = Some(QueuedMetadataWrite {
+            request,
+            registration: target_registration,
+        });
         resource_state.waiters.push(GenerationWaiter {
             generation,
             sender: waiter_sender,
@@ -737,6 +791,26 @@ impl MetadataIoActor {
         }
     }
 
+    /// Accepts a snapshot and returns its real persistence conclusion.
+    ///
+    /// This distinguishes a failure before target replacement from an
+    /// unconfirmed replacement followed by a parent-directory sync failure.
+    pub async fn submit_commit(
+        &self,
+        request: MetadataWriteRequest,
+        deadline: MetadataDeadline,
+    ) -> RuntimeResult<MetadataIoCommitAdmissionOutcome> {
+        match self.submit(request, deadline)? {
+            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt
+                .wait_until_outcome(deadline)
+                .await
+                .map(MetadataIoCommitAdmissionOutcome::Completed),
+            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+                Ok(MetadataIoCommitAdmissionOutcome::TargetConflict(request))
+            }
+        }
+    }
+
     /// Assigns the next process-lifetime generation, accepts the immutable
     /// snapshot, and waits for durable completion using one absolute deadline.
     ///
@@ -758,6 +832,26 @@ impl MetadataIoActor {
                 .map(MetadataIoDurabilityOutcome::Durable),
             MetadataIoAdmissionOutcome::TargetConflict(request) => {
                 Ok(MetadataIoDurabilityOutcome::TargetConflict(request))
+            }
+        }
+    }
+
+    /// Assigns the next process-lifetime generation and returns its real
+    /// persistence conclusion.
+    pub async fn submit_next_commit(
+        &self,
+        resource: impl Into<Arc<str>>,
+        target: impl Into<PathBuf>,
+        bytes: impl Into<Vec<u8>>,
+        deadline: MetadataDeadline,
+    ) -> RuntimeResult<MetadataIoCommitAdmissionOutcome> {
+        match self.submit_next(resource, target, bytes, deadline)? {
+            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt
+                .wait_until_outcome(deadline)
+                .await
+                .map(MetadataIoCommitAdmissionOutcome::Completed),
+            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+                Ok(MetadataIoCommitAdmissionOutcome::TargetConflict(request))
             }
         }
     }
@@ -797,6 +891,54 @@ impl MetadataIoActor {
     pub fn snapshot(&self) -> MetadataIoSnapshot {
         snapshot(&self.inner)
     }
+}
+
+fn ensure_target_registration(
+    state: &mut ActorState,
+    registry: &MetadataTargetRegistry,
+    request: &MetadataWriteRequest,
+) -> RuntimeResult<Option<MetadataTargetRegistration>> {
+    let resource = &request.resource;
+    let mut target_changed = false;
+    if let Some(existing) = state.resources.get(resource) {
+        if let Some(target) = &existing.target {
+            target_changed = target.as_ref() != request.target.as_ref();
+            if target_changed && (existing.in_flight.is_some() || existing.queued.is_some()) {
+                return Ok(None);
+            }
+            if !target_changed {
+                if let Some(registration) = &existing.target_registration {
+                    return Ok(Some(registration.clone()));
+                }
+            }
+        }
+    }
+
+    let registration = match registry.register(request.target.as_ref(), Arc::clone(resource))? {
+        MetadataTargetRegistrationOutcome::Registered(registration) => registration,
+        MetadataTargetRegistrationOutcome::Conflict => return Ok(None),
+        MetadataTargetRegistrationOutcome::ReconciliationRequired => {
+            return Err(RuntimeError::context_unavailable(
+                crate::RuntimeOperation::MetadataResourceTarget,
+            ));
+        }
+    };
+    let durable_generation = registration.durable_generation();
+    let resource_state = state.resources.entry(Arc::clone(resource)).or_default();
+    if target_changed {
+        resource_state.target_registration = None;
+        resource_state.durable_generation = None;
+    }
+    resource_state.target = Some(request.target.clone());
+    resource_state.target_registration = Some(registration.clone());
+    if let Some(durable_generation) = durable_generation {
+        resource_state.durable_generation = Some(
+            resource_state
+                .durable_generation
+                .map_or(durable_generation, |current| current.max(durable_generation)),
+        );
+    }
+    Ok(Some(registration))
 }
 
 async fn run_actor(
@@ -861,9 +1003,10 @@ async fn process_resource(
     file_system: &Arc<dyn MetadataFileSystem>,
     resource: Arc<str>,
 ) -> bool {
-    let Some(request) = take_next_request(inner, &resource) else {
+    let Some(queued) = take_next_request(inner, &resource) else {
         return false;
     };
+    let QueuedMetadataWrite { request, registration } = queued;
     let MetadataWriteRequest {
         target,
         bytes,
@@ -871,9 +1014,20 @@ async fn process_resource(
         ..
     } = request;
     let worker_file_system = file_system.clone();
+    let completion_registration = registration.clone();
     let result = match blocking
         .submit_io(format!("metadata-io:{resource}"), move || {
-            worker_file_system.persist_atomic(&target, &bytes)
+            let result = worker_file_system.persist_atomic(&target, &bytes);
+            match &result {
+                Ok(()) => {
+                    let _ = completion_registration.record_durable(generation);
+                }
+                Err(error) if error.operation() == crate::RuntimeOperation::MetadataSyncParent => {
+                    let _ = completion_registration.record_reconciliation_required();
+                }
+                Err(_) => {}
+            }
+            result
         })
         .await
     {
@@ -885,13 +1039,13 @@ async fn process_resource(
     finish_request(inner, &resource, generation, result)
 }
 
-fn take_next_request(inner: &ActorInner, resource: &Arc<str>) -> Option<MetadataWriteRequest> {
+fn take_next_request(inner: &ActorInner, resource: &Arc<str>) -> Option<QueuedMetadataWrite> {
     let mut state = inner.state.lock();
     let resource_state = state.resources.get_mut(resource)?;
     let request = resource_state.queued.take()?;
     resource_state.in_flight = Some(WorkMeta {
-        generation: request.generation,
-        bytes: request.len(),
+        generation: request.request.generation,
+        bytes: request.request.len(),
     });
     Some(request)
 }
@@ -903,7 +1057,7 @@ fn finish_request(
     result: RuntimeResult<()>,
 ) -> bool {
     let mut completed_waiters = Vec::new();
-    let has_queued = {
+    let (has_queued, outcome) = {
         let mut state = inner.state.lock();
         let Some(mut resource_state) = state.resources.remove(resource) else {
             return false;
@@ -916,7 +1070,8 @@ fn finish_request(
         state.pending_operations = state.pending_operations.saturating_sub(1);
         state.pending_bytes = state.pending_bytes.saturating_sub(in_flight.bytes);
 
-        if result.is_ok() {
+        let outcome = commit_outcome(generation, result);
+        if matches!(outcome, MetadataIoCommitOutcome::Durable(_)) {
             resource_state.durable_generation = Some(
                 resource_state
                     .durable_generation
@@ -933,18 +1088,27 @@ fn finish_request(
         }
         resource_state.waiters = retained;
         let has_queued = resource_state.queued.is_some();
+        if !has_queued {
+            resource_state.target_registration = None;
+        }
         state.resources.insert(resource.clone(), resource_state);
-        has_queued
+        (has_queued, outcome)
     };
 
     for waiter in completed_waiters {
-        let completion = match &result {
-            Ok(()) => Ok(generation),
-            Err(error) => Err(error.clone()),
-        };
-        let _ = waiter.sender.send(completion);
+        let _ = waiter.sender.send(Ok(outcome.clone()));
     }
     has_queued
+}
+
+fn commit_outcome(generation: MetadataGeneration, result: RuntimeResult<()>) -> MetadataIoCommitOutcome {
+    match result {
+        Ok(()) => MetadataIoCommitOutcome::Durable(generation),
+        Err(error) if error.operation() == crate::RuntimeOperation::MetadataSyncParent => {
+            MetadataIoCommitOutcome::CommitOutcomeUnknown(error)
+        }
+        Err(error) => MetadataIoCommitOutcome::FailedBeforeCommit(error),
+    }
 }
 
 fn stop_admission(inner: &ActorInner) {
@@ -1023,7 +1187,7 @@ fn resource_snapshot(resource: &Arc<str>, state: &ResourceState) -> MetadataIoRe
         target: state.target.clone(),
         durable_generation: state.durable_generation,
         in_flight_generation: state.in_flight.as_ref().map(|work| work.generation),
-        queued_generation: state.queued.as_ref().map(|request| request.generation),
+        queued_generation: state.queued.as_ref().map(|queued| queued.request.generation),
         waiter_count: state.waiters.len(),
     }
 }

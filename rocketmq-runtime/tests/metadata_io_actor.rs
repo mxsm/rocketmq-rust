@@ -28,6 +28,8 @@ use rocketmq_runtime::MetadataFileSystem;
 use rocketmq_runtime::MetadataGeneration;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoAdmissionOutcome;
+use rocketmq_runtime::MetadataIoCommitAdmissionOutcome;
+use rocketmq_runtime::MetadataIoCommitOutcome;
 use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::MetadataIoOperation;
 use rocketmq_runtime::MetadataWriteRequest;
@@ -73,6 +75,18 @@ impl MetadataFileSystem for GateRecordingFileSystem {
     }
 }
 
+#[derive(Debug, Default)]
+struct RecordingFileSystem {
+    writes: Mutex<Vec<Vec<u8>>>,
+}
+
+impl MetadataFileSystem for RecordingFileSystem {
+    fn persist_atomic(&self, _target: &Path, bytes: &[u8]) -> RuntimeResult<()> {
+        self.writes.lock().unwrap().push(bytes.to_vec());
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 struct FailingFileSystem {
     operation: MetadataIoOperation,
@@ -112,12 +126,22 @@ fn start_actor(
     config: MetadataIoConfig,
 ) -> (RuntimeContext, MetadataIoActor) {
     let context = RuntimeContext::try_from_current("metadata-io-test").unwrap();
+    let actor = start_actor_in(&context, "test-service", file_system, config);
+    (context, actor)
+}
+
+fn start_actor_in(
+    context: &RuntimeContext,
+    scope: &'static str,
+    file_system: Arc<dyn MetadataFileSystem>,
+    config: MetadataIoConfig,
+) -> MetadataIoActor {
     let actor = config
         .into_plan()
         .unwrap()
-        .start_with_file_system(&context.service_context("test-service"), file_system)
+        .start_with_file_system(&context.service_context(scope), file_system)
         .unwrap();
-    (context, actor)
+    actor
 }
 
 fn request(resource: &str, generation: u64, bytes: &[u8]) -> MetadataWriteRequest {
@@ -384,6 +408,141 @@ async fn expired_absolute_deadline_rejects_admission_without_side_effects() {
             .await
             .timed_out
     );
+}
+
+#[tokio::test]
+async fn target_binding_is_process_local_and_rejects_a_second_resource() {
+    let context = RuntimeContext::try_from_current("metadata-target-binding").unwrap();
+    let file_system = Arc::new(RecordingFileSystem::default());
+    let actor = start_actor_in(&context, "binding", file_system.clone(), config(2, 64));
+    let deadline = MetadataDeadline::after(Duration::from_secs(5));
+
+    let first = accepted(actor.submit(request("first", 1, b"one"), deadline).unwrap());
+    assert_eq!(first.wait_until(deadline).await.unwrap(), MetadataGeneration::new(1));
+
+    let conflicting = MetadataWriteRequest::new("second", 1, PathBuf::from("first.json"), b"two");
+    match actor.submit(conflicting, deadline).unwrap() {
+        MetadataIoAdmissionOutcome::TargetConflict(request) => {
+            assert_eq!(request.resource(), "second");
+        }
+        MetadataIoAdmissionOutcome::Accepted(_) => {
+            panic!("a second resource must not bind the same target")
+        }
+    }
+    assert_eq!(*file_system.writes.lock().unwrap(), vec![b"one".to_vec()]);
+    let _ = context.shutdown_tasks(Duration::from_secs(1)).await;
+}
+
+#[tokio::test]
+async fn cancelled_actor_retains_target_until_the_real_closure_exits() {
+    let context = RuntimeContext::try_from_current("metadata-target-cancel").unwrap();
+    let gated_file_system = Arc::new(GateRecordingFileSystem::default());
+    let started = gated_file_system.gate.started.notified();
+    let cancelled_scope = context.service_context("cancelled");
+    let cancelled_actor = config(2, 64)
+        .into_plan()
+        .unwrap()
+        .start_with_file_system(&cancelled_scope, gated_file_system.clone())
+        .unwrap();
+    let deadline = MetadataDeadline::after(Duration::from_secs(5));
+    let receipt = accepted(cancelled_actor.submit(request("shared", 1, b"one"), deadline).unwrap());
+    started.await;
+
+    cancelled_scope.task_group().shutdown_now();
+    drop(cancelled_actor);
+    drop(receipt);
+    let replacement_file_system = Arc::new(RecordingFileSystem::default());
+    let replacement_actor = start_actor_in(&context, "replacement", replacement_file_system.clone(), config(2, 64));
+    assert!(matches!(
+        replacement_actor
+            .submit(request("shared", 1, b"two"), deadline)
+            .unwrap(),
+        MetadataIoAdmissionOutcome::TargetConflict(_)
+    ));
+
+    gated_file_system.gate.release();
+    let replacement = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match replacement_actor
+                .submit(request("shared", 1, b"two"), deadline)
+                .unwrap()
+            {
+                MetadataIoAdmissionOutcome::Accepted(receipt) => break receipt,
+                MetadataIoAdmissionOutcome::TargetConflict(_) => tokio::task::yield_now().await,
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        replacement.wait_until(deadline).await.unwrap(),
+        MetadataGeneration::new(1)
+    );
+    assert!(replacement_file_system.writes.lock().unwrap().is_empty());
+
+    let newer = replacement_actor
+        .submit_commit(
+            MetadataWriteRequest::new("shared", 2, PathBuf::from("shared.json"), b"newer".to_vec()),
+            deadline,
+        )
+        .await
+        .unwrap();
+    match newer {
+        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::Durable(generation)) => {
+            assert_eq!(generation, MetadataGeneration::new(2));
+        }
+        outcome => panic!("replacement write must become durable: {outcome:?}"),
+    }
+    assert_eq!(*replacement_file_system.writes.lock().unwrap(), vec![b"newer".to_vec()]);
+    let _ = context.shutdown_tasks(Duration::from_secs(1)).await;
+}
+
+#[tokio::test]
+async fn commit_outcome_distinguishes_unknown_durability() {
+    let context = RuntimeContext::try_from_current("metadata-commit-outcome").unwrap();
+    let unknown_actor = start_actor_in(
+        &context,
+        "unknown",
+        Arc::new(FailingFileSystem {
+            operation: MetadataIoOperation::SyncParent,
+            error_kind: io::ErrorKind::Other,
+        }),
+        config(1, 64),
+    );
+    let failed_actor = start_actor_in(
+        &context,
+        "failed",
+        Arc::new(FailingFileSystem {
+            operation: MetadataIoOperation::WriteTemporary,
+            error_kind: io::ErrorKind::Other,
+        }),
+        config(1, 64),
+    );
+    let deadline = MetadataDeadline::after(Duration::from_secs(5));
+
+    let unknown = unknown_actor
+        .submit_next_commit("unknown-resource", PathBuf::from("unknown.json"), b"unknown", deadline)
+        .await
+        .unwrap();
+    assert!(matches!(
+        unknown,
+        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::CommitOutcomeUnknown(_))
+    ));
+    let blocked = unknown_actor
+        .submit_next_commit("unknown-resource", PathBuf::from("unknown.json"), b"retry", deadline)
+        .await
+        .unwrap_err();
+    assert_eq!(blocked.condition(), rocketmq_error::CanonicalCondition::Unavailable);
+
+    let failed = failed_actor
+        .submit_next_commit("failed-resource", PathBuf::from("failed.json"), b"failed", deadline)
+        .await
+        .unwrap();
+    assert!(matches!(
+        failed,
+        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::FailedBeforeCommit(_))
+    ));
+    assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
 }
 
 #[test]
