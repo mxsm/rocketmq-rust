@@ -101,8 +101,10 @@ impl PopCheckPoint {
         i32::MAX
     }
 
+    /// Returns `pop_time + invisible_time`, saturating instead of overflowing when
+    /// the client supplies a near-`i64::MAX` `invisible_time`.
     pub fn get_revive_time(&self) -> i64 {
-        self.pop_time + self.invisible_time
+        self.pop_time.saturating_add(self.invisible_time)
     }
 
     // Getter methods
@@ -491,6 +493,14 @@ mod tests {
         let serialized = serde_json::to_string(&p).unwrap();
         let deserialized: PopCheckPoint = serde_json::from_str(&serialized).unwrap();
         assert_eq!(p, deserialized);
+    }
+
+    #[test]
+    fn get_revive_time_saturates_instead_of_overflowing() {
+        let mut ck = PopCheckPoint::default();
+        ck.set_pop_time(1_000);
+        ck.set_invisible_time(i64::MAX);
+        assert_eq!(ck.get_revive_time(), i64::MAX);
     }
 
     #[test]
