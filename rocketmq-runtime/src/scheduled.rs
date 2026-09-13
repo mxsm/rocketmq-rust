@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -23,6 +24,7 @@ use std::time::Instant;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use serde::Serialize;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::RuntimeError;
@@ -42,6 +44,62 @@ pub enum ScheduleMode {
     FixedRateNoOverlap,
     /// Represents the fixed rate allow overlap case.
     FixedRateAllowOverlap,
+}
+
+/// Maximum concurrent runs admitted for one bounded schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ScheduledTaskConcurrency {
+    /// At most one run is active.
+    Serial,
+    /// At most `max_runs` runs are active.
+    Bounded(NonZeroUsize),
+}
+
+/// Policy for ticks that arrive while all run slots are occupied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum MissedTickPolicy {
+    /// Discard the missed tick.
+    Skip,
+    /// Retain at most one pending intent and run it when a slot becomes free.
+    CoalesceLatest,
+    /// Retain at most `max_pending` intents and run them as slots become free.
+    BoundedCatchUp(NonZeroUsize),
+}
+
+/// Bounded execution policy for one scheduled task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ScheduledExecutionPolicy {
+    /// Maximum concurrent runs.
+    pub concurrency: ScheduledTaskConcurrency,
+    /// Behavior for missed ticks.
+    pub missed_ticks: MissedTickPolicy,
+}
+
+impl ScheduledExecutionPolicy {
+    /// Creates a serial policy.
+    #[must_use]
+    pub const fn serial(missed_ticks: MissedTickPolicy) -> Self {
+        Self {
+            concurrency: ScheduledTaskConcurrency::Serial,
+            missed_ticks,
+        }
+    }
+
+    /// Creates a bounded-overlap policy.
+    #[must_use]
+    pub const fn bounded(concurrency: NonZeroUsize, missed_ticks: MissedTickPolicy) -> Self {
+        Self {
+            concurrency: ScheduledTaskConcurrency::Bounded(concurrency),
+            missed_ticks,
+        }
+    }
+
+    fn max_concurrency(self) -> usize {
+        match self.concurrency {
+            ScheduledTaskConcurrency::Serial => 1,
+            ScheduledTaskConcurrency::Bounded(concurrency) => concurrency.get(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -122,6 +180,9 @@ pub struct ScheduledTaskGroup {
 #[derive(Debug)]
 struct ScheduledTaskMetrics {
     config: ScheduledTaskConfig,
+    max_concurrency: usize,
+    pending_runs: AtomicU64,
+    completion: Notify,
     running: AtomicBool,
     active_runs: AtomicU64,
     runs: AtomicU64,
@@ -245,7 +306,7 @@ impl ScheduledTaskGroup {
         config.mode = ScheduleMode::FixedDelay;
         let name: Arc<str> = Arc::from(config.name.as_str());
         let name_for_cleanup = name.clone();
-        let Some(metrics) = self.register(name.clone(), config.clone()) else {
+        let Some(metrics) = self.register(name.clone(), config.clone(), 1) else {
             return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
         };
         let token = operation.cancellation_token();
@@ -300,7 +361,7 @@ impl ScheduledTaskGroup {
         config.mode = ScheduleMode::FixedRateNoOverlap;
         let name: Arc<str> = Arc::from(config.name.as_str());
         let name_for_cleanup = name.clone();
-        let Some(metrics) = self.register(name.clone(), config.clone()) else {
+        let Some(metrics) = self.register(name.clone(), config.clone(), 1) else {
             return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
         };
         let token = operation.cancellation_token();
@@ -368,7 +429,7 @@ impl ScheduledTaskGroup {
         config.mode = ScheduleMode::FixedDelay;
         let name: Arc<str> = Arc::from(config.name.as_str());
         let name_for_cleanup = name.clone();
-        let Some(metrics) = self.register(name.clone(), config.clone()) else {
+        let Some(metrics) = self.register(name.clone(), config.clone(), 1) else {
             return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
         };
         let token = self.group.cancellation_token();
@@ -422,7 +483,7 @@ impl ScheduledTaskGroup {
         config.mode = ScheduleMode::FixedRateNoOverlap;
         let name: Arc<str> = Arc::from(config.name.as_str());
         let name_for_cleanup = name.clone();
-        let Some(metrics) = self.register(name.clone(), config.clone()) else {
+        let Some(metrics) = self.register(name.clone(), config.clone(), 1) else {
             return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
         };
         let token = self.group.cancellation_token();
@@ -490,7 +551,7 @@ impl ScheduledTaskGroup {
         config.mode = ScheduleMode::FixedRateAllowOverlap;
         let name: Arc<str> = Arc::from(config.name.as_str());
         let name_for_cleanup = name.clone();
-        let Some(metrics) = self.register(name.clone(), config.clone()) else {
+        let Some(metrics) = self.register(name.clone(), config.clone(), 1) else {
             return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
         };
         let token = self.group.cancellation_token();
@@ -555,6 +616,139 @@ impl ScheduledTaskGroup {
         self.schedule_fixed_rate(config, task)
     }
 
+    /// Schedules one task with explicit concurrency and missed-tick limits.
+    ///
+    /// A run slot is acquired before a run task is created. Fixed-delay
+    /// schedules remain serial; fixed-rate schedules use the supplied
+    /// concurrency and missed-tick policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an operational error when the period is zero or the driver
+    /// cannot be registered.
+    pub fn schedule_bounded<F, Fut>(
+        &self,
+        mut config: ScheduledTaskConfig,
+        policy: ScheduledExecutionPolicy,
+        task: F,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        if config.period.is_zero() {
+            return Err(RuntimeError::unsupported(
+                crate::RuntimeOperation::RegisterScheduledTask,
+            ));
+        }
+        let max_concurrency = if matches!(config.mode, ScheduleMode::FixedDelay | ScheduleMode::FixedRateNoOverlap) {
+            1
+        } else {
+            policy.max_concurrency()
+        };
+        config.mode = if config.mode == ScheduleMode::FixedDelay {
+            ScheduleMode::FixedDelay
+        } else if max_concurrency == 1 {
+            ScheduleMode::FixedRateNoOverlap
+        } else {
+            ScheduleMode::FixedRateAllowOverlap
+        };
+
+        let name: Arc<str> = Arc::from(config.name.as_str());
+        let name_for_cleanup = name.clone();
+        let Some(metrics) = self.register(name.clone(), config.clone(), max_concurrency) else {
+            return Ok(ScheduledTaskRegistrationOutcome::AlreadyPresent);
+        };
+        let token = self.group.cancellation_token();
+        let run_group = self.group.clone();
+        let task = Arc::new(task);
+        let max_run_time = config.max_run_time;
+        let period = config.period;
+        let initial_delay = config.initial_delay;
+
+        let spawn_result = if config.mode == ScheduleMode::FixedDelay {
+            self.group.spawn(
+                format!("scheduled-driver:{name}"),
+                TaskKind::ScheduledDriver,
+                async move {
+                    if !sleep_or_cancel(&token, initial_delay).await {
+                        return;
+                    }
+                    loop {
+                        if token.is_cancelled() {
+                            return;
+                        }
+                        let started_at = Instant::now();
+                        metrics.begin_serial_run(started_at);
+                        let timed_out = run_with_optional_timeout(task(), max_run_time).await;
+                        metrics.finish_run(started_at, timed_out);
+                        if !sleep_or_cancel(&token, period).await {
+                            return;
+                        }
+                    }
+                },
+            )
+        } else {
+            self.group.spawn(
+                format!("scheduled-driver:{name}"),
+                TaskKind::ScheduledDriver,
+                async move {
+                    let mut expected_tick = Instant::now() + initial_delay;
+                    loop {
+                        if token.is_cancelled() {
+                            return;
+                        }
+                        tokio::select! {
+                            biased;
+                            _ = token.cancelled() => return,
+                            _ = metrics.completion.notified() => {}
+                            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(expected_tick)) => {
+                                let now = Instant::now();
+                                let overdue = now.saturating_duration_since(expected_tick);
+                                let total_missed = 1u64.saturating_add(
+                                    u64::try_from(overdue.as_nanos() / period.as_nanos()).unwrap_or(u64::MAX),
+                                );
+                                let mut remaining = total_missed;
+                                while remaining > 0 && metrics.try_reserve_run() {
+                                    if !spawn_bounded_run(
+                                        &run_group,
+                                        &metrics,
+                                        &task,
+                                        &name,
+                                        max_run_time,
+                                    ) {
+                                        metrics.rollback_started_run();
+                                        break;
+                                    }
+                                    remaining -= 1;
+                                }
+                                metrics.queue_missed_ticks(remaining, policy.missed_ticks);
+                                let advance = period.saturating_mul(
+                                    u32::try_from(total_missed).unwrap_or(u32::MAX),
+                                );
+                                expected_tick = expected_tick.checked_add(advance).unwrap_or(now);
+                            }
+                        }
+                        while metrics.pending_runs.load(Ordering::Acquire) > 0 && metrics.try_reserve_run() {
+                            if !metrics.take_pending_run() {
+                                metrics.rollback_started_run();
+                                break;
+                            }
+                            if !spawn_bounded_run(&run_group, &metrics, &task, &name, max_run_time) {
+                                metrics.rollback_started_run();
+                                break;
+                            }
+                        }
+                    }
+                },
+            )
+        };
+        if spawn_result.is_err() {
+            self.schedules.remove(&name_for_cleanup);
+        }
+        spawn_result.map(ScheduledTaskRegistrationOutcome::Scheduled)
+    }
+
     /// Returns the snapshot.
     pub fn snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
         self.schedules.iter().map(|entry| entry.value().snapshot()).collect()
@@ -581,9 +775,17 @@ impl ScheduledTaskGroup {
         self.group.shutdown(timeout).await
     }
 
-    fn register(&self, name: Arc<str>, config: ScheduledTaskConfig) -> Option<Arc<ScheduledTaskMetrics>> {
+    fn register(
+        &self,
+        name: Arc<str>,
+        config: ScheduledTaskConfig,
+        max_concurrency: usize,
+    ) -> Option<Arc<ScheduledTaskMetrics>> {
         let metrics = Arc::new(ScheduledTaskMetrics {
             config,
+            max_concurrency,
+            pending_runs: AtomicU64::new(0),
+            completion: Notify::new(),
             running: AtomicBool::new(false),
             active_runs: AtomicU64::new(0),
             runs: AtomicU64::new(0),
@@ -606,6 +808,67 @@ impl ScheduledTaskGroup {
 }
 
 impl ScheduledTaskMetrics {
+    fn try_reserve_run(&self) -> bool {
+        let mut active = self.active_runs.load(Ordering::Acquire);
+        loop {
+            if active >= self.max_concurrency as u64 {
+                return false;
+            }
+            match self
+                .active_runs
+                .compare_exchange_weak(active, active + 1, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => {
+                    self.running.store(true, Ordering::Release);
+                    return true;
+                }
+                Err(observed) => active = observed,
+            }
+        }
+    }
+
+    fn take_pending_run(&self) -> bool {
+        self.pending_runs
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| pending.checked_sub(1))
+            .is_ok()
+    }
+
+    fn queue_missed_ticks(&self, missed: u64, policy: MissedTickPolicy) {
+        if missed == 0 {
+            return;
+        }
+        let skipped = match policy {
+            MissedTickPolicy::Skip => missed,
+            MissedTickPolicy::CoalesceLatest => {
+                let previously_pending = self.pending_runs.swap(1, Ordering::AcqRel);
+                if previously_pending == 0 {
+                    missed.saturating_sub(1)
+                } else {
+                    missed
+                }
+            }
+            MissedTickPolicy::BoundedCatchUp(limit) => {
+                let limit = limit.get() as u64;
+                let mut added = 0;
+                while added < missed {
+                    let pending = self.pending_runs.load(Ordering::Acquire);
+                    if pending >= limit {
+                        break;
+                    }
+                    if self
+                        .pending_runs
+                        .compare_exchange_weak(pending, pending + 1, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                    {
+                        added += 1;
+                    }
+                }
+                missed.saturating_sub(added)
+            }
+        };
+        self.skips.fetch_add(skipped, Ordering::Relaxed);
+    }
+
     fn begin_serial_run(&self, expected_at: Instant) {
         self.active_runs.fetch_add(1, Ordering::AcqRel);
         self.running.store(true, Ordering::Release);
@@ -642,11 +905,13 @@ impl ScheduledTaskMetrics {
             self.runs.fetch_add(1, Ordering::Relaxed);
         }
         self.finish_active_run();
+        self.completion.notify_one();
     }
 
     fn rollback_started_run(&self) {
         self.failures.fetch_add(1, Ordering::Relaxed);
         self.finish_active_run();
+        self.completion.notify_one();
     }
 
     fn finish_active_run(&self) {
@@ -676,6 +941,28 @@ impl ScheduledTaskMetrics {
             max_elapsed_ms: self.max_elapsed_ms.load(Ordering::Relaxed),
         }
     }
+}
+
+fn spawn_bounded_run<F, Fut>(
+    group: &TaskGroup,
+    metrics: &Arc<ScheduledTaskMetrics>,
+    task: &Arc<F>,
+    name: &Arc<str>,
+    max_run_time: Option<Duration>,
+) -> bool
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let run_metrics = metrics.clone();
+    let run_task = task.clone();
+    group
+        .spawn(format!("scheduled-run:{name}"), TaskKind::ScheduledRun, async move {
+            let started_at = Instant::now();
+            let timed_out = run_with_optional_timeout(run_task(), max_run_time).await;
+            run_metrics.finish_run(started_at, timed_out);
+        })
+        .is_ok()
 }
 
 fn next_expected_tick(current: Instant, period: Duration) -> Instant {
@@ -719,5 +1006,86 @@ async fn sleep_or_cancel(token: &CancellationToken, duration: Duration) -> bool 
     tokio::select! {
         _ = token.cancelled() => false,
         _ = tokio::time::sleep(duration) => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tokio::sync::Semaphore;
+
+    use super::*;
+    use crate::RuntimeContext;
+
+    #[tokio::test(start_paused = true)]
+    async fn coalesced_bounded_schedule_never_exceeds_one_active_and_one_pending_run() {
+        let context = RuntimeContext::try_from_current("bounded-schedule").unwrap();
+        let scheduled = ScheduledTaskGroup::new(context.root_group().clone());
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(Semaphore::new(0));
+
+        let task_active = active.clone();
+        let task_max_active = max_active.clone();
+        let task_calls = calls.clone();
+        let task_release = release.clone();
+        scheduled
+            .schedule_bounded(
+                ScheduledTaskConfig::fixed_rate("bounded-coalesce", Duration::from_secs(1)),
+                ScheduledExecutionPolicy::serial(MissedTickPolicy::CoalesceLatest),
+                move || {
+                    let task_active = task_active.clone();
+                    let task_max_active = task_max_active.clone();
+                    let task_calls = task_calls.clone();
+                    let task_release = task_release.clone();
+                    async move {
+                        let current = task_active.fetch_add(1, Ordering::AcqRel) + 1;
+                        task_max_active.fetch_max(current, Ordering::AcqRel);
+                        task_calls.fetch_add(1, Ordering::AcqRel);
+                        let permit = task_release.acquire().await.unwrap();
+                        drop(permit);
+                        task_active.fetch_sub(1, Ordering::AcqRel);
+                    }
+                },
+            )
+            .unwrap();
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+
+        tokio::time::advance(Duration::from_secs(5)).await;
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        let snapshot = scheduled
+            .snapshot()
+            .into_iter()
+            .find(|snapshot| snapshot.name == "bounded-coalesce")
+            .unwrap();
+        assert_eq!(snapshot.active_runs, 1);
+        assert!(snapshot.skips >= 4);
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+
+        release.add_permits(1);
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(calls.load(Ordering::Acquire), 2);
+        assert_eq!(max_active.load(Ordering::Acquire), 1);
+
+        release.add_permits(1);
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(active.load(Ordering::Acquire), 0);
+        assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
     }
 }
