@@ -34,6 +34,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -520,6 +521,7 @@ pub struct MetadataIoActor {
 struct ActorInner {
     config: MetadataIoConfig,
     targets: MetadataTargetRegistry,
+    waiter_count: Arc<AtomicUsize>,
     next_generation: AtomicU64,
     state: Mutex<ActorState>,
     shutdown: Notify,
@@ -561,6 +563,45 @@ struct WorkMeta {
 struct GenerationWaiter {
     generation: MetadataGeneration,
     sender: oneshot::Sender<RuntimeResult<MetadataIoCommitOutcome>>,
+    _permit: WaiterPermit,
+}
+
+#[derive(Debug)]
+struct WaiterPermit {
+    waiter_count: Arc<AtomicUsize>,
+}
+
+impl Drop for WaiterPermit {
+    fn drop(&mut self) {
+        self.waiter_count.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl ActorInner {
+    fn reserve_waiter(&self, resource_waiters: usize) -> RuntimeResult<WaiterPermit> {
+        let max_waiters = self.config.max_pending_operations.saturating_mul(4).max(1);
+        if resource_waiters >= max_waiters {
+            return Err(RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataOperation));
+        }
+
+        let mut current = self.waiter_count.load(Ordering::Acquire);
+        loop {
+            if current >= max_waiters {
+                return Err(RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataOperation));
+            }
+            match self
+                .waiter_count
+                .compare_exchange_weak(current, current + 1, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => {
+                    return Ok(WaiterPermit {
+                        waiter_count: Arc::clone(&self.waiter_count),
+                    });
+                }
+                Err(observed) => current = observed,
+            }
+        }
+    }
 }
 
 impl MetadataIoActor {
@@ -576,6 +617,7 @@ impl MetadataIoActor {
         let inner = Arc::new(ActorInner {
             config,
             targets,
+            waiter_count: Arc::new(AtomicUsize::new(0)),
             next_generation: AtomicU64::new(1),
             state: Mutex::new(ActorState {
                 accepting: true,
@@ -649,6 +691,7 @@ impl MetadataIoActor {
             }
             if let Some(in_flight) = &existing.in_flight {
                 if generation <= in_flight.generation {
+                    let waiter_permit = self.inner.reserve_waiter(existing.waiters.len())?;
                     let Some(resource_state) = state.resources.get_mut(&resource) else {
                         return Err(RuntimeError::context_unavailable(
                             crate::RuntimeOperation::MetadataWorkerStopped,
@@ -657,6 +700,7 @@ impl MetadataIoActor {
                     resource_state.waiters.push(GenerationWaiter {
                         generation,
                         sender: waiter_sender,
+                        _permit: waiter_permit,
                     });
                     return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
                         generation,
@@ -666,6 +710,7 @@ impl MetadataIoActor {
             }
             if let Some(queued) = &existing.queued {
                 if generation <= queued.request.generation {
+                    let waiter_permit = self.inner.reserve_waiter(existing.waiters.len())?;
                     let Some(resource_state) = state.resources.get_mut(&resource) else {
                         return Err(RuntimeError::context_unavailable(
                             crate::RuntimeOperation::MetadataWorkerStopped,
@@ -674,6 +719,7 @@ impl MetadataIoActor {
                     resource_state.waiters.push(GenerationWaiter {
                         generation,
                         sender: waiter_sender,
+                        _permit: waiter_permit,
                     });
                     return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
                         generation,
@@ -683,6 +729,9 @@ impl MetadataIoActor {
             }
         }
 
+        let waiter_permit = self
+            .inner
+            .reserve_waiter(existing.map_or(0, |resource_state| resource_state.waiters.len()))?;
         let old_queued_bytes = existing
             .and_then(|resource_state| resource_state.queued.as_ref())
             .map_or(0, |queued| queued.request.len());
@@ -723,6 +772,7 @@ impl MetadataIoActor {
         resource_state.waiters.push(GenerationWaiter {
             generation,
             sender: waiter_sender,
+            _permit: waiter_permit,
         });
         drop(state);
         if let Some(permit) = queue_permit {
