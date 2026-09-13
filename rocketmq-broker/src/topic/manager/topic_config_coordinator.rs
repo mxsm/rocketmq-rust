@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
@@ -20,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::broker::metadata_reconciliation::MetadataWriteConclusion;
 use crate::broker_error::BrokerResult as Result;
 use crate::config::config_manager::ConfigManager;
 use rocketmq_error::SharedError;
@@ -45,14 +47,72 @@ const TOPIC_CONFIG_METADATA_RESOURCE: &str = "metadata-io:broker.topic-config";
 pub(crate) type TopicRegistrationFuture = Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>;
 pub(crate) type TopicRegistrationAction = Box<dyn FnOnce() -> TopicRegistrationFuture + Send + 'static>;
 
+/// The outcome of one topic config persistence command.
+///
+/// The persistence conclusion is reported separately from a registration
+/// failure, because a registration callback runs only after the snapshot was
+/// written: when it fails the file still holds the change, so the durable state
+/// is known and a supervised topic can be released even though the command as a
+/// whole failed.
+pub(crate) struct TopicConfigCommandOutcome {
+    /// What the persistence step confirmed about the durable file.
+    pub(crate) conclusion: crate::broker::metadata_reconciliation::MetadataWriteConclusion,
+    /// A failure that did not come from persistence, such as the registration
+    /// callback.
+    pub(crate) registration_error: Option<SharedError>,
+}
+
+impl TopicConfigCommandOutcome {
+    /// Wraps a persistence conclusion that stands on its own.
+    fn persisted(conclusion: crate::broker::metadata_reconciliation::MetadataWriteConclusion) -> Self {
+        Self {
+            conclusion,
+            registration_error: None,
+        }
+    }
+
+    /// Returns the error to report to the caller, if the command failed.
+    pub(crate) fn error(&self) -> Option<SharedError> {
+        self.registration_error
+            .clone()
+            .or_else(|| crate::broker::metadata_reconciliation::conclusion_error(&self.conclusion))
+    }
+
+    /// Returns whether the command completed without a failure.
+    pub(crate) fn is_ok(&self) -> bool {
+        self.error().is_none()
+    }
+}
+
+impl fmt::Debug for TopicConfigCommandOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TopicConfigCommandOutcome")
+            .field("durable", &self.conclusion.is_durable())
+            .field("registration_error", &self.registration_error.is_some())
+            .finish()
+    }
+}
+
+/// Reduces a command outcome to the error the caller has to report.
+///
+/// Callers that do not act on the persistence conclusion use this so the
+/// failure they report is the same one a supervisor would use.
+pub(crate) fn outcome_result(outcome: TopicConfigCommandOutcome) -> Result<()> {
+    match outcome.error() {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
 enum TopicConfigCommand {
     Persist {
         registration: Option<TopicRegistrationAction>,
-        completion: Option<oneshot::Sender<Result<()>>>,
+        completion: Option<oneshot::Sender<TopicConfigCommandOutcome>>,
         _pending: TopicConfigPendingGuard,
     },
     Finalize {
-        completion: oneshot::Sender<Result<()>>,
+        completion: oneshot::Sender<TopicConfigCommandOutcome>,
     },
 }
 
@@ -263,23 +323,34 @@ impl TopicConfigCoordinator {
             .map_err(topic_coordinator_source)?
     }
 
-    pub(crate) async fn persist_and_wait(&self) -> Result<()> {
-        self.submit(None, true).await
+    pub(crate) async fn persist_and_wait(&self) -> Result<TopicConfigCommandOutcome> {
+        self.submit(None, true)
+            .await?
+            .ok_or_else(|| topic_coordinator_error("topic config command was accepted without a conclusion"))
     }
 
     pub(crate) async fn persist_accepted(&self) -> Result<()> {
-        self.submit(None, false).await
+        self.submit(None, false).await.map(|_| ())
     }
 
-    pub(crate) async fn persist_and_register_wait(&self, registration: TopicRegistrationAction) -> Result<()> {
-        self.submit(Some(registration), true).await
+    pub(crate) async fn persist_and_register_wait(
+        &self,
+        registration: TopicRegistrationAction,
+    ) -> Result<TopicConfigCommandOutcome> {
+        self.submit(Some(registration), true)
+            .await?
+            .ok_or_else(|| topic_coordinator_error("topic config command was accepted without a conclusion"))
     }
 
     pub(crate) async fn persist_and_register_accepted(&self, registration: TopicRegistrationAction) -> Result<()> {
-        self.submit(Some(registration), false).await
+        self.submit(Some(registration), false).await.map(|_| ())
     }
 
-    async fn submit(&self, registration: Option<TopicRegistrationAction>, wait: bool) -> Result<()> {
+    async fn submit(
+        &self,
+        registration: Option<TopicRegistrationAction>,
+        wait: bool,
+    ) -> Result<Option<TopicConfigCommandOutcome>> {
         self.ensure_started().await?;
         let (completion, receiver) = if wait {
             let (sender, receiver) = oneshot::channel();
@@ -310,8 +381,12 @@ impl TopicConfigCoordinator {
         match receiver {
             Some(receiver) => receiver
                 .await
-                .map_err(|_| topic_coordinator_error("topic config command result channel closed"))?,
-            None => Ok(()),
+                .map_err(|_| topic_coordinator_error("topic config command result channel closed"))
+                .map(Some),
+            // An accepted command reports no conclusion: the caller did not wait
+            // for one, and a persistence failure is recorded in the counters and
+            // the warning log instead.
+            None => Ok(None),
         }
     }
 
@@ -363,11 +438,13 @@ impl TopicConfigCoordinator {
             .map(|_| "failed to enqueue final persistence".to_string());
         let final_persist_succeeded = if detail.is_none() {
             match tokio::time::timeout(deadline.remaining(), receiver).await {
-                Ok(Ok(Ok(()))) => true,
-                Ok(Ok(Err(error))) => {
-                    detail = Some(error.to_string());
-                    false
-                }
+                Ok(Ok(outcome)) => match outcome.error() {
+                    Some(error) => {
+                        detail = Some(error.to_string());
+                        false
+                    }
+                    None => true,
+                },
                 Ok(Err(_)) => {
                     detail = Some("final persistence result channel closed".to_string());
                     false
@@ -420,32 +497,44 @@ async fn run_topic_config_worker(
                 completion,
                 _pending,
             } => {
-                let result = persist_stable(&manager, &blocking, metadata_io.as_ref()).await;
-                let result = match (result, registration) {
-                    (Ok(()), Some(registration)) => match registration().await {
-                        Ok(()) => persist_stable(&manager, &blocking, metadata_io.as_ref()).await,
-                        Err(error) => {
-                            registration_failures.fetch_add(1, Ordering::AcqRel);
-                            Err(error)
+                let mut outcome = TopicConfigCommandOutcome::persisted(
+                    persist_stable(&manager, &blocking, metadata_io.as_ref()).await,
+                );
+                if outcome.conclusion.is_durable() {
+                    if let Some(registration) = registration {
+                        match registration().await {
+                            Ok(()) => {
+                                outcome = TopicConfigCommandOutcome::persisted(
+                                    persist_stable(&manager, &blocking, metadata_io.as_ref()).await,
+                                );
+                            }
+                            Err(error) => {
+                                registration_failures.fetch_add(1, Ordering::AcqRel);
+                                // The snapshot was already written, so this is
+                                // not a persistence failure. The conclusion
+                                // keeps describing the durable file.
+                                outcome.registration_error = Some(error);
+                            }
                         }
-                    },
-                    (result, _) => result,
-                };
-                if result.is_err() {
+                    }
+                }
+                if !outcome.is_ok() {
                     persist_failures.fetch_add(1, Ordering::AcqRel);
                 }
                 if let Some(completion) = completion {
-                    let _ = completion.send(result);
-                } else if let Err(error) = result {
+                    let _ = completion.send(outcome);
+                } else if let Some(error) = outcome.error() {
                     warn!(?error, "asynchronous topic config command failed");
                 }
             }
             TopicConfigCommand::Finalize { completion } => {
-                let result = persist_stable(&manager, &blocking, metadata_io.as_ref()).await;
-                if result.is_err() {
+                let outcome = TopicConfigCommandOutcome::persisted(
+                    persist_stable(&manager, &blocking, metadata_io.as_ref()).await,
+                );
+                if !outcome.is_ok() {
                     persist_failures.fetch_add(1, Ordering::AcqRel);
                 }
-                let _ = completion.send(result);
+                let _ = completion.send(outcome);
                 break;
             }
         }
@@ -456,11 +545,17 @@ async fn persist_stable(
     manager: &Arc<TopicConfigManager>,
     blocking: &BlockingExecutor,
     metadata_io: Option<&MetadataIoActor>,
-) -> Result<()> {
+) -> MetadataWriteConclusion {
+    // The persistence step is chosen once per command, so the conclusion
+    // recorded by the last iteration is the one that describes the file.
+    let mut observed = MetadataWriteConclusion::BlockingPersisted;
     loop {
         let persisted_version = if manager.supports_metadata_io_actor() {
             if let Some(metadata_io) = metadata_io {
-                let (version, path, content) = manager.encoded_persistence_snapshot()?;
+                let (version, path, content) = match manager.encoded_persistence_snapshot() {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => return MetadataWriteConclusion::FailedBeforeCommit(error),
+                };
                 let observation = metadata_io
                     .submit_next_observed(
                         "broker.topic-config",
@@ -469,32 +564,49 @@ async fn persist_stable(
                         MetadataDeadline::after(Duration::from_secs(30)),
                     )
                     .await
-                    .map_err(crate::runtime_to_rocketmq_error)?;
-                // An unconfirmed generation is retried by the convergence loop,
-                // which re-encodes current memory and therefore repairs
-                // durability on the next attempt.
-                crate::require_metadata_conclusion("broker.topic-config", observation)?;
+                    .map_err(crate::runtime_to_rocketmq_error);
+                observed = match observation {
+                    Ok(observation) => crate::broker::metadata_reconciliation::conclude_metadata_write(
+                        "broker.topic-config",
+                        observation,
+                    ),
+                    Err(error) => MetadataWriteConclusion::FailedBeforeCommit(error),
+                };
+                // An unconfirmed generation is not retried here. The runtime
+                // fences a target whose replacement was never confirmed, so a
+                // second attempt cannot be admitted until the fence is cleared.
+                if !observed.is_durable() {
+                    return observed;
+                }
                 version
             } else {
                 let manager_for_write = Arc::clone(manager);
-                blocking
+                match blocking
                     .spawn_io("broker.topic-config.persist", move || {
                         manager_for_write.persist_latest_snapshot()
                     })
                     .await
-                    .map_err(topic_coordinator_source)??
+                {
+                    Ok(Ok(version)) => version,
+                    Ok(Err(error)) => return MetadataWriteConclusion::FailedBeforeCommit(error),
+                    Err(error) => return MetadataWriteConclusion::FailedBeforeCommit(topic_coordinator_source(error)),
+                }
             }
         } else {
             let manager_for_write = Arc::clone(manager);
-            blocking
+            match blocking
                 .spawn_io("broker.topic-config.persist", move || {
                     manager_for_write.persist_latest_snapshot()
                 })
                 .await
-                .map_err(topic_coordinator_source)??
+            {
+                Ok(Ok(version)) => version,
+                Ok(Err(error)) => return MetadataWriteConclusion::FailedBeforeCommit(error),
+                Err(error) => return MetadataWriteConclusion::FailedBeforeCommit(topic_coordinator_source(error)),
+            }
         };
         if manager.data_version() == persisted_version {
-            return Ok(());
+            return observed;
         }
     }
 }
@@ -526,6 +638,7 @@ mod tests {
 
     use super::TopicConfigCoordinator;
     use super::TopicRegistrationAction;
+    use crate::broker::metadata_reconciliation::MetadataWriteConclusion;
     use crate::topic::manager::topic_config_manager::TopicConfigManager;
 
     fn test_coordinator(temp_dir: &TempDir) -> (RuntimeContext, Arc<TopicConfigCoordinator>) {
@@ -617,6 +730,134 @@ mod tests {
         assert!(runtime_report.is_healthy(), "{}", runtime_report.to_json());
     }
 
+    /// Fails after the target was replaced, which the actor reports as an
+    /// unconfirmed replacement.
+    #[derive(Debug)]
+    struct UnconfirmedReplacementFileSystem;
+
+    impl rocketmq_runtime::MetadataFileSystem for UnconfirmedReplacementFileSystem {
+        fn persist_atomic(&self, _target: &std::path::Path, _bytes: &[u8]) -> rocketmq_runtime::RuntimeResult<()> {
+            Err(rocketmq_runtime::RuntimeError::io(
+                rocketmq_runtime::MetadataIoOperation::SyncParent.runtime_operation(),
+                std::io::Error::other("injected parent directory sync failure"),
+            ))
+        }
+    }
+
+    fn test_coordinator_with_metadata_io(
+        temp_dir: &TempDir,
+        file_system: Arc<dyn rocketmq_runtime::MetadataFileSystem>,
+    ) -> (RuntimeContext, Arc<TopicConfigCoordinator>) {
+        let root = temp_dir.path().to_string_lossy().to_string();
+        let broker_config = BrokerConfig {
+            store_path_root_dir: root.clone().into(),
+            ..BrokerConfig::default()
+        };
+        let message_store_config = MessageStoreConfig {
+            store_path_root_dir: root.into(),
+            ..MessageStoreConfig::default()
+        };
+        let manager = Arc::new(TopicConfigManager::new(
+            &broker_config,
+            &message_store_config,
+            false,
+            None,
+        ));
+        let runtime = RuntimeContext::from_current("topic-config-coordinator-metadata-test");
+        let actor = rocketmq_runtime::MetadataIoConfig::default()
+            .into_plan()
+            .expect("default metadata I/O config is valid")
+            .start_with_file_system(
+                &runtime.service_context("topic-config-coordinator-metadata"),
+                file_system,
+            )
+            .expect("metadata actor should start");
+        let coordinator = Arc::new(TopicConfigCoordinator::new_with_metadata_io(
+            manager,
+            runtime.service_context("topic-config-coordinator"),
+            Some(actor),
+        ));
+        (runtime, coordinator)
+    }
+
+    #[tokio::test]
+    async fn a_registration_failure_reports_the_persistence_conclusion_as_durable() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let (runtime, coordinator) = test_coordinator(&temp_dir);
+        coordinator
+            .manager()
+            .update_topic_config(TopicConfig::with_queues("ConclusionTopic", 1, 1), 0);
+        let failed: TopicRegistrationAction =
+            Box::new(|| Box::pin(async { Err(crate::broker_error::service_failed("registration")) }));
+
+        let outcome = coordinator
+            .persist_and_register_wait(failed)
+            .await
+            .expect("the command is admitted and reports an outcome");
+
+        // The snapshot reached the file before the callback ran, so the
+        // durability of this topic is known even though the command failed.
+        assert!(!outcome.is_ok());
+        assert!(
+            outcome.conclusion.is_durable(),
+            "a registration failure must not be reported as a persistence failure"
+        );
+        assert!(!outcome.conclusion.retains_dirty_marker());
+        assert!(outcome.registration_error.is_some());
+        assert!(outcome.error().is_some());
+        assert_eq!(coordinator.registration_failure_count(), 1);
+
+        let report = coordinator
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+            .await;
+        assert!(report.can_unregister(), "{report:?}");
+        let runtime_report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(runtime_report.is_healthy(), "{}", runtime_report.to_json());
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_snapshot_keeps_the_topic_marker() {
+        let temp_dir = TempDir::new().expect("temp dir should be created");
+        let (runtime, coordinator) =
+            test_coordinator_with_metadata_io(&temp_dir, Arc::new(UnconfirmedReplacementFileSystem));
+        coordinator
+            .manager()
+            .update_topic_config(TopicConfig::with_queues("UnconfirmedTopic", 1, 1), 0);
+
+        let outcome = coordinator
+            .persist_and_wait()
+            .await
+            .expect("the command is admitted and reports an outcome");
+
+        assert!(!outcome.is_ok());
+        assert!(
+            !outcome.conclusion.is_durable(),
+            "an unconfirmed replacement is not a durable conclusion"
+        );
+        assert!(
+            outcome.conclusion.retains_dirty_marker(),
+            "the supervised topic must stay marked while its durability is unknown"
+        );
+        assert!(matches!(
+            outcome.conclusion,
+            MetadataWriteConclusion::Unconfirmed {
+                reason: crate::broker::metadata_reconciliation::UnconfirmedReason::CommitUnconfirmed,
+                ..
+            }
+        ));
+
+        let report = coordinator
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+            .await;
+        // The injected filesystem fails every write, so the final persistence
+        // during shutdown cannot succeed either. What matters here is that the
+        // worker still exited and reported the real remaining work.
+        assert!(report.worker_exited, "{report:?}");
+        assert!(!report.final_persist_succeeded, "{report:?}");
+        let runtime_report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(runtime_report.is_healthy(), "{}", runtime_report.to_json());
+    }
+
     #[tokio::test]
     async fn failed_registration_keeps_admission_open_for_periodic_retry() {
         let temp_dir = TempDir::new().expect("temp dir should be created");
@@ -639,7 +880,15 @@ mod tests {
                 )))
             })
         });
-        assert!(coordinator.persist_and_register_wait(failed).await.is_err());
+        let outcome = coordinator
+            .persist_and_register_wait(failed)
+            .await
+            .expect("the command is admitted and reports an outcome");
+        assert!(
+            !outcome.is_ok(),
+            "a registration failure is reported through the command outcome"
+        );
+        assert!(outcome.registration_error.is_some());
         assert_eq!(coordinator.registration_failure_count(), 1);
 
         let retried = Arc::new(AtomicBool::new(false));

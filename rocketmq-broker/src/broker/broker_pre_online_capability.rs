@@ -47,6 +47,7 @@ use crate::out_api::broker_outer_api::BrokerOuterAPI;
 use crate::plugin::broker_attached_plugin::BrokerAttachedPlugin;
 use crate::processor::ack_message_processor::AckMessageProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
+use crate::topic::manager::topic_config_coordinator::outcome_result;
 use crate::topic::manager::topic_config_coordinator::TopicConfigCoordinator;
 use crate::topic::manager::topic_config_coordinator::TopicRegistrationAction;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
@@ -402,7 +403,10 @@ impl BrokerRegistrationCapability {
                     .await
             })
         });
-        coordinator.persist_and_register_wait(registration).await
+        coordinator
+            .persist_and_register_wait(registration)
+            .await
+            .and_then(outcome_result)
     }
 
     async fn register_snapshot(

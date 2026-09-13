@@ -650,7 +650,12 @@ impl<MS: BrokerAdminStore> BrokerAdminRuntime<MS> {
                     })
                 })
             });
-            if let Err(error) = self.topic_config_coordinator.persist_and_register_wait(action).await {
+            let outcome = self
+                .topic_config_coordinator
+                .persist_and_register_wait(action)
+                .await
+                .and_then(crate::topic::manager::topic_config_coordinator::outcome_result);
+            if let Err(error) = outcome {
                 warn!(%error, generation = generation.value(), "runtime topic metadata refresh will be retried by periodic registration");
             }
         }
