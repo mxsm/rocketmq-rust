@@ -136,12 +136,11 @@ fn start_actor_in(
     file_system: Arc<dyn MetadataFileSystem>,
     config: MetadataIoConfig,
 ) -> MetadataIoActor {
-    let actor = config
+    config
         .into_plan()
         .unwrap()
         .start_with_file_system(&context.service_context(scope), file_system)
-        .unwrap();
-    actor
+        .unwrap()
 }
 
 fn request(resource: &str, generation: u64, bytes: &[u8]) -> MetadataWriteRequest {
