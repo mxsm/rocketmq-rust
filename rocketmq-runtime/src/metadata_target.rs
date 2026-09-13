@@ -269,6 +269,22 @@ mod tests {
     }
 
     #[test]
+    fn target_registry_capacity_is_bounded() {
+        let registry = MetadataTargetRegistry::with_max_entries(1);
+        let first = std::env::temp_dir().join("rocketmq-runtime-target-capacity-first");
+        let second = std::env::temp_dir().join("rocketmq-runtime-target-capacity-second");
+
+        assert!(matches!(
+            registry.register(&first, Arc::<str>::from("first")).unwrap(),
+            MetadataTargetRegistrationOutcome::Registered(_)
+        ));
+        let error = registry
+            .register(&second, Arc::<str>::from("second"))
+            .expect_err("target registration capacity must be bounded");
+        assert_eq!(error.condition(), rocketmq_error::CanonicalCondition::ResourceExhausted);
+    }
+
+    #[test]
     fn registration_release_and_durable_generation_outlive_replacement() {
         let registry = MetadataTargetRegistry::new();
         let target = std::env::temp_dir().join("rocketmq-runtime-target-replacement");

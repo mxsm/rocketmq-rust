@@ -225,6 +225,38 @@ async fn queued_generations_coalesce_without_losing_waiters() {
 }
 
 #[tokio::test]
+async fn waiter_admission_is_bounded_per_actor() {
+    let file_system = Arc::new(GateRecordingFileSystem::default());
+    let started = file_system.gate.started.notified();
+    tokio::pin!(started);
+    started.as_mut().enable();
+    let (_context, actor) = start_actor(file_system.clone(), config(1, 64));
+    let deadline = MetadataDeadline::after(Duration::from_secs(5));
+
+    let first = accepted(actor.submit(request("waiters", 1, b"one"), deadline).unwrap());
+    started.await;
+    let mut observers = Vec::new();
+    for _ in 0..3 {
+        observers.push(accepted(
+            actor.submit(request("waiters", 1, b"duplicate"), deadline).unwrap(),
+        ));
+    }
+    let error = actor
+        .submit(request("waiters", 1, b"overflow"), deadline)
+        .expect_err("waiter admission must be bounded");
+    assert_eq!(error.condition(), rocketmq_error::CanonicalCondition::ResourceExhausted);
+    assert_eq!(actor.snapshot().resources[0].waiter_count, 4);
+
+    file_system.gate.release();
+    assert_eq!(first.wait_until(deadline).await.unwrap(), MetadataGeneration::new(1));
+    for observer in observers {
+        assert_eq!(observer.wait_until(deadline).await.unwrap(), MetadataGeneration::new(1));
+    }
+    assert_eq!(actor.snapshot().resources[0].waiter_count, 0);
+    assert!(!actor.shutdown_until(deadline).await.timed_out);
+}
+
+#[tokio::test]
 async fn pending_resource_target_conflict_returns_the_original_request() {
     let file_system = Arc::new(GateRecordingFileSystem::default());
     let started = file_system.gate.started.notified();
