@@ -841,8 +841,20 @@ impl TopicConfigManager {
         }))
     }
 
-    pub(crate) fn complete_supervised_persistence(&self, topic: &CheetahString, version: u64, persisted: bool) {
-        if !persisted {
+    /// Releases the per-topic marker only for a conclusion known to be durable.
+    ///
+    /// A supervised compare and set must not build a newer state on one whose
+    /// durability is unknown, so every other conclusion keeps the marker. A
+    /// registration failure is not a persistence failure and is reported
+    /// through the command outcome instead, because the snapshot was already
+    /// written when the callback ran.
+    pub(crate) fn complete_supervised_persistence(
+        &self,
+        topic: &CheetahString,
+        version: u64,
+        conclusion: &crate::broker::metadata_reconciliation::MetadataWriteConclusion,
+    ) {
+        if conclusion.retains_dirty_marker() {
             return;
         }
         if self
@@ -1457,6 +1469,14 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Barrier;
 
+    fn persisted_conclusion() -> crate::broker::metadata_reconciliation::MetadataWriteConclusion {
+        crate::broker::metadata_reconciliation::MetadataWriteConclusion::BlockingPersisted
+    }
+
+    fn unconfirmed_conclusion() -> crate::broker::metadata_reconciliation::MetadataWriteConclusion {
+        crate::broker::metadata_reconciliation::MetadataWriteConclusion::unconfirmed_for_test()
+    }
+
     use crate::config::broker_config::BrokerConfig;
     use crate::config::config_manager::ConfigManager;
     use cheetah_string::CheetahString;
@@ -1849,7 +1869,7 @@ mod tests {
                 actual_version: Some(actual_version),
             } if actual_version == created_version
         ));
-        manager.complete_supervised_persistence(&topic, created_version, true);
+        manager.complete_supervised_persistence(&topic, created_version, &persisted_conclusion());
 
         let replaced = expect_applied(
             manager
@@ -1866,7 +1886,7 @@ mod tests {
         assert_eq!(replaced.topic_config.read_queue_nums, 4);
         assert_eq!(replaced.topic_config.write_queue_nums, 6);
         assert!(replaced.changed);
-        manager.complete_supervised_persistence(&topic, created_version + 1, true);
+        manager.complete_supervised_persistence(&topic, created_version + 1, &persisted_conclusion());
         let unchanged = expect_applied(
             manager
                 .replace_topic_config_if_state(
@@ -1940,7 +1960,7 @@ mod tests {
                 .expect("create"),
         );
         let version = u64::try_from(created.data_version.counter()).expect("version");
-        manager.complete_supervised_persistence(&topic, version, false);
+        manager.complete_supervised_persistence(&topic, version, &unconfirmed_conclusion());
         assert_eq!(manager.supervised_dirty_version(&topic), Some(version));
         for replacement in [
             created.topic_config.as_ref().clone(),

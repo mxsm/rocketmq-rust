@@ -53,6 +53,8 @@ use std::collections::HashSet;
 use tracing::info;
 
 use crate::broker::broker_admin_runtime::BrokerAdminRuntime;
+use crate::broker::metadata_reconciliation::MetadataWriteConclusion;
+use crate::topic::manager::topic_config_coordinator::outcome_result;
 
 use super::AdminRequestMetadata;
 use crate::failover::escape_bridge::MessageStoreUnavailable;
@@ -222,7 +224,8 @@ impl TopicRequestHandler {
 
         broker_config_request_handler
             .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
-            .await?;
+            .await
+            .and_then(outcome_result)?;
 
         Ok(Some(RemotingCommand::create_success_response_command()))
     }
@@ -386,7 +389,8 @@ impl TopicRequestHandler {
         };
         broker_config_request_handler
             .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
-            .await?;
+            .await
+            .and_then(outcome_result)?;
 
         Ok(Some(
             RemotingCommand::create_success_response_command_with_header(UpdateTopicConfigCasResponseHeader {
@@ -545,15 +549,27 @@ impl TopicRequestHandler {
                     ),
             ));
         }
-        let persistence = broker_config_request_handler
+        let outcome = broker_config_request_handler
             .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
             .await;
+        let (conclusion, succeeded) = match outcome {
+            Ok(outcome) => {
+                let succeeded = outcome.is_ok();
+                (outcome.conclusion, succeeded)
+            }
+            // A command that was never admitted, or that failed before the
+            // target was replaced, is a definite pre-commit failure.
+            Err(error) => (MetadataWriteConclusion::FailedBeforeCommit(error), false),
+        };
         runtime
             .topic_config_manager()
-            .complete_supervised_persistence(&header.topic, version, persistence.is_ok());
-        let (code, persistence) = if persistence.is_ok() {
+            .complete_supervised_persistence(&header.topic, version, &conclusion);
+        let (code, persistence) = if succeeded {
             (ResponseCode::Success, MutationPersistenceState::Persisted)
         } else {
+            // An unconfirmed replacement and a definite failure both report a
+            // failed persistence state; only the marker and the warn log
+            // distinguish them.
             (ResponseCode::SystemError, MutationPersistenceState::Failed)
         };
         Ok(Some(
@@ -665,7 +681,8 @@ impl TopicRequestHandler {
 
         broker_config_request_handler
             .persist_and_register_topic_updates(vec![update.topic_config], update.data_version)
-            .await?;
+            .await
+            .and_then(outcome_result)?;
 
         Ok(Some(RemotingCommand::create_success_response_command()))
     }

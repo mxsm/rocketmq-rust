@@ -84,11 +84,17 @@ impl<MS: BrokerAdminStore> BrokerConfigRequestHandler<MS> {
         &self.broker_runtime_inner
     }
 
+    /// Persists the topic updates and runs their registration callback.
+    ///
+    /// The returned outcome keeps the persistence conclusion separate from a
+    /// registration failure, so a caller can report the failure without
+    /// treating a snapshot that already reached the file as unconfirmed.
     pub(super) async fn persist_and_register_topic_updates(
         &self,
         topic_config_list: Vec<Arc<TopicConfig>>,
         data_version: DataVersion,
-    ) -> crate::broker_error::BrokerResult<()> {
+    ) -> crate::broker_error::BrokerResult<crate::topic::manager::topic_config_coordinator::TopicConfigCommandOutcome>
+    {
         let runtime = self.broker_runtime_inner.clone();
         let single_topic_registration = runtime.broker_config().enable_single_topic_register;
         let registration: TopicRegistrationAction = Box::new(move || {
