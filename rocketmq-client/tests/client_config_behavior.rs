@@ -15,6 +15,21 @@
 #![recursion_limit = "256"]
 
 use rocketmq_client_rust::ClientConfig;
+use rocketmq_client_rust::ClientError;
+use rocketmq_error::fields;
+use rocketmq_error::ErrorContext;
+
+#[track_caller]
+fn assert_invalid_config(error: &ClientError, key: &str) {
+    assert!(error.is(&rocketmq_error::CORE_CONFIGURATION_INVALID));
+    assert_eq!(
+        error.context(),
+        &ErrorContext::new()
+            .with_text(fields::KEY, key)
+            .with_secret_presence(fields::VALUE_PRESENT)
+            .with_secret_presence(fields::REASON_PRESENT)
+    );
+}
 
 #[test]
 fn runtime_concurrency_and_metadata_limits_are_preserved() {
@@ -41,7 +56,7 @@ fn zero_callback_concurrency_is_rejected() {
         Err(error) => error,
     };
 
-    assert!(error.to_string().contains("client_callback_executor_threads"));
+    assert_invalid_config(&error, "client_callback_executor_threads");
 }
 
 #[test]
@@ -55,7 +70,7 @@ fn enabled_concurrent_heartbeat_rejects_zero_capacity() {
         Err(error) => error,
     };
 
-    assert!(error.to_string().contains("concurrent_heartbeat_thread_pool_size"));
+    assert_invalid_config(&error, "concurrent_heartbeat_thread_pool_size");
 }
 
 #[test]
@@ -65,5 +80,5 @@ fn zero_metadata_page_size_is_rejected() {
         Err(error) => error,
     };
 
-    assert!(error.to_string().contains("max_page_size_in_get_metadata"));
+    assert_invalid_config(&error, "max_page_size_in_get_metadata");
 }
