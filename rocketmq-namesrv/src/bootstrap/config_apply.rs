@@ -19,9 +19,11 @@ use std::time::Duration;
 use crate::NameServerResult;
 use cheetah_string::CheetahString;
 use rocketmq_runtime::MetadataDeadline;
-use rocketmq_runtime::MetadataIoCommitAdmissionOutcome;
+use rocketmq_runtime::MetadataIoCommitObservation;
 use rocketmq_runtime::MetadataIoCommitOutcome;
 use rocketmq_runtime::MetadataWriteRequest;
+use rocketmq_runtime::RuntimeError;
+use rocketmq_runtime::RuntimeOperation;
 
 use crate::config::is_tls_config_key;
 use crate::config::validate_namesrv_property;
@@ -106,22 +108,34 @@ pub(crate) async fn apply_runtime_updates(
         .map_err(|error| crate::namesrv_error::storage_write(error.clone()))?;
     let deadline = MetadataDeadline::after(CONFIG_PERSIST_TIMEOUT);
     let durable_generation = match actor
-        .submit_commit(
+        .submit_observed(
             MetadataWriteRequest::new(CONFIG_RESOURCE, desired_generation, &target, desired_bytes),
             deadline,
         )
         .await
         .map_err(crate::namesrv_error::storage_write)?
     {
-        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::Durable(generation)) => generation.get(),
-        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::FailedBeforeCommit(error)) => {
+        MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::Durable(generation)) => generation.get(),
+        MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::FailedBeforeCommit(error)) => {
             return Err(crate::namesrv_error::storage_write(error));
         }
-        MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::CommitOutcomeUnknown(error)) => {
+        MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::CommitOutcomeUnknown(error)) => {
             runtime.config_generations.write().reconciliation_required = true;
             return Err(crate::namesrv_error::storage_write(error));
         }
-        MetadataIoCommitAdmissionOutcome::TargetConflict(_request) => {
+        MetadataIoCommitObservation::Unobserved(_generation) => {
+            // The caller stopped waiting, but the admitted generation may still
+            // replace the durable file. NameServer deliberately keeps the
+            // previous in-memory configuration and closes the sticky
+            // reconciliation gate: its configuration store is a live,
+            // client-facing read surface, so retaining the old value is
+            // preferable to publishing a state whose persistence is unknown.
+            runtime.config_generations.write().reconciliation_required = true;
+            return Err(crate::namesrv_error::storage_write(RuntimeError::timed_out(
+                RuntimeOperation::WaitForDurableMetadata,
+            )));
+        }
+        MetadataIoCommitObservation::TargetConflict(_request) => {
             return Err(crate::namesrv_error::storage_write(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 "metadata resource target conflict",

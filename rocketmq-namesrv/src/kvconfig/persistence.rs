@@ -37,7 +37,7 @@ use rocketmq_protocol::protocol::RemotingSerializable;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
-use rocketmq_runtime::MetadataIoCommitAdmissionOutcome;
+use rocketmq_runtime::MetadataIoCommitObservation;
 use rocketmq_runtime::MetadataIoCommitOutcome;
 #[cfg(test)]
 use rocketmq_runtime::MetadataIoOperation;
@@ -517,24 +517,42 @@ async fn process_batch(
             }
         };
         match metadata_io
-            .submit_next_commit(KV_RESOURCE, target, bytes, deadline)
+            .submit_next_observed(KV_RESOURCE, target, bytes, deadline)
             .await
         {
-            Ok(MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::Durable(_))) => {}
-            Ok(MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::FailedBeforeCommit(error))) => {
+            Ok(MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::Durable(_))) => {}
+            Ok(MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::FailedBeforeCommit(error))) => {
                 metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
                 finish_batch_with_error(inner, batch, KvCommitError::Metadata(error));
                 record_kv_snapshot(metrics, inner);
                 return;
             }
-            Ok(MetadataIoCommitAdmissionOutcome::Completed(MetadataIoCommitOutcome::CommitOutcomeUnknown(error))) => {
+            Ok(MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::CommitOutcomeUnknown(error))) => {
                 inner.reconciliation_required.store(true, Ordering::Release);
                 metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
                 finish_batch_with_error(inner, batch, KvCommitError::CommitOutcomeUnknown(error));
                 record_kv_snapshot(metrics, inner);
                 return;
             }
-            Ok(MetadataIoCommitAdmissionOutcome::TargetConflict(_request)) => {
+            Ok(MetadataIoCommitObservation::Unobserved(_generation)) => {
+                // The batch stopped being observed but may still reach the
+                // durable file, so the in-memory table keeps the previous
+                // value and the sticky gate stays closed. Reporting it as an
+                // unconfirmed commit is what stops a later batch from
+                // publishing an older snapshot over it.
+                inner.reconciliation_required.store(true, Ordering::Release);
+                metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
+                finish_batch_with_error(
+                    inner,
+                    batch,
+                    KvCommitError::CommitOutcomeUnknown(RuntimeError::timed_out(
+                        RuntimeOperation::WaitForDurableMetadata,
+                    )),
+                );
+                record_kv_snapshot(metrics, inner);
+                return;
+            }
+            Ok(MetadataIoCommitObservation::TargetConflict(_request)) => {
                 metrics.record_kv_persist(persist_started.elapsed(), false, batch_size);
                 finish_batch_with_error(inner, batch, KvCommitError::MetadataTargetConflict);
                 record_kv_snapshot(metrics, inner);
@@ -732,6 +750,16 @@ mod tests {
         queue_capacity: usize,
         batch_size: usize,
     ) -> (RuntimeContext, MetadataIoActor, KvMutationService, tempfile::TempDir) {
+        start_service_with(name, file_system, table, queue_capacity, batch_size)
+    }
+
+    fn start_service_with(
+        name: &'static str,
+        file_system: Arc<dyn MetadataFileSystem>,
+        table: Arc<ConfigTable>,
+        queue_capacity: usize,
+        batch_size: usize,
+    ) -> (RuntimeContext, MetadataIoActor, KvMutationService, tempfile::TempDir) {
         let context = RuntimeContext::try_from_current(name).expect("test should use the current Tokio runtime");
         let service_context = context.service_context("namesrv-kv-test");
         let actor = MetadataIoConfig::default()
@@ -914,6 +942,130 @@ mod tests {
         second.wait_until(deadline).await.unwrap();
         assert_eq!(table.get("ns").map(|values| values.len()), Some(2));
         assert!(service.submit(put("ns", "three", "3"), deadline).is_err());
+        let _ = actor.shutdown_until(deadline).await;
+    }
+
+    /// A file system that parks every write until the gate is released.
+    #[derive(Debug, Default)]
+    struct GatedFileSystem {
+        released: std::sync::Mutex<bool>,
+        condition: std::sync::Condvar,
+        writes: AtomicUsize,
+    }
+
+    impl GatedFileSystem {
+        fn release(&self) {
+            *self.released.lock().unwrap() = true;
+            self.condition.notify_all();
+        }
+    }
+
+    impl MetadataFileSystem for GatedFileSystem {
+        fn persist_atomic(&self, _target: &std::path::Path, _bytes: &[u8]) -> rocketmq_runtime::RuntimeResult<()> {
+            self.writes.fetch_add(1, Ordering::Relaxed);
+            let mut released = self.released.lock().unwrap();
+            while !*released {
+                released = self.condition.wait(released).unwrap();
+            }
+            Ok(())
+        }
+    }
+
+    /// Releases the gate on every exit path: an assertion failure must not
+    /// leave a real blocking closure parked, because dropping the runtime then
+    /// waits for it.
+    struct ReleaseGateOnDrop(Arc<GatedFileSystem>);
+
+    impl Drop for ReleaseGateOnDrop {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+
+    /// Drives the KV worker until `condition` holds, so the assertions do not
+    /// depend on how many scheduler turns the worker needs.
+    async fn wait_until(condition: impl Fn() -> bool) {
+        for _ in 0..1_000_000 {
+            if condition() {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("the KV persistence state never reached the expected value");
+    }
+
+    #[tokio::test]
+    async fn observation_timeout_after_a_durable_commit_still_requires_reconciliation() {
+        let table = Arc::new(ConfigTable::new());
+        let file_system = Arc::new(GatedFileSystem::default());
+        let _release_on_failure = ReleaseGateOnDrop(file_system.clone());
+        let (_context, actor, service, _root) =
+            start_service_with("kv-observation-timeout", file_system.clone(), Arc::clone(&table), 8, 8);
+        // The batch deadline is short and the write is parked, so the worker
+        // always stops observing before the replacement can complete. It is
+        // either already expired when the worker checks or expires while the
+        // closure is parked; both paths reach the same conclusion.
+        let deadline = MetadataDeadline::after(Duration::from_millis(1));
+        let receipt = service.submit(put("ns", "key", "new"), deadline).unwrap();
+
+        wait_until(|| service.snapshot().reconciliation_required).await;
+        assert!(
+            actor.confirmed_durable_generation(KV_RESOURCE).is_none(),
+            "the unobserved generation must not be reported as durable yet"
+        );
+
+        // Neither the caller nor a newer mutation may treat that as a failure
+        // that leaves the table free to publish an older snapshot.
+        assert!(receipt.wait_until(deadline).await.is_err());
+        assert!(service.submit(put("ns", "key", "newer"), deadline).is_err());
+        assert!(table.get("ns").is_none());
+
+        // Releasing the parked write proves the generation really did become
+        // durable after the caller stopped observing.
+        file_system.release();
+        wait_until(|| actor.confirmed_durable_generation(KV_RESOURCE).is_some()).await;
+        assert_eq!(file_system.writes.load(Ordering::Relaxed), 1);
+
+        let drained = service
+            .shutdown_until(MetadataDeadline::after(Duration::from_secs(5)))
+            .await;
+        assert!(!drained.timed_out);
+        let _ = actor
+            .shutdown_until(MetadataDeadline::after(Duration::from_secs(5)))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn definite_pre_commit_failure_does_not_require_reconciliation() {
+        let table = Arc::new(ConfigTable::new());
+        let file_system = Arc::new(RecordingFileSystem::default());
+        file_system.fail.store(true, Ordering::Release);
+        *file_system.failure_operation.lock() = Some(MetadataIoOperation::WriteTemporary);
+        let (_context, actor, service, _root) =
+            start_service("kv-pre-commit-failure", file_system, Arc::clone(&table), 8, 8);
+        let deadline = MetadataDeadline::after(Duration::from_secs(5));
+
+        let error = service
+            .submit(put("ns", "key", "new"), deadline)
+            .unwrap()
+            .wait_until(deadline)
+            .await
+            .unwrap_err();
+        assert_eq!(error.condition(), rocketmq_error::CanonicalCondition::Internal);
+        assert!(
+            !service.snapshot().reconciliation_required,
+            "a failure before target replacement must not close the gate permanently"
+        );
+
+        // Admission stays open, so a transient failure does not stop KV
+        // persistence until an operator restarts the NameServer.
+        let retried = service
+            .submit(put("ns", "key", "newer"), deadline)
+            .expect("a definite pre-commit failure must not block newer mutations");
+        assert!(retried.wait_until(deadline).await.is_err());
+        assert!(table.get("ns").is_none());
+
+        let _ = service.shutdown_until(deadline).await;
         let _ = actor.shutdown_until(deadline).await;
     }
 }

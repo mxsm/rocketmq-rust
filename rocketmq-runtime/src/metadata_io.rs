@@ -33,7 +33,6 @@ use std::iter;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -463,6 +462,83 @@ pub enum MetadataIoCommitAdmissionOutcome {
     TargetConflict(MetadataWriteRequest),
 }
 
+/// What a caller actually confirmed about one admitted metadata snapshot.
+///
+/// Unlike [`MetadataIoCommitOutcome`], this models the case where the caller
+/// stopped observing before the persistence protocol reached a terminal
+/// conclusion. An [`Self::Unobserved`] generation is not evidence that the
+/// write did not happen: the admitted snapshot keeps its ordering and byte
+/// charge, so it may still become durable, fail, or end unconfirmed after the
+/// caller's deadline. Business owners must treat that generation as
+/// unconfirmed rather than as a definite failure.
+#[derive(Debug)]
+pub enum MetadataIoCommitObservation {
+    /// The persistence protocol reached a terminal conclusion within the
+    /// caller's deadline.
+    Settled(MetadataIoCommitOutcome),
+    /// The caller stopped observing first. The returned generation identifies
+    /// the change whose durability was not confirmed.
+    Unobserved(MetadataGeneration),
+    /// The request was not admitted because the resource is bound to a
+    /// different process-local target.
+    TargetConflict(MetadataWriteRequest),
+}
+
+impl MetadataIoCommitObservation {
+    /// Returns whether the caller must treat durable state as unconfirmed.
+    ///
+    /// True for an unobserved generation and for a replacement that the
+    /// durability protocol did not confirm. False for a confirmed durable
+    /// write, a failure before target replacement, and a target conflict.
+    #[must_use]
+    pub fn requires_reconciliation(&self) -> bool {
+        match self {
+            MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::Durable(_))
+            | MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::FailedBeforeCommit(_))
+            | MetadataIoCommitObservation::TargetConflict(_) => false,
+            MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::CommitOutcomeUnknown(_))
+            | MetadataIoCommitObservation::Unobserved(_) => true,
+        }
+    }
+
+    /// Consumes the observation and returns the terminal conclusion, if any.
+    #[must_use]
+    pub fn settled(self) -> Option<MetadataIoCommitOutcome> {
+        match self {
+            MetadataIoCommitObservation::Settled(outcome) => Some(outcome),
+            MetadataIoCommitObservation::Unobserved(_) | MetadataIoCommitObservation::TargetConflict(_) => None,
+        }
+    }
+
+    /// Returns the generation whose durability was not confirmed.
+    #[must_use]
+    pub const fn unobserved_generation(&self) -> Option<MetadataGeneration> {
+        match self {
+            MetadataIoCommitObservation::Unobserved(generation) => Some(*generation),
+            MetadataIoCommitObservation::Settled(_) | MetadataIoCommitObservation::TargetConflict(_) => None,
+        }
+    }
+}
+
+/// The private receipt conclusion that keeps the coordinator-abort case
+/// distinct from a deadline expiry.
+///
+/// [`MetadataIoReceipt::wait_until_outcome`] reports a stopped coordinator as
+/// an unavailable context, while [`MetadataIoReceipt::observe_until`] folds it
+/// into an unobserved generation. Both mappings are derived from this single
+/// classification so the receipt channel is interpreted in exactly one place.
+enum ReceiptConclusion {
+    /// The receipt channel delivered the actor's result. That is either a
+    /// terminal persistence conclusion or the worker-stopped error, which the
+    /// actor only produces for a generation that never ran.
+    Delivered(RuntimeResult<MetadataIoCommitOutcome>),
+    /// The caller's absolute deadline elapsed first.
+    Expired,
+    /// The coordinator task was dropped without delivering a conclusion.
+    /// A blocking closure it submitted may still be running.
+    CoordinatorStopped,
+}
+
 impl MetadataIoReceipt {
     /// Returns the accepted resource generation.
     #[must_use]
@@ -483,12 +559,51 @@ impl MetadataIoReceipt {
         if deadline.is_expired() {
             return Err(RuntimeError::timed_out(crate::RuntimeOperation::WaitForDurableMetadata));
         }
-        match tokio::time::timeout_at(deadline.instant(), self.durable).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_closed)) => Err(RuntimeError::context_unavailable(
+        match self.conclude(deadline).await {
+            ReceiptConclusion::Delivered(result) => result,
+            ReceiptConclusion::CoordinatorStopped => Err(RuntimeError::context_unavailable(
                 crate::RuntimeOperation::MetadataWorkerStopped,
             )),
-            Err(_elapsed) => Err(RuntimeError::timed_out(crate::RuntimeOperation::WaitForDurableMetadata)),
+            ReceiptConclusion::Expired => Err(RuntimeError::timed_out(crate::RuntimeOperation::WaitForDurableMetadata)),
+        }
+    }
+
+    /// Observes this generation without collapsing an observation timeout into
+    /// the persistence error channel.
+    ///
+    /// Expiry returns [`MetadataIoCommitObservation::Unobserved`] rather than
+    /// an error, because the accepted snapshot retains its ordering and byte
+    /// charge and may still become durable. A caller that needs a definite
+    /// answer must reconcile against the actor's confirmed durable generation
+    /// instead of treating the expiry as a failure.
+    ///
+    /// This method never returns [`MetadataIoCommitObservation::TargetConflict`]:
+    /// a receipt already owns its target registration.
+    pub async fn observe_until(self, deadline: MetadataDeadline) -> MetadataIoCommitObservation {
+        let generation = self.generation;
+        match self.conclude(deadline).await {
+            ReceiptConclusion::Delivered(Ok(outcome)) => MetadataIoCommitObservation::Settled(outcome),
+            // The actor delivered the worker-stopped error, which it only
+            // produces for a generation that never ran. That is a definite
+            // pre-commit failure rather than an unconfirmed replacement.
+            ReceiptConclusion::Delivered(Err(error)) => {
+                MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::FailedBeforeCommit(error))
+            }
+            // A stopped coordinator and an elapsed deadline are both
+            // "no conclusion observed": a submitted closure may still be
+            // running, and the target may still change.
+            ReceiptConclusion::CoordinatorStopped | ReceiptConclusion::Expired => {
+                MetadataIoCommitObservation::Unobserved(generation)
+            }
+        }
+    }
+
+    /// Classifies the receipt channel exactly once for every caller.
+    async fn conclude(self, deadline: MetadataDeadline) -> ReceiptConclusion {
+        match tokio::time::timeout_at(deadline.instant(), self.durable).await {
+            Ok(Ok(result)) => ReceiptConclusion::Delivered(result),
+            Ok(Err(_closed)) => ReceiptConclusion::CoordinatorStopped,
+            Err(_elapsed) => ReceiptConclusion::Expired,
         }
     }
 
@@ -522,7 +637,6 @@ struct ActorInner {
     config: MetadataIoConfig,
     targets: MetadataTargetRegistry,
     waiter_count: Arc<AtomicUsize>,
-    next_generation: AtomicU64,
     state: Mutex<ActorState>,
     shutdown: Notify,
     worker_finished: Notify,
@@ -618,7 +732,6 @@ impl MetadataIoActor {
             config,
             targets,
             waiter_count: Arc::new(AtomicUsize::new(0)),
-            next_generation: AtomicU64::new(1),
             state: Mutex::new(ActorState {
                 accepting: true,
                 worker_finished: false,
@@ -784,11 +897,13 @@ impl MetadataIoActor {
         }))
     }
 
-    /// Assigns the next process-lifetime generation and accepts an immutable
+    /// Assigns the next owner-lifetime generation and accepts an immutable
     /// snapshot without waiting for durability.
     ///
-    /// Generation values are unique across this actor instance. Gaps are
-    /// allowed when admission rejects a request; they do not weaken ordering.
+    /// Generation values are unique across every metadata actor that shares
+    /// this runtime owner, so a generation stays a usable change identity
+    /// after an actor is replaced. Gaps are allowed when admission rejects a
+    /// request; they do not weaken ordering.
     ///
     /// # Errors
     ///
@@ -800,19 +915,7 @@ impl MetadataIoActor {
         bytes: impl Into<Vec<u8>>,
         deadline: MetadataDeadline,
     ) -> RuntimeResult<MetadataIoAdmissionOutcome> {
-        let mut generation = self.inner.next_generation.load(Ordering::Relaxed);
-        loop {
-            let next = if generation == u64::MAX { 1 } else { generation + 1 };
-            match self.inner.next_generation.compare_exchange_weak(
-                generation,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(observed) => generation = observed,
-            }
-        }
+        let generation = self.inner.targets.next_generation();
         self.submit(MetadataWriteRequest::new(resource, generation, target, bytes), deadline)
     }
 
@@ -886,7 +989,7 @@ impl MetadataIoActor {
         }
     }
 
-    /// Assigns the next process-lifetime generation and returns its real
+    /// Assigns the next owner-lifetime generation and returns its real
     /// persistence conclusion.
     pub async fn submit_next_commit(
         &self,
@@ -904,6 +1007,70 @@ impl MetadataIoActor {
                 Ok(MetadataIoCommitAdmissionOutcome::TargetConflict(request))
             }
         }
+    }
+
+    /// Accepts a snapshot and reports what the caller actually confirmed about
+    /// its persistence.
+    ///
+    /// An `Err` result means the request was never admitted, so the caller may
+    /// safely discard its change. Every other case is expressed as a
+    /// [`MetadataIoCommitObservation`], including an expiry that leaves the
+    /// change unconfirmed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed admission, capacity, or lifecycle failure.
+    pub async fn submit_observed(
+        &self,
+        request: MetadataWriteRequest,
+        deadline: MetadataDeadline,
+    ) -> RuntimeResult<MetadataIoCommitObservation> {
+        match self.submit(request, deadline)? {
+            MetadataIoAdmissionOutcome::Accepted(receipt) => Ok(receipt.observe_until(deadline).await),
+            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+                Ok(MetadataIoCommitObservation::TargetConflict(request))
+            }
+        }
+    }
+
+    /// Assigns the next owner-lifetime generation and reports what the caller
+    /// actually confirmed about its persistence.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same normal outcome and typed failures as
+    /// [`Self::submit_observed`].
+    pub async fn submit_next_observed(
+        &self,
+        resource: impl Into<Arc<str>>,
+        target: impl Into<PathBuf>,
+        bytes: impl Into<Vec<u8>>,
+        deadline: MetadataDeadline,
+    ) -> RuntimeResult<MetadataIoCommitObservation> {
+        match self.submit_next(resource, target, bytes, deadline)? {
+            MetadataIoAdmissionOutcome::Accepted(receipt) => Ok(receipt.observe_until(deadline).await),
+            MetadataIoAdmissionOutcome::TargetConflict(request) => {
+                Ok(MetadataIoCommitObservation::TargetConflict(request))
+            }
+        }
+    }
+
+    /// Returns the highest generation this actor confirmed durable for one
+    /// logical resource.
+    ///
+    /// This is the evidence a caller needs to resolve an earlier
+    /// [`MetadataIoCommitObservation::Unobserved`] conclusion without holding
+    /// completion history: when the value reaches the unobserved generation,
+    /// the change is durable after all. The value is seeded from the
+    /// owner-scoped target registration, so it survives actor replacement for
+    /// the same resource and target.
+    #[must_use]
+    pub fn confirmed_durable_generation(&self, resource: &str) -> Option<MetadataGeneration> {
+        let state = self.inner.state.lock();
+        state
+            .resources
+            .get(resource)
+            .and_then(|resource_state| resource_state.durable_generation)
     }
 
     /// Stops new admission and drains accepted work until the absolute
@@ -958,6 +1125,16 @@ fn ensure_target_registration(
             }
             if !target_changed {
                 if let Some(registration) = &existing.target_registration {
+                    // Reusing a cached registration skips the registry check
+                    // below, so it has to consult the target's reconciliation
+                    // fence explicitly. Without this, a queued generation would
+                    // write over a target whose previous replacement never
+                    // completed the durability protocol.
+                    if registration.reconciliation_required() {
+                        return Err(RuntimeError::context_unavailable(
+                            crate::RuntimeOperation::MetadataResourceTarget,
+                        ));
+                    }
                     return Ok(Some(registration.clone()));
                 }
             }
@@ -1420,5 +1597,50 @@ mod tests {
             .downcast_ref::<std::io::Error>()
             .expect("metadata error source should remain a std::io::Error");
         assert_eq!(source.kind(), std::io::ErrorKind::WriteZero);
+    }
+
+    #[test]
+    fn commit_observation_requires_reconciliation_only_for_unconfirmed_outcomes() {
+        let step_error = || {
+            RuntimeError::io(
+                crate::RuntimeOperation::MetadataSyncParent,
+                std::io::Error::other("injected failure"),
+            )
+        };
+
+        let confirmed = [
+            MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::Durable(MetadataGeneration::new(7))),
+            MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::FailedBeforeCommit(step_error())),
+        ];
+        for observation in confirmed {
+            assert!(
+                !observation.requires_reconciliation(),
+                "a settled conclusion cannot require reconciliation"
+            );
+            assert_eq!(observation.unobserved_generation(), None);
+        }
+
+        let unconfirmed =
+            MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::CommitOutcomeUnknown(step_error()));
+        assert!(unconfirmed.requires_reconciliation());
+        assert!(unconfirmed.settled().is_some());
+
+        let unobserved = MetadataIoCommitObservation::Unobserved(MetadataGeneration::new(9));
+        assert!(unobserved.requires_reconciliation());
+        assert_eq!(unobserved.unobserved_generation(), Some(MetadataGeneration::new(9)));
+        assert!(unobserved.settled().is_none());
+    }
+
+    #[test]
+    fn target_conflict_observation_is_not_a_durability_conclusion() {
+        let conflict = MetadataIoCommitObservation::TargetConflict(MetadataWriteRequest::new(
+            "resource",
+            MetadataGeneration::new(1),
+            Path::new("metadata.json"),
+            b"snapshot".to_vec(),
+        ));
+        assert!(!conflict.requires_reconciliation());
+        assert_eq!(conflict.unobserved_generation(), None);
+        assert!(conflict.settled().is_none());
     }
 }

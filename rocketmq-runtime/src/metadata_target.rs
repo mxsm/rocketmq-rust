@@ -38,6 +38,7 @@ pub(crate) struct MetadataTargetRegistry {
 struct RegistryInner {
     state: Mutex<RegistryState>,
     next_owner: AtomicU64,
+    next_generation: AtomicU64,
     max_entries: usize,
 }
 
@@ -88,9 +89,44 @@ impl MetadataTargetRegistry {
             inner: Arc::new(RegistryInner {
                 state: Mutex::new(RegistryState::default()),
                 next_owner: AtomicU64::new(1),
+                next_generation: AtomicU64::new(1),
                 max_entries,
             }),
         }
+    }
+
+    /// Reserves the next generation for a snapshot admitted under this owner.
+    ///
+    /// The counter belongs to the owner-scoped registry rather than to one
+    /// actor, so a generation remains a usable change identity after an actor
+    /// is replaced. A per-actor counter would restart at one and let a rebuilt
+    /// actor reuse a generation whose durability is still unconfirmed.
+    ///
+    /// Values wrap from `u64::MAX` back to one. Gaps are allowed when admission
+    /// rejects a request; they do not weaken ordering.
+    pub(crate) fn next_generation(&self) -> u64 {
+        let mut generation = self.inner.next_generation.load(Ordering::Relaxed);
+        loop {
+            let next = if generation == u64::MAX { 1 } else { generation + 1 };
+            match self.inner.next_generation.compare_exchange_weak(
+                generation,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return generation,
+                Err(observed) => generation = observed,
+            }
+        }
+    }
+
+    /// Returns whether the target still requires reconciliation.
+    fn requires_reconciliation(&self, target: &NormalizedMetadataTarget) -> bool {
+        let state = self.inner.state.lock();
+        state
+            .targets
+            .get(target)
+            .is_some_and(|entry| entry.reconciliation_required)
     }
 
     pub(crate) fn register(
@@ -201,6 +237,17 @@ impl MetadataTargetRegistration {
             .registry
             .record_reconciliation_required(&self.inner.target, &self.inner.resource, self.inner.owner)
     }
+
+    /// Returns whether the bound target still requires reconciliation.
+    ///
+    /// The flag describes the *target*, not this writer: an earlier generation
+    /// may have replaced the file without completing the durability protocol.
+    /// A caller that reuses a cached registration must consult it before
+    /// exercising write authority again, because the registry conflict check
+    /// is skipped on that path.
+    pub(crate) fn reconciliation_required(&self) -> bool {
+        self.inner.registry.requires_reconciliation(&self.inner.target)
+    }
 }
 
 impl Drop for RegistrationInner {
@@ -254,6 +301,37 @@ fn normalize_target(target: &Path) -> RuntimeResult<NormalizedMetadataTarget> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_generations_are_allocated_by_the_owner_scoped_registry() {
+        let registry = MetadataTargetRegistry::new();
+        assert_eq!(registry.next_generation(), 1);
+        assert_eq!(registry.next_generation(), 2);
+        assert_eq!(registry.next_generation(), 3);
+
+        // A clone shares the counter, so two actors derived from one owner
+        // cannot reuse a generation whose durability is still unconfirmed.
+        let shared = registry.clone();
+        assert_eq!(shared.next_generation(), 4);
+        assert_eq!(registry.next_generation(), 5);
+    }
+
+    #[test]
+    fn registration_reports_the_target_reconciliation_fence() {
+        let registry = MetadataTargetRegistry::new();
+        let target = std::env::temp_dir().join("rocketmq-runtime-registration-fence");
+        let outcome = registry.register(&target, Arc::<str>::from("resource")).unwrap();
+        let MetadataTargetRegistrationOutcome::Registered(registration) = outcome else {
+            panic!("a free target should register");
+        };
+
+        assert!(!registration.reconciliation_required());
+        assert!(registration.record_reconciliation_required());
+        assert!(
+            registration.reconciliation_required(),
+            "a cached registration must observe an unconfirmed replacement"
+        );
+    }
 
     #[test]
     fn different_resources_cannot_bind_the_same_target() {

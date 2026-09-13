@@ -16,6 +16,8 @@ use std::error::Error;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
@@ -730,4 +732,309 @@ async fn late_failure_preserves_write_order_after_observer_and_lane_deadlines() 
 #[tokio::test(start_paused = true)]
 async fn late_panic_preserves_write_order_after_observer_and_lane_deadlines() {
     verify_late_write_order(FirstWriteOutcome::Panic).await;
+}
+
+/// Waits until one generation occupies the actor's single in-flight slot.
+///
+/// Polling the public snapshot keeps the assertions independent of blocking
+/// thread startup and of notification registration order.
+async fn wait_for_in_flight(actor: &MetadataIoActor, generation: u64) {
+    for _ in 0..200_000 {
+        let observed = actor
+            .snapshot()
+            .resources
+            .iter()
+            .any(|resource| resource.in_flight_generation == Some(generation.into()));
+        if observed {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("generation {generation} never occupied the in-flight slot");
+}
+
+/// Waits until the actor owns no queued or in-flight generation.
+async fn wait_for_idle_worker(actor: &MetadataIoActor) {
+    for _ in 0..200_000 {
+        if actor.snapshot().pending_operations == 0 {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("the metadata actor never drained its accepted generations");
+}
+
+#[tokio::test(start_paused = true)]
+async fn observation_timeout_reports_the_unobserved_generation_and_late_success_stays_authoritative() {
+    let file_system = Arc::new(GateRecordingFileSystem::default());
+    // Release the gate on every exit path: a failed assertion must not leave a
+    // real blocking closure parked, because dropping the runtime then waits.
+    let _release_on_failure = ReleaseGateOnDrop(file_system.gate.clone());
+    let (_context, actor) = start_actor(file_system.clone(), config(3, 64));
+    let deadline = MetadataDeadline::after(Duration::from_secs(60));
+
+    let first = accepted(actor.submit(request("routes", 1, b"routes-1"), deadline).unwrap());
+    wait_for_in_flight(&actor, 1).await;
+
+    // The caller stops observing while the admitted closure is still gated.
+    let observation = first.observe_until(MetadataDeadline::after(Duration::from_secs(1)));
+    tokio::pin!(observation);
+    assert!(futures::poll!(&mut observation).is_pending());
+    tokio::time::advance(Duration::from_secs(2)).await;
+    let observation = observation.await;
+    assert_eq!(observation.unobserved_generation(), Some(MetadataGeneration::new(1)));
+    assert!(
+        observation.requires_reconciliation(),
+        "an unobserved generation is not a confirmed failure"
+    );
+    assert!(observation.settled().is_none());
+    assert!(actor.confirmed_durable_generation("routes").is_none());
+    assert_eq!(actor.snapshot().resources[0].durable_generation, None);
+
+    // The accepted generation keeps its ordering and commits after the caller
+    // gave up; it is never retroactively reported to the departed observer.
+    file_system.gate.release();
+    let second = accepted(actor.submit(request("routes", 2, b"routes-2"), deadline).unwrap());
+    assert_eq!(second.wait_until(deadline).await.unwrap(), MetadataGeneration::new(2));
+    assert_eq!(
+        actor.confirmed_durable_generation("routes"),
+        Some(MetadataGeneration::new(2))
+    );
+    assert_eq!(
+        *file_system.writes.lock().unwrap(),
+        vec![b"routes-1".to_vec(), b"routes-2".to_vec()]
+    );
+
+    let drained = actor.shutdown_until(deadline).await;
+    assert!(!drained.timed_out);
+}
+
+#[tokio::test(start_paused = true)]
+async fn observation_timeout_does_not_publish_a_generation_for_a_late_failure() {
+    let file_system = Arc::new(LateCompletionFileSystem {
+        gate: Arc::new(Gate::default()),
+        outcome: FirstWriteOutcome::Failure,
+        writes: Mutex::new(Vec::new()),
+    });
+    let _release_on_failure = ReleaseGateOnDrop(file_system.gate.clone());
+    let (_context, actor) = start_actor(file_system.clone(), config(3, 64));
+    let deadline = MetadataDeadline::after(Duration::from_secs(60));
+
+    let first = accepted(actor.submit(request("routes", 1, b"one"), deadline).unwrap());
+    wait_for_in_flight(&actor, 1).await;
+
+    let observation = first.observe_until(MetadataDeadline::after(Duration::from_secs(1)));
+    tokio::pin!(observation);
+    assert!(futures::poll!(&mut observation).is_pending());
+    tokio::time::advance(Duration::from_secs(2)).await;
+    let observation = observation.await;
+    assert_eq!(observation.unobserved_generation(), Some(MetadataGeneration::new(1)));
+
+    // Releasing the gate turns the unobserved generation into a real
+    // pre-commit failure. Nothing about it may be published as durable, and
+    // the resource must remain writable afterwards.
+    file_system.gate.release();
+    wait_for_idle_worker(&actor).await;
+    assert!(actor.confirmed_durable_generation("routes").is_none());
+    assert_eq!(actor.snapshot().resources[0].durable_generation, None);
+    assert!(file_system.writes.lock().unwrap().is_empty());
+
+    let retried = accepted(actor.submit(request("routes", 2, b"two"), deadline).unwrap());
+    assert_eq!(retried.wait_until(deadline).await.unwrap(), MetadataGeneration::new(2));
+
+    let drained = actor.shutdown_until(deadline).await;
+    assert!(!drained.timed_out);
+}
+
+#[tokio::test]
+async fn observed_submission_classifies_every_settled_conclusion() {
+    let context = RuntimeContext::try_from_current("metadata-observation-classification").unwrap();
+    let deadline = MetadataDeadline::after(Duration::from_secs(5));
+
+    let durable = start_actor_in(
+        &context,
+        "durable",
+        Arc::new(RecordingFileSystem::default()),
+        config(1, 64),
+    );
+    let observed = durable
+        .submit_next_observed("durable-resource", PathBuf::from("durable.json"), b"durable", deadline)
+        .await
+        .unwrap();
+    assert!(!observed.requires_reconciliation());
+    assert!(matches!(
+        observed.settled(),
+        Some(MetadataIoCommitOutcome::Durable(generation)) if generation == MetadataGeneration::new(1)
+    ));
+
+    // A second resource cannot bind the same target; the conflict is reported
+    // as an admission outcome rather than as a durability conclusion.
+    let conflicted = durable
+        .submit_next_observed("other-resource", PathBuf::from("durable.json"), b"other", deadline)
+        .await
+        .unwrap();
+    assert!(!conflicted.requires_reconciliation());
+    assert_eq!(conflicted.unobserved_generation(), None);
+    assert!(conflicted.settled().is_none());
+
+    let failed = start_actor_in(
+        &context,
+        "failed",
+        Arc::new(FailingFileSystem {
+            operation: MetadataIoOperation::WriteTemporary,
+            error_kind: io::ErrorKind::Other,
+        }),
+        config(1, 64),
+    );
+    let observed = failed
+        .submit_next_observed("failed-resource", PathBuf::from("failed.json"), b"failed", deadline)
+        .await
+        .unwrap();
+    assert!(
+        !observed.requires_reconciliation(),
+        "a failure before target replacement is a definite conclusion"
+    );
+    assert!(matches!(
+        observed.settled(),
+        Some(MetadataIoCommitOutcome::FailedBeforeCommit(_))
+    ));
+    assert!(failed.confirmed_durable_generation("failed-resource").is_none());
+
+    let unknown = start_actor_in(
+        &context,
+        "unknown",
+        Arc::new(FailingFileSystem {
+            operation: MetadataIoOperation::SyncParent,
+            error_kind: io::ErrorKind::Other,
+        }),
+        config(1, 64),
+    );
+    let observed = unknown
+        .submit_next_observed("unknown-resource", PathBuf::from("unknown.json"), b"unknown", deadline)
+        .await
+        .unwrap();
+    assert!(
+        observed.requires_reconciliation(),
+        "an unconfirmed replacement must reach the business owner"
+    );
+    assert_eq!(observed.unobserved_generation(), None);
+    assert!(matches!(
+        observed.settled(),
+        Some(MetadataIoCommitOutcome::CommitOutcomeUnknown(_))
+    ));
+}
+
+#[tokio::test]
+async fn generations_are_unique_across_actors_sharing_one_owner() {
+    let context = RuntimeContext::try_from_current("metadata-generation-scope").unwrap();
+    let deadline = MetadataDeadline::after(Duration::from_secs(5));
+    let first_actor = start_actor_in(
+        &context,
+        "first",
+        Arc::new(RecordingFileSystem::default()),
+        config(1, 64),
+    );
+    let second_actor = start_actor_in(
+        &context,
+        "second",
+        Arc::new(RecordingFileSystem::default()),
+        config(1, 64),
+    );
+
+    let first = accepted(
+        first_actor
+            .submit_next("first-resource", PathBuf::from("first.json"), b"first", deadline)
+            .unwrap(),
+    );
+    let second = accepted(
+        second_actor
+            .submit_next("second-resource", PathBuf::from("second.json"), b"second", deadline)
+            .unwrap(),
+    );
+    let first_generation = first.generation();
+    let second_generation = second.generation();
+    assert_eq!(first.wait_until(deadline).await.unwrap(), first_generation);
+    assert_eq!(second.wait_until(deadline).await.unwrap(), second_generation);
+    assert!(
+        second_generation > first_generation,
+        "an actor replacement must not reuse a generation from the same owner"
+    );
+}
+
+/// A file system whose first write is gated and then fails after the target
+/// was replaced, which is the actor's unconfirmed-replacement case. Later
+/// writes are gated by a second, independent gate.
+#[derive(Debug, Default)]
+struct TwoGateFileSystem {
+    first_gate: Arc<Gate>,
+    second_gate: Arc<Gate>,
+    writes: Mutex<Vec<Vec<u8>>>,
+    attempts: AtomicUsize,
+}
+
+impl MetadataFileSystem for TwoGateFileSystem {
+    fn persist_atomic(&self, _target: &Path, bytes: &[u8]) -> RuntimeResult<()> {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.first_gate.wait();
+            self.writes.lock().unwrap().push(bytes.to_vec());
+            return Err(RuntimeError::io(
+                MetadataIoOperation::SyncParent.runtime_operation(),
+                io::Error::other("injected parent-directory sync failure"),
+            ));
+        }
+        self.second_gate.wait();
+        self.writes.lock().unwrap().push(bytes.to_vec());
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn unconfirmed_commit_fences_a_target_that_still_has_queued_work() {
+    let file_system = Arc::new(TwoGateFileSystem::default());
+    // Both gates must be released on every exit path, including a failed
+    // fence assertion, or the parked closures block runtime shutdown.
+    let _release_on_failure = (
+        ReleaseGateOnDrop(file_system.first_gate.clone()),
+        ReleaseGateOnDrop(file_system.second_gate.clone()),
+    );
+    let (_context, actor) = start_actor(file_system.clone(), config(4, 64));
+    let deadline = MetadataDeadline::after(Duration::from_secs(60));
+
+    // Generation 1 owns the in-flight slot and will fail after replacement.
+    let first = accepted(actor.submit(request("fenced", 1, b"one"), deadline).unwrap());
+    wait_for_in_flight(&actor, 1).await;
+    // Generation 2 is admitted and queued, so the target registration stays
+    // cached in the actor while generation 1 becomes unconfirmed.
+    let second = accepted(actor.submit(request("fenced", 2, b"two"), deadline).unwrap());
+
+    file_system.first_gate.release();
+    wait_for_in_flight(&actor, 2).await;
+
+    assert!(
+        matches!(
+            first.wait_until_outcome(deadline).await.unwrap(),
+            MetadataIoCommitOutcome::CommitOutcomeUnknown(_)
+        ),
+        "generation 1 must be reported as an unconfirmed replacement"
+    );
+
+    // The already-admitted generation continues and repairs durability, but a
+    // new generation must not reuse the cached registration for a target whose
+    // replacement was never confirmed.
+    let blocked = actor.submit(request("fenced", 3, b"three"), deadline).unwrap_err();
+    assert_eq!(blocked.condition(), rocketmq_error::CanonicalCondition::Unavailable);
+
+    file_system.second_gate.release();
+    assert_eq!(second.wait_until(deadline).await.unwrap(), MetadataGeneration::new(2));
+    assert_eq!(
+        actor.confirmed_durable_generation("fenced"),
+        Some(MetadataGeneration::new(2))
+    );
+    assert_eq!(
+        *file_system.writes.lock().unwrap(),
+        vec![b"one".to_vec(), b"two".to_vec()]
+    );
+
+    let drained = actor.shutdown_until(deadline).await;
+    assert!(!drained.timed_out);
 }

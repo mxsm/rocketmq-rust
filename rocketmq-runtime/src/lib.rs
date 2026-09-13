@@ -111,6 +111,7 @@ pub use metadata_io::MetadataGeneration;
 pub use metadata_io::MetadataIoActor;
 pub use metadata_io::MetadataIoAdmissionOutcome;
 pub use metadata_io::MetadataIoCommitAdmissionOutcome;
+pub use metadata_io::MetadataIoCommitObservation;
 pub use metadata_io::MetadataIoCommitOutcome;
 pub use metadata_io::MetadataIoConfig;
 pub use metadata_io::MetadataIoDurabilityOutcome;
