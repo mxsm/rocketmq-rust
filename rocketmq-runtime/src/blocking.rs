@@ -18,6 +18,8 @@
 //! composition creates one global budget and clones only handles into child
 //! contexts; queue admission, lane ceilings, reservations, the running permit,
 //! absolute deadlines, and diagnostics remain private implementation details.
+//! Each derived executor observes its scope gate; [`BlockingDrainLease`] is the
+//! bounded authorization for already accepted work and owner finalization.
 
 mod admission;
 mod diagnostics;
@@ -26,6 +28,7 @@ mod policy;
 
 pub use diagnostics::BlockingExecutorSnapshot;
 pub use diagnostics::BlockingTaskSnapshot;
+pub use executor::BlockingDrainLease;
 pub use executor::BlockingExecutor;
 pub use policy::BlockingKind;
 pub use policy::BlockingLane;

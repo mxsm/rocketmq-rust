@@ -14,6 +14,7 @@
 
 //! Deliberate stable runtime ownership and shutdown entry points.
 
+pub use crate::blocking::BlockingDrainLease;
 pub use crate::blocking::BlockingExecutor;
 pub use crate::diagnostics::RuntimeBlockingKindSummaryV1;
 pub use crate::diagnostics::RuntimeBlockingKindV1;
