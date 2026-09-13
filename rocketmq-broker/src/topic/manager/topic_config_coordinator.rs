@@ -461,16 +461,19 @@ async fn persist_stable(
         let persisted_version = if manager.supports_metadata_io_actor() {
             if let Some(metadata_io) = metadata_io {
                 let (version, path, content) = manager.encoded_persistence_snapshot()?;
-                metadata_io
-                    .submit_next_durable(
+                let observation = metadata_io
+                    .submit_next_observed(
                         "broker.topic-config",
                         path,
                         content,
                         MetadataDeadline::after(Duration::from_secs(30)),
                     )
                     .await
-                    .map_err(crate::runtime_to_rocketmq_error)
-                    .and_then(crate::require_metadata_durability)?;
+                    .map_err(crate::runtime_to_rocketmq_error)?;
+                // An unconfirmed generation is retried by the convergence loop,
+                // which re-encodes current memory and therefore repairs
+                // durability on the next attempt.
+                crate::require_metadata_conclusion("broker.topic-config", observation)?;
                 version
             } else {
                 let manager_for_write = Arc::clone(manager);

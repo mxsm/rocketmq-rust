@@ -115,15 +115,24 @@ pub(crate) async fn apply_runtime_updates(
         .await
         .map_err(crate::namesrv_error::storage_write)?
     {
-        MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::Durable(generation)) => generation.get(),
-        MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::FailedBeforeCommit(error)) => {
+        MetadataIoCommitObservation::Settled {
+            outcome: MetadataIoCommitOutcome::Durable(generation),
+            ..
+        } => generation.get(),
+        MetadataIoCommitObservation::Settled {
+            outcome: MetadataIoCommitOutcome::FailedBeforeCommit(error),
+            ..
+        } => {
             return Err(crate::namesrv_error::storage_write(error));
         }
-        MetadataIoCommitObservation::Settled(MetadataIoCommitOutcome::CommitOutcomeUnknown(error)) => {
+        MetadataIoCommitObservation::Settled {
+            outcome: MetadataIoCommitOutcome::CommitOutcomeUnknown(error),
+            ..
+        } => {
             runtime.config_generations.write().reconciliation_required = true;
             return Err(crate::namesrv_error::storage_write(error));
         }
-        MetadataIoCommitObservation::Unobserved(_generation) => {
+        MetadataIoCommitObservation::Unobserved { .. } => {
             // The caller stopped waiting, but the admitted generation may still
             // replace the durable file. NameServer deliberately keeps the
             // previous in-memory configuration and closes the sticky

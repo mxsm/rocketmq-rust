@@ -21,3 +21,4 @@ pub(crate) mod broker_registration_runtime;
 pub(crate) mod broker_runtime_config_state;
 pub(crate) mod broker_state_observer;
 pub(crate) mod log_filter_control;
+pub(crate) mod metadata_reconciliation;

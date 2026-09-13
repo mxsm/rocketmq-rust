@@ -626,16 +626,16 @@ impl<MS: BrokerReplicationStore> BrokerPreOnlineContext<MS> {
                 return Ok(());
             }
             if let Some(metadata_io) = self.metadata_io.as_ref() {
-                metadata_io
-                    .submit_next_durable(
+                let observation = metadata_io
+                    .submit_next_observed(
                         resource,
                         manager.config_file_path(),
                         content.into_bytes(),
                         MetadataDeadline::after(Duration::from_secs(5)),
                     )
                     .await
-                    .map_err(crate::runtime_to_rocketmq_error)
-                    .and_then(crate::require_metadata_durability)?;
+                    .map_err(crate::runtime_to_rocketmq_error)?;
+                crate::require_metadata_conclusion(resource, observation)?;
                 return Ok(());
             }
         }

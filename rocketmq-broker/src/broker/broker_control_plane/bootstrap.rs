@@ -289,16 +289,20 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
                 "broker-id metadata actor is unavailable in the production control plane",
             )
         })?;
-        metadata_io
-            .submit_next_durable(
+        let observation = metadata_io
+            .submit_next_observed(
                 resource,
                 target,
                 content,
                 MetadataDeadline::after(Duration::from_secs(10)),
             )
             .await
-            .map_err(crate::runtime_to_rocketmq_error)
-            .and_then(crate::require_metadata_durability)?;
+            .map_err(crate::runtime_to_rocketmq_error)?;
+        // An unconfirmed write returns here without publishing the pending
+        // record, so the next attempt replans from the temporary file that is
+        // still on disk instead of starting a competing identity. The temporary
+        // file is only removed when the controller rejects the broker id.
+        crate::require_metadata_conclusion(resource, observation)?;
         Ok(())
     }
 

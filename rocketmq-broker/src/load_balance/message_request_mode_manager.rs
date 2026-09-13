@@ -123,17 +123,35 @@ impl MessageRequestModeManager {
         })
     }
 
+    /// Marks one exact Topic/group entry as not durably persisted.
+    ///
+    /// The unconditional setter applies its change to memory before it persists,
+    /// so an unconfirmed write there has to block a later supervised compare and
+    /// set from building on a state whose durability is unknown.
+    pub(crate) fn mark_supervised_dirty(&self, topic: &CheetahString, consumer_group: &CheetahString) {
+        self.supervised_dirty
+            .lock()
+            .insert((topic.clone(), consumer_group.clone()));
+    }
+
+    /// Releases the per-key marker only for a conclusion known to be durable.
+    ///
+    /// A supervised compare and set must not build a newer state on one whose
+    /// durability is unknown, so every other conclusion keeps the marker. That
+    /// includes an unconfirmed replacement, which the caller now receives as
+    /// such instead of as an undifferentiated failure.
     pub(crate) fn complete_supervised_persistence(
         &self,
         topic: &CheetahString,
         consumer_group: &CheetahString,
-        persisted: bool,
+        conclusion: &crate::broker::metadata_reconciliation::MetadataWriteConclusion,
     ) {
-        if persisted {
-            self.supervised_dirty
-                .lock()
-                .remove(&(topic.clone(), consumer_group.clone()));
+        if conclusion.retains_dirty_marker() {
+            return;
         }
+        self.supervised_dirty
+            .lock()
+            .remove(&(topic.clone(), consumer_group.clone()));
     }
 
     pub fn message_request_mode_map(&self) -> Arc<parking_lot::Mutex<MessageRequestModeMap>> {
@@ -176,6 +194,14 @@ mod tests {
     use rocketmq_store::MessageStoreConfig;
 
     use super::*;
+
+    fn persisted_conclusion() -> crate::broker::metadata_reconciliation::MetadataWriteConclusion {
+        crate::broker::metadata_reconciliation::MetadataWriteConclusion::BlockingPersisted
+    }
+
+    fn unconfirmed_conclusion() -> crate::broker::metadata_reconciliation::MetadataWriteConclusion {
+        crate::broker::metadata_reconciliation::MetadataWriteConclusion::unconfirmed_for_test()
+    }
 
     #[test]
     fn set_message_request_mode_adds_entry() {
@@ -235,7 +261,7 @@ mod tests {
         assert_eq!(conflict.mode, MessageRequestMode::Pull);
         assert_eq!(conflict.pop_share_queue_num, 0);
 
-        manager.complete_supervised_persistence(&topic, &consumer_group, true);
+        manager.complete_supervised_persistence(&topic, &consumer_group, &persisted_conclusion());
 
         let updated = manager
             .set_message_request_mode_if_current(topic.clone(), consumer_group.clone(), Some(&pull), pop.clone())
@@ -254,7 +280,7 @@ mod tests {
                 Err(MessageRequestModeCasError::PersistenceDirty(Some(_)))
             ));
         }
-        manager.complete_supervised_persistence(&topic, &consumer_group, true);
+        manager.complete_supervised_persistence(&topic, &consumer_group, &persisted_conclusion());
         let unchanged = manager
             .set_message_request_mode_if_current(topic.clone(), consumer_group.clone(), Some(&pop), pop.clone())
             .expect("identical replacement should be an accepted no-op");
@@ -264,6 +290,46 @@ mod tests {
             .expect("updated mode should remain present");
         assert_eq!(current.mode, MessageRequestMode::Pop);
         assert_eq!(current.pop_share_queue_num, 4);
+    }
+
+    #[test]
+    fn unconfirmed_persistence_keeps_the_request_mode_dirty() {
+        let manager = MessageRequestModeManager::new(Arc::new(MessageStoreConfig::default()));
+        let topic = CheetahString::from("test_topic");
+        let consumer_group = CheetahString::from("test_group");
+        let pull = SetMessageRequestModeRequestBody {
+            mode: MessageRequestMode::Pull,
+            pop_share_queue_num: 0,
+            ..SetMessageRequestModeRequestBody::default()
+        };
+        let pop = SetMessageRequestModeRequestBody {
+            mode: MessageRequestMode::Pop,
+            pop_share_queue_num: 4,
+            ..SetMessageRequestModeRequestBody::default()
+        };
+        manager
+            .set_message_request_mode_if_current(topic.clone(), consumer_group.clone(), None, pull.clone())
+            .expect("absent mode should be created");
+
+        // An unconfirmed replacement keeps the key dirty, because the next
+        // compare and set has no durable base to build on.
+        manager.complete_supervised_persistence(&topic, &consumer_group, &unconfirmed_conclusion());
+        assert!(matches!(
+            manager.set_message_request_mode_if_current(
+                topic.clone(),
+                consumer_group.clone(),
+                Some(&pull),
+                pop.clone()
+            ),
+            Err(MessageRequestModeCasError::PersistenceDirty(_))
+        ));
+
+        // A conclusion that is known durable releases it.
+        manager.complete_supervised_persistence(&topic, &consumer_group, &persisted_conclusion());
+        let updated = manager
+            .set_message_request_mode_if_current(topic.clone(), consumer_group.clone(), Some(&pull), pop)
+            .expect("a durable conclusion releases the marker");
+        assert!(updated.changed);
     }
 
     #[test]
@@ -286,7 +352,7 @@ mod tests {
             .set_message_request_mode_if_current(topic.clone(), consumer_group.clone(), None, pull)
             .expect("in-memory replacement");
         assert!(applied.changed);
-        manager.complete_supervised_persistence(&topic, &consumer_group, false);
+        manager.complete_supervised_persistence(&topic, &consumer_group, &unconfirmed_conclusion());
 
         let restarted = MessageRequestModeManager::new(config);
         assert!(restarted.load());
