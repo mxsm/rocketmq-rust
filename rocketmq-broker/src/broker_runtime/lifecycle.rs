@@ -407,22 +407,27 @@ impl BrokerRuntime {
         // admitted immediately before shutdown can retain the store until the absolute deadline
         // and prevent a same-path Broker restart from acquiring the lock file.
         let started = Instant::now();
-        let scheduled_report = self
-            .shutdown_scheduled_tasks_with_timeout(deadline.remaining().min(SCHEDULED_TASK_SHUTDOWN_TIMEOUT))
-            .await;
-        shutdown_report.scheduled_tasks = if scheduled_report.is_healthy() {
+        let scheduled_deadline = rocketmq_runtime::ShutdownDeadline::at(
+            deadline
+                .instant()
+                .min(std::time::Instant::now() + SCHEDULED_TASK_SHUTDOWN_TIMEOUT),
+        );
+        let scheduled_outcome = self.shutdown_scheduled_tasks_until(scheduled_deadline).await;
+        shutdown_report.scheduled_tasks = if scheduled_outcome.is_healthy() {
             BrokerShutdownComponentReport::completed("scheduled_tasks", started.elapsed())
         } else {
+            let scheduled_report = &scheduled_outcome.drivers;
             BrokerShutdownComponentReport::unhealthy(
                 "scheduled_tasks",
                 started.elapsed(),
                 format!(
-                    "task_count={}, completed={}, aborted={}, panicked={}, timed_out={}",
+                    "task_count={}, completed={}, aborted={}, panicked={}, timed_out={}, task_group_count={}",
                     scheduled_report.task_count,
                     scheduled_report.completed,
                     scheduled_report.aborted,
                     scheduled_report.panicked,
-                    scheduled_report.timed_out
+                    scheduled_report.timed_out,
+                    scheduled_outcome.task_groups.len()
                 ),
             )
         };
@@ -841,13 +846,21 @@ impl BrokerRuntime {
         &self,
         timeout: Duration,
     ) -> rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownReport {
-        let report = self.lifecycle.scheduled_task_manager.shutdown_all(timeout).await;
-        self.lifecycle
-            .bounded_scheduled_tasks
-            .shutdown(timeout)
+        self.shutdown_scheduled_tasks_until(rocketmq_runtime::ShutdownDeadline::after(timeout))
             .await
-            .log_if_unhealthy();
-        if !report.is_healthy() {
+            .drivers
+    }
+
+    pub(crate) async fn shutdown_scheduled_tasks_until(
+        &self,
+        deadline: rocketmq_runtime::ShutdownDeadline,
+    ) -> rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownOutcome {
+        let mut outcome = self.lifecycle.scheduled_task_manager.shutdown_all_until(deadline).await;
+        outcome
+            .task_groups
+            .push(self.lifecycle.bounded_scheduled_tasks.shutdown_until(deadline).await);
+        if !outcome.is_healthy() {
+            let report = &outcome.drivers;
             warn!(
                 task_count = report.task_count,
                 completed = report.completed,
@@ -855,10 +868,11 @@ impl BrokerRuntime {
                 panicked = report.panicked,
                 timed_out = report.timed_out,
                 elapsed_ms = report.elapsed.as_millis(),
+                task_group_count = outcome.task_groups.len(),
                 "Broker scheduled task shutdown report is unhealthy"
             );
         }
-        report
+        outcome
     }
 
     pub(crate) async fn shutdown_remoting_servers(

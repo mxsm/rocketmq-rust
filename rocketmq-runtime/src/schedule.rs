@@ -75,6 +75,7 @@ pub mod simple_scheduler {
     use crate::RuntimeError;
     use crate::RuntimeHandle;
     use crate::RuntimeResult;
+    use crate::ShutdownDeadline;
     use crate::ShutdownReport;
     use crate::TaskGroup;
     use crate::TaskId as RuntimeTaskId;
@@ -191,6 +192,22 @@ pub mod simple_scheduler {
 
         fn record_aborted_driver(&mut self) {
             self.aborted += 1;
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    /// Driver and owned-task results for one scheduled manager shutdown.
+    pub struct ScheduledShutdownOutcome {
+        /// Driver shutdown result.
+        pub drivers: ScheduledShutdownReport,
+        /// Owned TaskGroup results.
+        pub task_groups: Vec<ShutdownReport>,
+    }
+
+    impl ScheduledShutdownOutcome {
+        /// Returns whether every driver and owned run shut down cleanly.
+        pub fn is_healthy(&self) -> bool {
+            self.drivers.is_healthy() && self.task_groups.iter().all(ShutdownReport::is_healthy)
         }
     }
 
@@ -555,17 +572,34 @@ pub mod simple_scheduler {
 
         /// Shuts down all.
         pub async fn shutdown_all(&self, timeout: Duration) -> ScheduledShutdownReport {
+            self.shutdown_all_until(ShutdownDeadline::after(timeout)).await.drivers
+        }
+
+        /// Shuts down all drivers and owned tasks using one absolute deadline.
+        pub async fn shutdown_all_until(&self, deadline: ShutdownDeadline) -> ScheduledShutdownOutcome {
             let tasks = {
                 let mut tasks = self.tasks.write();
                 tasks.drain().collect::<Vec<_>>()
             };
-            let report = Self::shutdown_entries(tasks, timeout).await;
-            self.shutdown_task_group(timeout).await;
-            report
+            let drivers = Self::shutdown_entries(tasks, deadline).await;
+            let task_group = self.shutdown_task_group_until(deadline).await;
+            ScheduledShutdownOutcome {
+                drivers,
+                task_groups: task_group.into_iter().collect(),
+            }
         }
 
         /// Shuts down tasks.
         pub async fn shutdown_tasks<I>(&self, task_ids: I, timeout: Duration) -> ScheduledShutdownReport
+        where
+            I: IntoIterator<Item = TaskId>,
+        {
+            self.shutdown_tasks_until(task_ids, ShutdownDeadline::after(timeout))
+                .await
+        }
+
+        /// Shuts down selected drivers using one absolute deadline.
+        pub async fn shutdown_tasks_until<I>(&self, task_ids: I, deadline: ShutdownDeadline) -> ScheduledShutdownReport
         where
             I: IntoIterator<Item = TaskId>,
         {
@@ -577,10 +611,13 @@ pub mod simple_scheduler {
                     .filter_map(|id| tasks.remove(&id).map(|info| (id, info)))
                     .collect::<Vec<_>>()
             };
-            Self::shutdown_entries(tasks, timeout).await
+            Self::shutdown_entries(tasks, deadline).await
         }
 
-        async fn shutdown_entries(tasks: Vec<(TaskId, TaskInfo)>, timeout: Duration) -> ScheduledShutdownReport {
+        async fn shutdown_entries(
+            tasks: Vec<(TaskId, TaskInfo)>,
+            deadline: ShutdownDeadline,
+        ) -> ScheduledShutdownReport {
             let mut report = ScheduledShutdownReport::new(tasks.len());
             let started = Instant::now();
 
@@ -594,7 +631,7 @@ pub mod simple_scheduler {
                     continue;
                 }
 
-                let remaining = timeout.checked_sub(started.elapsed()).unwrap_or(Duration::ZERO);
+                let remaining = deadline.remaining();
                 if !remaining.is_zero() && time::timeout(remaining, &mut info.done).await.is_ok() {
                     report.record_completed_driver();
                     continue;
@@ -606,7 +643,7 @@ pub mod simple_scheduler {
                 }
 
                 report.timed_out += 1;
-                let abort_wait = timeout.min(Duration::from_secs(1));
+                let abort_wait = deadline.remaining().min(Duration::from_secs(1));
                 if info
                     .task_group
                     .abort_task_and_wait(info.runtime_task_id, abort_wait)
@@ -643,12 +680,15 @@ pub mod simple_scheduler {
             self.last_task_group_shutdown_report.read().clone()
         }
 
-        async fn shutdown_task_group(&self, timeout: Duration) {
+        async fn shutdown_task_group_until(&self, deadline: ShutdownDeadline) -> Option<ShutdownReport> {
             let task_group = self.task_group.write().take();
             if let Some(task_group) = task_group {
-                let report = task_group.shutdown(timeout).await;
+                let report = task_group.shutdown_until(deadline).await;
                 report.log_if_unhealthy();
                 *self.last_task_group_shutdown_report.write() = Some(report);
+                self.last_task_group_shutdown_report.read().clone()
+            } else {
+                self.last_task_group_shutdown_report.read().clone()
             }
         }
     }
@@ -800,6 +840,7 @@ mod tests {
 
     use crate::RuntimeContext;
     use crate::RuntimeResult;
+    use crate::ShutdownDeadline;
     use rocketmq_error::CanonicalCondition;
     use tokio::time;
 
@@ -1027,6 +1068,28 @@ mod tests {
             .expect("task group shutdown report should be recorded");
         assert!(task_group_report.is_healthy(), "{}", task_group_report.to_json());
         assert_eq!(task_group_report.leaked, 0);
+    }
+
+    #[tokio::test]
+    async fn shutdown_all_until_returns_driver_and_owned_group_reports() {
+        let manager = ScheduledTaskManager::new_legacy_compatibility();
+        manager
+            .add_scheduled_task(
+                ScheduleMode::FixedDelay,
+                Duration::from_secs(60),
+                Duration::from_secs(60),
+                |_token| async move { Ok(()) },
+            )
+            .expect("fixed-delay scheduled task should start");
+
+        let outcome = manager
+            .shutdown_all_until(ShutdownDeadline::after(Duration::from_secs(1)))
+            .await;
+
+        assert_eq!(outcome.drivers.task_count, 1);
+        assert_eq!(outcome.drivers.completed, 1);
+        assert_eq!(outcome.task_groups.len(), 1);
+        assert!(outcome.is_healthy());
     }
 
     #[tokio::test]
