@@ -129,7 +129,11 @@ pub enum MutationFailureCode {
 pub enum MutationPersistenceState {
     NotRequired,
     Persisted,
+    /// The write is confirmed not to have reached the target file.
     Failed,
+    /// The write may already have reached the target file; the Broker ended
+    /// its observation without confirming either durability or failure.
+    Unconfirmed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

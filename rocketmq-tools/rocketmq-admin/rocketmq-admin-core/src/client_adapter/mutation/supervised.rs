@@ -355,7 +355,13 @@ async fn execute_topic_checked<A: MQAdminMutationExt + ?Sized>(
             .await
         {
             Ok(result) => {
-                let verification = if result.persistence == ClientMutationPersistenceState::Failed {
+                // An unconfirmed write is verified like a definite failure:
+                // the post-read decides whether the change already reached the
+                // target, while `persistence` keeps the distinction.
+                let verification = if matches!(
+                    result.persistence,
+                    ClientMutationPersistenceState::Failed | ClientMutationPersistenceState::Unconfirmed
+                ) {
                     match admin
                         .mutation_topic_config_state(target.broker_addr.as_str().into(), plan.topic.as_str().into())
                         .await
@@ -379,7 +385,10 @@ async fn execute_topic_checked<A: MQAdminMutationExt + ?Sized>(
                     changed: result.changed,
                     persistence: map_client_persistence(result.persistence),
                     verification,
-                    failure: if result.persistence == ClientMutationPersistenceState::Failed {
+                    failure: if matches!(
+                        result.persistence,
+                        ClientMutationPersistenceState::Failed | ClientMutationPersistenceState::Unconfirmed
+                    ) {
                         Some(MutationFailureCode::PersistenceFailed)
                     } else if !result.applied {
                         Some(MutationFailureCode::Conflict)
@@ -628,7 +637,10 @@ async fn execute_subscription_group_checked<A: MQAdminMutationExt + ?Sized>(
             .await
         {
             Ok(result) => {
-                let verification = if result.persistence == ClientMutationPersistenceState::Failed {
+                let verification = if matches!(
+                    result.persistence,
+                    ClientMutationPersistenceState::Failed | ClientMutationPersistenceState::Unconfirmed
+                ) {
                     match admin
                         .mutation_subscription_group_config_state(
                             target.broker_addr.as_str().into(),
@@ -655,7 +667,10 @@ async fn execute_subscription_group_checked<A: MQAdminMutationExt + ?Sized>(
                     changed: result.changed,
                     persistence: map_client_persistence(result.persistence),
                     verification,
-                    failure: if result.persistence == ClientMutationPersistenceState::Failed {
+                    failure: if matches!(
+                        result.persistence,
+                        ClientMutationPersistenceState::Failed | ClientMutationPersistenceState::Unconfirmed
+                    ) {
                         Some(MutationFailureCode::PersistenceFailed)
                     } else if !result.applied {
                         Some(MutationFailureCode::Conflict)
@@ -956,7 +971,13 @@ async fn execute_request_mode_checked_inner<A: MQAdminMutationExt + ?Sized>(
                 .await
         };
         match result {
-            Ok(result) if result.applied || result.persistence == ClientMutationPersistenceState::Failed => {
+            Ok(result)
+                if result.applied
+                    || matches!(
+                        result.persistence,
+                        ClientMutationPersistenceState::Failed | ClientMutationPersistenceState::Unconfirmed
+                    ) =>
+            {
                 let observed = admin
                     .mutation_message_request_mode(
                         broker_addr.as_str().into(),
@@ -998,7 +1019,10 @@ async fn execute_request_mode_checked_inner<A: MQAdminMutationExt + ?Sized>(
                     verification,
                     failure: if verification_failed {
                         Some(MutationFailureCode::VerificationFailed)
-                    } else if persistence == MutationPersistenceState::Failed {
+                    } else if matches!(
+                        persistence,
+                        MutationPersistenceState::Failed | MutationPersistenceState::Unconfirmed
+                    ) {
                         Some(MutationFailureCode::PersistenceFailed)
                     } else {
                         None
@@ -1468,6 +1492,7 @@ fn map_client_persistence(state: ClientMutationPersistenceState) -> MutationPers
         ClientMutationPersistenceState::NotRequired => MutationPersistenceState::NotRequired,
         ClientMutationPersistenceState::Persisted => MutationPersistenceState::Persisted,
         ClientMutationPersistenceState::Failed => MutationPersistenceState::Failed,
+        ClientMutationPersistenceState::Unconfirmed => MutationPersistenceState::Unconfirmed,
     }
 }
 
@@ -2153,7 +2178,12 @@ mod tests {
             } else {
                 ClientMutationPersistenceState::NotRequired
             };
-            if persistence == ClientMutationPersistenceState::Failed {
+            // The fake mirrors the Broker dirty marker: it stays set for an
+            // unconfirmed write as well as for a definite failure.
+            if matches!(
+                persistence,
+                ClientMutationPersistenceState::Failed | ClientMutationPersistenceState::Unconfirmed
+            ) {
                 self.topic_dirty.store(true, Ordering::SeqCst);
             }
             if let Some(order) = self
@@ -2221,7 +2251,10 @@ mod tests {
             } else {
                 ClientMutationPersistenceState::NotRequired
             };
-            if persistence == ClientMutationPersistenceState::Failed {
+            if matches!(
+                persistence,
+                ClientMutationPersistenceState::Failed | ClientMutationPersistenceState::Unconfirmed
+            ) {
                 self.group_dirty.store(true, Ordering::SeqCst);
             }
             Ok(rocketmq_client_rust::MutationStateCasOutcome {
@@ -2298,7 +2331,10 @@ mod tests {
             } else {
                 ClientMutationPersistenceState::NotRequired
             };
-            if persistence == ClientMutationPersistenceState::Failed {
+            if matches!(
+                persistence,
+                ClientMutationPersistenceState::Failed | ClientMutationPersistenceState::Unconfirmed
+            ) {
                 self.request_mode_dirty.store(true, Ordering::SeqCst);
             }
             Ok(rocketmq_client_rust::MutationMessageRequestModeOutcome {
@@ -3379,6 +3415,50 @@ mod tests {
         let state = fake.topic_state.lock().expect("topic state");
         assert_eq!(state.state, ClientExpectedState::Present { version: 1 });
         assert_eq!(state.config.as_ref().expect("Topic config").read_queue_nums, 4);
+    }
+
+    #[tokio::test]
+    async fn production_topic_unconfirmed_persistence_stays_distinct_and_still_blocks_followups() {
+        let fake = CountingMutationAdmin::new(1);
+        *fake.topic_persistence.lock().expect("topic persistence") = ClientMutationPersistenceState::Unconfirmed;
+        let seal = Arc::new(MutationPlanSeal);
+        let request = TopicMutationPreflightRequest {
+            cluster: "cluster-a".to_owned(),
+            topic: "orders".to_owned(),
+            replacement: TopicReplacement {
+                read_queue_nums: 4,
+                write_queue_nums: 4,
+                perm: 6,
+                order: true,
+                message_type: TopicMessageType::Normal,
+            },
+        };
+        let plan = preflight_topic_with_admin(&fake, Arc::clone(&seal), &request)
+            .await
+            .expect("Topic preflight");
+        let outcome = execute_topic_checked(&fake, &seal, &plan).await.expect("Topic execute");
+        assert_eq!(outcome.targets.len(), 1);
+        assert!(outcome.targets[0].applied);
+        assert!(outcome.targets[0].changed);
+        assert_eq!(outcome.targets[0].persistence, MutationPersistenceState::Unconfirmed);
+        assert_eq!(outcome.targets[0].verification, MutationVerificationState::Verified);
+        assert_eq!(outcome.targets[0].failure, Some(MutationFailureCode::PersistenceFailed));
+        assert_eq!(outcome.order_reconciled, Some(false));
+
+        // An unconfirmed write dirties the key just like a definite failure:
+        // the next compare and set must not build on unknown durability.
+        let follow_up = preflight_topic_with_admin(&fake, Arc::clone(&seal), &request)
+            .await
+            .expect("dirty Topic preflight");
+        let blocked = execute_topic_checked(&fake, &seal, &follow_up)
+            .await
+            .expect("dirty Topic execute");
+        let blocked = &blocked.targets[0];
+        assert!(!blocked.applied);
+        assert!(!blocked.changed);
+        assert_eq!(blocked.persistence, MutationPersistenceState::Failed);
+        assert_eq!(blocked.failure, Some(MutationFailureCode::PersistenceFailed));
+        assert_eq!(fake.topic_writes.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

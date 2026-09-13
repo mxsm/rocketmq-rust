@@ -160,7 +160,11 @@ pub struct MessageRequestModeStateBody {
 pub enum MutationPersistenceState {
     NotRequired,
     Persisted,
+    /// The write is confirmed not to have reached the target file.
     Failed,
+    /// The write may already have reached the target file; the Broker ended
+    /// its observation without confirming either durability or failure.
+    Unconfirmed,
 }
 
 /// Conditional request-mode outcome, including applied and durability truth.

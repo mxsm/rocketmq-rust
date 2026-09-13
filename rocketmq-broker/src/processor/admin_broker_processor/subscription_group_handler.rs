@@ -445,10 +445,14 @@ impl SubscriptionGroupHandler {
         let (code, persistence) = if conclusion.is_durable() {
             (ResponseCode::Success, MutationPersistenceState::Persisted)
         } else {
-            // An unconfirmed replacement is reported as failed to the client;
-            // the per-group marker keeps the next compare and set from
-            // building on a state whose durability is unknown.
-            (ResponseCode::SystemError, MutationPersistenceState::Failed)
+            // An unconfirmed replacement is reported as unconfirmed rather
+            // than as a definite failure: the target file may already hold
+            // the change. The per-group marker still keeps the next compare
+            // and set from building on a state whose durability is unknown.
+            (
+                ResponseCode::SystemError,
+                crate::broker::metadata_reconciliation::persistence_state(&conclusion),
+            )
         };
         Ok(Some(
             RemotingCommand::create_success_response_command()

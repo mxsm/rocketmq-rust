@@ -395,6 +395,7 @@ pub enum PersistenceState {
     NotRequired,
     Persisted,
     Failed,
+    Unconfirmed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]

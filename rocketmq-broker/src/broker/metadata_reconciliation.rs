@@ -30,6 +30,7 @@
 //! `MetadataIoActor::confirmed_durable_generation`.
 
 use rocketmq_error::SharedError;
+use rocketmq_protocol::protocol::body::supervised_mutation::MutationPersistenceState;
 use rocketmq_runtime::MetadataGeneration;
 use rocketmq_runtime::MetadataIoCommitObservation;
 use rocketmq_runtime::MetadataIoCommitOutcome;
@@ -180,6 +181,24 @@ pub(crate) fn conclusion_error(conclusion: &MetadataWriteConclusion) -> Option<S
     }
 }
 
+/// Maps a write conclusion to the persistence state reported on the wire.
+///
+/// An unconfirmed replacement stays distinct from a definite failure: the
+/// target file may already contain the change, which is exactly the fact a
+/// supervised caller needs to reconcile. `NotRequired` is never produced here
+/// because a conclusion only exists once a write was attempted.
+pub(crate) fn persistence_state(conclusion: &MetadataWriteConclusion) -> MutationPersistenceState {
+    match conclusion {
+        MetadataWriteConclusion::Durable(_) | MetadataWriteConclusion::BlockingPersisted => {
+            MutationPersistenceState::Persisted
+        }
+        MetadataWriteConclusion::FailedBeforeCommit(_) | MetadataWriteConclusion::TargetConflict(_) => {
+            MutationPersistenceState::Failed
+        }
+        MetadataWriteConclusion::Unconfirmed { .. } => MutationPersistenceState::Unconfirmed,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
@@ -264,5 +283,35 @@ mod tests {
         assert!(!conflict.is_durable());
         assert!(conflict.retains_dirty_marker());
         assert!(conclusion_error(&conflict).is_some());
+    }
+
+    #[test]
+    fn persistence_state_keeps_unconfirmed_distinct_from_definite_failure() {
+        assert_eq!(
+            persistence_state(&MetadataWriteConclusion::Durable(MetadataGeneration::new(4))),
+            MutationPersistenceState::Persisted
+        );
+        assert_eq!(
+            persistence_state(&MetadataWriteConclusion::BlockingPersisted),
+            MutationPersistenceState::Persisted
+        );
+        assert_eq!(
+            persistence_state(&MetadataWriteConclusion::FailedBeforeCommit(broker_error::internal(
+                "metadata_io",
+                io::Error::other("injected write failure"),
+            ))),
+            MutationPersistenceState::Failed
+        );
+        assert_eq!(
+            persistence_state(&MetadataWriteConclusion::TargetConflict(broker_error::internal(
+                "metadata_io",
+                io::Error::other("injected target conflict"),
+            ))),
+            MutationPersistenceState::Failed
+        );
+        assert_eq!(
+            persistence_state(&MetadataWriteConclusion::unconfirmed_for_test()),
+            MutationPersistenceState::Unconfirmed
+        );
     }
 }

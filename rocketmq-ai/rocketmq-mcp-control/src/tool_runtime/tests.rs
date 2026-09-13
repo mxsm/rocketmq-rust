@@ -902,6 +902,19 @@ fn response_mapping_preserves_unchanged_conflict_partial_and_persistence_states(
     assert_eq!(targets[0].persistence, tools::PersistenceState::Failed);
 
     let (status, targets) = mapped(
+        vec![outcome(
+            "broker-a",
+            true,
+            true,
+            admin::MutationPersistenceState::Unconfirmed,
+            Some(admin::MutationFailureCode::PersistenceFailed),
+        )],
+        &["broker-a"],
+    );
+    assert_eq!(status, tools::MutationStatus::Failed);
+    assert_eq!(targets[0].persistence, tools::PersistenceState::Unconfirmed);
+
+    let (status, targets) = mapped(
         vec![
             outcome("broker-a", true, true, admin::MutationPersistenceState::Persisted, None),
             outcome(

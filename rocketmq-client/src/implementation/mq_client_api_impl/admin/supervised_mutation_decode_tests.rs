@@ -80,6 +80,28 @@ fn state_cas_response_binds_status_to_typed_body() {
         }
     );
 
+    let persistence_unconfirmed = RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
+        .set_body(
+            StateCasResultBody {
+                applied: true,
+                changed: true,
+                state: ExpectedState::Present { version: 11 },
+                persistence: MutationPersistenceState::Unconfirmed,
+            }
+            .encode()
+            .expect("unconfirmed persistence body"),
+        );
+    assert_eq!(
+        state_cas_outcome_from_response(&persistence_unconfirmed, MutationExpectedState::Present { version: 10 })
+            .expect("applied unconfirmed outcome"),
+        MutationStateCasOutcome {
+            applied: true,
+            changed: true,
+            state: MutationExpectedState::Present { version: 11 },
+            persistence: ClientMutationPersistenceState::Unconfirmed,
+        }
+    );
+
     let disagree = RemotingCommand::create_success_response_command().set_body(
         StateCasResultBody {
             applied: false,
@@ -107,6 +129,7 @@ fn state_cas_response_accepts_only_the_closed_code_body_matrix() {
                     MutationPersistenceState::NotRequired,
                     MutationPersistenceState::Persisted,
                     MutationPersistenceState::Failed,
+                    MutationPersistenceState::Unconfirmed,
                 ] {
                     let (expected, state) = match code {
                         ResponseCode::Success if !changed => (
@@ -147,8 +170,13 @@ fn state_cas_response_accepts_only_the_closed_code_body_matrix() {
                             !applied && !changed && persistence == MutationPersistenceState::NotRequired
                         }
                         ResponseCode::SystemError => {
-                            persistence == MutationPersistenceState::Failed
-                                && ((applied && changed) || (!applied && !changed))
+                            (applied
+                                && changed
+                                && matches!(
+                                    persistence,
+                                    MutationPersistenceState::Failed | MutationPersistenceState::Unconfirmed
+                                ))
+                                || (!applied && !changed && persistence == MutationPersistenceState::Failed)
                         }
                         _ => false,
                     };
@@ -234,6 +262,7 @@ fn request_mode_response_accepts_only_closed_matrix_and_exact_current() {
                     MutationPersistenceState::NotRequired,
                     MutationPersistenceState::Persisted,
                     MutationPersistenceState::Failed,
+                    MutationPersistenceState::Unconfirmed,
                 ] {
                     let expected = if code == ResponseCode::Success && !changed {
                         MutationExpectedMessageRequestMode::Present(pop)
@@ -268,8 +297,13 @@ fn request_mode_response_accepts_only_closed_matrix_and_exact_current() {
                             !applied && !changed && persistence == MutationPersistenceState::NotRequired
                         }
                         ResponseCode::SystemError => {
-                            persistence == MutationPersistenceState::Failed
-                                && ((applied && changed) || (!applied && !changed))
+                            (applied
+                                && changed
+                                && matches!(
+                                    persistence,
+                                    MutationPersistenceState::Failed | MutationPersistenceState::Unconfirmed
+                                ))
+                                || (!applied && !changed && persistence == MutationPersistenceState::Failed)
                         }
                         _ => false,
                     };
