@@ -14,6 +14,7 @@
 
 mod budget;
 mod clock;
+mod dynamic;
 mod limit;
 mod memory;
 mod queue;
@@ -26,6 +27,11 @@ pub use budget::ResourceBudgetTree;
 pub use budget::ResourcePermit;
 pub use clock::MonotonicClock;
 pub use clock::SystemMonotonicClock;
+pub use dynamic::DynamicBudgetKey;
+pub use dynamic::DynamicKeyAdmissionRejection;
+pub use dynamic::DynamicKeyRegistrationFailure;
+pub use dynamic::DynamicKeyRetirement;
+pub use dynamic::DEFAULT_MAX_DYNAMIC_BUDGET_KEYS;
 pub use limit::BudgetCapacity;
 pub use limit::BudgetClass;
 pub use limit::BudgetDimension;
@@ -36,6 +42,7 @@ pub use memory::MemoryLimitSource;
 pub use memory::ProcessMemoryLimit;
 pub use queue::BudgetedItem;
 pub use queue::BudgetedQueue;
+pub use queue::ForeignPermit;
 pub use queue::QueuePushOutcome;
 pub use queue::QueuePushRejection;
 pub use queue::QueueSnapshot;

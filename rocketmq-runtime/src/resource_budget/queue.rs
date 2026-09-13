@@ -25,6 +25,7 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use super::budget::BudgetRejection;
+use super::budget::PermitRebindOutcome;
 use super::budget::ResourceBudget;
 use super::budget::ResourcePermit;
 use super::limit::BudgetClass;
@@ -66,6 +67,23 @@ pub enum QueuePushRejection {
     Closed,
     /// The queue closed a slow consumer.
     SlowConsumerClosed,
+}
+
+/// A push rejected because its permit belongs to another budget tree.
+///
+/// The item and its unchanged permit are returned together. The permit still
+/// holds the charge the caller acquired, so dropping it here would release
+/// capacity that the caller is still accounting for.
+///
+/// The permit is boxed because a [`ResourcePermit`] inlines its ancestor
+/// reservations and this is only reachable when a caller passes a permit from
+/// an unrelated budget tree.
+#[derive(Debug)]
+pub struct ForeignPermit<T> {
+    /// The item that was not enqueued.
+    pub item: T,
+    /// The unchanged permit, still holding its charge.
+    pub permit: Box<ResourcePermit>,
 }
 
 /// Represents budgeted item.
@@ -205,6 +223,62 @@ impl<T> BudgetedQueue<T> {
                 }
             }
             Err(error) => self.handle_full(item, retained_bytes, class, error),
+        }
+    }
+
+    /// Pushes an item whose retained bytes are already charged by `permit`.
+    ///
+    /// The permit is transferred into the queue, so an admission at the
+    /// caller's own ingress boundary and the queue retention charge the shared
+    /// ancestor chain exactly once. A permit acquired from an ancestor of this
+    /// queue's budget is rebound to the queue before it is retained, which is
+    /// the difference between this entry point and the ones that acquire their
+    /// own permit from `retained_bytes`.
+    ///
+    /// A rejection returns the item and releases the transferred charge, which
+    /// matches the entry points that acquire their own permit: an item that was
+    /// not retained holds no reservation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForeignPermit`] with the item and its unchanged permit when
+    /// `permit` does not belong to this queue's budget tree. The permit still
+    /// holds the caller's charge, so it is handed back instead of dropped.
+    pub fn try_push_budgeted(
+        &self,
+        item: T,
+        mut permit: ResourcePermit,
+    ) -> Result<QueuePushOutcome<T>, ForeignPermit<T>> {
+        let _coalesce_guard = if self.inner.budget.limit().full_policy == FullPolicy::CoalesceLatest {
+            Some(
+                self.inner
+                    .coalesce_push
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
+        } else {
+            None
+        };
+        let dropped = self.apply_age_policy();
+        match permit.try_rebind(&self.inner.budget) {
+            Ok(PermitRebindOutcome::Rebound | PermitRebindOutcome::Unchanged) => {
+                if let Some(rejected) = self.enqueue(item, permit) {
+                    return Ok(rejected);
+                }
+                Ok(if dropped == 0 {
+                    QueuePushOutcome::Enqueued
+                } else {
+                    QueuePushOutcome::DroppedStale { dropped }
+                })
+            }
+            Ok(PermitRebindOutcome::Rejected(rejection)) => Ok(QueuePushOutcome::Rejected {
+                item,
+                rejection: QueuePushRejection::BudgetExhausted(rejection),
+            }),
+            Err(_) => Err(ForeignPermit {
+                item,
+                permit: Box::new(permit),
+            }),
         }
     }
 
