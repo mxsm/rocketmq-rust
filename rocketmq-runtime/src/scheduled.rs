@@ -775,6 +775,11 @@ impl ScheduledTaskGroup {
         self.group.shutdown(timeout).await
     }
 
+    /// Shuts down the owned service using one absolute deadline.
+    pub async fn shutdown_until(&self, deadline: crate::ShutdownDeadline) -> ShutdownReport {
+        self.group.shutdown_until(deadline).await
+    }
+
     fn register(
         &self,
         name: Arc<str>,
