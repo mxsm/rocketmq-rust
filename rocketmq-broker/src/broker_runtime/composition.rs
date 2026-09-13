@@ -1168,6 +1168,12 @@ impl BrokerRuntime {
             .parse::<SocketAddr>()
             .unwrap_or_else(|_| SocketAddr::new(network.bind_address(), network.listen_port()));
         let scheduled_task_manager = BrokerScheduledTasks::new_with_task_group(service_context.task_group().clone());
+        let bounded_scheduled_tasks = rocketmq_runtime::ScheduledTaskGroup::new(
+            service_context
+                .component("broker.bounded-scheduled")
+                .task_group()
+                .clone(),
+        );
         let metadata_io = Some(
             MetadataIoConfig::default()
                 .into_plan()
@@ -1563,7 +1569,7 @@ impl BrokerRuntime {
                 #[cfg(feature = "rocksdb_store")]
                 rocksdb_config_managers,
             ),
-            lifecycle: BrokerLifecycle::new(scheduled_task_manager),
+            lifecycle: BrokerLifecycle::new(scheduled_task_manager, bounded_scheduled_tasks),
         }
     }
 

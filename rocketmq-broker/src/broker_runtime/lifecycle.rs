@@ -16,11 +16,16 @@ use super::deferred::BrokerDeferredLifecycle;
 use super::deferred::BrokerDeferredRegistryShutdownReport;
 use super::shutdown_report::record_message_store_shutdown_outcome;
 use super::*;
+use rocketmq_runtime::MissedTickPolicy;
+use rocketmq_runtime::ScheduledExecutionPolicy;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStorePort;
 pub(super) struct BrokerLifecycle {
     pub(super) shutdown_hook: Option<BrokerShutdownHook>,
     pub(super) scheduled_task_manager: BrokerScheduledTasks,
+    pub(super) bounded_scheduled_tasks: ScheduledTaskGroup,
     pub(super) remoting_server_task_group: Option<TaskGroup>,
     pub(super) remoting_server_report_receivers: Vec<BrokerRemotingServerReportReceiver>,
     pub(super) request_processor_task_group: Option<TaskGroup>,
@@ -28,10 +33,14 @@ pub(super) struct BrokerLifecycle {
 }
 
 impl BrokerLifecycle {
-    pub(super) fn new(scheduled_task_manager: BrokerScheduledTasks) -> Self {
+    pub(super) fn new(
+        scheduled_task_manager: BrokerScheduledTasks,
+        bounded_scheduled_tasks: ScheduledTaskGroup,
+    ) -> Self {
         Self {
             shutdown_hook: None,
             scheduled_task_manager,
+            bounded_scheduled_tasks,
             remoting_server_task_group: None,
             remoting_server_report_receivers: Vec::new(),
             request_processor_task_group: None,
@@ -46,6 +55,7 @@ impl Drop for BrokerRuntime {
         // ticker loops cannot spin at full speed and block the runtime from completing
         // shutdown when the broker is dropped (e.g. during test panic unwind).
         self.lifecycle.scheduled_task_manager.abort_all();
+        self.lifecycle.bounded_scheduled_tasks.group().cancel();
     }
 }
 
@@ -832,6 +842,11 @@ impl BrokerRuntime {
         timeout: Duration,
     ) -> rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownReport {
         let report = self.lifecycle.scheduled_task_manager.shutdown_all(timeout).await;
+        self.lifecycle
+            .bounded_scheduled_tasks
+            .shutdown(timeout)
+            .await
+            .log_if_unhealthy();
         if !report.is_healthy() {
             warn!(
                 task_count = report.task_count,
@@ -1080,11 +1095,14 @@ impl BrokerRuntime {
             10000.max(60000.min(self.composition.state.broker_config().register_name_server_period)),
         );
         let initial_delay = Duration::from_secs(10);
-        Self::log_scheduled_task_start(
+        let mut registration_config_schedule = ScheduledTaskConfig::fixed_rate("broker.registration", period);
+        registration_config_schedule.initial_delay = initial_delay;
+        Self::log_bounded_scheduled_task_start(
             "register_broker_to_namesrv",
-            self.lifecycle
-                .scheduled_task_manager
-                .add_fixed_rate_task_async(initial_delay, period, move |_ctx| {
+            self.lifecycle.bounded_scheduled_tasks.schedule_bounded(
+                registration_config_schedule,
+                ScheduledExecutionPolicy::serial(MissedTickPolicy::Skip),
+                move || {
                     let registration_runtime = registration_runtime.clone();
                     let registration_config = registration_config.clone();
                     let registration_shutdown = Arc::clone(&registration_shutdown);
@@ -1092,16 +1110,16 @@ impl BrokerRuntime {
                     let registration_role_state = Arc::clone(&registration_role_state);
                     async move {
                         if registration_shutdown.load(Ordering::Acquire) {
-                            return Ok(());
+                            return;
                         }
                         let start_time = registration_should_start_time.load(Ordering::Relaxed);
                         if current_millis() < start_time {
                             info!("Register to namesrv after {}", start_time);
-                            return Ok(());
+                            return;
                         }
                         if registration_role_state.is_isolated() {
                             info!("Skip register for broker is isolated");
-                            return Ok(());
+                            return;
                         }
                         let force_register = registration_config.broker_snapshot().force_register;
                         if let Err(error) = registration_runtime
@@ -1110,28 +1128,29 @@ impl BrokerRuntime {
                         {
                             warn!(%error, "Scheduled broker registration failed");
                         }
-                        Ok(())
                     }
-                }),
+                },
+            ),
         );
 
         if broker_config.enable_slave_acting_master {
             self.schedule_send_heartbeat();
             let sync_broker_member_group_period = broker_config.sync_broker_member_group_period;
             let controller_runtime = self.composition.state.build_controller_runtime();
-            Self::log_scheduled_task_start(
+            let mut sync_member_group_config = ScheduledTaskConfig::fixed_delay(
+                "broker.member-group.sync",
+                Duration::from_millis(sync_broker_member_group_period),
+            );
+            sync_member_group_config.initial_delay = Duration::from_millis(1000);
+            Self::log_bounded_scheduled_task_start(
                 "sync_broker_member_group",
-                self.lifecycle.scheduled_task_manager.add_fixed_rate_task_async(
-                    Duration::from_millis(1000),
-                    Duration::from_millis(sync_broker_member_group_period),
-                    move |ctx| {
+                self.lifecycle.bounded_scheduled_tasks.schedule_bounded(
+                    sync_member_group_config,
+                    ScheduledExecutionPolicy::serial(MissedTickPolicy::CoalesceLatest),
+                    move || {
                         let controller_runtime = controller_runtime.clone();
                         async move {
-                            if ctx.is_cancelled() {
-                                return Ok(());
-                            }
                             controller_runtime.sync_broker_member_group().await;
-                            Ok(())
                         }
                     },
                 ),

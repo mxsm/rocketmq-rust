@@ -15,6 +15,9 @@
 use super::*;
 #[cfg(feature = "otel-metrics")]
 use crate::metrics::consumer_lag_snapshot::ConsumerLagSnapshotService;
+use rocketmq_runtime::MissedTickPolicy;
+use rocketmq_runtime::ScheduledExecutionPolicy;
+use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerReplicationStore;
 
@@ -329,19 +332,24 @@ impl BrokerRuntime {
             .as_ref()
             .map(|context| context.metadata_io().clone());
 
-        Self::log_scheduled_task_start(
+        let mut consumer_offset_config = ScheduledTaskConfig::fixed_rate(
+            "broker.consumer-offset.flush",
+            Duration::from_millis(flush_consumer_offset_interval),
+        );
+        consumer_offset_config.initial_delay = Duration::from_secs(10);
+        Self::log_bounded_scheduled_task_start(
             "flush_consumer_offset",
-            self.lifecycle.scheduled_task_manager.add_fixed_rate_task_async(
-                Duration::from_secs(10),
-                Duration::from_millis(flush_consumer_offset_interval),
-                move |ctx| {
+            self.lifecycle.bounded_scheduled_tasks.schedule_bounded(
+                consumer_offset_config,
+                ScheduledExecutionPolicy::serial(MissedTickPolicy::CoalesceLatest),
+                move || {
                     let consumer_offset_shutdown = Arc::clone(&consumer_offset_shutdown);
                     let consumer_offset_manager = consumer_offset_manager.clone();
                     let metadata_io = metadata_io.clone();
                     let metadata_blocking = metadata_blocking.clone();
                     async move {
-                        if ctx.is_cancelled() || consumer_offset_shutdown.load(Ordering::Acquire) {
-                            return Ok(());
+                        if consumer_offset_shutdown.load(Ordering::Acquire) {
+                            return;
                         }
                         let result = match metadata_blocking {
                             Some(blocking) => {
@@ -359,7 +367,6 @@ impl BrokerRuntime {
                         if let Err(error) = result {
                             warn!(%error, "Failed to persist consumer offsets");
                         }
-                        Ok(())
                     }
                 },
             ),
@@ -670,6 +677,15 @@ impl BrokerRuntime {
     }
 
     pub(super) fn log_scheduled_task_start(task_name: &str, task_id: rocketmq_runtime::RuntimeResult<u64>) {
+        if let Err(error) = task_id {
+            error!("Failed to start scheduled task {task_name}: {error}");
+        }
+    }
+
+    pub(super) fn log_bounded_scheduled_task_start(
+        task_name: &str,
+        task_id: rocketmq_runtime::RuntimeResult<rocketmq_runtime::ScheduledTaskRegistrationOutcome>,
+    ) {
         if let Err(error) = task_id {
             error!("Failed to start scheduled task {task_name}: {error}");
         }
