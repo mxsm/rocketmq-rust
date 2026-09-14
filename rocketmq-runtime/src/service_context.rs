@@ -403,6 +403,20 @@ impl ChildServiceContext {
             .view_v1(component, &self.task_group, self.blocking_lanes.snapshots())
     }
 
+    /// Returns a bounded, explicitly scoped diagnostics view for this subtree.
+    ///
+    /// The runtime context does not own scheduled groups or a metadata actor, so
+    /// the caller supplies the snapshots it holds; a section without an input is
+    /// reported as absent rather than as an empty value.
+    pub fn diagnostics_view_v2(
+        &self,
+        component: crate::diagnostics::RuntimeComponent,
+        inputs: crate::diagnostics::RuntimeDiagnosticsInputs,
+    ) -> crate::diagnostics::RuntimeDiagnosticsViewV2 {
+        self.diagnostics
+            .view_v2(component, &self.task_group, self.blocking_lanes.snapshots(), inputs)
+    }
+
     /// Creates a long-lived component context owned by this service.
     ///
     /// Dynamically supplied names must be validated with [`ScopeId::try_new`]

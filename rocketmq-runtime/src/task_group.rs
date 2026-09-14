@@ -185,6 +185,38 @@ pub(crate) struct TaskGroupDiagnostics {
     pub(crate) task_kinds: Vec<TaskKindDiagnostics>,
 }
 
+/// Which population one bounded task detail was observed in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TaskDetailScope {
+    /// A task of the group the scan started from.
+    Local,
+    /// A task of one of its descendant groups.
+    Subtree,
+}
+
+/// One bounded task detail.
+///
+/// Deliberately carries no task identifier, task name, or group name: a detail
+/// list is served through an authenticated endpoint, and those values are
+/// caller-provided labels that diagnostics must not disclose.
+#[derive(Debug, Clone)]
+pub(crate) struct TaskDetail {
+    pub(crate) kind: TaskKind,
+    pub(crate) scope: TaskDetailScope,
+    pub(crate) elapsed: Duration,
+}
+
+/// The result of one bounded detail scan.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TaskDetailScan {
+    /// How many tasks were examined before the scan budget was reached.
+    pub(crate) scanned: usize,
+    /// The details that fit inside the output budget.
+    pub(crate) details: Vec<TaskDetail>,
+    /// Whether either budget stopped the scan short of every task.
+    pub(crate) truncated: bool,
+}
+
 #[derive(Debug)]
 struct TaskGroupInner {
     id: TaskGroupId,
@@ -322,6 +354,63 @@ impl TaskGroup {
         let mut aggregate = TaskGroupDiagnosticsAccumulator::default();
         self.accumulate_diagnostics(long_running_threshold, &mut aggregate);
         aggregate.finish()
+    }
+
+    /// Returns diagnostics for this group's own tasks without descending into
+    /// child groups.
+    pub(crate) fn local_diagnostics(&self, long_running_threshold: Duration) -> TaskGroupDiagnostics {
+        let mut aggregate = TaskGroupDiagnosticsAccumulator {
+            group_count: 1,
+            ..TaskGroupDiagnosticsAccumulator::default()
+        };
+        for task in self.inner.registry.tasks.iter() {
+            let elapsed = task.started_at.elapsed();
+            aggregate.record_task(task.kind, elapsed, elapsed >= long_running_threshold);
+        }
+        aggregate.finish()
+    }
+
+    /// Scans this group and its descendants for a bounded detail list.
+    ///
+    /// The scan budget bounds the work and the output budget bounds the payload.
+    /// When either is reached the result reports how many tasks were examined, so
+    /// a partial list is never presented as the complete tree.
+    pub(crate) fn bounded_task_details(&self, scan_budget: usize, output_budget: usize) -> TaskDetailScan {
+        let mut scan = TaskDetailScan::default();
+        self.collect_task_details(scan_budget, output_budget, TaskDetailScope::Local, &mut scan);
+        scan
+    }
+
+    fn collect_task_details(
+        &self,
+        scan_budget: usize,
+        output_budget: usize,
+        scope: TaskDetailScope,
+        scan: &mut TaskDetailScan,
+    ) {
+        for task in self.inner.registry.tasks.iter() {
+            if scan.scanned >= scan_budget {
+                scan.truncated = true;
+                return;
+            }
+            scan.scanned = scan.scanned.saturating_add(1);
+            if scan.details.len() < output_budget {
+                scan.details.push(TaskDetail {
+                    kind: task.kind,
+                    scope,
+                    elapsed: task.started_at.elapsed(),
+                });
+            } else {
+                scan.truncated = true;
+            }
+        }
+        for child in self.inner.registry.components_snapshot() {
+            if scan.scanned >= scan_budget {
+                scan.truncated = true;
+                return;
+            }
+            child.collect_task_details(scan_budget, output_budget, TaskDetailScope::Subtree, scan);
+        }
     }
 
     fn accumulate_diagnostics(
