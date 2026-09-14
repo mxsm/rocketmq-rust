@@ -57,6 +57,15 @@ flowchart TD
 `RuntimeHandle` 是内部实现类型，不是公开接入入口。
 常用所有权类型也可通过 `rocketmq_runtime::prelude` 导入。
 
+对于自行拥有运行时的服务，推荐路径只在 `rocketmq_runtime::prelude` 上文档化一次，
+并以会真实运行的测试示例给出：拥有运行时、从密封根派生唯一组件上下文、注册服务、
+注册有界周期任务而不是自己驱动裸循环，最后在关闭预算内排空收尾 I/O 并读取关闭报告。
+`RuntimeContext` 是迁移与测试夹具，不是生产入口。
+
+旧入口集中在 `rocketmq_runtime::compat`，让迁移方把它们当作一组并看到明确方向：
+`RocketMQRuntime`、保留的 executor service 以及旧调度器类型。该模块是增量式的，
+不会新增任何弃用标记；`ActorRuntime` 不纳入其中，因为它拥有独立线程而非适配所有权 API。
+
 ## 运行时所有权与快速开始
 
 默认配置使用 `RuntimeOwner::new()?`。命名或自定义配置使用
@@ -382,7 +391,8 @@ cargo test -p rocketmq-runtime --test runtime_model
 ```text
 rocketmq-runtime/
   src/public_api.rs        deliberate ownership and diagnostics exports
-  src/prelude.rs           common ownership imports
+  src/prelude.rs           recommended entry path and common ownership imports
+  src/compat.rs            compatibility facade for older entry points
   src/config.rs            runtime and blocking-lane configuration
   src/owner.rs             validated construction and owned runtime lifecycle
   src/context.rs           borrowed runtime migration/test harness

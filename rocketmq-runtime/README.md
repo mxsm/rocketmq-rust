@@ -63,6 +63,19 @@ dedicated thread helpers retain their own explicit ownership boundaries.
 entrypoint. Common ownership types are also available from
 `rocketmq_runtime::prelude`.
 
+The recommended path for a service that owns its runtime is documented once, as
+an example that runs as a test, on `rocketmq_runtime::prelude`: own the runtime,
+derive one component context from the sealed root, register services, register
+bounded periodic work instead of driving a raw loop, then drain final I/O inside
+the shutdown budget and read the shutdown report. `RuntimeContext` is the
+migration and test harness rather than a production entry point.
+
+Older entry points are grouped in `rocketmq_runtime::compat` so a migrating
+consumer sees them as one set with a stated direction: `RocketMQRuntime`, the
+retained executor services, and the legacy scheduler types. The module is
+additive. Nothing is newly deprecated there, and `ActorRuntime` stays out of it
+because it owns a dedicated thread rather than adapting the ownership API.
+
 ## Runtime Ownership And Quick Start
 
 Use `RuntimeOwner::new()?` for the default profile. For a named or customized
@@ -452,7 +465,8 @@ guarantees. See [repository validation guidance](../AGENTS.md).
 ```text
 rocketmq-runtime/
   src/public_api.rs        deliberate ownership and diagnostics exports
-  src/prelude.rs           common ownership imports
+  src/prelude.rs           recommended entry path and common ownership imports
+  src/compat.rs            compatibility facade for older entry points
   src/config.rs            runtime and blocking-lane configuration
   src/owner.rs             validated construction and owned runtime lifecycle
   src/context.rs           borrowed runtime migration/test harness
