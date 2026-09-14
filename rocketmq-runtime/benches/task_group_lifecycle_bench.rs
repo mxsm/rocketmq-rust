@@ -133,6 +133,41 @@ fn write_shutdown_report_artifact() {
     .expect("runtime benchmark artifact should be written");
 }
 
+/// Runs short-lived work in repeated cycles and asserts the registry returns to
+/// zero after each one, which is the steady-state churn case: long-running load
+/// must not accumulate registrations or blocked capacity.
+fn run_spawn_complete_churn(task_count: usize, cycles: usize) -> Duration {
+    let owner = RuntimeOwner::plan(runtime_config())
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("runtime owner should start");
+    let context = owner.root_context().component("bench.task-group-churn-root");
+
+    owner.block_on(async move {
+        let service = context.component(
+            ScopeId::try_new(format!("bench.task-group-churn.{task_count}"))
+                .expect("the benchmark scope has a fixed nonblank prefix"),
+        );
+        let started_at = std::time::Instant::now();
+        for cycle in 0..cycles {
+            for task_index in 0..task_count {
+                service
+                    .spawn(format!("churn-task-{cycle}-{task_index}"), TaskKind::Worker, async {})
+                    .expect("churn task should spawn");
+            }
+            while service.task_group().task_count() > 0 {
+                tokio::task::yield_now().await;
+            }
+        }
+        let elapsed = started_at.elapsed();
+        assert_eq!(service.task_group().task_count(), 0);
+        assert_eq!(service.task_group().component_count(), 0);
+        let report = context.task_group().shutdown(Duration::from_secs(5)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        elapsed
+    })
+}
+
 fn bench_task_group_lifecycle(criterion: &mut Criterion) {
     write_shutdown_report_artifact();
 
@@ -165,6 +200,21 @@ fn bench_task_group_lifecycle(criterion: &mut Criterion) {
         );
     }
     operation_churn.finish();
+
+    let mut spawn_churn = criterion.benchmark_group("task_group_spawn_churn");
+    for task_count in [64usize, 256] {
+        spawn_churn.bench_with_input(
+            BenchmarkId::new("spawn_complete_cycles", task_count),
+            &task_count,
+            |bencher, task_count| {
+                bencher.iter(|| {
+                    let elapsed = run_spawn_complete_churn(black_box(*task_count), 4);
+                    black_box(elapsed);
+                });
+            },
+        );
+    }
+    spawn_churn.finish();
 }
 
 criterion_group! {
