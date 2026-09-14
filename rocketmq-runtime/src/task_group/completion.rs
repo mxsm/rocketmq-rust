@@ -18,6 +18,9 @@ use std::sync::Arc;
 
 use futures::FutureExt;
 
+use crate::critical::CriticalFailureKind;
+use crate::critical::CriticalRegistration;
+
 use super::TaskCompletion;
 use super::TaskGroupInner;
 use super::TaskId;
@@ -30,6 +33,7 @@ pub(super) struct TaskExecution<F> {
     future: F,
     finalizer: TaskFinalizer,
     propagate_panic: bool,
+    critical: Option<CriticalRegistration>,
 }
 
 impl<F: Future<Output = ()>> TaskExecution<F> {
@@ -39,6 +43,7 @@ impl<F: Future<Output = ()>> TaskExecution<F> {
         task_id: TaskId,
         completion: Arc<TaskCompletion>,
         propagate_panic: bool,
+        critical: Option<CriticalRegistration>,
     ) -> Self {
         Self {
             future,
@@ -49,24 +54,42 @@ impl<F: Future<Output = ()>> TaskExecution<F> {
                 result: TaskResult::Aborted,
             },
             propagate_panic,
+            critical,
         }
     }
 
     pub(super) async fn run(self) {
         let mut finalizer = self.finalizer;
+        let critical = self.critical;
         let result = AssertUnwindSafe(self.future).catch_unwind().await;
         // The awaited future has been destroyed at this statement boundary.
         // Record the observed result once, independently of subsequent aborts.
         match result {
             Ok(()) => {
-                finalizer.result = if finalizer.inner.cancellation_token.is_cancelled() {
-                    TaskResult::Cancelled
+                if finalizer.inner.cancellation_token.is_cancelled() {
+                    finalizer.result = TaskResult::Cancelled;
                 } else {
-                    TaskResult::Completed
-                };
+                    finalizer.result = TaskResult::Completed;
+                    // A critical service is contracted to run until its owner is
+                    // cancelled, so returning first is an unexpected exit. Owner
+                    // cancellation never reaches this branch, which is what keeps
+                    // a normal shutdown out of failure handling.
+                    if let Some(critical) = &critical {
+                        if critical.expects_until_cancelled {
+                            critical
+                                .failures
+                                .record(CriticalFailureKind::ExitedUnexpectedly, critical.task_kind);
+                        }
+                    }
+                }
             }
             Err(error) => {
                 finalizer.result = TaskResult::Panicked;
+                if let Some(critical) = &critical {
+                    critical
+                        .failures
+                        .record(CriticalFailureKind::Panicked, critical.task_kind);
+                }
                 tracing::error!(task_id = finalizer.task_id.as_u64(), "task panicked");
                 if self.propagate_panic {
                     std::panic::resume_unwind(error);

@@ -36,6 +36,10 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::watch;
 
+use crate::critical::CriticalFailure;
+use crate::critical::CriticalFailureState;
+use crate::task_group::TaskId;
+use crate::task_spawner::TaskSpawner;
 use crate::wait_for_signal_result;
 use crate::ChildServiceContext;
 use crate::RuntimeError;
@@ -70,6 +74,26 @@ pub enum DependencyReadiness {
     Ready,
     /// Required dependencies are unavailable or their evidence has expired.
     Degraded,
+}
+
+/// How a handled critical task failure affects the service.
+///
+/// The choice belongs to the business: the runtime only guarantees that
+/// readiness is revoked and that the failure reaches the handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CriticalFailureRecovery {
+    /// Revoke dependency readiness and keep serving.
+    ///
+    /// Use this when the failed work is not required for the process to answer
+    /// traffic correctly and the caller handles the consequence elsewhere.
+    RevokeReadiness,
+    /// Revoke readiness and mark the service failed.
+    FailService,
+    /// Revoke readiness, mark the service failed, and request an ordered shutdown.
+    ///
+    /// The first request wins, so this cannot extend or replace a shutdown that
+    /// already started.
+    FailAndRequestShutdown,
 }
 
 /// Stable process lifecycle states used by readiness and liveness probes.
@@ -424,6 +448,53 @@ impl ServiceLifecycle {
         } else {
             DependencyReadiness::Degraded
         }
+    }
+
+    /// Applies the handling policy for one critical task failure.
+    ///
+    /// Dependency readiness is revoked first, because a process whose critical
+    /// work failed must stop advertising itself as ready even when it keeps
+    /// making progress. The remaining effects are the caller's policy: this
+    /// method never decides on its own whether the process fails or asks for an
+    /// ordered shutdown.
+    pub fn handle_critical_failure(&self, failure: &CriticalFailure, recovery: CriticalFailureRecovery) {
+        tracing::warn!(
+            kind = failure.kind().as_str(),
+            task_kind = ?failure.task_kind(),
+            sequence = failure.sequence(),
+            "critical task failure"
+        );
+        self.set_dependency_readiness(DependencyReadiness::Degraded);
+        match recovery {
+            CriticalFailureRecovery::RevokeReadiness => {}
+            CriticalFailureRecovery::FailService => self.mark_failed(),
+            CriticalFailureRecovery::FailAndRequestShutdown => {
+                self.mark_failed();
+                self.request_shutdown(ShutdownReason::Internal);
+            }
+        }
+    }
+
+    /// Spawns a monitor that applies `recovery` when a critical failure is pending.
+    ///
+    /// `owner` must be an owner outside the group of the monitored tasks, because
+    /// a poisoned group can neither spawn nor run its own monitor. The monitor
+    /// takes each pending failure before handling it, so repeated failures are
+    /// handled in sequence rather than replayed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `owner` is shutting down or closed.
+    pub fn spawn_critical_failure_monitor(
+        &self,
+        owner: &TaskSpawner,
+        failures: &CriticalFailureState,
+        recovery: CriticalFailureRecovery,
+    ) -> RuntimeResult<TaskId> {
+        let lifecycle = self.clone();
+        failures.spawn_monitor(owner, "service-lifecycle.critical-failures", move |failure| {
+            lifecycle.handle_critical_failure(&failure, recovery);
+        })
     }
 
     /// Returns whether live.

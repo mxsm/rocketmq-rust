@@ -19,6 +19,7 @@ use crate::blocking::BlockingExecutor;
 use crate::blocking::BlockingLane;
 use crate::blocking::BlockingLanePolicies;
 use crate::blocking::GlobalBlockingBudget;
+use crate::critical::CriticalFailureState;
 use crate::diagnostics::RuntimeDiagnostics;
 use crate::diagnostics::RuntimeDiagnosticsSnapshot;
 use crate::error::RuntimeContractViolation;
@@ -487,5 +488,40 @@ impl ChildServiceContext {
         F: Future<Output = ()> + Send + 'static,
     {
         self.task_group.spawn_cancellable_service(name, future)
+    }
+
+    /// Spawns work whose panic is recorded as a critical failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when this service context is shutting down or closed.
+    pub fn spawn_critical<F>(
+        &self,
+        name: impl Into<Arc<str>>,
+        kind: TaskKind,
+        failures: CriticalFailureState,
+        future: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.task_group.spawn_critical(name, kind, failures, future)
+    }
+
+    /// Spawns a critical service that must run until this context is cancelled.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when this service context is shutting down or closed.
+    pub fn spawn_critical_service<F>(
+        &self,
+        name: impl Into<Arc<str>>,
+        failures: CriticalFailureState,
+        future: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.task_group.spawn_critical_service(name, failures, future)
     }
 }

@@ -311,6 +311,19 @@ startup, and publish dependency readiness separately. Maintenance can suspend
 readiness without marking the process dead. Liveness checks lifecycle state
 and progress freshness, not whether a business port is open.
 
+A task registered as critical makes its failure observable: record it with
+`spawn_critical_service` for a service that must run until cancelled, or
+`spawn_critical` for work whose panic alone is a failure. The failure stays
+pending in the `CriticalFailureState` until a handler takes it, so a full
+notification channel cannot lose it, and only an owner cancellation is treated
+as an expected exit, which keeps an ordinary shutdown out of failure handling.
+`ServiceLifecycle::spawn_critical_failure_monitor` applies a
+`CriticalFailureRecovery` policy: revoke readiness only, fail the service, or
+fail it and request an ordered shutdown. Spawn that monitor under an owner
+outside the monitored group, because a poisoned group cannot run its own
+monitor. Liveness stays independent, so a process that keeps progressing still
+reports not-ready after a handled critical failure.
+
 With `ServiceLifecycle::from_env`, `ROCKETMQ_HEALTH_BIND_ADDR` enables the
 optional probe server with `/readyz`, `/livez`, and `/drainz`.
 `ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS` and `ROCKETMQ_LIVENESS_STALE_SECONDS`
