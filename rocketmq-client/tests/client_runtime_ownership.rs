@@ -21,6 +21,7 @@ use rocketmq_client_rust::ClientConfig;
 use rocketmq_client_rust::ClientOptions;
 use rocketmq_client_rust::ClientRuntime;
 use rocketmq_client_rust::ClientRuntimeConfig;
+use rocketmq_client_rust::MQClientException;
 use rocketmq_client_rust::NameServerDiscoveryConfig;
 use rocketmq_client_rust::NameServerSource;
 use rocketmq_client_rust::TelemetryHandle;
@@ -232,7 +233,14 @@ fn client_pool_rejects_conflicting_configuration_for_the_same_client_id() {
         Ok(_) => panic!("a conflicting owner for the same client id must be rejected"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("configuration conflicts"));
+    assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
+    assert_eq!(
+        error
+            .source_ref::<MQClientException>()
+            .expect("configuration conflict should retain its Java compatibility exception")
+            .error_message(),
+        Some("ClientPool configuration conflicts with an existing client-id owner")
+    );
 
     owner.block_on(async {
         assert!(runtime.pool().release(lease.into_parts().1).await);
@@ -344,7 +352,14 @@ fn shutting_down_client_runtime_closes_pool_admission() {
         Ok(_) => panic!("shutdown must close new client admission"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("shutting down"));
+    assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
+    assert_eq!(
+        error
+            .source_ref::<MQClientException>()
+            .expect("closed admission should retain its Java compatibility exception")
+            .error_message(),
+        Some("ClientRuntime is shutting down")
+    );
     assert!(
         runtime
             .pool()
