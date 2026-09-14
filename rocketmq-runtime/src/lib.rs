@@ -38,6 +38,8 @@ pub mod common;
 mod config;
 /// Context types and operations.
 mod context;
+/// Critical task failure records and handling.
+mod critical;
 mod diagnostics;
 /// Error types and operations.
 mod error;
@@ -88,6 +90,10 @@ pub use blocking::BlockingPoolPolicy;
 pub use blocking::BlockingTaskSnapshot;
 pub use config::RuntimeConfig;
 pub use context::RuntimeContext;
+pub use critical::CriticalFailure;
+pub use critical::CriticalFailureKind;
+pub use critical::CriticalFailureState;
+pub use critical::CriticalFailureSubscription;
 pub use error::RuntimeContractPolicy;
 pub use error::RuntimeContractViolation;
 pub use error::RuntimeError;
@@ -186,6 +192,7 @@ pub use scheduled::ScheduledTaskGroup;
 pub use scheduled::ScheduledTaskRegistrationOutcome;
 pub use scheduled::ScheduledTaskSnapshot;
 pub use service_context::ScopeId;
+pub use service_lifecycle::CriticalFailureRecovery;
 pub use service_lifecycle::DependencyReadiness;
 pub use service_lifecycle::ServiceLifecycle;
 pub use service_lifecycle::ServiceLifecycleConfig;

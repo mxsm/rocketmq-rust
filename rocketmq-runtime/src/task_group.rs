@@ -32,6 +32,8 @@ use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use crate::critical::CriticalFailureState;
+use crate::critical::CriticalRegistration;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
@@ -497,6 +499,66 @@ impl TaskGroup {
         self.spawn_inner(name.into(), kind, None, future)
     }
 
+    /// Spawns a task whose panic is recorded as a critical failure.
+    ///
+    /// Registration is explicit and opt-in: a task spawned the ordinary way keeps
+    /// today's behavior. A normal completion is not a failure here, because a
+    /// worker or job may legitimately return; use [`Self::spawn_critical_service`]
+    /// when returning before owner cancellation must be treated as one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when this task group is shutting down or closed.
+    pub fn spawn_critical<F>(
+        &self,
+        name: impl Into<Arc<str>>,
+        kind: TaskKind,
+        failures: CriticalFailureState,
+        future: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let registration = CriticalRegistration {
+            failures,
+            task_kind: kind,
+            expects_until_cancelled: false,
+        };
+        let (task_id, join_handle) =
+            self.spawn_inner_with_handle(name.into(), kind, None, false, Some(registration), future)?;
+        drop(join_handle);
+        Ok(task_id)
+    }
+
+    /// Spawns a critical service that must run until its owner is cancelled.
+    ///
+    /// Both a panic and a return before owner cancellation are recorded as
+    /// critical failures. Owner cancellation is an expected exit and records
+    /// nothing, so an ordinary shutdown never triggers failure handling.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when this task group is shutting down or closed.
+    pub fn spawn_critical_service<F>(
+        &self,
+        name: impl Into<Arc<str>>,
+        failures: CriticalFailureState,
+        future: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let registration = CriticalRegistration {
+            failures,
+            task_kind: TaskKind::Service,
+            expects_until_cancelled: true,
+        };
+        let (task_id, join_handle) =
+            self.spawn_inner_with_handle(name.into(), TaskKind::Service, None, false, Some(registration), future)?;
+        drop(join_handle);
+        Ok(task_id)
+    }
+
     /// Spawns a service that owns its shutdown protocol.
     ///
     /// The service remains tracked during owner shutdown, but its future must
@@ -602,7 +664,7 @@ impl TaskGroup {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.spawn_inner_with_handle(name.into(), kind, None, true, future)
+        self.spawn_inner_with_handle(name.into(), kind, None, true, None, future)
     }
 
     /// Spawns service with handle.
@@ -720,7 +782,7 @@ impl TaskGroup {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let (task_id, join_handle) = self.spawn_inner_with_handle(name, kind, detached_policy, false, future)?;
+        let (task_id, join_handle) = self.spawn_inner_with_handle(name, kind, detached_policy, false, None, future)?;
         drop(join_handle);
         Ok(task_id)
     }
@@ -731,15 +793,16 @@ impl TaskGroup {
         kind: TaskKind,
         detached_policy: Option<DetachedTaskPolicy>,
         propagate_panic: bool,
+        critical: Option<CriticalRegistration>,
         future: F,
     ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
     where
         F: Future<Output = ()> + Send + 'static,
     {
         if std::mem::size_of::<F>() > MAX_INLINE_TASK_FUTURE_SIZE {
-            self.spawn_registered(name, kind, detached_policy, propagate_panic, Box::pin(future))
+            self.spawn_registered(name, kind, detached_policy, propagate_panic, critical, Box::pin(future))
         } else {
-            self.spawn_registered(name, kind, detached_policy, propagate_panic, future)
+            self.spawn_registered(name, kind, detached_policy, propagate_panic, critical, future)
         }
     }
 
@@ -749,6 +812,7 @@ impl TaskGroup {
         kind: TaskKind,
         detached_policy: Option<DetachedTaskPolicy>,
         propagate_panic: bool,
+        critical: Option<CriticalRegistration>,
         future: F,
     ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
     where
@@ -781,7 +845,15 @@ impl TaskGroup {
             },
         );
 
-        let wrapped = TaskExecution::new(future, self.inner.clone(), task_id, completion, propagate_panic).run();
+        let wrapped = TaskExecution::new(
+            future,
+            self.inner.clone(),
+            task_id,
+            completion,
+            propagate_panic,
+            critical,
+        )
+        .run();
 
         let join_handle = if detached_policy.is_some() {
             self.inner.runtime.spawn_owned(wrapped)

@@ -263,6 +263,15 @@ actor 的兼容 `blocking_*` 配置不会替换共享通道策略。
 维护操作可以暂停就绪状态而不将进程标记为死亡。存活检查依据生命周期状态和进度更新时间，
 不以业务端口是否开放作为判断依据。
 
+注册为关键的任务其失败可被观测：服务必须以「运行到被取消」为契约时使用
+`spawn_critical_service`，只把 panic 视为失败的工作使用 `spawn_critical`。
+失败记录会一直停留在 `CriticalFailureState` 中直到被处理方取走，
+因此通知通道写满也不会丢失该事实；只有属主取消被视为预期退出，
+普通关闭因此不会触发失败处理。`ServiceLifecycle::spawn_critical_failure_monitor`
+按 `CriticalFailureRecovery` 策略处理：仅撤销就绪、标记服务失败，或标记失败并请求有序关闭。
+该监视任务必须挂在被监视组之外的属主下，因为中毒的组无法运行自己的监视任务。
+存活状态保持独立：处理关键失败后，仍在推进的进程依旧报告未就绪。
+
 使用 `ServiceLifecycle::from_env` 时，`ROCKETMQ_HEALTH_BIND_ADDR` 启用可选探针服务，
 提供 `/readyz`、`/livez` 和 `/drainz`。
 `ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS` 与 `ROCKETMQ_LIVENESS_STALE_SECONDS`

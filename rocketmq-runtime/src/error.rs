@@ -342,6 +342,8 @@ pub enum RuntimeContractPolicy {
     ManagedMemoryHeadroomBelowEffectiveLimit,
     /// The managed memory budget must be positive.
     ManagedMemoryBudgetPositive,
+    /// A critical failure subscription capacity must be positive.
+    CriticalFailureSubscriptionCapacityPositive,
     /// A cron schedule expression must be valid.
     CronExpression,
     /// A schedule interval must be positive.
@@ -375,6 +377,7 @@ impl RuntimeContractPolicy {
             Self::ManagedMemoryRatioPositiveAndBounded => "managed-memory-ratio-positive-and-bounded",
             Self::ManagedMemoryHeadroomBelowEffectiveLimit => "managed-memory-headroom-below-effective-limit",
             Self::ManagedMemoryBudgetPositive => "managed-memory-budget-positive",
+            Self::CriticalFailureSubscriptionCapacityPositive => "critical-failure-subscription-capacity-positive",
             Self::CronExpression => "cron-expression",
             Self::IntervalMustBePositive => "interval-must-be-positive",
             Self::DelayedIntervalMustBePositive => "delayed-interval-must-be-positive",

@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::critical::CriticalFailureState;
 use crate::error::RuntimeResult;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskGroupId;
@@ -96,5 +97,46 @@ impl TaskSpawner {
         F: Future<Output = ()> + Send + 'static,
     {
         self.task_group.spawn_cancellable_service(name, future)
+    }
+
+    /// Registers parent-owned work whose panic is recorded as a critical failure.
+    ///
+    /// The failure record stays pending until a handler takes it, so a full
+    /// notification channel cannot lose the fact that the task failed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the parent group is shutting down or closed.
+    pub fn spawn_critical<F>(
+        &self,
+        name: impl Into<Arc<str>>,
+        kind: TaskKind,
+        failures: CriticalFailureState,
+        future: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.task_group.spawn_critical(name, kind, failures, future)
+    }
+
+    /// Registers a critical service that must run until its owner is cancelled.
+    ///
+    /// A panic and a return before owner cancellation are both recorded; owner
+    /// cancellation is an expected exit and records nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the parent group is shutting down or closed.
+    pub fn spawn_critical_service<F>(
+        &self,
+        name: impl Into<Arc<str>>,
+        failures: CriticalFailureState,
+        future: F,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.task_group.spawn_critical_service(name, failures, future)
     }
 }
