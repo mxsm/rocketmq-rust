@@ -168,6 +168,20 @@ impl BlockingLanePolicies {
         Ok(())
     }
 
+    /// Returns the policy in force for one lane.
+    ///
+    /// Lane capacity, phase timeouts, and the warn threshold are owned here for
+    /// every consumer of the lane, so a component that accepts its own timeout
+    /// fields can report which value actually applies.
+    #[must_use]
+    pub fn policy(&self, lane: BlockingLane) -> &BlockingPoolPolicy {
+        match lane {
+            BlockingLane::StorageIo => &self.storage_io,
+            BlockingLane::MetadataIo => &self.metadata_io,
+            BlockingLane::CpuCrypto => &self.cpu_crypto,
+        }
+    }
+
     pub(crate) fn max_concurrency(&self, lane: BlockingLane) -> usize {
         match lane {
             BlockingLane::StorageIo => self.storage_io.max_concurrency,
