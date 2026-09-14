@@ -243,10 +243,17 @@ Do not create an independent `ResourceBudgetTree` in each component when a
 shared process limit is required.
 
 The owner detects a memory limit from `ROCKETMQ_PROCESS_MEMORY_LIMIT_BYTES`,
-Linux cgroup limits, or host physical memory. Supply an explicit
+the process's own cgroup membership, or host physical memory. On Linux it reads
+`/proc/self/cgroup` and `/proc/self/mountinfo` and takes the smallest finite
+hard limit visible along the membership path, ignoring the cgroup v2 `max` and
+cgroup v1 unlimited markers. The detected limit and the chargeable budget are
+separate numbers: `RuntimeOwnerPlan::with_memory_policy` derives the managed
+budget from the effective limit as the whole limit (the default), an explicit
+byte count, or a bounded fraction with reserved headroom. Supply an explicit
 `ProcessMemoryLimit` through `RuntimeOwnerPlan::with_memory_limit` when needed.
 These limits account for resources admitted through the budget APIs; they do
-not automatically limit every process allocation or resident-memory usage.
+not automatically limit every process allocation or resident-memory usage, and
+a constraint the process cannot see is not discovered.
 
 `ResourceBudget` checks count, retained bytes, and optional rate limits along
 the ancestor chain. A `ResourcePermit` retains count and byte reservations

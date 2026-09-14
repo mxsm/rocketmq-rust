@@ -50,6 +50,8 @@ pub enum RuntimeOperation {
     DeserializeConfigFile,
     /// Detects the process memory limit.
     DetectProcessMemoryLimit,
+    /// Resolves the managed memory budget from the effective limit.
+    ResolveManagedMemoryBudget,
     /// Reads a file.
     ReadFile,
     /// Reads a file before creating a backup.
@@ -216,6 +218,7 @@ impl RuntimeOperation {
             Self::LoadConfigFile => "load-config-file",
             Self::DeserializeConfigFile => "deserialize-config-file",
             Self::DetectProcessMemoryLimit => "detect-process-memory-limit",
+            Self::ResolveManagedMemoryBudget => "resolve-managed-memory-budget",
             Self::ReadFile => "read-file",
             Self::ReadFileBackup => "read-file-backup",
             Self::CheckFile => "check-file",
@@ -333,6 +336,12 @@ pub enum RuntimeContractPolicy {
     ConfiguredMemoryLimitPositive,
     /// A process-memory fraction must be positive and bounded.
     MemoryFractionPositiveAndBounded,
+    /// A managed-memory ratio must be positive and bounded.
+    ManagedMemoryRatioPositiveAndBounded,
+    /// Managed-memory headroom must leave a positive effective limit.
+    ManagedMemoryHeadroomBelowEffectiveLimit,
+    /// The managed memory budget must be positive.
+    ManagedMemoryBudgetPositive,
     /// A cron schedule expression must be valid.
     CronExpression,
     /// A schedule interval must be positive.
@@ -363,6 +372,9 @@ impl RuntimeContractPolicy {
             Self::ServiceContextScopeNotBlank => "service-context-scope-not-blank",
             Self::ConfiguredMemoryLimitPositive => "configured-limit-must-be-positive",
             Self::MemoryFractionPositiveAndBounded => "fraction-must-be-positive-and-bounded",
+            Self::ManagedMemoryRatioPositiveAndBounded => "managed-memory-ratio-positive-and-bounded",
+            Self::ManagedMemoryHeadroomBelowEffectiveLimit => "managed-memory-headroom-below-effective-limit",
+            Self::ManagedMemoryBudgetPositive => "managed-memory-budget-positive",
             Self::CronExpression => "cron-expression",
             Self::IntervalMustBePositive => "interval-must-be-positive",
             Self::DelayedIntervalMustBePositive => "delayed-interval-must-be-positive",

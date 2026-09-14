@@ -207,10 +207,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 通过 `context.process_budget().child(...)` 派生更窄的限制。
 需要共享进程上限时，不要让每个组件各自创建独立的 `ResourceBudgetTree`。
 
-所有者从 `ROCKETMQ_PROCESS_MEMORY_LIMIT_BYTES`、Linux cgroup 限制或宿主物理内存
-探测内存限制；也可以通过 `RuntimeOwnerPlan::with_memory_limit` 提供显式
-`ProcessMemoryLimit`。这些限制只核算通过预算 API 接收的资源，不会自动限制所有进程
-内存分配或常驻内存使用量。
+所有者从 `ROCKETMQ_PROCESS_MEMORY_LIMIT_BYTES`、进程自身的 cgroup 归属或宿主物理内存
+探测内存限制。在 Linux 上会读取 `/proc/self/cgroup` 与 `/proc/self/mountinfo`，
+沿归属路径取最小的有限硬上限，并忽略 cgroup v2 的 `max` 与 cgroup v1 的无限标记。
+探测到的限制与可计费额度是两个不同的数字：`RuntimeOwnerPlan::with_memory_policy`
+从有效限制推导托管额度，可取整个限制（默认）、显式字节数，或带预留余量的受限比例。
+也可以通过 `RuntimeOwnerPlan::with_memory_limit` 提供显式 `ProcessMemoryLimit`。
+这些限制只核算通过预算 API 接收的资源，不会自动限制所有进程内存分配或常驻内存使用量，
+进程不可见的约束也不会被探测到。
 
 `ResourceBudget` 沿祖先链检查数量、保留字节数和可选速率限制。
 `ResourcePermit` 保留数量与字节配额，直到被丢弃。
