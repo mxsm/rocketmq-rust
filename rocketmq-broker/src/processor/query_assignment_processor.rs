@@ -801,7 +801,11 @@ impl QueryAssignmentProcessor {
             };
             if !conclusion.is_durable() {
                 code = ResponseCode::SystemError;
-                persistence = MutationPersistenceState::Failed;
+                // An unconfirmed replacement is reported as unconfirmed rather
+                // than as a definite failure: the target file may already hold
+                // the mode, while the marker keeps the next compare and set
+                // from building on a state whose durability is unknown.
+                persistence = crate::broker::metadata_reconciliation::persistence_state(&conclusion);
             }
             self.message_request_mode_manager.complete_supervised_persistence(
                 &CheetahString::from(&body.topic),

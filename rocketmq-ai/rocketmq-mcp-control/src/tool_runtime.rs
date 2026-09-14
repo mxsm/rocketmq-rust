@@ -703,6 +703,7 @@ fn map_persistence(state: admin::MutationPersistenceState) -> tools::Persistence
         admin::MutationPersistenceState::NotRequired => tools::PersistenceState::NotRequired,
         admin::MutationPersistenceState::Persisted => tools::PersistenceState::Persisted,
         admin::MutationPersistenceState::Failed => tools::PersistenceState::Failed,
+        admin::MutationPersistenceState::Unconfirmed => tools::PersistenceState::Unconfirmed,
     }
 }
 

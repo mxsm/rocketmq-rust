@@ -564,13 +564,21 @@ impl TopicRequestHandler {
         runtime
             .topic_config_manager()
             .complete_supervised_persistence(&header.topic, version, &conclusion);
-        let (code, persistence) = if succeeded {
-            (ResponseCode::Success, MutationPersistenceState::Persisted)
+        let (code, persistence) = if !conclusion.is_durable() {
+            // An unconfirmed replacement is reported as unconfirmed rather
+            // than as a definite failure: the target file may already hold
+            // the change. The per-topic marker still keeps the next compare
+            // and set from building on a state whose durability is unknown.
+            (
+                ResponseCode::SystemError,
+                crate::broker::metadata_reconciliation::persistence_state(&conclusion),
+            )
+        } else if !succeeded {
+            // The write is durable, so a registration callback failure is
+            // reported as itself rather than as a persistence failure.
+            (ResponseCode::SystemError, MutationPersistenceState::Persisted)
         } else {
-            // An unconfirmed replacement and a definite failure both report a
-            // failed persistence state; only the marker and the warn log
-            // distinguish them.
-            (ResponseCode::SystemError, MutationPersistenceState::Failed)
+            (ResponseCode::Success, MutationPersistenceState::Persisted)
         };
         Ok(Some(
             RemotingCommand::create_success_response_command()

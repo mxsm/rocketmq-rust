@@ -196,8 +196,13 @@ pub(super) fn state_cas_outcome_from_response(
             !outcome.applied && !outcome.changed && outcome.persistence == MutationPersistenceState::NotRequired
         }
         ResponseCode::SystemError => {
-            outcome.persistence == MutationPersistenceState::Failed
-                && ((outcome.applied && outcome.changed) || (!outcome.applied && !outcome.changed))
+            (outcome.applied
+                && outcome.changed
+                && matches!(
+                    outcome.persistence,
+                    MutationPersistenceState::Failed | MutationPersistenceState::Unconfirmed
+                ))
+                || (!outcome.applied && !outcome.changed && outcome.persistence == MutationPersistenceState::Failed)
         }
         _ => false,
     };
@@ -256,6 +261,7 @@ pub(super) fn state_cas_outcome_from_response(
             MutationPersistenceState::NotRequired => ClientMutationPersistenceState::NotRequired,
             MutationPersistenceState::Persisted => ClientMutationPersistenceState::Persisted,
             MutationPersistenceState::Failed => ClientMutationPersistenceState::Failed,
+            MutationPersistenceState::Unconfirmed => ClientMutationPersistenceState::Unconfirmed,
         },
     })
 }
@@ -294,8 +300,13 @@ pub(super) fn request_mode_cas_outcome_from_response(
             !outcome.applied && !outcome.changed && outcome.persistence == MutationPersistenceState::NotRequired
         }
         ResponseCode::SystemError => {
-            outcome.persistence == MutationPersistenceState::Failed
-                && ((outcome.applied && outcome.changed) || (!outcome.applied && !outcome.changed))
+            (outcome.applied
+                && outcome.changed
+                && matches!(
+                    outcome.persistence,
+                    MutationPersistenceState::Failed | MutationPersistenceState::Unconfirmed
+                ))
+                || (!outcome.applied && !outcome.changed && outcome.persistence == MutationPersistenceState::Failed)
         }
         _ => false,
     };
@@ -326,6 +337,7 @@ pub(super) fn request_mode_cas_outcome_from_response(
             MutationPersistenceState::NotRequired => ClientMutationPersistenceState::NotRequired,
             MutationPersistenceState::Persisted => ClientMutationPersistenceState::Persisted,
             MutationPersistenceState::Failed => ClientMutationPersistenceState::Failed,
+            MutationPersistenceState::Unconfirmed => ClientMutationPersistenceState::Unconfirmed,
         },
     })
 }

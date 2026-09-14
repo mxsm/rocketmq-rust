@@ -248,7 +248,8 @@ expression: catalog.list_tools().tools
           "enum": [
             "not_required",
             "persisted",
-            "failed"
+            "failed",
+            "unconfirmed"
           ],
           "type": "string"
         },
@@ -815,7 +816,8 @@ expression: catalog.list_tools().tools
           "enum": [
             "not_required",
             "persisted",
-            "failed"
+            "failed",
+            "unconfirmed"
           ],
           "type": "string"
         },
@@ -1679,7 +1681,8 @@ expression: catalog.list_tools().tools
           "enum": [
             "not_required",
             "persisted",
-            "failed"
+            "failed",
+            "unconfirmed"
           ],
           "type": "string"
         },
@@ -1946,7 +1949,8 @@ expression: catalog.list_tools().tools
           "enum": [
             "not_required",
             "persisted",
-            "failed"
+            "failed",
+            "unconfirmed"
           ],
           "type": "string"
         },
