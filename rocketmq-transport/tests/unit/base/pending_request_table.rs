@@ -24,6 +24,7 @@ use super::pending_request_table::PendingRequestCompletion;
 use super::pending_request_table::PendingRequestGuard;
 use super::pending_request_table::PendingRequestLimits;
 use super::pending_request_table::PendingRequestTable;
+use super::pending_request_table::PendingResponseOutcome;
 use crate::deadline::RequestDeadline;
 
 fn registered(outcome: PendingRegistrationOutcome) -> PendingRequestGuard {
@@ -57,14 +58,20 @@ async fn response_completion_is_exactly_once_and_releases_the_reservation() {
     let guard = registered(table.register(7, RequestDeadline::from_timeout_millis(3_000), sender));
 
     assert_eq!(table.len(), 1);
-    assert!(table.complete_response(
-        7,
-        RemotingCommand::create_response_command_with_code(ResponseCode::Success),
-    ));
-    assert!(!table.complete_response(
-        7,
-        RemotingCommand::create_response_command_with_code(ResponseCode::SystemError),
-    ));
+    assert_eq!(
+        table.complete_response(
+            7,
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+        ),
+        PendingResponseOutcome::Completed
+    );
+    assert_eq!(
+        table.complete_response(
+            7,
+            RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
+        ),
+        PendingResponseOutcome::Late
+    );
 
     let response = response(receiver.await.expect("completion should notify the waiter"));
     assert_eq!(response.code(), ResponseCode::Success.to_i32());
@@ -167,10 +174,13 @@ async fn retired_opaque_cannot_be_reused_by_a_late_response() {
         RequestDeadline::from_timeout_millis(3_000),
         second_sender,
     )));
-    assert!(!table.complete_response(
-        9,
-        RemotingCommand::create_response_command_with_code(ResponseCode::Success),
-    ));
+    assert_eq!(
+        table.complete_response(
+            9,
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+        ),
+        PendingResponseOutcome::Late
+    );
 }
 
 #[tokio::test]
@@ -257,11 +267,14 @@ async fn closing_one_connection_owner_does_not_complete_another_owners_request()
     assert!(second_receiver.try_recv().is_err());
     assert_eq!(table.len(), 1);
 
-    assert!(table.complete_response_for_owner(
-        &second_owner,
-        17,
-        RemotingCommand::create_response_command_with_code(ResponseCode::Success),
-    ));
+    assert_eq!(
+        table.complete_response_for_owner(
+            &second_owner,
+            17,
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success),
+        ),
+        PendingResponseOutcome::Completed
+    );
     assert_eq!(
         response(second_receiver.await.unwrap()).code(),
         ResponseCode::Success.to_i32()
@@ -306,16 +319,22 @@ async fn timed_out_owner_rejects_reuse_but_rotated_owner_is_safe_from_late_respo
         RequestDeadline::from_timeout_millis(3_000),
         rotated_sender,
     ));
-    assert!(!table.complete_response_for_owner(
-        &retired_owner,
-        29,
-        RemotingCommand::create_response_command_with_code(ResponseCode::SystemError),
-    ));
-    assert!(table.complete_response_for_owner(
-        &rotated_owner,
-        29,
-        RemotingCommand::create_response_command_with_code(ResponseCode::Success),
-    ));
+    assert_eq!(
+        table.complete_response_for_owner(
+            &retired_owner,
+            29,
+            RemotingCommand::create_response_command_with_code(ResponseCode::SystemError),
+        ),
+        PendingResponseOutcome::Late
+    );
+    assert_eq!(
+        table.complete_response_for_owner(
+            &rotated_owner,
+            29,
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success),
+        ),
+        PendingResponseOutcome::Completed
+    );
     assert_eq!(
         response(rotated_receiver.await.unwrap()).code(),
         ResponseCode::Success.to_i32()
@@ -488,18 +507,18 @@ fn timeout_response_and_disconnect_race_completes_once_and_retires_the_owner() {
 
         match result {
             PendingRequestCompletion::Response(command) => {
-                assert!(response_won);
+                assert_eq!(response_won, PendingResponseOutcome::Completed);
                 assert_eq!(command.code(), ResponseCode::Success.to_i32());
                 assert_eq!(disconnected, 0);
             }
             PendingRequestCompletion::OperationalFailure(source)
                 if source.code() == rocketmq_error::TRANSPORT_RESPONSE_TIMEOUT.code() =>
             {
-                assert!(!response_won);
+                assert_ne!(response_won, PendingResponseOutcome::Completed);
                 assert_eq!(disconnected, 0);
             }
             PendingRequestCompletion::SessionClosed => {
-                assert!(!response_won);
+                assert_ne!(response_won, PendingResponseOutcome::Completed);
                 assert_eq!(disconnected, 1);
             }
             PendingRequestCompletion::DeadlineExpired
@@ -521,4 +540,34 @@ fn timeout_response_and_disconnect_race_completes_once_and_retires_the_owner() {
             next_sender,
         )));
     }
+}
+
+#[tokio::test]
+async fn responses_report_completion_lateness_and_foreign_ownership_separately() {
+    let table = PendingRequestTable::new();
+    let owner = table.new_owner();
+    let (sender, _receiver) = tokio::sync::oneshot::channel();
+    let guard = registered(table.register_for_owner(&owner, 51, RequestDeadline::from_timeout_millis(3_000), sender));
+    let response = || RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_opaque(51);
+
+    assert_eq!(
+        table.complete_response_for_owner(&owner, 51, response()),
+        PendingResponseOutcome::Completed,
+        "the first response completes the registered request"
+    );
+    assert_eq!(
+        table.complete_response_for_owner(&owner, 51, response()),
+        PendingResponseOutcome::Late,
+        "a repeated response arrives after the request already settled"
+    );
+
+    // An owner that belongs to another table cannot complete anything here, which
+    // is a routing or generation mistake rather than ordinary lateness.
+    let other_table = PendingRequestTable::new();
+    let foreign_owner = other_table.new_owner();
+    assert_eq!(
+        table.complete_response_for_owner(&foreign_owner, 51, response()),
+        PendingResponseOutcome::ForeignOwner
+    );
+    drop(guard);
 }

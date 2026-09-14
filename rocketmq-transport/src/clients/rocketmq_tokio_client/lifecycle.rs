@@ -888,14 +888,57 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
     /// drains or connection cleanup.
     pub fn shutdown(&self) {
         let report = self.shutdown_now();
-        if report.background.as_ref().is_some_and(|report| !report.is_healthy()) {
-            warn!("RemotingClient background task shutdown report is unhealthy");
-        }
-        if report.workers.as_ref().is_some_and(|report| !report.is_healthy()) {
-            warn!("RemotingClient worker task shutdown report is unhealthy");
-        }
+        // `shutdown_now` cancels and aborts without waiting, so a task that has
+        // not been polled to completion is still tracked when the report is
+        // taken, and the report counts it as leaked. Reporting that as an
+        // unhealthy shutdown would warn on every immediate shutdown, so only
+        // explicit failures and panics are reported here, with their counters.
+        warn_immediate_shutdown_faults("background", report.background.as_ref());
+        warn_immediate_shutdown_faults("worker", report.workers.as_ref());
         info!("RemotingClient shutdown complete");
     }
+}
+
+/// Reports task-group faults observed while an immediate shutdown was requested.
+///
+/// Failures and panics are counted across the group tree. Work that is merely
+/// still winding down is deliberately excluded, because an immediate shutdown
+/// does not wait and cannot distinguish it from a leak.
+fn warn_immediate_shutdown_faults(stage: &'static str, report: Option<&ShutdownReport>) {
+    let Some(report) = report else {
+        return;
+    };
+    let faults = shutdown_faults(report);
+    if faults.failed == 0 && faults.panicked == 0 {
+        return;
+    }
+    warn!(
+        stage,
+        failed = faults.failed,
+        panicked = faults.panicked,
+        still_tracked = report.leaked,
+        detached_still_running = report.detached_still_running,
+        "RemotingClient task group reported faults during immediate shutdown"
+    );
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct ShutdownFaults {
+    failed: usize,
+    panicked: usize,
+}
+
+fn shutdown_faults(report: &ShutdownReport) -> ShutdownFaults {
+    let mut faults = ShutdownFaults {
+        failed: report.failed,
+        panicked: report.panicked,
+    };
+    for child in &report.children {
+        let child_faults = shutdown_faults(child);
+        faults.failed = faults.failed.saturating_add(child_faults.failed);
+        faults.panicked = faults.panicked.saturating_add(child_faults.panicked);
+    }
+    faults
 }
 
 enum StartAttempt {

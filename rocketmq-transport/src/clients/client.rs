@@ -44,6 +44,7 @@ use crate::base::pending_request_table::PendingRegistrationOutcome;
 use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
+use crate::base::pending_request_table::PendingResponseOutcome;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::connection::CommandSendOutcome;
 use crate::connection::Connection;
@@ -262,15 +263,29 @@ where
     async fn response(&self, state: &Self::SessionState, session: SessionHandle, command: RemotingCommand) {
         let opaque = command.opaque();
         let code = command.code();
-        if !self
+        match self
             .pending_requests
             .complete_response_for_owner(&state.pending_owner, opaque, command)
         {
-            tracing::warn!(
-                code,
-                session_id = session.session_id(),
-                "received client response without a matching pending request",
-            );
+            PendingResponseOutcome::Completed => {}
+            // The caller already has its answer, because the request timed out,
+            // was cancelled, or was retired with its session while the response
+            // was still in flight. That is ordinary client behaviour, not a
+            // fault, and it happens systematically while a connection drains.
+            PendingResponseOutcome::Late => {
+                tracing::debug!(
+                    code,
+                    session_id = session.session_id(),
+                    "late client response for a request that already settled",
+                );
+            }
+            PendingResponseOutcome::ForeignOwner => {
+                tracing::warn!(
+                    code,
+                    session_id = session.session_id(),
+                    "client response arrived for a foreign pending-request owner",
+                );
+            }
         }
     }
 

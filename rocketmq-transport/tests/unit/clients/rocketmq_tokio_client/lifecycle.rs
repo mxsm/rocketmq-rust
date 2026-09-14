@@ -645,3 +645,43 @@ async fn shutdown_observes_a_real_starting_phase_before_second_spawn() {
     assert!(shutdown.is_healthy(), "{shutdown:?}");
     assert_eq!(client.lifecycle_phase(), "stopped");
 }
+
+#[test]
+fn immediate_shutdown_reports_faults_rather_than_work_still_winding_down() {
+    use rocketmq_runtime::ShutdownReport;
+
+    let mut child = ShutdownReport::new("child-group", Duration::ZERO);
+    child.panicked = 1;
+    child.leaked = 3;
+
+    let mut group = ShutdownReport::new("background-group", Duration::ZERO);
+    // Work that an immediate shutdown did not wait for is still tracked, which
+    // the runtime report counts as leaked and timed out. Neither is a fault.
+    group.leaked = 5;
+    group.timed_out = 1;
+    group.failed = 2;
+    group.children.push(child);
+
+    let faults = super::shutdown_faults(&group);
+
+    assert_eq!(faults.failed, 2, "the group's own failures are reported");
+    assert_eq!(faults.panicked, 1, "descendant panics are aggregated");
+    assert!(
+        !group.is_healthy(),
+        "the runtime report keeps its raw meaning for callers that wait"
+    );
+}
+
+#[test]
+fn a_settled_shutdown_without_faults_reports_none() {
+    use rocketmq_runtime::ShutdownReport;
+
+    let mut group = ShutdownReport::new("background-group", Duration::ZERO);
+    group.leaked = 4;
+    group.detached_still_running = 2;
+
+    let faults = super::shutdown_faults(&group);
+
+    assert_eq!(faults.failed, 0);
+    assert_eq!(faults.panicked, 0);
+}

@@ -195,6 +195,23 @@ pub(crate) enum PendingRequestCompletion {
     OperationalFailure(SharedError),
 }
 
+/// What became of a response that arrived for one pending-request owner.
+///
+/// A response can legitimately arrive after its request already settled: the
+/// caller stopped waiting, the request deadline elapsed, or the owning session
+/// started draining and retired the owner. Those cases are reported separately
+/// from a response that does not belong to this table at all, which indicates a
+/// routing or generation mistake rather than ordinary cancellation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingResponseOutcome {
+    /// The response matched a registered request and completed it.
+    Completed,
+    /// No request is registered for the opaque: it already settled.
+    Late,
+    /// The owner belongs to a different pending-request table generation.
+    ForeignOwner,
+}
+
 impl PendingRequestCompletion {
     #[track_caller]
     pub(crate) fn operational(error: SharedError) -> Self {
@@ -416,7 +433,7 @@ impl PendingRequestTable {
     }
 
     #[cfg(test)]
-    pub(crate) fn complete_response(&self, opaque: i32, response: RemotingCommand) -> bool {
+    pub(crate) fn complete_response(&self, opaque: i32, response: RemotingCommand) -> PendingResponseOutcome {
         self.complete_response_for_owner(&self.inner.default_owner, opaque, response)
     }
 
@@ -425,20 +442,20 @@ impl PendingRequestTable {
         owner: &PendingRequestOwner,
         opaque: i32,
         response: RemotingCommand,
-    ) -> bool {
+    ) -> PendingResponseOutcome {
         if owner.table_id != self.inner.table_id {
-            return false;
+            return PendingResponseOutcome::ForeignOwner;
         }
         let Some(pending) = self.take_key(PendingRequestKey {
             owner_id: owner.id,
             opaque,
         }) else {
-            return false;
+            return PendingResponseOutcome::Late;
         };
         pending
             .completion
             .complete(PendingRequestCompletion::Response(response));
-        true
+        PendingResponseOutcome::Completed
     }
 
     pub fn len(&self) -> usize {

@@ -34,6 +34,7 @@ use crate::base::pending_request_table::PendingRegistrationOutcome;
 use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
+use crate::base::pending_request_table::PendingResponseOutcome;
 use crate::deadline::RequestDeadline;
 use crate::dispatch::OriginalRequestIdentity;
 use crate::dispatch::RemotingResponse;
@@ -257,11 +258,14 @@ impl PendingHotPathHarness {
         ) else {
             panic!("pending registration rejected")
         };
-        assert!(self.table.complete_response_for_owner(
-            &self.owner,
-            opaque,
-            RemotingCommand::create_success_response_command().set_opaque(opaque),
-        ));
+        assert_eq!(
+            self.table.complete_response_for_owner(
+                &self.owner,
+                opaque,
+                RemotingCommand::create_success_response_command().set_opaque(opaque),
+            ),
+            PendingResponseOutcome::Completed
+        );
         black_box(guard);
     }
 }
