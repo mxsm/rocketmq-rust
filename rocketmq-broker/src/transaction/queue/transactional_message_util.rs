@@ -94,7 +94,7 @@ impl TransactionalMessageUtil {
         let mut check_immunity_time = 0;
 
         if let Ok(parsed_time) = check_immunity_time_str.parse::<u64>() {
-            check_immunity_time = parsed_time * 1000;
+            check_immunity_time = parsed_time.saturating_mul(1000);
         }
 
         if check_immunity_time < transaction_timeout {
@@ -171,5 +171,11 @@ mod tests {
     fn get_immunity_time_with_time_less_than_transaction_timeout() {
         let immunity_time = TransactionalMessageUtil::get_immunity_time("3", 5000);
         assert_eq!(immunity_time, 5000);
+    }
+
+    #[test]
+    fn get_immunity_time_saturates_on_overflowing_value() {
+        let immunity_time = TransactionalMessageUtil::get_immunity_time("18446744073709551615", 5000);
+        assert_eq!(immunity_time, u64::MAX);
     }
 }

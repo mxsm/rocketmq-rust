@@ -896,7 +896,7 @@ where
     fn get_immunity_time(&self, check_immunity_time_str: &str, transaction_timeout: i64) -> i64 {
         match check_immunity_time_str.parse::<i64>() {
             Ok(-1) => transaction_timeout,
-            Ok(time) => time * 1000,
+            Ok(time) => time.saturating_mul(1000),
             Err(_) => transaction_timeout,
         }
     }

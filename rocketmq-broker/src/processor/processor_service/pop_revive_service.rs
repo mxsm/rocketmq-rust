@@ -353,7 +353,8 @@ impl<MS: BrokerReadWriteStore> PopReviveService<MS> {
                 let mut delay = 0;
                 if let Some(ref sort_list) = consume_revive_obj.sort_list {
                     if !sort_list.is_empty() {
-                        delay = (current_millis() - (sort_list[0].get_revive_time() as u64)) / 1000;
+                        // revive_time is pop_time + invisible_time and may still be in the future.
+                        delay = current_millis().saturating_sub(sort_list[0].get_revive_time() as u64) / 1000;
                         service
                             .current_revive_message_timestamp
                             .store(sort_list[0].get_revive_time(), Ordering::Release);
@@ -447,7 +448,7 @@ impl<MS: BrokerReadWriteStore> PopReviveService<MS> {
                 // Safely get timer message store delays
                 let (timer_delay, commit_log_delay) = self.context.store.timer_lag().unwrap_or((0, 0));
                 if end_time != 0
-                    && current_millis() - end_time > (3 * PopAckConstants::SECOND) as u64
+                    && current_millis().saturating_sub(end_time) > (3 * PopAckConstants::SECOND) as u64
                     && timer_delay <= 0
                     && commit_log_delay <= 0
                 {
@@ -461,7 +462,10 @@ impl<MS: BrokerReadWriteStore> PopReviveService<MS> {
                     );
                 }
 
-                if end_time - first_rt > (PopAckConstants::ACK_TIME_INTERVAL + PopAckConstants::SECOND) as u64 {
+                // first_rt is the first checkpoint's revive_time and can be ahead of end_time.
+                if end_time.saturating_sub(first_rt)
+                    > (PopAckConstants::ACK_TIME_INTERVAL + PopAckConstants::SECOND) as u64
+                {
                     break;
                 }
                 no_msg_count += 1;

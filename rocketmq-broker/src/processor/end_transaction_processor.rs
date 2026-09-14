@@ -374,6 +374,8 @@ where
 
                     // Save topic and born_timestamp before sending (msg_inner is moved)
                     let topic = msg_inner.get_topic().clone();
+                    // born_timestamp is copied from the client request and may be in the future or
+                    // negative, so elapsed-time math must not assume it stays below current_millis.
                     let born_timestamp = result.prepare_message.as_ref().unwrap().born_timestamp as u64;
 
                     let send_result = self.send_final_message(msg_inner).await;
@@ -389,7 +391,7 @@ where
                             metrics.inc_commit_messages(&topic, 1);
 
                             // Record transaction finish latency (in seconds)
-                            let commit_latency_secs = (current_millis() - born_timestamp) / 1000;
+                            let commit_latency_secs = current_millis().saturating_sub(born_timestamp) / 1000;
                             metrics.record_transaction_finish_latency(&topic, commit_latency_secs);
                         }
 
@@ -474,12 +476,14 @@ where
             MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS,
         )) {
             if !check_immunity_time_str.is_empty() {
-                let value_of_current_minus_born = current_millis() - (message_ext.born_timestamp as u64);
+                // Keep the difference signed like DefaultTransactionalMessageService: a future or
+                // negative client-supplied born_timestamp must not reject the request.
+                let value_of_current_minus_born = (current_millis() as i64).saturating_sub(message_ext.born_timestamp);
                 let check_immunity_time = TransactionalMessageUtil::get_immunity_time(
                     &check_immunity_time_str,
                     self.context.policy.transaction_timeout,
                 );
-                return value_of_current_minus_born > check_immunity_time;
+                return u64::try_from(value_of_current_minus_born).unwrap_or(0) > check_immunity_time;
             }
         }
         false
@@ -812,6 +816,45 @@ mod tests {
 
         assert_eq!(ResponseCode::from(plan.response_code()), ResponseCode::IllegalOperation);
         assert_eq!(plan.body_len(), 0);
+        let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
+    }
+
+    #[tokio::test]
+    async fn reject_commit_or_rollback_handles_client_supplied_born_timestamp() {
+        let mut runtime = new_test_runtime("reject-born-timestamp").await;
+        let processor = {
+            let inner = runtime.runtime_state_mut();
+            let transactional_message_service = inner
+                .transactional_message_service()
+                .cloned()
+                .expect("transactional message service should be initialized");
+            let escape_bridge = inner.escape_bridge();
+            EndTransactionProcessor::new(
+                transactional_message_service,
+                EndTransactionProcessorContext::new(
+                    EndTransactionPolicy::from_configs(&inner.broker_config(), &inner.message_store_config()),
+                    EndTransactionStoreCapability::new(&escape_bridge),
+                    inner.broker_stats_manager_handle(),
+                    None,
+                ),
+            )
+        };
+
+        let mut msg_ext = MessageExt::default();
+        msg_ext.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS),
+            CheetahString::from("60"),
+        );
+
+        // A future born timestamp must not underflow the elapsed-time subtraction
+        // nor reject a fresh commit/rollback (matching the Java broker).
+        msg_ext.born_timestamp = current_millis() as i64 + 3_600_000;
+        assert!(!processor.reject_commit_or_rollback(false, &msg_ext));
+
+        // A negative born timestamp counts as a long-elapsed message, as in Java.
+        msg_ext.born_timestamp = -1;
+        assert!(processor.reject_commit_or_rollback(false, &msg_ext));
+
         let _ = std::fs::remove_dir_all(runtime.message_store_config().store_path_root_dir.as_str());
     }
 
