@@ -29,6 +29,7 @@ use super::ResponseSink;
 use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestOwner;
 use crate::base::pending_request_table::PendingRequestTable;
+use crate::base::pending_request_table::PendingResponseOutcome;
 use crate::contract::TransportContractViolation;
 use crate::hook_registry::HookSnapshot;
 use crate::remoting::inner::run_after_rpc_hooks;
@@ -335,14 +336,25 @@ where
     }
 
     fn complete_network_response(&self, session: &Self::NetworkSession, response: RemotingCommand) {
-        if !session
+        match session
             .response_table
             .complete_response_for_owner(&session.owner, response.opaque(), response)
         {
-            tracing::warn!(
-                frame = "unexpected_response",
-                "unmatched response frame dropped on transport session"
-            );
+            PendingResponseOutcome::Completed => {}
+            // The request this frame answers already settled, so the frame is
+            // stale rather than unexpected.
+            PendingResponseOutcome::Late => {
+                tracing::debug!(
+                    frame = "late_response",
+                    "late response frame dropped on transport session"
+                );
+            }
+            PendingResponseOutcome::ForeignOwner => {
+                tracing::warn!(
+                    frame = "foreign_response_owner",
+                    "response frame dropped for a foreign pending-request owner"
+                );
+            }
         }
     }
 

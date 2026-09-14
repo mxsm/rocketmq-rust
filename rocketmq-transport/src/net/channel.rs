@@ -1136,7 +1136,10 @@ mod tests {
         .await
         .expect("pending table should receive the request");
         let response = RemotingCommand::create_response_command_with_code(0).set_opaque(73);
-        assert!(response_table.complete_response_for_owner(&response_owner, 73, response));
+        assert_eq!(
+            response_table.complete_response_for_owner(&response_owner, 73, response),
+            crate::base::pending_request_table::PendingResponseOutcome::Completed
+        );
         let (response, report) = response_task.await.unwrap();
         assert_eq!(response.unwrap().opaque(), 73);
         assert!(report.is_healthy(), "{}", report.to_json());

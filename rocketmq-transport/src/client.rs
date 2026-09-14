@@ -31,6 +31,7 @@ use crate::base::pending_request_table::PendingRequestCompletion;
 use crate::base::pending_request_table::PendingRequestLimits;
 use crate::base::pending_request_table::PendingRequestTable;
 use crate::base::pending_request_table::PendingRequestUsage;
+use crate::base::pending_request_table::PendingResponseOutcome;
 use crate::clients::nameserver_endpoint::ConnectTarget;
 use crate::codec::remoting_command_codec::FrameLimits;
 use crate::config::SocketOptions;
@@ -620,10 +621,11 @@ impl OneShotTransportClient {
         match deadline.timeout(connection.receive_command()).await {
             Ok(Some(Ok(response))) => {
                 let response_opaque = response.opaque();
-                if !self
-                    .pending
-                    .complete_response_for_owner(&owner, response_opaque, response)
-                {
+                if !matches!(
+                    self.pending
+                        .complete_response_for_owner(&owner, response_opaque, response),
+                    PendingResponseOutcome::Completed
+                ) {
                     guard.complete(PendingRequestCompletion::OperationalFailure(
                         connection_failed_without_source_for_remote(address.to_string(), TransportStage::Closed),
                     ));
