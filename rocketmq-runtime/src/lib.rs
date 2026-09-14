@@ -28,12 +28,18 @@
 //! [`ChildServiceContext`] or a narrower capability. [`RuntimeContext`] is a
 //! test and migration harness, while [`RocketMQRuntime`] remains only as a
 //! deprecated compatibility boundary.
+//!
+//! [`prelude`] documents the recommended entry path with an example that runs
+//! as a test. The older entry points are grouped in [`compat`], which states the
+//! migration direction without deprecating anything further.
 
 /// Actor types and operations.
 mod actor;
 pub mod blocking;
 /// Common types and operations.
 pub mod common;
+/// Compatibility facade for the older runtime entry points.
+pub mod compat;
 /// Config types and operations.
 mod config;
 /// Context types and operations.
