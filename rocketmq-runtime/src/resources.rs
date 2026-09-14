@@ -15,6 +15,7 @@
 use crate::metadata_target::MetadataTargetRegistry;
 use crate::resource_budget::BudgetLimit;
 use crate::resource_budget::FullPolicy;
+use crate::resource_budget::ManagedMemoryBudget;
 use crate::resource_budget::ProcessMemoryLimit;
 use crate::resource_budget::ResourceBudget;
 use crate::resource_budget::ResourceBudgetTree;
@@ -27,21 +28,23 @@ use crate::resource_budget::ResourceBudgetTree;
 #[derive(Debug, Clone)]
 pub struct RuntimeResources {
     memory_limit: ProcessMemoryLimit,
+    memory_budget: ManagedMemoryBudget,
     process_budget: ResourceBudget,
     metadata_targets: MetadataTargetRegistry,
 }
 
 impl RuntimeResources {
-    pub(crate) fn from_memory_limit(memory_limit: ProcessMemoryLimit) -> Self {
-        let managed_bytes = usize::try_from(memory_limit.bytes()).unwrap_or(usize::MAX);
+    pub(crate) fn from_memory_budget(memory_budget: ManagedMemoryBudget) -> Self {
+        let managed_bytes = usize::try_from(memory_budget.managed_bytes()).unwrap_or(usize::MAX);
         let process_budget = ResourceBudgetTree::new(
             "process",
             BudgetLimit::new(usize::MAX, managed_bytes, FullPolicy::Reject),
         )
-        .expect("a positive ProcessMemoryLimit must create the process budget")
+        .expect("a positive managed memory budget must create the process budget")
         .root();
         Self {
-            memory_limit,
+            memory_limit: memory_budget.detected(),
+            memory_budget,
             process_budget,
             metadata_targets: MetadataTargetRegistry::new(),
         }
@@ -51,6 +54,12 @@ impl RuntimeResources {
     #[must_use]
     pub const fn memory_limit(&self) -> ProcessMemoryLimit {
         self.memory_limit
+    }
+
+    /// Returns the managed memory budget the ledger charges.
+    #[must_use]
+    pub const fn memory_budget(&self) -> ManagedMemoryBudget {
+        self.memory_budget
     }
 
     /// Returns the shared process resource-budget root.

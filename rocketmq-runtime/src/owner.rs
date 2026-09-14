@@ -19,6 +19,8 @@ use crate::diagnostics::RuntimeDiagnostics;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
+use crate::resource_budget::ManagedMemoryBudget;
+use crate::resource_budget::ManagedMemoryPolicy;
 use crate::resource_budget::ProcessMemoryLimit;
 use crate::resources::RuntimeResources;
 use crate::service_context::RootServiceContext;
@@ -46,6 +48,7 @@ pub struct RuntimeOwner {
 pub struct RuntimeOwnerPlan {
     config: RuntimeConfig,
     memory_limit: Option<ProcessMemoryLimit>,
+    memory_policy: ManagedMemoryPolicy,
 }
 
 impl RuntimeOwnerPlan {
@@ -56,15 +59,35 @@ impl RuntimeOwnerPlan {
         self
     }
 
+    /// Derives the chargeable managed budget from the effective memory limit.
+    ///
+    /// The default policy charges the whole effective limit, which is the
+    /// behavior that existed before the policy existed. A ratio or headroom is
+    /// adopted explicitly after measuring the service.
+    #[must_use]
+    pub fn with_memory_policy(mut self, memory_policy: ManagedMemoryPolicy) -> Self {
+        self.memory_policy = memory_policy;
+        self
+    }
+
     /// Builds the validated Tokio runtime owner.
     ///
     /// # Errors
     ///
     /// Returns an operational error when process-memory discovery or Tokio
-    /// runtime construction fails.
+    /// runtime construction fails, and a contract violation when the policy
+    /// cannot resolve a positive budget from the effective limit.
     pub fn build(self) -> RuntimeResult<RuntimeOwner> {
-        RuntimeOwner::build_validated(self.config, || {
-            self.memory_limit.map_or_else(ProcessMemoryLimit::detect, Ok)
+        let Self {
+            config,
+            memory_limit,
+            memory_policy,
+        } = self;
+        RuntimeOwner::build_validated(config, move || {
+            let memory_limit = memory_limit.map_or_else(ProcessMemoryLimit::detect, Ok)?;
+            ManagedMemoryBudget::resolve(memory_limit, None, memory_policy).map_err(|violation| {
+                RuntimeError::configuration_failure(crate::RuntimeOperation::ResolveManagedMemoryBudget, violation)
+            })
         })
     }
 }
@@ -81,6 +104,7 @@ impl RuntimeOwner {
         Ok(RuntimeOwnerPlan {
             config,
             memory_limit: None,
+            memory_policy: ManagedMemoryPolicy::default(),
         })
     }
 
@@ -99,10 +123,10 @@ impl RuntimeOwner {
 
     fn build_validated<F>(config: RuntimeConfig, detector: F) -> RuntimeResult<Self>
     where
-        F: FnOnce() -> RuntimeResult<ProcessMemoryLimit>,
+        F: FnOnce() -> RuntimeResult<ManagedMemoryBudget>,
     {
-        let memory_limit = detector()?;
-        let resources = RuntimeResources::from_memory_limit(memory_limit);
+        let memory_budget = detector()?;
+        let resources = RuntimeResources::from_memory_budget(memory_budget);
 
         let mut builder = tokio::runtime::Builder::new_multi_thread();
         builder
@@ -310,5 +334,38 @@ mod tests {
         let runtime = build_tokio_runtime(&mut builder).expect("valid Tokio builder should start");
 
         runtime.block_on(async {});
+    }
+
+    #[test]
+    fn a_memory_policy_bounds_the_process_budget() {
+        let owner = RuntimeOwner::plan(RuntimeConfig::default())
+            .expect("default config is valid")
+            .with_memory_limit(ProcessMemoryLimit::configured(4 * 1024 * 1024).expect("test limit is valid"))
+            .with_memory_policy(ManagedMemoryPolicy::fraction(1, 2).expect("a half is bounded"))
+            .build()
+            .expect("the owner should start");
+
+        // The detected limit stays reportable while the ledger charges the
+        // derived budget.
+        assert_eq!(owner.resources().memory_limit().bytes(), 4 * 1024 * 1024);
+        assert_eq!(owner.resources().memory_budget().managed_bytes(), 2 * 1024 * 1024);
+
+        let budget = owner.resources().process_budget();
+        assert_eq!(budget.limit().capacity.bytes, 2 * 1024 * 1024);
+        assert!(budget.try_acquire_data(2 * 1024 * 1024 + 1).is_err());
+        assert!(budget.try_acquire_data(2 * 1024 * 1024).is_ok());
+    }
+
+    #[test]
+    fn an_unresolvable_memory_policy_fails_the_owner_build() {
+        let error = RuntimeOwner::plan(RuntimeConfig::default())
+            .expect("default config is valid")
+            .with_memory_limit(ProcessMemoryLimit::configured(4 * 1024 * 1024).expect("test limit is valid"))
+            .with_memory_policy(ManagedMemoryPolicy::whole_limit().with_headroom(8 * 1024 * 1024))
+            .build()
+            .err()
+            .expect("headroom above the effective limit cannot resolve a budget");
+
+        assert_eq!(error.operation(), crate::RuntimeOperation::ResolveManagedMemoryBudget);
     }
 }

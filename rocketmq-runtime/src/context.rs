@@ -24,6 +24,8 @@ use crate::diagnostics::RuntimeDiagnosticsSnapshot;
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
 use crate::handle::RuntimeHandle;
+use crate::resource_budget::ManagedMemoryBudget;
+use crate::resource_budget::ManagedMemoryPolicy;
 use crate::resource_budget::ProcessMemoryLimit;
 use crate::resources::RuntimeResources;
 use crate::service_context::ChildServiceContext;
@@ -72,9 +74,14 @@ impl RuntimeContext {
         let global_blocking_capacity = blocking_policies.total_max_concurrency();
         let root_group = TaskGroup::root(name.clone(), runtime.clone());
         let diagnostics = RuntimeDiagnostics::new();
-        let resources = RuntimeResources::from_memory_limit(
-            ProcessMemoryLimit::configured(BORROWED_RUNTIME_MEMORY_LIMIT_BYTES)
-                .expect("the static borrowed-runtime memory limit is positive"),
+        let resources = RuntimeResources::from_memory_budget(
+            ManagedMemoryBudget::resolve(
+                ProcessMemoryLimit::configured(BORROWED_RUNTIME_MEMORY_LIMIT_BYTES)
+                    .expect("the static borrowed-runtime memory limit is positive"),
+                None,
+                ManagedMemoryPolicy::whole_limit(),
+            )
+            .expect("the static borrowed-runtime memory budget is representable"),
         );
         let root = RootServiceContext::new(
             name,
