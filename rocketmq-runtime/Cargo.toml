@@ -82,3 +82,11 @@ harness = false
 [[bench]]
 name    = "budgeted_queue_bench"
 harness = false
+
+[[bench]]
+name    = "runtime_diagnostics_bench"
+harness = false
+
+[[bench]]
+name    = "metadata_io_bench"
+harness = false

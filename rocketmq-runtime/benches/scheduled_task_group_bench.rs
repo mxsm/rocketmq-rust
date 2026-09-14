@@ -138,6 +138,96 @@ fn run_scheduled_case(mode: ScheduleMode, period: Duration, run_for: Duration) -
     })
 }
 
+#[derive(Debug)]
+struct StalledTicksOutput {
+    stalled: ScheduledTaskSnapshot,
+    recovered: ScheduledTaskSnapshot,
+    report: ShutdownReport,
+}
+
+/// Holds the first run across several periods, releases it, and records what the
+/// schedule did while stalled and after recovery.
+///
+/// The load case is a run that outlives its period. The measurement is only
+/// meaningful together with the assertions: ticks must be skipped rather than
+/// queued while the run is held, and recovery must resume runs without
+/// accumulating active ones, which is the bounded-recovery requirement.
+fn run_stalled_ticks_recovery(period: Duration) -> StalledTicksOutput {
+    let owner = RuntimeOwner::plan(runtime_config())
+        .expect("test runtime configuration is valid")
+        .build()
+        .expect("runtime owner should start");
+    let context = owner.root_context().component("bench.scheduler-stall-root");
+
+    owner.block_on(async move {
+        let scheduled = context.component("bench.scheduler-stall").scheduled_tasks("scheduled");
+        let release = Arc::new(tokio::sync::Notify::new());
+        let stalls_remaining = Arc::new(AtomicUsize::new(1));
+        let runs = Arc::new(AtomicUsize::new(0));
+        scheduled
+            .schedule_fixed_rate_no_overlap(ScheduledTaskConfig::fixed_rate_no_overlap("stalled", period), {
+                let release = release.clone();
+                let stalls_remaining = stalls_remaining.clone();
+                let runs = runs.clone();
+                move || {
+                    let release = release.clone();
+                    let stalls_remaining = stalls_remaining.clone();
+                    let runs = runs.clone();
+                    async move {
+                        runs.fetch_add(1, Ordering::Relaxed);
+                        // Only the first run starts stalled, so recovery is
+                        // observable inside one scenario.
+                        if stalls_remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
+                            release.notified().await;
+                        }
+                    }
+                }
+            })
+            .expect("stalled scheduled task should start");
+
+        tokio::time::sleep(period * 8).await;
+        let stalled = scheduled
+            .snapshot()
+            .into_iter()
+            .next()
+            .expect("scheduled task snapshot should be available");
+        assert!(
+            stalled.skips > 0,
+            "a run held across periods must skip ticks: {stalled:?}"
+        );
+        assert_eq!(
+            stalled.overlaps, 0,
+            "a no-overlap schedule must not overlap: {stalled:?}"
+        );
+        assert_eq!(stalled.active_runs, 1, "the held run stays active: {stalled:?}");
+
+        release.notify_one();
+        tokio::time::sleep(period * 8).await;
+        let recovered = scheduled
+            .snapshot()
+            .into_iter()
+            .next()
+            .expect("scheduled task snapshot should be available");
+        assert!(
+            recovered.runs > stalled.runs,
+            "runs resume after the stall: {recovered:?}"
+        );
+        assert!(
+            recovered.active_runs <= 1,
+            "recovery must not accumulate active runs: {recovered:?}"
+        );
+
+        let report = context.task_group().shutdown(Duration::from_secs(5)).await;
+        assert_eq!(report.leaked, 0, "{}", report.to_json());
+        assert!(report.remaining_tasks.is_empty(), "{}", report.to_json());
+        StalledTicksOutput {
+            stalled,
+            recovered,
+            report,
+        }
+    })
+}
+
 fn write_scheduled_report_artifact() {
     let period = Duration::from_millis(10);
     let run_for = Duration::from_millis(90);
@@ -158,11 +248,17 @@ fn write_scheduled_report_artifact() {
         .duration_since(UNIX_EPOCH)
         .expect("system clock should be after unix epoch")
         .as_millis();
+    let stalled = run_stalled_ticks_recovery(period);
     let payload = serde_json::json!({
         "case": "scheduled_task_group",
         "generated_at_unix_ms": generated_at_unix_ms,
         "period_ms": period.as_millis(),
         "run_for_ms": run_for.as_millis(),
+        "stalled_ticks": {
+            "stalled": stalled.stalled,
+            "recovered": stalled.recovered,
+            "healthy": stalled.report.is_healthy(),
+        },
         "cases": cases.iter().map(|case| {
             serde_json::json!({
                 "mode": case.snapshot.mode,
@@ -204,6 +300,19 @@ fn bench_scheduled_task_group(criterion: &mut Criterion) {
         );
     }
     group.finish();
+
+    let mut stalled = criterion.benchmark_group("scheduled_task_group_stalled");
+    stalled.bench_with_input(
+        BenchmarkId::new("stall_and_recover", period.as_millis()),
+        &period,
+        |bencher, period| {
+            bencher.iter(|| {
+                let output = run_stalled_ticks_recovery(black_box(*period));
+                black_box(output.recovered.skips);
+            });
+        },
+    );
+    stalled.finish();
 }
 
 criterion_group! {

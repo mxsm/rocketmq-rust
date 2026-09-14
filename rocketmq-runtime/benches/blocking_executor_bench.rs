@@ -53,7 +53,9 @@ struct TimeoutBlockingOutput {
 }
 
 fn runtime_config(policy: BlockingPoolPolicy) -> RuntimeConfig {
-    let max_blocking_threads = (policy.max_concurrency * 2).max(2);
+    // The global blocking budget must reserve one slot for every lane, so the
+    // scenario cannot derive a budget below the lane count.
+    let max_blocking_threads = (policy.max_concurrency * 2).max(3);
     let mut config = RuntimeConfig {
         worker_threads: 2,
         max_blocking_threads,

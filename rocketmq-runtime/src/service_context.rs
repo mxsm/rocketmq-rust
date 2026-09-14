@@ -414,8 +414,29 @@ impl ChildServiceContext {
         component: crate::diagnostics::RuntimeComponent,
         inputs: crate::diagnostics::RuntimeDiagnosticsInputs,
     ) -> crate::diagnostics::RuntimeDiagnosticsViewV2 {
-        self.diagnostics
-            .view_v2(component, &self.task_group, self.blocking_lanes.snapshots(), inputs)
+        self.diagnostics_view_v2_with_options(
+            component,
+            inputs,
+            crate::diagnostics::RuntimeDiagnosticsViewOptionsV2::default(),
+        )
+    }
+
+    /// Returns a bounded, explicitly scoped diagnostics view with explicit
+    /// budget limits, including the scan and output budgets of an on-demand task
+    /// detail list.
+    pub fn diagnostics_view_v2_with_options(
+        &self,
+        component: crate::diagnostics::RuntimeComponent,
+        inputs: crate::diagnostics::RuntimeDiagnosticsInputs,
+        options: crate::diagnostics::RuntimeDiagnosticsViewOptionsV2,
+    ) -> crate::diagnostics::RuntimeDiagnosticsViewV2 {
+        self.diagnostics.view_v2_with_options(
+            component,
+            &self.task_group,
+            self.blocking_lanes.snapshots(),
+            inputs,
+            options,
+        )
     }
 
     /// Creates a long-lived component context owned by this service.
