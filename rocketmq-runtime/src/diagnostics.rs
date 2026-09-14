@@ -24,6 +24,10 @@ use serde::Serialize;
 
 use crate::blocking::BlockingExecutorSnapshot;
 use crate::blocking::BlockingKind;
+use crate::metadata_io::MetadataIoSnapshot;
+use crate::scheduled::ScheduledTaskSnapshot;
+use crate::shutdown_report::ShutdownReport;
+use crate::task_group::TaskDetailScope;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskGroupId;
 use crate::task_group::TaskGroupLifecycleState;
@@ -341,6 +345,461 @@ impl RuntimeDiagnostics {
     }
 }
 
+/// Names the population a V2 diagnostics value covers.
+///
+/// The scope is part of the payload, so a reader never has to infer it from how
+/// the view was produced, and a partial value cannot be read as a total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeDiagnosticsScope {
+    /// Only the calling group's own state.
+    Local,
+    /// The calling group and every descendant group.
+    Subtree,
+    /// State owned once per process and shared by every component.
+    ProcessShared,
+}
+
+/// Bounds applied while creating [`RuntimeDiagnosticsViewV2`].
+///
+/// The detail budgets default to zero, so a routine sample reads only bounded
+/// aggregates and a task list is always an explicit request.
+#[derive(Debug, Clone, Copy)]
+pub struct RuntimeDiagnosticsViewOptionsV2 {
+    /// Elapsed time after which an active task is classified as long-running.
+    pub long_running_threshold: Duration,
+    /// Maximum number of task-kind summaries included in the view.
+    pub max_task_kind_summaries: usize,
+    /// Maximum number of blocking-lane summaries included in the view.
+    pub max_blocking_lane_summaries: usize,
+    /// Maximum number of schedule summaries included in the view.
+    pub max_schedule_tasks: usize,
+    /// Maximum number of metadata resources summarized in the view.
+    pub max_metadata_resources: usize,
+    /// Maximum number of task details emitted when a detail list is requested.
+    pub max_detail_entries: usize,
+    /// Maximum number of tasks examined when a detail list is requested.
+    pub detail_scan_budget: usize,
+}
+
+impl Default for RuntimeDiagnosticsViewOptionsV2 {
+    fn default() -> Self {
+        Self {
+            long_running_threshold: Duration::from_secs(30),
+            max_task_kind_summaries: 7,
+            max_blocking_lane_summaries: 3,
+            max_schedule_tasks: 16,
+            max_metadata_resources: 32,
+            max_detail_entries: 0,
+            detail_scan_budget: 0,
+        }
+    }
+}
+
+/// Component-owned inputs for the V2 view.
+///
+/// A section whose input is absent is reported as absent rather than as zero, so
+/// a caller that does not own scheduled work, a metadata actor, or a shutdown
+/// report cannot make the view claim those values are empty.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeDiagnosticsInputs {
+    /// Snapshots of the caller's scheduled tasks.
+    pub schedule: Vec<ScheduledTaskSnapshot>,
+    /// The snapshot of the caller's metadata actor.
+    pub metadata: Option<MetadataIoSnapshot>,
+    /// The most recent shutdown report for the caller's group.
+    pub shutdown: Option<ShutdownReport>,
+}
+
+/// Bounded task counts for one group population.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeTaskSectionV2 {
+    /// The population these counts cover.
+    pub scope: RuntimeDiagnosticsScope,
+    /// Number of task groups represented.
+    pub task_group_count: usize,
+    /// Number of active tasks represented.
+    pub task_count: usize,
+    /// Number of active tasks in the calling group alone.
+    ///
+    /// The aggregate `task_count` is scoped to the subtree, so this value lets a
+    /// reader separate the calling group's own work from its descendants without
+    /// requesting a detail list.
+    pub local_task_count: usize,
+    /// Number of active tasks exceeding the long-running threshold.
+    pub long_running: usize,
+    /// Maximum elapsed time among active tasks, in milliseconds.
+    pub max_elapsed_millis: u64,
+    /// Bounded aggregate summaries grouped by task kind.
+    pub task_kinds: Vec<RuntimeTaskKindSummaryV1>,
+    /// Whether summaries were omitted by configured bounds.
+    pub truncated: bool,
+}
+
+/// Bounded blocking-executor state, including work that outlived its wait.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeBlockingSectionV2 {
+    /// The population these counts cover.
+    pub scope: RuntimeDiagnosticsScope,
+    /// Number of queued blocking tasks.
+    pub queued: usize,
+    /// Number of running blocking tasks.
+    pub running: usize,
+    /// Number of waits that expired while the blocking closure keeps running.
+    pub timed_out_still_running: usize,
+    /// Number of blocking tasks that were still running during observation.
+    pub blocking_still_running: usize,
+    /// Bounded per-lane summaries.
+    pub lanes: Vec<RuntimeBlockingLaneSummaryV1>,
+    /// Whether summaries were omitted by configured bounds.
+    pub truncated: bool,
+}
+
+/// Bounded scheduled-work aggregates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeScheduleSectionV2 {
+    /// The population these counts cover.
+    pub scope: RuntimeDiagnosticsScope,
+    /// Number of scheduled tasks examined.
+    pub tasks_scanned: usize,
+    /// Number of scheduled tasks included in the aggregates.
+    pub tasks_emitted: usize,
+    /// Number of runs that are still active.
+    pub active_runs: u64,
+    /// Number of runs started.
+    pub runs: u64,
+    /// Number of skipped ticks.
+    pub skips: u64,
+    /// Number of overlapping runs that were coalesced or refused.
+    pub overlaps: u64,
+    /// Number of failed runs.
+    pub failures: u64,
+    /// Maximum run duration, in milliseconds.
+    pub max_elapsed_millis: u64,
+    /// Whether summaries were omitted by configured bounds.
+    pub truncated: bool,
+}
+
+/// Bounded retained-metadata state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeMetadataSectionV2 {
+    /// The population these counts cover.
+    pub scope: RuntimeDiagnosticsScope,
+    /// Whether the metadata actor still accepts work.
+    pub accepting: bool,
+    /// Number of retained operations.
+    pub retained_operations: usize,
+    /// Number of retained payload bytes.
+    pub retained_bytes: usize,
+    /// Number of durability waiters.
+    pub waiters: usize,
+    /// Number of metadata resources examined.
+    pub resources_scanned: usize,
+    /// Number of metadata resources included in the counts.
+    pub resources_emitted: usize,
+    /// Whether resources were omitted by configured bounds.
+    pub truncated: bool,
+}
+
+/// The most recent shutdown result for one group population.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeShutdownSectionV2 {
+    /// The population this result covers.
+    pub scope: RuntimeDiagnosticsScope,
+    /// Shutdown duration in milliseconds.
+    pub elapsed_millis: u64,
+    /// Number of tasks that were cancelled.
+    pub cancelled: usize,
+    /// Number of tasks that finished with an explicit failure.
+    pub failed: usize,
+    /// Number of tasks that did not finish inside the deadline.
+    pub timed_out: usize,
+    /// Number of tasks that were still tracked after shutdown.
+    pub leaked: usize,
+}
+
+/// One bounded task detail.
+///
+/// Carries a bounded category, the population it was observed in, and its
+/// elapsed time. Task names, group names, and identifiers are deliberately
+/// excluded because they are caller-provided labels.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeTaskDetailV2 {
+    /// Bounded task category.
+    pub kind: RuntimeTaskKindV1,
+    /// The population the task was observed in.
+    pub scope: RuntimeDiagnosticsScope,
+    /// Elapsed time since the task started, in milliseconds.
+    pub elapsed_millis: u64,
+}
+
+/// Versioned, bounded, and sanitized runtime diagnostics with explicit scopes.
+///
+/// Unlike [`RuntimeDiagnosticsViewV1`], every section states the population it
+/// covers, the payload separates a section that has no input from a section that
+/// is empty, and a bounded detail list reports how much of the tree it examined
+/// instead of presenting a partial list as the whole runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeDiagnosticsViewV2 {
+    /// Schema identifier for this serialized diagnostics view.
+    pub schema_version: String,
+    /// UTC timestamp at which the snapshot was observed.
+    pub observed_at: DateTime<Utc>,
+    /// Bounded component category that owns the runtime.
+    pub component: RuntimeComponent,
+    /// Current lifecycle state of the root task group.
+    pub lifecycle_state: RuntimeLifecycleStateV1,
+    /// Bounded task counts and their scope.
+    pub tasks: RuntimeTaskSectionV2,
+    /// Bounded blocking state and its scope.
+    pub blocking: RuntimeBlockingSectionV2,
+    /// Bounded scheduled-work aggregates, absent when the caller owns none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<RuntimeScheduleSectionV2>,
+    /// Bounded retained-metadata state, absent when the caller owns no actor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<RuntimeMetadataSectionV2>,
+    /// The most recent shutdown result, absent until shutdown was attempted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shutdown: Option<RuntimeShutdownSectionV2>,
+    /// Bounded task details, empty unless a detail list was requested.
+    pub details: Vec<RuntimeTaskDetailV2>,
+    /// The scan budget applied while collecting details.
+    pub detail_scan_budget: usize,
+    /// Number of tasks examined while collecting details.
+    pub details_scanned: usize,
+    /// Whether any section, including the detail list, was cut short.
+    pub truncated: bool,
+}
+
+impl RuntimeDiagnosticsViewV2 {
+    /// Stable schema identifier emitted by [`RuntimeDiagnostics::view_v2`].
+    pub const SCHEMA_VERSION: &'static str = "rocketmq.runtime-diagnostics.v2";
+}
+
+impl RuntimeDiagnostics {
+    /// Creates a bounded, explicitly scoped diagnostics view.
+    pub fn view_v2(
+        &self,
+        component: RuntimeComponent,
+        root: &TaskGroup,
+        blocking_lanes: Vec<BlockingExecutorSnapshot>,
+        inputs: RuntimeDiagnosticsInputs,
+    ) -> RuntimeDiagnosticsViewV2 {
+        self.view_v2_with_options(
+            component,
+            root,
+            blocking_lanes,
+            inputs,
+            RuntimeDiagnosticsViewOptionsV2::default(),
+        )
+    }
+
+    /// Creates a bounded, explicitly scoped diagnostics view using explicit
+    /// budget limits.
+    pub fn view_v2_with_options(
+        &self,
+        component: RuntimeComponent,
+        root: &TaskGroup,
+        blocking_lanes: Vec<BlockingExecutorSnapshot>,
+        inputs: RuntimeDiagnosticsInputs,
+        options: RuntimeDiagnosticsViewOptionsV2,
+    ) -> RuntimeDiagnosticsViewV2 {
+        let (tasks, tasks_truncated) = task_section_v2(root, options);
+        let (blocking, blocking_truncated) = blocking_section_v2(blocking_lanes, options);
+        let schedule = (!inputs.schedule.is_empty()).then(|| schedule_section_v2(&inputs.schedule, options));
+        let metadata = inputs
+            .metadata
+            .as_ref()
+            .map(|snapshot| metadata_section_v2(snapshot, options));
+        let shutdown = inputs.shutdown.as_ref().map(shutdown_section_v2);
+        // A zero budget means no detail list was requested, so a routine sample
+        // neither pays for the scan nor reports truncation for a list nobody
+        // asked for.
+        let details = if options.max_detail_entries == 0 && options.detail_scan_budget == 0 {
+            crate::task_group::TaskDetailScan::default()
+        } else {
+            root.bounded_task_details(options.detail_scan_budget, options.max_detail_entries)
+        };
+        let details_truncated = details.truncated;
+
+        let schedule_truncated = schedule.as_ref().is_some_and(|section| section.truncated);
+        let metadata_truncated = metadata.as_ref().is_some_and(|section| section.truncated);
+
+        RuntimeDiagnosticsViewV2 {
+            schema_version: RuntimeDiagnosticsViewV2::SCHEMA_VERSION.to_string(),
+            observed_at: Utc::now(),
+            component,
+            lifecycle_state: runtime_lifecycle_state(root.lifecycle_state()),
+            tasks,
+            blocking,
+            schedule,
+            metadata,
+            shutdown,
+            details: details
+                .details
+                .into_iter()
+                .map(|detail| RuntimeTaskDetailV2 {
+                    kind: runtime_task_kind(detail.kind),
+                    scope: runtime_detail_scope(detail.scope),
+                    elapsed_millis: duration_millis(detail.elapsed),
+                })
+                .collect(),
+            detail_scan_budget: options.detail_scan_budget,
+            details_scanned: details.scanned,
+            truncated: tasks_truncated
+                || blocking_truncated
+                || schedule_truncated
+                || metadata_truncated
+                || details_truncated,
+        }
+    }
+}
+
+fn task_section_v2(root: &TaskGroup, options: RuntimeDiagnosticsViewOptionsV2) -> (RuntimeTaskSectionV2, bool) {
+    let diagnostics = root.diagnostics(options.long_running_threshold);
+    let summary_count = diagnostics.task_kinds.len();
+    // Totals cover every kind, so a truncated summary list still reports the
+    // long-running and maximum-elapsed values for the whole population, and the
+    // truncation is stated rather than folded into the numbers.
+    let long_running = diagnostics
+        .task_kinds
+        .iter()
+        .fold(0usize, |total, summary| total.saturating_add(summary.long_running));
+    let max_elapsed = diagnostics
+        .task_kinds
+        .iter()
+        .map(|summary| summary.max_elapsed)
+        .max()
+        .unwrap_or(Duration::ZERO);
+    let section = RuntimeTaskSectionV2 {
+        scope: RuntimeDiagnosticsScope::Subtree,
+        task_group_count: diagnostics.group_count,
+        task_count: diagnostics.task_count,
+        local_task_count: root.local_diagnostics(options.long_running_threshold).task_count,
+        long_running,
+        max_elapsed_millis: duration_millis(max_elapsed),
+        truncated: summary_count > options.max_task_kind_summaries,
+        task_kinds: diagnostics
+            .task_kinds
+            .into_iter()
+            .take(options.max_task_kind_summaries)
+            .map(|summary| RuntimeTaskKindSummaryV1 {
+                kind: runtime_task_kind(summary.kind),
+                active: summary.active,
+                long_running: summary.long_running,
+                max_elapsed_millis: duration_millis(summary.max_elapsed),
+            })
+            .collect(),
+    };
+    (section, summary_count > options.max_task_kind_summaries)
+}
+
+fn blocking_section_v2(
+    blocking_lanes: Vec<BlockingExecutorSnapshot>,
+    options: RuntimeDiagnosticsViewOptionsV2,
+) -> (RuntimeBlockingSectionV2, bool) {
+    let lane_count = blocking_lanes.len();
+    let limit = options.max_blocking_lane_summaries.min(3);
+    let mut queued = 0usize;
+    let mut running = 0usize;
+    let mut timed_out_still_running = 0usize;
+    let mut blocking_still_running = 0usize;
+    let lanes = blocking_lanes
+        .into_iter()
+        .enumerate()
+        .take(limit)
+        .map(|(index, snapshot)| {
+            queued = queued.saturating_add(snapshot.queued);
+            running = running.saturating_add(snapshot.running);
+            timed_out_still_running = timed_out_still_running.saturating_add(snapshot.timed_out_still_running);
+            blocking_still_running = blocking_still_running.saturating_add(snapshot.blocking_still_running);
+            sanitize_blocking_lane(index, snapshot)
+        })
+        .collect();
+    (
+        RuntimeBlockingSectionV2 {
+            scope: RuntimeDiagnosticsScope::ProcessShared,
+            queued,
+            running,
+            timed_out_still_running,
+            blocking_still_running,
+            lanes,
+            truncated: lane_count > limit,
+        },
+        lane_count > limit,
+    )
+}
+
+fn schedule_section_v2(
+    schedule: &[ScheduledTaskSnapshot],
+    options: RuntimeDiagnosticsViewOptionsV2,
+) -> RuntimeScheduleSectionV2 {
+    let scanned = schedule.len();
+    let mut section = RuntimeScheduleSectionV2 {
+        scope: RuntimeDiagnosticsScope::Local,
+        tasks_scanned: scanned,
+        tasks_emitted: 0,
+        active_runs: 0,
+        runs: 0,
+        skips: 0,
+        overlaps: 0,
+        failures: 0,
+        max_elapsed_millis: 0,
+        truncated: scanned > options.max_schedule_tasks,
+    };
+    for snapshot in schedule.iter().take(options.max_schedule_tasks) {
+        section.tasks_emitted = section.tasks_emitted.saturating_add(1);
+        section.active_runs = section.active_runs.saturating_add(snapshot.active_runs);
+        section.runs = section.runs.saturating_add(snapshot.runs);
+        section.skips = section.skips.saturating_add(snapshot.skips);
+        section.overlaps = section.overlaps.saturating_add(snapshot.overlaps);
+        section.failures = section.failures.saturating_add(snapshot.failures);
+        section.max_elapsed_millis = section.max_elapsed_millis.max(snapshot.max_elapsed_ms);
+    }
+    section
+}
+
+fn metadata_section_v2(
+    snapshot: &MetadataIoSnapshot,
+    options: RuntimeDiagnosticsViewOptionsV2,
+) -> RuntimeMetadataSectionV2 {
+    let scanned = snapshot.resources.len();
+    let waiters = snapshot
+        .resources
+        .iter()
+        .take(options.max_metadata_resources)
+        .fold(0usize, |total, resource| total.saturating_add(resource.waiter_count));
+    RuntimeMetadataSectionV2 {
+        scope: RuntimeDiagnosticsScope::Local,
+        accepting: snapshot.accepting,
+        retained_operations: snapshot.pending_operations,
+        retained_bytes: snapshot.pending_bytes,
+        waiters,
+        resources_scanned: scanned,
+        resources_emitted: scanned.min(options.max_metadata_resources),
+        truncated: scanned > options.max_metadata_resources,
+    }
+}
+
+fn shutdown_section_v2(report: &ShutdownReport) -> RuntimeShutdownSectionV2 {
+    RuntimeShutdownSectionV2 {
+        scope: RuntimeDiagnosticsScope::Local,
+        elapsed_millis: duration_millis(report.elapsed),
+        cancelled: report.cancelled,
+        failed: report.failed,
+        timed_out: report.timed_out,
+        leaked: report.leaked,
+    }
+}
+
+const fn runtime_detail_scope(scope: TaskDetailScope) -> RuntimeDiagnosticsScope {
+    match scope {
+        TaskDetailScope::Local => RuntimeDiagnosticsScope::Local,
+        TaskDetailScope::Subtree => RuntimeDiagnosticsScope::Subtree,
+    }
+}
+
 fn sanitize_blocking_lane(index: usize, snapshot: BlockingExecutorSnapshot) -> RuntimeBlockingLaneSummaryV1 {
     let lane = match index {
         0 => RuntimeBlockingLaneV1::StorageIo,
@@ -518,5 +977,265 @@ mod tests {
             serde_json::from_value(legacy).expect("older v1 view should remain readable");
         assert_eq!(legacy.blocking_lanes[0].max_concurrency, None);
         assert_eq!(legacy.blocking_lanes[0].max_queue_depth, None);
+    }
+
+    fn scheduled_snapshot(name: &str, runs: u64, skips: u64, max_elapsed_ms: u64) -> ScheduledTaskSnapshot {
+        ScheduledTaskSnapshot {
+            name: name.to_string(),
+            mode: crate::scheduled::ScheduleMode::FixedDelay,
+            running: true,
+            active_runs: 1,
+            runs,
+            skips,
+            overlaps: 0,
+            failures: 0,
+            last_drift_ms: 0,
+            last_elapsed_ms: max_elapsed_ms,
+            max_elapsed_ms,
+        }
+    }
+
+    fn metadata_snapshot(waiter_count: usize) -> MetadataIoSnapshot {
+        MetadataIoSnapshot {
+            accepting: true,
+            pending_operations: 2,
+            pending_bytes: 4_096,
+            max_pending_operations: 1_024,
+            max_pending_bytes: 65_536,
+            resources: vec![crate::metadata_io::MetadataIoResourceSnapshot {
+                resource: "sensitive-resource-name".into(),
+                target: None,
+                durable_generation: None,
+                in_flight_generation: None,
+                queued_generation: None,
+                waiter_count,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn v2_sections_state_their_scope_and_absent_inputs_stay_absent() {
+        let context = RuntimeContext::from_current("runtime-v2-scope");
+        context
+            .root_group()
+            .spawn("local-worker", TaskKind::Worker, std::future::pending())
+            .expect("task should spawn");
+        context
+            .service_context("runtime-v2-child")
+            .spawn("child-worker", TaskKind::Worker, std::future::pending())
+            .expect("task should spawn");
+        let diagnostics = RuntimeDiagnostics::new();
+
+        let view = diagnostics.view_v2(
+            RuntimeComponent::Broker,
+            context.root_group(),
+            Vec::new(),
+            RuntimeDiagnosticsInputs::default(),
+        );
+
+        assert_eq!(view.schema_version, "rocketmq.runtime-diagnostics.v2");
+        assert_eq!(view.tasks.scope, RuntimeDiagnosticsScope::Subtree);
+        assert_eq!(view.tasks.task_count, 2);
+        assert_eq!(view.tasks.local_task_count, 1);
+        assert_eq!(view.blocking.scope, RuntimeDiagnosticsScope::ProcessShared);
+        assert!(view.schedule.is_none());
+        assert!(view.metadata.is_none());
+        assert!(view.shutdown.is_none());
+        assert!(view.details.is_empty());
+        // No detail list was requested, so a routine sample reports no truncation.
+        assert!(!view.truncated);
+    }
+
+    #[tokio::test]
+    async fn v2_reports_component_owned_sections_with_their_scope() {
+        let context = RuntimeContext::from_current("runtime-v2-sections");
+        let diagnostics = RuntimeDiagnostics::new();
+
+        let view = diagnostics.view_v2(
+            RuntimeComponent::Broker,
+            context.root_group(),
+            Vec::new(),
+            RuntimeDiagnosticsInputs {
+                schedule: vec![scheduled_snapshot("sensitive-schedule", 4, 3, 250)],
+                metadata: Some(metadata_snapshot(2)),
+                shutdown: Some(ShutdownReport {
+                    cancelled: 1,
+                    failed: 1,
+                    timed_out: 1,
+                    leaked: 1,
+                    ..ShutdownReport::new("sensitive-group", Duration::from_millis(120))
+                }),
+            },
+        );
+
+        let schedule = view.schedule.clone().expect("a supplied schedule section is present");
+        assert_eq!(schedule.scope, RuntimeDiagnosticsScope::Local);
+        assert_eq!(schedule.tasks_scanned, 1);
+        assert_eq!(schedule.tasks_emitted, 1);
+        assert_eq!(schedule.runs, 4);
+        assert_eq!(schedule.skips, 3);
+        assert_eq!(schedule.max_elapsed_millis, 250);
+        assert!(!schedule.truncated);
+
+        let metadata = view.metadata.clone().expect("a supplied metadata section is present");
+        assert_eq!(metadata.scope, RuntimeDiagnosticsScope::Local);
+        assert_eq!(metadata.retained_operations, 2);
+        assert_eq!(metadata.retained_bytes, 4_096);
+        assert_eq!(metadata.waiters, 2);
+        assert!(metadata.accepting);
+
+        let shutdown = view.shutdown.clone().expect("a supplied shutdown section is present");
+        assert_eq!(shutdown.scope, RuntimeDiagnosticsScope::Local);
+        assert_eq!(shutdown.elapsed_millis, 120);
+        assert_eq!(shutdown.failed, 1);
+        assert_eq!(shutdown.timed_out, 1);
+        assert_eq!(shutdown.leaked, 1);
+
+        let json = serde_json::to_string(&view).expect("view should serialize");
+        assert!(!json.contains("sensitive"));
+    }
+
+    #[tokio::test]
+    async fn v2_truncation_reports_what_was_scanned_and_emitted() {
+        let context = RuntimeContext::from_current("runtime-v2-truncation");
+        let diagnostics = RuntimeDiagnostics::new();
+        let schedule = vec![
+            scheduled_snapshot("first", 1, 0, 10),
+            scheduled_snapshot("second", 1, 0, 20),
+            scheduled_snapshot("third", 1, 0, 30),
+        ];
+
+        let view = diagnostics.view_v2_with_options(
+            RuntimeComponent::Other,
+            context.root_group(),
+            Vec::new(),
+            RuntimeDiagnosticsInputs {
+                schedule,
+                ..RuntimeDiagnosticsInputs::default()
+            },
+            RuntimeDiagnosticsViewOptionsV2 {
+                max_schedule_tasks: 1,
+                ..RuntimeDiagnosticsViewOptionsV2::default()
+            },
+        );
+
+        let section = view.schedule.expect("a supplied schedule section is present");
+        assert!(section.truncated);
+        assert_eq!(section.tasks_scanned, 3);
+        assert_eq!(section.tasks_emitted, 1);
+        assert_eq!(section.runs, 1);
+        assert!(view.truncated);
+    }
+
+    #[tokio::test]
+    async fn v2_detail_lists_stay_bounded_and_redacted() {
+        let context = RuntimeContext::from_current("sensitive-runtime-name");
+        let child = context.service_context("sensitive-child-name");
+        for index in 0..4 {
+            child
+                .spawn(
+                    format!("sensitive-task-{index}"),
+                    TaskKind::Worker,
+                    std::future::pending(),
+                )
+                .expect("task should spawn");
+        }
+        let diagnostics = RuntimeDiagnostics::new();
+
+        let view = diagnostics.view_v2_with_options(
+            RuntimeComponent::Mcp,
+            context.root_group(),
+            Vec::new(),
+            RuntimeDiagnosticsInputs::default(),
+            RuntimeDiagnosticsViewOptionsV2 {
+                max_detail_entries: 2,
+                detail_scan_budget: 4,
+                ..RuntimeDiagnosticsViewOptionsV2::default()
+            },
+        );
+
+        assert_eq!(view.details.len(), 2);
+        assert_eq!(view.details_scanned, 4);
+        assert_eq!(view.detail_scan_budget, 4);
+        assert!(view.truncated);
+        assert!(
+            view.details
+                .iter()
+                .all(|detail| detail.scope == RuntimeDiagnosticsScope::Subtree),
+            "the tasks belong to a descendant group"
+        );
+
+        let json = serde_json::to_string(&view).expect("view should serialize");
+        assert!(!json.contains("sensitive"));
+        assert!(!json.contains("rocketmq-runtime-"));
+        let decoded: RuntimeDiagnosticsViewV2 = serde_json::from_str(&json).expect("versioned view should deserialize");
+        assert_eq!(decoded, view);
+    }
+
+    #[tokio::test]
+    async fn v2_detail_scan_budget_bounds_the_scan_and_not_only_the_output() {
+        let context = RuntimeContext::from_current("runtime-v2-scan-budget");
+        for index in 0..4 {
+            context
+                .root_group()
+                .spawn(format!("worker-{index}"), TaskKind::Worker, std::future::pending())
+                .expect("task should spawn");
+        }
+        let diagnostics = RuntimeDiagnostics::new();
+
+        let view = diagnostics.view_v2_with_options(
+            RuntimeComponent::Other,
+            context.root_group(),
+            Vec::new(),
+            RuntimeDiagnosticsInputs::default(),
+            RuntimeDiagnosticsViewOptionsV2 {
+                max_detail_entries: 8,
+                detail_scan_budget: 2,
+                ..RuntimeDiagnosticsViewOptionsV2::default()
+            },
+        );
+
+        assert_eq!(view.details_scanned, 2);
+        assert_eq!(view.details.len(), 2);
+        assert!(view.truncated, "the scan stopped before every task was examined");
+        assert!(view
+            .details
+            .iter()
+            .all(|detail| detail.scope == RuntimeDiagnosticsScope::Local));
+    }
+
+    #[tokio::test]
+    async fn v2_view_is_a_snapshot_that_late_completions_cannot_rewrite() {
+        let context = RuntimeContext::from_current("runtime-v2-frozen");
+        let (release, wait) = tokio::sync::oneshot::channel::<()>();
+        context
+            .root_group()
+            .spawn("finishes-later", TaskKind::Worker, async move {
+                let _ = wait.await;
+            })
+            .expect("task should spawn");
+        let diagnostics = RuntimeDiagnostics::new();
+
+        let view = diagnostics.view_v2(
+            RuntimeComponent::Other,
+            context.root_group(),
+            Vec::new(),
+            RuntimeDiagnosticsInputs::default(),
+        );
+        assert_eq!(view.tasks.task_count, 1);
+
+        release.send(()).expect("the task should still be waiting");
+        for _ in 0..10_000 {
+            if context.root_group().task_count() == 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        assert_eq!(context.root_group().task_count(), 0, "the task really finished");
+        assert_eq!(
+            view.tasks.task_count, 1,
+            "the earlier view keeps what it observed instead of following late completions"
+        );
     }
 }

@@ -300,6 +300,13 @@ actor 的兼容 `blocking_*` 配置不会替换共享通道策略。
 摘要被省略时设置 `truncated`。这些诊断无需 Tokio unstable 特性或 console subscriber，
 也不能替代应用健康检查或性能测量。
 
+`diagnostics_view_v2(RuntimeComponent::..., inputs)` 在相同保证之上补充显式范围：
+每个小节都声明它覆盖的是 `local`、`subtree` 还是 `process_shared` 状态，
+调用方不拥有的小节报告为缺失而不是空值，计划任务、保留元数据和关闭结果都以有界聚合呈现。
+`RuntimeDiagnosticsViewOptionsV2` 还承载按需任务详情列表的扫描与输出预算，
+因此被截断的列表会报告实际扫描了多少任务，而不是把局部总和当作整棵运行时。
+V1 的字段和含义保持不变。
+
 ## 兼容边界与工作区接入
 
 `RocketMQRuntime` 已弃用，但在 1.x 中仍可使用。构造方式应迁移到

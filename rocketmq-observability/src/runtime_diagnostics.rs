@@ -28,7 +28,9 @@ use std::time::Duration;
 
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::RuntimeComponent;
+use rocketmq_runtime::RuntimeDiagnosticsInputs;
 use rocketmq_runtime::RuntimeDiagnosticsViewV1;
+use rocketmq_runtime::RuntimeDiagnosticsViewV2;
 use rocketmq_runtime::ScheduledTaskConfig;
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
@@ -48,6 +50,13 @@ pub const RUNTIME_DIAGNOSTICS_SAMPLE_INTERVAL_SECONDS_ENV: &str =
 pub const RUNTIME_DIAGNOSTICS_SCOPE: &str = "rocketmq:diagnose";
 pub const RUNTIME_DIAGNOSTICS_PATH: &str = "/internal/v1/runtime/diagnostics";
 pub const RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA: &str = "rocketmq.runtime-diagnostics-endpoint.v1";
+/// Path of the explicitly scoped diagnostics view.
+///
+/// It shares the listener, token, and scope checks with the V1 path and returns
+/// the same process view, so the sections the endpoint does not own (scheduled
+/// work, retained metadata, shutdown results) are absent rather than empty.
+pub const RUNTIME_DIAGNOSTICS_V2_PATH: &str = "/internal/v2/runtime/diagnostics";
+pub const RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA_V2: &str = "rocketmq.runtime-diagnostics-endpoint.v2";
 
 const DEFAULT_SAMPLE_INTERVAL: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -330,9 +339,11 @@ async fn route_request(
     if request.method != "GET" {
         return error_response(HttpStatus::MethodNotAllowed);
     }
-    if request.path != RUNTIME_DIAGNOSTICS_PATH {
-        return error_response(HttpStatus::NotFound);
-    }
+    let is_scoped_view = match request.path {
+        RUNTIME_DIAGNOSTICS_PATH => false,
+        RUNTIME_DIAGNOSTICS_V2_PATH => true,
+        _ => return error_response(HttpStatus::NotFound),
+    };
     let Some(candidate) = request.bearer_token else {
         return error_response(HttpStatus::Unauthorized);
     };
@@ -345,6 +356,19 @@ async fn route_request(
     };
     if !constant_time_equal(candidate.as_bytes(), expected.as_bytes()) {
         return error_response(HttpStatus::Unauthorized);
+    }
+
+    if is_scoped_view {
+        let view = service_context.diagnostics_view_v2(component, RuntimeDiagnosticsInputs::default());
+        let envelope = RuntimeDiagnosticsEndpointEnvelopeV2 {
+            schema_version: RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA_V2,
+            source: "rocketmq_process",
+            data: view,
+        };
+        return match serde_json::to_vec(&envelope) {
+            Ok(body) => response(HttpStatus::Ok, &body),
+            Err(_) => error_response(HttpStatus::InternalServerError),
+        };
     }
 
     let view = service_context.diagnostics_view_v1(component);
@@ -501,6 +525,13 @@ struct RuntimeDiagnosticsEndpointEnvelopeV1 {
     schema_version: &'static str,
     source: &'static str,
     data: RuntimeDiagnosticsViewV1,
+}
+
+#[derive(Serialize)]
+struct RuntimeDiagnosticsEndpointEnvelopeV2 {
+    schema_version: &'static str,
+    source: &'static str,
+    data: RuntimeDiagnosticsViewV2,
 }
 
 struct ParsedRequest<'a> {
@@ -702,17 +733,73 @@ mod tests {
     }
 
     async fn request(addr: SocketAddr, token: &str, scope: Option<&str>) -> String {
+        request_path(addr, RUNTIME_DIAGNOSTICS_PATH, token, scope).await
+    }
+
+    async fn request_path(addr: SocketAddr, path: &str, token: &str, scope: Option<&str>) -> String {
         let mut stream = TcpStream::connect(addr).await.expect("connect");
         let scope = scope
             .map(|scope| format!("X-RocketMQ-SRE-Scope: {scope}\r\n"))
             .unwrap_or_default();
         let request = format!(
-            "GET {RUNTIME_DIAGNOSTICS_PATH} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer \
+            "GET {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer \
              {token}\r\n{scope}Connection: close\r\n\r\n"
         );
         stream.write_all(request.as_bytes()).await.expect("write request");
         let mut response = Vec::new();
         stream.read_to_end(&mut response).await.expect("read response");
         String::from_utf8(response).expect("UTF-8 response")
+    }
+
+    #[tokio::test]
+    async fn scoped_view_path_serves_the_v2_schema_and_leaves_v1_unchanged() {
+        let token_file = test_token_path();
+        fs::write(&token_file, "scoped-token").expect("write token fixture");
+        let context = RuntimeContext::from_current("runtime-diagnostics-scoped-view-test");
+        let service_context = context.service_context("runtime-diagnostics-scoped-view-test");
+        let config = RuntimeDiagnosticsEndpointConfig::try_new(
+            "127.0.0.1:0".parse().expect("address"),
+            token_file,
+            Duration::from_secs(1),
+            false,
+        )
+        .expect("config");
+        let endpoint = start_runtime_diagnostics_endpoint(&service_context, RuntimeComponent::Broker, config)
+            .await
+            .expect("endpoint");
+
+        let scoped = request_path(
+            endpoint.local_addr(),
+            RUNTIME_DIAGNOSTICS_V2_PATH,
+            "scoped-token",
+            Some(RUNTIME_DIAGNOSTICS_SCOPE),
+        )
+        .await;
+        assert!(scoped.starts_with("HTTP/1.1 200 OK"), "{scoped}");
+        assert!(scoped.contains(RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA_V2), "{scoped}");
+        assert!(scoped.contains(r#""scope":"subtree""#), "{scoped}");
+        assert!(scoped.contains(r#""scope":"process_shared""#), "{scoped}");
+        assert!(scoped.contains(r#""component":"broker""#), "{scoped}");
+        assert!(!scoped.contains("scoped-token"));
+
+        let versioned = request_path(
+            endpoint.local_addr(),
+            RUNTIME_DIAGNOSTICS_PATH,
+            "scoped-token",
+            Some(RUNTIME_DIAGNOSTICS_SCOPE),
+        )
+        .await;
+        assert!(versioned.starts_with("HTTP/1.1 200 OK"), "{versioned}");
+        assert!(versioned.contains(RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA), "{versioned}");
+        assert!(!versioned.contains("runtime-diagnostics.v2"));
+
+        let unknown = request_path(
+            endpoint.local_addr(),
+            "/internal/v3/runtime/diagnostics",
+            "scoped-token",
+            Some(RUNTIME_DIAGNOSTICS_SCOPE),
+        )
+        .await;
+        assert!(unknown.starts_with("HTTP/1.1 404 Not Found"), "{unknown}");
     }
 }

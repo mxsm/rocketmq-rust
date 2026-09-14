@@ -355,6 +355,15 @@ threshold; omitted summaries set `truncated`. These diagnostics do not require
 Tokio unstable features or a console subscriber, and do not replace application
 health checks or performance measurements.
 
+`diagnostics_view_v2(RuntimeComponent::..., inputs)` adds the same guarantees
+with explicit scopes: every section states whether it covers `local`, `subtree`,
+or `process_shared` state, a section whose input the caller does not own is
+absent rather than empty, and scheduled work, retained metadata, and shutdown
+results are reported as bounded aggregates. `RuntimeDiagnosticsViewOptionsV2`
+also carries the scan and output budgets for an on-demand task detail list, so a
+partially scanned list reports how many tasks it examined instead of presenting
+a partial sum as the whole runtime. V1 keeps its fields and meanings.
+
 ## Compatibility And Workspace Integration
 
 `RocketMQRuntime` remains deprecated but available in 1.x. Migrate construction
