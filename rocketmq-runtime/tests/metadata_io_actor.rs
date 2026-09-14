@@ -23,6 +23,7 @@ use std::sync::Condvar;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BlockingPoolPolicy;
 use rocketmq_runtime::LocalMetadataFileSystem;
 use rocketmq_runtime::MetadataDeadline;
@@ -34,10 +35,12 @@ use rocketmq_runtime::MetadataIoCommitAdmissionOutcome;
 use rocketmq_runtime::MetadataIoCommitOutcome;
 use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::MetadataIoOperation;
+use rocketmq_runtime::MetadataLimitSource;
 use rocketmq_runtime::MetadataWriteRequest;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeError;
 use rocketmq_runtime::RuntimeResult;
+use rocketmq_runtime::ShutdownDeadline;
 use tempfile::TempDir;
 use tokio::sync::Notify;
 
@@ -1037,4 +1040,205 @@ async fn unconfirmed_commit_fences_a_target_that_still_has_queued_work() {
 
     let drained = actor.shutdown_until(deadline).await;
     assert!(!drained.timed_out);
+}
+
+#[tokio::test]
+async fn effective_profile_reports_the_lane_as_the_owner_of_blocking_limits() {
+    let lane_policy = BlockingPoolPolicy {
+        name: "metadata-profile-lane".to_string(),
+        max_concurrency: 2,
+        max_queue_depth: 6,
+        queue_timeout: Duration::from_secs(11),
+        task_timeout: Duration::from_secs(22),
+        warn_after: Duration::from_secs(3),
+    };
+    let context = RuntimeContext::try_from_current_with_blocking_policy("metadata-io-profile", lane_policy)
+        .expect("test runtime context should start");
+    // The literal keeps every field explicit, so an existing configuration
+    // literal keeps compiling.
+    let config = MetadataIoConfig {
+        max_pending_operations: 8,
+        max_pending_bytes: 64,
+        blocking_queue_timeout: Duration::from_millis(1),
+        blocking_task_timeout: Duration::from_millis(2),
+        blocking_warn_after: Duration::from_millis(3),
+    };
+    let actor = start_actor_in(
+        &context,
+        "profile-service",
+        Arc::new(RecordingFileSystem::default()),
+        config,
+    );
+
+    let profile = actor.effective_profile();
+    assert_eq!(profile.blocking_lane.name, "metadata-profile-lane.metadata-io");
+    assert_eq!(profile.blocking_lane.max_concurrency, 2);
+    assert_eq!(profile.blocking_lane.max_queue_depth, 6);
+    assert_eq!(profile.blocking_lane.queue_timeout, Duration::from_secs(11));
+    assert_eq!(profile.blocking_lane.task_timeout, Duration::from_secs(22));
+    assert_eq!(profile.blocking_lane.warn_after, Duration::from_secs(3));
+    assert_eq!(profile.actor_limits.max_pending_operations, 8);
+    assert_eq!(profile.actor_limits.max_pending_bytes, 64);
+    assert_eq!(profile.actor_limits.max_waiters, 32);
+
+    let field = |name: &str| {
+        profile
+            .legacy_blocking_fields
+            .iter()
+            .find(|field| field.field == name)
+            .cloned()
+            .expect("every retained blocking field is reported")
+    };
+    let queue = field("blocking_queue_timeout");
+    assert_eq!(queue.configured, Duration::from_millis(1));
+    assert_eq!(queue.effective, Duration::from_secs(11));
+    assert_eq!(queue.effective_source, MetadataLimitSource::BlockingLanePolicy);
+    let task = field("blocking_task_timeout");
+    assert_eq!(task.configured, Duration::from_millis(2));
+    assert_eq!(task.effective, Duration::from_secs(22));
+    assert_eq!(task.effective_source, MetadataLimitSource::BlockingLanePolicy);
+    let warn = field("blocking_warn_after");
+    assert_eq!(warn.configured, Duration::from_millis(3));
+    assert_eq!(warn.effective, Duration::from_secs(3));
+    assert_eq!(warn.effective_source, MetadataLimitSource::BlockingLanePolicy);
+
+    let _ = actor
+        .shutdown_until(MetadataDeadline::after(Duration::from_secs(5)))
+        .await;
+}
+
+/// Occupies the metadata lane with one parked closure until the holder gate is
+/// released, and returns once the closure is really running on the lane.
+async fn occupy_metadata_lane(
+    context: &RuntimeContext,
+    holder: &Arc<Gate>,
+) -> (BlockingExecutor, tokio::task::JoinHandle<RuntimeResult<()>>) {
+    let executor = context.service_context("lane-holder").metadata_io().clone();
+    let lane = executor.clone();
+    let holder_gate = holder.clone();
+    let task = tokio::spawn(async move {
+        lane.spawn_io_until(
+            "lane-holder",
+            ShutdownDeadline::after(Duration::from_secs(60)),
+            move || holder_gate.wait(),
+        )
+        .await
+    });
+    for _ in 0..100_000 {
+        if executor.blocking_still_running() > 0 {
+            return (executor, task);
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("the lane holder should occupy the metadata lane");
+}
+
+#[tokio::test]
+async fn a_request_lane_deadline_tightens_the_shared_lane_budget() {
+    let lane_policy = BlockingPoolPolicy {
+        max_concurrency: 1,
+        max_queue_depth: 1,
+        queue_timeout: Duration::from_secs(60),
+        task_timeout: Duration::from_secs(60),
+        ..BlockingPoolPolicy::default()
+    };
+    let context = RuntimeContext::try_from_current_with_blocking_policy("metadata-io-tightened-lane", lane_policy)
+        .expect("test runtime context should start");
+    let file_system = Arc::new(GateRecordingFileSystem::default());
+    let actor = start_actor_in(&context, "tightened-service", file_system.clone(), config(8, 64));
+    let holder = Arc::new(Gate::default());
+    let (_lane, holder_task) = occupy_metadata_lane(&context, &holder).await;
+
+    // The lane budget is a minute, so only the request-level deadline can
+    // refuse this request while the lane slot is held.
+    let observation = tokio::time::timeout(
+        Duration::from_secs(10),
+        actor.submit_observed(
+            request("tightened", 1, b"tightened")
+                .with_lane_deadline(MetadataDeadline::after(Duration::from_millis(100))),
+            MetadataDeadline::after(Duration::from_secs(60)),
+        ),
+    )
+    .await
+    .expect("a tightened lane deadline must refuse the request instead of waiting for the lane budget")
+    .expect("the actor admits the request before the lane budget applies");
+
+    assert!(
+        !observation.requires_reconciliation(),
+        "a refused lane admission is a definite failure, not an unconfirmed replacement"
+    );
+    assert!(
+        matches!(
+            observation.settled(),
+            Some(MetadataIoCommitOutcome::FailedBeforeCommit(_))
+        ),
+        "the tightened deadline must settle as a failure before replacement"
+    );
+    assert!(
+        file_system.writes.lock().unwrap().is_empty(),
+        "a refused lane admission must never reach the filesystem"
+    );
+
+    holder.release();
+    assert!(
+        holder_task
+            .await
+            .expect("the lane holder task should not panic")
+            .is_ok(),
+        "the lane holder completes once released"
+    );
+    let _ = actor
+        .shutdown_until(MetadataDeadline::after(Duration::from_secs(10)))
+        .await;
+}
+
+#[tokio::test]
+async fn a_request_lane_deadline_cannot_widen_the_lane_budget() {
+    let lane_policy = BlockingPoolPolicy {
+        max_concurrency: 1,
+        max_queue_depth: 1,
+        queue_timeout: Duration::from_millis(200),
+        task_timeout: Duration::from_secs(60),
+        ..BlockingPoolPolicy::default()
+    };
+    let context = RuntimeContext::try_from_current_with_blocking_policy("metadata-io-widened-lane", lane_policy)
+        .expect("test runtime context should start");
+    let file_system = Arc::new(GateRecordingFileSystem::default());
+    let actor = start_actor_in(&context, "widened-service", file_system.clone(), config(8, 64));
+    let holder = Arc::new(Gate::default());
+    let (_lane, holder_task) = occupy_metadata_lane(&context, &holder).await;
+
+    // The request asks for a minute while the lane budget is 200 ms. Admission
+    // keeps the earlier expiry, so the request is refused on the lane budget
+    // and this call never waits for the request deadline.
+    let observation = tokio::time::timeout(
+        Duration::from_secs(10),
+        actor.submit_observed(
+            request("widened", 1, b"widened").with_lane_deadline(MetadataDeadline::after(Duration::from_secs(60))),
+            MetadataDeadline::after(Duration::from_secs(60)),
+        ),
+    )
+    .await
+    .expect("the lane budget must still bound a request that asks for more")
+    .expect("the actor admits the request before the lane budget applies");
+
+    assert!(
+        matches!(
+            observation.settled(),
+            Some(MetadataIoCommitOutcome::FailedBeforeCommit(_))
+        ),
+        "the lane budget must settle the request as a failure before replacement"
+    );
+
+    holder.release();
+    assert!(
+        holder_task
+            .await
+            .expect("the lane holder task should not panic")
+            .is_ok(),
+        "the lane holder completes once released"
+    );
+    let _ = actor
+        .shutdown_until(MetadataDeadline::after(Duration::from_secs(10)))
+        .await;
 }

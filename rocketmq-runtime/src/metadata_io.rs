@@ -48,7 +48,9 @@ use uuid::Uuid;
 use crate::metadata_target::MetadataTargetRegistration;
 use crate::metadata_target::MetadataTargetRegistrationOutcome;
 use crate::metadata_target::MetadataTargetRegistry;
+use crate::shutdown_deadline::ShutdownDeadline;
 use crate::BlockingExecutor;
+use crate::BlockingPoolPolicy;
 use crate::ChildServiceContext;
 use crate::RuntimeContractPolicy;
 use crate::RuntimeContractViolation;
@@ -190,6 +192,7 @@ pub struct MetadataWriteRequest {
     generation: MetadataGeneration,
     target: Arc<Path>,
     bytes: Arc<[u8]>,
+    lane_deadline: Option<MetadataDeadline>,
 }
 
 impl MetadataWriteRequest {
@@ -206,7 +209,28 @@ impl MetadataWriteRequest {
             generation: generation.into(),
             target: Arc::from(target.into()),
             bytes: Arc::from(bytes.into()),
+            lane_deadline: None,
         }
+    }
+
+    /// Bounds this request against the shared blocking lane.
+    ///
+    /// The value is combined with the lane's phase budgets, so it can only
+    /// tighten them and can never widen a shared lane limit. It is deliberately
+    /// separate from the durability deadline passed to
+    /// [`MetadataIoActor::submit`]: an admitted write keeps its ordering and
+    /// byte charge when the caller stops observing it, while a request whose
+    /// lane deadline has already elapsed is refused instead of started.
+    #[must_use]
+    pub fn with_lane_deadline(mut self, deadline: MetadataDeadline) -> Self {
+        self.lane_deadline = Some(deadline);
+        self
+    }
+
+    /// Returns the optional request-level lane deadline.
+    #[must_use]
+    pub const fn lane_deadline(&self) -> Option<MetadataDeadline> {
+        self.lane_deadline
     }
 
     /// Returns the logical resource identifier.
@@ -266,18 +290,36 @@ impl MetadataFileSystem for LocalMetadataFileSystem {
     }
 }
 
-/// Admission and dedicated blocking-lane limits.
+/// Metadata actor admission limits and legacy blocking-lane fields.
+///
+/// The actor owns its admission bounds, `max_pending_operations` and
+/// `max_pending_bytes`. The shared blocking lane policy owns lane capacity,
+/// phase timeouts, and the warn threshold, so the three `blocking_*` fields are
+/// accepted for source compatibility and never override the lane.
+/// [`MetadataIoActor::effective_profile`] reports the value that applies to each
+/// one.
 #[derive(Debug, Clone)]
 pub struct MetadataIoConfig {
     /// The max pending operations value.
     pub max_pending_operations: usize,
     /// The max pending size in bytes.
     pub max_pending_bytes: usize,
-    /// The blocking queue timeout value.
+    /// Legacy lane queue wait, retained for source compatibility.
+    ///
+    /// The shared blocking lane policy owns the queue wait in force, so this
+    /// value does not change admission. Use
+    /// [`MetadataWriteRequest::with_lane_deadline`] to tighten a single request.
     pub blocking_queue_timeout: Duration,
-    /// The blocking task timeout value.
+    /// Legacy lane execution budget, retained for source compatibility.
+    ///
+    /// The shared blocking lane policy owns the execution budget in force, so
+    /// this value does not bound a running write. It is still validated for
+    /// compatibility with existing configuration literals.
     pub blocking_task_timeout: Duration,
-    /// The blocking warn after value.
+    /// Legacy lane warn threshold, retained for source compatibility.
+    ///
+    /// The warn threshold belongs to the shared blocking lane policy, so this
+    /// value is never emitted.
     pub blocking_warn_after: Duration,
 }
 
@@ -289,6 +331,10 @@ pub struct MetadataIoPlan {
 
 impl MetadataIoConfig {
     /// Validates bounded metadata actor configuration before startup.
+    ///
+    /// The zero `blocking_task_timeout` check is retained for compatibility with
+    /// existing configuration literals, even though the field does not drive
+    /// execution.
     ///
     /// # Errors
     ///
@@ -361,6 +407,163 @@ impl Default for MetadataIoConfig {
             blocking_warn_after: Duration::from_secs(1),
         }
     }
+}
+
+/// Identifies the owner of one effective metadata limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetadataLimitSource {
+    /// The shared root blocking lane policy owns the value.
+    BlockingLanePolicy,
+    /// The metadata actor configuration owns the value.
+    ActorConfiguration,
+}
+
+/// One retained actor field together with the value that applies instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetadataIoLegacyBlockingField {
+    /// The configuration field name.
+    pub field: &'static str,
+    /// The value a caller configured.
+    pub configured: Duration,
+    /// The value that drives execution.
+    pub effective: Duration,
+    /// The owner of the effective value.
+    pub effective_source: MetadataLimitSource,
+}
+
+/// The shared blocking lane limits in force for the metadata actor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetadataIoBlockingLaneProfile {
+    /// The lane name from the root blocking lane policy.
+    pub name: String,
+    /// The admitted concurrency ceiling.
+    pub max_concurrency: usize,
+    /// The admitted queue depth ceiling.
+    pub max_queue_depth: usize,
+    /// The queue wait budget.
+    pub queue_timeout: Duration,
+    /// The execution budget.
+    pub task_timeout: Duration,
+    /// The warn threshold for work that completed above it.
+    pub warn_after: Duration,
+}
+
+/// The admission limits the metadata actor owns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetadataIoActorLimitsProfile {
+    /// The admitted pending operation ceiling.
+    pub max_pending_operations: usize,
+    /// The admitted retained byte ceiling.
+    pub max_pending_bytes: usize,
+    /// The waiter ceiling derived from `max_pending_operations`.
+    pub max_waiters: usize,
+}
+
+/// A read-only view of the metadata I/O limits actually in force.
+///
+/// `blocking_lane` carries the shared lane limits owned by the root
+/// [`BlockingLanePolicies`](crate::BlockingLanePolicies), `actor_limits` carries
+/// the admission bounds the actor owns, and `legacy_blocking_fields` reports
+/// each retained configuration field beside the value that applies instead.
+///
+/// A request may tighten the lane phase budgets with
+/// [`MetadataWriteRequest::with_lane_deadline`]. The executor combines the
+/// request deadline with the lane budget by taking the earlier expiry, so no
+/// request can widen a shared lane limit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetadataIoEffectiveProfile {
+    /// The shared blocking lane limits in force.
+    pub blocking_lane: MetadataIoBlockingLaneProfile,
+    /// The admission limits owned by the actor.
+    pub actor_limits: MetadataIoActorLimitsProfile,
+    /// The retained configuration fields that do not override the lane.
+    pub legacy_blocking_fields: [MetadataIoLegacyBlockingField; 3],
+}
+
+/// The waiter ceiling derived from the admitted pending-operation bound.
+fn max_metadata_waiters(max_pending_operations: usize) -> usize {
+    max_pending_operations.saturating_mul(4).max(1)
+}
+
+fn effective_profile(config: &MetadataIoConfig, blocking_policy: &BlockingPoolPolicy) -> MetadataIoEffectiveProfile {
+    let legacy_blocking_field =
+        |field: &'static str, configured: Duration, effective: Duration| MetadataIoLegacyBlockingField {
+            field,
+            configured,
+            effective,
+            effective_source: MetadataLimitSource::BlockingLanePolicy,
+        };
+    MetadataIoEffectiveProfile {
+        blocking_lane: MetadataIoBlockingLaneProfile {
+            name: blocking_policy.name.clone(),
+            max_concurrency: blocking_policy.max_concurrency,
+            max_queue_depth: blocking_policy.max_queue_depth,
+            queue_timeout: blocking_policy.queue_timeout,
+            task_timeout: blocking_policy.task_timeout,
+            warn_after: blocking_policy.warn_after,
+        },
+        actor_limits: MetadataIoActorLimitsProfile {
+            max_pending_operations: config.max_pending_operations,
+            max_pending_bytes: config.max_pending_bytes,
+            max_waiters: max_metadata_waiters(config.max_pending_operations),
+        },
+        legacy_blocking_fields: [
+            legacy_blocking_field(
+                "blocking_queue_timeout",
+                config.blocking_queue_timeout,
+                blocking_policy.queue_timeout,
+            ),
+            legacy_blocking_field(
+                "blocking_task_timeout",
+                config.blocking_task_timeout,
+                blocking_policy.task_timeout,
+            ),
+            legacy_blocking_field(
+                "blocking_warn_after",
+                config.blocking_warn_after,
+                blocking_policy.warn_after,
+            ),
+        ],
+    }
+}
+
+/// Reports retained blocking fields that a caller configured away from their
+/// defaults.
+///
+/// The notice is emitted once per actor start, so a non-default value cannot
+/// turn into per-operation logging. The lane policy always owns the value in
+/// force, which [`MetadataIoEffectiveProfile`] reports for every field.
+fn warn_legacy_blocking_fields(config: &MetadataIoConfig, blocking_policy: &BlockingPoolPolicy) {
+    let defaults = MetadataIoConfig::default();
+    let changed = [
+        (
+            "blocking_queue_timeout",
+            config.blocking_queue_timeout,
+            defaults.blocking_queue_timeout,
+        ),
+        (
+            "blocking_task_timeout",
+            config.blocking_task_timeout,
+            defaults.blocking_task_timeout,
+        ),
+        (
+            "blocking_warn_after",
+            config.blocking_warn_after,
+            defaults.blocking_warn_after,
+        ),
+    ]
+    .into_iter()
+    .filter(|(_field, configured, default)| configured != default)
+    .map(|(field, _configured, _default)| field)
+    .collect::<Vec<_>>();
+    if changed.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        fields = ?changed,
+        lane = %blocking_policy.name,
+        "metadata blocking fields are retained for source compatibility and do not override the shared blocking lane policy"
+    );
 }
 
 /// A snapshot of one logical metadata resource.
@@ -658,6 +861,7 @@ pub struct MetadataIoActor {
 #[derive(Debug)]
 struct ActorInner {
     config: MetadataIoConfig,
+    blocking_policy: BlockingPoolPolicy,
     targets: MetadataTargetRegistry,
     waiter_count: Arc<AtomicUsize>,
     state: Mutex<ActorState>,
@@ -716,7 +920,7 @@ impl Drop for WaiterPermit {
 
 impl ActorInner {
     fn reserve_waiter(&self, resource_waiters: usize) -> RuntimeResult<WaiterPermit> {
-        let max_waiters = self.config.max_pending_operations.saturating_mul(4).max(1);
+        let max_waiters = max_metadata_waiters(self.config.max_pending_operations);
         if resource_waiters >= max_waiters {
             return Err(RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataOperation));
         }
@@ -749,10 +953,13 @@ impl MetadataIoActor {
     ) -> RuntimeResult<Self> {
         let task_group = service_context.component("metadata-io").task_group().clone();
         let blocking = service_context.metadata_io().clone();
+        let blocking_policy = blocking.policy().clone();
+        warn_legacy_blocking_fields(&config, &blocking_policy);
         let targets = service_context.resources().metadata_targets();
         let (sender, receiver) = mpsc::channel(config.max_pending_operations);
         let inner = Arc::new(ActorInner {
             config,
+            blocking_policy,
             targets,
             waiter_count: Arc::new(AtomicUsize::new(0)),
             state: Mutex::new(ActorState {
@@ -1131,6 +1338,16 @@ impl MetadataIoActor {
     pub fn snapshot(&self) -> MetadataIoSnapshot {
         snapshot(&self.inner)
     }
+
+    /// Returns the metadata I/O limits that are actually in force.
+    ///
+    /// The view is read-only and derived from the validated configuration and
+    /// the root blocking lane policy captured at startup, so it reports the
+    /// values that drive execution rather than the values a caller requested.
+    #[must_use]
+    pub fn effective_profile(&self) -> MetadataIoEffectiveProfile {
+        effective_profile(&self.inner.config, &self.inner.blocking_policy)
+    }
 }
 
 fn ensure_target_registration(
@@ -1261,12 +1478,18 @@ async fn process_resource(
         target,
         bytes,
         generation,
+        lane_deadline,
         ..
     } = request;
+    // A request-level deadline is the only value that may tighten the lane
+    // phase budgets. The durability deadline a caller passes to `submit` is
+    // deliberately not reused here: an admitted write keeps its ordering and
+    // byte charge after the caller stops observing it.
+    let lane_deadline = lane_deadline.map(|deadline| ShutdownDeadline::at(deadline.instant().into_std()));
     let worker_file_system = file_system.clone();
     let completion_registration = registration.clone();
     let result = match blocking
-        .submit_io(format!("metadata-io:{resource}"), move || {
+        .submit_io_until(format!("metadata-io:{resource}"), lane_deadline, move || {
             let result = worker_file_system.persist_atomic(&target, &bytes);
             match &result {
                 Ok(()) => {

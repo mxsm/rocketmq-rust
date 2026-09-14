@@ -442,6 +442,26 @@ impl BlockingExecutor {
             .await
     }
 
+    /// Admits short I/O under an optional caller deadline and returns its
+    /// execution-owned completion ticket.
+    ///
+    /// The deadline is combined with the lane phase budgets by `phase_deadline`,
+    /// so it can only tighten them. An expired deadline refuses the submission
+    /// instead of starting the closure.
+    pub(crate) async fn submit_io_until<F, R>(
+        &self,
+        name: impl Into<Arc<str>>,
+        deadline: Option<ShutdownDeadline>,
+        operation: F,
+    ) -> RuntimeResult<BlockingTask<R>>
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.submit_inner(name.into(), BlockingKind::ShortIo, deadline, operation)
+            .await
+    }
+
     /// Runs short blocking I/O without admitting or waiting for work beyond `deadline`.
     pub async fn spawn_io_until<F, R>(
         &self,
