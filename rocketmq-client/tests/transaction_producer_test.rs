@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use rocketmq_client_rust::ArcTransactionListener;
 use rocketmq_client_rust::LocalTransactionState;
+use rocketmq_client_rust::MQClientException;
 use rocketmq_client_rust::TransactionListener;
 use rocketmq_client_rust::TransactionMQProducerBuilder;
 use rocketmq_model::common::message::message_ext::MessageExt;
@@ -131,9 +132,17 @@ async fn transaction_send_without_listener_fails_before_start_or_send_like_java(
         .body("transaction-body")
         .build_unchecked();
 
-    let result = producer.send_message_in_transaction(msg, None::<()>).await;
+    let error = producer
+        .send_message_in_transaction(msg, None::<()>)
+        .await
+        .expect_err("missing transaction listener must fail before startup or send");
 
-    assert!(result
-        .err()
-        .is_some_and(|error| error.to_string().contains("TransactionListener is null")));
+    assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
+    assert_eq!(
+        error
+            .source_ref::<MQClientException>()
+            .expect("missing listener should retain its Java compatibility exception")
+            .error_message(),
+        Some("TransactionListener is null")
+    );
 }
