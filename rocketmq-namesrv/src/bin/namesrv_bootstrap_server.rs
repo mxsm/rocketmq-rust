@@ -288,6 +288,11 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let builder = builder.set_controller_config_opt(controller_config);
     #[cfg(not(feature = "embedded-controller"))]
     let _ = controller_config;
+    // The final telemetry flush runs after the NameServer stops, which shuts the shared service
+    // task group down once the route manager has routed work through it, so the flush allowance
+    // is reserved while that scope is still open. The shutdown deadline is not known yet; the
+    // scope's own deadline bounds the flush.
+    let telemetry_flush_lease = rocketmq_observability::reserve_telemetry_flush_lease(&service_context, None);
     let boot_result = builder
         .build()
         .boot_with_lifecycle(lifecycle.clone())
@@ -300,9 +305,18 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let shutdown_request = lifecycle
         .shutdown_request()
         .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
-    let telemetry_report = telemetry_guard
-        .shutdown_with_service_context(&service_context, shutdown_request.deadline.remaining())
-        .await;
+    let telemetry_report = match telemetry_flush_lease {
+        Some(lease) => {
+            telemetry_guard
+                .shutdown_with_drain_lease(lease, shutdown_request.deadline.remaining())
+                .await
+        }
+        None => {
+            telemetry_guard
+                .shutdown_with_service_context(&service_context, shutdown_request.deadline.remaining())
+                .await
+        }
+    };
     let shutdown_result = telemetry_report
         .into_result()
         .context("failed to shutdown namesrv telemetry bootstrap");

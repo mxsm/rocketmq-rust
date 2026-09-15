@@ -889,6 +889,33 @@ fn core_services_install_telemetry_before_business_lifecycle() {
 }
 
 #[test]
+fn owner_finalization_reserves_its_telemetry_flush_allowance() {
+    // The broker, controller, and NameServer flush telemetry after their service task group
+    // has been shut down, and a closed scope refuses ordinary blocking submissions. Each
+    // reserves the allowance while its scope is open and submits the flush through it.
+    let workspace_root = workspace_root();
+    for relative_path in [
+        "rocketmq-broker/src/broker_runtime/lifecycle.rs",
+        "rocketmq-controller/src/bin/controller_bootstrap.rs",
+        "rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs",
+    ] {
+        let path = workspace_root.join(relative_path);
+        let source =
+            fs::read_to_string(&path).unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        let reserve = source
+            .find("reserve_telemetry_flush_lease(")
+            .unwrap_or_else(|| panic!("{relative_path} must reserve its telemetry flush allowance"));
+        let flush = source
+            .find("shutdown_with_drain_lease(")
+            .unwrap_or_else(|| panic!("{relative_path} must flush telemetry through the reserved allowance"));
+        assert!(
+            reserve < flush,
+            "{relative_path} must reserve the telemetry flush allowance before the flush"
+        );
+    }
+}
+
+#[test]
 fn build_scripts_do_not_inject_log_filter_defaults() {
     let workspace_root = workspace_root();
     let mut violations = BTreeSet::new();

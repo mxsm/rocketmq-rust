@@ -16,6 +16,7 @@ use super::deferred::BrokerDeferredLifecycle;
 use super::deferred::BrokerDeferredRegistryShutdownReport;
 use super::shutdown_report::record_message_store_shutdown_outcome;
 use super::*;
+use rocketmq_runtime::BlockingDrainLease;
 use rocketmq_runtime::MissedTickPolicy;
 use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
@@ -799,6 +800,10 @@ impl BrokerRuntime {
             };
         progress.complete("client_housekeeping");
 
+        // The final telemetry flush is owner finalization: it runs after this task group is
+        // shut down, so its blocking allowance has to be reserved while the scope is open.
+        let telemetry_flush_lease = self.reserve_telemetry_flush_lease(deadline);
+
         let started = Instant::now();
         shutdown_report.service_tasks = if let Some(service_context) = self.composition.state.service_context.as_ref() {
             let report = service_context.task_group().shutdown_until(deadline).await;
@@ -816,9 +821,14 @@ impl BrokerRuntime {
         if let Some(guard) = self.composition.state.observability_guard.take() {
             shutdown_report.observability =
                 if let Some(service_context) = self.composition.state.service_context.as_ref() {
-                    let telemetry_report = guard
-                        .shutdown_with_service_context(service_context, deadline.remaining())
-                        .await;
+                    let telemetry_report = match telemetry_flush_lease {
+                        Some(lease) => guard.shutdown_with_drain_lease(lease, deadline.remaining()).await,
+                        None => {
+                            guard
+                                .shutdown_with_service_context(service_context, deadline.remaining())
+                                .await
+                        }
+                    };
                     if !telemetry_report.is_healthy() {
                         warn!(
                             report = %telemetry_report.to_json(),
@@ -840,6 +850,19 @@ impl BrokerRuntime {
 
         shutdown_report.unfinished_components = progress.unfinished();
         shutdown_report
+    }
+
+    /// Reserves the blocking allowance for the telemetry flush that runs after `service_tasks`
+    /// has already closed the scope owning it. One submission covers the single provider flush.
+    ///
+    /// Without an installed observability guard there is nothing to flush, and a missing
+    /// reservation is not fatal: the flush then submits through the closed scope and reports
+    /// its own failure, which keeps that outcome part of the shutdown report.
+    fn reserve_telemetry_flush_lease(&self, deadline: ShutdownDeadline) -> Option<BlockingDrainLease> {
+        // Only an installed observability guard produces a flush to finalize.
+        self.composition.state.observability_guard.as_ref()?;
+        let service_context = self.composition.state.service_context.as_ref()?;
+        rocketmq_observability::reserve_telemetry_flush_lease(service_context, Some(deadline))
     }
 
     pub(crate) async fn shutdown_scheduled_tasks_with_timeout(

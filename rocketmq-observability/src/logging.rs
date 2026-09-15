@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::num::NonZeroUsize;
+use std::time::Duration;
+
 use tracing_appender::non_blocking::ErrorCounter;
 use tracing_appender::non_blocking::NonBlockingBuilder;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -23,7 +26,9 @@ use tracing_subscriber::reload;
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
 
+use rocketmq_runtime::BlockingDrainLease;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ShutdownDeadline;
 use serde::Serialize;
 
@@ -538,6 +543,73 @@ impl TelemetryShutdownReport {
     }
 }
 
+/// The blocking authority that runs the final provider flush.
+///
+/// A service context is used while its scope still admits work; a drain lease reserved
+/// from that scope carries the same allowance into owner finalization.
+enum TelemetryFlushAuthority<'a> {
+    ServiceContext(&'a ChildServiceContext),
+    Drain(BlockingDrainLease),
+}
+
+impl TelemetryFlushAuthority<'_> {
+    async fn flush<F>(
+        self,
+        name: &'static str,
+        deadline: ShutdownDeadline,
+        operation: F,
+    ) -> RuntimeResult<TelemetryShutdownReport>
+    where
+        F: FnOnce() -> TelemetryShutdownReport + Send + 'static,
+    {
+        match self {
+            Self::ServiceContext(service_context) => {
+                service_context
+                    .metadata_io()
+                    .spawn_io_until(name, deadline, operation)
+                    .await
+            }
+            Self::Drain(lease) => lease.spawn_io_until(name, deadline, operation).await,
+        }
+    }
+}
+
+/// A reservation made before the owner knows its shutdown deadline only has to outlive the
+/// process: the deadline the scope installs when it stops becomes the effective bound.
+const UNKNOWN_SHUTDOWN_DEADLINE_HORIZON: Duration = Duration::from_secs(u32::MAX as u64);
+
+/// Reserves one blocking submission for a final telemetry flush owned by `service_context`.
+///
+/// Owner finalization reaches telemetry after the owning service task group has been shut
+/// down, and that closed scope refuses ordinary submissions. Reserving the allowance while
+/// the scope is still open keeps the last flush admissible, bounded by `deadline` or by the
+/// shutdown deadline the scope installs later, whichever is earlier. An owner that reserves
+/// before its shutdown deadline exists, because its flush runs after the service scope has
+/// already closed, passes `None`.
+///
+/// The caller falls back to [`TelemetryRuntimeGuard::shutdown_with_service_context`] and
+/// reports that outcome when the allowance cannot be reserved.
+#[must_use]
+pub fn reserve_telemetry_flush_lease(
+    service_context: &ChildServiceContext,
+    deadline: Option<ShutdownDeadline>,
+) -> Option<BlockingDrainLease> {
+    let deadline = deadline.unwrap_or_else(|| ShutdownDeadline::after(UNKNOWN_SHUTDOWN_DEADLINE_HORIZON));
+    match service_context
+        .metadata_io()
+        .try_drain_lease(deadline, NonZeroUsize::MIN)
+    {
+        Ok(lease) => Some(lease),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "final telemetry flush could not reserve its blocking allowance"
+            );
+            None
+        }
+    }
+}
+
 impl TelemetryRuntimeGuard {
     pub(crate) fn new(telemetry_guard: TelemetryProviderGuard, logging_guard: LoggingGuard) -> Self {
         let handle = telemetry_guard.handle();
@@ -655,6 +727,30 @@ impl TelemetryRuntimeGuard {
         service_context: &ChildServiceContext,
         timeout: std::time::Duration,
     ) -> TelemetryShutdownReport {
+        self.shutdown_with_flush_authority(TelemetryFlushAuthority::ServiceContext(service_context), timeout)
+            .await
+    }
+
+    /// Runs the same flush as [`Self::shutdown_with_service_context`] on a drain lease
+    /// reserved from the owning scope while that scope was still open.
+    ///
+    /// Owner finalization reaches telemetry after the owning task group has already been
+    /// shut down, and the closed scope then refuses ordinary submissions. The lease carries
+    /// the reserved allowance past that point without reopening the scope.
+    pub async fn shutdown_with_drain_lease(
+        self,
+        lease: BlockingDrainLease,
+        timeout: std::time::Duration,
+    ) -> TelemetryShutdownReport {
+        self.shutdown_with_flush_authority(TelemetryFlushAuthority::Drain(lease), timeout)
+            .await
+    }
+
+    async fn shutdown_with_flush_authority(
+        self,
+        authority: TelemetryFlushAuthority<'_>,
+        timeout: std::time::Duration,
+    ) -> TelemetryShutdownReport {
         #[cfg(feature = "prometheus")]
         let mut telemetry_runtime = self;
         #[cfg(not(feature = "prometheus"))]
@@ -677,9 +773,8 @@ impl TelemetryRuntimeGuard {
             None
         };
 
-        let shutdown_result = service_context
-            .metadata_io()
-            .spawn_io_until("observability.provider-shutdown", deadline, move || {
+        let shutdown_result = authority
+            .flush("observability.provider-shutdown", deadline, move || {
                 telemetry_runtime.shutdown_with_timeout(deadline.remaining())
             })
             .await;

@@ -935,7 +935,7 @@ fn transaction_shutdown_precedes_topic_coordinator_and_message_store() {
 fn scheduled_tasks_shutdown_precedes_exclusive_message_store_shutdown() {
     let source = include_str!("../../src/broker_runtime/lifecycle.rs");
     let scheduled_shutdown = source
-        .find("let scheduled_report = self")
+        .find("let scheduled_outcome = self.shutdown_scheduled_tasks_until(")
         .expect("scheduled task shutdown should exist");
     let store_detach = source
         .find("self.detach_message_store_provider();")
