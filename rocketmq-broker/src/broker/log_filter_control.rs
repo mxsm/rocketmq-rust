@@ -371,14 +371,27 @@ impl BrokerLogFilterControl {
             .map_err(|error| BrokerLogFilterControlError::Reload(Box::new(error)))?
         };
         let audit = AuditContext::from(&request);
-        self.append_audit(AuditRecord::request(
-            "intent",
-            &audit,
-            old_filter.filter(),
-            target_filter.filter(),
-            "pending",
-        ))
-        .await?;
+        // A stopped TTL controller can never auto-restore an override, and the shutdown that
+        // stops it also closes the blocking scope that persists audit records. The check is
+        // therefore made before the audit outcome is reported, so that a stopped controller is
+        // always refused as a scheduling failure rather than as the coincident audit failure.
+        // The intent record is still attempted first, so a controller that stopped on its own
+        // leaves the same trail as a schedule that fails below.
+        let controller_available = !self.ttl_sender.is_closed();
+        let intent = self
+            .append_audit(AuditRecord::request(
+                "intent",
+                &audit,
+                old_filter.filter(),
+                target_filter.filter(),
+                "pending",
+            ))
+            .await;
+        if !controller_available {
+            self.append_scheduling_failure_audit(&audit, old_filter.filter()).await;
+            return Err(Self::ttl_controller_unavailable());
+        }
+        intent?;
 
         let previous = self.active.lock().unwrap_or_else(|error| error.into_inner()).clone();
         let scheduled = if request.restore {
@@ -391,15 +404,7 @@ impl BrokerLogFilterControl {
             })
         };
         if let Err(error) = self.send_schedule(scheduled.clone()).await {
-            let _ = self
-                .append_audit(AuditRecord::request(
-                    "scheduling_failure",
-                    &audit,
-                    old_filter.filter(),
-                    old_filter.filter(),
-                    "failure",
-                ))
-                .await;
+            self.append_scheduling_failure_audit(&audit, old_filter.filter()).await;
             return Err(error);
         }
 
@@ -528,14 +533,36 @@ impl BrokerLogFilterControl {
         }
     }
 
+    /// Returns the rejection used when the TTL controller can no longer accept work.
+    ///
+    /// The override is never applied in that state: a filter without a working TTL
+    /// controller would survive until an explicit restore or a Broker restart.
+    fn ttl_controller_unavailable() -> BrokerLogFilterControlError {
+        BrokerLogFilterControlError::Scheduling(Box::new(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "log filter TTL controller is unavailable",
+        )))
+    }
+
+    /// Appends the best-effort failure record for an override that could not be scheduled.
+    async fn append_scheduling_failure_audit(&self, audit: &AuditContext, old_filter: &str) {
+        let _ = self
+            .append_audit(AuditRecord::request(
+                "scheduling_failure",
+                audit,
+                old_filter,
+                old_filter,
+                "failure",
+            ))
+            .await;
+    }
+
     async fn send_schedule(&self, active: Option<ActiveOverride>) -> Result<(), BrokerLogFilterControlError> {
         let command = active.map_or(TtlCommand::Clear, TtlCommand::Set);
-        self.ttl_sender.send(command).await.map_err(|_| {
-            BrokerLogFilterControlError::Scheduling(Box::new(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "log filter TTL controller is unavailable",
-            )))
-        })
+        self.ttl_sender
+            .send(command)
+            .await
+            .map_err(|_| Self::ttl_controller_unavailable())
     }
 
     async fn append_audit(&self, record: AuditRecord) -> Result<(), BrokerLogFilterControlError> {
@@ -986,6 +1013,8 @@ mod tests {
             ))
             .await
             .expect_err("stopped TTL task must reject the override");
+        // The stopped controller and the closed blocking scope that persists audit records
+        // fail together here; the scheduling rejection is the one reported.
         assert!(matches!(error, BrokerLogFilterControlError::Scheduling(_)));
         assert_eq!(handle.current(), baseline);
 

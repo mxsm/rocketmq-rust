@@ -109,6 +109,7 @@ pub use logging::install_global;
 pub use logging::install_global_with_filter;
 pub use logging::install_global_with_filter_and_service_context;
 pub use logging::install_global_with_service_context;
+pub use logging::reserve_telemetry_flush_lease;
 pub use logging::FileLogLayer;
 pub use logging::LoggingGuard;
 pub use logging::TelemetryRuntimeGuard;

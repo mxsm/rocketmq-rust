@@ -380,15 +380,28 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let shutdown_request = lifecycle
         .shutdown_request()
         .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
+    // The final telemetry flush runs after this task group closes, so its blocking allowance
+    // is reserved while the scope is still open.
+    let telemetry_flush_lease =
+        rocketmq_observability::reserve_telemetry_flush_lease(&service_context, Some(shutdown_request.deadline));
     let controller_result = finish_controller_process_shutdown(
         controller_result,
         service_context.task_group(),
         shutdown_request.deadline,
     )
     .await;
-    let telemetry_report = telemetry_guard
-        .shutdown_with_service_context(&service_context, shutdown_request.deadline.remaining())
-        .await;
+    let telemetry_report = match telemetry_flush_lease {
+        Some(lease) => {
+            telemetry_guard
+                .shutdown_with_drain_lease(lease, shutdown_request.deadline.remaining())
+                .await
+        }
+        None => {
+            telemetry_guard
+                .shutdown_with_service_context(&service_context, shutdown_request.deadline.remaining())
+                .await
+        }
+    };
     let shutdown_result = telemetry_report
         .into_result()
         .context("failed to shutdown controller telemetry bootstrap");
