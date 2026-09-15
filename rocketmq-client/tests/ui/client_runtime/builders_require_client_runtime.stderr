@@ -1,30 +1,30 @@
 error[E0061]: this function takes 1 argument but 0 arguments were supplied
- --> tests/ui/client_runtime/builders_require_client_runtime.rs:22:13
+  --> tests/ui/client_runtime/builders_require_client_runtime.rs:22:13
    |
 22 |     let _ = DefaultMQProducer::builder();
    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^-- argument #1 of type `Arc<ClientRuntime>` is missing
    |
 note: associated function defined here
- --> src/producer/default_mq_producer.rs
-  |
-  |     pub fn builder(client_runtime: Arc<ClientRuntime>) -> DefaultMQProducerBuilder {
-  |            ^^^^^^^
+  --> src/producer/default_mq_producer.rs
+   |
+   |     pub fn builder(client_runtime: Arc<ClientRuntime>) -> DefaultMQProducerBuilder {
+   |            ^^^^^^^
 help: provide the argument
    |
 22 |     let _ = DefaultMQProducer::builder(/* Arc<ClientRuntime> */);
    |                                        ++++++++++++++++++++++++
 
 error[E0061]: this function takes 1 argument but 0 arguments were supplied
- --> tests/ui/client_runtime/builders_require_client_runtime.rs:23:13
+  --> tests/ui/client_runtime/builders_require_client_runtime.rs:23:13
    |
 23 |     let _ = DefaultMQPushConsumer::builder();
    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-- argument #1 of type `Arc<ClientRuntime>` is missing
    |
 note: associated function defined here
- --> src/consumer/default_mq_push_consumer.rs
-  |
-  |     pub fn builder(client_runtime: Arc<ClientRuntime>) -> DefaultMQPushConsumerBuilder {
-  |            ^^^^^^^
+  --> src/consumer/default_mq_push_consumer.rs
+   |
+   |     pub fn builder(client_runtime: Arc<ClientRuntime>) -> DefaultMQPushConsumerBuilder {
+   |            ^^^^^^^
 help: provide the argument
    |
 23 |     let _ = DefaultMQPushConsumer::builder(/* Arc<ClientRuntime> */);
