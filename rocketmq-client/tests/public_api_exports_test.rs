@@ -109,6 +109,8 @@ use rocketmq_client_rust::TraceDispatcherType;
 use rocketmq_client_rust::TraceType;
 use rocketmq_client_rust::TransactionClient;
 use rocketmq_client_rust::TransactionMQProducer;
+use rocketmq_error::fields;
+use rocketmq_error::ErrorContext;
 use rocketmq_model::common::message::message_queue::MessageQueue;
 use rocketmq_model::common::message::message_single::Message;
 
@@ -195,6 +197,15 @@ impl ConsumeMessageHook for RootConsumeHook {
 
 fn assert_unsupported_error(error: ClientError, _api: &str, _replacement: &str) {
     assert!(error.is(&rocketmq_error::CORE_ARGUMENT_INVALID));
+}
+
+#[track_caller]
+fn assert_not_initialized(error: &ClientError, component: &str) {
+    assert!(error.is(&rocketmq_error::CORE_LIFECYCLE_NOT_INITIALIZED));
+    assert_eq!(
+        error.context(),
+        &ErrorContext::new().with_text(fields::COMPONENT_NAME, component)
+    );
 }
 
 #[test]
@@ -294,22 +305,28 @@ async fn crate_root_classic_pull_exports_are_functional_or_fail_closed() {
         .start()
         .await
         .expect_err("detached pull consumer must require a runtime builder");
-    assert!(start_error.to_string().contains("builder"));
-    assert!(!start_error.to_string().contains("not supported"));
+    assert_not_initialized(
+        &start_error,
+        "DefaultMQPullConsumer has no ClientRuntime; create it with DefaultMQPullConsumer::builder",
+    );
     let implementation_error = match consumer.default_mq_pull_consumer_impl() {
         Ok(_) => panic!("detached pull consumer must not expose a live implementation"),
         Err(error) => error,
     };
-    assert!(implementation_error.to_string().contains("builder"));
-    assert!(!implementation_error.to_string().contains("not supported"));
+    assert_not_initialized(
+        &implementation_error,
+        "DefaultMQPullConsumer has no ClientRuntime; create it with DefaultMQPullConsumer::builder",
+    );
     let detached_implementation = rocketmq_client_rust::DefaultMQPullConsumerImpl::new()
         .expect("compatibility constructor should remain available");
     let rebalance_error = match detached_implementation.rebalance_impl() {
         Ok(_) => panic!("detached implementation must not expose a live rebalance handle"),
         Err(error) => error,
     };
-    assert!(rebalance_error.to_string().contains("builder"));
-    assert!(!rebalance_error.to_string().contains("not supported"));
+    assert_not_initialized(
+        &rebalance_error,
+        "DefaultMQPullConsumerImpl is detached; create a consumer with DefaultMQPullConsumer::builder",
+    );
 
     let schedule_service = rocketmq_client_rust::MQPullConsumerScheduleService::new("legacy-group");
     assert_eq!(schedule_service.consumer_group().as_str(), "legacy-group");
@@ -317,14 +334,18 @@ async fn crate_root_classic_pull_exports_are_functional_or_fail_closed() {
         .start()
         .await
         .expect_err("detached pull schedule service must require a runtime");
-    assert!(schedule_error.to_string().contains("with_client_runtime"));
-    assert!(!schedule_error.to_string().contains("not supported"));
+    assert_not_initialized(
+        &schedule_error,
+        "MQPullConsumerScheduleService has no ClientRuntime; use with_client_runtime",
+    );
 
     let helper_error =
         rocketmq_client_rust::MQHelper::reset_offset_by_timestamp("CLUSTERING", "legacy-group", "TopicA", 0)
             .expect_err("detached MQHelper must require an application-owned runtime");
-    assert!(helper_error.to_string().contains("ClientRuntime"));
-    assert!(!helper_error.to_string().contains("not supported"));
+    assert_not_initialized(
+        &helper_error,
+        "MQHelper requires an application-owned ClientRuntime; use reset_offset_by_timestamp_with_client_runtime",
+    );
 
     let send_hook = rocketmq_client_rust::SendMessageOpenTracingHookImpl::new(());
     assert_eq!(send_hook.hook_name(), "SendMessageOpenTracingHook");
