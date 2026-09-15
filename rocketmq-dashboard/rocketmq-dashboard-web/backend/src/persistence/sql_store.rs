@@ -547,7 +547,7 @@ impl SqlPersistence {
         }
         match &self.pool {
             DatabasePool::Sqlite(pool) => {
-                crate::delete_monitor_rule_in_pool!(pool, environment_id, consumer_group, expected_revision)
+                delete_monitor_rule_in_sqlite_transaction(pool, environment_id, consumer_group, expected_revision).await
             }
             DatabasePool::MySql(pool) => {
                 crate::delete_monitor_rule_in_pool!(pool, environment_id, consumer_group, expected_revision)
@@ -572,7 +572,7 @@ impl SqlPersistence {
         }
         match &self.pool {
             DatabasePool::Sqlite(pool) => {
-                let mut transaction = pool.begin().await.map_err(map_query_error)?;
+                let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.map_err(map_query_error)?;
                 let removed = crate::delete_monitor_rule_in_transaction!(
                     transaction,
                     environment_id,
@@ -1239,6 +1239,28 @@ async fn upsert_monitor_rule_in_sqlite_transaction(
 ) -> Result<ConsumerMonitorRule, PersistenceError> {
     let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.map_err(map_query_error)?;
     let result = crate::upsert_monitor_rule_in_transaction!(transaction, rule, expected_revision);
+    let result = result?;
+    transaction.commit().await.map_err(map_query_error)?;
+    Ok(result)
+}
+
+/// Deletes a monitor rule inside a SQLite write transaction.
+///
+/// `delete_monitor_rule_in_transaction!` reads `dashboard_environment` before it deletes, so this
+/// transaction must not begin deferred. A deferred SQLite transaction takes a read snapshot on
+/// that first statement, and promoting the snapshot to a write lock fails with `SQLITE_BUSY` as
+/// soon as another connection has committed since the snapshot was taken. SQLite reports that
+/// failure without invoking the busy handler, so `busy_timeout` cannot absorb it.
+/// `BEGIN IMMEDIATE` takes the write lock up front, where the busy handler does apply.
+async fn delete_monitor_rule_in_sqlite_transaction(
+    pool: &SqlitePool,
+    environment_id: &EnvironmentId,
+    consumer_group: &str,
+    expected_revision: Revision,
+) -> Result<bool, PersistenceError> {
+    let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await.map_err(map_query_error)?;
+    let result =
+        crate::delete_monitor_rule_in_transaction!(transaction, environment_id, consumer_group, expected_revision);
     let result = result?;
     transaction.commit().await.map_err(map_query_error)?;
     Ok(result)
