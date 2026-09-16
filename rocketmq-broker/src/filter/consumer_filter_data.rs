@@ -151,11 +151,11 @@ impl Display for ConsumerFilterData {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ConsumerFilterData {{ group: {}, topic: {}, expression: {:?}, type: {:?}, has_compiled: {}, born: {}, \
+            "ConsumerFilterData {{ group: {}, topic: {}, has_expression: {}, type: {:?}, has_compiled: {}, born: {}, \
              dead: {}, has_bloom: {}, client_ver: {} }}",
             self.consumer_group,
             self.topic,
-            self.expression,
+            self.expression.is_some(),
             self.expression_type,
             self.compiled_expression.is_some(),
             self.born_time,
@@ -163,5 +163,76 @@ impl Display for ConsumerFilterData {
             self.bloom_filter_data.is_some(),
             self.client_version
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_filter::expression::AlwaysTrueExpression;
+    use rocketmq_filter::utils::bloom_filter_data::BloomFilterData;
+    use rocketmq_runtime::common::time_utils::current_millis;
+
+    use super::ConsumerFilterData;
+
+    #[test]
+    fn consumer_filter_data_lifetime_boundaries_are_explicit() {
+        let mut data = ConsumerFilterData::default();
+        data.set_born_time(100);
+
+        data.set_dead_time(99);
+        assert!(!data.is_dead());
+        data.set_dead_time(100);
+        assert!(data.is_dead());
+
+        assert!(!data.is_msg_in_live(99));
+        assert!(!data.is_msg_in_live(100));
+        assert!(data.is_msg_in_live(101));
+    }
+
+    #[test]
+    fn consumer_filter_data_reports_bounded_time_after_death() {
+        let now = current_millis();
+        let mut data = ConsumerFilterData::default();
+        data.set_born_time(0);
+        data.set_dead_time(now.saturating_sub(10));
+
+        let elapsed = data.how_long_after_death().expect("filter should be dead");
+        assert!(elapsed >= 10);
+        assert!(elapsed <= 500);
+
+        data.set_born_time(now.saturating_add(1));
+        assert_eq!(data.how_long_after_death(), None);
+    }
+
+    #[test]
+    fn consumer_filter_data_accessors_round_trip_and_display_redacts_expression() {
+        let mut data = ConsumerFilterData::default();
+        data.set_consumer_group("group-a".into());
+        data.set_topic("orders".into());
+        data.set_expression(Some("private-filter-body".into()));
+        data.set_expression_type(Some("SQL92".into()));
+        data.set_born_time(10);
+        data.set_dead_time(20);
+        data.set_bloom_filter_data(Some(BloomFilterData::new(vec![1, 3], 8)));
+        data.set_client_version(7);
+        data.set_compiled_expression(Box::new(AlwaysTrueExpression));
+
+        assert_eq!(data.consumer_group(), "group-a");
+        assert_eq!(data.topic(), "orders");
+        assert_eq!(
+            data.expression().map(|value| value.as_str()),
+            Some("private-filter-body")
+        );
+        assert_eq!(data.expression_type().map(|value| value.as_str()), Some("SQL92"));
+        assert_eq!(data.born_time(), 10);
+        assert_eq!(data.dead_time(), 20);
+        assert_eq!(data.bloom_filter_data().expect("bloom data").bit_pos(), &[1, 3]);
+        assert_eq!(data.client_version(), 7);
+        assert!(data.compiled_expression().is_some());
+
+        let rendered = data.to_string();
+        assert!(rendered.contains("has_compiled: true"));
+        assert!(rendered.contains("has_bloom: true"));
+        assert!(!rendered.contains("private-filter-body"));
     }
 }
