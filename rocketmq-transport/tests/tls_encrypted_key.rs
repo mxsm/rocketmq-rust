@@ -18,6 +18,8 @@ use std::fs;
 
 use pkcs8::LineEnding;
 use pkcs8::PrivateKeyInfoRef;
+use rocketmq_error::fields;
+use rocketmq_error::ErrorContext;
 use rocketmq_transport::api::PrivateKeyLoader;
 
 #[test]
@@ -40,13 +42,19 @@ fn encrypted_pkcs8_key_requires_the_correct_password_without_leaking_it() {
     assert!(!loaded.secret_der().is_empty());
 
     let missing = PrivateKeyLoader::load(&path, "tls.server.keyPath", None).expect_err("password is required");
-    assert!(missing.to_string().contains("password is required"));
+    let expected_context = ErrorContext::new()
+        .with_text(fields::KEY, "tls.server.keyPath")
+        .with_secret_presence(fields::VALUE_PRESENT)
+        .with_secret_presence(fields::REASON_PRESENT);
+    assert_eq!(missing.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
+    assert_eq!(missing.context(), &expected_context);
 
     let wrong_secret = "definitely-not-the-password";
     let wrong =
         PrivateKeyLoader::load(&path, "tls.server.keyPath", Some(wrong_secret)).expect_err("wrong password must fail");
+    assert_eq!(wrong.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
+    assert_eq!(wrong.context(), &expected_context);
     let diagnostic = wrong.to_string();
-    assert!(diagnostic.contains("decryption failed"));
     assert!(!diagnostic.contains(password));
     assert!(!diagnostic.contains(wrong_secret));
     assert!(!diagnostic.contains("BEGIN ENCRYPTED PRIVATE KEY"));

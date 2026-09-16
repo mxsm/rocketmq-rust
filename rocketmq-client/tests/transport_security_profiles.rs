@@ -21,6 +21,8 @@ use std::time::Duration;
 use pkcs8::LineEnding;
 use pkcs8::PrivateKeyInfoRef;
 use rocketmq_client_rust::ClientConfig;
+use rocketmq_error::fields;
+use rocketmq_error::ErrorContext;
 use rocketmq_transport::api::PrivateKeyLoader;
 use rocketmq_transport::api::RequestDeadline;
 use rocketmq_transport::api::SocksProxyConfig;
@@ -51,10 +53,16 @@ fn encrypted_pkcs8_profile_is_secret_safe() {
             .is_empty()
     );
     let error = PrivateKeyLoader::load(&path, "tls.client.keyPath", Some("wrong-secret"))
-        .expect_err("wrong password must fail")
-        .to_string();
-    assert!(error.contains("decryption failed"));
-    assert!(!error.contains("wrong-secret"));
+        .expect_err("wrong password must fail");
+    assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
+    assert_eq!(
+        error.context(),
+        &ErrorContext::new()
+            .with_text(fields::KEY, "tls.client.keyPath")
+            .with_secret_presence(fields::VALUE_PRESENT)
+            .with_secret_presence(fields::REASON_PRESENT)
+    );
+    assert!(!error.to_string().contains("wrong-secret"));
 }
 
 #[test]
