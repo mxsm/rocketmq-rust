@@ -31,3 +31,36 @@ pub struct FilterDataMapByTopic {
     pub(crate) filter_data_map: HashMap<String /* consumer group */, ConsumerFilterData>,
     pub(crate) topic: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consumer_filter_wrapper_defaults_to_empty_usable_maps() {
+        let wrapper = ConsumerFilterWrapper::default();
+
+        assert!(wrapper.filter_data_by_topic.is_empty());
+    }
+
+    #[test]
+    fn consumer_filter_wrapper_round_trips_camel_case_json() {
+        let by_topic = FilterDataMapByTopic {
+            filter_data_map: HashMap::from([("group-a".to_owned(), ConsumerFilterData::default())]),
+            topic: "orders".to_owned(),
+        };
+        let wrapper = ConsumerFilterWrapper {
+            filter_data_by_topic: HashMap::from([("orders".to_owned(), by_topic)]),
+        };
+
+        let json = serde_json::to_string(&wrapper).expect("wrapper should serialize");
+        assert!(json.contains("\"filterDataByTopic\""));
+        assert!(json.contains("\"filterDataMap\""));
+        assert!(json.contains("\"topic\""));
+
+        let decoded: ConsumerFilterWrapper = serde_json::from_str(&json).expect("wrapper should deserialize");
+        let decoded_topic = decoded.filter_data_by_topic.get("orders").expect("topic entry");
+        assert_eq!(decoded_topic.topic, "orders");
+        assert!(decoded_topic.filter_data_map.contains_key("group-a"));
+    }
+}

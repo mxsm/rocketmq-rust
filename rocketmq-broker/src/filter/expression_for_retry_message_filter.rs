@@ -38,3 +38,19 @@ impl MessageFilter for ExpressionForRetryMessageFilter {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_store::MessageFilter;
+
+    use super::ExpressionForRetryMessageFilter;
+
+    #[test]
+    fn retry_message_filter_bypasses_expression_filtering() {
+        let filter = ExpressionForRetryMessageFilter;
+
+        assert!(!filter.requires_commit_log_payload());
+        assert!(filter.is_matched_by_consume_queue(None, None));
+        assert!(filter.is_matched_by_commit_log(None, None));
+    }
+}
