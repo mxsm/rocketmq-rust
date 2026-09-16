@@ -12,6 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Typed failures for the Broker configuration pipeline.
+//!
+//! Every fallible step that loads, validates, projects, or version-controls
+//! the Broker configuration reports one of the variants in
+//! `BrokerConfigError`. Each error carries the `ConfigSection` it belongs
+//! to (where applicable) so callers can attribute a failure to a specific
+//! configuration group and render a section-qualified diagnostic. The rest of
+//! the crate matches on these variants, so they are part of the crate's
+//! documented surface.
+
 use std::fmt;
 use std::path::PathBuf;
 
@@ -19,13 +29,25 @@ use rocketmq_runtime::common::parse_config_file::render_safe_config_error;
 use rocketmq_runtime::RuntimeContractViolation;
 use rocketmq_runtime::RuntimeError;
 
+/// The configuration group a failure belongs to.
+///
+/// A Broker configuration is partitioned into ordered sections; this enum
+/// names them so a rejected change can be routed to the matching in-memory
+/// section and so errors can be rendered with a section-qualified message
+/// (see the [`fmt::Display`] impl).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConfigSection {
+    /// Broker identity (name, id, cluster membership).
     Identity,
+    /// Networking and listener configuration.
     Network,
+    /// High-availability / replication configuration.
     HighAvailability,
+    /// Message store and on-disk layout configuration.
     Storage,
+    /// Security, authentication, and ACL configuration.
     Security,
+    /// Resource limits and capacity tuning.
     Resources,
 }
 
@@ -43,58 +65,83 @@ impl fmt::Display for ConfigSection {
     }
 }
 
+/// An error produced while loading, validating, or applying Broker
+/// configuration.
+///
+/// The variants distinguish the stage that failed. Only [`Load`](Self::Load),
+/// [`Runtime`](Self::Runtime), and [`Contract`](Self::Contract) wrap an
+/// underlying source error (exposed through [`std::error::Error::source`]);
+/// the others are self-describing.
 pub enum BrokerConfigError {
+    /// The raw configuration at `path` could not be read or parsed.
+    ///
+    /// Wraps the underlying [`config::ConfigError`] as its source. Recoverable:
+    /// correct the file and reload.
     Load {
         path: PathBuf,
         source: Box<config::ConfigError>,
     },
 
+    /// A configuration `field` failed validation, with a human-readable
+    /// `message` explaining why.
+    ///
+    /// Recoverable: supply a valid value for the field and re-validate.
     Invalid {
         section: ConfigSection,
         field: &'static str,
         message: String,
     },
 
+    /// The runtime could not resolve or apply a configuration `field`.
+    ///
+    /// Wraps the originating [`RuntimeError`] as its source.
     Runtime {
         section: ConfigSection,
         field: &'static str,
         source: RuntimeError,
     },
 
+    /// A configuration `field` violated a runtime contract.
+    ///
+    /// Wraps the originating [`RuntimeContractViolation`] as its source.
     Contract {
         section: ConfigSection,
         field: &'static str,
         source: RuntimeContractViolation,
     },
 
-    RestartRequired {
-        fields: String,
-    },
+    /// One or more changed `fields` can only take effect after a Broker
+    /// restart and were therefore not applied live.
+    RestartRequired { fields: String },
 
-    UnsupportedKeys {
-        keys: String,
-    },
+    /// The configuration contained `keys` the Broker does not recognize.
+    UnsupportedKeys { keys: String },
 
+    /// A property `key` was present but its `value` did not match the
+    /// `expected` type or shape.
+    ///
+    /// Recoverable: correct the property value.
     InvalidProperty {
         key: String,
         value: String,
         expected: &'static str,
     },
 
-    GenerationConflict {
-        expected: u64,
-        actual: u64,
-    },
+    /// An optimistic configuration-generation check failed because another
+    /// update advanced the generation concurrently.
+    ///
+    /// Recoverable: re-read the current generation and retry the update.
+    GenerationConflict { expected: u64, actual: u64 },
 
+    /// The configuration generation counter can no longer be advanced.
     GenerationExhausted,
 
-    RuntimeProjectionUnavailable {
-        component: &'static str,
-    },
+    /// The runtime configuration projection for `component` is not available.
+    RuntimeProjectionUnavailable { component: &'static str },
 
-    RuntimeCoordination {
-        detail: String,
-    },
+    /// Coordination of a runtime configuration change failed; `detail`
+    /// describes the failure.
+    RuntimeCoordination { detail: String },
 }
 
 impl fmt::Display for BrokerConfigError {
@@ -162,6 +209,8 @@ impl std::error::Error for BrokerConfigError {
 }
 
 impl BrokerConfigError {
+    /// Builds an [`Invalid`](Self::Invalid) error for `field` in `section`,
+    /// capturing a human-readable `message`.
     pub(crate) fn invalid(section: ConfigSection, field: &'static str, message: impl Into<String>) -> Self {
         Self::Invalid {
             section,
@@ -170,14 +219,21 @@ impl BrokerConfigError {
         }
     }
 
+    /// Builds a [`Runtime`](Self::Runtime) error wrapping the `source`
+    /// [`RuntimeError`] raised while resolving `field` in `section`.
     pub(crate) fn runtime(section: ConfigSection, field: &'static str, source: RuntimeError) -> Self {
         Self::Runtime { section, field, source }
     }
 
+    /// Builds a [`Contract`](Self::Contract) error wrapping the `source`
+    /// [`RuntimeContractViolation`] for `field` in `section`.
     pub(crate) fn contract(section: ConfigSection, field: &'static str, source: RuntimeContractViolation) -> Self {
         Self::Contract { section, field, source }
     }
 
+    /// Builds a [`RestartRequired`](Self::RestartRequired) error from the list
+    /// of changed `fields`. The list is sorted and de-duplicated so the
+    /// rendered message is stable regardless of input order.
     pub(crate) fn restart_required(mut fields: Vec<String>) -> Self {
         fields.sort();
         fields.dedup();
@@ -186,6 +242,9 @@ impl BrokerConfigError {
         }
     }
 
+    /// Builds an [`UnsupportedKeys`](Self::UnsupportedKeys) error from the
+    /// unrecognized `keys`. The list is sorted and de-duplicated for a stable
+    /// message.
     pub(crate) fn unsupported_keys(mut keys: Vec<String>) -> Self {
         keys.sort();
         keys.dedup();
