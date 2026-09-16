@@ -37,18 +37,31 @@ impl BatchMqHandler {
         Self
     }
 
-    pub async fn lock_natch_mq<MS: BrokerAdminStore>(
+    pub async fn lock_batch_mq<MS: BrokerAdminStore>(
         &self,
         broker_runtime_inner: &BrokerAdminRuntime<MS>,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
-        let mut request_body = LockBatchRequestBody::decode(request.get_body().unwrap()).unwrap();
+        let Some(body) = request.get_body() else {
+            return Err(crate::broker_error::invalid_argument(
+                "lockBatchMQ request body is required",
+            ));
+        };
+        let mut request_body = LockBatchRequestBody::decode(body)
+            .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))?;
         let mut lock_ok_mqset = HashSet::new();
+        let (Some(consumer_group), Some(client_id)) =
+            (request_body.consumer_group.as_ref(), request_body.client_id.as_ref())
+        else {
+            return Err(crate::broker_error::invalid_argument(
+                "lockBatchMQ consumerGroup and clientId are required",
+            ));
+        };
         let self_lock_okmqset = broker_runtime_inner.rebalance_lock_manager().try_lock_batch(
-            request_body.consumer_group.as_ref().unwrap(),
+            consumer_group,
             &request_body.mq_set,
-            request_body.client_id.as_ref().unwrap(),
+            client_id,
         );
         if request_body.only_this_broker || !broker_runtime_inner.broker_config().lock_in_strict_mode {
             lock_ok_mqset = self_lock_okmqset;
@@ -119,13 +132,24 @@ impl BatchMqHandler {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> crate::broker_error::BrokerResult<Option<RemotingCommand>> {
-        let mut request_body = UnlockBatchRequestBody::decode(request.get_body().unwrap()).unwrap();
+        let Some(body) = request.get_body() else {
+            return Err(crate::broker_error::invalid_argument(
+                "unlockBatchMQ request body is required",
+            ));
+        };
+        let mut request_body = UnlockBatchRequestBody::decode(body)
+            .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))?;
         if request_body.only_this_broker || !broker_runtime_inner.broker_config().lock_in_strict_mode {
-            broker_runtime_inner.rebalance_lock_manager().unlock_batch(
-                request_body.consumer_group.as_ref().unwrap(),
-                &request_body.mq_set,
-                request_body.client_id.as_ref().unwrap(),
-            );
+            let (Some(consumer_group), Some(client_id)) =
+                (request_body.consumer_group.as_ref(), request_body.client_id.as_ref())
+            else {
+                return Err(crate::broker_error::invalid_argument(
+                    "unlockBatchMQ consumerGroup and clientId are required",
+                ));
+            };
+            broker_runtime_inner
+                .rebalance_lock_manager()
+                .unlock_batch(consumer_group, &request_body.mq_set, client_id);
         } else {
             request_body.only_this_broker = true;
             let request_body = Bytes::from(request_body.encode().expect("unlockBatchMQ encode error"));
