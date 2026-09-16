@@ -707,105 +707,157 @@ mod defaults {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrokerConfig {
+    /// Identity of this Broker: its name, broker id, and the cluster it belongs
+    /// to.
     #[serde(default = "defaults::broker_identity")]
     pub broker_identity: BrokerIdentity,
 
+    /// Default read/write queue counts applied when topics are auto-created.
     #[serde(default = "defaults::topic_queue_config")]
     pub topic_queue_config: TopicQueueConfig,
 
+    /// Configuration of the timing wheel that drives delayed / timer messages.
     #[serde(default = "defaults::timer_wheel_config")]
     pub timer_wheel_config: TimerWheelConfig,
 
+    /// Network server settings for the Broker's remoting listener.
     #[serde(default = "defaults::broker_server_config")]
     pub broker_server_config: ServerConfig,
 
+    /// Primary advertised IP address of this Broker, used in the broker address
+    /// registered with the nameserver.
     #[serde(default = "defaults::broker_ip1")]
     pub broker_ip1: CheetahString,
 
+    /// Secondary IP address advertised for HA replication, if any.
     #[serde(default = "defaults::broker_ip2")]
     pub broker_ip2: Option<CheetahString>,
 
+    /// TCP port the Broker's remoting server listens on.
     #[serde(default = "defaults::listen_port")]
     pub listen_port: u32,
 
+    /// Whether the message-trace feature is enabled on this Broker. Boolean
+    /// toggle.
     #[serde(default)]
     pub trace_topic_enable: bool,
 
+    /// Name of the topic that message-trace data is written to.
     #[serde(default = "defaults::msg_trace_topic_name")]
     pub msg_trace_topic_name: CheetahString,
 
+    /// Whether this Broker runs in controller (5.x replication controller)
+    /// mode. Boolean toggle.
     #[serde(default)]
     pub enable_controller_mode: bool,
 
+    /// Address(es) of the controller, used when controller mode is enabled.
     #[serde(default = "defaults::controller_addr")]
     pub controller_addr: CheetahString,
 
+    /// Interval, in milliseconds, between syncs of broker metadata from master
+    /// to slave.
     #[serde(default = "defaults::sync_broker_metadata_period")]
     pub sync_broker_metadata_period: u64,
 
+    /// Interval, in milliseconds, between syncs of controller metadata.
     #[serde(default = "defaults::sync_controller_metadata_period")]
     pub sync_controller_metadata_period: u64,
 
+    /// Region identifier stamped into messages for region routing / tracing.
     #[serde(default = "defaults::region_id")]
     pub region_id: CheetahString,
 
+    /// Whether tracing is switched on for this Broker. Boolean toggle.
     #[serde(default = "defaults::trace_on")]
     pub trace_on: bool,
 
+    /// Bitmask of Broker permissions (read / write / inherit); see `PermName`.
     #[serde(default = "defaults::broker_permission")]
     pub broker_permission: u32,
 
+    /// Retained only for Java configuration compatibility; not used by the Rust
+    /// Broker.
     #[serde(default)]
     pub async_send_enable: bool, //not used in rust version,only for Java compatibility
 
+    /// Root directory of the message store on disk.
     #[serde(default = "defaults::store_path_root_dir")]
     pub store_path_root_dir: CheetahString,
 
+    /// Whether all configuration tables share a single RocksDB instance instead
+    /// of one instance per table. Boolean toggle.
     #[serde(default = "defaults::use_single_rocksdb_for_all_configs")]
     pub use_single_rocksdb_for_all_configs: bool,
 
+    /// Whether broker registration to the nameserver is split into several
+    /// smaller requests. Boolean toggle.
     #[serde(default)]
     pub enable_split_registration: bool,
 
+    /// Number of topics carried per request when split registration is enabled.
+    /// A count.
     #[serde(default = "defaults::split_registration_size")]
     pub split_registration_size: i32,
 
+    /// Timeout, in milliseconds, for a single register-broker request to the
+    /// nameserver.
     #[serde(default = "defaults::register_broker_timeout_mills")]
     pub register_broker_timeout_mills: i32,
 
+    /// Whether this Broker runs inside a broker container (several brokers in
+    /// one process). Boolean toggle.
     #[serde(default)]
     pub is_in_broker_container: bool,
 
+    /// Message size unit, in bytes, used when accounting commercial / billing
+    /// statistics.
     #[serde(default = "defaults::commercial_size_per_msg")]
     pub commercial_size_per_msg: i32,
 
+    /// Whether the message store recovers consume queues concurrently on
+    /// startup. Boolean toggle.
     #[serde(default)]
     pub recover_concurrently: bool,
 
+    /// Whether duplicated message delivery is permitted. Boolean toggle.
     #[serde(default)]
     pub duplication_enable: bool,
 
+    /// Epoch timestamp, in milliseconds, before which the Broker rejects send
+    /// requests; used to delay accepting traffic after startup.
     #[serde(default)]
     pub start_accept_send_request_time_stamp: i64,
 
+    /// Whether topics are auto-created on first use. Boolean toggle.
     #[serde(default = "defaults::auto_create_topic_enable")]
     pub auto_create_topic_enable: bool,
 
+    /// Whether auto-created topic configuration is persisted asynchronously.
+    /// Boolean toggle.
     #[serde(default = "defaults::async_topic_create_persist_enable")]
     pub async_topic_create_persist_enable: bool,
 
+    /// Whether topics are registered to the nameserver one at a time rather
+    /// than in bulk. Boolean toggle.
     #[serde(default = "defaults::enable_single_topic_register")]
     pub enable_single_topic_register: bool,
 
+    /// Whether the per-broker system topic is enabled. Boolean toggle.
     #[serde(default = "defaults::broker_topic_enable")]
     pub broker_topic_enable: bool,
 
+    /// Whether the per-cluster system topic is enabled. Boolean toggle.
     #[serde(default = "defaults::cluster_topic_enable")]
     pub cluster_topic_enable: bool,
 
+    /// Number of revive queues used by POP consumption for retry / ack
+    /// handling. A count.
     #[serde(default = "defaults::revive_queue_num")]
     pub revive_queue_num: u32,
 
+    /// Whether a slave may act as master when the master is unavailable.
+    /// Boolean toggle.
     #[serde(default)]
     pub enable_slave_acting_master: bool,
 
