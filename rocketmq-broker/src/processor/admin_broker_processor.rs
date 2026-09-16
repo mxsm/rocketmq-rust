@@ -71,6 +71,9 @@ mod broker_stats_handler;
 #[cfg(test)]
 #[path = "../../tests/unit/processor/admin_broker_concurrency.rs"]
 mod concurrency_tests;
+#[cfg(test)]
+#[path = "../../tests/unit/processor/batch_mq_handler_tests.rs"]
+mod batch_mq_handler_tests;
 mod consumer_request_handler;
 mod create_acl_request_handler;
 mod create_user_request_handler;
@@ -459,7 +462,7 @@ impl<MS: BrokerAdminStore> AdminBrokerProcessor<MS> {
             RequestCode::LockBatchMq => {
                 let broker_runtime_inner = self.broker_config_request_handler.broker_runtime_inner();
                 self.batch_mq_handler
-                    .lock_natch_mq(broker_runtime_inner, request_code, request)
+                    .lock_batch_mq(broker_runtime_inner, request_code, request)
                     .await
             }
             RequestCode::UnlockBatchMq => {
