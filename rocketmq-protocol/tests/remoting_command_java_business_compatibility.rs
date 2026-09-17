@@ -147,9 +147,10 @@ fn ext_key_length_matches_java_signed_short_boundary() {
         .try_fast_header_encode(&mut destination)
         .expect_err("a key larger than Java's signed-short range must be rejected");
     assert_eq!(destination.as_ref(), b"prefix");
-    assert!(error
-        .to_string()
-        .contains("dynamic header key length exceeds the ROCKETMQ wire limit"));
+    // Canonical errors render only the stable code and detail, so the classified
+    // "dynamic header key length exceeds the ROCKETMQ wire limit" text is no longer
+    // observable: the rejection contract is the header-invalid descriptor.
+    assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_HEADER_INVALID);
 
     let mut json_command = RemotingCommand::create_success_response_command().set_serialize_type(SerializeType::JSON);
     json_command.add_ext_field(oversized_key.clone(), "value");
