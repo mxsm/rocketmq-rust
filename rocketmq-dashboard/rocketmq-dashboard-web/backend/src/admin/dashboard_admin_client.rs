@@ -27,6 +27,7 @@ use rocketmq_admin_core::client_adapter::ClientRuntime;
 use rocketmq_admin_core::core::dashboard as core;
 use rocketmq_admin_core::core::dashboard::DashboardAdmin;
 use rocketmq_admin_core::core::security::AdminCredentials;
+use rocketmq_dashboard_common::redact_sensitive_entries;
 use rocketmq_runtime::ChildServiceContext;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -562,7 +563,8 @@ impl DashboardAdminClient {
         Ok(BrokerConfigView {
             broker_name: config.broker_name,
             address: config.address,
-            entries: config.entries,
+            // Credential/token/TLS-shaped values must never reach the API response unredacted.
+            entries: redact_sensitive_entries(config.entries),
         })
     }
 
