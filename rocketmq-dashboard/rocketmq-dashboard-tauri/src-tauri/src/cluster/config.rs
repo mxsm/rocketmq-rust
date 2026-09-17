@@ -18,6 +18,7 @@ use rocketmq_admin_core::client_adapter::AdminSession;
 use rocketmq_admin_core::core::dashboard::{
     DashboardAdmin, DashboardBrokerConfigUpdateRequest, DashboardBrokerInfo, DashboardBrokerTarget,
 };
+use rocketmq_dashboard_common::redact_sensitive_entries;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -139,7 +140,9 @@ pub(super) async fn update_config(
             } else {
                 ConfigReadBack::Different
             };
-            (status, Some(entries))
+            // The confirmed/different comparison above runs on the raw values;
+            // only the entries handed back to the UI need to be redacted.
+            (status, Some(redact_sensitive_entries(entries)))
         }
         Err(_) => (ConfigReadBack::Unavailable, None),
     };
@@ -223,6 +226,54 @@ mod tests {
             assert_eq!(*admin.calls.borrow(), ["brokers", "write", "read"]);
             assert_eq!(result.summary().outcome, crate::audit::types::Outcome::Success);
         }
+    }
+    #[tokio::test]
+    async fn read_back_entries_redact_sensitive_keys_but_keep_comparison_accurate() {
+        struct SensitiveFake;
+        impl BrokerConfigAccess for SensitiveFake {
+            async fn brokers(&self) -> DashboardResult<Vec<DashboardBrokerInfo>> {
+                Ok(vec![DashboardBrokerInfo {
+                    cluster_name: "cluster".into(),
+                    broker_name: "broker-a".into(),
+                    broker_id: 0,
+                    address: "127.0.0.1:10911".into(),
+                    role: "MASTER".into(),
+                    version: "".into(),
+                    produce_tps: 0.0,
+                    consume_tps: 0.0,
+                    runtime_entries: BTreeMap::new(),
+                    runtime_error: None,
+                }])
+            }
+            async fn write(&self, _: &DashboardBrokerConfigUpdateRequest) -> DashboardResult<()> {
+                Ok(())
+            }
+            async fn read(&self, _: &DashboardBrokerTarget) -> DashboardResult<BTreeMap<String, String>> {
+                Ok(BTreeMap::from([
+                    ("brokerPermission".into(), "6".into()),
+                    ("tlsServerKeyPassword".into(), "hunter2".into()),
+                ]))
+            }
+        }
+
+        let mut request = request();
+        request.entries = BTreeMap::from([
+            ("brokerPermission".into(), "6".into()),
+            ("tlsServerKeyPassword".into(), "hunter2".into()),
+        ]);
+
+        let result = update_config(&SensitiveFake, request).await.unwrap();
+
+        // The confirmed/different comparison must still see the real values,
+        // not the redacted placeholder, or every sensitive-key write would
+        // wrongly report as `Different`.
+        assert_eq!(result.read_back, ConfigReadBack::Confirmed);
+        let entries = result.entries.expect("entries should be present on success");
+        assert_eq!(entries.get("brokerPermission").map(String::as_str), Some("6"));
+        assert_eq!(
+            entries.get("tlsServerKeyPassword").map(String::as_str),
+            Some("<redacted>")
+        );
     }
     #[tokio::test]
     async fn invalid_patch_and_changed_identity_never_write() {
