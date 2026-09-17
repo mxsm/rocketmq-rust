@@ -813,9 +813,10 @@ impl<MS: BrokerReadWriteStore> PopReviveService<MS> {
         }
         if new_offset > consume_revive_obj.old_offset {
             if !this.should_run_pop_revive.load(Ordering::Acquire) {
-                println!(
-                    "slave skip commit, revive topic={}, reviveQueueId={}",
-                    this.revive_topic, this.queue_id
+                warn!(
+                    revive_topic = %this.revive_topic,
+                    queue_id = this.queue_id,
+                    "slave skip commit"
                 );
                 return Ok(());
             }
