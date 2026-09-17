@@ -116,13 +116,15 @@ async fn notification_deferred_execution_admission_rejects_before_handler_and_wr
     assert_eq!(response.code(), ResponseCode::SystemBusy as i32);
     assert_eq!(handler_calls.load(Ordering::SeqCst), 0);
     assert_terminal(&service);
+
+    // Deferred completion can precede the original request task releasing its admission permits.
+    running.finish().await;
     let admission = controller.snapshot();
     assert_eq!(admission.queued.current_count, 0);
     assert_eq!(admission.inflight.current_count, 0);
     assert_eq!(admission.processors.current_count, 0);
     assert_eq!(admission.queued.rejected_count, 1);
 
-    running.finish().await;
     assert!(
         client.receive_command().await.is_none(),
         "execution admission rejection has one terminal frame"
