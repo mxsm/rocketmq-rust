@@ -823,6 +823,37 @@ fn phase_four_message_pull_progress_messages_include_event_counts() {
 }
 
 #[test]
+fn message_pull_capture_reports_a_reached_event_limit_as_a_truncated_success() {
+    let mut events = Vec::new();
+    let mut truncated = false;
+    let abort = loop {
+        match super::operations::capture_message_pull_event(&mut events, 2, MessagePullEvent::Separator, &mut truncated)
+        {
+            Ok(()) => {}
+            Err(error) => break error,
+        }
+    };
+
+    assert!(truncated, "the reached limit must be observed by the capture owner");
+    assert_eq!(events.len(), 2, "the event that reached the limit is still captured");
+
+    let capture = super::operations::message_pull_capture_from_result(events, 2, truncated, Err(abort))
+        .expect("reaching the event limit is a bounded success, not a failure");
+    assert!(capture.truncated);
+    assert_eq!(capture.events.len(), 2);
+}
+
+#[test]
+fn message_pull_capture_still_propagates_failures_that_are_not_truncation() {
+    let error = crate::errors::invariant_violated("injected pull failure");
+
+    assert!(
+        super::operations::message_pull_capture_from_result(Vec::new(), 8, false, Err(error)).is_err(),
+        "an unobserved failure must not be reported as a truncated capture"
+    );
+}
+
+#[test]
 fn phase_five_monitoring_progress_messages_include_event_context() {
     let message = super::operations::monitoring_progress_message(
         2,

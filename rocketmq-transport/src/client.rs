@@ -737,10 +737,17 @@ mod tests {
             .expect_err("SOCKS target parser must reject the invalid authority");
         assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 29);
         assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
-        assert!(error
-            .context()
-            .to_string()
-            .contains("key=com.rocketmq.socks.proxy.config"));
+        // The configuration key is Diagnostic-visibility, so it is redacted in rendering and
+        // readable only through the diagnostic projection.
+        let view = error.diagnostic_view().expect("valid diagnostic error context");
+        let actual = view
+            .fields()
+            .find(|field| field.name() == rocketmq_error::fields::KEY.schema().name())
+            .map(|field| field.value());
+        assert_eq!(
+            actual,
+            Some(rocketmq_error::ViewValueRef::Text("com.rocketmq.socks.proxy.config"))
+        );
     }
 
     #[cfg(feature = "socks")]

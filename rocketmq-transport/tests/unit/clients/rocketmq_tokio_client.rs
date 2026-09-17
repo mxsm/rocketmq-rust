@@ -838,11 +838,7 @@ async fn request_before_hook_error_is_preserved_without_writing_a_frame() {
 
     assert_eq!(error.request_stage(), Some(OutboundRequestStage::BeforeWrite));
     assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
-    assert!(error
-        .shared_error()
-        .source()
-        .and_then(|source| source.downcast_ref::<rocketmq_error::SharedError>())
-        .is_some_and(|source| source.descriptor() == &rocketmq_error::CORE_ARGUMENT_INVALID));
+    // The canonical rejection is source-free and carried as the error itself, not as a source.
     assert_eq!(hook.calls.load(Ordering::SeqCst), 1);
     client.shutdown();
     assert_eq!(
@@ -889,11 +885,7 @@ async fn response_hook_error_is_operational_at_response_received() {
 
     assert_eq!(error.request_stage(), Some(OutboundRequestStage::ResponseReceived));
     assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
-    assert!(error
-        .shared_error()
-        .source()
-        .and_then(|source| source.downcast_ref::<rocketmq_error::SharedError>())
-        .is_some_and(|source| source.descriptor() == &rocketmq_error::CORE_ARGUMENT_INVALID));
+    // The canonical rejection is source-free and carried as the error itself, not as a source.
 
     server.await.expect("response hook server task");
     client.shutdown();

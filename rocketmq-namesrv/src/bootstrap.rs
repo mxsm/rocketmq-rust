@@ -4290,7 +4290,11 @@ mod tests {
         .expect("startup rollback should honor its deadline")
         .expect_err("partially started route lookup should fail startup");
 
-        assert!(error.to_string().contains("simulated partial startup failure"));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERVICE_FAILED);
+        let startup_source = std::error::Error::source(error.as_ref())
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .expect("startup failure must retain the injected io::Error source");
+        assert_eq!(startup_source.to_string(), "simulated partial startup failure");
         assert!(route_lookup.started.load(Ordering::Acquire));
         assert!(route_lookup.shutdown_called.load(Ordering::Acquire));
         assert_eq!(route_lookup.task_group.task_count(), 0);
@@ -4367,9 +4371,16 @@ mod tests {
             .await
             .expect_err("a binary without embedded-controller must reject the runtime setting");
 
-        assert!(error
-            .to_string()
-            .contains("compiled without the `embedded-controller` feature"));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
+        let view = error.diagnostic_view().expect("valid diagnostic error context");
+        let rejected_key = view
+            .fields()
+            .find(|field| field.name() == rocketmq_error::fields::KEY.schema().name())
+            .map(|field| field.value());
+        assert_eq!(
+            rejected_key,
+            Some(rocketmq_error::ViewValueRef::Text("enableControllerInNamesrv"))
+        );
     }
 
     #[tokio::test]
@@ -4696,7 +4707,16 @@ mod tests {
             .await
             .expect_err("embedded controller should reject conflicting listen addresses");
 
-        assert!(error.to_string().contains("conflicts with namesrv address"));
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
+        let view = error.diagnostic_view().expect("valid diagnostic error context");
+        let rejected_key = view
+            .fields()
+            .find(|field| field.name() == rocketmq_error::fields::KEY.schema().name())
+            .map(|field| field.value());
+        assert_eq!(
+            rejected_key,
+            Some(rocketmq_error::ViewValueRef::Text("enableControllerInNamesrv"))
+        );
     }
 
     #[cfg(feature = "embedded-controller")]

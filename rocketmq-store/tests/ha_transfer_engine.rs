@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::error::Error as _;
 use std::io;
 use std::io::IoSlice;
 use std::pin::Pin;
@@ -25,6 +26,8 @@ use rocketmq_store::select_transfer_engine;
 use rocketmq_store::select_transfer_engine_with_availability;
 use rocketmq_store::BytesTransferEngine;
 use rocketmq_store::SegmentLease;
+use rocketmq_store::StoreComponent;
+use rocketmq_store::StoreOperation;
 use rocketmq_store::TransferBatch;
 use rocketmq_store::TransferCacheState;
 use rocketmq_store::TransferEngineAvailability;
@@ -158,7 +161,15 @@ async fn vectored_transfer_engine_does_not_fallback_after_partial_write() {
     assert_eq!(writer.written, expected[..5]);
     assert_eq!(writer.write_calls, 0);
     assert_eq!(writer.vectored_calls, 2);
-    assert!(error.to_string().contains("vectored write failed after partial frame"));
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_IO_FAILED);
+    assert_eq!(error.operation(), StoreOperation::Replicate);
+    assert_eq!(error.component(), StoreComponent::HighAvailability);
+    let transfer_source = error.source().expect("transfer failure remains the typed source");
+    let io_source = transfer_source
+        .source()
+        .and_then(|source| source.downcast_ref::<io::Error>())
+        .expect("partial-frame vectored write retains its causal I/O error");
+    assert_eq!(io_source.to_string(), "vectored write failed after partial frame");
 }
 
 #[test]

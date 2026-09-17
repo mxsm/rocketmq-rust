@@ -43,6 +43,12 @@ use rcgen::Issuer;
 use rcgen::KeyPair;
 #[cfg(feature = "tls")]
 use rcgen::KeyUsagePurpose;
+#[cfg(feature = "tls")]
+use rocketmq_error::fields;
+#[cfg(feature = "tls")]
+use rocketmq_error::ViewValueRef;
+#[cfg(feature = "tls")]
+use rocketmq_error::CORE_CONFIGURATION_INVALID;
 use rocketmq_model::result::SendStatus;
 use rocketmq_protocol::protocol::route::route_data_view::{BrokerData, QueueData};
 use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
@@ -963,7 +969,16 @@ async fn proxy_runtime_rejects_partial_grpc_tls_material_before_startup() {
         Ok(_) => panic!("certificate-only TLS must fail before the listener starts"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("privateKeyPath"), "{error}");
+    let ProxyError::Canonical(canonical) = error else {
+        panic!("certificate-only TLS must fail with a canonical configuration error: {error:?}");
+    };
+    assert_eq!(canonical.descriptor(), &CORE_CONFIGURATION_INVALID);
+    let view = canonical.diagnostic_view().expect("valid diagnostic error context");
+    let actual = view
+        .fields()
+        .find(|field| field.name() == fields::KEY.schema().name())
+        .map(|field| field.value());
+    assert_eq!(actual, Some(ViewValueRef::Text("grpc.tls.privateKeyPath")));
 }
 
 #[cfg(feature = "tls")]
