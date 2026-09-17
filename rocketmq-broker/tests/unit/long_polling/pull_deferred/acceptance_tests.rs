@@ -786,6 +786,15 @@ async fn tcp_partial_write_drops_owner_once_without_retrying() {
         .expect("partial Pull resume receipt channel")
         .expect_err("peer close must fail the incomplete canonical write");
     assert_eq!(rereads.load(Ordering::SeqCst), 1, "partial writes are never retried");
+    // The queued writer publishes this failure before it releases the payload it holds, so the
+    // canonical owner is released concurrently with the resume terminal rather than inside it.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while owner_drops.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("failed partial write releases the accepted resume owner");
     assert_eq!(owner_drops.load(Ordering::SeqCst), 1);
     assert_released(&service);
     let _ = service.shutdown();
