@@ -65,15 +65,15 @@ use tracing::warn;
 use crate::processor::response_assembly::immediate_outcome_from_command_result;
 
 mod batch_mq_handler;
+#[cfg(test)]
+#[path = "../../tests/unit/processor/batch_mq_handler_tests.rs"]
+mod batch_mq_handler_tests;
 mod broker_config_request_handler;
 mod broker_epoch_cache_handler;
 mod broker_stats_handler;
 #[cfg(test)]
 #[path = "../../tests/unit/processor/admin_broker_concurrency.rs"]
 mod concurrency_tests;
-#[cfg(test)]
-#[path = "../../tests/unit/processor/batch_mq_handler_tests.rs"]
-mod batch_mq_handler_tests;
 mod consumer_request_handler;
 mod create_acl_request_handler;
 mod create_user_request_handler;
