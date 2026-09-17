@@ -191,287 +191,124 @@ mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_model::common::lite::to_lmq_name;
 
-    use super::*;
+    use super::LiteConsumerLagCalculator;
+    use super::LiteConsumerLagDataSource;
+    use super::LiteOffsetTable;
 
-    const GROUP: &str = "group_a";
-    const OTHER_GROUP: &str = "group_b";
-    const PARENT_TOPIC: &str = "parent_topic";
-
-    struct MockLagDataSource {
-        offset_table: LiteOffsetTable,
+    #[derive(Default)]
+    struct TestDataSource {
+        offsets: LiteOffsetTable,
         max_offsets: HashMap<CheetahString, i64>,
-        store_timestamps: HashMap<CheetahString, i64>,
+        timestamps: HashMap<(CheetahString, i64), i64>,
     }
 
-    impl MockLagDataSource {
-        fn new() -> Self {
-            Self {
-                offset_table: HashMap::new(),
-                max_offsets: HashMap::new(),
-                store_timestamps: HashMap::new(),
-            }
-        }
-
-        fn with_queue(mut self, parent_topic: &str, lite_topic: &str, group: &str, consumer_offset: i64) -> Self {
-            let lmq_name = lmq_name(parent_topic, lite_topic);
-            let key = offset_table_key(&lmq_name, group);
-            self.offset_table.entry(key).or_default().insert(0, consumer_offset);
-            self
-        }
-
-        fn with_max_offset(mut self, parent_topic: &str, lite_topic: &str, max_offset: i64) -> Self {
-            self.max_offsets.insert(lmq_name(parent_topic, lite_topic), max_offset);
-            self
-        }
-
-        fn with_store_timestamp(mut self, parent_topic: &str, lite_topic: &str, timestamp: i64) -> Self {
-            self.store_timestamps
-                .insert(lmq_name(parent_topic, lite_topic), timestamp);
-            self
+    impl TestDataSource {
+        fn insert(&mut self, parent: &str, lite: &str, group: &str, consumer: i64, max: i64, timestamp: i64) {
+            let queue = lite_queue(parent, lite);
+            self.offsets.insert(
+                CheetahString::from_string(format!("{queue}@{group}")),
+                HashMap::from([(0, consumer)]),
+            );
+            self.max_offsets.insert(queue.clone(), max);
+            self.timestamps.insert((queue, consumer), timestamp);
         }
     }
 
-    impl LiteConsumerLagDataSource for MockLagDataSource {
+    impl LiteConsumerLagDataSource for TestDataSource {
         fn offset_table_snapshot(&self) -> LiteOffsetTable {
-            self.offset_table.clone()
+            self.offsets.clone()
         }
 
         fn max_offset(&self, lmq_name: &CheetahString) -> i64 {
-            self.max_offsets.get(lmq_name).copied().unwrap_or(0)
+            self.max_offsets.get(lmq_name).copied().unwrap_or_default()
         }
 
-        fn message_store_timestamp(&self, lmq_name: &CheetahString, _offset: i64) -> i64 {
-            self.store_timestamps.get(lmq_name).copied().unwrap_or(0)
+        fn message_store_timestamp(&self, lmq_name: &CheetahString, offset: i64) -> i64 {
+            self.timestamps
+                .get(&(lmq_name.clone(), offset))
+                .copied()
+                .unwrap_or_default()
         }
     }
 
-    fn lmq_name(parent_topic: &str, lite_topic: &str) -> CheetahString {
-        CheetahString::from_string(to_lmq_name(parent_topic, lite_topic).expect("valid lite topic name"))
-    }
-
-    fn offset_table_key(lmq_name: &CheetahString, group: &str) -> CheetahString {
-        CheetahString::from_string(format!("{}{}{}", lmq_name, TOPIC_GROUP_SEPARATOR, group))
-    }
-
-    fn group(group_name: &str) -> CheetahString {
-        CheetahString::from_slice(group_name)
-    }
-
-    /// Collect (lite topic, lag count) pairs sorted by lite topic so results can be
-    /// asserted without depending on `HashMap` iteration order.
-    fn sorted_lag_pairs(lag_infos: &[LiteLagInfo]) -> Vec<(&str, i64)> {
-        let mut pairs: Vec<(&str, i64)> = lag_infos
-            .iter()
-            .map(|lag_info| (lag_info.lite_topic().as_str(), lag_info.lag_count()))
-            .collect();
-        pairs.sort_unstable();
-        pairs
+    fn lite_queue(parent: &str, lite: &str) -> CheetahString {
+        CheetahString::from_string(to_lmq_name(parent, lite).expect("non-empty lite queue components"))
     }
 
     #[test]
-    fn lag_count_single_queue_behind_max_offset() {
-        let data_source = MockLagDataSource::new()
-            .with_queue(PARENT_TOPIC, "lite_a", GROUP, 100)
-            .with_max_offset(PARENT_TOPIC, "lite_a", 150);
+    fn lite_consumer_lag_count_filters_groups_truncates_results_and_preserves_total() {
+        let mut source = TestDataSource::default();
+        source.insert("orders", "priority", "group-a", 3, 10, 300);
+        source.insert("orders", "standard", "group-a", 7, 10, 700);
+        source.insert("orders", "express", "group-a", 3, 10, 300);
+        source.insert("orders", "other-group", "group-b", 1, 20, 100);
 
-        let (lag_infos, total_lag_count) =
-            LiteConsumerLagCalculator::get_lag_count_top_k(&data_source, &group(GROUP), 10);
+        let (lag_infos, total) = LiteConsumerLagCalculator::get_lag_count_top_k(&source, &"group-a".into(), 1);
 
+        assert_eq!(total, 17);
         assert_eq!(lag_infos.len(), 1);
-        assert_eq!(lag_infos[0].lite_topic(), "lite_a");
-        assert_eq!(lag_infos[0].lag_count(), 50);
-        assert_eq!(total_lag_count, 50);
-    }
+        assert_eq!(lag_infos[0].lite_topic(), "express");
+        assert_eq!(lag_infos[0].lag_count(), 7);
 
-    #[test]
-    fn lag_count_zero_when_consumer_offset_equals_max_offset() {
-        let data_source = MockLagDataSource::new()
-            .with_queue(PARENT_TOPIC, "lite_a", GROUP, 200)
-            .with_max_offset(PARENT_TOPIC, "lite_a", 200);
-
-        let (lag_infos, total_lag_count) =
-            LiteConsumerLagCalculator::get_lag_count_top_k(&data_source, &group(GROUP), 10);
-
+        let (lag_infos, total) = LiteConsumerLagCalculator::get_lag_count_top_k(&source, &"missing-group".into(), 10);
         assert!(lag_infos.is_empty());
-        assert_eq!(total_lag_count, 0);
+        assert_eq!(total, 0);
     }
 
     #[test]
-    fn lag_count_totals_across_several_queues_in_group() {
-        let data_source = MockLagDataSource::new()
-            .with_queue(PARENT_TOPIC, "lite_a", GROUP, 10)
-            .with_max_offset(PARENT_TOPIC, "lite_a", 20)
-            .with_queue(PARENT_TOPIC, "lite_b", GROUP, 5)
-            .with_max_offset(PARENT_TOPIC, "lite_b", 15)
-            .with_queue(PARENT_TOPIC, "lite_c", GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "lite_c", 7);
+    fn lite_consumer_lag_count_omits_non_positive_lag_and_keeps_all_for_non_positive_top_k() {
+        let mut source = TestDataSource::default();
+        source.insert("orders", "behind", "group-a", 3, 5, 300);
+        source.insert("orders", "further-behind", "group-a", 1, 4, 100);
+        source.insert("orders", "equal", "group-a", 5, 5, 500);
+        source.insert("orders", "ahead", "group-a", 7, 5, 700);
 
-        let (lag_infos, total_lag_count) =
-            LiteConsumerLagCalculator::get_lag_count_top_k(&data_source, &group(GROUP), 10);
-
+        for top_k in [0, -1] {
+            let (lag_infos, total) = LiteConsumerLagCalculator::get_lag_count_top_k(&source, &"group-a".into(), top_k);
+            assert_eq!(total, 5);
+            assert_eq!(lag_infos.len(), 2);
+            assert_eq!(lag_infos[0].lite_topic(), "further-behind");
+            assert_eq!(lag_infos[1].lite_topic(), "behind");
+        }
         assert_eq!(
-            sorted_lag_pairs(&lag_infos),
-            vec![("lite_a", 10), ("lite_b", 10), ("lite_c", 7)]
-        );
-        assert_eq!(total_lag_count, 27);
-    }
-
-    #[test]
-    fn lag_count_ignores_other_groups() {
-        let data_source = MockLagDataSource::new()
-            .with_queue(PARENT_TOPIC, "lite_a", GROUP, 10)
-            .with_max_offset(PARENT_TOPIC, "lite_a", 40)
-            .with_queue(PARENT_TOPIC, "lite_b", OTHER_GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "lite_b", 90);
-
-        let (lag_infos, total_lag_count) =
-            LiteConsumerLagCalculator::get_lag_count_top_k(&data_source, &group(GROUP), 10);
-
-        assert_eq!(lag_infos.len(), 1);
-        assert_eq!(lag_infos[0].lite_topic(), "lite_a");
-        assert_eq!(lag_infos[0].lag_count(), 30);
-        assert_eq!(total_lag_count, 30);
-    }
-
-    #[test]
-    fn lag_count_empty_group_returns_empty_result() {
-        let data_source = MockLagDataSource::new()
-            .with_queue(PARENT_TOPIC, "lite_a", OTHER_GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "lite_a", 10);
-
-        let (lag_infos, total_lag_count) =
-            LiteConsumerLagCalculator::get_lag_count_top_k(&data_source, &group(GROUP), 10);
-
-        assert!(lag_infos.is_empty());
-        assert_eq!(total_lag_count, 0);
-    }
-
-    #[test]
-    fn lag_count_top_k_truncates_sorted_results() {
-        let data_source = MockLagDataSource::new()
-            .with_queue(PARENT_TOPIC, "lite_a", GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "lite_a", 5)
-            .with_queue(PARENT_TOPIC, "lite_b", GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "lite_b", 50)
-            .with_queue(PARENT_TOPIC, "lite_c", GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "lite_c", 30);
-
-        let (lag_infos, total_lag_count) =
-            LiteConsumerLagCalculator::get_lag_count_top_k(&data_source, &group(GROUP), 2);
-
-        assert_eq!(lag_infos.len(), 2);
-        assert_eq!(lag_infos[0].lite_topic(), "lite_b");
-        assert_eq!(lag_infos[0].lag_count(), 50);
-        assert_eq!(lag_infos[1].lite_topic(), "lite_c");
-        assert_eq!(lag_infos[1].lag_count(), 30);
-        // The total is accumulated before truncation.
-        assert_eq!(total_lag_count, 85);
-    }
-
-    #[test]
-    fn lag_count_ties_are_ordered_by_lite_topic() {
-        let data_source = MockLagDataSource::new()
-            .with_queue(PARENT_TOPIC, "zeta", GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "zeta", 10)
-            .with_queue(PARENT_TOPIC, "alpha", GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "alpha", 10)
-            .with_queue(PARENT_TOPIC, "mid", GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "mid", 10);
-
-        let (lag_infos, _) = LiteConsumerLagCalculator::get_lag_count_top_k(&data_source, &group(GROUP), 10);
-
-        let topics: Vec<&str> = lag_infos
-            .iter()
-            .map(|lag_info| lag_info.lite_topic().as_str())
-            .collect();
-        assert_eq!(topics, vec!["alpha", "mid", "zeta"]);
-    }
-
-    #[test]
-    fn lag_count_top_k_zero_and_negative_keep_all_entries() {
-        let data_source = MockLagDataSource::new()
-            .with_queue(PARENT_TOPIC, "lite_a", GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "lite_a", 1)
-            .with_queue(PARENT_TOPIC, "lite_b", GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "lite_b", 2);
-
-        // truncate_top_k only truncates for top_k > 0; zero and negative values
-        // keep the full result set.
-        let (zero_k_infos, _) = LiteConsumerLagCalculator::get_lag_count_top_k(&data_source, &group(GROUP), 0);
-        assert_eq!(zero_k_infos.len(), 2);
-
-        let (negative_k_infos, _) = LiteConsumerLagCalculator::get_lag_count_top_k(&data_source, &group(GROUP), -3);
-        assert_eq!(negative_k_infos.len(), 2);
-    }
-
-    #[test]
-    fn lag_timestamp_filters_by_parent_topic() {
-        let data_source = MockLagDataSource::new()
-            .with_queue(PARENT_TOPIC, "lite_a", GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "lite_a", 3)
-            .with_store_timestamp(PARENT_TOPIC, "lite_a", 100)
-            .with_queue("other_parent", "lite_b", GROUP, 0)
-            .with_max_offset("other_parent", "lite_b", 4)
-            .with_store_timestamp("other_parent", "lite_b", 200);
-
-        let (lag_infos, _) =
-            LiteConsumerLagCalculator::get_lag_timestamp_top_k(&data_source, &group(GROUP), &group(PARENT_TOPIC), 10);
-
-        assert_eq!(lag_infos.len(), 1);
-        assert_eq!(lag_infos[0].lite_topic(), "lite_a");
-        assert_eq!(lag_infos[0].lag_count(), 3);
-        assert_eq!(lag_infos[0].earliest_unconsumed_timestamp(), 100);
-    }
-
-    #[test]
-    fn lag_timestamp_reports_oldest_timestamp() {
-        let data_source = MockLagDataSource::new()
-            .with_queue(PARENT_TOPIC, "lite_a", GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "lite_a", 1)
-            .with_store_timestamp(PARENT_TOPIC, "lite_a", 300)
-            .with_queue(PARENT_TOPIC, "lite_b", GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "lite_b", 1)
-            .with_store_timestamp(PARENT_TOPIC, "lite_b", 100)
-            .with_queue(PARENT_TOPIC, "lite_c", GROUP, 0)
-            .with_max_offset(PARENT_TOPIC, "lite_c", 1)
-            .with_store_timestamp(PARENT_TOPIC, "lite_c", 200);
-
-        let (lag_infos, earliest_unconsumed_timestamp) =
-            LiteConsumerLagCalculator::get_lag_timestamp_top_k(&data_source, &group(GROUP), &group(PARENT_TOPIC), 10);
-
-        assert_eq!(lag_infos.len(), 3);
-        assert_eq!(lag_infos[0].lite_topic(), "lite_b");
-        assert_eq!(earliest_unconsumed_timestamp, 100);
-    }
-
-    #[test]
-    fn decode_lite_topic_maps_lmq_name_and_keeps_plain_topic() {
-        let lite = lmq_name(PARENT_TOPIC, "lite_a");
-        assert_eq!(
-            LiteConsumerLagCalculator::decode_lite_topic(&lite),
-            CheetahString::from_static_str("lite_a")
-        );
-
-        let plain = CheetahString::from_static_str("regular_topic");
-        assert_eq!(LiteConsumerLagCalculator::decode_lite_topic(&plain), plain);
-    }
-
-    #[test]
-    fn offset_diff_handles_consumer_offset_beyond_max_offset() {
-        let data_source = MockLagDataSource::new().with_max_offset(PARENT_TOPIC, "lite_a", 100);
-
-        let lmq = lmq_name(PARENT_TOPIC, "lite_a");
-        assert_eq!(LiteConsumerLagCalculator::offset_diff(&data_source, &lmq, 110), 0);
-        // i64 boundary: max_offset at i64::MAX stays exact, and a consumer offset
-        // of i64::MAX clamps to zero without wrapping.
-        let boundary_source = MockLagDataSource::new().with_max_offset(PARENT_TOPIC, "lite_a", i64::MAX);
-        assert_eq!(
-            LiteConsumerLagCalculator::offset_diff(&boundary_source, &lmq, i64::MAX - 5),
-            5
-        );
-        assert_eq!(
-            LiteConsumerLagCalculator::offset_diff(&boundary_source, &lmq, i64::MAX),
+            LiteConsumerLagCalculator::offset_diff(&source, &lite_queue("orders", "ahead"), 7),
             0
+        );
+
+        source.insert("orders", "boundary", "group-a", i64::MAX - 5, i64::MAX, 300);
+        for (consumer_offset, expected) in [(i64::MAX - 5, 5), (i64::MAX, 0)] {
+            assert_eq!(
+                LiteConsumerLagCalculator::offset_diff(&source, &lite_queue("orders", "boundary"), consumer_offset),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn lite_consumer_lag_timestamp_filters_parent_and_reports_oldest_timestamp() {
+        let mut source = TestDataSource::default();
+        source.insert("orders", "newer", "group-a", 1, 3, 400);
+        source.insert("orders", "older", "group-a", 2, 6, 100);
+        source.insert("payments", "ignored", "group-a", 1, 9, 50);
+
+        let (lag_infos, oldest) =
+            LiteConsumerLagCalculator::get_lag_timestamp_top_k(&source, &"group-a".into(), &"orders".into(), 10);
+
+        assert_eq!(oldest, 100);
+        assert_eq!(lag_infos.len(), 2);
+        assert_eq!(lag_infos[0].lite_topic(), "older");
+        assert_eq!(lag_infos[1].lite_topic(), "newer");
+    }
+
+    #[test]
+    fn lite_consumer_lag_decodes_lite_and_plain_topic_names() {
+        assert_eq!(
+            LiteConsumerLagCalculator::decode_lite_topic(&lite_queue("orders", "priority")),
+            "priority"
+        );
+        assert_eq!(
+            LiteConsumerLagCalculator::decode_lite_topic(&CheetahString::from_static_str("plain-topic")),
+            "plain-topic"
         );
     }
 }
