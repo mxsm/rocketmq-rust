@@ -101,6 +101,15 @@ mod tests {
             .expect_err("invalid utf8 should be rejected");
 
         assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_BODY_INVALID);
-        assert!(error.to_string().contains("UPDATE_CONTROLLER_CONFIG"));
+
+        let diagnostic = error.diagnostic_view().expect("schema-valid diagnostic view");
+        let operation = diagnostic
+            .fields()
+            .find(|field| field.name() == "operation")
+            .expect("the failing operation must be retained as diagnostic context");
+        assert_eq!(
+            operation.value(),
+            rocketmq_error::ViewValueRef::Text("UPDATE_CONTROLLER_CONFIG")
+        );
     }
 }

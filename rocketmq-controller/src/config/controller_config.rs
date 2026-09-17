@@ -1208,8 +1208,8 @@ path = "/rocketmq"
 
         let error = config.update(properties).await.expect_err("invalid value should fail");
 
-        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
-        assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 29);
+        assert_eq!(error.descriptor(), &rocketmq_error::CONTROLLER_CONFIGURATION_INVALID);
+        assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 2015);
         assert!(std::error::Error::source(&error)
             .and_then(|source| source.downcast_ref::<serde_json::Error>())
             .is_some());
@@ -1223,8 +1223,7 @@ path = "/rocketmq"
 
         let error = config.update(properties).await.expect_err("unknown key should fail");
 
-        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
-        assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 29);
-        assert_eq!(error.descriptor(), &rocketmq_error::CORE_CONFIGURATION_INVALID);
+        assert_eq!(error.descriptor(), &rocketmq_error::CONTROLLER_CONFIGURATION_INVALID);
+        assert_eq!(error.descriptor().projection().remoting().code.as_i32(), 2015);
     }
 }
