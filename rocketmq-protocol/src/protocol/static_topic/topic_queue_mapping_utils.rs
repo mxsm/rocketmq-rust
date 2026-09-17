@@ -895,6 +895,9 @@ impl TopicQueueMappingUtils {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_error::fields;
+    use rocketmq_error::ViewValueRef;
+
     use super::*;
 
     #[test]
@@ -1173,7 +1176,18 @@ mod tests {
         let error = TopicQueueMappingUtils::check_leader_in_target_brokers(&mapping_ones, &missing_b)
             .expect_err("leader broker outside target brokers should be rejected");
         assert_eq!(error.descriptor(), &rocketmq_error::ROUTE_TOPIC_INCONSISTENT);
-        assert!(error.to_string().contains("The leader broker is not in target brokers"));
+        // Canonical rendering discards the free-form reason ("The leader broker is not in target
+        // brokers"): the rejected leader broker only surfaces through the mapping scope the helper
+        // attaches to the inconsistency.
+        assert_eq!(
+            error
+                .diagnostic_view()
+                .expect("valid diagnostic error context")
+                .fields()
+                .find(|field| field.name() == fields::TOPIC.schema().name())
+                .map(|field| field.value()),
+            Some(ViewValueRef::Text("static_topic_mapping"))
+        );
     }
 
     #[test]

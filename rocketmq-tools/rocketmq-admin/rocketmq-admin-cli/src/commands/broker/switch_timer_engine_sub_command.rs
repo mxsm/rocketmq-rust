@@ -58,14 +58,9 @@ impl CommandExecute for SwitchTimerEngineSubCommand {
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> CanonicalResult<()> {
-        let request = match self.request() {
-            Ok(request) => request,
-            Err(error) if error.to_string().contains("engineType") => {
-                println!("switchTimerEngine engineType must be R or F");
-                return Ok(());
-            }
-            Err(error) => return Err(error),
-        };
+        // An unsupported `-e` value must surface as `core.argument.invalid` (exit code 64), which is
+        // the Java-compatible outcome recorded for this command.
+        let request = self.request()?;
 
         let engine_name = request.engine_name().clone();
         let result = BrokerService::switch_timer_engine_by_request_with_credentials(
@@ -119,6 +114,7 @@ mod tests {
             SwitchTimerEngineSubCommand::try_parse_from(["switchTimerEngine", "-b", "127.0.0.1:10911", "-e", "bad"])
                 .unwrap();
 
-        assert!(cmd.request().is_err());
+        let error = cmd.request().expect_err("invalid engine type must be rejected");
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
     }
 }

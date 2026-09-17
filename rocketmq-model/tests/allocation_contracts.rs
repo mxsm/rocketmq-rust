@@ -101,7 +101,8 @@ fn allocation_rejects_empty_or_unknown_consumer_input() {
             &consumers(),
         )
         .expect_err("empty consumer id must fail");
-    assert!(error.to_string().contains("currentCID is empty"));
+    // Canonical errors expose the stable descriptor; free-form argument text is never rendered.
+    assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
 
     assert!(AllocateMessageQueueAveragely
         .allocate(

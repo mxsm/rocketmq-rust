@@ -36,6 +36,9 @@ impl CompressorFactory {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_error::fields;
+    use rocketmq_error::ViewValueRef;
+
     use super::*;
 
     const ALL_TYPES: [CompressionType; 3] = [CompressionType::LZ4, CompressionType::Zlib, CompressionType::Zstd];
@@ -149,9 +152,34 @@ mod tests {
             let error = compressor
                 .decompress(b"definitely not compressed data")
                 .expect_err("garbage input should be rejected");
+            // The old free-form "decompression failed" detail is dropped by canonical error
+            // rendering. The stable contract is the serialization descriptor, the decode of the
+            // compression format in the diagnostic context, and the retained compressor source.
+            assert_eq!(
+                error.descriptor(),
+                &rocketmq_error::CORE_SERIALIZATION_FAILED,
+                "{name} garbage input should be a serialization failure"
+            );
+            let diagnostic = error.diagnostic_view().expect("valid diagnostic error context");
+            let diagnostic_field = |field_name: &str| {
+                diagnostic
+                    .fields()
+                    .find(|field| field.name() == field_name)
+                    .map(|field| field.value())
+            };
+            assert_eq!(
+                diagnostic_field(fields::OPERATION_DIAGNOSTIC.schema().name()),
+                Some(ViewValueRef::Text("decode")),
+                "{name} failure should be classified as a decode operation"
+            );
+            assert_eq!(
+                diagnostic_field(fields::FORMAT.schema().name()),
+                Some(ViewValueRef::Text("compression")),
+                "{name} failure should be classified against the compression format"
+            );
             assert!(
-                error.to_string().contains("decompression failed"),
-                "{name} error should describe the failure, got: {error}"
+                std::error::Error::source(&error).is_some(),
+                "{name} compressor detail should stay available as a typed source"
             );
         }
     }

@@ -3228,9 +3228,16 @@ mod retirement_tests {
             .expect_err("deadline must win the enqueue race");
 
         assert_eq!(error.descriptor(), &rocketmq_error::CORE_OPERATION_TIMED_OUT);
+        // `operation` is Diagnostic-visibility, so rendering redacts it; `timeout_ms` is Public.
+        assert_eq!(error.context().to_string(), "operation=<redacted>, timeout_ms=50");
+        let view = error.diagnostic_view().expect("valid diagnostic error context");
+        let operation = view
+            .fields()
+            .find(|field| field.name() == rocketmq_error::fields::OPERATION_DIAGNOSTIC.schema().name())
+            .map(|field| field.value());
         assert_eq!(
-            error.context().to_string(),
-            "operation=transport_before_send, timeout_ms=50"
+            operation,
+            Some(rocketmq_error::ViewValueRef::Text("transport_before_send"))
         );
         let mut byte = [0_u8; 1];
         tokio::select! {

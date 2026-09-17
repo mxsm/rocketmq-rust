@@ -2897,14 +2897,15 @@ impl TuiAdminFacade {
             self.print_messages_request(topic, sub_expression, begin_timestamp, end_timestamp, lmq_parent_topic)?;
         let mut events = Vec::new();
         let mut event_count = 0usize;
+        let mut truncated = false;
         let result =
             MessageService::print_messages_by_request_with_credentials(request, None, self.client_runtime(), |event| {
                 event_count += 1;
                 progress(message_pull_progress_message(event_count, &event));
-                capture_message_pull_event(&mut events, max_events, event)
+                capture_message_pull_event(&mut events, max_events, event, &mut truncated)
             })
             .await;
-        message_pull_capture_from_result(events, max_events, result)
+        message_pull_capture_from_result(events, max_events, truncated, result)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2936,6 +2937,7 @@ impl TuiAdminFacade {
         )?;
         let mut events = Vec::new();
         let mut event_count = 0usize;
+        let mut truncated = false;
         let result = MessageService::print_messages_by_queue_by_request_with_credentials(
             request,
             None,
@@ -2943,11 +2945,11 @@ impl TuiAdminFacade {
             |event| {
                 event_count += 1;
                 progress(message_pull_progress_message(event_count, &event));
-                capture_message_pull_event(&mut events, max_events, event)
+                capture_message_pull_event(&mut events, max_events, event, &mut truncated)
             },
         )
         .await;
-        message_pull_capture_from_result(events, max_events, result)
+        message_pull_capture_from_result(events, max_events, truncated, result)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2979,6 +2981,7 @@ impl TuiAdminFacade {
         )?;
         let mut events = Vec::new();
         let mut event_count = 0usize;
+        let mut truncated = false;
         let result = MessageService::consume_messages_by_request_with_credentials(
             request,
             None,
@@ -2986,11 +2989,11 @@ impl TuiAdminFacade {
             |event| {
                 event_count += 1;
                 progress(message_pull_progress_message(event_count, &event));
-                capture_message_pull_event(&mut events, max_events, event)
+                capture_message_pull_event(&mut events, max_events, event, &mut truncated)
             },
         )
         .await;
-        message_pull_capture_from_result(events, max_events, result)
+        message_pull_capture_from_result(events, max_events, truncated, result)
     }
 }
 
@@ -3035,7 +3038,11 @@ pub(super) fn monitoring_progress_message(event_count: usize, event: &Monitoring
     format!("monitor event {event_count}: {detail}")
 }
 
-const MESSAGE_EVENT_LIMIT_REACHED: &str = "__rocketmq_admin_tui_message_event_limit_reached__";
+/// Internal marker used only to abort an in-flight pull once the event limit is reached.
+///
+/// The truncation outcome is carried by the caller's own flag, so this error is never rendered
+/// and must never be matched on: canonical errors do not expose free-form text.
+const MESSAGE_PULL_ABORTED: &str = "message pull stopped after reaching the event limit";
 
 pub(super) fn message_pull_progress_message(event_count: usize, event: &MessagePullEvent) -> String {
     let detail = match event {
@@ -3077,36 +3084,42 @@ pub(super) fn message_pull_progress_message(event_count: usize, event: &MessageP
     format!("message pull event {event_count}: {detail}")
 }
 
-fn capture_message_pull_event(
+/// Records one pull event, flagging `truncated` and aborting the pull once `event_limit` is reached.
+pub(super) fn capture_message_pull_event(
     events: &mut Vec<MessagePullEvent>,
     event_limit: usize,
     event: MessagePullEvent,
+    truncated: &mut bool,
 ) -> CanonicalResult<()> {
     events.push(event);
     if event_limit > 0 && events.len() >= event_limit {
-        Err(crate::errors::invariant_violated(MESSAGE_EVENT_LIMIT_REACHED))
+        *truncated = true;
+        Err(crate::errors::invariant_violated(MESSAGE_PULL_ABORTED))
     } else {
         Ok(())
     }
 }
 
-fn message_pull_capture_from_result(
+/// Resolves a finished pull into a capture, treating a reached event limit as a bounded success.
+pub(super) fn message_pull_capture_from_result(
     events: Vec<MessagePullEvent>,
     event_limit: usize,
+    truncated: bool,
     result: CanonicalResult<()>,
 ) -> CanonicalResult<MessagePullCapture> {
     match result {
-        Ok(()) => Ok(MessagePullCapture {
-            events,
-            event_limit,
-            truncated: false,
-        }),
-        Err(error) if error.to_string().contains(MESSAGE_EVENT_LIMIT_REACHED) => Ok(MessagePullCapture {
+        // Only the limit observer sets this flag before aborting the pull, so the abort is expected.
+        Err(_) if truncated => Ok(MessagePullCapture {
             events,
             event_limit,
             truncated: true,
         }),
         Err(error) => Err(error),
+        Ok(()) => Ok(MessagePullCapture {
+            events,
+            event_limit,
+            truncated,
+        }),
     }
 }
 

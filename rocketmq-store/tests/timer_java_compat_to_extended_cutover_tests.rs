@@ -24,6 +24,8 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_store::LocalFileMessageStore;
 use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::StoreComponent;
+use rocketmq_store::StoreOperation;
 use rocketmq_store::StoreRuntimeConfig;
 use rocketmq_store_api::TimerStoreMode;
 
@@ -98,7 +100,9 @@ async fn formal_activation_requires_a_nonzero_epoch() {
 
     let error = store.init().await.expect_err("zero epoch must fail closed");
 
-    assert!(error.to_string().contains("non-zero activation epoch"), "{error}");
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+    assert_eq!(error.operation(), StoreOperation::Load);
+    assert_eq!(error.component(), StoreComponent::Configuration);
 }
 
 #[tokio::test]
@@ -131,7 +135,9 @@ async fn formal_owner_marker_blocks_silent_java_compat_rollback() {
         .await
         .expect_err("formal ownership requires an explicit offline conversion");
 
-    assert!(error.to_string().contains("rollback is unsafe"), "{error}");
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED);
+    assert_eq!(error.operation(), StoreOperation::Load);
+    assert_eq!(error.component(), StoreComponent::Configuration);
 }
 
 #[tokio::test]
@@ -150,5 +156,7 @@ async fn formal_restart_requires_the_persisted_activation_epoch() {
         .await
         .expect_err("activation epoch cannot change across restart");
 
-    assert!(error.to_string().contains("does not match persisted epoch"), "{error}");
+    assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_REQUEST_INVALID);
+    assert_eq!(error.operation(), StoreOperation::Load);
+    assert_eq!(error.component(), StoreComponent::Configuration);
 }

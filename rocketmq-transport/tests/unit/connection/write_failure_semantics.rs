@@ -775,9 +775,16 @@ async fn direct_preflight_deadline_is_not_started_and_keeps_the_writer_healthy()
     let (legacy_connection, result) = legacy_send.await.expect("legacy direct send task");
     let error = result.expect_err("expired preflight deadline must fail");
     assert_eq!(error.descriptor(), &rocketmq_error::CORE_OPERATION_TIMED_OUT);
+    // `operation` is Diagnostic-visibility, so rendering redacts it; `timeout_ms` is Public.
+    assert_eq!(error.context().to_string(), "operation=<redacted>, timeout_ms=10");
+    let view = error.diagnostic_view().expect("valid diagnostic error context");
+    let operation = view
+        .fields()
+        .find(|field| field.name() == rocketmq_error::fields::OPERATION_DIAGNOSTIC.schema().name())
+        .map(|field| field.value());
     assert_eq!(
-        error.context().to_string(),
-        "operation=transport_before_send, timeout_ms=10"
+        operation,
+        Some(rocketmq_error::ViewValueRef::Text("transport_before_send"))
     );
     assert_eq!(writes.load(Ordering::Acquire), 0);
     assert_eq!(flushes.load(Ordering::Acquire), 0);

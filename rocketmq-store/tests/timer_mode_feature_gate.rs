@@ -22,6 +22,8 @@ use rocketmq_runtime::RuntimeOwner;
 use rocketmq_store::BrokerStorePort;
 use rocketmq_store::LocalFileMessageStore;
 use rocketmq_store::MessageStoreConfig;
+use rocketmq_store::StoreComponent;
+use rocketmq_store::StoreOperation;
 use rocketmq_store::StoreRuntimeConfig;
 use rocketmq_store_api::TimerStoreMode;
 
@@ -64,6 +66,8 @@ async fn extended_modes_fail_before_startup_without_the_feature() {
         .expect("create Timer mode feature-gate Store")
         .expect("test Timer Store configuration is valid");
         let error = store.init().await.expect_err("unsupported mode must fail closed");
-        assert!(error.to_string().contains("extended_timeline feature"), "{error}");
+        assert_eq!(error.descriptor(), &rocketmq_error::STORAGE_OPERATION_UNSUPPORTED);
+        assert_eq!(error.operation(), StoreOperation::Load);
+        assert_eq!(error.component(), StoreComponent::Configuration);
     }
 }
