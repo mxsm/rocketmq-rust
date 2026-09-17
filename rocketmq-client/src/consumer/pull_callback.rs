@@ -216,7 +216,10 @@ impl PullCallback for DefaultPullCallback {
             if broker_code == Some(ResponseCode::SubscriptionNotLatest) {
                 warn!("the subscription is not latest, group={}", consumer_group,);
             } else {
-                warn!("execute the pull request exception, group={}", consumer_group);
+                warn!(
+                    "execute the pull request exception, group={}, broker_code={:?}, error={}",
+                    consumer_group, broker_code, err
+                );
             }
         }
         let time_delay = if broker_code == Some(ResponseCode::FlowControl) {
