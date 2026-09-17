@@ -47,29 +47,33 @@ impl CommitLogDispatcher for CommitLogDispatcherCalcBitMap {
         }
 
         // Main logic
-        let filter_datas = self.consumer_filter_manager.get(&request.topic);
-        if filter_datas.is_none() || filter_datas.as_ref().unwrap().is_empty() {
+        let Some(filter_datas) = self.consumer_filter_manager.get(&request.topic) else {
+            return;
+        };
+        if filter_datas.is_empty() {
             return;
         }
-        let filter_datas = filter_datas.unwrap();
-        let mut filter_bit_map = BitsArray::create(self.consumer_filter_manager.bloom_filter().unwrap().m() as usize);
+        let Some(bloom_filter) = self.consumer_filter_manager.bloom_filter() else {
+            return;
+        };
+        let mut filter_bit_map = BitsArray::create(bloom_filter.m() as usize);
+        let context = MessageEvaluationContext::new(request.properties_map.as_ref());
 
         let start_time = Instant::now();
         for filter_data in filter_datas.iter() {
-            if filter_data.compiled_expression().is_none() {
+            let Some(compiled_expression) = filter_data.compiled_expression().as_ref() else {
                 error!(
                     "[BUG] Consumer in filter manager has no compiled expression! {:?}",
                     filter_data
                 );
                 continue;
-            }
-            if filter_data.bloom_filter_data().is_none() {
+            };
+            let Some(bloom_filter_data) = filter_data.bloom_filter_data() else {
                 error!("[BUG] Consumer in filter manager has no bloom data! {:?}", filter_data);
                 continue;
-            }
+            };
 
-            let context = MessageEvaluationContext::new(request.properties_map.as_ref());
-            let ret = filter_data.compiled_expression().as_ref().unwrap().evaluate(&context);
+            let ret = compiled_expression.evaluate(&context);
 
             debug!(
                 "Result of Calc bit map: ret={:?}, data={:?}, props={:?}, offset={}",
@@ -78,11 +82,7 @@ impl CommitLogDispatcher for CommitLogDispatcherCalcBitMap {
 
             // eval true
             if let Ok(rocketmq_filter::expression::Value::Boolean(true)) = ret {
-                let _ = self
-                    .consumer_filter_manager
-                    .bloom_filter()
-                    .unwrap()
-                    .hash_to(filter_data.bloom_filter_data().unwrap(), &mut filter_bit_map);
+                let _ = bloom_filter.hash_to(bloom_filter_data, &mut filter_bit_map);
             }
         }
 
