@@ -436,3 +436,112 @@ pub(crate) fn route_inconsistent(topic: impl AsRef<str>) -> SharedError {
         ),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_diagnostic_fields(error: &Error, names: &[&str]) {
+        let view = error.diagnostic_view().expect("valid diagnostic context");
+        for name in names {
+            assert!(
+                view.fields().any(|field| field.name() == *name),
+                "missing field: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn broker_error_response_code_round_trips_broker_failures() {
+        for code in [i32::MIN, -3, 0, 17, i32::MAX] {
+            let error = broker_operation_failed("send", code, "rejected");
+            assert_eq!(broker_response_code(error.as_ref()), Some(code));
+
+            for broker_addr in [None, Some("127.0.0.1:10911".into())] {
+                let has_address = broker_addr.is_some();
+                let addressed = broker_operation_failed_with_address("send", code, "rejected", broker_addr);
+                assert_eq!(broker_response_code(addressed.as_ref()), Some(code));
+                let view = addressed.diagnostic_view().expect("valid broker context");
+                assert_eq!(
+                    view.fields()
+                        .any(|field| field.name() == fields::BROKER_ADDR.schema().name()),
+                    has_address
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn broker_error_response_code_rejects_other_descriptors_and_out_of_range_values() {
+        for error in [
+            invalid_argument("bad input"),
+            invalid_argument_source(std::io::Error::other("cause")),
+            permission_denied("publish"),
+            topic_not_found("orders"),
+            route_inconsistent("orders"),
+            configuration_invalid("broker.listenPort"),
+            client_invalid_state("running", "stopped"),
+        ] {
+            assert_eq!(broker_response_code(error.as_ref()), None);
+        }
+
+        for code in [i64::from(i32::MIN) - 1, i64::from(i32::MAX) + 1, i64::MAX] {
+            let out_of_range = Error::new(&BROKER_OPERATION_FAILED)
+                .with_context(ErrorContext::new().with_i64(fields::BROKER_CODE, code));
+            assert_eq!(broker_response_code(&out_of_range), None);
+        }
+    }
+
+    #[test]
+    fn broker_error_argument_constructors_preserve_descriptor_and_typed_source() {
+        let error = invalid_argument("bad input");
+        let sourced = invalid_argument_source(std::io::Error::other("cause"));
+        for error in [&error, &sourced] {
+            assert_eq!(error.descriptor(), &CORE_ARGUMENT_INVALID);
+            assert_diagnostic_fields(error.as_ref(), &[fields::MESSAGE_PRESENT.schema().name()]);
+        }
+        let source = StdError::source(sourced.as_ref()).expect("typed cause retained");
+        assert!(source.downcast_ref::<std::io::Error>().is_some());
+    }
+
+    #[test]
+    fn broker_error_constructors_project_approved_context_fields() {
+        let denied = permission_denied("publish");
+        assert_eq!(denied.descriptor(), &AUTH_PERMISSION_DENIED);
+        assert_diagnostic_fields(denied.as_ref(), &[fields::OPERATION.schema().name()]);
+
+        let missing = topic_not_found("orders");
+        assert_eq!(missing.descriptor(), &BROKER_TOPIC_NOT_FOUND);
+        assert_diagnostic_fields(missing.as_ref(), &[fields::TOPIC.schema().name()]);
+    }
+
+    #[test]
+    fn broker_error_configuration_route_and_lifecycle_descriptors_remain_distinct() {
+        let route = route_inconsistent("orders");
+        let configuration = configuration_invalid("broker.listenPort");
+        let lifecycle = client_invalid_state("running", "stopped");
+
+        assert_eq!(route.descriptor(), &ROUTE_TOPIC_INCONSISTENT);
+        assert_eq!(configuration.descriptor(), &CORE_CONFIGURATION_INVALID);
+        assert_eq!(lifecycle.descriptor(), &CLIENT_LIFECYCLE_INVALID_STATE);
+        assert_ne!(route.descriptor(), configuration.descriptor());
+        assert_ne!(configuration.descriptor(), lifecycle.descriptor());
+        assert_ne!(route.descriptor(), lifecycle.descriptor());
+        assert_diagnostic_fields(route.as_ref(), &[fields::TOPIC.schema().name()]);
+        assert_diagnostic_fields(
+            configuration.as_ref(),
+            &[
+                fields::KEY.schema().name(),
+                fields::VALUE_PRESENT.schema().name(),
+                fields::REASON_PRESENT.schema().name(),
+            ],
+        );
+        assert_diagnostic_fields(
+            lifecycle.as_ref(),
+            &[
+                fields::EXPECTED_STATE.schema().name(),
+                fields::ACTUAL_STATE.schema().name(),
+            ],
+        );
+    }
+}

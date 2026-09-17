@@ -50,3 +50,53 @@ impl PutMessageHook for BatchCheckBeforePutMessageHook {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use cheetah_string::CheetahString;
+    use dashmap::DashMap;
+    use rocketmq_model::common::config::TopicConfig;
+    use rocketmq_model::common::message::message_ext::MessageExt;
+    use rocketmq_model::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+    use rocketmq_model::common::message::MessageTrait;
+    use rocketmq_model::common::sys_flag::message_sys_flag::MessageSysFlag;
+    use rocketmq_store::PutMessageHook;
+    use rocketmq_store::PutMessageStatus;
+
+    use super::BatchCheckBeforePutMessageHook;
+
+    #[test]
+    fn batch_check_before_put_message_hook_has_stable_identity() {
+        let hook = BatchCheckBeforePutMessageHook::new(Arc::new(DashMap::new()));
+
+        assert_eq!(hook.hook_name(), "batchCheckBeforePutMessage");
+    }
+
+    #[test]
+    fn batch_check_before_put_message_hook_delegates_inner_batch_rejection() {
+        let topic_configs = Arc::new(DashMap::new());
+        topic_configs.insert(
+            CheetahString::from_static_str("orders"),
+            Arc::new(TopicConfig::with_queues("orders", 1, 1)),
+        );
+        let hook = BatchCheckBeforePutMessageHook::new(topic_configs);
+        let mut message = MessageExtBrokerInner::default();
+        message.set_topic(CheetahString::from_static_str("orders"));
+        message.message_ext_inner.set_sys_flag(MessageSysFlag::INNER_BATCH_FLAG);
+
+        let rejection = hook
+            .execute_before_put_message(&mut message)
+            .expect("inner batch on a simple consume queue should be rejected");
+        assert_eq!(rejection.put_message_status(), PutMessageStatus::MessageIllegal);
+    }
+
+    #[test]
+    fn batch_check_before_put_message_hook_ignores_other_message_types() {
+        let hook = BatchCheckBeforePutMessageHook::new(Arc::new(DashMap::new()));
+        let mut message = MessageExt::default();
+
+        assert!(hook.execute_before_put_message(&mut message).is_none());
+    }
+}

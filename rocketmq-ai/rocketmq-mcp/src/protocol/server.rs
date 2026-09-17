@@ -29,7 +29,7 @@ use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResponse;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::ServerCapabilities;
-use rmcp::model::ServerInfo;
+use rmcp::model::ServerConfig;
 use rmcp::model::Tool;
 use rmcp::service::RequestContext;
 use rmcp::ErrorData;
@@ -119,8 +119,8 @@ impl RocketmqMcpServer {
 }
 
 impl ServerHandler for RocketmqMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()

@@ -183,3 +183,132 @@ impl LiteConsumerLagCalculator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use cheetah_string::CheetahString;
+    use rocketmq_model::common::lite::to_lmq_name;
+
+    use super::LiteConsumerLagCalculator;
+    use super::LiteConsumerLagDataSource;
+    use super::LiteOffsetTable;
+
+    #[derive(Default)]
+    struct TestDataSource {
+        offsets: LiteOffsetTable,
+        max_offsets: HashMap<CheetahString, i64>,
+        timestamps: HashMap<(CheetahString, i64), i64>,
+    }
+
+    impl TestDataSource {
+        fn insert(&mut self, parent: &str, lite: &str, group: &str, consumer: i64, max: i64, timestamp: i64) {
+            let queue = lite_queue(parent, lite);
+            self.offsets.insert(
+                CheetahString::from_string(format!("{queue}@{group}")),
+                HashMap::from([(0, consumer)]),
+            );
+            self.max_offsets.insert(queue.clone(), max);
+            self.timestamps.insert((queue, consumer), timestamp);
+        }
+    }
+
+    impl LiteConsumerLagDataSource for TestDataSource {
+        fn offset_table_snapshot(&self) -> LiteOffsetTable {
+            self.offsets.clone()
+        }
+
+        fn max_offset(&self, lmq_name: &CheetahString) -> i64 {
+            self.max_offsets.get(lmq_name).copied().unwrap_or_default()
+        }
+
+        fn message_store_timestamp(&self, lmq_name: &CheetahString, offset: i64) -> i64 {
+            self.timestamps
+                .get(&(lmq_name.clone(), offset))
+                .copied()
+                .unwrap_or_default()
+        }
+    }
+
+    fn lite_queue(parent: &str, lite: &str) -> CheetahString {
+        CheetahString::from_string(to_lmq_name(parent, lite).expect("non-empty lite queue components"))
+    }
+
+    #[test]
+    fn lite_consumer_lag_count_filters_groups_truncates_results_and_preserves_total() {
+        let mut source = TestDataSource::default();
+        source.insert("orders", "priority", "group-a", 3, 10, 300);
+        source.insert("orders", "standard", "group-a", 7, 10, 700);
+        source.insert("orders", "express", "group-a", 3, 10, 300);
+        source.insert("orders", "other-group", "group-b", 1, 20, 100);
+
+        let (lag_infos, total) = LiteConsumerLagCalculator::get_lag_count_top_k(&source, &"group-a".into(), 1);
+
+        assert_eq!(total, 17);
+        assert_eq!(lag_infos.len(), 1);
+        assert_eq!(lag_infos[0].lite_topic(), "express");
+        assert_eq!(lag_infos[0].lag_count(), 7);
+
+        let (lag_infos, total) = LiteConsumerLagCalculator::get_lag_count_top_k(&source, &"missing-group".into(), 10);
+        assert!(lag_infos.is_empty());
+        assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn lite_consumer_lag_count_omits_non_positive_lag_and_keeps_all_for_non_positive_top_k() {
+        let mut source = TestDataSource::default();
+        source.insert("orders", "behind", "group-a", 3, 5, 300);
+        source.insert("orders", "further-behind", "group-a", 1, 4, 100);
+        source.insert("orders", "equal", "group-a", 5, 5, 500);
+        source.insert("orders", "ahead", "group-a", 7, 5, 700);
+
+        for top_k in [0, -1] {
+            let (lag_infos, total) = LiteConsumerLagCalculator::get_lag_count_top_k(&source, &"group-a".into(), top_k);
+            assert_eq!(total, 5);
+            assert_eq!(lag_infos.len(), 2);
+            assert_eq!(lag_infos[0].lite_topic(), "further-behind");
+            assert_eq!(lag_infos[1].lite_topic(), "behind");
+        }
+        assert_eq!(
+            LiteConsumerLagCalculator::offset_diff(&source, &lite_queue("orders", "ahead"), 7),
+            0
+        );
+
+        source.insert("orders", "boundary", "group-a", i64::MAX - 5, i64::MAX, 300);
+        for (consumer_offset, expected) in [(i64::MAX - 5, 5), (i64::MAX, 0)] {
+            assert_eq!(
+                LiteConsumerLagCalculator::offset_diff(&source, &lite_queue("orders", "boundary"), consumer_offset),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn lite_consumer_lag_timestamp_filters_parent_and_reports_oldest_timestamp() {
+        let mut source = TestDataSource::default();
+        source.insert("orders", "newer", "group-a", 1, 3, 400);
+        source.insert("orders", "older", "group-a", 2, 6, 100);
+        source.insert("payments", "ignored", "group-a", 1, 9, 50);
+
+        let (lag_infos, oldest) =
+            LiteConsumerLagCalculator::get_lag_timestamp_top_k(&source, &"group-a".into(), &"orders".into(), 10);
+
+        assert_eq!(oldest, 100);
+        assert_eq!(lag_infos.len(), 2);
+        assert_eq!(lag_infos[0].lite_topic(), "older");
+        assert_eq!(lag_infos[1].lite_topic(), "newer");
+    }
+
+    #[test]
+    fn lite_consumer_lag_decodes_lite_and_plain_topic_names() {
+        assert_eq!(
+            LiteConsumerLagCalculator::decode_lite_topic(&lite_queue("orders", "priority")),
+            "priority"
+        );
+        assert_eq!(
+            LiteConsumerLagCalculator::decode_lite_topic(&CheetahString::from_static_str("plain-topic")),
+            "plain-topic"
+        );
+    }
+}

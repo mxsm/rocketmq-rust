@@ -29,6 +29,7 @@ use rocketmq_dashboard_common::ClusterBrokerConfigRequest;
 use rocketmq_dashboard_common::ClusterBrokerStatusRequest;
 use rocketmq_dashboard_common::ClusterHomePageRequest;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
+use rocketmq_dashboard_common::redact_sensitive_entries;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -276,7 +277,8 @@ impl ClusterManager {
 
         Ok(ClusterBrokerConfigView {
             broker_addr: broker_addr.to_string(),
-            entries: config.entries,
+            // Credential/token/TLS-shaped values must never reach the UI unredacted.
+            entries: redact_sensitive_entries(config.entries),
         })
     }
 

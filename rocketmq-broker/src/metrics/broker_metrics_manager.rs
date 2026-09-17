@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
-use rocketmq_protocol::common::message::message_decoder as MessageDecoder;
+use rocketmq_protocol::common::message::message_decoder::NAME_VALUE_SEPARATOR;
+use rocketmq_protocol::common::message::message_decoder::PROPERTY_SEPARATOR;
 use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 
 #[cfg(feature = "otel-metrics")]
@@ -23,28 +22,37 @@ pub(crate) use rocketmq_observability::metrics::broker_manager::*;
 
 /// Get message type from send message request header.
 pub(crate) fn get_message_type(request_header: &SendMessageRequestHeader) -> TopicMessageType {
-    let properties = if let Some(props) = &request_header.properties {
-        MessageDecoder::string_to_message_properties(Some(props))
-    } else {
-        HashMap::new()
+    let Some(properties) = request_header.properties.as_deref() else {
+        return TopicMessageType::Normal;
     };
+    let mut transaction = None;
+    let mut fifo = false;
+    let mut delay = false;
 
-    if let Some(tra_flag) = properties.get("TRAN_MSG") {
-        if tra_flag.eq_ignore_ascii_case("true") {
-            return TopicMessageType::Transaction;
+    for property in properties.split(PROPERTY_SEPARATOR) {
+        let Some((key, value)) = property.split_once(NAME_VALUE_SEPARATOR) else {
+            continue;
+        };
+        if key.is_empty() || value.is_empty() {
+            continue;
+        }
+        match key {
+            "TRAN_MSG" => transaction = Some(value.eq_ignore_ascii_case("true")),
+            "SHARDING_KEY" => fifo = true,
+            "__STARTDELIVERTIME" | "DELAY" | "TIMER_DELIVER_MS" | "TIMER_DELAY_SEC" | "TIMER_DELAY_MS" => {
+                delay = true;
+            }
+            _ => {}
         }
     }
 
-    if properties.contains_key("SHARDING_KEY") {
+    if transaction == Some(true) {
+        return TopicMessageType::Transaction;
+    }
+    if fifo {
         return TopicMessageType::Fifo;
     }
-
-    if properties.contains_key("__STARTDELIVERTIME")
-        || properties.contains_key("DELAY")
-        || properties.contains_key("TIMER_DELIVER_MS")
-        || properties.contains_key("TIMER_DELAY_SEC")
-        || properties.contains_key("TIMER_DELAY_MS")
-    {
+    if delay {
         return TopicMessageType::Delay;
     }
 
@@ -94,6 +102,75 @@ impl BrokerMetricsManager {
 
 #[cfg(test)]
 mod tests {
+    use cheetah_string::CheetahString;
+    use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
+    use rocketmq_protocol::common::message::message_decoder::NAME_VALUE_SEPARATOR;
+    use rocketmq_protocol::common::message::message_decoder::PROPERTY_SEPARATOR;
+    use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+
+    use super::get_message_type;
+
+    fn request_header(properties: &[(&str, &str)]) -> SendMessageRequestHeader {
+        let mut encoded = String::new();
+        for (key, value) in properties {
+            encoded.push_str(key);
+            encoded.push(NAME_VALUE_SEPARATOR);
+            encoded.push_str(value);
+            encoded.push(PROPERTY_SEPARATOR);
+        }
+        SendMessageRequestHeader {
+            properties: Some(CheetahString::from_string(encoded)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn message_type_classification_preserves_priority_and_all_outcomes() {
+        assert_eq!(
+            get_message_type(&request_header(&[("TRAN_MSG", "TrUe"), ("SHARDING_KEY", "queue")])),
+            TopicMessageType::Transaction
+        );
+        assert_eq!(
+            get_message_type(&request_header(&[("SHARDING_KEY", "queue"), ("DELAY", "3")])),
+            TopicMessageType::Fifo
+        );
+        for key in [
+            "__STARTDELIVERTIME",
+            "DELAY",
+            "TIMER_DELIVER_MS",
+            "TIMER_DELAY_SEC",
+            "TIMER_DELAY_MS",
+        ] {
+            assert_eq!(
+                get_message_type(&request_header(&[(key, "1")])),
+                TopicMessageType::Delay
+            );
+        }
+        assert_eq!(
+            get_message_type(&request_header(&[("KEYS", "value")])),
+            TopicMessageType::Normal
+        );
+        assert_eq!(
+            get_message_type(&request_header(&[("TRAN_MSG", "true"), ("TRAN_MSG", "false")])),
+            TopicMessageType::Normal
+        );
+        assert_eq!(
+            get_message_type(&request_header(&[("SHARDING_KEY", "")])),
+            TopicMessageType::Normal
+        );
+        assert_eq!(
+            get_message_type(&SendMessageRequestHeader::default()),
+            TopicMessageType::Normal
+        );
+    }
+
+    #[test]
+    fn message_type_classification_does_not_match_keys_inside_values() {
+        let header = request_header(&[("KEYS", "TRAN_MSG\u{1}true\u{2}SHARDING_KEY")]);
+
+        assert_eq!(get_message_type(&header), TopicMessageType::Normal);
+    }
+
     #[test]
     fn broker_metrics_sources_have_no_global_manager_access() {
         let manager_source = include_str!("../../../rocketmq-observability/src/metrics/broker_manager.rs");

@@ -159,7 +159,7 @@ mod tests {
         let error =
             RpcClientUtils::try_encode_body(&body).expect_err("serializable body encoding failure should be returned");
 
-        assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_RESPONSE_FAILED);
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_SERIALIZATION_FAILED);
         assert!(error.source().is_some());
     }
 

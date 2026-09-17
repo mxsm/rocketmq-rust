@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodecV2;
-use rocketmq_protocol::{CommandCustomHeader, FromMap, HeaderMap};
+use rocketmq_protocol::{CommandCustomHeader, FromMap, HeaderMap, ProtocolContractViolation};
 use serde::{Deserialize, Serialize};
 
 fn default_limit() -> i32 {
@@ -131,8 +131,11 @@ fn canonical_alias_order_defaults_and_generics_are_deterministic() {
     let generic = <GenericHeader<u32> as FromMap>::from(&map).expect("generic header");
     assert_eq!(generic.value, 41);
 
+    // The generated codec reports the failure through `request_header_error`, which discards the
+    // free-form "Missing requestId field" detail; the stable contract is the header-invalid
+    // descriptor.
     let error = <BaseHeader as FromMap>::from(&HeaderMap::new()).expect_err("requestId is required");
-    assert!(error.to_string().contains("Missing requestId field"));
+    assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_HEADER_INVALID);
 }
 
 #[test]
@@ -158,12 +161,22 @@ fn malformed_unknown_empty_and_optional_flatten_behavior_is_frozen() {
         CheetahString::from_static_str("count"),
         CheetahString::from_static_str("not-an-integer"),
     );
+    // The generated codec drops the free-form "Parse count field error" detail; only the
+    // header-invalid descriptor survives the canonical rendering.
     let error = <OptionalFlattenHeader as FromMap>::from(&map).expect_err("malformed count");
-    assert!(error.to_string().contains("Parse count field error"));
+    assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_HEADER_INVALID);
 
     let empty_required = HeaderMap::from([(CheetahString::from_static_str("requestId"), CheetahString::new())]);
     let error = <BaseHeader as FromMap>::from(&empty_required).expect_err("empty requestId");
-    assert!(error
-        .to_string()
-        .contains("Required header field requestId must not be empty"));
+    assert_eq!(error.descriptor(), &rocketmq_error::PROTOCOL_HEADER_INVALID);
+    // The dropped "Required header field requestId must not be empty" detail comes from the
+    // required-field validation hook, which keeps its classification through the typed codec
+    // channel instead.
+    let violation = BaseHeader {
+        request_id: CheetahString::new(),
+        enabled: None,
+    }
+    .try_encode_into_map(&mut HeaderMap::new())
+    .expect_err("empty requestId should fail the header validation hook");
+    assert!(matches!(violation, ProtocolContractViolation::LegacyValidation { .. }));
 }

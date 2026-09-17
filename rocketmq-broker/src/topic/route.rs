@@ -84,13 +84,13 @@ impl BrokerPublishRoute {
                 message_queues.sort_by_key(MessageQueue::queue_id);
             }
         } else {
-            route.queue_datas.sort_unstable();
             let brokers_with_master: HashSet<&str> = route
                 .broker_datas
                 .iter()
                 .filter(|broker_data| broker_data.broker_addrs().contains_key(&mix_all::MASTER_ID))
                 .map(|broker_data| broker_data.broker_name().as_str())
                 .collect();
+            route.queue_datas.sort_unstable();
             for queue_data in &route.queue_datas {
                 if !PermName::is_writeable(queue_data.perm) {
                     continue;

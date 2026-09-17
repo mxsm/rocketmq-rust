@@ -895,7 +895,16 @@ impl TopicQueueMappingUtils {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use rocketmq_error::fields;
+    use rocketmq_error::ViewValueRef;
+
     use super::*;
+
+    /// Serializes every environment mutation in this module so concurrent
+    /// `cargo test` threads cannot race on the same process-wide env block.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn check_logic_queue_mapping_item_offset_accepts_monotonic_items() {
@@ -995,6 +1004,9 @@ mod tests {
         impl EnvVarGuard {
             fn remove(key: &'static str) -> Self {
                 let original = std::env::var_os(key);
+                // SAFETY: ENV_LOCK serializes every environment mutation in
+                // this module, and the guard restores the original value
+                // before the lock is released.
                 unsafe {
                     std::env::remove_var(key);
                 }
@@ -1004,6 +1016,8 @@ mod tests {
 
         impl Drop for EnvVarGuard {
             fn drop(&mut self) {
+                // SAFETY: ENV_LOCK is held by the `_lock` guard in the
+                // enclosing test for the whole time this guard is alive.
                 unsafe {
                     match &self.original {
                         Some(value) => std::env::set_var(self.key, value),
@@ -1013,6 +1027,7 @@ mod tests {
             }
         }
 
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let _guard = EnvVarGuard::remove("java.io.tmpdir");
 
         let error = TopicQueueMappingUtils::write_to_temp(&TopicRemappingDetailWrapper::empty(), false)
@@ -1173,7 +1188,18 @@ mod tests {
         let error = TopicQueueMappingUtils::check_leader_in_target_brokers(&mapping_ones, &missing_b)
             .expect_err("leader broker outside target brokers should be rejected");
         assert_eq!(error.descriptor(), &rocketmq_error::ROUTE_TOPIC_INCONSISTENT);
-        assert!(error.to_string().contains("The leader broker is not in target brokers"));
+        // Canonical rendering discards the free-form reason ("The leader broker is not in target
+        // brokers"): the rejected leader broker only surfaces through the mapping scope the helper
+        // attaches to the inconsistency.
+        assert_eq!(
+            error
+                .diagnostic_view()
+                .expect("valid diagnostic error context")
+                .fields()
+                .find(|field| field.name() == fields::TOPIC.schema().name())
+                .map(|field| field.value()),
+            Some(ViewValueRef::Text("static_topic_mapping"))
+        );
     }
 
     #[test]
