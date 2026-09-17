@@ -61,7 +61,7 @@ fn parse_controller_config_file(config_path: &Path) -> ControllerResult<Controll
 
     for key in REMOVED_CONTROLLER_TELEMETRY_KEYS {
         if config.get::<config::Value>(key).is_ok() {
-            return Err(crate::error::configuration_invalid("property"));
+            return Err(crate::error::configuration_invalid(key));
         }
     }
 
@@ -377,7 +377,16 @@ path = "/rocketmq"
                 .load_config(ControllerConfig::default())
                 .expect_err("every removed telemetry key must be rejected");
 
-            assert!(error.to_string().contains(key), "error must identify {key}: {error}");
+            let diagnostic = error.diagnostic_view().expect("schema-valid diagnostic view");
+            let rejected = diagnostic
+                .fields()
+                .find(|field| field.name() == "key")
+                .expect("the rejected key must be retained as diagnostic context");
+            assert_eq!(
+                rejected.value(),
+                rocketmq_error::ViewValueRef::Text(key),
+                "error must identify {key}"
+            );
         }
     }
 
