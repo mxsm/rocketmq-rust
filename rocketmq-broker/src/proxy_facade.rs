@@ -41,6 +41,14 @@ use crate::broker_runtime::BrokerRuntime;
 use crate::lifecycle::BrokerReadiness;
 use crate::lifecycle::BrokerStartupError;
 
+/// In-process embedding entry point for the Broker.
+///
+/// A `ProxyBrokerFacade` owns a `BrokerRuntime` together with the task group
+/// used for local request dispatch, and is the supported way to run the Broker
+/// inside another process (for example the Proxy). It is re-exported from the
+/// crate root. Owning a facade means owning the embedded Broker's lifecycle:
+/// call [`initialize`](Self::initialize) then [`start`](Self::start) before
+/// serving traffic, and [`shutdown`](Self::shutdown) to stop it.
 pub struct ProxyBrokerFacade {
     runtime: BrokerRuntime,
     local_request_tasks: TaskGroup,
@@ -89,6 +97,20 @@ impl ProxyBrokerFacade {
         )
     }
 
+    /// Creates an embedded Broker from explicit broker and message-store
+    /// configurations, using the application's default remoting command
+    /// factory.
+    ///
+    /// Prefer this over
+    /// [`try_new_from_broker_config`](Self::try_new_from_broker_config) when the
+    /// message store needs non-default tuning; use
+    /// [`try_new_with_factory`](Self::try_new_with_factory) to also supply a
+    /// custom [`RemotingCommandFactory`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrokerConfigError`] when the broker or message-store
+    /// configuration fails validation.
     pub fn try_new(
         broker_config: BrokerConfig,
         message_store_config: MessageStoreConfig,
@@ -127,6 +149,13 @@ impl ProxyBrokerFacade {
         ))
     }
 
+    /// Creates a proxy facade from an already-[`ValidatedBrokerConfig`], using
+    /// the application's default remoting command factory.
+    ///
+    /// This constructor is infallible: validation happened when the
+    /// [`ValidatedBrokerConfig`] was produced. Use
+    /// [`from_validated_config_with_factory`](Self::from_validated_config_with_factory)
+    /// to supply a custom [`RemotingCommandFactory`].
     pub fn from_validated_config(
         validated_config: ValidatedBrokerConfig,
         service_context: ChildServiceContext,
@@ -178,15 +207,33 @@ impl ProxyBrokerFacade {
         self.runtime.shutdown().await;
     }
 
-    /// Checks completed Broker startup and the current Store write state without issuing a mutation.
+    /// Reports whether the embedded Broker is ready to serve requests.
+    ///
+    /// Returns `true` only when [`start`](Self::start) has completed
+    /// successfully *and* the local message store currently reports that it can
+    /// accept writes. It is a non-mutating, point-in-time check: a `false`
+    /// before startup and a `false` from a store that has stopped accepting
+    /// writes are not distinguished.
     pub fn is_ready(&self) -> bool {
         self.started && self.runtime.local_store_is_ready()
     }
 
+    /// Returns a shared handle to the effective [`BrokerConfig`] this facade is
+    /// running with.
     pub fn broker_config(&self) -> Arc<BrokerConfig> {
         self.runtime.broker_config()
     }
 
+    /// Looks up the [`TopicRouteData`] for `topic` from in-process Broker
+    /// state.
+    ///
+    /// This is a read-only, in-process lookup: it does not contact the
+    /// nameserver or take the admin request path, and returns a typed
+    /// `BrokerResult` rather than panicking.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `topic` has no configuration on this Broker.
     pub fn query_route(&self, topic: &str) -> crate::broker_error::BrokerResult<TopicRouteData> {
         let topic_name = CheetahString::from(topic);
         let topic_config = self
@@ -197,6 +244,15 @@ impl ProxyBrokerFacade {
         Ok(build_topic_route(&self.runtime.broker_config(), topic_config.as_ref()))
     }
 
+    /// Returns the [`TopicMessageType`] configured for `topic`, read from
+    /// in-process Broker state.
+    ///
+    /// A read-only, in-process lookup rather than an admin request; returns a
+    /// typed `BrokerResult` rather than panicking.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `topic` has no configuration on this Broker.
     pub fn query_topic_message_type(&self, topic: &str) -> crate::broker_error::BrokerResult<TopicMessageType> {
         let topic_name = CheetahString::from(topic);
         let topic_config = self
@@ -206,6 +262,15 @@ impl ProxyBrokerFacade {
         Ok(topic_config.get_topic_message_type())
     }
 
+    /// Returns the [`SubscriptionGroupConfig`] for `group`, or `Ok(None)` when
+    /// the group is not configured, read from in-process Broker state.
+    ///
+    /// A read-only, in-process lookup rather than an admin request.
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible; the `BrokerResult` return
+    /// type is retained for symmetry with the other `query_*` methods.
     pub fn query_subscription_group(
         &self,
         group: &str,
