@@ -12,15 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Broker configuration: parsing, validation, persistence, and the typed
+//! configuration model.
+//!
+//! This module owns the pipeline that turns raw configuration (files and Java
+//! `.properties`) into a validated, in-memory [`BrokerConfig`] that every
+//! Broker subsystem reads, along with the errors that pipeline can produce and
+//! the managers that persist configuration state. The submodules below are the
+//! public entry points into that pipeline.
+//!
+//! [`BrokerConfig`]: broker_config::BrokerConfig
+
+/// The aggregate [`BrokerConfig`](broker_config::BrokerConfig) type and its
+/// defaults — the configuration read by every Broker subsystem.
 pub mod broker_config;
+/// Persistence and lifecycle management for Broker configuration state
+/// (topics, consumer offsets, subscription groups).
 pub mod config_manager;
+/// Typed configuration failures ([`BrokerConfigError`](error::BrokerConfigError)
+/// and [`ConfigSection`](error::ConfigSection)).
 pub mod error;
+/// Compatibility layer for reading Apache RocketMQ Java `.properties`
+/// configuration into this crate's model.
 pub mod java_properties;
+/// The raw, unvalidated configuration as parsed from files and properties,
+/// before section validation.
 pub mod raw;
+/// The ordered configuration sections and their per-section validation.
 pub mod sections;
+/// Transaction-related Broker configuration.
 pub mod transaction;
+/// [`ValidatedBrokerConfig`](validated::ValidatedBrokerConfig): configuration
+/// that has passed validation and is safe to apply to the runtime.
 pub mod validated;
 
+/// RocksDB-backed persistence for Broker configuration, enabled by the
+/// `rocksdb_store` feature.
 #[cfg(feature = "rocksdb_store")]
 pub(crate) mod rocksdb_manager;
 
