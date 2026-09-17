@@ -124,3 +124,63 @@ impl ResumePopLite {
         self.request
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_protocol::protocol::header::pop_lite_message_request_header::PopLiteMessageRequestHeader;
+    use rocketmq_protocol::rpc::rpc_request_header::RpcRequestHeader;
+
+    use super::PopLiteRequestData;
+
+    fn request_data(client_id: &str, group: &str, topic: &str) -> PopLiteRequestData {
+        PopLiteRequestData::new(PopLiteMessageRequestHeader {
+            client_id: client_id.into(),
+            consumer_group: group.into(),
+            topic: topic.into(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn pop_lite_request_data_counts_required_string_bytes() {
+        let data = request_data("client", "group-a", "orders");
+
+        assert_eq!(data.try_estimated_dynamic_bytes(), Some(6 + 7 + 6));
+    }
+
+    #[test]
+    fn pop_lite_request_data_counts_attempt_and_rpc_fields_exactly() {
+        let mut header = PopLiteMessageRequestHeader {
+            client_id: "client".into(),
+            consumer_group: "group".into(),
+            topic: "topic".into(),
+            attempt_id: Some("attempt".into()),
+            rpc: Some(RpcRequestHeader::new(
+                Some("namespace".into()),
+                None,
+                Some("broker-a".into()),
+                None,
+            )),
+            ..Default::default()
+        };
+
+        let all_present = PopLiteRequestData::new(header.clone());
+        assert_eq!(all_present.try_estimated_dynamic_bytes(), Some(6 + 5 + 5 + 7 + 9 + 8));
+
+        header.rpc = Some(RpcRequestHeader::new(None, None, Some("broker-a".into()), None));
+        let namespace_absent = PopLiteRequestData::new(header.clone());
+        assert_eq!(namespace_absent.try_estimated_dynamic_bytes(), Some(6 + 5 + 5 + 7 + 8));
+
+        header.rpc = Some(RpcRequestHeader::new(Some("namespace".into()), None, None, None));
+        let broker_absent = PopLiteRequestData::new(header);
+        assert_eq!(broker_absent.try_estimated_dynamic_bytes(), Some(6 + 5 + 5 + 7 + 9));
+    }
+
+    #[test]
+    fn pop_lite_request_data_empty_strings_are_measurable() {
+        let data = request_data("", "", "");
+
+        assert_eq!(data.try_estimated_dynamic_bytes(), Some(0));
+        assert!(data.try_estimated_dynamic_bytes().is_some());
+    }
+}
