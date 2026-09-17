@@ -26,7 +26,7 @@ use rmcp::ServiceError;
 use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::ClientCapabilities;
-use rmcp::model::ClientInfo;
+use rmcp::model::ClientConfig;
 use rmcp::model::Implementation;
 use rmcp::model::ProtocolVersion;
 use rmcp::model::ReadResourceRequestParams;
@@ -60,7 +60,7 @@ use crate::auth::TokenProvider;
 use crate::verify_manifest;
 use crate::wire::validate_wire_envelope;
 
-type ClientService = RunningService<RoleClient, ClientInfo>;
+type ClientService = RunningService<RoleClient, ClientConfig>;
 
 const SYSTEM_RESOURCE_SCHEMA: &str = "rocketmq-mcp.system-resource.v1";
 const RUNTIME_RESOURCE_URI: &str = "rocketmq://system/runtime/v1";
@@ -231,13 +231,13 @@ impl RmcpGateway {
             .auth_header(token)
             .reinit_on_expired_session(true);
         let transport = StreamableHttpClientTransport::with_client(self.http.clone(), transport_config);
-        let client_info = ClientInfo::new(
+        let client_config = ClientConfig::new(
             ClientCapabilities::default(),
             Implementation::new("rocketmq-sre-connector", env!("CARGO_PKG_VERSION")),
         )
         .with_protocol_version(ProtocolVersion::V_2025_11_25);
 
-        match tokio::time::timeout(self.config.request_timeout, client_info.clone().serve(transport)).await {
+        match tokio::time::timeout(self.config.request_timeout, client_config.clone().serve(transport)).await {
             Ok(Ok(service)) => Ok(service),
             Ok(Err(error)) if !force_refresh && is_unauthorized_initialize(&error) => {
                 self.tokens.invalidate().await;
@@ -246,7 +246,7 @@ impl RmcpGateway {
                     .auth_header(token)
                     .reinit_on_expired_session(true);
                 let transport = StreamableHttpClientTransport::with_client(self.http.clone(), transport_config);
-                tokio::time::timeout(self.config.request_timeout, client_info.serve(transport))
+                tokio::time::timeout(self.config.request_timeout, client_config.serve(transport))
                     .await
                     .map_err(|source| ConnectorError::from_source(ConnectorFailure::DeadlineExceeded, true, source))?
                     .map_err(map_initialize_error)

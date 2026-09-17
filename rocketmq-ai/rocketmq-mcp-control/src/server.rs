@@ -33,7 +33,7 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::Resource;
 use rmcp::model::ResourceContents;
 use rmcp::model::ServerCapabilities;
-use rmcp::model::ServerInfo;
+use rmcp::model::ServerConfig;
 use rmcp::service::RequestContext;
 use rmcp::ErrorData;
 use rmcp::RoleServer;
@@ -183,8 +183,8 @@ impl std::fmt::Debug for ControlServer {
 }
 
 impl ServerHandler for ControlServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
             .with_server_info(Implementation::new("rocketmq-mcp-control", env!("CARGO_PKG_VERSION")))
             .with_protocol_version(ProtocolVersion::V_2025_11_25)
             .with_instructions(
