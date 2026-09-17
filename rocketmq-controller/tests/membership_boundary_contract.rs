@@ -15,6 +15,8 @@
 use rocketmq_controller::ConsensusNode;
 use rocketmq_controller::MembershipChange;
 use rocketmq_controller::MembershipChangeRequest;
+use rocketmq_error::ViewValueRef;
+use rocketmq_error::CONTROLLER_REQUEST_INVALID;
 
 #[test]
 fn membership_request_uses_controller_owned_dtos() {
@@ -42,7 +44,16 @@ fn membership_request_rejects_unstable_operation_identity() {
     )
     .expect_err("operation id must be canonical");
 
-    assert!(error.to_string().contains("operation id"));
+    assert_eq!(error.descriptor(), &CONTROLLER_REQUEST_INVALID);
+    let diagnostic = error.diagnostic_view().expect("schema-valid diagnostic view");
+    let operation = diagnostic
+        .fields()
+        .find(|field| field.name() == "operation")
+        .expect("the rejected operation identity must be retained as diagnostic context");
+    assert_eq!(
+        operation.value(),
+        ViewValueRef::Text("validate membership operation id")
+    );
 }
 
 #[test]
