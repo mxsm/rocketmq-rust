@@ -45,18 +45,20 @@ pub struct LongRangeAttribute {
 }
 
 impl LongRangeAttribute {
-    /// Create a new enum attribute with the specified properties
+    /// Creates a long attribute with inclusive range bounds.
     ///
     /// # Arguments
     ///
     /// * `name` - The name of the attribute
     /// * `changeable` - Whether the attribute can be changed after creation
-    /// * `universe` - Set of valid values this attribute can take
-    /// * `default_value` - Default value for this attribute (must be in universe)
+    /// * `min` - Minimum allowed value (inclusive)
+    /// * `max` - Maximum allowed value (inclusive)
+    /// * `default_value` - Default value for this attribute
     ///
     /// # Returns
     ///
-    /// A new EnumAttribute instance, or an error if the default value is not in the universe
+    /// A new `LongRangeAttribute` without validating its bounds or default value.
+    /// Values are checked against the range by [`Attribute::verify`].
     pub fn new(name: CheetahString, changeable: bool, min: i64, max: i64, default_value: i64) -> Self {
         Self {
             attribute: AttributeBase::new(name, changeable),
