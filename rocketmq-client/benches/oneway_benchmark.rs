@@ -45,7 +45,7 @@ fn bench_send_oneway_latency(c: &mut Criterion) {
     c.bench_function("send_oneway_latency", |b| {
         let client_runtime = client_runtime.clone();
         b.to_async(&rt).iter(|| async {
-            let mut producer = DefaultMQProducer::builder(client_runtime.clone())
+            let producer = DefaultMQProducer::builder(client_runtime.clone())
                 .producer_group("bench_group".to_string())
                 .name_server_addr("127.0.0.1:9876".to_string())
                 .build();
@@ -151,7 +151,7 @@ fn bench_concurrent_oneway(c: &mut Criterion) {
                     for i in 0..conc {
                         let client_runtime = client_runtime.clone();
                         let handle = tokio::spawn(async move {
-                            let mut producer = DefaultMQProducer::builder(client_runtime)
+                            let producer = DefaultMQProducer::builder(client_runtime)
                                 .producer_group("bench_group".to_string())
                                 .name_server_addr("127.0.0.1:9876".to_string())
                                 .build();
