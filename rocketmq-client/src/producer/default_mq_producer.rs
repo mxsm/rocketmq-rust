@@ -2585,8 +2585,14 @@ mod facade_tests {
     #[tokio::test]
     async fn default_mq_producer_satisfies_shared_borrow_producer_backend_contract() {
         let producer = unstarted_producer();
+        let callback = |_result: Option<&SendResult>, _err: Option<&ClientError>| {};
+        let selector = |_queues: &[MessageQueue], _msg: &Message, _arg: &i32| -> Option<MessageQueue> { None };
 
         assert_not_initialized(ProducerBackend::send(&producer, message()).await);
+        assert_not_initialized(ProducerBackend::send_with_timeout(&producer, message(), 1000).await);
+        assert_not_initialized(ProducerBackend::send_with_callback(&producer, message(), callback).await);
+        assert_not_initialized(ProducerBackend::send_to_queue(&producer, message(), queue()).await);
+        assert_not_initialized(ProducerBackend::send_with_selector(&producer, message(), selector, 1).await);
         assert_not_initialized(ProducerBackend::send_batch(&producer, vec![message()]).await);
         assert_not_initialized(ProducerBackend::request(&producer, message(), 1000).await);
         assert_not_initialized(ProducerBackend::recall_message(&producer, "test-topic", "recall-handle-123").await);
