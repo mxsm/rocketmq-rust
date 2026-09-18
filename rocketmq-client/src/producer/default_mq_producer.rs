@@ -2426,6 +2426,7 @@ mod facade_tests {
     use super::ProducerConfig;
     use super::StableConfig;
     use crate::base::client_config::ClientConfig;
+    use crate::producer::producer_backend::ProducerBackend;
     use crate::producer::send_result::SendResult;
 
     fn test_runtime() -> Arc<crate::runtime::ClientRuntime> {
@@ -2579,6 +2580,16 @@ mod facade_tests {
                 .send_batch_to_queue_with_callback_timeout(vec![message()], queue(), callback, 1000)
                 .await,
         );
+    }
+
+    #[tokio::test]
+    async fn default_mq_producer_satisfies_shared_borrow_producer_backend_contract() {
+        let producer = unstarted_producer();
+
+        assert_not_initialized(ProducerBackend::send(&producer, message()).await);
+        assert_not_initialized(ProducerBackend::send_batch(&producer, vec![message()]).await);
+        assert_not_initialized(ProducerBackend::request(&producer, message(), 1000).await);
+        assert_not_initialized(ProducerBackend::recall_message(&producer, "test-topic", "recall-handle-123").await);
     }
 
     #[tokio::test]
