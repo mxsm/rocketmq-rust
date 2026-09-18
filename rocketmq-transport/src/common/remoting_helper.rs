@@ -17,14 +17,7 @@ pub struct RemotingHelper;
 impl RemotingHelper {
     pub fn parse_host_from_address(address: Option<&str>) -> String {
         match address {
-            Some(addr) if !addr.is_empty() => {
-                let splits: Vec<&str> = addr.split(':').collect();
-                if !splits.is_empty() {
-                    splits[0].to_string()
-                } else {
-                    String::new()
-                }
-            }
+            Some(addr) if !addr.is_empty() => addr.split(':').next().unwrap_or_default().to_string(),
             _ => String::new(),
         }
     }
