@@ -1906,6 +1906,8 @@ mod tests {
     use rocketmq_controller::Controller;
     #[cfg(feature = "embedded-controller")]
     use rocketmq_controller::ControllerConfig;
+    #[cfg(feature = "embedded-controller")]
+    use rocketmq_controller::RaftPeer;
     use rocketmq_model::common::config::TopicConfig;
     use rocketmq_model::common::constant::PermName;
     use rocketmq_model::common::mix_all::string_to_properties;
@@ -2718,15 +2720,44 @@ mod tests {
         (config, root)
     }
 
+    /// Reserve the Controller remoting and Raft addresses.
+    ///
+    /// Both listeners stay bound until both ports are known, so the two roles can never
+    /// collapse onto one address the way two separate `reserve_local_port` calls may.
+    #[cfg(feature = "embedded-controller")]
+    fn reserve_controller_addresses() -> (SocketAddr, SocketAddr) {
+        let remoting = TcpListener::bind("127.0.0.1:0").expect("test should reserve a controller remoting port");
+        let raft = TcpListener::bind("127.0.0.1:0").expect("test should reserve a controller Raft port");
+        let addresses = (
+            remoting
+                .local_addr()
+                .expect("remoting listener should expose a local addr"),
+            raft.local_addr().expect("Raft listener should expose a local addr"),
+        );
+        drop((remoting, raft));
+        addresses
+    }
+
     #[cfg(feature = "embedded-controller")]
     fn embedded_controller_config() -> (ControllerConfig, tempfile::TempDir) {
         let root = tempfile::Builder::new()
             .prefix("rocketmq-controller-test-")
             .tempdir()
             .expect("test should create an isolated controller directory");
+        let (remoting_addr, raft_addr) = reserve_controller_addresses();
+        // The embedded Controller needs a Raft listener that is distinct from its broker-facing
+        // remoting listener. The `local_raft_addr` fallback resolves an unset Raft address to the
+        // remoting address, and the second bind then fails on hosts that reject a wildcard and a
+        // specific listener on one port, leaving the Controller permanently not running.
         let config = ControllerConfig::default()
-            .with_node_info(1, format!("127.0.0.1:{}", reserve_local_port()).parse().unwrap())
+            .with_node_info(1, remoting_addr)
+            .with_raft_peers(vec![RaftPeer { id: 1, addr: raft_addr }])
             .with_storage_path(root.path().to_string_lossy().into_owned());
+        assert_ne!(
+            config.local_raft_addr(),
+            config.listen_addr,
+            "embedded Controller Raft and remoting listeners must use distinct addresses"
+        );
         (config, root)
     }
 
