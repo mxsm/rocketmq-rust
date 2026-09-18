@@ -680,7 +680,7 @@ impl ProduceAccumulator {
     /// Send a batch synchronously (extracted to avoid holding lock across await)
     async fn send_batch_sync(&self, batch: Arc<Mutex<MessageAccumulation>>) -> crate::ClientResult<()> {
         // Extract all data from the batch without holding the lock across await
-        let (messages, resource_permits, mq, mut producer, total_size, count, notify, aggregate_key, keys) = {
+        let (messages, resource_permits, mq, producer, total_size, count, notify, aggregate_key, keys) = {
             let mut batch_guard = batch.lock().await;
             if !batch_guard.try_mark_closing() {
                 return Ok(());
@@ -775,7 +775,7 @@ impl ProduceAccumulator {
     /// Send a batch asynchronously (extracted to avoid holding lock across await)
     async fn send_batch_async(&self, batch: Arc<Mutex<MessageAccumulation>>) -> crate::ClientResult<()> {
         // Extract all data from the batch without holding the lock across await
-        let (messages, resource_permits, mq, mut producer, total_size, callbacks, aggregate_key, keys, notify) = {
+        let (messages, resource_permits, mq, producer, total_size, callbacks, aggregate_key, keys, notify) = {
             let mut batch_guard = batch.lock().await;
             if !batch_guard.try_mark_closing() {
                 return Ok(());
@@ -2546,7 +2546,7 @@ impl GuardForAsyncSendService {
         currently_hold_size: Arc<AtomicU64>,
     ) -> crate::ClientResult<()> {
         // Extract all data from the batch without holding the lock across await
-        let (messages, resource_permits, mq, mut producer, total_size, callbacks, aggregate_key, keys, notify) = {
+        let (messages, resource_permits, mq, producer, total_size, callbacks, aggregate_key, keys, notify) = {
             let mut batch_guard = batch.lock().await;
             if !batch_guard.try_mark_closing() {
                 return Ok(());

@@ -533,21 +533,21 @@ impl DefaultMQProducer {
         <Self as ProducerBackend>::view_message(self, topic, msg_id).await
     }
 
-    pub async fn send<M>(&mut self, msg: M) -> crate::ClientResult<Option<SendResult>>
+    pub async fn send<M>(&self, msg: M) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::send(self, msg).await
     }
 
-    pub async fn send_with_timeout<M>(&mut self, msg: M, timeout: u64) -> crate::ClientResult<Option<SendResult>>
+    pub async fn send_with_timeout<M>(&self, msg: M, timeout: u64) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::send_with_timeout(self, msg, timeout).await
     }
 
-    pub async fn send_with_callback<M, F>(&mut self, msg: M, send_callback: F) -> crate::ClientResult<()>
+    pub async fn send_with_callback<M, F>(&self, msg: M, send_callback: F) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
@@ -556,7 +556,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_with_callback_timeout<F, M>(
-        &mut self,
+        &self,
         msg: M,
         send_callback: F,
         timeout: u64,
@@ -568,14 +568,14 @@ impl DefaultMQProducer {
         <Self as ProducerBackend>::send_with_callback_timeout(self, msg, send_callback, timeout).await
     }
 
-    pub async fn send_oneway<M>(&mut self, msg: M) -> crate::ClientResult<()>
+    pub async fn send_oneway<M>(&self, msg: M) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::send_oneway(self, msg).await
     }
 
-    pub async fn send_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> crate::ClientResult<Option<SendResult>>
+    pub async fn send_to_queue<M>(&self, msg: M, mq: MessageQueue) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -583,7 +583,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_to_queue_with_timeout<M>(
-        &mut self,
+        &self,
         msg: M,
         mq: MessageQueue,
         timeout: u64,
@@ -595,7 +595,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_to_queue_with_callback<M, F>(
-        &mut self,
+        &self,
         msg: M,
         mq: MessageQueue,
         send_callback: F,
@@ -608,7 +608,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_to_queue_with_callback_timeout<M, F>(
-        &mut self,
+        &self,
         msg: M,
         mq: MessageQueue,
         send_callback: F,
@@ -621,7 +621,7 @@ impl DefaultMQProducer {
         <Self as ProducerBackend>::send_to_queue_with_callback_timeout(self, msg, mq, send_callback, timeout).await
     }
 
-    pub async fn send_oneway_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> crate::ClientResult<()>
+    pub async fn send_oneway_to_queue<M>(&self, msg: M, mq: MessageQueue) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -629,7 +629,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_with_selector<M, S, T>(
-        &mut self,
+        &self,
         msg: M,
         selector: S,
         arg: T,
@@ -643,7 +643,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_with_selector_timeout<M, S, T>(
-        &mut self,
+        &self,
         msg: M,
         selector: S,
         arg: T,
@@ -658,7 +658,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_with_selector_callback<M, S, T>(
-        &mut self,
+        &self,
         msg: M,
         selector: S,
         arg: T,
@@ -673,7 +673,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_with_selector_callback_timeout<M, S, T>(
-        &mut self,
+        &self,
         msg: M,
         selector: S,
         arg: T,
@@ -689,7 +689,7 @@ impl DefaultMQProducer {
             .await
     }
 
-    pub async fn send_oneway_with_selector<M, S, T>(&mut self, msg: M, selector: S, arg: T) -> crate::ClientResult<()>
+    pub async fn send_oneway_with_selector<M, S, T>(&self, msg: M, selector: S, arg: T) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -699,7 +699,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_message_in_transaction<T, M>(
-        &mut self,
+        &self,
         msg: M,
         arg: Option<T>,
     ) -> crate::ClientResult<TransactionSendResult>
@@ -710,21 +710,21 @@ impl DefaultMQProducer {
         <Self as ProducerBackend>::send_message_in_transaction(self, msg, arg).await
     }
 
-    pub async fn send_batch<M>(&mut self, msgs: Vec<M>) -> crate::ClientResult<SendResult>
+    pub async fn send_batch<M>(&self, msgs: Vec<M>) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::send_batch(self, msgs).await
     }
 
-    pub async fn send_batch_with_timeout<M>(&mut self, msgs: Vec<M>, timeout: u64) -> crate::ClientResult<SendResult>
+    pub async fn send_batch_with_timeout<M>(&self, msgs: Vec<M>, timeout: u64) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
         <Self as ProducerBackend>::send_batch_with_timeout(self, msgs, timeout).await
     }
 
-    pub async fn send_batch_to_queue<M>(&mut self, msgs: Vec<M>, mq: MessageQueue) -> crate::ClientResult<SendResult>
+    pub async fn send_batch_to_queue<M>(&self, msgs: Vec<M>, mq: MessageQueue) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -732,7 +732,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_batch_to_queue_with_timeout<M>(
-        &mut self,
+        &self,
         msgs: Vec<M>,
         mq: MessageQueue,
         timeout: u64,
@@ -743,7 +743,7 @@ impl DefaultMQProducer {
         <Self as ProducerBackend>::send_batch_to_queue_with_timeout(self, msgs, mq, timeout).await
     }
 
-    pub async fn send_batch_with_callback<M, F>(&mut self, msgs: Vec<M>, f: F) -> crate::ClientResult<()>
+    pub async fn send_batch_with_callback<M, F>(&self, msgs: Vec<M>, f: F) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
@@ -752,7 +752,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_batch_with_callback_timeout<M, F>(
-        &mut self,
+        &self,
         msgs: Vec<M>,
         f: F,
         timeout: u64,
@@ -765,7 +765,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_batch_to_queue_with_callback<M, F>(
-        &mut self,
+        &self,
         msgs: Vec<M>,
         mq: MessageQueue,
         f: F,
@@ -778,7 +778,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_batch_to_queue_with_callback_timeout<M, F>(
-        &mut self,
+        &self,
         msgs: Vec<M>,
         mq: MessageQueue,
         f: F,
@@ -791,7 +791,7 @@ impl DefaultMQProducer {
         <Self as ProducerBackend>::send_batch_to_queue_with_callback_timeout(self, msgs, mq, f, timeout).await
     }
 
-    pub async fn request<M>(&mut self, msg: M, timeout: u64) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
+    pub async fn request<M>(&self, msg: M, timeout: u64) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -799,7 +799,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn request_with_callback<F, M>(
-        &mut self,
+        &self,
         msg: M,
         request_callback: F,
         timeout: u64,
@@ -812,7 +812,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn request_with_selector<M, S, T>(
-        &mut self,
+        &self,
         msg: M,
         selector: S,
         arg: T,
@@ -827,7 +827,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn request_with_selector_callback<M, S, T, F>(
-        &mut self,
+        &self,
         msg: M,
         selector: S,
         arg: T,
@@ -845,7 +845,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn request_to_queue<M>(
-        &mut self,
+        &self,
         msg: M,
         mq: MessageQueue,
         timeout: u64,
@@ -857,7 +857,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn request_to_queue_with_callback<M, F>(
-        &mut self,
+        &self,
         msg: M,
         mq: MessageQueue,
         request_callback: F,
@@ -871,7 +871,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn recall_message(
-        &mut self,
+        &self,
         topic: impl Into<CheetahString>,
         recall_handle: impl Into<CheetahString>,
     ) -> crate::ClientResult<String> {
@@ -1493,7 +1493,7 @@ impl DefaultMQProducer {
 
     pub fn release_back_pressure_for_async_send_size_lock(&self) {}
 
-    fn batch<M>(&mut self, messages: Vec<M>) -> crate::ClientResult<MessageBatch>
+    fn batch<M>(&self, messages: Vec<M>) -> crate::ClientResult<MessageBatch>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1540,7 +1540,7 @@ impl DefaultMQProducer {
             .ok_or_else(|| mq_client_err!("ProduceAccumulator is not initialized, auto-batch is enabled"))
     }
     pub async fn send_direct<M>(
-        &mut self,
+        &self,
         mut msg: M,
         mq: Option<MessageQueue>,
         send_callback: Option<ArcSendCallback>,
@@ -1568,7 +1568,7 @@ impl DefaultMQProducer {
     }
 
     pub async fn send_by_accumulator<M>(
-        &mut self,
+        &self,
         mut msg: M,
         mq: Option<MessageQueue>,
         send_callback: Option<ArcSendCallback>,
@@ -1629,7 +1629,7 @@ impl DefaultMQProducer {
 
 impl DefaultMQProducer {
     #[inline]
-    pub fn with_namespace(&mut self, resource: impl Into<CheetahString>) -> CheetahString {
+    pub fn with_namespace(&self, resource: impl Into<CheetahString>) -> CheetahString {
         let resource = resource.into();
         let client_config = self.client_config.snapshot();
         let namespace = client_config.resolved_namespace().unwrap_or_default();
@@ -1852,7 +1852,7 @@ impl ProducerBackend for DefaultMQProducer {
         }
     }
 
-    async fn send<M>(&mut self, mut msg: M) -> crate::ClientResult<Option<SendResult>>
+    async fn send<M>(&self, mut msg: M) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1869,7 +1869,7 @@ impl ProducerBackend for DefaultMQProducer {
         }
     }
 
-    async fn send_with_timeout<M>(&mut self, mut msg: M, timeout: u64) -> crate::ClientResult<Option<SendResult>>
+    async fn send_with_timeout<M>(&self, mut msg: M, timeout: u64) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1882,7 +1882,7 @@ impl ProducerBackend for DefaultMQProducer {
             .await
     }
 
-    async fn send_with_callback<M, F>(&mut self, mut msg: M, send_callback: F) -> crate::ClientResult<()>
+    async fn send_with_callback<M, F>(&self, mut msg: M, send_callback: F) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
@@ -1908,7 +1908,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn send_with_callback_timeout<F, M>(
-        &mut self,
+        &self,
         mut msg: M,
         send_callback: F,
         timeout: u64,
@@ -1926,7 +1926,7 @@ impl ProducerBackend for DefaultMQProducer {
         Ok(())
     }
 
-    async fn send_oneway<M>(&mut self, mut msg: M) -> crate::ClientResult<()>
+    async fn send_oneway<M>(&self, mut msg: M) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1939,7 +1939,7 @@ impl ProducerBackend for DefaultMQProducer {
         Ok(())
     }
 
-    async fn send_to_queue<M>(&mut self, mut msg: M, mq: MessageQueue) -> crate::ClientResult<Option<SendResult>>
+    async fn send_to_queue<M>(&self, mut msg: M, mq: MessageQueue) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -1953,7 +1953,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn send_to_queue_with_timeout<M>(
-        &mut self,
+        &self,
         mut msg: M,
         mq: MessageQueue,
         timeout: u64,
@@ -1971,7 +1971,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn send_to_queue_with_callback<M, F>(
-        &mut self,
+        &self,
         mut msg: M,
         mq: MessageQueue,
         send_callback: F,
@@ -1994,7 +1994,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn send_to_queue_with_callback_timeout<M, F>(
-        &mut self,
+        &self,
         mut msg: M,
         mq: MessageQueue,
         send_callback: F,
@@ -2013,7 +2013,7 @@ impl ProducerBackend for DefaultMQProducer {
             .await
     }
 
-    async fn send_oneway_to_queue<M>(&mut self, mut msg: M, mq: MessageQueue) -> crate::ClientResult<()>
+    async fn send_oneway_to_queue<M>(&self, mut msg: M, mq: MessageQueue) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -2028,7 +2028,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn send_with_selector<M, S, T>(
-        &mut self,
+        &self,
         mut msg: M,
         selector: S,
         arg: T,
@@ -2054,7 +2054,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn send_with_selector_timeout<M, S, T>(
-        &mut self,
+        &self,
         mut msg: M,
         selector: S,
         arg: T,
@@ -2074,7 +2074,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn send_with_selector_callback<M, S, T>(
-        &mut self,
+        &self,
         mut msg: M,
         selector: S,
         arg: T,
@@ -2102,7 +2102,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn send_with_selector_callback_timeout<M, S, T>(
-        &mut self,
+        &self,
         mut msg: M,
         selector: S,
         arg: T,
@@ -2122,7 +2122,7 @@ impl ProducerBackend for DefaultMQProducer {
             .await
     }
 
-    async fn send_oneway_with_selector<M, S, T>(&mut self, mut msg: M, selector: S, arg: T) -> crate::ClientResult<()>
+    async fn send_oneway_with_selector<M, S, T>(&self, mut msg: M, selector: S, arg: T) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -2137,7 +2137,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn send_message_in_transaction<T, M>(
-        &mut self,
+        &self,
         _msg: M,
         _arg: Option<T>,
     ) -> crate::ClientResult<TransactionSendResult>
@@ -2150,7 +2150,7 @@ impl ProducerBackend for DefaultMQProducer {
         ))
     }
 
-    async fn send_batch<M>(&mut self, msgs: Vec<M>) -> crate::ClientResult<SendResult>
+    async fn send_batch<M>(&self, msgs: Vec<M>) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -2164,7 +2164,7 @@ impl ProducerBackend for DefaultMQProducer {
         result.ok_or_else(|| crate::mq_client_err!("Synchronous batch send completed without SendResult"))
     }
 
-    async fn send_batch_with_timeout<M>(&mut self, msgs: Vec<M>, timeout: u64) -> crate::ClientResult<SendResult>
+    async fn send_batch_with_timeout<M>(&self, msgs: Vec<M>, timeout: u64) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -2178,7 +2178,7 @@ impl ProducerBackend for DefaultMQProducer {
         result.ok_or_else(|| crate::mq_client_err!("Synchronous batch send completed without SendResult"))
     }
 
-    async fn send_batch_to_queue<M>(&mut self, msgs: Vec<M>, mq: MessageQueue) -> crate::ClientResult<SendResult>
+    async fn send_batch_to_queue<M>(&self, msgs: Vec<M>, mq: MessageQueue) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -2194,7 +2194,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn send_batch_to_queue_with_timeout<M>(
-        &mut self,
+        &self,
         msgs: Vec<M>,
         mq: MessageQueue,
         timeout: u64,
@@ -2213,7 +2213,7 @@ impl ProducerBackend for DefaultMQProducer {
         result.ok_or_else(|| crate::mq_client_err!("Synchronous batch send completed without SendResult"))
     }
 
-    async fn send_batch_with_callback<M, F>(&mut self, msgs: Vec<M>, f: F) -> crate::ClientResult<()>
+    async fn send_batch_with_callback<M, F>(&self, msgs: Vec<M>, f: F) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
@@ -2227,12 +2227,7 @@ impl ProducerBackend for DefaultMQProducer {
         Ok(())
     }
 
-    async fn send_batch_with_callback_timeout<M, F>(
-        &mut self,
-        msgs: Vec<M>,
-        f: F,
-        timeout: u64,
-    ) -> crate::ClientResult<()>
+    async fn send_batch_with_callback_timeout<M, F>(&self, msgs: Vec<M>, f: F, timeout: u64) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
@@ -2247,7 +2242,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn send_batch_to_queue_with_callback<M, F>(
-        &mut self,
+        &self,
         msgs: Vec<M>,
         mq: MessageQueue,
         f: F,
@@ -2266,7 +2261,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn send_batch_to_queue_with_callback_timeout<M, F>(
-        &mut self,
+        &self,
         msgs: Vec<M>,
         mq: MessageQueue,
         f: F,
@@ -2285,7 +2280,7 @@ impl ProducerBackend for DefaultMQProducer {
             .await
     }
 
-    async fn request<M>(&mut self, mut msg: M, timeout: u64) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
+    async fn request<M>(&self, mut msg: M, timeout: u64) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -2298,7 +2293,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn request_with_callback<F, M>(
-        &mut self,
+        &self,
         mut msg: M,
         request_callback: F,
         timeout: u64,
@@ -2316,7 +2311,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn request_with_selector<M, S, T>(
-        &mut self,
+        &self,
         mut msg: M,
         selector: S,
         arg: T,
@@ -2336,7 +2331,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn request_with_selector_callback<M, S, T, F>(
-        &mut self,
+        &self,
         mut msg: M,
         selector: S,
         arg: T,
@@ -2358,7 +2353,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn request_to_queue<M>(
-        &mut self,
+        &self,
         mut msg: M,
         mq: MessageQueue,
         timeout: u64,
@@ -2376,7 +2371,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn request_to_queue_with_callback<M, F>(
-        &mut self,
+        &self,
         mut msg: M,
         mq: MessageQueue,
         request_callback: F,
@@ -2404,7 +2399,7 @@ impl ProducerBackend for DefaultMQProducer {
     }
 
     async fn recall_message(
-        &mut self,
+        &self,
         topic: impl Into<CheetahString>,
         recall_handle: impl Into<CheetahString>,
     ) -> crate::ClientResult<String> {

@@ -629,7 +629,7 @@ impl MQClientInstance {
     }
 
     pub(crate) async fn send_with_default_producer(&self, message: Message) -> crate::ClientResult<Option<SendResult>> {
-        let mut default_producer = self.default_producer.lock().await;
+        let default_producer = self.default_producer.lock().await;
         default_producer.send(message).await
     }
 

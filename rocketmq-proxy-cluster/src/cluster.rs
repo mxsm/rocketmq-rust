@@ -847,7 +847,7 @@ impl ClusterProducerIo for DefaultMQProducer {
         topic: CheetahString,
         recall_handle: CheetahString,
     ) -> Result<String, CanonicalError> {
-        self.recall_message(topic, recall_handle)
+        DefaultMQProducer::recall_message(self, topic, recall_handle)
             .await
             .map_err(ClientError::into_error)
     }
