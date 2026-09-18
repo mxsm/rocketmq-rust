@@ -79,6 +79,7 @@ soak, complete disaster recovery, Docker images, and real external adapters rema
 | `rocketmq-dashboard-tauri` | `rocketmq-admin-core` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
 | `rocketmq-dashboard-tauri` | `rocketmq-dashboard-common` | `rocketmq-dashboard/rocketmq-dashboard-common` |
 | `rocketmq-dashboard-tauri` | `rocketmq-error` | `rocketmq-error` |
+| `rocketmq-dashboard-tauri` | `rocketmq-model` | `rocketmq-model` |
 | `rocketmq-dashboard-tauri` | `rocketmq-runtime` | `rocketmq-runtime` |
 | `rocketmq-dashboard-web-backend` | `rocketmq-admin-core` | `rocketmq-tools/rocketmq-admin/rocketmq-admin-core` |
 | `rocketmq-dashboard-web-backend` | `rocketmq-dashboard-common` | `rocketmq-dashboard/rocketmq-dashboard-common` |
@@ -217,15 +218,15 @@ and inject `ChildServiceContext`/`TaskGroup` capabilities.
 
 ## Python architecture test inventory
 
-- Inventoried test modules: 77.
+- Inventoried test modules: 79.
 - Guard runner: `python scripts/run_architecture_tests.py --tier pr_static`.
 - Contract runner: `python scripts/run_architecture_tests.py --tier phase_contract --tier dynamic_fixture`.
 
 | Tier | Modules |
 |---|---:|
-| `pr_static` | 27 |
+| `pr_static` | 28 |
 | `phase_contract` | 23 |
-| `dynamic_fixture` | 22 |
+| `dynamic_fixture` | 23 |
 | `deferred_validation` | 5 |
 
 ## Evidence workflows and artifact identities

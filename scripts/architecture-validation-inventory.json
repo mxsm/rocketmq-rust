@@ -205,7 +205,7 @@
     ]
   },
   "python_tests": {
-    "expected_count": 77,
+    "expected_count": 79,
     "ci": {
       "guards": "python scripts/run_architecture_tests.py --tier pr_static",
       "contracts": "python scripts/run_architecture_tests.py --tier phase_contract --tier dynamic_fixture"
@@ -245,6 +245,8 @@
       {"path": "scripts/tests/test_common_release_inputs.py", "owner": "release-engineering", "tier": "phase_contract", "trigger_paths": ["scripts/**", "distribution/**"], "command": "python -m unittest scripts.tests.test_common_release_inputs -v", "estimated_seconds": 60, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_component_sbom.py", "owner": "release-engineering", "tier": "dynamic_fixture", "trigger_paths": ["scripts/**", "distribution/**"], "command": "python -m unittest scripts.tests.test_component_sbom -v", "estimated_seconds": 120, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_core_container_image_guard.py", "owner": "release-engineering", "tier": "dynamic_fixture", "trigger_paths": ["scripts/**", "distribution/**", ".github/workflows/core-kubernetes-assets-ci.yml"], "command": "python -m unittest scripts.tests.test_core_container_image_guard -v", "estimated_seconds": 120, "platform": "any", "fixture_policy": "repository-fixtures"},
+      {"path": "scripts/tests/test_core_helm_rollout.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/**", "distribution/helm/rocketmq-rust-core/**"], "command": "python -m unittest scripts.tests.test_core_helm_rollout -v", "estimated_seconds": 10, "platform": "any", "fixture_policy": "repository-fixtures"},
+      {"path": "scripts/tests/test_core_helm_runtime.py", "owner": "release-engineering", "tier": "dynamic_fixture", "trigger_paths": ["scripts/**", "distribution/helm/rocketmq-rust-core/**"], "command": "python -m unittest scripts.tests.test_core_helm_runtime -v", "estimated_seconds": 60, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_core_oci_layout.py", "owner": "release-engineering", "tier": "dynamic_fixture", "trigger_paths": ["scripts/**", "distribution/**"], "command": "python -m unittest scripts.tests.test_core_oci_layout -v", "estimated_seconds": 120, "platform": "any", "fixture_policy": "temporary-only"},
       {"path": "scripts/tests/test_core_release_check_routes.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/**", ".github/workflows/**"], "command": "python -m unittest scripts.tests.test_core_release_check_routes -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "repository-fixtures"},
       {"path": "scripts/tests/test_core_release_scope.py", "owner": "release-engineering", "tier": "pr_static", "trigger_paths": ["scripts/**", "Cargo.toml", "**/Cargo.toml"], "command": "python -m unittest scripts.tests.test_core_release_scope -v", "estimated_seconds": 30, "platform": "any", "fixture_policy": "repository-fixtures"},

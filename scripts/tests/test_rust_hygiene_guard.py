@@ -268,12 +268,21 @@ fn test_runtime() {
         self.assertEqual("2.0.0", debt[0]["expiry"])
 
 
-    def test_runtime_rule_allows_only_the_definition_and_root_reexport(self):
+    def test_runtime_rule_allows_only_the_definition_and_compatibility_reexports(self):
         canonical = "pub enum RocketMQRuntime { A } impl RocketMQRuntime { fn get() { let _ = RocketMQRuntime::A; } }"
         reexport = "pub use legacy::RocketMQRuntime;"
+        compat_reexport = "pub use crate::legacy::RocketMQRuntime;"
 
         self.assertEqual(([], []), self.guard.scan_source(canonical, "rocketmq-runtime/src/legacy.rs"))
         self.assertEqual(([], []), self.guard.scan_source(reexport, "rocketmq-runtime/src/lib.rs"))
+        self.assertEqual(([], []), self.guard.scan_source(compat_reexport, "rocketmq-runtime/src/compat.rs"))
+        safety, _ = self.guard.scan_source(compat_reexport, "crate/src/compat.rs")
+        self.assertEqual(1, len(safety))
+        safety, _ = self.guard.scan_source(
+            compat_reexport + " fn run() { let _ = RocketMQRuntime::new(); }",
+            "rocketmq-runtime/src/compat.rs",
+        )
+        self.assertEqual(1, len(safety))
         safety, _ = self.guard.scan_source(
             "use rocketmq_runtime::RocketMQRuntime;", "crate/src/lib.rs"
         )

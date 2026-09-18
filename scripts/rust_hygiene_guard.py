@@ -336,7 +336,7 @@ def matching_delimiter(masked: str, opening: int, opener: str, closer: str) -> i
 
 
 def legacy_runtime_offsets(masked: str, relative: str) -> list[int]:
-    """Reject runtime references outside the legacy definition and root re-export."""
+    """Reject runtime references outside the legacy definition and compatibility re-exports."""
 
     allowed: list[tuple[int, int]] = []
     if relative == "rocketmq-runtime/src/legacy.rs":
@@ -347,6 +347,10 @@ def legacy_runtime_offsets(masked: str, relative: str) -> list[int]:
                 allowed.append((declaration.start(), closing + 1))
     elif relative == "rocketmq-runtime/src/lib.rs":
         reexport = re.search(r"\bpub\s+use\s+legacy\s*::\s*RocketMQRuntime\s*;", masked)
+        if reexport is not None:
+            allowed.append(reexport.span())
+    elif relative == "rocketmq-runtime/src/compat.rs":
+        reexport = re.search(r"\bpub\s+use\s+crate\s*::\s*legacy\s*::\s*RocketMQRuntime\s*;", masked)
         if reexport is not None:
             allowed.append(reexport.span())
     return [
