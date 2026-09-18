@@ -34,8 +34,10 @@ use rocketmq_client_rust::ClientRuntime;
 #[cfg(test)]
 use rocketmq_client_rust::ClientRuntimeConfig;
 use rocketmq_client_rust::DefaultMQProducer;
+use rocketmq_client_rust::MessageRecall;
 use rocketmq_client_rust::PopResult;
 use rocketmq_client_rust::PopStatus;
+use rocketmq_client_rust::RecallRequest;
 use rocketmq_client_rust::TelemetryHandle;
 use rocketmq_error::Error as CanonicalError;
 use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
@@ -847,7 +849,7 @@ impl ClusterProducerIo for DefaultMQProducer {
         topic: CheetahString,
         recall_handle: CheetahString,
     ) -> Result<String, CanonicalError> {
-        DefaultMQProducer::recall_message(self, topic, recall_handle)
+        MessageRecall::recall(self, RecallRequest { topic, recall_handle })
             .await
             .map_err(ClientError::into_error)
     }
