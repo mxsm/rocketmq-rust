@@ -133,7 +133,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<Option<SendResult>>` - A result containing an optional
     ///   send result or an error.
-    async fn send<M>(&mut self, msg: M) -> crate::ClientResult<Option<SendResult>>
+    async fn send<M>(&self, msg: M) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync;
 
@@ -148,7 +148,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<SendResult>` - A result containing the send result or an
     ///   error.
-    async fn send_with_timeout<M>(&mut self, msg: M, timeout: u64) -> crate::ClientResult<Option<SendResult>>
+    async fn send_with_timeout<M>(&self, msg: M, timeout: u64) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync;
 
@@ -167,7 +167,7 @@ pub(crate) trait ProducerBackend {
     /// # Returns
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
-    async fn send_with_callback<M, F>(&mut self, msg: M, send_callback: F) -> crate::ClientResult<()>
+    async fn send_with_callback<M, F>(&self, msg: M, send_callback: F) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static;
@@ -187,12 +187,7 @@ pub(crate) trait ProducerBackend {
     /// # Returns
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
-    async fn send_with_callback_timeout<F, M>(
-        &mut self,
-        msg: M,
-        send_callback: F,
-        timeout: u64,
-    ) -> crate::ClientResult<()>
+    async fn send_with_callback_timeout<F, M>(&self, msg: M, send_callback: F, timeout: u64) -> crate::ClientResult<()>
     where
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync;
@@ -210,7 +205,7 @@ pub(crate) trait ProducerBackend {
     /// # Returns
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
-    async fn send_oneway<M>(&mut self, msg: M) -> crate::ClientResult<()>
+    async fn send_oneway<M>(&self, msg: M) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync;
 
@@ -230,7 +225,7 @@ pub(crate) trait ProducerBackend {
     /// * `crate::ClientResult<SendResult>` - A result containing an optional send result
     ///   or an error. Returns `Some(SendResult)` for synchronous sends, or `None` when the result
     ///   is delivered asynchronously via a callback.
-    async fn send_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> crate::ClientResult<Option<SendResult>>
+    async fn send_to_queue<M>(&self, msg: M, mq: MessageQueue) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync;
 
@@ -251,7 +246,7 @@ pub(crate) trait ProducerBackend {
     /// * `crate::ClientResult<Option<SendResult>>` - A result containing the send result
     ///   or an error.
     async fn send_to_queue_with_timeout<M>(
-        &mut self,
+        &self,
         msg: M,
         mq: MessageQueue,
         timeout: u64,
@@ -276,7 +271,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_to_queue_with_callback<M, F>(
-        &mut self,
+        &self,
         msg: M,
         mq: MessageQueue,
         send_callback: F,
@@ -303,7 +298,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_to_queue_with_callback_timeout<M, F>(
-        &mut self,
+        &self,
         msg: M,
         mq: MessageQueue,
         send_callback: F,
@@ -327,7 +322,7 @@ pub(crate) trait ProducerBackend {
     /// # Returns
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
-    async fn send_oneway_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> crate::ClientResult<()>
+    async fn send_oneway_to_queue<M>(&self, msg: M, mq: MessageQueue) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync;
 
@@ -349,12 +344,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<Option<SendResult>>` - A result containing the send result
     ///   or an error.
-    async fn send_with_selector<M, S, T>(
-        &mut self,
-        msg: M,
-        selector: S,
-        arg: T,
-    ) -> crate::ClientResult<Option<SendResult>>
+    async fn send_with_selector<M, S, T>(&self, msg: M, selector: S, arg: T) -> crate::ClientResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
@@ -380,7 +370,7 @@ pub(crate) trait ProducerBackend {
     /// * `crate::ClientResult<Option<SendResult>>` - A result containing the send result
     ///   or an error.
     async fn send_with_selector_timeout<M, S, T>(
-        &mut self,
+        &self,
         msg: M,
         selector: S,
         arg: T,
@@ -410,7 +400,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_with_selector_callback<M, S, T>(
-        &mut self,
+        &self,
         msg: M,
         selector: S,
         arg: T,
@@ -442,7 +432,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_with_selector_callback_timeout<M, S, T>(
-        &mut self,
+        &self,
         msg: M,
         selector: S,
         arg: T,
@@ -472,7 +462,7 @@ pub(crate) trait ProducerBackend {
     /// # Returns
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
-    async fn send_oneway_with_selector<M, S, T>(&mut self, msg: M, selector: S, arg: T) -> crate::ClientResult<()>
+    async fn send_oneway_with_selector<M, S, T>(&self, msg: M, selector: S, arg: T) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -490,7 +480,7 @@ pub(crate) trait ProducerBackend {
     /// * `crate::ClientResult<TransactionSendResult>` - A result containing the
     ///   transaction send result or an error.
     async fn send_message_in_transaction<T, M>(
-        &mut self,
+        &self,
         msg: M,
         arg: Option<T>,
     ) -> crate::ClientResult<TransactionSendResult>
@@ -508,7 +498,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<SendResult>` - A result containing the send result or an
     ///   error.
-    async fn send_batch<M>(&mut self, msgs: Vec<M>) -> crate::ClientResult<SendResult>
+    async fn send_batch<M>(&self, msgs: Vec<M>) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync;
 
@@ -523,7 +513,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<SendResult>` - A result containing the send result or an
     ///   error.
-    async fn send_batch_with_timeout<M>(&mut self, msgs: Vec<M>, timeout: u64) -> crate::ClientResult<SendResult>
+    async fn send_batch_with_timeout<M>(&self, msgs: Vec<M>, timeout: u64) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync;
 
@@ -538,7 +528,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<SendResult>` - A result containing the send result or an
     ///   error.
-    async fn send_batch_to_queue<M>(&mut self, msgs: Vec<M>, mq: MessageQueue) -> crate::ClientResult<SendResult>
+    async fn send_batch_to_queue<M>(&self, msgs: Vec<M>, mq: MessageQueue) -> crate::ClientResult<SendResult>
     where
         M: MessageTrait + Send + Sync;
 
@@ -555,7 +545,7 @@ pub(crate) trait ProducerBackend {
     /// * `crate::ClientResult<SendResult>` - A result containing the send result or an
     ///   error.
     async fn send_batch_to_queue_with_timeout<M>(
-        &mut self,
+        &self,
         msgs: Vec<M>,
         mq: MessageQueue,
         timeout: u64,
@@ -573,7 +563,7 @@ pub(crate) trait ProducerBackend {
     /// # Returns
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
-    async fn send_batch_with_callback<M, F>(&mut self, msgs: Vec<M>, f: F) -> crate::ClientResult<()>
+    async fn send_batch_with_callback<M, F>(&self, msgs: Vec<M>, f: F) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static;
@@ -589,12 +579,7 @@ pub(crate) trait ProducerBackend {
     /// # Returns
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
-    async fn send_batch_with_callback_timeout<M, F>(
-        &mut self,
-        msgs: Vec<M>,
-        f: F,
-        timeout: u64,
-    ) -> crate::ClientResult<()>
+    async fn send_batch_with_callback_timeout<M, F>(&self, msgs: Vec<M>, f: F, timeout: u64) -> crate::ClientResult<()>
     where
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&ClientError>) + Send + Sync + 'static;
@@ -611,7 +596,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_batch_to_queue_with_callback<M, F>(
-        &mut self,
+        &self,
         msgs: Vec<M>,
         mq: MessageQueue,
         f: F,
@@ -633,7 +618,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn send_batch_to_queue_with_callback_timeout<M, F>(
-        &mut self,
+        &self,
         msgs: Vec<M>,
         mq: MessageQueue,
         f: F,
@@ -658,7 +643,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<Box<dyn MessageTrait + Send>>` - A result containing the
     ///   response message or an error.
-    async fn request<M>(&mut self, msg: M, timeout: u64) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
+    async fn request<M>(&self, msg: M, timeout: u64) -> crate::ClientResult<Box<dyn MessageTrait + Send>>
     where
         M: MessageTrait + Send + Sync;
 
@@ -678,12 +663,7 @@ pub(crate) trait ProducerBackend {
     /// # Returns
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
-    async fn request_with_callback<F, M>(
-        &mut self,
-        msg: M,
-        request_callback: F,
-        timeout: u64,
-    ) -> crate::ClientResult<()>
+    async fn request_with_callback<F, M>(&self, msg: M, request_callback: F, timeout: u64) -> crate::ClientResult<()>
     where
         F: Fn(Option<&dyn MessageTrait>, Option<&crate::ClientError>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync;
@@ -708,7 +688,7 @@ pub(crate) trait ProducerBackend {
     /// * `crate::ClientResult<Box<dyn MessageTrait + Send>>` - A result containing the
     ///   response message or an error.
     async fn request_with_selector<M, S, T>(
-        &mut self,
+        &self,
         msg: M,
         selector: S,
         arg: T,
@@ -740,7 +720,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn request_with_selector_callback<M, S, T, F>(
-        &mut self,
+        &self,
         msg: M,
         selector: S,
         arg: T,
@@ -770,7 +750,7 @@ pub(crate) trait ProducerBackend {
     /// * `crate::ClientResult<Box<dyn MessageTrait + Send>>` - A result containing the
     ///   response message or an error.
     async fn request_to_queue<M>(
-        &mut self,
+        &self,
         msg: M,
         mq: MessageQueue,
         timeout: u64,
@@ -796,7 +776,7 @@ pub(crate) trait ProducerBackend {
     ///
     /// * `crate::ClientResult<()>` - An empty result indicating success or failure.
     async fn request_to_queue_with_callback<M, F>(
-        &mut self,
+        &self,
         msg: M,
         mq: MessageQueue,
         request_callback: F,
@@ -861,7 +841,7 @@ pub(crate) trait ProducerBackend {
     /// producer.recall_message(topic, "handle123").await?;
     /// ```
     async fn recall_message(
-        &mut self,
+        &self,
         topic: impl Into<CheetahString>,
         recall_handle: impl Into<CheetahString>,
     ) -> crate::ClientResult<String>;
