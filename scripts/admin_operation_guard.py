@@ -60,11 +60,11 @@ GOLDEN_EXIT_CODES = {
     "permission": 77,
 }
 GOLDEN_ERROR_CODES = {
-    "invalid-input": "ILLEGAL_ARGUMENT",
-    "not-found": "QUERY_NOT_FOUND",
-    "partial-failure": "BROKER_OPERATION_FAILED",
-    "timeout": "TIMEOUT",
-    "permission": "BROKER_PERMISSION_DENIED",
+    "invalid-input": "core.argument.invalid",
+    "not-found": "broker.query.not_found",
+    "partial-failure": "broker.operation.failed",
+    "timeout": "core.operation.timed_out",
+    "permission": "auth.permission.denied",
 }
 GOLDEN_SUCCESS_STATES = {
     "read-only-query": ("baseline", "baseline", True),

@@ -36,11 +36,11 @@ ERROR_EXIT_CODES = {
     "permission": 77,
 }
 ERROR_CODES = {
-    "invalid-input": "ILLEGAL_ARGUMENT",
-    "not-found": "QUERY_NOT_FOUND",
-    "partial-failure": "BROKER_OPERATION_FAILED",
-    "timeout": "TIMEOUT",
-    "permission": "BROKER_PERMISSION_DENIED",
+    "invalid-input": "core.argument.invalid",
+    "not-found": "broker.query.not_found",
+    "partial-failure": "broker.operation.failed",
+    "timeout": "core.operation.timed_out",
+    "permission": "auth.permission.denied",
 }
 ERROR_CYCLES = {
     "read-only-query": ("not-found", "timeout", "permission", "invalid-input"),

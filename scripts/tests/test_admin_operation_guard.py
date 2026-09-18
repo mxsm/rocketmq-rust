@@ -30,6 +30,7 @@ OPERATION_MAP = ROOT / "rocketmq-doc" / "en" / "admin" / "java-55-operation-map.
 CAPABILITY_MANIFEST = ROOT / "scripts" / "v1-capability-manifest.json"
 FUNCTIONAL_MATRIX = ROOT / "scripts" / "v1-functional-test-matrix.json"
 GOLDENS = ROOT / "scripts" / "fixtures" / "admin-java-55" / "operation-goldens.json"
+GENERATOR = ROOT / "scripts" / "generate_admin_operation_goldens.py"
 
 
 def run_guard(matrix: Path = MATRIX, *extra_args: str) -> subprocess.CompletedProcess[str]:
@@ -122,6 +123,11 @@ class AdminOperationGuardTest(unittest.TestCase):
         self.assertIn("goldens=94 scenarios=278", result.stdout)
 
         fixture = json.loads(GOLDENS.read_text(encoding="utf-8"))
+        generated = subprocess.run(
+            [sys.executable, str(GENERATOR), "--check"],
+            cwd=ROOT, check=False, capture_output=True, text=True,
+        )
+        self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
         self.assertEqual(fixture["counts"], {"operations": 94, "scenarios": 278})
         self.assertEqual(len(fixture["operations"]), 94)
         for operation in fixture["operations"]:
