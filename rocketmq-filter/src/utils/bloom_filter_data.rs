@@ -15,30 +15,41 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+/// Bit positions and total bit count for one Bloom-filter entry.
+///
+/// Uses the Apache RocketMQ `bitPos` and `bitNum` payload fields for
+/// wire and storage compatibility.
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BloomFilterData {
+    /// Bit indices associated with this entry.
     bit_pos: Vec<i32>,
+    /// Total number of bits in the filter's bit array.
     bit_num: u32,
 }
 
 impl BloomFilterData {
+    /// Creates an entry with the given bit positions and total bit count.
     pub fn new(bit_pos: Vec<i32>, bit_num: u32) -> Self {
         Self { bit_pos, bit_num }
     }
 
+    /// Replaces the bit positions associated with this entry.
     pub fn set_bit_pos(&mut self, bit_pos: Vec<i32>) {
         self.bit_pos = bit_pos;
     }
 
+    /// Replaces the total bit count of the filter's bit array.
     pub fn set_bit_num(&mut self, bit_num: u32) {
         self.bit_num = bit_num;
     }
 
+    /// Returns the bit positions associated with this entry.
     pub fn bit_pos(&self) -> &Vec<i32> {
         &self.bit_pos
     }
 
+    /// Returns the total bit count of the filter's bit array.
     pub fn bit_num(&self) -> u32 {
         self.bit_num
     }
