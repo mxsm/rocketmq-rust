@@ -2623,7 +2623,7 @@ mod tests {
     #[tokio::test]
     async fn request_with_callback_not_initialized() {
         // Arrange
-        let mut producer = DefaultMQProducer {
+        let producer = DefaultMQProducer {
             session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
@@ -2642,7 +2642,7 @@ mod tests {
     #[tokio::test]
     async fn request_with_selector_not_initialized() {
         // Arrange
-        let mut producer = DefaultMQProducer {
+        let producer = DefaultMQProducer {
             session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
@@ -2659,7 +2659,7 @@ mod tests {
     #[tokio::test]
     async fn request_with_selector_callback_not_initialized() {
         // Arrange
-        let mut producer = DefaultMQProducer {
+        let producer = DefaultMQProducer {
             session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
@@ -2681,7 +2681,7 @@ mod tests {
     #[tokio::test]
     async fn send_batch_with_callback_not_initialized() {
         // Arrange
-        let mut producer = DefaultMQProducer {
+        let producer = DefaultMQProducer {
             session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
@@ -2702,7 +2702,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_batch_delay_millis_returns_java_compatible_batch_error_before_start_check() {
-        let mut producer = DefaultMQProducer {
+        let producer = DefaultMQProducer {
             session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
@@ -2726,7 +2726,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_producer_transaction_send_returns_java_compatible_error() {
-        let mut producer = DefaultMQProducer {
+        let producer = DefaultMQProducer {
             session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
@@ -2751,7 +2751,7 @@ mod tests {
     #[tokio::test]
     async fn send_batch_with_callback_timeout_not_initialized() {
         // Arrange
-        let mut producer = DefaultMQProducer {
+        let producer = DefaultMQProducer {
             session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
@@ -2775,7 +2775,7 @@ mod tests {
     #[tokio::test]
     async fn send_batch_to_queue_with_callback_not_initialized() {
         // Arrange
-        let mut producer = DefaultMQProducer {
+        let producer = DefaultMQProducer {
             session: None,
             client_config: Default::default(),
             producer_config: Default::default(),
@@ -2800,7 +2800,7 @@ mod tests {
     #[tokio::test]
     async fn recall_message_not_initialized() {
         // Arrange
-        let mut producer = DefaultMQProducer {
+        let producer = DefaultMQProducer {
             session: None,
             client_config: Default::default(),
             producer_config: Default::default(),

@@ -125,8 +125,7 @@ fn transaction_check_listener_facade_matches_java_reference() {
 
 #[tokio::test]
 async fn transaction_send_without_listener_fails_before_start_or_send_like_java() {
-    let mut producer =
-        TransactionMQProducerBuilder::new(support::client_runtime("transaction-send-no-listener")).build();
+    let producer = TransactionMQProducerBuilder::new(support::client_runtime("transaction-send-no-listener")).build();
     let msg = Message::builder()
         .topic("TopicTest")
         .body("transaction-body")
