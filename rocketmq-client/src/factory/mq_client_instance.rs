@@ -629,7 +629,10 @@ impl MQClientInstance {
     }
 
     pub(crate) async fn send_with_default_producer(&self, message: Message) -> crate::ClientResult<Option<SendResult>> {
-        let default_producer = self.default_producer.lock().await;
+        let default_producer = {
+            let default_producer = self.default_producer.lock().await;
+            default_producer.clone()
+        };
         default_producer.send(message).await
     }
 
@@ -637,11 +640,11 @@ impl MQClientInstance {
         &self,
         message: &mut Message,
     ) -> crate::ClientResult<Option<SendResult>> {
-        let mut default_producer = self.default_producer.lock().await;
-        let producer_impl = default_producer
-            .default_mqproducer_impl
-            .as_mut()
-            .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQProducerImpl"))?;
+        let producer_impl = {
+            let default_producer = self.default_producer.lock().await;
+            default_producer.default_mqproducer_impl.as_ref().cloned()
+        }
+        .ok_or_else(|| crate::ClientError::not_initialized("DefaultMQProducerImpl"))?;
         producer_impl.send(message).await
     }
 
