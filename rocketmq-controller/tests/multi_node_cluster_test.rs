@@ -144,7 +144,40 @@ async fn add_cluster_learner(node: &RaftNodeManager, peer_id: u64, base_port: u1
         .expect("add caught-up learner through membership boundary");
 }
 
+/// Waits until the leader observes the learner at the committed log frontier.
+///
+/// The membership boundary rejects a promotion while the leader still holds a committed entry
+/// the learner has not acknowledged. That state is expected immediately after the previous
+/// membership change committed, so promotion waits for the precondition instead of racing it.
+async fn wait_for_promotable_learner(node: &RaftNodeManager, learner_id: u64) {
+    for attempt in 1_usize..=100 {
+        let membership = node
+            .consensus_membership()
+            .await
+            .expect("read membership while waiting for learner promotion readiness");
+        if membership.caught_up().contains(&learner_id) {
+            return;
+        }
+        if attempt.is_multiple_of(25) {
+            println!(
+                "Waiting for learner {} to reach the committed index (attempt {}), voters={:?}, \
+                 learners={:?}, caught_up={:?}",
+                learner_id,
+                attempt,
+                membership.voters(),
+                membership.learners(),
+                membership.caught_up()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("learner {learner_id} did not reach the leader's committed index before voter promotion");
+}
+
 async fn promote_cluster_voter(node: &RaftNodeManager, node_id: u64, operation: &str) {
+    // The membership version must be read after the wait so the fence matches the membership
+    // the boundary validates against.
+    wait_for_promotable_learner(node, node_id).await;
     let membership = node
         .consensus_membership()
         .await
