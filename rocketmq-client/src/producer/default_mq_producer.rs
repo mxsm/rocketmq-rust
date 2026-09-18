@@ -2546,6 +2546,14 @@ mod facade_tests {
         MessageQueue::from_parts("test-topic", "broker-a", 0)
     }
 
+    fn test_send_callback(_result: Option<&SendResult>, _err: Option<&ClientError>) {}
+
+    fn test_request_callback(_msg: Option<&dyn MessageTrait>, _err: Option<&crate::ClientError>) {}
+
+    fn test_selector(_queues: &[MessageQueue], _msg: &Message, _arg: &i32) -> Option<MessageQueue> {
+        None
+    }
+
     fn assert_not_initialized<T>(result: ClientResult<T>) {
         match result {
             Err(error) => assert!(
@@ -2554,6 +2562,13 @@ mod facade_tests {
             ),
             Ok(_) => panic!("expected producer facade to require a started implementation"),
         }
+    }
+
+    fn assert_shared_borrow_contract_rejects<T>(result: ClientResult<T>) {
+        assert!(
+            result.is_err(),
+            "expected shared-borrow ProducerBackend method to reject an unstarted producer"
+        );
     }
 
     #[tokio::test]
@@ -2583,19 +2598,127 @@ mod facade_tests {
     }
 
     #[tokio::test]
-    async fn default_mq_producer_satisfies_shared_borrow_producer_backend_contract() {
+    async fn default_mq_producer_satisfies_shared_borrow_producer_backend_send_contract() {
         let producer = unstarted_producer();
-        let callback = |_result: Option<&SendResult>, _err: Option<&ClientError>| {};
-        let selector = |_queues: &[MessageQueue], _msg: &Message, _arg: &i32| -> Option<MessageQueue> { None };
 
-        assert_not_initialized(ProducerBackend::send(&producer, message()).await);
-        assert_not_initialized(ProducerBackend::send_with_timeout(&producer, message(), 1000).await);
-        assert_not_initialized(ProducerBackend::send_with_callback(&producer, message(), callback).await);
-        assert_not_initialized(ProducerBackend::send_to_queue(&producer, message(), queue()).await);
-        assert_not_initialized(ProducerBackend::send_with_selector(&producer, message(), selector, 1).await);
-        assert_not_initialized(ProducerBackend::send_batch(&producer, vec![message()]).await);
-        assert_not_initialized(ProducerBackend::request(&producer, message(), 1000).await);
-        assert_not_initialized(ProducerBackend::recall_message(&producer, "test-topic", "recall-handle-123").await);
+        assert_shared_borrow_contract_rejects(ProducerBackend::send(&producer, message()).await);
+        assert_shared_borrow_contract_rejects(ProducerBackend::send_with_timeout(&producer, message(), 1000).await);
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_with_callback(&producer, message(), test_send_callback).await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_with_callback_timeout(&producer, message(), test_send_callback, 1000).await,
+        );
+        assert_shared_borrow_contract_rejects(ProducerBackend::send_oneway(&producer, message()).await);
+        assert_shared_borrow_contract_rejects(ProducerBackend::send_to_queue(&producer, message(), queue()).await);
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_to_queue_with_timeout(&producer, message(), queue(), 1000).await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_to_queue_with_callback(&producer, message(), queue(), test_send_callback).await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_to_queue_with_callback_timeout(
+                &producer,
+                message(),
+                queue(),
+                test_send_callback,
+                1000,
+            )
+            .await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_with_selector(&producer, message(), test_selector, 1).await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_with_selector_timeout(&producer, message(), test_selector, 1, 1000).await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_with_selector_callback(
+                &producer,
+                message(),
+                test_selector,
+                1,
+                Some(Arc::new(test_send_callback)),
+            )
+            .await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_with_selector_callback_timeout(
+                &producer,
+                message(),
+                test_selector,
+                1,
+                Some(Arc::new(test_send_callback)),
+                1000,
+            )
+            .await,
+        );
+        assert_shared_borrow_contract_rejects(ProducerBackend::send_batch(&producer, vec![message()]).await);
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_batch_with_timeout(&producer, vec![message()], 1000).await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_batch_with_callback(&producer, vec![message()], test_send_callback).await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_batch_with_callback_timeout(&producer, vec![message()], test_send_callback, 1000)
+                .await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_batch_to_queue(&producer, vec![message()], queue()).await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_batch_to_queue_with_timeout(&producer, vec![message()], queue(), 1000).await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_batch_to_queue_with_callback(&producer, vec![message()], queue(), test_send_callback)
+                .await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::send_batch_to_queue_with_callback_timeout(
+                &producer,
+                vec![message()],
+                queue(),
+                test_send_callback,
+                1000,
+            )
+            .await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::recall_message(&producer, "test-topic", "recall-handle-123").await,
+        );
+    }
+
+    #[tokio::test]
+    async fn default_mq_producer_satisfies_shared_borrow_producer_backend_request_contract() {
+        let producer = unstarted_producer();
+
+        assert_shared_borrow_contract_rejects(ProducerBackend::request(&producer, message(), 1000).await);
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::request_with_callback(&producer, message(), test_request_callback, 1000).await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::request_with_selector(&producer, message(), test_selector, 1, 1000).await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::request_with_selector_callback(
+                &producer,
+                message(),
+                test_selector,
+                1,
+                test_request_callback,
+                1000,
+            )
+            .await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::request_to_queue(&producer, message(), queue(), 1000).await,
+        );
+        assert_shared_borrow_contract_rejects(
+            ProducerBackend::request_to_queue_with_callback(&producer, message(), queue(), test_request_callback, 1000)
+                .await,
+        );
     }
 
     #[tokio::test]
