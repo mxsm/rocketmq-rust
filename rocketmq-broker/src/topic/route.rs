@@ -215,4 +215,51 @@ mod tests {
 
         assert_eq!("broker-b", selected.broker_name().as_str());
     }
+
+    #[test]
+    fn publish_projection_filters_unwritable_queues_and_brokers_without_master() {
+        let mut route = TopicRouteData {
+            queue_datas: vec![
+                // Read-only despite a master: contributes nothing.
+                QueueData::new("broker-a".into(), 4, 4, PermName::PERM_READ, 0),
+                // Two queue-data entries for the same broker, both writable.
+                QueueData::new("broker-b".into(), 4, 2, PermName::PERM_READ | PermName::PERM_WRITE, 0),
+                QueueData::new("broker-b".into(), 2, 1, PermName::PERM_READ | PermName::PERM_WRITE, 0),
+                // Writable but its broker only exposes a slave: contributes nothing.
+                QueueData::new("broker-c".into(), 4, 3, PermName::PERM_READ | PermName::PERM_WRITE, 0),
+            ],
+            broker_datas: vec![
+                BrokerData::new(
+                    "cluster-a".into(),
+                    "broker-c".into(),
+                    HashMap::from([(mix_all::MASTER_ID + 1, "10.0.0.3:10911".into())]),
+                    None,
+                ),
+                BrokerData::new(
+                    "cluster-a".into(),
+                    "broker-b".into(),
+                    HashMap::from([
+                        (mix_all::MASTER_ID, "10.0.0.2:10911".into()),
+                        (mix_all::MASTER_ID + 1, "10.0.0.2:10912".into()),
+                    ]),
+                    None,
+                ),
+                BrokerData::new(
+                    "cluster-a".into(),
+                    "broker-a".into(),
+                    HashMap::from([(mix_all::MASTER_ID, "10.0.0.1:10911".into())]),
+                    None,
+                ),
+            ],
+            ..Default::default()
+        };
+
+        let projected = BrokerPublishRoute::from_topic_route_data("topic-a", &mut route);
+
+        let queues = projected.message_queues();
+        assert_eq!(3, queues.len());
+        assert!(queues.iter().all(|queue| queue.broker_name().as_str() == "broker-b"));
+        let queue_ids: Vec<i32> = queues.iter().map(|queue| queue.queue_id()).collect();
+        assert_eq!(vec![0, 0, 1], queue_ids);
+    }
 }
