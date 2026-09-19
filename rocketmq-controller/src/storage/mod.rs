@@ -27,9 +27,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(test)]
 use serde::de::DeserializeOwned;
+#[cfg(test)]
 use serde::Serialize;
 
+#[cfg(test)]
 use crate::error::controller_internal_by;
 use rocketmq_error::Result;
 use rocketmq_runtime::BlockingExecutor;
@@ -110,7 +113,11 @@ pub struct StorageStats {
     pub backend_info: String,
 }
 
-/// Helper methods for storing/retrieving typed data
+/// Test-only helpers for storing/retrieving typed data.
+///
+/// No production caller serializes through the backend; the storage contract is exercised
+/// with these helpers from this module's tests.
+#[cfg(test)]
 #[async_trait]
 pub trait StorageBackendExt: StorageBackend {
     /// Put a serializable value
@@ -130,25 +137,10 @@ pub trait StorageBackendExt: StorageBackend {
             None => Ok(None),
         }
     }
-
-    /// List all values with a given prefix
-    async fn list_json<T: DeserializeOwned + Send>(&self, prefix: &str) -> Result<Vec<T>> {
-        let keys = self.list_keys(prefix).await?;
-        let mut values = Vec::new();
-
-        for key in keys {
-            if let Some(data) = self.get(&key).await? {
-                let value: T = serde_json::from_slice(&data)
-                    .map_err(|e| controller_internal_by("deserialize listed storage value", e))?;
-                values.push(value);
-            }
-        }
-
-        Ok(values)
-    }
 }
 
 // Blanket implementation for all StorageBackend implementors
+#[cfg(test)]
 impl<T: StorageBackend + ?Sized> StorageBackendExt for T {}
 
 /// Create a storage backend based on configuration

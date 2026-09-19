@@ -71,6 +71,7 @@ impl SyncStateInfo {
         self.master_epoch.load(Ordering::SeqCst) == 0
     }
 
+    #[cfg(test)]
     pub fn is_master_exist(&self) -> bool {
         self.master_broker_id.is_some()
     }
@@ -79,6 +80,7 @@ impl SyncStateInfo {
         &self.cluster_name
     }
 
+    #[cfg(test)]
     pub fn broker_name(&self) -> &str {
         &self.broker_name
     }

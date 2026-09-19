@@ -35,6 +35,7 @@ impl BrokerIdentityInfo {
         }
     }
 
+    #[cfg(test)]
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.cluster_name.trim().is_empty() && self.broker_name.trim().is_empty() && self.broker_id.is_none()

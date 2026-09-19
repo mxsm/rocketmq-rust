@@ -111,6 +111,7 @@ impl ControllerManager {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn broker_role_notifier_snapshot(&self) -> NotifySnapshot {
         self.broker_role_notifier.snapshot()
     }

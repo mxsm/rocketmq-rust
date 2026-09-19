@@ -15,7 +15,6 @@
 //! OpenRaft-backed controller wrapper.
 
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -125,21 +124,6 @@ impl RaftController {
         }
     }
 
-    pub(crate) fn new_open_raft_with_heartbeat_and_metrics(
-        config: ControllerConfigReader,
-        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
-        service_context: ChildServiceContext,
-        metrics_manager: Arc<ControllerMetricsManager>,
-    ) -> Self {
-        Self::new_open_raft_with_heartbeat_metrics_and_remoting_command_factory(
-            config,
-            heartbeat_manager,
-            service_context,
-            metrics_manager,
-            application_remoting_command_factory(),
-        )
-    }
-
     pub(crate) fn new_open_raft_with_heartbeat_metrics_and_remoting_command_factory(
         config: ControllerConfigReader,
         heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
@@ -173,14 +157,6 @@ impl RaftController {
     /// Post-bootstrap membership changes must use [`Self::apply_membership_change`].
     pub async fn initialize_cluster(&self, nodes: BTreeMap<NodeId, Node>) -> Result<()> {
         self.inner.initialize_cluster(nodes).await
-    }
-
-    pub(crate) async fn add_learner(&self, node_id: NodeId, node: Node, blocking: bool) -> Result<()> {
-        self.inner.add_learner(node_id, node, blocking).await
-    }
-
-    pub(crate) async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
-        self.inner.change_membership(members, retain).await
     }
 
     /// Applies an authorized, version-fenced, process-local-idempotent membership step.

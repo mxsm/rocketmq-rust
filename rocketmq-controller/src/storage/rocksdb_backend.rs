@@ -38,9 +38,6 @@ pub struct RocksDBBackend {
     /// RocksDB instance
     db: Arc<DB>,
 
-    /// Database path
-    path: PathBuf,
-
     /// Bounded executor for short RocksDB blocking I/O.
     blocking: BlockingExecutor,
 }
@@ -87,14 +84,8 @@ impl RocksDBBackend {
 
         Ok(Self {
             db: Arc::new(db),
-            path,
             blocking,
         })
-    }
-
-    /// Get the database path
-    pub fn path(&self) -> &PathBuf {
-        &self.path
     }
 
     async fn spawn_io<F, R>(&self, name: &'static str, operation: F) -> Result<R>

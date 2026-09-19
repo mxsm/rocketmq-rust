@@ -80,7 +80,6 @@ mod tests {
     const TEST_CLUSTER_NAME: &str = "test_cluster";
     const TEST_BROKER_NAME: &str = "test_broker";
     const TEST_BROKER_ADDRESS: &str = "192.168.10.30:8989";
-    const BROKER_ID: Option<u64> = Some(u64::MAX);
 
     #[test]
     fn new_method() {
