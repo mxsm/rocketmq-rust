@@ -661,6 +661,33 @@ mod tests {
 
     use super::*;
 
+    /// Upper bound for a registry-settling wait.
+    ///
+    /// The wait covers bookkeeping only, never task execution, so a generous bound costs nothing on
+    /// the happy path while keeping a genuine regression failing instead of hanging.
+    const REGISTRY_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// How often [`wait_for_registry_to_settle`] re-reads the registry.
+    const REGISTRY_SETTLE_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+    /// Waits for a task group's registry records to drain, returning how many remain.
+    ///
+    /// The runtime publishes a task's completion signal before it removes that task's registry
+    /// record: `TaskGroupInner::finish_task` runs only after the user future, and therefore the
+    /// completion handle that future owns, has been dropped. A group can consequently still report
+    /// a nonzero `task_count` after every `wait_finished` call has returned true, so a test that
+    /// asserts on the group's own counters must let the registry settle first.
+    async fn wait_for_registry_to_settle(task_group: &TaskGroup, timeout: Duration) -> usize {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = task_group.task_count();
+            if remaining == 0 || Instant::now() >= deadline {
+                return remaining;
+            }
+            tokio::time::sleep(REGISTRY_SETTLE_POLL_INTERVAL).await;
+        }
+    }
+
     #[test]
     fn client_runtimes_keep_independent_remoting_command_factories() {
         let json_factory = RemotingCommandFactory::new(RemotingCommandDefaults::new(301, SerializeType::JSON));
@@ -785,7 +812,11 @@ mod tests {
             assert!(handle.wait_finished(Duration::from_secs(1)));
         }
 
-        assert_eq!(service_context.task_group().task_count(), 0);
+        assert_eq!(
+            wait_for_registry_to_settle(service_context.task_group(), REGISTRY_SETTLE_TIMEOUT).await,
+            0,
+            "finished tasks must leave the group registry without a shutdown"
+        );
         assert_eq!(
             service_context.task_group().component_count(),
             baseline_components,
