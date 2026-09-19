@@ -617,17 +617,22 @@ async fn producer_selector_paths_without_client_return_error_instead_of_panickin
 
 #[tokio::test]
 async fn request_fail_removes_future_and_executes_callback_once_like_java() {
+    const FAILURE_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5);
+
     let producer = running_producer_without_client();
     let request_future_holder = Arc::clone(&producer.request_future_holder);
     let correlation_id = format!("request-fail-{}", current_millis());
     request_future_holder.remove_request(correlation_id.as_str()).await;
 
     let calls = Arc::new(AtomicUsize::new(0));
+    let callback_ran = Arc::new(tokio::sync::Notify::new());
     let calls_inner = Arc::clone(&calls);
+    let callback_ran_inner = Arc::clone(&callback_ran);
     let callback: RequestCallbackFn = Arc::new(move |response, error| {
         assert!(response.is_none());
         assert!(error.is_none());
         calls_inner.fetch_add(1, Ordering::SeqCst);
+        callback_ran_inner.notify_one();
     });
     let future = Arc::new(RequestResponseFuture::new(
         correlation_id.as_str().into(),
@@ -638,12 +643,15 @@ async fn request_fail_removes_future_and_executes_callback_once_like_java() {
 
     request_future_holder.fail_request(correlation_id.clone());
     request_future_holder.fail_request(correlation_id.clone());
-    for _ in 0..100 {
-        if calls.load(Ordering::SeqCst) == 1 {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
+
+    // `fail_request` hands the failure to the shared client runtime, so both the removal and the
+    // callback run on that runtime's worker rather than on this test task. Yielding here only
+    // advances this task's own runtime, which is why a bounded yield loop raced the spawned task
+    // under load. Wait on a real deadline instead. The spawned task removes the entry before it
+    // runs the callback, so observing the callback once is enough for the removal to be visible.
+    tokio::time::timeout(FAILURE_CALLBACK_TIMEOUT, callback_ran.notified())
+        .await
+        .expect("the request failure callback should run once the failure is scheduled");
 
     assert!(request_future_holder
         .get_request(correlation_id.as_str())
