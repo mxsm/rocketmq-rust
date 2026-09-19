@@ -1341,7 +1341,18 @@ mod tests {
             .await
             .expect("the current-thread runtime should keep advancing after drop")
             .expect("the ticker task should complete");
-        assert_eq!(worker_group.task_count(), 0);
+        // An abort is confirmed only when this current-thread runtime next polls the worker, and
+        // the ticker completing does not order that poll before this assertion. Drain the group by
+        // waiting for the task to leave its registry instead of assuming one scheduler turn.
+        let drain_deadline = Instant::now() + Duration::from_secs(5);
+        while worker_group.task_count() != 0 && Instant::now() < drain_deadline {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            worker_group.task_count(),
+            0,
+            "the dropped trace worker must leave its task group"
+        );
     }
 
     #[tokio::test]

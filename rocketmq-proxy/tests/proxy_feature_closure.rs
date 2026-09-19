@@ -106,11 +106,18 @@ fn resolved_proxy_packages(feature: &str) -> HashSet<String> {
         .map(|node| {
             let id = node.get("id").and_then(Value::as_str).expect("node id").to_owned();
             let dependencies = node
-                .get("dependencies")
+                .get("deps")
                 .and_then(Value::as_array)
-                .expect("node dependencies")
+                .expect("node deps")
                 .iter()
-                .map(|dependency| dependency.as_str().expect("dependency id").to_owned())
+                .filter(|dependency| compiled_for_dependents(dependency))
+                .map(|dependency| {
+                    dependency
+                        .get("pkg")
+                        .and_then(Value::as_str)
+                        .expect("dependency package id")
+                        .to_owned()
+                })
                 .collect::<Vec<_>>();
             (id, dependencies)
         })
@@ -131,4 +138,21 @@ fn resolved_proxy_packages(feature: &str) -> HashSet<String> {
         }
     }
     names
+}
+
+/// Reports whether a resolved edge is compiled when a dependent package builds.
+///
+/// `cargo metadata` resolves dev-dependencies for every workspace member, so their edges appear in
+/// the graph even though a feature selection of an unrelated package never compiles them. The
+/// closure must therefore follow only normal and build edges; otherwise a dev-dependency of any
+/// member, such as an example-only test client, is reported as a dependency of the Proxy.
+fn compiled_for_dependents(dependency: &Value) -> bool {
+    dependency
+        .get("dep_kinds")
+        .and_then(Value::as_array)
+        .is_none_or(|dep_kinds| {
+            dep_kinds
+                .iter()
+                .any(|dep_kind| dep_kind.get("kind").and_then(Value::as_str) != Some("dev"))
+        })
 }
