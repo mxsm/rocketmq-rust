@@ -117,3 +117,68 @@ impl TieredReadPolicy {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_store_api::StoreOperation;
+
+    use super::*;
+
+    #[test]
+    fn selects_storage_for_each_level_and_residency() {
+        use TieredReadSource::{Local, Tiered};
+
+        for (level, expected) in [
+            (TieredStorageLevel::Disable, [Local, Local, Local]),
+            (TieredStorageLevel::NotInDisk, [Local, Local, Tiered]),
+            (TieredStorageLevel::NotInMem, [Local, Tiered, Tiered]),
+            (TieredStorageLevel::Force, [Tiered, Tiered, Tiered]),
+        ] {
+            for (residency, expected) in [
+                TieredLocalResidency::Memory,
+                TieredLocalResidency::Disk,
+                TieredLocalResidency::Missing,
+            ]
+            .into_iter()
+            .zip(expected)
+            {
+                let policy = TieredReadPolicy::new(level);
+                let context = TieredReadContext::new(residency);
+                assert_eq!(policy.select(context), expected, "{level:?}, {residency:?}");
+                assert_eq!(policy.select(context.force_local()), Local, "{level:?}, {residency:?}");
+                assert_eq!(policy.select(context.remote_only()), Tiered, "{level:?}, {residency:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn falls_back_only_for_eligible_errors_when_local_storage_is_available() {
+        for descriptor in [
+            &rocketmq_error::STORAGE_BACKEND_UNAVAILABLE,
+            &rocketmq_error::STORAGE_OPERATION_TIMED_OUT,
+            &rocketmq_error::STORAGE_CAPACITY_EXHAUSTED,
+            &rocketmq_error::STORAGE_READ_FAILED,
+            &rocketmq_error::STORAGE_IO_FAILED,
+        ] {
+            let error = StoreError::new(descriptor, StoreOperation::Read);
+            assert_eq!(
+                TieredReadPolicy::classify_error(&error, true),
+                TieredReadErrorDisposition::FallbackToLocal,
+                "{descriptor:?}"
+            );
+            assert_eq!(
+                TieredReadPolicy::classify_error(&error, false),
+                TieredReadErrorDisposition::Fatal,
+                "{descriptor:?}"
+            );
+        }
+
+        let error = StoreError::new(&rocketmq_error::STORAGE_REQUEST_INVALID, StoreOperation::Read);
+        for local_available in [true, false] {
+            assert_eq!(
+                TieredReadPolicy::classify_error(&error, local_available),
+                TieredReadErrorDisposition::Fatal
+            );
+        }
+    }
+}
