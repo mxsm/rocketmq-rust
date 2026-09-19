@@ -1956,6 +1956,7 @@ mod tests {
     #[cfg(feature = "embedded-controller")]
     use rocketmq_protocol::protocol::SerializeType;
     use rocketmq_runtime::RuntimeContext;
+    use rocketmq_runtime::RuntimeError;
     use rocketmq_security_api::Principal;
     use rocketmq_security_api::SecurityBootstrap;
     use rocketmq_security_api::SecurityBootstrapConfig;
@@ -2435,12 +2436,17 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn runtime_config_concurrent_readers_only_observe_complete_snapshots() {
+        // Every update below is asserted to be accepted, so this test owns its runtime context.
+        // The process-wide test owner shares one metadata lane and one global blocking budget with
+        // every other test in this binary, so load from an unrelated test can reject an already
+        // admitted write instead of making it durable.
+        let owner = RuntimeContext::from_current("namesrv-runtime-config-concurrency");
         let (namesrv_config, _root) = isolated_namesrv_config(NamesrvConfig {
             enable_all_topic_list: true,
             enable_topic_list: true,
             ..NamesrvConfig::default()
         });
-        let bootstrap = Builder::new(test_service_context(), TelemetryHandle::noop())
+        let bootstrap = Builder::new(owner.service_context("namesrv"), TelemetryHandle::noop())
             .set_name_server_config(namesrv_config)
             .build();
         let runtime = bootstrap.runtime_inner();
@@ -2448,19 +2454,22 @@ mod tests {
         let writer = |runtime: Arc<NameServerRuntimeInner>, enable_all: &'static str, enable_topic: &'static str| {
             tokio::spawn(async move {
                 for _ in 0..20 {
-                    runtime
-                        .update_runtime_config(HashMap::from([
-                            (
-                                CheetahString::from_static_str("enableAllTopicList"),
-                                CheetahString::from_static_str(enable_all),
-                            ),
-                            (
-                                CheetahString::from_static_str("enableTopicList"),
-                                CheetahString::from_static_str(enable_topic),
-                            ),
-                        ]))
-                        .await
-                        .expect("valid snapshot update should succeed");
+                    let updates = HashMap::from([
+                        (
+                            CheetahString::from_static_str("enableAllTopicList"),
+                            CheetahString::from_static_str(enable_all),
+                        ),
+                        (
+                            CheetahString::from_static_str("enableTopicList"),
+                            CheetahString::from_static_str(enable_topic),
+                        ),
+                    ]);
+                    if let Err(error) = runtime.update_runtime_config(updates).await {
+                        panic!(
+                            "valid snapshot update should succeed: {}",
+                            describe_error_chain(error.as_ref())
+                        );
+                    }
                 }
             })
         };
@@ -2480,6 +2489,25 @@ mod tests {
         }
         first_writer.await.expect("first config writer should not panic");
         second_writer.await.expect("second config writer should not panic");
+    }
+
+    /// Renders an error with every source in its chain and the typed runtime operation.
+    ///
+    /// A configuration failure redacts its store detail by design, so the failed phase is only
+    /// visible through the chain: the metadata path reports a runtime error whose operation names
+    /// the phase, and the filesystem path reports an `io::Error` whose kind names the call.
+    fn describe_error_chain(error: &dyn std::error::Error) -> String {
+        let mut rendered = error.to_string();
+        let mut source = error.source();
+        while let Some(current) = source {
+            rendered.push_str(" <- ");
+            rendered.push_str(&current.to_string());
+            if let Some(runtime_error) = current.downcast_ref::<RuntimeError>() {
+                rendered.push_str(&format!(" [operation: {:?}]", runtime_error.operation()));
+            }
+            source = current.source();
+        }
+        rendered
     }
 
     #[tokio::test]
