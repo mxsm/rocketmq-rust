@@ -2456,6 +2456,7 @@ fn attach_pop_receipt_handles(
                     .position(|&queue| queue == topic)
                     .and_then(|index| queue_offsets.get(index))
                     .and_then(|value| value.parse::<i64>().ok())
+                    .filter(|offset| *offset >= 0)
                     .unwrap_or_default();
                 let queue_id_key = ExtraInfoUtil::get_start_offset_info_map_key(topic, mix_all::LMQ_QUEUE_ID as i64);
                 let queue_offset_key =
@@ -2560,7 +2561,9 @@ fn build_queue_offset_sorted_map(topic: &str, messages: &[MessageExt]) -> ProxyR
                     .iter()
                     .position(|&queue| queue == topic)
                     .and_then(|index| queue_offsets.get(index))
-                    .and_then(|value| value.parse().ok())
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .filter(|offset| *offset >= 0)
+                    .map(|offset| offset as u64)
                     .unwrap_or_default(),
             );
             continue;
@@ -2851,6 +2854,7 @@ mod tests {
             ("%LMQ%other", "42", 0_u64),
             ("%LMQ%other,%LMQ%target", "42", 0),
             ("%LMQ%target", "invalid", 0),
+            ("%LMQ%target", "-1", 0),
             ("%LMQ%target", "42", 42),
         ] {
             let mut message = MessageExt::default();
