@@ -604,8 +604,11 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
             } else {
                 let client = Arc::clone(self);
                 let scan_token = token.clone();
+                // The loop observes the lifecycle generation token for an ordered stop, and the
+                // cancellable spawn adds the owner group so a shutdown that never runs that stop
+                // ends the scan instead of aborting it and reporting an unconfirmed leak.
                 task_group
-                    .spawn_service("remoting.client.namesrv-scan", async move {
+                    .spawn_cancellable_service("remoting.client.namesrv-scan", async move {
                         loop {
                             tokio::select! {
                                 () = scan_token.cancelled() => break,
@@ -660,8 +663,9 @@ impl<PR: Send + Sync + Clone + 'static> TransportClient<PR> {
                         Err(connection_failed_without_source(TransportStage::Closed))
                     } else {
                         let client = Arc::clone(self);
+                        // Cancellable for the same owner-group reason as the name server scan.
                         task_group
-                            .spawn_service("remoting.client.idle-scan", async move {
+                            .spawn_cancellable_service("remoting.client.idle-scan", async move {
                                 loop {
                                     tokio::select! {
                                         () = token.cancelled() => break,
