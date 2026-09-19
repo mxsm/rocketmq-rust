@@ -246,15 +246,11 @@ pub fn string_to_bytes(hex_string: impl Into<String>) -> Option<Vec<u8>> {
     }
 
     let hex_string = hex_string.to_uppercase();
-    let length = hex_string.len() / 2;
-    let mut bytes = Vec::<u8>::with_capacity(length);
-
-    for i in 0..length {
-        let pos = i * 2;
-        let byte = (char_to_byte(hex_string.chars().nth(pos)?) << 4) | char_to_byte(hex_string.chars().nth(pos + 1)?);
-
-        bytes.push(byte);
-    }
+    let bytes = hex_string
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| (char_to_byte(pair[0] as char) << 4) | char_to_byte(pair[1] as char))
+        .collect();
 
     Some(bytes)
 }
@@ -477,6 +473,36 @@ mod tests {
     fn bytes_to_string_converts_correctly() {
         let bytes = [0x41, 0x42, 0x43];
         assert_eq!(bytes_to_string(&bytes), "414243");
+    }
+
+    #[test]
+    fn string_to_bytes_decodes_even_length_hex() {
+        assert_eq!(string_to_bytes("414243"), Some(vec![0x41, 0x42, 0x43]));
+        assert_eq!(string_to_bytes("00FF7F80"), Some(vec![0x00, 0xFF, 0x7F, 0x80]));
+    }
+
+    #[test]
+    fn string_to_bytes_accepts_lowercase_hex() {
+        assert_eq!(string_to_bytes("00ff7f80"), Some(vec![0x00, 0xFF, 0x7F, 0x80]));
+        assert_eq!(string_to_bytes("aBcD"), string_to_bytes("ABCD"));
+    }
+
+    #[test]
+    fn string_to_bytes_ignores_incomplete_trailing_pair() {
+        assert_eq!(string_to_bytes("ABC"), Some(vec![0xAB]));
+        assert_eq!(string_to_bytes("A"), Some(Vec::new()));
+    }
+
+    #[test]
+    fn string_to_bytes_returns_none_for_empty_input() {
+        assert_eq!(string_to_bytes(""), None);
+        assert_eq!(string_to_bytes(String::new()), None);
+    }
+
+    #[test]
+    fn string_to_bytes_round_trips_bytes_to_string() {
+        let bytes: Vec<u8> = (0..=u8::MAX).collect();
+        assert_eq!(string_to_bytes(bytes_to_string(&bytes)), Some(bytes));
     }
 
     #[test]
