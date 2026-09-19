@@ -72,3 +72,38 @@ impl From<OutputFormat> for FormatterType {
 pub fn get_formatter(format: OutputFormat) -> FormatterType {
     FormatterType::from(format)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_format_parses_json_case_insensitively() {
+        assert!(matches!(OutputFormat::from("json"), OutputFormat::Json));
+        assert!(matches!(OutputFormat::from("JSON"), OutputFormat::Json));
+    }
+
+    #[test]
+    fn output_format_parses_yaml_aliases_case_insensitively() {
+        assert!(matches!(OutputFormat::from("yaml"), OutputFormat::Yaml));
+        assert!(matches!(OutputFormat::from("YAML"), OutputFormat::Yaml));
+        assert!(matches!(OutputFormat::from("yml"), OutputFormat::Yaml));
+        assert!(matches!(OutputFormat::from("YML"), OutputFormat::Yaml));
+    }
+
+    #[test]
+    fn output_format_parses_table() {
+        assert!(matches!(OutputFormat::from("table"), OutputFormat::Table));
+    }
+
+    #[test]
+    fn output_format_defaults_to_table_for_unrecognized_input() {
+        assert!(matches!(OutputFormat::from("bogus"), OutputFormat::Table));
+        assert!(matches!(OutputFormat::from(""), OutputFormat::Table));
+    }
+
+    #[test]
+    fn output_format_default_is_table() {
+        assert!(matches!(OutputFormat::default(), OutputFormat::Table));
+    }
+}
