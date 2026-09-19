@@ -278,3 +278,74 @@ impl<'de> Deserialize<'de> for BrokerReplicaInfo {
         deserializer.deserialize_struct("BrokerReplicaInfo", FIELDS, BrokerReplicaInfoVisitor)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broker_replica_info_starts_empty() {
+        let info = BrokerReplicaInfo::new("cluster", "broker");
+
+        assert_eq!(info.cluster_name(), "cluster");
+        assert_eq!(info.broker_name(), "broker");
+        assert_eq!(info.get_next_assign_broker_id(), FIRST_BROKER_CONTROLLER_ID);
+        assert!(info.get_all_broker().is_empty());
+        assert!(info.get_broker_id_table().is_empty());
+        assert!(!info.is_broker_exist(1));
+        assert_eq!(info.get_broker_address(1), None);
+        assert_eq!(info.get_broker_register_check_code(1), None);
+    }
+
+    #[test]
+    fn broker_replica_info_tracks_add_update_and_remove() {
+        let info = BrokerReplicaInfo::new("cluster", "broker");
+        info.add_broker(1, "10.0.0.1:10911", "chk-1");
+
+        assert!(info.is_broker_exist(1));
+        assert_eq!(info.get_broker_address(1).as_deref(), Some("10.0.0.1:10911"));
+        assert_eq!(info.get_broker_register_check_code(1).as_deref(), Some("chk-1"));
+        assert_eq!(info.get_next_assign_broker_id(), 2);
+
+        info.add_broker(2, "10.0.0.2:10911", "chk-2");
+        assert_eq!(info.get_all_broker(), HashSet::from([1, 2]));
+        assert_eq!(
+            info.get_broker_id_table(),
+            HashMap::from([(1, "10.0.0.1:10911".into()), (2, "10.0.0.2:10911".into())])
+        );
+
+        info.update_broker_address(1, "10.0.0.3:10911");
+        assert_eq!(info.get_broker_address(1).as_deref(), Some("10.0.0.3:10911"));
+        assert_eq!(info.get_broker_register_check_code(1).as_deref(), Some("chk-1"));
+
+        info.remove_broker_id(1);
+        assert!(!info.is_broker_exist(1));
+        assert_eq!(info.get_broker_address(1), None);
+        assert_eq!(info.get_broker_register_check_code(1), None);
+        assert_eq!(info.get_all_broker(), HashSet::from([2]));
+    }
+
+    #[test]
+    fn broker_replica_info_serialization_round_trip_preserves_state() {
+        let info = BrokerReplicaInfo::new("cluster", "broker");
+        info.add_broker(1, "10.0.0.1:10911", "chk-1");
+        info.add_broker(2, "10.0.0.2:10911", "chk-2");
+        info.update_broker_address(1, "10.0.0.3:10911");
+
+        let json = serde_json::to_string(&info).unwrap();
+        let restored: BrokerReplicaInfo = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.cluster_name(), info.cluster_name());
+        assert_eq!(restored.broker_name(), info.broker_name());
+        assert_eq!(restored.get_next_assign_broker_id(), info.get_next_assign_broker_id());
+        assert_eq!(restored.get_all_broker(), info.get_all_broker());
+        assert_eq!(restored.get_broker_id_table(), info.get_broker_id_table());
+        for id in info.get_all_broker() {
+            assert_eq!(restored.get_broker_address(id), info.get_broker_address(id));
+            assert_eq!(
+                restored.get_broker_register_check_code(id),
+                info.get_broker_register_check_code(id)
+            );
+        }
+    }
+}
