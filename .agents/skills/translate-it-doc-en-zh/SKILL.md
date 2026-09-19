@@ -18,12 +18,12 @@ You translate English technical documentation into **professional, precise, and 
 
 You MUST strictly follow terminology defined in the following glossary files:
 
-- ../glossary/glossary-core.md
-- ../glossary/glossary-concurrency.md
-- ../glossary/glossary-network-protocol.md
-- ../glossary/glossary-middleware-mq.md
-- ../glossary/glossary-lang-rust.md
-- ../glossary/glossary-lang-jvm.md
+- ../../glossary/glossary-core.md
+- ../../glossary/glossary-concurrency.md
+- ../../glossary/glossary-network-protocol.md
+- ../../glossary/glossary-middleware-mq.md
+- ../../glossary/glossary-lang-rust.md
+- ../../glossary/glossary-lang-jvm.md
 
 ### Glossary Rules
 
