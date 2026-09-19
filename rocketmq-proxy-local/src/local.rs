@@ -2451,8 +2451,12 @@ fn attach_pop_receipt_handles(
                     ))
                     .unwrap_or_default();
                 let queue_offsets: Vec<&str> = data.split_str(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
-                let offset = queue_offsets[queues.iter().position(|&queue| queue == topic).unwrap()]
-                    .parse::<i64>()
+                let offset = queues
+                    .iter()
+                    .position(|&queue| queue == topic)
+                    .and_then(|index| queue_offsets.get(index))
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .filter(|offset| *offset >= 0)
                     .unwrap_or_default();
                 let queue_id_key = ExtraInfoUtil::get_start_offset_info_map_key(topic, mix_all::LMQ_QUEUE_ID as i64);
                 let queue_offset_key =
@@ -2553,8 +2557,13 @@ fn build_queue_offset_sorted_map(topic: &str, messages: &[MessageExt]) -> ProxyR
             let queue_offsets: Vec<&str> = data.split_str(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
             let key = ExtraInfoUtil::get_start_offset_info_map_key(topic, mix_all::LMQ_QUEUE_ID as i64);
             sort_map.entry(key).or_insert_with(|| Vec::with_capacity(4)).push(
-                queue_offsets[queues.iter().position(|&queue| queue == topic).unwrap()]
-                    .parse()
+                queues
+                    .iter()
+                    .position(|&queue| queue == topic)
+                    .and_then(|index| queue_offsets.get(index))
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .filter(|offset| *offset >= 0)
+                    .map(|offset| offset as u64)
                     .unwrap_or_default(),
             );
             continue;
@@ -2782,7 +2791,10 @@ mod tests {
 
     use cheetah_string::CheetahString;
     use rocketmq_model::common::attribute::topic_message_type::TopicMessageType;
+    use rocketmq_model::common::message::message_ext::MessageExt;
     use rocketmq_model::common::message::MessageConst;
+    use rocketmq_model::common::message::MessageTrait;
+    use rocketmq_model::common::mix_all;
     use rocketmq_model::result::SendResult;
     use rocketmq_model::result::SendStatus;
     use rocketmq_observability::TelemetryHandle;
@@ -2791,6 +2803,7 @@ mod tests {
     use rocketmq_protocol::protocol::header::extra_info_util::ExtraInfoUtil;
     use rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
     use rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+    use rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader;
     use rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader;
     use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
     use rocketmq_proxy_core::ConsumerFilterExpression;
@@ -2810,10 +2823,12 @@ mod tests {
     use rocketmq_transport::api::EmbeddedResponse;
     use rocketmq_transport::api::RemotingResponse;
 
+    use super::attach_pop_receipt_handles;
     use super::broker_operation_error;
     use super::build_local_proxy_producer_group;
     use super::build_pop_request_header;
     use super::build_pull_request_header;
+    use super::build_queue_offset_sorted_map;
     use super::build_send_batch_message_request;
     use super::build_send_message_request;
     use super::build_send_result;
@@ -2831,6 +2846,57 @@ mod tests {
     use super::LocalRemotingBackend;
     use super::MessageIdDecodeError;
     use crate::LocalConfig;
+
+    #[test]
+    fn multi_dispatch_offsets_default_only_for_malformed_properties() {
+        let topic = "%LMQ%target";
+        for (dispatch, offsets, expected_offset) in [
+            ("%LMQ%other", "42", 0_u64),
+            ("%LMQ%other,%LMQ%target", "42", 0),
+            ("%LMQ%target", "invalid", 0),
+            ("%LMQ%target", "-1", 0),
+            ("%LMQ%target", "42", 42),
+        ] {
+            let mut message = MessageExt::default();
+            message.set_topic("TopicA".into());
+            message.set_queue_offset(9);
+            message.put_property(MessageConst::PROPERTY_INNER_MULTI_DISPATCH.into(), dispatch.into());
+            message.put_property(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET.into(), offsets.into());
+            let mut messages = vec![message];
+
+            let sorted = build_queue_offset_sorted_map(topic, &messages).expect("malformed offsets must not panic");
+            let key = ExtraInfoUtil::get_start_offset_info_map_key(topic, mix_all::LMQ_QUEUE_ID as i64);
+            assert_eq!(
+                sorted.get(&key).map(Vec::as_slice),
+                Some(&[expected_offset][..]),
+                "{dispatch}, {offsets}"
+            );
+
+            let mut start_offset_info = String::new();
+            ExtraInfoUtil::build_start_offset_info(&mut start_offset_info, topic, mix_all::LMQ_QUEUE_ID as i32, 0);
+            let mut order_count_info = String::new();
+            ExtraInfoUtil::build_queue_offset_order_count_info(
+                &mut order_count_info,
+                topic,
+                mix_all::LMQ_QUEUE_ID as i64,
+                expected_offset as i64,
+                7,
+            );
+            let header = PopMessageResponseHeader {
+                start_offset_info: Some(start_offset_info.into()),
+                order_count_info: Some(order_count_info.into()),
+                ..Default::default()
+            };
+            attach_pop_receipt_handles(&mut messages, topic, &"broker-a".into(), &header, true)
+                .expect("malformed offsets must still produce a receipt");
+            assert_eq!(
+                messages[0].reconsume_times(),
+                7,
+                "the parsed offset must select its order count"
+            );
+            assert!(messages[0].property(&MessageConst::PROPERTY_POP_CK.into()).is_some());
+        }
+    }
 
     fn batch_entry(id: &str) -> SendMessageEntry {
         SendMessageEntry {
