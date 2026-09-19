@@ -1414,7 +1414,13 @@ async fn panicked_lane_is_reclaimed_and_closes_without_leaks() {
         .query_route(ResourceIdentity::new("", "RecoveredTopic"))
         .await
         .expect_err("first keyed lane panics");
-    assert!(matches!(first, ProxyError::Transport { .. }));
+    // The unwinding lane drops the in-flight reply, so the caller observes the canonical
+    // transport carrier, which keeps the dropped-reply error as its typed source.
+    assert_eq!(
+        first.descriptor(),
+        &rocketmq_error::PROXY_TRANSPORT_UNAVAILABLE,
+        "unexpected panicked lane error: {first:?}"
+    );
     wait_until(|| {
         let snapshot = executor.lanes.snapshot();
         snapshot.active_keys == 0
@@ -1720,10 +1726,12 @@ async fn worker_maps_send_results_and_orders_shutdown() {
                             message: ProxyMessage::new("TopicA", b"first".to_vec()),
                             queue_id: None,
                         },
+                        // A second topic keeps this entry out of the compatible-batch fast
+                        // path, so each entry reports the send result scripted for it.
                         SendMessageEntry {
-                            topic: ResourceIdentity::new("", "TopicA"),
+                            topic: ResourceIdentity::new("", "TopicB"),
                             client_message_id: "client-message-2".to_owned(),
-                            message: ProxyMessage::new("TopicA", b"second".to_vec()),
+                            message: ProxyMessage::new("TopicB", b"second".to_vec()),
                             queue_id: None,
                         },
                     ],
