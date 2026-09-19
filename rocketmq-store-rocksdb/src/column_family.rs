@@ -36,3 +36,23 @@ impl RocksDbColumnFamily {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn column_family_names_match_persisted_mapping() {
+        for (family, expected) in [
+            (RocksDbColumnFamily::Default, "default"),
+            (RocksDbColumnFamily::ConsumeQueueOffset, "offset"),
+            (RocksDbColumnFamily::Timer, "timer"),
+            (RocksDbColumnFamily::Transaction, "trans"),
+            (RocksDbColumnFamily::PopState, "popState"),
+            (RocksDbColumnFamily::PopConsumerProfile, "popConsumerProfile"),
+            (RocksDbColumnFamily::Config("custom".to_owned()), "custom"),
+        ] {
+            assert_eq!(family.name(), expected, "{family:?}");
+        }
+    }
+}
