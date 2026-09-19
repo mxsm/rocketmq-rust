@@ -3207,6 +3207,14 @@ mod tests {
             ]
         );
 
+        // `instance.shutdown()` aborts the transport this test started without waiting, and that
+        // immediate snapshot becomes the transport group's cached report. The runtime shutdown
+        // below reads it as a leak whenever the shared test runtime has not yet polled the aborted
+        // scans, so drain the transport gracefully first and leave a confirmed report instead.
+        api.get_remoting_client()
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+            .await
+            .expect("drain route preparation transport");
         instance.shutdown().await;
         client_runtime
             .shutdown()
