@@ -192,11 +192,6 @@ impl FileBackend {
         })
     }
 
-    /// Returns the storage root.
-    pub fn path(&self) -> &PathBuf {
-        &self.path
-    }
-
     fn data_dir(&self) -> PathBuf {
         self.path.join(DATA_DIRECTORY)
     }
