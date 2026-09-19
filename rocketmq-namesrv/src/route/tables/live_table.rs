@@ -18,6 +18,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU64;
@@ -237,6 +238,7 @@ pub struct BrokerLiveTable {
     inner: DashMap<Arc<BrokerAddrInfo>, Arc<BrokerLiveInfo>>,
     by_session: DashMap<SessionId, Arc<BrokerAddrInfo>>,
     by_remote_addr: DashMap<SocketAddr, Arc<BrokerAddrInfo>>,
+    by_broker_addr: DashMap<CheetahString, HashSet<Arc<BrokerAddrInfo>>>,
     expiry_index: Arc<ExpiryIndex>,
 }
 
@@ -311,6 +313,7 @@ impl BrokerLiveTable {
             inner: DashMap::new(),
             by_session: DashMap::new(),
             by_remote_addr: DashMap::new(),
+            by_broker_addr: DashMap::new(),
             expiry_index: Arc::new(ExpiryIndex::new(ExpiryIndexMode::Off)),
         }
     }
@@ -329,6 +332,7 @@ impl BrokerLiveTable {
             inner: DashMap::with_capacity(capacity),
             by_session: DashMap::with_capacity(capacity),
             by_remote_addr: DashMap::with_capacity(capacity),
+            by_broker_addr: DashMap::with_capacity(capacity),
             expiry_index: Arc::new(ExpiryIndex::new(expiry_index_mode)),
         }
     }
@@ -349,7 +353,15 @@ impl BrokerLiveTable {
         let session_id = live_info.session_id;
         let remote_addr = live_info.remote_addr;
         let live_info = Arc::new(live_info);
-        let previous = self.inner.insert(Arc::clone(&broker_addr_info), Arc::clone(&live_info));
+        let previous = {
+            let mut brokers = self
+                .by_broker_addr
+                .entry(broker_addr_info.broker_addr.clone())
+                .or_default();
+            let previous = self.inner.insert(Arc::clone(&broker_addr_info), Arc::clone(&live_info));
+            brokers.insert(Arc::clone(&broker_addr_info));
+            previous
+        };
         if let Some(previous) = &previous {
             if let Some(session_id) = previous.session_id {
                 self.remove_session_index_if_current(session_id, &broker_addr_info);
@@ -429,7 +441,20 @@ impl BrokerLiveTable {
     /// # Returns
     /// Removed live info if existed
     pub fn remove(&self, broker_addr_info: &BrokerAddrInfo) -> Option<Arc<BrokerLiveInfo>> {
-        let (key, live_info) = self.inner.remove(broker_addr_info)?;
+        let removed = {
+            let mut brokers = self
+                .by_broker_addr
+                .entry(broker_addr_info.broker_addr.clone())
+                .or_default();
+            let removed = self.inner.remove(broker_addr_info);
+            if let Some((key, _)) = &removed {
+                brokers.remove(key);
+            }
+            removed
+        };
+        self.by_broker_addr
+            .remove_if(&broker_addr_info.broker_addr, |_, brokers| brokers.is_empty());
+        let (key, live_info) = removed?;
         self.expiry_index.remove(&key);
         if let Some(session_id) = live_info.session_id {
             self.remove_session_index_if_current(session_id, &key);
@@ -516,6 +541,7 @@ impl BrokerLiveTable {
         self.inner.clear();
         self.by_session.clear();
         self.by_remote_addr.clear();
+        self.by_broker_addr.clear();
         self.expiry_index.clear();
     }
 
@@ -544,13 +570,9 @@ impl BrokerLiveTable {
     /// # Returns
     /// Broker live info if found
     pub fn get_broker_by_addr(&self, broker_addr: &str) -> Option<Arc<BrokerLiveInfo>> {
-        for entry in self.inner.iter() {
-            let key_addr: &str = entry.key().broker_addr.as_ref();
-            if key_addr == broker_addr {
-                return Some(Arc::clone(entry.value()));
-            }
-        }
-        None
+        let key = CheetahString::from_slice(broker_addr);
+        let brokers = self.by_broker_addr.get(&key)?;
+        self.get(brokers.iter().next()?.as_ref())
     }
 
     /// Get broker address info by broker address string
@@ -675,6 +697,50 @@ mod tests {
         // Get
         let retrieved = table.get(&broker_info).unwrap();
         assert_eq!(retrieved.last_update_timestamp(), 1000);
+    }
+
+    #[test]
+    fn broker_address_index_tracks_lifecycle() {
+        let table = BrokerLiveTable::new();
+        let broker = create_test_broker_addr_info("broker-a", 0);
+        let address = broker.broker_addr.clone();
+
+        assert!(table.get_broker_by_addr(address.as_str()).is_none());
+        table.register(Arc::clone(&broker), create_test_live_info(1000));
+        assert!(Arc::ptr_eq(
+            &table.get_broker_by_addr(address.as_str()).unwrap(),
+            &table.get(&broker).unwrap()
+        ));
+
+        assert!(table.remove(&broker).is_some());
+        assert!(table.get_broker_by_addr(address.as_str()).is_none());
+
+        table.register(broker, create_test_live_info(2000));
+        table.clear();
+        assert!(table.get_broker_by_addr(address.as_str()).is_none());
+    }
+
+    #[test]
+    fn broker_address_index_preserves_colliding_entries() {
+        let address = "broker-a:10911";
+        for remove_first in [true, false] {
+            let table = BrokerLiveTable::new();
+            let first = Arc::new(BrokerAddrInfo::new("cluster-a", address));
+            let second = Arc::new(BrokerAddrInfo::new("cluster-b", address));
+            table.register(Arc::clone(&first), create_test_live_info(1000));
+            table.register(Arc::clone(&second), create_test_live_info(2000));
+            let (removed, remaining) = if remove_first {
+                (&first, &second)
+            } else {
+                (&second, &first)
+            };
+
+            assert!(table.remove(removed).is_some());
+            assert!(Arc::ptr_eq(
+                &table.get_broker_by_addr(address).unwrap(),
+                &table.get(remaining).unwrap()
+            ));
+        }
     }
 
     #[test]
