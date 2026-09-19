@@ -19,15 +19,13 @@ use clap::Parser;
 use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::admin::rollback_stats::RollbackStats;
 use rocketmq_runtime::common::time_utils::current_millis;
+use rocketmq_runtime::common::util_all::YYYY_MM_DD_HH_MM_SS_SSS;
 
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
 use rocketmq_admin_core::client_adapter::services::offset::OffsetService;
 use rocketmq_admin_core::client_adapter::services::offset::ResetOffsetByTimeRequest;
 use rocketmq_admin_core::client_adapter::services::offset::ResetOffsetByTimeResult;
-
-/// Timestamp format used by the Java reference implementation.
-const TIMESTAMP_FORMAT: &str = "%Y-%m-%d#%H:%M:%S:%3f";
 
 /// Parse a timestamp string in one of the three supported forms:
 ///   - `"now"`  -> current system time in milliseconds
@@ -41,7 +39,7 @@ fn parse_timestamp(s: &str) -> CanonicalResult<u64> {
     if let Ok(ms) = s.parse::<u64>() {
         return Ok(ms);
     }
-    if let Ok(ndt) = NaiveDateTime::parse_from_str(s, TIMESTAMP_FORMAT) {
+    if let Ok(ndt) = NaiveDateTime::parse_from_str(s, YYYY_MM_DD_HH_MM_SS_SSS) {
         let millis = Local
             .from_local_datetime(&ndt)
             .single()
@@ -176,7 +174,7 @@ impl ResetOffsetByTimeSubCommand {
             Local
                 .timestamp_millis_opt(request.timestamp() as i64)
                 .single()
-                .map(|dt| dt.format(TIMESTAMP_FORMAT).to_string())
+                .map(|dt| dt.format(YYYY_MM_DD_HH_MM_SS_SSS).to_string())
                 .unwrap_or_else(|| request.timestamp().to_string())
         );
         println!("  timestamp(long)[{}]", request.timestamp());
