@@ -51,6 +51,8 @@ pub(crate) enum SubmitOutcome {
     Closed,
 }
 
+/// Mailbox counters captured for assertions; test-only.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NotifySnapshot {
     pub capacity: usize,
@@ -293,6 +295,7 @@ impl Mailbox {
         self.reset();
     }
 
+    #[cfg(test)]
     pub(super) fn snapshot(&self) -> NotifySnapshot {
         NotifySnapshot {
             capacity: self.capacity,
@@ -514,6 +517,7 @@ impl BrokerRoleNotifier {
         self.mailbox.lock().close();
     }
 
+    #[cfg(test)]
     pub(crate) fn snapshot(&self) -> NotifySnapshot {
         self.mailbox.lock().snapshot()
     }

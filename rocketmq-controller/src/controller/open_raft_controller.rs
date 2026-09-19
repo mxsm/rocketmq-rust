@@ -21,7 +21,6 @@
 //! - gRPC server lifecycle management
 
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -152,6 +151,15 @@ pub struct OpenRaftController {
     task_group: Arc<Mutex<Option<TaskGroup>>>,
     scan_task_group: Arc<Mutex<Option<TaskGroup>>>,
     scan_scheduled_tasks: Arc<Mutex<Option<ScheduledTaskGroup>>>,
+    /// Ownership anchor only; never read. `DefaultBrokerHeartbeatManager::drop` runs
+    /// `shutdown_shared()`, so this handle must outlive the controller. The
+    /// `new_with_remoting_command_factory` path constructs the manager itself and stores it
+    /// here as the sole owner, where dropping it early would shut heartbeat tracking down
+    /// during construction.
+    #[allow(
+        dead_code,
+        reason = "keeps the heartbeat manager alive for the controller's lifetime"
+    )]
     heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
     lifecycle_listeners: Arc<RwLock<Vec<Arc<dyn BrokerLifecycleListener>>>>,
     scheduling: Arc<AtomicBool>,
@@ -213,21 +221,6 @@ impl OpenRaftController {
             service_context,
             metrics_manager,
             command_factory,
-        )
-    }
-
-    pub(crate) fn new_with_heartbeat_and_metrics(
-        config: ControllerConfigReader,
-        heartbeat_manager: Arc<DefaultBrokerHeartbeatManager>,
-        service_context: ChildServiceContext,
-        metrics_manager: Arc<ControllerMetricsManager>,
-    ) -> Self {
-        Self::new_with_heartbeat_metrics_and_remoting_command_factory(
-            config,
-            heartbeat_manager,
-            service_context,
-            metrics_manager,
-            application_remoting_command_factory(),
         )
     }
 
@@ -448,11 +441,6 @@ impl OpenRaftController {
             response = response.set_body(body);
         }
         response
-    }
-
-    fn replicas_info_manager(&self) -> Option<Arc<ReplicasInfoManager>> {
-        self.node()
-            .map(|node| node.store().state_machine.replicas_info_manager())
     }
 
     async fn linearizable_replicas_info_manager(&self) -> ControllerResult<Option<Arc<ReplicasInfoManager>>> {
@@ -788,16 +776,6 @@ impl OpenRaftController {
             config.node_id,
             &self.service_context,
         ))
-    }
-
-    pub(crate) async fn add_learner(&self, node_id: NodeId, node_info: Node, blocking: bool) -> Result<()> {
-        let node = self.node().ok_or_else(|| not_initialized("controller.openraft"))?;
-        node.add_learner(node_id, node_info, blocking).await
-    }
-
-    pub(crate) async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
-        let node = self.node().ok_or_else(|| not_initialized("controller.openraft"))?;
-        node.change_membership(members, retain).await
     }
 
     /// Applies one authorized, version-fenced, process-local-idempotent membership step.

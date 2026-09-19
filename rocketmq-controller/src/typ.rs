@@ -373,10 +373,8 @@ openraft::declare_raft_types!(
 );
 
 pub type Raft = openraft::Raft<TypeConfig, crate::openraft::StateMachine>;
-pub type RaftConfig = openraft::Config;
 pub type LogId = openraft::type_config::alias::LogIdOf<TypeConfig>;
 pub type LogEntry = openraft::type_config::alias::EntryOf<TypeConfig>;
-pub type CommittedLogEntry = openraft::type_config::alias::EntryOf<TypeConfig>;
 pub type Vote = openraft::type_config::alias::VoteOf<TypeConfig>;
 pub type EntryPayload = openraft::type_config::alias::EntryPayloadOf<TypeConfig>;
 pub type SnapshotMeta = openraft::type_config::alias::SnapshotMetaOf<TypeConfig>;
@@ -384,9 +382,3 @@ pub type Snapshot = openraft::type_config::alias::SnapshotOf<TypeConfig>;
 pub type StoredMembership = openraft::type_config::alias::StoredMembershipOf<TypeConfig>;
 pub type RaftMetrics = openraft::metrics::RaftMetrics<TypeConfig>;
 pub type ClientWriteResponse = openraft::raft::ClientWriteResponse<TypeConfig>;
-pub type AppendEntriesRequest = openraft::raft::AppendEntriesRequest<TypeConfig>;
-pub type AppendEntriesResponse = openraft::raft::AppendEntriesResponse<TypeConfig>;
-pub type VoteRequest = openraft::raft::VoteRequest<TypeConfig>;
-pub type VoteResponse = openraft::raft::VoteResponse<TypeConfig>;
-pub type InstallSnapshotRequest = openraft::raft::InstallSnapshotRequest<TypeConfig>;
-pub type InstallSnapshotResponse = openraft::raft::InstallSnapshotResponse<TypeConfig>;

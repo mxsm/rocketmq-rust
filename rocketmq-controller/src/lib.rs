@@ -62,7 +62,6 @@
 
 #![warn(rust_2018_idioms)]
 #![warn(clippy::all)]
-#![allow(dead_code)]
 #![allow(clippy::module_inception)]
 
 mod cli;

@@ -49,16 +49,6 @@ impl NetworkFactory {
     pub async fn add_peer(&self, node_id: NodeId, addr: String) {
         self.peer_addrs.write().await.insert(node_id, addr);
     }
-
-    /// Remove a peer
-    pub async fn remove_peer(&self, node_id: NodeId) {
-        self.peer_addrs.write().await.remove(&node_id);
-    }
-
-    /// Get all peer addresses
-    pub async fn get_peers(&self) -> HashMap<NodeId, String> {
-        self.peer_addrs.read().await.clone()
-    }
 }
 
 impl Default for NetworkFactory {

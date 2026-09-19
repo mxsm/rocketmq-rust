@@ -29,6 +29,7 @@ use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::controller::broker_heartbeat_manager::BrokerSessionId;
 use crate::controller::broker_role_notifier::BrokerRoleNotifier;
 use crate::controller::broker_role_notifier::NotifyKey;
+#[cfg(test)]
 use crate::controller::broker_role_notifier::NotifySnapshot;
 use crate::controller::broker_role_notifier::NotifyState;
 use crate::controller::broker_role_notifier::NotifyTask;
