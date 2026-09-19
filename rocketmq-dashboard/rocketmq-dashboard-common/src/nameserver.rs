@@ -225,6 +225,15 @@ pub fn normalize_nameserver_address(address: &str) -> Result<String> {
         ));
     }
 
+    if host.chars().any(char::is_whitespace) {
+        return Err(DashboardCommonError::contract(
+            DashboardOperation::NormalizeNameServerAddress,
+            DashboardContractViolation::EndpointHostContainsWhitespace {
+                kind: DashboardEndpointKind::NameServer,
+            },
+        ));
+    }
+
     let port = port_part.trim();
     let port_number: u16 = port
         .parse()
@@ -283,6 +292,7 @@ mod tests {
     use crate::DashboardEndpointKind;
     use crate::DashboardOperation;
 
+    use super::normalize_nameserver_address;
     use super::NameServerConfigSnapshot;
     use super::NameServerConfigStore;
     use super::NameServerConfigTransaction;
@@ -291,6 +301,21 @@ mod tests {
     use std::error::Error as _;
     use std::sync::Arc;
     use std::sync::Mutex;
+
+    #[test]
+    fn normalize_nameserver_address_rejects_embedded_host_whitespace() {
+        for address in ["name server:9876", "name\tserver:9876", "name\u{2003}server:9876"] {
+            let error = normalize_nameserver_address(address).expect_err("host whitespace must fail");
+            assert!(matches!(
+                error
+                    .source()
+                    .and_then(|source| source.downcast_ref::<DashboardContractViolation>()),
+                Some(DashboardContractViolation::EndpointHostContainsWhitespace {
+                    kind: DashboardEndpointKind::NameServer
+                })
+            ));
+        }
+    }
 
     #[derive(Debug)]
     struct MemoryStore {
