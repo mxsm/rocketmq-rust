@@ -1509,6 +1509,14 @@ async fn process_resource(
         Ok(mut task) => task.wait().await.and_then(|result| result),
         Err(source) => Err(source),
     };
+    // A request's file mutation and durability accounting are complete once its blocking
+    // closure returns, so this writer's target authority is released before the completion
+    // is published. Publishing while the authority is still held would let a caller that
+    // observes the confirmed generation race this release: the completion clears the
+    // cached registration, so the follow-up write for this resource and target has to
+    // re-register and would find the previous generation's registration still alive. A
+    // queued generation keeps its own clone, so its authority outlives this release.
+    drop(registration);
     finish_request(inner, &resource, generation, result)
 }
 

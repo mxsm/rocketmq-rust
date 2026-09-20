@@ -28,6 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::RuntimeError;
 use crate::error::RuntimeResult;
+use crate::shutdown_deadline::ABORT_CONFIRMATION_TIMEOUT;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskGroupId;
 use crate::task_group::TaskId;
@@ -133,8 +134,9 @@ impl OperationContext {
     /// Cancels this operation and waits for all tasks registered with `owner`.
     ///
     /// Returns `true` when every task completed before the shared timeout.
-    /// Tasks still running at the deadline are aborted and awaited without
-    /// extending the timeout.
+    /// Tasks still running at the deadline are aborted and awaited for a
+    /// bounded confirmation window beyond it, so their running futures are
+    /// dropped before this returns.
     ///
     /// # Errors
     ///
@@ -146,7 +148,8 @@ impl OperationContext {
     }
 
     /// Waits for all currently registered operation tasks without requesting
-    /// cancellation. Tasks still running at the shared deadline are aborted.
+    /// cancellation. Tasks still running at the shared deadline are aborted and
+    /// awaited for a bounded confirmation window.
     ///
     /// # Errors
     ///
@@ -173,10 +176,12 @@ impl OperationContext {
             .filter_map(|(task_id, completed)| (!completed && owner.contains_task(task_id)).then_some(task_id))
             .collect::<Vec<_>>();
 
-        join_all(timed_out.iter().copied().map(|task_id| {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            owner.abort_task_and_wait(task_id, remaining)
-        }))
+        join_all(
+            timed_out
+                .iter()
+                .copied()
+                .map(|task_id| owner.abort_task_and_wait(task_id, ABORT_CONFIRMATION_TIMEOUT)),
+        )
         .await;
 
         Ok(timed_out.is_empty() && self.active_task_count() == 0)
@@ -361,6 +366,60 @@ mod tests {
             .cancel_and_wait(owner.task_group(), Duration::from_secs(1))
             .await
             .expect("second operation should use its bound owner"));
+        let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+    }
+
+    #[tokio::test]
+    async fn wait_confirms_cancellation_of_an_overrunning_operation() {
+        struct DropMarker(Arc<AtomicBool>);
+
+        impl Drop for DropMarker {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let runtime = RuntimeContext::from_current("operation-abort-confirmation-test");
+        let owner = runtime.service_context("operations");
+        let operation = OperationContext::without_deadline(TaskKind::Worker);
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+
+        owner
+            .task_group()
+            .spawn_operation(&operation, "overrunning-operation", {
+                let started = Arc::clone(&started);
+                let dropped = Arc::clone(&dropped);
+                async move {
+                    let _marker = DropMarker(dropped);
+                    started.store(true, Ordering::Release);
+                    std::future::pending::<()>().await
+                }
+            })
+            .expect("operation task should spawn");
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("operation task should start");
+
+        assert!(
+            !operation
+                .wait(owner.task_group(), Duration::from_millis(10))
+                .await
+                .expect("operation should use its bound owner"),
+            "an overrunning operation must not report a clean drain"
+        );
+        assert!(
+            dropped.load(Ordering::Acquire),
+            "wait should confirm cancellation before returning"
+        );
+        assert_eq!(operation.active_task_count(), 0);
+
         let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }

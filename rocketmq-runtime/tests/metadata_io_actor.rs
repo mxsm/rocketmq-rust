@@ -964,6 +964,75 @@ async fn generations_are_unique_across_actors_sharing_one_owner() {
     );
 }
 
+/// A provider that mutates the same resource again as soon as the previous
+/// generation is confirmed durable must not be refused the target: at that
+/// point the earlier request cannot still be writing it.
+///
+/// The refusal this guards against needs the worker to be descheduled between
+/// publishing the generation and releasing its target authority, so it is
+/// timing dependent and trips under adverse scheduling only. The actor releases
+/// that authority before the completion becomes observable at all, which makes
+/// the refusal unreachable rather than merely unlikely.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_published_generation_releases_the_target_for_the_next_write() {
+    const ROUNDS: usize = 16;
+
+    let temp = TempDir::new().unwrap();
+    let (_context, actor) = start_actor(Arc::new(LocalMetadataFileSystem), config(4, 64 * 1024));
+    let deadline = MetadataDeadline::after(Duration::from_secs(5));
+
+    for round in 0..ROUNDS {
+        let resource = format!("follow-up-{round}");
+        let target = temp.path().join(format!("follow-up-{round}.json"));
+
+        // The confirmed generation is published to callers while the actor is
+        // still finishing the request, so a writer that observes it and writes
+        // again immediately races the rest of the completion path. The resource
+        // is fresh in this round, so the first generation published for it is
+        // the one the write below produces.
+        let spinner_actor = actor.clone();
+        let spinner_resource = resource.clone();
+        let spinner_target = target.clone();
+        let follow_up = std::thread::spawn(move || {
+            while spinner_actor
+                .confirmed_durable_generation(spinner_resource.as_str())
+                .is_none()
+            {
+                std::hint::spin_loop();
+            }
+            spinner_actor.submit_next(
+                spinner_resource.as_str(),
+                spinner_target,
+                b"follow-up",
+                MetadataDeadline::after(Duration::from_secs(5)),
+            )
+        });
+
+        let receipt = accepted(
+            actor
+                .submit_next(
+                    resource.as_str(),
+                    target.clone(),
+                    round.to_string().as_bytes(),
+                    deadline,
+                )
+                .unwrap(),
+        );
+        let generation = receipt.generation();
+        assert_eq!(receipt.wait_until(deadline).await.unwrap(), generation);
+
+        let follow_up = follow_up
+            .join()
+            .expect("the follow-up writer should not panic")
+            .expect("the follow-up write should be admitted for this resource");
+
+        assert!(
+            matches!(follow_up, MetadataIoAdmissionOutcome::Accepted(_)),
+            "round {round}: a write that follows a confirmed generation was refused as a target conflict"
+        );
+    }
+}
+
 /// A file system whose first write is gated and then fails after the target
 /// was replaced, which is the actor's unconfirmed-replacement case. Later
 /// writes are gated by a second, independent gate.

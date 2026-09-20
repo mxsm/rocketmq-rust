@@ -72,6 +72,7 @@ pub mod simple_scheduler {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
+    use crate::shutdown_deadline::ABORT_CONFIRMATION_TIMEOUT;
     use crate::RuntimeError;
     use crate::RuntimeHandle;
     use crate::RuntimeResult;
@@ -643,10 +644,9 @@ pub mod simple_scheduler {
                 }
 
                 report.timed_out += 1;
-                let abort_wait = deadline.remaining().min(Duration::from_secs(1));
                 if info
                     .task_group
-                    .abort_task_and_wait(info.runtime_task_id, abort_wait)
+                    .abort_task_and_wait(info.runtime_task_id, ABORT_CONFIRMATION_TIMEOUT)
                     .await
                 {
                     report.record_aborted_driver();
