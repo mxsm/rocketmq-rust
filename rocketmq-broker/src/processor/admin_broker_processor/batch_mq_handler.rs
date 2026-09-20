@@ -49,7 +49,7 @@ impl BatchMqHandler {
             ));
         };
         let mut request_body = LockBatchRequestBody::decode(body)
-            .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))?;
+            .map_err(|error| crate::broker_error::request_body_source("LOCK_BATCH_MQ", error))?;
         let mut lock_ok_mqset = HashSet::new();
         let (Some(consumer_group), Some(client_id)) =
             (request_body.consumer_group.as_ref(), request_body.client_id.as_ref())
@@ -138,7 +138,7 @@ impl BatchMqHandler {
             ));
         };
         let mut request_body = UnlockBatchRequestBody::decode(body)
-            .map_err(|error| crate::broker_error::invalid_argument(error.to_string()))?;
+            .map_err(|error| crate::broker_error::request_body_source("UNLOCK_BATCH_MQ", error))?;
         if request_body.only_this_broker || !broker_runtime_inner.broker_config().lock_in_strict_mode {
             let (Some(consumer_group), Some(client_id)) =
                 (request_body.consumer_group.as_ref(), request_body.client_id.as_ref())

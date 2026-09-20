@@ -106,7 +106,13 @@ async fn lock_batch_mq_corrupt_body_returns_error() {
         .lock_batch_mq(&admin, RequestCode::LockBatchMq, &mut request)
         .await;
 
-    assert!(result.is_err(), "corrupt lockBatchMQ body must return a typed error");
+    let Err(error) = result else {
+        panic!("corrupt lockBatchMQ body must return a typed error");
+    };
+    assert!(
+        std::error::Error::source(error.as_ref()).is_some(),
+        "lockBatchMQ decode error must retain its typed source"
+    );
     cleanup(&runtime);
 }
 
@@ -123,7 +129,13 @@ async fn unlock_batch_mq_corrupt_body_returns_error() {
         .unlock_batch_mq(&admin, RequestCode::UnlockBatchMq, &mut request)
         .await;
 
-    assert!(result.is_err(), "corrupt unlockBatchMQ body must return a typed error");
+    let Err(error) = result else {
+        panic!("corrupt unlockBatchMQ body must return a typed error");
+    };
+    assert!(
+        std::error::Error::source(error.as_ref()).is_some(),
+        "unlockBatchMQ decode error must retain its typed source"
+    );
     cleanup(&runtime);
 }
 

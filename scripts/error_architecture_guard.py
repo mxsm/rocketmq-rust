@@ -34,6 +34,7 @@ import rust_hygiene_guard
 ROOT = Path(__file__).resolve().parents[1]
 RUST_SUFFIX = ".rs"
 PROXY_STATUS_MAPPER = ROOT / "rocketmq-proxy-core" / "src" / "status.rs"
+PROXY_GRPC_STATUS_MAPPER = ROOT / "rocketmq-proxy" / "src" / "status.rs"
 PROXY_REMOTING_BOUNDARY = ROOT / "rocketmq-proxy" / "src" / "remoting.rs"
 EXTERNAL_CFG_TEST_MODULES = frozenset(
     {
@@ -566,6 +567,10 @@ def check_required_mapping_adapters() -> list[Finding]:
             "descriptor.projection().grpc()",
             "descriptor.public_message()",
             "grpc_payload_to_code",
+        ],
+        PROXY_GRPC_STATUS_MAPPER: [
+            "descriptor.projection().grpc()",
+            "descriptor.public_message()",
             "grpc_status_to_tonic_code",
         ],
         ROOT
@@ -667,9 +672,10 @@ def check_required_mapping_adapters() -> list[Finding]:
 
 
 def check_proxy_grpc_boundary() -> list[Finding]:
-    path = PROXY_STATUS_MAPPER
-    if not path.exists():
-        return [Finding(path, 1, "proxy gRPC status mapper is missing")]
+    paths = (PROXY_STATUS_MAPPER, PROXY_GRPC_STATUS_MAPPER)
+    missing = [Finding(path, 1, "proxy gRPC status mapper is missing") for path in paths if not path.exists()]
+    if missing:
+        return missing
 
     forbidden = {
         "tonic_code_from_payload_code": "proxy gRPC transport status must come from the central spec or a local-only kind",
@@ -677,7 +683,7 @@ def check_proxy_grpc_boundary() -> list[Finding]:
         "broker_response_payload_override": "broker response codes must be normalized once at Proxy ingress",
         "ResponseCode::from": "Proxy status mapping must consume canonical projections instead of raw Broker response codes",
     }
-    return scan_forbidden_terms([path], forbidden)
+    return scan_forbidden_terms(paths, forbidden)
 
 
 PROXY_REMOTING_FORBIDDEN_TERMS = {
