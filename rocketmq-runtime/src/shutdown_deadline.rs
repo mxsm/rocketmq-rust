@@ -15,6 +15,17 @@
 use std::time::Duration;
 use std::time::Instant;
 
+/// Upper bound on how long an aborted task may take to confirm cancellation.
+///
+/// Every abort path reaches this window only after the graceful deadline has
+/// elapsed, so the window is deliberately independent of
+/// [`ShutdownDeadline::remaining`]. Deriving it from the expired deadline would
+/// always yield zero. `TaskGroup::abort_task_and_wait` treats a zero timeout as an
+/// unconfirmed cancellation, so a zero window would report a timed-out driver as
+/// not aborted and would let a caller observe a task whose running future had
+/// not been dropped yet.
+pub(crate) const ABORT_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// A single absolute shutdown deadline shared by nested lifecycle owners.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShutdownDeadline {
