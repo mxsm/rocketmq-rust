@@ -34,7 +34,12 @@ pub struct TopicRouteSubCommand {
     #[arg(short = 't', long = "topic", required = true, help = "topic name")]
     topic: String,
 
-    #[arg(short = 'l', long = "list format", required = false, help = "list format")]
+    #[arg(
+        short = 'l',
+        long = "listFormat",
+        required = false,
+        help = "print the topic route in list format"
+    )]
     list_format: Option<bool>,
 }
 impl TopicRouteSubCommand {
@@ -124,5 +129,13 @@ mod tests {
         let cmd = TopicRouteSubCommand::try_parse_from(["topicRoute"]);
 
         assert!(cmd.is_err());
+    }
+
+    #[test]
+    fn topic_route_sub_command_parses_list_format_long_option() {
+        let cmd = TopicRouteSubCommand::try_parse_from(["topicRoute", "--topic", "TestTopic", "--listFormat", "true"])
+            .unwrap();
+
+        assert_eq!(cmd.list_format, Some(true));
     }
 }
