@@ -91,7 +91,7 @@ impl MessageListenerConcurrently for RequestReplyListener {
     ) -> ClientResult<ConsumeConcurrentlyStatus> {
         for message in messages {
             let request = message.message.clone();
-            let mut producer = self.reply_producer.clone();
+            let producer = self.reply_producer.clone();
             let response_body = format!("reply to {}", message.msg_id());
 
             tokio::spawn(async move {
