@@ -383,11 +383,13 @@ impl MessageExtEncoder {
             batch_size += 1;
             let total_size = messages_byte_buff.get_i32();
             let magic_code = messages_byte_buff.get_i32();
-            let body_crc = messages_byte_buff.get_i32();
+            // Batch clients write 0 into BODYCRC and leave it to the broker, so the stored CRC is
+            // computed from the body below instead of copied from the client record.
+            messages_byte_buff.advance(4);
             let flag = messages_byte_buff.get_i32();
             let body_len = messages_byte_buff.get_i32();
             let body = messages_byte_buff.copy_to_bytes(body_len as usize);
-            let body_crc_calculated = crc32(body.as_ref());
+            let body_crc = crc32(body.as_ref());
             let properties_len = messages_byte_buff.get_i16();
             let properties_body = messages_byte_buff.copy_to_bytes(properties_len as usize);
             let current = total_length - messages_byte_buff.remaining();
@@ -418,7 +420,7 @@ impl MessageExtEncoder {
             self.byte_buf
                 .put_i32(message_ext_batch.message_ext_broker_inner.version().get_magic_code());
             // 3 BODYCRC
-            self.byte_buf.put_i32(body_crc);
+            self.byte_buf.put_u32(body_crc);
             // 4 QUEUEID
             self.byte_buf
                 .put_i32(message_ext_batch.message_ext_broker_inner.queue_id());
@@ -636,5 +638,60 @@ mod tests {
         encoder.update_encoder_buffer_capacity(200);
 
         assert_eq!(encoder.max_message_body_size, 200);
+    }
+
+    #[test]
+    fn encode_batch_stores_the_broker_computed_body_crc() {
+        use std::collections::BTreeMap;
+
+        use rocketmq_model::common::message::message_single::Message;
+        use rocketmq_model::common::message::MessageTrait;
+
+        use crate::log_file::commit_log::check_message_and_return_size;
+
+        // The client batch encoder writes 0 into every record's BODYCRC and leaves it to the
+        // broker, so the stored record is only valid if the broker computes the CRC itself.
+        let batch_message = |body: &[u8]| {
+            Message::builder()
+                .topic(CheetahString::from_static_str("BatchCrcTopic"))
+                .body(body.to_vec())
+                .build_unchecked()
+        };
+        let messages = [batch_message(b"first batch body"), batch_message(b"second batch body")];
+        let mut inner = MessageExtBrokerInner::default();
+        inner.with_version(MessageVersion::V1);
+        inner.set_topic(CheetahString::from_static_str("BatchCrcTopic"));
+        inner.message_ext_inner.set_queue_id(0);
+        inner.set_body(MessageDecoder::encode_messages(&messages));
+        inner.message_ext_inner.set_store_timestamp(1234);
+        let batch = MessageExtBatch {
+            message_ext_broker_inner: inner,
+            is_inner_batch: false,
+            encoded_buff: None,
+        };
+
+        let config = Arc::new(MessageStoreConfig::default());
+        let mut encoder = MessageExtEncoder::new(Arc::clone(&config));
+        let mut context = PutMessageContext::new("BatchCrcTopic-0".to_string());
+        let mut stored = encoder
+            .encode_batch(&batch, &mut context)
+            .expect("batch should encode")
+            .freeze();
+
+        let delay_level_table = BTreeMap::new();
+        let mut records = 0;
+        while !stored.is_empty() {
+            let mut unchecked = stored.clone();
+            let layout =
+                check_message_and_return_size(&mut unchecked, false, false, true, &config, 0, &delay_level_table);
+            assert!(layout.success, "stored record {records} must be well formed");
+            let checked = check_message_and_return_size(&mut stored, true, false, true, &config, 0, &delay_level_table);
+            assert!(
+                checked.success,
+                "stored record {records} must carry the CRC of its body for recovery with checkCrcOnRecover"
+            );
+            records += 1;
+        }
+        assert_eq!(records, messages.len());
     }
 }
