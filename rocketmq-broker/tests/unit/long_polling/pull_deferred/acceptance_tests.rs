@@ -653,6 +653,17 @@ async fn tcp_pending_arrival_and_timeout_reexecute_then_write_one_bound_frame() 
         assert_eq!(response.code(), ResponseCode::PullNotFound as i32);
         assert_eq!(response.body().map(|body| body.as_ref()), Some(RESPONSE_BODY));
         assert_eq!(rereads.load(Ordering::SeqCst), 1);
+        // The queued session writer publishes a write completion before it drops the payload that
+        // owns the response body, so the owner release races the deferred resume terminal instead
+        // of being ordered inside it. Wait for the release with a bounded timeout before asserting
+        // exactly one drop, so a genuine leak or a double release still fails.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while owner_drops.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("completed Pull write releases the accepted resume owner");
         assert_eq!(owner_drops.load(Ordering::SeqCst), 1);
         let terminal_resume = service.resource_snapshot();
         assert_eq!(terminal_resume.resume_executions, 0);
