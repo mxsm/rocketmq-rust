@@ -90,25 +90,21 @@ fn print_header() {
 
 fn print_acl(acl: &AclInfo) {
     let subject = acl.subject.as_ref().map(|s| s.as_str()).unwrap_or("*");
-    let policies = acl.policies.as_ref();
-
-    if policies.is_none() || policies.unwrap().is_empty() {
+    let Some(policies) = acl.policies.as_ref().filter(|policies| !policies.is_empty()) else {
         println!(
             "{:<24}  {:<12}  {:<24}  {:<20}  {:<24}  {:<12}",
             subject, "", "", "", "", ""
         );
         return;
-    }
+    };
 
-    for policy in policies.unwrap() {
+    for policy in policies {
         let policy_type = policy.policy_type.as_ref().map(|p| p.as_str()).unwrap_or("");
-        let entries = policy.entries.as_ref();
-
-        if entries.is_none() || entries.unwrap().is_empty() {
+        let Some(entries) = policy.entries.as_ref().filter(|entries| !entries.is_empty()) else {
             continue;
-        }
+        };
 
-        for entry in entries.unwrap() {
+        for entry in entries {
             let resource = entry.resource.as_ref().map(|r| r.as_str()).unwrap_or("");
             let actions = entry
                 .actions
