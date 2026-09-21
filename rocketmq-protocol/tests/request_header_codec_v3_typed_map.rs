@@ -12,10 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(deprecated)]
-
 use cheetah_string::CheetahString;
-use rocketmq_macros::{RequestHeaderCodecV2, RequestHeaderCodecV3};
+use rocketmq_macros::RequestHeaderCodecV3;
 use rocketmq_protocol::protocol::header_codec::{
     AliasConflictPolicy, FlattenPresenceSpec, HeaderCodec, HeaderFieldSource, HeaderPresence,
 };
@@ -95,12 +93,6 @@ struct DenseScanHeaderV3 {
     third: i32,
     #[header(required)]
     fourth: i32,
-}
-
-#[derive(RequestHeaderCodecV2)]
-struct HardenedV2Header {
-    #[required]
-    value: String,
 }
 
 fn sample_header() -> TypedMapHeaderV3 {
@@ -343,17 +335,9 @@ fn validation_and_java_ranges_fail_before_map_values_are_exposed() {
 }
 
 #[test]
-fn object_safe_and_v2_fallible_shims_preserve_classified_failures() {
+fn object_safe_shims_expose_wire_metadata() {
     let header: Box<dyn CommandCustomHeader> = Box::new(sample_header());
     assert_eq!(header.canonical_wire_key("legacyRequestId"), Some("requestId"));
     assert!(header.contains_wire_key("topic"));
     assert!(header.encoded_len_hint() > 0);
-
-    let v2 = HardenedV2Header { value: String::new() };
-    let mut out = HeaderMap::new();
-    assert!(matches!(
-        v2.try_encode_into_map(&mut out),
-        Err(ProtocolContractViolation::LegacyValidation { .. })
-    ));
-    assert!(out.is_empty());
 }

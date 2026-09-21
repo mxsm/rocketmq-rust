@@ -27,25 +27,20 @@ reviewed post-freeze approval.
 
 ## Direct source migrations
 
-### Request-header derive retirement readiness
+### Request-header derive retirement
 
 `rocketmq_macros::RequestHeaderCodec` (V1) and
-`rocketmq_macros::RequestHeaderCodecV2` remain deprecated public 1.x derives
-and compatibility adapters. New request headers should use the recommended
-`rocketmq_macros::RequestHeaderCodecV3` derive with its explicit
-`#[header(...)]` wire metadata.
+`rocketmq_macros::RequestHeaderCodecV2` were removed before 1.0. Use
+`rocketmq_macros::RequestHeaderCodecV3` with explicit `#[header(...)]` wire
+metadata. Existing V1/V2 consumers must migrate before upgrading to 1.0; the
+macro README documents the attribute and behavior differences that require
+review.
 
-The checked-in registry and migration guard provide completion evidence:
-`152 registered, 152 V3, 0 V2, 0 pending, 0 production legacy derive uses`.
-This does not change compatibility behavior. Existing wire behavior,
-compatibility adapters, helper attributes, fixtures, and the 13 intentional
-deprecated-use allows remain in place.
-
-Any future removal requires the complete release cycle, an explicit 2.0
-breaking window, and a migration decision covering
-each affected API: `rocketmq_macros::RequestHeaderCodec` and
-`rocketmq_macros::RequestHeaderCodecV2`. This change creates no approval and
-does not announce or approve 2.0.
+The checked-in migration inventory records `153 registered, 153 V3, 0 V2, 0
+pending`. The production protocol source contains no V1 or V2 derive use, so
+this source-compatibility break does not change the registered request-header
+wire contracts. Repository-owner approval for this 1.0 retirement is recorded
+in #10790.
 
 ### Auth security-contract ownership and policy models
 

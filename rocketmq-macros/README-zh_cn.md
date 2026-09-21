@@ -11,11 +11,9 @@ RocketMQ-Rust 协议类型和 Remoting Header 使用的过程宏。
 | 宏 | 状态 | 用途 |
 | --- | --- | --- |
 | `RequestHeaderCodecV3` | 推荐 | 生成类型化 map/source codec、wire schema、校验、键解析、兼容适配器，以及经过审查的可选直接编码。 |
-| `RequestHeaderCodecV2` | 已废弃 | 加固 V2 wire 契约的冻结兼容适配器；生产 Header 禁止新增使用。 |
-| `RequestHeaderCodec` | 已废弃 | 保留最早 Request Header quirks 的冻结兼容适配器，仅用于下游源码兼容。 |
 | `RemotingSerializable` | 旧版工具 | 为旧版 crate 本地序列化 trait 生成实现；与当前协议 trait 不兼容。参见[序列化](#序列化)。 |
 
-仓库中登记的全部生产请求头和响应头都已使用 V3。仓库新增生产 Header 必须使用 V3；V1 和 V2 仅是冻结的兼容适配器。两个旧版请求头 derive 自 1.0.0 起已废弃，仍保留导出以兼容下游代码。它们生成 `CommandCustomHeader` 和 `FromMap` 实现，但不实现 V3 的 `HeaderCodec` 或类型化 schema。
+`RequestHeaderCodecV3` 是唯一受支持的请求头 derive。在所有已登记的生产 Header 迁移到 V3 后，V1 `RequestHeaderCodec` 和 `RequestHeaderCodecV2` 入口已在 1.0 前移除。V3 基于单一显式 wire model 生成 `HeaderCodec`、`CommandCustomHeader` 和 `FromMap` 实现。
 
 ## 快速开始
 
@@ -148,7 +146,7 @@ canonical key 和别名必须非空、不包含 NUL，并满足 ROCKETMQ 的 `u1
 
 回退按 Header 和命令生效，不改变 wire 契约，也不会在每条消息上增加全局开关或环境变量查询。
 
-## 迁移旧 Header
+## 迁移 V1/V2 使用方
 
 V2 元数据不会被静默解释成 V3。必须对照固定 Java schema 审核后显式转换：
 
@@ -166,13 +164,13 @@ V2 元数据不会被静默解释成 V3。必须对照固定 Java schema 审核�
 
 V2 忽略容器级 `serde(rename_all)`，解码时也不使用标量 `Option<T>` 的默认值提供函数。将属性复制到 V3 前应审核这些差异。与 V2 的 `ToString`/`FromStr` 路径相比，V3 支持的标量类型范围也更窄。
 
-V2 只应用于尚未完成迁移的既有下游模型。新增生产 Header 应登记到类型化 registry 和仓库内的类型清单。`request_header_codec_v3_registry` 对照 `migration.json` 和固定的 Java 契约检查该 registry。迁移生成器和 Java 提取工具已退役；当前不存在自动发现并拒绝所有新增源码 Header 的 migration guard。
+1.0 不再导出 V1 和 V2 derive 入口。下游使用方必须在升级前将 Header model 迁移到 V3。新增生产 Header 应登记到类型化 registry 和仓库内的类型清单。`request_header_codec_v3_registry` 对照 `migration.json` 和固定的 Java 契约检查该 registry。迁移生成器和 Java 提取工具已退役；当前不存在自动发现并拒绝所有新增源码 Header 的 migration guard。
 
-V1（`RequestHeaderCodec`）为源码兼容而冻结，包括其历史解析和解码特殊行为。例如，格式错误的可选基础类型值可能变为 `None`，格式错误的非必填基础类型值可能回退到 `Default`。V3 则返回转换错误。不要将 V1 用于新代码；现有 V1 Header 应直接迁移到显式的 V3 model。
+V1（`RequestHeaderCodec`）曾包含历史解析和解码特殊行为。例如，格式错误的可选基础类型值可能变为 `None`，格式错误的非必填基础类型值可能回退到 `Default`。V3 则返回转换错误，因此 V1 使用方直接迁移到显式 V3 model 时必须审核这些差异。
 
 ## 重命名 Protocol 依赖
 
-V2 和 V3 从使用方的 Cargo manifest 解析 `rocketmq-protocol`，包括重命名为 `protocol_api` 的依赖。生成代码或 re-export 场景可显式覆盖路径。V3 示例：
+V3 从使用方的 Cargo manifest 解析 `rocketmq-protocol`，包括重命名为 `protocol_api` 的依赖。生成代码或 re-export 场景可显式覆盖路径：
 
 ```rust
 use rocketmq_macros::RequestHeaderCodecV3;
@@ -185,7 +183,7 @@ struct Header {
 }
 ```
 
-V2 使用 `#[request_header_codec_v2(crate = "protocol_api")]`。V1 仍生成 `crate::protocol` 路径，要求使用方保留旧版布局。独立项目 [`tests/fixtures/renamed-consumer`](tests/fixtures/renamed-consumer/) 检查 V2 和 V3 自动解析依赖名称的能力。
+独立项目 [`tests/fixtures/renamed-consumer`](tests/fixtures/renamed-consumer/) 检查 V3 自动解析依赖名称的能力。
 
 ## 序列化
 
@@ -198,10 +196,7 @@ V2 使用 `#[request_header_codec_v2(crate = "protocol_api")]`。V1 仍生成 `c
 | 路径 | 用途 |
 | --- | --- |
 | [`src/lib.rs`](src/lib.rs) | 公开 derive 入口和共享解析辅助函数。 |
-| [`src/request_header_codec_v3/`](src/request_header_codec_v3/) | canonical V3 元数据、语义模型、profile 校验和代码生成。 |
-| [`src/request_header_codec_v3/legacy_v1.rs`](src/request_header_codec_v3/legacy_v1.rs) 与 [`legacy_v2.rs`](src/request_header_codec_v3/legacy_v2.rs) | 基于 canonical model 的冻结 V1/V2 语法适配器和兼容代码生成。 |
-| [`src/request_header_codec_v2.rs`](src/request_header_codec_v2.rs) 与 [`src/request_header_codec_v2/attr.rs`](src/request_header_codec_v2/attr.rs) | 已废弃的 V2 入口封装和公开语法解析器；适配逻辑位于 `legacy_v2/`。 |
-| [`src/request_header_custom.rs`](src/request_header_custom.rs) | 已废弃的 V1 parse/wrapper entry，转发到冻结兼容适配器。 |
+| [`src/request_header_codec_v3/`](src/request_header_codec_v3/) | canonical V3 元数据、语义模型、校验和代码生成。 |
 | [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | 历史 crate 本地序列化展开逻辑。 |
 
 Cargo 构建不会访问 Java checkout。Java schema、golden frame、请求头注册数据和基准测试输入保存在协议 crate 的[兼容性夹具目录](../rocketmq-protocol/tests/fixtures/request_header_codec/README.md)中。
@@ -219,13 +214,9 @@ cargo test -p rocketmq-protocol --test request_header_codec_runtime_ui
 cargo test -p rocketmq-protocol --test request_header_java_compatibility
 ```
 
-旧版兼容行为和依赖重命名检查：
+依赖重命名检查：
 
 ```powershell
-cargo test -p rocketmq-protocol --test request_header_codec_v1_ui
-cargo test -p rocketmq-protocol --test request_header_codec_v1_wire_snapshot
-cargo test -p rocketmq-protocol --test request_header_codec_v2_ui
-cargo test -p rocketmq-protocol --test request_header_codec_v2_wire_snapshot
 cargo check --locked --offline --manifest-path rocketmq-macros/tests/fixtures/renamed-consumer/Cargo.toml
 ```
 

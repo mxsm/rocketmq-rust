@@ -1,5 +1,0 @@
-error: wire key `same` is already used by field `first`
-  --> tests/ui/request_header_codec_v2/fail/duplicate_key.rs:24:5
-   |
-24 |     #[serde(alias = "same")]
-   |     ^

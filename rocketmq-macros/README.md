@@ -12,14 +12,11 @@ or remoting crates instead of depending on it directly.
 | Macro | Status | Purpose |
 | --- | --- | --- |
 | `RequestHeaderCodecV3` | Recommended | Generates typed map/source codecs, wire schema, validation, key resolution, compatibility adapters, and optional reviewed direct encoding. |
-| `RequestHeaderCodecV2` | Deprecated | Frozen compatibility adapter for the hardened V2 wire contract. No production header may newly adopt it. |
-| `RequestHeaderCodec` | Deprecated | Frozen compatibility adapter that preserves the original request-header quirks for downstream source compatibility. |
 | `RemotingSerializable` | Legacy utility | Emits an implementation for the old crate-local serialization trait; incompatible with the current protocol trait. See [Serialization](#serialization). |
 
-All registered production request and response headers use V3. New production headers in this repository must use
-V3; V1 and V2 are frozen compatibility adapters only. Both legacy request-header derives are deprecated since
-1.0.0 and remain exported for downstream compatibility. They generate `CommandCustomHeader` and `FromMap`
-implementations, but do not implement V3's `HeaderCodec` or typed schema.
+`RequestHeaderCodecV3` is the only supported request-header derive. The V1 `RequestHeaderCodec` and
+`RequestHeaderCodecV2` entry points were removed before 1.0 after all registered production headers migrated to
+V3. V3 generates `HeaderCodec`, `CommandCustomHeader`, and `FromMap` implementations over one explicit wire model.
 
 ## Quick start
 
@@ -193,7 +190,7 @@ requires absent extension fields and a header that has not already been material
 This fallback is per header and per command. It does not change the wire contract, and it avoids adding a global
 branch or environment lookup to every message.
 
-## Migrating legacy headers
+## Migrating V1/V2 consumers
 
 V2 metadata is not silently reinterpreted. Review it against the fixed Java schema and convert it explicitly:
 
@@ -213,20 +210,20 @@ V2 ignores container-level `serde(rename_all)` and does not apply scalar `Option
 decode. Review these differences before copying attributes to V3. V3 also has a narrower set of supported
 scalar types than V2's `ToString`/`FromStr` path.
 
-Keep V2 only while migrating an existing downstream model. Register new production headers in the typed registry
-and checked-in inventory. `request_header_codec_v3_registry` compares that registry with `migration.json` and
-the pinned Java contracts. Migration generators and the Java extraction harness have been retired; there is no
-active migration guard that automatically discovers and rejects every new source header.
+The V1 and V2 derive entry points are not exported in 1.0. Downstream consumers must migrate their header models
+to V3 before upgrading. Register new production headers in the typed registry and checked-in inventory.
+`request_header_codec_v3_registry` compares that registry with `migration.json` and the pinned Java contracts.
+Migration generators and the Java extraction harness have been retired; there is no active migration guard that
+automatically discovers and rejects every new source header.
 
-V1 (`RequestHeaderCodec`) is frozen for source compatibility, including its historical parsing and decode quirks.
-For example, malformed optional primitive values can become `None`, and malformed non-required primitive values
-can fall back to `Default`. V3 returns conversion errors instead. Do not use V1 for new code; migrate existing V1
-headers directly to the explicit V3 model.
+V1 (`RequestHeaderCodec`) had historical parsing and decode quirks. For example, malformed optional primitive
+values could become `None`, and malformed non-required primitive values could fall back to `Default`. V3 returns
+conversion errors instead, so V1 consumers must review those cases while moving directly to the explicit V3 model.
 
 ## Renamed protocol dependency
 
-V2 and V3 resolve `rocketmq-protocol` from the consumer's Cargo manifest, including a dependency renamed to
-`protocol_api`. Generated/re-exported environments can override the path explicitly. For V3:
+V3 resolves `rocketmq-protocol` from the consumer's Cargo manifest, including a dependency renamed to
+`protocol_api`. Generated/re-exported environments can override the path explicitly:
 
 ```rust
 use rocketmq_macros::RequestHeaderCodecV3;
@@ -239,9 +236,8 @@ struct Header {
 }
 ```
 
-V2 uses `#[request_header_codec_v2(crate = "protocol_api")]`. V1 still emits `crate::protocol` paths and requires
-the legacy consumer layout. The standalone [`tests/fixtures/renamed-consumer`](tests/fixtures/renamed-consumer/)
-project checks automatic dependency-name resolution for V2 and V3.
+The standalone [`tests/fixtures/renamed-consumer`](tests/fixtures/renamed-consumer/) project checks V3's automatic
+dependency-name resolution.
 
 ## Serialization
 
@@ -260,10 +256,7 @@ Likewise, owned deserializable types receive `RemotingDeserializable` through it
 | Path | Purpose |
 | --- | --- |
 | [`src/lib.rs`](src/lib.rs) | Public derive entry points and shared parsing helpers. |
-| [`src/request_header_codec_v3/`](src/request_header_codec_v3/) | Canonical V3 metadata, semantic model, profile validation, and code generation. |
-| [`src/request_header_codec_v3/legacy_v1.rs`](src/request_header_codec_v3/legacy_v1.rs) and [`legacy_v2.rs`](src/request_header_codec_v3/legacy_v2.rs) | Frozen V1/V2 syntax adapters and compatibility code generation over the canonical model. |
-| [`src/request_header_codec_v2.rs`](src/request_header_codec_v2.rs) and [`src/request_header_codec_v2/attr.rs`](src/request_header_codec_v2/attr.rs) | Deprecated V2 entry wrapper and public syntax parser; adaptation lives under `legacy_v2/`. |
-| [`src/request_header_custom.rs`](src/request_header_custom.rs) | Deprecated V1 parse/wrapper entry forwarding to the frozen compatibility adapter. |
+| [`src/request_header_codec_v3/`](src/request_header_codec_v3/) | Canonical V3 metadata, semantic model, validation, and code generation. |
 | [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | Historical crate-local serialization expansion. |
 
 No Java checkout is accessed during Cargo builds. Java schemas, golden frames, header registry data, and
@@ -284,13 +277,9 @@ cargo test -p rocketmq-protocol --test request_header_codec_runtime_ui
 cargo test -p rocketmq-protocol --test request_header_java_compatibility
 ```
 
-For retained legacy behavior and renamed dependencies:
+For renamed-dependency coverage:
 
 ```powershell
-cargo test -p rocketmq-protocol --test request_header_codec_v1_ui
-cargo test -p rocketmq-protocol --test request_header_codec_v1_wire_snapshot
-cargo test -p rocketmq-protocol --test request_header_codec_v2_ui
-cargo test -p rocketmq-protocol --test request_header_codec_v2_wire_snapshot
 cargo check --locked --offline --manifest-path rocketmq-macros/tests/fixtures/renamed-consumer/Cargo.toml
 ```
 
