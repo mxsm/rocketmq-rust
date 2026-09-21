@@ -1751,7 +1751,7 @@ fn monitoring_event_row(event: &MonitoringEvent) -> Vec<String> {
                 subscription_consistent
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "unknown".to_string()),
-                process_queue_analysis.join("; ")
+                sanitize_cell(&process_queue_analysis.join("; "))
             ),
         ],
         MonitoringEvent::Error {
@@ -1765,7 +1765,7 @@ fn monitoring_event_row(event: &MonitoringEvent) -> Vec<String> {
             consumer_group.clone().unwrap_or_default(),
             String::new(),
             operation.clone(),
-            error.clone(),
+            sanitize_cell(error),
         ],
         MonitoringEvent::EndRound {
             round,
@@ -1884,7 +1884,7 @@ fn empty_message_event_row(event: &str, status: &str, detail: &str) -> Vec<Strin
         String::new(),
         String::new(),
         status.to_string(),
-        detail.to_string(),
+        sanitize_cell(detail),
     ]
 }
 
