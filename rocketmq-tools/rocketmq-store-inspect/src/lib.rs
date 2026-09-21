@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Offline tools for inspecting and preparing RocketMQ-Rust stores.
+//!
+//! The Cargo package is named `rocketmq-store-inspect`, while its executable is
+//! `rocketmq-cli-rust`. The tool reads local files and never connects to a running
+//! cluster. Stop the Broker before running downgrade preflight or multipath
+//! consolidation because those commands require the exclusive Store lock.
+
 pub mod command_line;
 pub mod content_show;
 pub mod downgrade_preflight;
