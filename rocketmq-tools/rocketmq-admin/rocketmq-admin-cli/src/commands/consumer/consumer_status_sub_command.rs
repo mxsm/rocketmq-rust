@@ -43,7 +43,7 @@ pub struct ConsumerStatusSubCommand {
 
     #[arg(
         short = 'n',
-        long = "name server address",
+        long = "namesrvAddr",
         required = false,
         help = "input name server address"
     )]
@@ -111,5 +111,24 @@ impl CommandExecute for ConsumerStatusSubCommand {
         )
         .await?;
         self.print_result(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consumer_status_sub_command_parses_namesrv_addr_long_option() {
+        let cmd = ConsumerStatusSubCommand::try_parse_from([
+            "consumerStatus",
+            "--consumerGroup",
+            "test-group",
+            "--namesrvAddr",
+            "127.0.0.1:9876",
+        ])
+        .unwrap();
+
+        assert_eq!(cmd.namesrv_addr.as_deref(), Some("127.0.0.1:9876"));
     }
 }
