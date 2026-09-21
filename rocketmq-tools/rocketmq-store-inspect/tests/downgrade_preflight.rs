@@ -223,7 +223,7 @@ fn incomplete_compaction_generation_and_active_store_lock_fail_closed() {
     fs2::FileExt::try_lock_exclusive(&lock).expect("simulate Broker lock");
     let error =
         run_preflight(&DowngradePreflightRequest::new("1.0.0", config)).expect_err("active Store lock must fail");
-    assert!(error.to_string().contains("Broker must be stopped"));
+    assert_eq!(error.descriptor().code().as_str(), "storage.read.failed");
     fs2::FileExt::unlock(&lock).expect("unlock fixture");
 }
 
