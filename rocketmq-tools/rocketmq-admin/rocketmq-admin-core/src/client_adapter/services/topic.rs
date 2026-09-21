@@ -20,7 +20,7 @@
 //! # Examples
 //!
 //! ```rust,ignore
-//! use rocketmq_admin_core::core::topic::{TopicService, TopicClusterList};
+//! use rocketmq_admin_core::client_adapter::services::topic::{TopicClusterList, TopicService};
 //!
 //! let clusters = TopicService::get_topic_cluster_list(&mut admin, "MyTopic").await?;
 //! ```
