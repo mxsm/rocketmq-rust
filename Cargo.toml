@@ -175,7 +175,7 @@ smallvec = "1.13"
 
 opentelemetry                      = { version = "0.32", features = ["metrics"] }
 opentelemetry_sdk                  = { version = "0.32", features = ["metrics", "rt-tokio"] }
-opentelemetry-otlp                 = { version = "0.32", default-features = false }
+opentelemetry-otlp                 = { version = "0.33", default-features = false }
 opentelemetry-prometheus           = { version = "0.32", default-features = false }
 opentelemetry-appender-tracing     = { version = "0.32", default-features = false }
 opentelemetry-semantic-conventions = { version = "0.32" }
