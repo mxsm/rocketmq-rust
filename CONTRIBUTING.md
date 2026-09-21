@@ -88,9 +88,9 @@ cargo test
 
 ### Foundation safety and compatibility
 
-- New production request headers use `RequestHeaderCodecV3`. `RequestHeaderCodec`
-  and `RequestHeaderCodecV2` remain only for supported compatibility macros and
-  their compile fixtures; do not add production derives for either legacy entry.
+- Production request headers use `RequestHeaderCodecV3`, the only supported
+  request-header derive. Register new headers in the typed registry and checked-in
+  migration inventory.
 - A process entrypoint owns its runtime through `RuntimeOwner`. Background work
   receives an injected `ServiceContext`/`ChildServiceContext` or a parent
   `TaskGroup` rather than creating another runtime or detached task.

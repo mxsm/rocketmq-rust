@@ -34,7 +34,6 @@ pub(super) struct HeaderModel {
     pub(super) protocol_path: Path,
     pub(super) fast: bool,
     pub(super) fields: Vec<FieldModel>,
-    pub(super) profile: CodecProfile,
 }
 
 pub(super) struct FieldModel {
@@ -54,14 +53,7 @@ pub(super) struct FieldModel {
     pub(super) source_order: u16,
     pub(super) kind: ValueKind,
     pub(super) legacy_required: bool,
-    pub(super) legacy_v2_default_declared: bool,
     pub(super) span: Span,
-}
-
-pub(super) enum CodecProfile {
-    V3,
-    LegacyV2 { validation_method: Option<Ident> },
-    LegacyV1,
 }
 
 #[derive(Clone)]
@@ -250,7 +242,6 @@ impl HeaderModel {
             protocol_path,
             fast: attrs.fast.is_some(),
             fields,
-            profile: CodecProfile::V3,
         });
         (model, errors)
     }
@@ -333,7 +324,6 @@ impl FieldModel {
             source_order,
             kind,
             legacy_required: attrs.legacy_required.is_some(),
-            legacy_v2_default_declared: false,
             span,
         })
     }
