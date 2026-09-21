@@ -46,7 +46,7 @@ pub struct UpdateStaticTopicSubCommand {
         short = 'c',
         long = "clusterName",
         required = false,
-        help = "create topic to which cluster"
+        help = "cluster that owns the static topic"
     )]
     cluster_name: Option<String>,
 

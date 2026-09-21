@@ -41,7 +41,7 @@ pub struct UpdateTopicPermSubCommand {
         short = 'c',
         long = "clusterName",
         required = false,
-        help = "create topic to which cluster"
+        help = "cluster that owns the topic"
     )]
     cluster_name: Option<String>,
 
