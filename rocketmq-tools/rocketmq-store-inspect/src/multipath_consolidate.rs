@@ -449,3 +449,29 @@ impl Drop for StagingCleanup {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_offset_accepts_canonical_twenty_digit_names() {
+        assert_eq!(parse_offset(Path::new("00000000000000000000")).unwrap(), 0);
+        assert_eq!(parse_offset(Path::new("00000000000000000123")).unwrap(), 123);
+    }
+
+    #[test]
+    fn parse_offset_rejects_noncanonical_or_overflowing_names() {
+        for name in [
+            "0000000000000000000",
+            "000000000000000000000",
+            "0000000000000000000a",
+            "99999999999999999999",
+        ] {
+            assert_eq!(
+                parse_offset(Path::new(name)).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+    }
+}

@@ -551,3 +551,35 @@ impl Drop for OfflineLock {
         let _ = fs2::FileExt::unlock(&self.file);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_major_parser_accepts_supported_version_spellings() {
+        assert_eq!(parse_target_major("1.0.0").unwrap(), 1);
+        assert_eq!(parse_target_major("0.9.0").unwrap(), 0);
+        assert_eq!(parse_target_major("v1.2.3").unwrap(), 1);
+        assert_eq!(parse_target_major("10.0.0").unwrap(), 10);
+    }
+
+    #[test]
+    fn target_major_parser_rejects_invalid_and_uppercase_prefixes() {
+        for version in ["abc", "", "V1.0.0"] {
+            let error = parse_target_major(version).unwrap_err();
+            assert_eq!(error.descriptor().code().as_str(), "core.argument.invalid");
+        }
+    }
+
+    #[test]
+    fn split_paths_trims_values_and_drops_empty_elements() {
+        assert_eq!(
+            split_paths("a, b ,,c"),
+            [PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")]
+        );
+        assert!(split_paths(" , , ").is_empty());
+        assert!(split_paths("").is_empty());
+        assert_eq!(split_paths("single"), [PathBuf::from("single")]);
+    }
+}
