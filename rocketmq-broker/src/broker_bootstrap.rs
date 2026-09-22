@@ -172,6 +172,7 @@ pub struct Builder {
     command_factory: RemotingCommandFactory,
     filter_registry: Arc<rocketmq_filter::filter::FilterRegistrySnapshot>,
     release_identity_required: bool,
+    diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources,
 }
 
 impl Builder {
@@ -184,6 +185,7 @@ impl Builder {
             command_factory: application_remoting_command_factory(),
             filter_registry: rocketmq_filter::filter::FilterRegistrySnapshot::sql92(),
             release_identity_required: false,
+            diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources::default(),
         }
     }
 
@@ -213,6 +215,18 @@ impl Builder {
         self
     }
 
+    /// Connects the Broker's fixed maintenance jobs and metadata actor to diagnostics.
+    ///
+    /// Retain a clone at the process boundary to read the service-task shutdown
+    /// summary after the diagnostic endpoint has stopped.
+    pub fn with_runtime_diagnostics_sources(
+        mut self,
+        sources: rocketmq_observability::RuntimeDiagnosticsSources,
+    ) -> Self {
+        self.diagnostics_sources = sources;
+        self
+    }
+
     #[inline]
     pub fn build(self) -> BrokerBootstrap<Configured> {
         let telemetry_handle = self.telemetry_runtime_guard.handle();
@@ -226,6 +240,7 @@ impl Builder {
             },
         );
         broker_runtime.set_telemetry_runtime_guard(self.telemetry_runtime_guard);
+        broker_runtime.set_runtime_diagnostics_sources(self.diagnostics_sources);
 
         BrokerBootstrap {
             broker_runtime,
@@ -248,7 +263,12 @@ mod tests {
         let context = RuntimeContext::from_current("broker-bootstrap-context-test");
         let service_context = context.service_context("broker-bootstrap-service");
 
-        let mut bootstrap = Builder::new(service_context.clone(), TelemetryRuntimeGuard::noop()).build();
+        let sources = rocketmq_observability::RuntimeDiagnosticsSources::default();
+        let mut bootstrap = Builder::new(service_context.clone(), TelemetryRuntimeGuard::noop())
+            .with_runtime_diagnostics_sources(sources.clone())
+            .build();
+        let inputs = rocketmq_observability::RuntimeDiagnosticsDataProvider::snapshot(&sources);
+        assert!(inputs.metadata.unwrap().accepting);
 
         let broker_task_group = bootstrap
             .broker_runtime

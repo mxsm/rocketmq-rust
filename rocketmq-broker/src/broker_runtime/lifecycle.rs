@@ -27,6 +27,7 @@ pub(super) struct BrokerLifecycle {
     pub(super) shutdown_hook: Option<BrokerShutdownHook>,
     pub(super) scheduled_task_manager: BrokerScheduledTasks,
     pub(super) bounded_scheduled_tasks: ScheduledTaskGroup,
+    pub(super) diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources,
     pub(super) remoting_server_task_group: Option<TaskGroup>,
     pub(super) remoting_server_report_receivers: Vec<BrokerRemotingServerReportReceiver>,
     pub(super) request_processor_task_group: Option<TaskGroup>,
@@ -42,6 +43,7 @@ impl BrokerLifecycle {
             shutdown_hook: None,
             scheduled_task_manager,
             bounded_scheduled_tasks,
+            diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources::default(),
             remoting_server_task_group: None,
             remoting_server_report_receivers: Vec::new(),
             request_processor_task_group: None,
@@ -103,9 +105,25 @@ impl BrokerRuntime {
                 if deadline.is_expired() {
                     report.deadline = BrokerShutdownComponentReport::timed_out("shutdown_deadline", started.elapsed());
                 }
+                // Early returns from a failed drain retain telemetry for later
+                // cleanup, but still need one observable business outcome.
+                self.record_business_drain(
+                    &progress,
+                    if deadline.is_expired() {
+                        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::DeadlineExceeded
+                    } else if report.is_healthy() {
+                        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Drained
+                    } else {
+                        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Failed
+                    },
+                );
                 report
             }
             Err(elapsed) => {
+                self.record_business_drain(
+                    &progress,
+                    rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::DeadlineExceeded,
+                );
                 warn!(
                     elapsed_ms = elapsed.as_millis(),
                     "Broker shutdown exhausted its absolute deadline"
@@ -836,6 +854,7 @@ impl BrokerRuntime {
         let started = Instant::now();
         shutdown_report.service_tasks = if let Some(service_context) = self.composition.state.service_context.as_ref() {
             let report = service_context.task_group().shutdown_until(deadline).await;
+            self.lifecycle.diagnostics_sources.retain_shutdown(&report);
             BrokerShutdownComponentReport::from_shutdown_report("service_tasks", Some(&report), started.elapsed())
         } else {
             BrokerShutdownComponentReport::unhealthy(
@@ -845,6 +864,16 @@ impl BrokerRuntime {
             )
         };
         progress.complete("service_tasks");
+
+        use rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome;
+        let business_outcome = if deadline.is_expired() {
+            RuntimeBusinessDrainOutcome::DeadlineExceeded
+        } else if shutdown_report.is_healthy() {
+            RuntimeBusinessDrainOutcome::Drained
+        } else {
+            RuntimeBusinessDrainOutcome::Failed
+        };
+        self.record_business_drain(&progress, business_outcome);
 
         let started = Instant::now();
         if let Some(guard) = self.composition.state.observability_guard.take() {
@@ -892,6 +921,20 @@ impl BrokerRuntime {
         self.composition.state.observability_guard.as_ref()?;
         let service_context = self.composition.state.service_context.as_ref()?;
         rocketmq_observability::reserve_telemetry_flush_lease(service_context, Some(deadline))
+    }
+
+    fn record_business_drain(
+        &self,
+        progress: &BrokerShutdownProgress,
+        outcome: rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome,
+    ) {
+        if progress.claim_business_drain_event() {
+            rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder::from_handle(
+                &self.composition.state.telemetry_handle,
+                rocketmq_runtime::RuntimeComponent::Broker,
+            )
+            .record_business_drain(outcome);
+        }
     }
 
     pub(crate) async fn shutdown_scheduled_tasks_with_timeout(

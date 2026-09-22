@@ -1037,3 +1037,19 @@ kind = "Counter"
 unit = "{response}"
 labels = ["REQUEST_CODE_BUCKET", "REASON"]
 source = "Remoting"
+
+[[metric]]
+index = 223
+symbol = "RUNTIME_OPERATION_OUTCOMES_TOTAL"
+kind = "Counter"
+unit = "{task}"
+labels = ["COMPONENT", "TASK_TYPE", "OUTCOME"]
+source = "Runtime"
+
+[[metric]]
+index = 224
+symbol = "RUNTIME_BUSINESS_DRAINS_TOTAL"
+kind = "Counter"
+unit = "{drain}"
+labels = ["COMPONENT", "OUTCOME"]
+source = "Runtime"

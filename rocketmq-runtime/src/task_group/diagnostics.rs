@@ -22,22 +22,8 @@ use std::time::Duration;
 impl TaskGroup {
     pub(crate) fn diagnostics(&self, long_running_threshold: Duration) -> TaskGroupDiagnostics {
         let mut aggregate = TaskGroupDiagnosticsAccumulator::default();
-        self.accumulate_diagnostics(long_running_threshold, &mut aggregate);
-        aggregate.finish()
-    }
-
-    /// Returns diagnostics for this group's own tasks without descending into
-    /// child groups.
-    pub(crate) fn local_diagnostics(&self, long_running_threshold: Duration) -> TaskGroupDiagnostics {
-        let mut aggregate = TaskGroupDiagnosticsAccumulator {
-            group_count: 1,
-            ..TaskGroupDiagnosticsAccumulator::default()
-        };
-        for task in self.inner.registry.tasks.iter() {
-            let elapsed = task.started_at.elapsed();
-            aggregate.record_task(task.kind, elapsed, elapsed >= long_running_threshold);
-        }
-        aggregate.finish()
+        let local_task_count = self.accumulate_diagnostics(long_running_threshold, &mut aggregate);
+        aggregate.finish(local_task_count)
     }
 
     /// Scans this group and its descendants for a bounded detail list.
@@ -87,9 +73,11 @@ impl TaskGroup {
         &self,
         long_running_threshold: Duration,
         aggregate: &mut TaskGroupDiagnosticsAccumulator,
-    ) {
+    ) -> usize {
         aggregate.group_count = aggregate.group_count.saturating_add(1);
+        let mut local_task_count = 0;
         for task in self.inner.registry.tasks.iter() {
+            local_task_count += 1;
             let elapsed = task.started_at.elapsed();
             aggregate.record_task(task.kind, elapsed, elapsed >= long_running_threshold);
         }
@@ -97,6 +85,7 @@ impl TaskGroup {
         for child in self.inner.registry.components_snapshot() {
             child.accumulate_diagnostics(long_running_threshold, aggregate);
         }
+        local_task_count
     }
 }
 
@@ -120,7 +109,7 @@ impl TaskGroupDiagnosticsAccumulator {
         self.max_elapsed_by_kind[index] = self.max_elapsed_by_kind[index].max(elapsed);
     }
 
-    fn finish(self) -> TaskGroupDiagnostics {
+    fn finish(self, local_task_count: usize) -> TaskGroupDiagnostics {
         let task_kinds = TaskKind::ALL
             .into_iter()
             .filter_map(|kind| {
@@ -135,6 +124,7 @@ impl TaskGroupDiagnosticsAccumulator {
             .collect();
 
         TaskGroupDiagnostics {
+            local_task_count,
             group_count: self.group_count,
             task_count: self.task_count,
             task_kinds,

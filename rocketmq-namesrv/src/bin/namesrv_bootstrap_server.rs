@@ -236,6 +236,12 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     log_security_bootstrap(validated_security);
     let transport_security = build_namesrv_transport_security(validated_security);
 
+    lifecycle.set_observer(std::sync::Arc::new(
+        rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder::from_handle(
+            &telemetry_guard.handle(),
+            RuntimeComponent::NameServer,
+        ),
+    ))?;
     if let Err(error) = lifecycle.start(&service_context).await {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
@@ -248,13 +254,20 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         }
         return Err(error).context("failed to start NameServer lifecycle boundary");
     }
-    if let Err(error) = rocketmq_observability::start_runtime_diagnostics_endpoint_from_env_with_telemetry(
+    let diagnostics_sources = rocketmq_observability::RuntimeDiagnosticsSources::default();
+    let diagnostics = rocketmq_observability::RuntimeDiagnosticsService::new(
         &service_context,
         RuntimeComponent::NameServer,
-        &telemetry_guard.handle(),
-    )
-    .await
-    {
+        telemetry_guard.handle(),
+        std::sync::Arc::new(diagnostics_sources.clone()),
+    );
+    let diagnostics_start = async {
+        diagnostics
+            .start(rocketmq_observability::RuntimeDiagnosticsMode::from_env()?)
+            .await
+    }
+    .await;
+    if let Err(error) = diagnostics_start {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
         if let Err(shutdown_error) = telemetry_guard
@@ -280,6 +293,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     info!("===============================================");
     // Start the name server
     let builder = Builder::new(service_context.clone(), telemetry_guard.handle())
+        .with_runtime_diagnostics_sources(diagnostics_sources.clone())
         .set_name_server_config(namesrv_config)
         .set_server_config(server_config)
         .set_tokio_client_config(tokio_client_config)
@@ -305,6 +319,17 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     let shutdown_request = lifecycle
         .shutdown_request()
         .unwrap_or_else(|| lifecycle.request_shutdown(ShutdownReason::Internal));
+    rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder::from_handle(
+        &telemetry_guard.handle(),
+        rocketmq_runtime::RuntimeComponent::NameServer,
+    )
+    .record_business_drain(if shutdown_request.deadline.is_expired() {
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::DeadlineExceeded
+    } else if boot_result.as_ref().is_ok_and(|report| report.is_healthy()) {
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Drained
+    } else {
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Failed
+    });
     let telemetry_report = match telemetry_flush_lease {
         Some(lease) => {
             telemetry_guard

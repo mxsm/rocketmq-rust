@@ -16,6 +16,8 @@ use std::collections::BTreeMap;
 
 #[path = "send_policy.rs"]
 mod send_policy;
+#[path = "shutdown_events.rs"]
+mod shutdown_events;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;

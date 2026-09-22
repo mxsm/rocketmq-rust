@@ -229,6 +229,8 @@ pub mod metrics {
     pub const RUNTIME_BLOCKING_RUNNING: &str = "rocketmq_runtime_blocking_running";
     pub const RUNTIME_BLOCKING_TIMEOUTS: &str = "rocketmq_runtime_blocking_timeouts";
     pub const RUNTIME_LIFECYCLE_TRANSITIONS_TOTAL: &str = "rocketmq_runtime_lifecycle_transitions_total";
+    pub const RUNTIME_OPERATION_OUTCOMES_TOTAL: &str = "rocketmq_runtime_operation_outcomes_total";
+    pub const RUNTIME_BUSINESS_DRAINS_TOTAL: &str = "rocketmq_runtime_business_drains_total";
     pub const RESOURCE_QUEUE_ITEMS: &str = "rocketmq_resource_queue_items";
     pub const RESOURCE_QUEUE_BYTES: &str = "rocketmq_resource_queue_bytes";
     pub const RESOURCE_QUEUE_OLDEST_AGE_MILLIS: &str = "rocketmq_resource_queue_oldest_age_millis";
@@ -325,6 +327,7 @@ pub mod events {
     pub const EXPORTER_SHUTDOWN: &str = "rocketmq.exporter.shutdown";
     pub const BROKER_LIFECYCLE: &str = "rocketmq.broker.lifecycle";
     pub const RUNTIME_LIFECYCLE: &str = "rocketmq.runtime.lifecycle";
+    pub const RUNTIME_BUSINESS_DRAIN: &str = "rocketmq.runtime.business_drain";
     pub const CONTROLLER_HEARTBEAT: &str = "rocketmq.controller.heartbeat";
     pub const CONTROLLER_ELECTION: &str = "rocketmq.controller.election";
 }

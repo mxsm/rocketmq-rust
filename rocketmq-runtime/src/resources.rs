@@ -35,6 +35,16 @@ pub struct RuntimeResources {
 
 impl RuntimeResources {
     pub(crate) fn from_memory_budget(memory_budget: ManagedMemoryBudget) -> Self {
+        Self::from_memory_budget_with_metadata_capacity(
+            memory_budget,
+            crate::metadata_target::DEFAULT_MAX_METADATA_TARGETS,
+        )
+    }
+
+    pub(crate) fn from_memory_budget_with_metadata_capacity(
+        memory_budget: ManagedMemoryBudget,
+        metadata_capacity: usize,
+    ) -> Self {
         let managed_bytes = usize::try_from(memory_budget.managed_bytes()).unwrap_or(usize::MAX);
         let process_budget = ResourceBudgetTree::new(
             "process",
@@ -46,7 +56,7 @@ impl RuntimeResources {
             memory_limit: memory_budget.detected(),
             memory_budget,
             process_budget,
-            metadata_targets: MetadataTargetRegistry::new(),
+            metadata_targets: MetadataTargetRegistry::with_max_entries(metadata_capacity),
         }
     }
 
@@ -66,6 +76,11 @@ impl RuntimeResources {
     #[must_use]
     pub fn process_budget(&self) -> ResourceBudget {
         self.process_budget.clone()
+    }
+
+    /// Returns retained target capacity and ownership counts without paths.
+    pub fn metadata_target_stats(&self) -> crate::MetadataTargetRegistryStats {
+        self.metadata_targets.stats()
     }
 
     pub(crate) fn metadata_targets(&self) -> MetadataTargetRegistry {

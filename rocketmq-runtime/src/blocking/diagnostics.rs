@@ -46,6 +46,61 @@ impl BlockingTaskMeta {
     }
 }
 
+/// Internal, name-free aggregates collected without materializing task details.
+pub(crate) struct BlockingExecutorAggregate {
+    pub lane: BlockingLane,
+    pub max_concurrency: usize,
+    pub max_queue_depth: usize,
+    pub queued: usize,
+    pub running: usize,
+    pub timed_out_still_running: usize,
+    pub blocking_still_running: usize,
+    pub task_kinds: [(BlockingKind, usize, Duration); 3],
+}
+
+impl BlockingExecutorAggregate {
+    pub(crate) fn new(lane: BlockingLane, max_concurrency: usize, max_queue_depth: usize) -> Self {
+        Self {
+            lane,
+            max_concurrency,
+            max_queue_depth,
+            queued: 0,
+            running: 0,
+            timed_out_still_running: 0,
+            blocking_still_running: 0,
+            task_kinds: [
+                (BlockingKind::ShortIo, 0, Duration::ZERO),
+                (BlockingKind::CpuBound, 0, Duration::ZERO),
+                (BlockingKind::LongRunning, 0, Duration::ZERO),
+            ],
+        }
+    }
+
+    pub(crate) fn record_kind(&mut self, kind: BlockingKind, elapsed: Duration) {
+        let index = match kind {
+            BlockingKind::ShortIo => 0,
+            BlockingKind::CpuBound => 1,
+            BlockingKind::LongRunning => 2,
+        };
+        self.task_kinds[index].1 = self.task_kinds[index].1.saturating_add(1);
+        self.task_kinds[index].2 = self.task_kinds[index].2.max(elapsed);
+    }
+}
+
+impl From<BlockingExecutorSnapshot> for BlockingExecutorAggregate {
+    fn from(snapshot: BlockingExecutorSnapshot) -> Self {
+        let mut aggregate = Self::new(snapshot.lane, snapshot.max_concurrency, snapshot.max_queue_depth);
+        aggregate.queued = snapshot.queued;
+        aggregate.running = snapshot.running;
+        aggregate.timed_out_still_running = snapshot.timed_out_still_running;
+        aggregate.blocking_still_running = snapshot.blocking_still_running;
+        for task in snapshot.tasks {
+            aggregate.record_kind(task.kind, task.elapsed);
+        }
+        aggregate
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 /// Represents blocking executor snapshot.
 pub struct BlockingExecutorSnapshot {

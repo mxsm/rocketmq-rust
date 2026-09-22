@@ -19,6 +19,16 @@
 //! are configured. Plain HTTP on a non-loopback listener additionally requires
 //! an explicit development-only opt-in.
 
+mod service;
+mod sources;
+
+pub use sources::RuntimeDiagnosticsSources;
+
+pub use service::{
+    RuntimeDiagnosticsDataProvider, RuntimeDiagnosticsMode, RuntimeDiagnosticsService, RuntimeDiagnosticsStarted,
+    RUNTIME_DIAGNOSTICS_MODE_ENV,
+};
+
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::Component;
@@ -31,15 +41,12 @@ use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeDiagnosticsInputs;
 use rocketmq_runtime::RuntimeDiagnosticsViewV1;
 use rocketmq_runtime::RuntimeDiagnosticsViewV2;
-use rocketmq_runtime::ScheduledTaskConfig;
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
-use crate::metrics::runtime::RuntimeLifecycleReason;
-use crate::metrics::runtime::RuntimeLifecycleState;
 use crate::ObservabilityError;
 
 pub const RUNTIME_DIAGNOSTICS_BIND_ADDR_ENV: &str = "ROCKETMQ_RUNTIME_DIAGNOSTICS_BIND_ADDR";
@@ -53,10 +60,13 @@ pub const RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA: &str = "rocketmq.runtime-diagnost
 /// Path of the explicitly scoped diagnostics view.
 ///
 /// It shares the listener, token, and scope checks with the V1 path and returns
-/// the same process view, so the sections the endpoint does not own (scheduled
-/// work, retained metadata, shutdown results) are absent rather than empty.
+/// the same process view. Caller-owned providers may supply scheduled work,
+/// metadata and retained shutdown results; compatibility wrappers leave these
+/// absent. V2 continues to omit empty schedule vectors.
 pub const RUNTIME_DIAGNOSTICS_V2_PATH: &str = "/internal/v2/runtime/diagnostics";
 pub const RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA_V2: &str = "rocketmq.runtime-diagnostics-endpoint.v2";
+/// Protected, process-shared metadata registry occupancy without target names.
+pub const RUNTIME_METADATA_TARGETS_PATH: &str = "/internal/v1/runtime/metadata-targets";
 
 const DEFAULT_SAMPLE_INTERVAL: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -193,12 +203,19 @@ pub async fn start_runtime_diagnostics_endpoint_from_env_with_telemetry(
     component: RuntimeComponent,
     telemetry: &crate::TelemetryHandle,
 ) -> Result<Option<RuntimeDiagnosticsEndpointHandle>, ObservabilityError> {
-    let Some(config) = RuntimeDiagnosticsEndpointConfig::from_env()? else {
+    let mode = RuntimeDiagnosticsMode::from_env()?;
+    if mode == RuntimeDiagnosticsMode::Disabled {
         return Ok(None);
-    };
-    start_runtime_diagnostics_endpoint_with_telemetry(service_context, component, config, telemetry)
-        .await
-        .map(Some)
+    }
+    RuntimeDiagnosticsService::new(
+        service_context,
+        component,
+        telemetry.clone(),
+        std::sync::Arc::new(RuntimeDiagnosticsInputs::default),
+    )
+    .start(mode)
+    .await
+    .map(|started| started.endpoint)
 }
 
 /// Starts a protected diagnostics listener using an explicit configuration.
@@ -227,78 +244,39 @@ async fn start_runtime_diagnostics_endpoint_with_telemetry(
     config: RuntimeDiagnosticsEndpointConfig,
     telemetry: &crate::TelemetryHandle,
 ) -> Result<RuntimeDiagnosticsEndpointHandle, ObservabilityError> {
-    read_token(service_context, config.token_file.clone()).await?;
-    let listener = TcpListener::bind(config.bind_addr)
-        .await
-        .map_err(|_| ObservabilityError::invalid_config("runtime diagnostics listener cannot bind"))?;
-    let local_addr = listener
-        .local_addr()
-        .map_err(|_| ObservabilityError::invalid_config("runtime diagnostics listener address is unavailable"))?;
-
-    let sampler_context = service_context.clone();
-    let runtime_metrics = crate::metrics::runtime::RuntimeMetricsRecorder::from_handle(telemetry, component);
-    let sampler_metrics = runtime_metrics.clone();
-    service_context
-        .scheduled_tasks("runtime-diagnostics.sampler")
-        .schedule_fixed_delay(
-            ScheduledTaskConfig::fixed_delay("runtime-diagnostics.sample", config.sample_interval),
-            move || {
-                let sampler_context = sampler_context.clone();
-                let sampler_metrics = sampler_metrics.clone();
-                async move {
-                    let view = sampler_context.diagnostics_view_v1(component);
-                    sampler_metrics.record_snapshot(&view);
-                }
-            },
-        )
-        .map_err(|_| ObservabilityError::invalid_config("runtime diagnostics sampler cannot start"))?;
-
-    runtime_metrics.record_lifecycle(RuntimeLifecycleState::Starting, RuntimeLifecycleReason::Startup);
-
-    let server_context = service_context.clone();
-    let server_cancellation = service_context.task_group().cancellation_token();
-    service_context
-        .spawn_service("runtime-diagnostics.endpoint", async move {
-            serve(
-                listener,
-                server_context,
-                component,
-                config.token_file,
-                server_cancellation,
-                runtime_metrics,
-            )
-            .await;
-        })
-        .map_err(|_| ObservabilityError::invalid_config("runtime diagnostics endpoint cannot start"))?;
-
-    tracing::info!(
-        component = component_name(component),
-        bind = %local_addr,
-        scope = RUNTIME_DIAGNOSTICS_SCOPE,
-        "protected runtime diagnostics endpoint listening"
-    );
-    Ok(RuntimeDiagnosticsEndpointHandle { local_addr })
+    RuntimeDiagnosticsService::new(
+        service_context,
+        component,
+        telemetry.clone(),
+        std::sync::Arc::new(RuntimeDiagnosticsInputs::default),
+    )
+    .start(RuntimeDiagnosticsMode::EndpointAndMetrics(config))
+    .await?
+    .endpoint
+    .ok_or_else(|| ObservabilityError::invalid_config("runtime diagnostics endpoint did not start"))
 }
 
-async fn serve(
-    listener: TcpListener,
-    service_context: ChildServiceContext,
+struct EndpointContext {
+    owner: ChildServiceContext,
+    observed: ChildServiceContext,
     component: RuntimeComponent,
     token_file: PathBuf,
-    cancellation: tokio_util::sync::CancellationToken,
-    runtime_metrics: crate::metrics::runtime::RuntimeMetricsRecorder,
-) {
+    metrics: crate::metrics::runtime::RuntimeMetricsRecorder,
+    provider: std::sync::Arc<dyn RuntimeDiagnosticsDataProvider>,
+}
+
+async fn serve(listener: TcpListener, context: EndpointContext, cancellation: tokio_util::sync::CancellationToken) {
     loop {
         tokio::select! {
             _ = cancellation.cancelled() => break,
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, _peer)) => {
-                        handle_connection(stream, &service_context, component, &token_file, &runtime_metrics).await;
+                        handle_connection(stream, &context).await;
                     }
                     Err(error) => {
                         tracing::warn!(
-                            component = component_name(component),
+                            component = component_name(context.component),
                             error_kind = ?error.kind(),
                             "runtime diagnostics accept failed"
                         );
@@ -310,15 +288,9 @@ async fn serve(
     }
 }
 
-async fn handle_connection(
-    mut stream: TcpStream,
-    service_context: &ChildServiceContext,
-    component: RuntimeComponent,
-    token_file: &Path,
-    runtime_metrics: &crate::metrics::runtime::RuntimeMetricsRecorder,
-) {
+async fn handle_connection(mut stream: TcpStream, context: &EndpointContext) {
     let response = match tokio::time::timeout(REQUEST_TIMEOUT, read_request(&mut stream)).await {
-        Ok(Ok(request)) => route_request(&request, service_context, component, token_file, runtime_metrics).await,
+        Ok(Ok(request)) => route_request(&request, context).await,
         Ok(Err(status)) => error_response(status),
         Err(_) => error_response(HttpStatus::RequestTimeout),
     };
@@ -326,22 +298,22 @@ async fn handle_connection(
     let _ = stream.shutdown().await;
 }
 
-async fn route_request(
-    request: &[u8],
-    service_context: &ChildServiceContext,
-    component: RuntimeComponent,
-    token_file: &Path,
-    runtime_metrics: &crate::metrics::runtime::RuntimeMetricsRecorder,
-) -> Vec<u8> {
+async fn route_request(request: &[u8], context: &EndpointContext) -> Vec<u8> {
     let Ok(request) = ParsedRequest::parse(request) else {
         return error_response(HttpStatus::BadRequest);
     };
     if request.method != "GET" {
         return error_response(HttpStatus::MethodNotAllowed);
     }
-    let is_scoped_view = match request.path {
-        RUNTIME_DIAGNOSTICS_PATH => false,
-        RUNTIME_DIAGNOSTICS_V2_PATH => true,
+    enum View {
+        Legacy,
+        Scoped,
+        MetadataTargets,
+    }
+    let view = match request.path {
+        RUNTIME_DIAGNOSTICS_PATH => View::Legacy,
+        RUNTIME_DIAGNOSTICS_V2_PATH => View::Scoped,
+        RUNTIME_METADATA_TARGETS_PATH => View::MetadataTargets,
         _ => return error_response(HttpStatus::NotFound),
     };
     let Some(candidate) = request.bearer_token else {
@@ -350,7 +322,7 @@ async fn route_request(
     if request.scope != Some(RUNTIME_DIAGNOSTICS_SCOPE) {
         return error_response(HttpStatus::Forbidden);
     }
-    let expected = match read_token(service_context, token_file.to_path_buf()).await {
+    let expected = match read_token(&context.owner, context.token_file.clone()).await {
         Ok(token) => token,
         Err(_) => return error_response(HttpStatus::ServiceUnavailable),
     };
@@ -358,8 +330,24 @@ async fn route_request(
         return error_response(HttpStatus::Unauthorized);
     }
 
-    if is_scoped_view {
-        let view = service_context.diagnostics_view_v2(component, RuntimeDiagnosticsInputs::default());
+    if matches!(view, View::MetadataTargets) {
+        let envelope = serde_json::json!({
+            "schema_version": "rocketmq.runtime-metadata-targets.v1",
+            "source": "rocketmq_process",
+            "scope": "process_shared",
+            "data": context.observed.resources().metadata_target_stats(),
+        });
+        return match serde_json::to_vec(&envelope) {
+            Ok(body) => response(HttpStatus::Ok, &body),
+            Err(_) => error_response(HttpStatus::InternalServerError),
+        };
+    }
+
+    if matches!(view, View::Scoped) {
+        let view = context
+            .observed
+            .diagnostics_view_v2(context.component, context.provider.snapshot());
+        context.metrics.record_snapshot_v2(&view);
         let envelope = RuntimeDiagnosticsEndpointEnvelopeV2 {
             schema_version: RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA_V2,
             source: "rocketmq_process",
@@ -371,8 +359,8 @@ async fn route_request(
         };
     }
 
-    let view = service_context.diagnostics_view_v1(component);
-    runtime_metrics.record_snapshot(&view);
+    let view = context.observed.diagnostics_view_v1(context.component);
+    context.metrics.record_snapshot(&view);
     let envelope = RuntimeDiagnosticsEndpointEnvelopeV1 {
         schema_version: RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA,
         source: "rocketmq_process",
@@ -673,6 +661,256 @@ mod tests {
     use super::*;
 
     static NEXT_TEST_FILE: AtomicU64 = AtomicU64::new(1);
+
+    async fn exercise_mode_matrix(telemetry: crate::TelemetryHandle, metrics_enabled: bool) {
+        for index in 0..4 {
+            let token_file = test_token_path();
+            fs::write(&token_file, "mode-token").unwrap();
+            let config = RuntimeDiagnosticsEndpointConfig::try_new(
+                "127.0.0.1:0".parse().unwrap(),
+                token_file.clone(),
+                Duration::from_secs(1),
+                false,
+            )
+            .unwrap();
+            let mode = match index {
+                0 => RuntimeDiagnosticsMode::Disabled,
+                1 => RuntimeDiagnosticsMode::MetricsOnly {
+                    sample_interval: Duration::from_secs(1),
+                },
+                2 => RuntimeDiagnosticsMode::EndpointOnly(config),
+                _ => RuntimeDiagnosticsMode::EndpointAndMetrics(config),
+            };
+            let context = RuntimeContext::from_current("mode-matrix");
+            let parent = context.service_context("business-owner");
+            let sampled = std::sync::Arc::new(tokio::sync::Notify::new());
+            let calls = std::sync::Arc::new(AtomicU64::new(0));
+            let provider = {
+                let sampled = sampled.clone();
+                let calls = calls.clone();
+                std::sync::Arc::new(move || {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    sampled.notify_one();
+                    RuntimeDiagnosticsInputs::default()
+                })
+            };
+            let service =
+                RuntimeDiagnosticsService::new(&parent, RuntimeComponent::Broker, telemetry.clone(), provider);
+            let clone = service.clone();
+            let (first, second) = tokio::join!(service.start(mode.clone()), clone.start(mode.clone()));
+            let first = first.unwrap();
+            assert_eq!(first, second.unwrap());
+            assert_eq!(first.endpoint.is_some(), index >= 2);
+            let expected_sampler = metrics_enabled && matches!(index, 1 | 3);
+            assert_eq!(first.sampler_active, expected_sampler);
+            if expected_sampler {
+                tokio::time::timeout(Duration::from_secs(2), sampled.notified())
+                    .await
+                    .unwrap();
+            } else {
+                assert_eq!(calls.load(Ordering::Relaxed), 0);
+            }
+            let view = parent.diagnostics_view_v1(RuntimeComponent::Broker);
+            let scheduled = view
+                .task_kinds
+                .iter()
+                .find(|kind| kind.kind == rocketmq_runtime::RuntimeTaskKindV1::ScheduledDriver);
+            assert_eq!(scheduled.map_or(0, |kind| kind.active), usize::from(expected_sampler));
+            let endpoints = view
+                .task_kinds
+                .iter()
+                .find(|kind| kind.kind == rocketmq_runtime::RuntimeTaskKindV1::Service);
+            assert_eq!(endpoints.map_or(0, |kind| kind.active), usize::from(index >= 2));
+            let other_mode = if index == 0 {
+                RuntimeDiagnosticsMode::MetricsOnly {
+                    sample_interval: Duration::from_secs(1),
+                }
+            } else {
+                RuntimeDiagnosticsMode::Disabled
+            };
+            assert!(service.start(other_mode).await.is_err());
+            let report = service
+                .shutdown_until(rocketmq_runtime::ShutdownDeadline::after(Duration::from_secs(2)))
+                .await;
+            assert!(report.is_healthy(), "{}", report.to_json());
+            assert!(service.start(mode).await.is_err());
+            if let Some(endpoint) = first.endpoint {
+                assert!(TcpStream::connect(endpoint.local_addr()).await.is_err());
+            }
+            assert!(context.shutdown_tasks(Duration::from_secs(2)).await.is_healthy());
+            fs::remove_file(token_file).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn four_modes_with_noop_metrics_only_create_requested_endpoints() {
+        exercise_mode_matrix(crate::TelemetryHandle::noop(), false).await;
+    }
+
+    #[tokio::test]
+    async fn caller_owned_sources_reach_http_and_outlive_the_listener_without_write_authority() {
+        use rocketmq_runtime::{
+            MetadataDeadline, MetadataIoAdmissionOutcome, MetadataIoConfig, MetadataWriteRequest, ScheduledTaskConfig,
+            ShutdownDeadline, ShutdownReport,
+        };
+
+        let token_file = test_token_path();
+        fs::write(&token_file, "source-token").unwrap();
+        let target = token_file.with_extension("metadata");
+        let context = RuntimeContext::from_current("source-provider");
+        let parent = context.service_context("provider-component");
+        let schedules = parent.scheduled_tasks("maintenance");
+        let sources = RuntimeDiagnosticsSources::default();
+        sources.set_schedules(schedules.observer(&["selected-job", "selected-job"]));
+        let mut config = ScheduledTaskConfig::fixed_delay("selected-job", Duration::from_secs(3600));
+        config.initial_delay = Duration::from_secs(3600);
+        schedules.schedule_fixed_delay(config, || async {}).unwrap();
+        schedules
+            .schedule_fixed_delay(
+                ScheduledTaskConfig::fixed_delay("unselected-job", Duration::from_secs(3600)),
+                || async {},
+            )
+            .unwrap();
+        let actor = MetadataIoConfig::default().into_plan().unwrap().start(&parent).unwrap();
+        sources.set_metadata(actor.observer());
+        let deadline = MetadataDeadline::after(Duration::from_secs(2));
+        let receipt = match actor
+            .submit(
+                MetadataWriteRequest::new("private-resource", 1, target.clone(), b"payload".to_vec()),
+                deadline,
+            )
+            .unwrap()
+        {
+            MetadataIoAdmissionOutcome::Accepted(receipt) => receipt,
+            MetadataIoAdmissionOutcome::TargetConflict(_) => panic!("unexpected target conflict"),
+        };
+        receipt.wait_until(deadline).await.unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"payload");
+        let mut retained = ShutdownReport::new("private-owner", Duration::from_millis(42));
+        retained.cancelled = 3;
+        retained
+            .children
+            .push(ShutdownReport::new("private-child", Duration::ZERO));
+        sources.retain_shutdown(&retained);
+        let config = RuntimeDiagnosticsEndpointConfig::try_new(
+            "127.0.0.1:0".parse().unwrap(),
+            token_file.clone(),
+            Duration::from_secs(1),
+            false,
+        )
+        .unwrap();
+        let service = RuntimeDiagnosticsService::new(
+            &parent,
+            RuntimeComponent::Broker,
+            crate::TelemetryHandle::noop(),
+            std::sync::Arc::new(sources.clone()),
+        );
+        let endpoint = service
+            .start(RuntimeDiagnosticsMode::EndpointOnly(config))
+            .await
+            .unwrap()
+            .endpoint
+            .unwrap();
+        let response = request_path(
+            endpoint.local_addr(),
+            RUNTIME_DIAGNOSTICS_V2_PATH,
+            "source-token",
+            Some(RUNTIME_DIAGNOSTICS_SCOPE),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+        let body: serde_json::Value = serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        let view = &body["data"];
+        assert_eq!(view["schedule"]["tasks_scanned"], 1, "{body}");
+        assert_eq!(view["metadata"]["resources_scanned"], 1, "{body}");
+        assert_eq!(view["shutdown"]["cancelled"], 3, "{body}");
+        for private in [
+            "source-token",
+            "private-resource",
+            "selected-job",
+            "private-owner",
+            "payload",
+        ] {
+            assert!(!response.contains(private), "{private}: {response}");
+        }
+        let denied = request_path(
+            endpoint.local_addr(),
+            RUNTIME_METADATA_TARGETS_PATH,
+            "wrong-token",
+            Some(RUNTIME_DIAGNOSTICS_SCOPE),
+        )
+        .await;
+        assert!(denied.starts_with("HTTP/1.1 401"));
+        fs::write(&token_file, "rotated-token").unwrap();
+        let denied = request_path(
+            endpoint.local_addr(),
+            RUNTIME_METADATA_TARGETS_PATH,
+            "source-token",
+            Some(RUNTIME_DIAGNOSTICS_SCOPE),
+        )
+        .await;
+        assert!(denied.starts_with("HTTP/1.1 401"));
+        let denied = request_path(
+            endpoint.local_addr(),
+            RUNTIME_METADATA_TARGETS_PATH,
+            "rotated-token",
+            None,
+        )
+        .await;
+        assert!(denied.starts_with("HTTP/1.1 403"));
+        let occupancy = request_path(
+            endpoint.local_addr(),
+            RUNTIME_METADATA_TARGETS_PATH,
+            "rotated-token",
+            Some(RUNTIME_DIAGNOSTICS_SCOPE),
+        )
+        .await;
+        assert!(occupancy.starts_with("HTTP/1.1 200"));
+        let body: serde_json::Value = serde_json::from_str(occupancy.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["schema_version"], "rocketmq.runtime-metadata-targets.v1");
+        assert_eq!(body["scope"], "process_shared");
+        assert_eq!(body["data"]["retained_targets"], 1);
+        assert_eq!(body["data"]["idle_histories"], 1);
+        assert_eq!(body["data"]["live_owners"], 0);
+        assert_eq!(body["data"]["fenced_targets"], 0);
+        assert!(!occupancy.contains("private-resource"));
+        assert!(!occupancy.contains(target.to_str().unwrap()));
+        assert!(service
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(2)))
+            .await
+            .is_healthy());
+        assert!(!actor.shutdown_until(deadline).await.timed_out);
+        drop(actor);
+        drop(schedules);
+        assert!(context.shutdown_tasks(Duration::from_secs(2)).await.is_healthy());
+        let retained = sources.snapshot();
+        assert!(retained.metadata.is_none());
+        assert!(retained.schedule.is_empty());
+        let summary = retained.shutdown.unwrap();
+        assert_eq!(summary.cancelled, 3);
+        assert!(summary.children.is_empty());
+        assert!(summary.name.is_empty());
+        fs::remove_file(token_file).unwrap();
+        fs::remove_file(target).unwrap();
+    }
+
+    #[cfg(feature = "prometheus")]
+    #[tokio::test]
+    async fn four_modes_with_real_metrics_export_without_duplicate_samplers() {
+        let mut config = crate::ObservabilityConfig::default();
+        config.enabled = true;
+        config.metrics.enabled = true;
+        let (provider, registry) = crate::exporter::prometheus::init_prometheus_metrics(&config)
+            .unwrap()
+            .into_parts();
+        let handle = crate::TelemetryHandle::active(&config, Some(&provider));
+        exercise_mode_matrix(handle, true).await;
+        assert!(registry
+            .gather()
+            .iter()
+            .any(|metric| metric.name() == crate::semantic::metrics::RUNTIME_TASKS));
+        provider.shutdown().unwrap();
+    }
 
     #[test]
     fn endpoint_config_rejects_implicit_non_loopback_plaintext() {

@@ -1595,6 +1595,21 @@ impl BrokerRuntime {
         self.composition.state.telemetry_handle.release_identity_registered()
     }
 
+    pub(crate) fn set_runtime_diagnostics_sources(
+        &mut self,
+        sources: rocketmq_observability::RuntimeDiagnosticsSources,
+    ) {
+        sources.set_schedules(self.lifecycle.bounded_scheduled_tasks.observer(&[
+            "broker.registration",
+            "broker.member-group.sync",
+            "broker.consumer-offset.flush",
+        ]));
+        if let Some(Ok(actor)) = self.composition.state.metadata_io.as_ref() {
+            sources.set_metadata(actor.observer());
+        }
+        self.lifecycle.diagnostics_sources = sources;
+    }
+
     pub(crate) fn broker_config(&self) -> Arc<BrokerConfig> {
         self.composition.state.broker_config_arc()
     }

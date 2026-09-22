@@ -106,8 +106,15 @@ EVENT_CONTRACTS = {
     ),
     "BROKER_LIFECYCLE": ("request", "broker", ["state", "result", "reason"]),
     "RUNTIME_LIFECYCLE": ("task", "runtime", ["component", "state", "result", "reason"]),
+    "RUNTIME_BUSINESS_DRAIN": ("task", "runtime", ["component", "outcome"]),
     "CONTROLLER_HEARTBEAT": ("request", "controller", ["state", "result", "stale_count"]),
     "CONTROLLER_ELECTION": ("request", "controller", ["state", "result"]),
+}
+
+RUNTIME_OUTCOME_BUDGETS = {
+    "rocketmq_runtime_operation_outcomes_total": 512,
+    "rocketmq_runtime_business_drains_total": 32,
+    "rocketmq.runtime.business_drain": 32,
 }
 
 
@@ -153,10 +160,10 @@ def attribute_contract(attribute_id: str) -> dict[str, Any]:
     }
 
 
-def deprecation() -> dict[str, Any]:
+def deprecation(since: str = "1.0.0") -> dict[str, Any]:
     return {
         "status": "active",
-        "since": "1.0.0",
+        "since": since,
         "replacement": None,
         "remove_after": None,
     }
@@ -195,14 +202,14 @@ def build_registry(*, scope: str = "core-release") -> dict[str, Any]:
                 "family": metric_family(metric["id"]),
                 "stability": "stable",
                 "attributes": metric["attributes"],
-                "cardinality_budget": (
+                "cardinality_budget": RUNTIME_OUTCOME_BUDGETS.get(metric["id"], (
                     64
                     if metric["id"] == "rocketmq_release_info"
                     else 10_000 if metric["attributes"] else 1
-                ),
+                )),
                 "privacy": signal_privacy(metric["attributes"]),
                 "sampling": {"strategy": "aggregate"},
-                "deprecation": deprecation(),
+                "deprecation": deprecation("1.2.0" if metric["id"] in RUNTIME_OUTCOME_BUDGETS else "1.0.0"),
             }
         )
 
@@ -256,14 +263,14 @@ def build_registry(*, scope: str = "core-release") -> dict[str, Any]:
                 "family": family,
                 "stability": "stable",
                 "attributes": attributes,
-                "cardinality_budget": 1_000,
+                "cardinality_budget": RUNTIME_OUTCOME_BUDGETS.get(event_id, 1_000),
                 "privacy": signal_privacy(attributes),
                 "sampling": {
                     "strategy": "rate_limit",
                     "max_per_second": 100,
                     "max_events_per_operation": 1,
                 },
-                "deprecation": deprecation(),
+                "deprecation": deprecation("1.2.0" if event_id in RUNTIME_OUTCOME_BUDGETS else "1.0.0"),
             }
         )
 
@@ -290,7 +297,7 @@ def build_registry(*, scope: str = "core-release") -> dict[str, Any]:
     )
     return {
         "schema_version": 1,
-        "registry_version": "1.1.0",
+        "registry_version": "1.2.0",
         "milestone": "M11-01",
         "description": "Canonical telemetry semantics and collector-outage behavior for RocketMQ Rust.",
         "required_families": sorted(guard.REQUIRED_FAMILIES),

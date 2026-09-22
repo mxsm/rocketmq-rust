@@ -94,7 +94,27 @@ where
     CFut: Future<Output = ()> + Send + 'static,
     R: Future<Output = ()> + Send,
 {
+    run_housekeeping_until_observed(interval, shutdown, task_group, run_once, renewal_loop, |_| {}).await
+}
+
+/// Publishes a read-only observation of the fixed housekeeping schedule.
+pub async fn run_housekeeping_until_observed<F, C, CFut, R, O>(
+    interval: Duration,
+    shutdown: F,
+    task_group: TaskGroup,
+    run_once: C,
+    renewal_loop: R,
+    observe: O,
+) -> GrpcHousekeepingRunReport
+where
+    F: Future<Output = ()> + Send,
+    C: Fn() -> CFut + Clone + Send + Sync + 'static,
+    CFut: Future<Output = ()> + Send + 'static,
+    R: Future<Output = ()> + Send,
+    O: FnOnce(rocketmq_runtime::ScheduledTaskObserver) + Send,
+{
     let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
+    observe(scheduled_tasks.observer(&["proxy.grpc.housekeeping"]));
     let schedule_result = scheduled_tasks.schedule_fixed_rate_no_overlap(
         ScheduledTaskConfig::fixed_rate_no_overlap("proxy.grpc.housekeeping", interval),
         run_once,

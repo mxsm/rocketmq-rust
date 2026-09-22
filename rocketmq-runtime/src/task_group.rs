@@ -214,6 +214,7 @@ pub(crate) struct TaskKindDiagnostics {
 
 #[derive(Debug, Clone)]
 pub(crate) struct TaskGroupDiagnostics {
+    pub(crate) local_task_count: usize,
     pub(crate) group_count: usize,
     pub(crate) task_count: usize,
     pub(crate) task_kinds: Vec<TaskKindDiagnostics>,
@@ -568,17 +569,12 @@ impl TaskGroup {
         let _operation_spawn_guard = context.spawn_guard();
         let registration = context.prepare_spawn(self.id())?;
         let guard = registration.guard();
-        let operation = context.clone();
-        let owner_cancellation = self.cancellation_token();
-        let task_id = self.spawn(name, context.task_kind(), async move {
-            let _guard = guard;
-            tokio::select! {
-                biased;
-                _ = owner_cancellation.cancelled() => {}
-                _ = operation.run(future) => {}
-            }
-        })?;
+        let execution =
+            crate::operation::OperationExecution::new(future, guard, context.clone(), Some(self.cancellation_token()));
+        let task_id = self.spawn(name, context.task_kind(), execution.run())?;
         registration.register(task_id);
+        drop(_operation_spawn_guard);
+        registration.finish_registration();
         Ok(task_id)
     }
 
@@ -602,12 +598,11 @@ impl TaskGroup {
         let _operation_spawn_guard = context.spawn_guard();
         let registration = context.prepare_spawn(self.id())?;
         let guard = registration.guard();
-        let operation = context.clone();
-        let task_id = self.spawn(name, context.task_kind(), async move {
-            let _guard = guard;
-            operation.run(future).await;
-        })?;
+        let execution = crate::operation::OperationExecution::new(future, guard, context.clone(), None);
+        let task_id = self.spawn(name, context.task_kind(), execution.run())?;
         registration.register(task_id);
+        drop(_operation_spawn_guard);
+        registration.finish_registration();
         Ok(task_id)
     }
 

@@ -36,6 +36,7 @@ use rocketmq_runtime::MetadataIoCommitOutcome;
 use rocketmq_runtime::MetadataIoConfig;
 use rocketmq_runtime::MetadataIoOperation;
 use rocketmq_runtime::MetadataLimitSource;
+use rocketmq_runtime::MetadataTargetRetirementOutcome;
 use rocketmq_runtime::MetadataWriteRequest;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeError;
@@ -164,6 +165,229 @@ fn accepted(outcome: MetadataIoAdmissionOutcome) -> rocketmq_runtime::MetadataIo
             panic!("test request unexpectedly conflicted with another target")
         }
     }
+}
+
+#[tokio::test]
+async fn diagnostic_observer_does_not_retain_metadata_ownership() {
+    let (context, actor) = start_actor(Arc::new(RecordingFileSystem::default()), config(4, 1024));
+    let observer = actor.observer();
+    assert!(observer.snapshot().unwrap().accepting);
+    let report = actor
+        .shutdown_until(MetadataDeadline::after(Duration::from_secs(2)))
+        .await;
+    assert!(!report.timed_out);
+    assert!(!observer.snapshot().unwrap().accepting);
+    drop(actor);
+    assert!(context.shutdown_tasks(Duration::from_secs(2)).await.is_healthy());
+    assert!(observer.snapshot().is_none());
+}
+
+#[test]
+fn small_target_capacity_supports_explicit_retirement_and_read_only_old_receipts() {
+    let owner =
+        rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::for_parallelism("target-retirement", 2))
+            .unwrap()
+            .with_metadata_target_capacity(std::num::NonZeroUsize::new(1).unwrap())
+            .build()
+            .unwrap();
+    owner.block_on(async {
+        let directory = TempDir::new().unwrap();
+        let target = directory.path().join("metadata.json");
+        let context = owner.root_context().component("metadata");
+        let deadline = MetadataDeadline::after(Duration::from_secs(5));
+        let mut previous_identity = None;
+        let mut retained_receipts = Vec::new();
+        for generation in 1..=16 {
+            let actor = MetadataIoConfig::default()
+                .into_plan()
+                .unwrap()
+                .start(&context)
+                .unwrap();
+            let receipt = accepted(
+                actor
+                    .submit(
+                        MetadataWriteRequest::new(
+                            format!("resource-{generation}"),
+                            generation,
+                            target.clone(),
+                            generation.to_string().into_bytes(),
+                        ),
+                        deadline,
+                    )
+                    .unwrap(),
+            );
+            let identity = receipt.target_identity();
+            if let Some(previous) = previous_identity {
+                assert_ne!(identity, previous);
+            }
+            assert_eq!(
+                actor
+                    .retire_target_for_new_identity(&format!("resource-{generation}"))
+                    .unwrap(),
+                MetadataTargetRetirementOutcome::AdmissionOpen
+            );
+            let report = actor.shutdown_until(deadline).await;
+            assert!(!report.timed_out);
+            let stats = owner.resources().metadata_target_stats();
+            assert_eq!(stats.capacity, 1);
+            assert_eq!(stats.retained_targets, 1);
+            assert_eq!(stats.remaining_capacity, 0);
+            assert_eq!(
+                actor
+                    .retire_target_for_new_identity(&format!("resource-{generation}"))
+                    .unwrap(),
+                MetadataTargetRetirementOutcome::Retired
+            );
+            assert_eq!(owner.resources().metadata_target_stats().retained_targets, 0);
+            assert_eq!(std::fs::read(&target).unwrap(), generation.to_string().into_bytes());
+            previous_identity = Some(identity);
+            retained_receipts.push((generation, receipt));
+        }
+        for (generation, receipt) in retained_receipts {
+            assert_eq!(
+                receipt.wait_until(deadline).await.unwrap(),
+                MetadataGeneration::new(generation)
+            );
+        }
+    });
+    assert!(owner
+        .shutdown_runtime_blocking_with_timeout(Duration::from_secs(2))
+        .unwrap()
+        .is_healthy());
+}
+
+#[tokio::test]
+async fn retirement_rejects_queued_work_and_actual_blocking_authority() {
+    let file_system = Arc::new(GateRecordingFileSystem::default());
+    let started = file_system.gate.started.notified();
+    let (context, actor) = start_actor(file_system.clone(), config(4, 1024));
+    let deadline = MetadataDeadline::after(Duration::from_secs(3));
+    let first = accepted(actor.submit(request("held", 1, b"one"), deadline).unwrap());
+    started.await;
+    let second = accepted(actor.submit(request("held", 2, b"two"), deadline).unwrap());
+    actor.stop_admission();
+    assert_eq!(
+        actor.retire_target_for_new_identity("held").unwrap(),
+        MetadataTargetRetirementOutcome::WorkInProgress
+    );
+    file_system.gate.release();
+    first.wait_until(deadline).await.unwrap();
+    second.wait_until(deadline).await.unwrap();
+    assert!(!actor.shutdown_until(deadline).await.timed_out);
+    assert_eq!(
+        actor.retire_target_for_new_identity("held").unwrap(),
+        MetadataTargetRetirementOutcome::Retired
+    );
+    assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
+}
+
+#[test]
+fn retirement_churn_cannot_grow_an_open_actors_history_cache() {
+    let owner =
+        rocketmq_runtime::RuntimeOwner::plan(rocketmq_runtime::RuntimeConfig::for_parallelism("retirement-cache", 2))
+            .unwrap()
+            .with_metadata_target_capacity(std::num::NonZeroUsize::new(1).unwrap())
+            .build()
+            .unwrap();
+    owner.block_on(async {
+        let context = owner.root_context().component("metadata");
+        let start = || {
+            config(4, 1024)
+                .into_plan()
+                .unwrap()
+                .start_with_file_system(&context, Arc::new(RecordingFileSystem::default()))
+                .unwrap()
+        };
+        let old = start();
+        let deadline = MetadataDeadline::after(Duration::from_secs(3));
+        accepted(old.submit(request("shared", 1, b"one"), deadline).unwrap())
+            .wait_until(deadline)
+            .await
+            .unwrap();
+        let replacement = start();
+        accepted(replacement.submit(request("shared", 2, b"two"), deadline).unwrap())
+            .wait_until(deadline)
+            .await
+            .unwrap();
+        assert!(!replacement.shutdown_until(deadline).await.timed_out);
+        assert_eq!(
+            replacement.retire_target_for_new_identity("shared").unwrap(),
+            MetadataTargetRetirementOutcome::Retired
+        );
+        assert_eq!(owner.resources().metadata_target_stats().retained_targets, 0);
+        assert_eq!(
+            old.submit(request("other", 1, b"new"), deadline)
+                .unwrap_err()
+                .condition(),
+            rocketmq_error::CanonicalCondition::ResourceExhausted
+        );
+        assert!(old.submit(request("shared", 3, b"stale"), deadline).is_err());
+        assert!(!old.shutdown_until(deadline).await.timed_out);
+    });
+    assert!(owner
+        .shutdown_runtime_blocking_with_timeout(Duration::from_secs(2))
+        .unwrap()
+        .is_healthy());
+}
+
+#[tokio::test]
+async fn retirement_keeps_unknown_outcome_fenced_and_old_actor_cannot_rebind_a_retired_history() {
+    let (context, failed) = start_actor(
+        Arc::new(FailingFileSystem {
+            operation: MetadataIoOperation::SyncParent,
+            error_kind: io::ErrorKind::Other,
+        }),
+        config(4, 1024),
+    );
+    let deadline = MetadataDeadline::after(Duration::from_secs(3));
+    let receipt = accepted(failed.submit(request("fenced", 1, b"one"), deadline).unwrap());
+    assert!(matches!(
+        receipt.wait_until_outcome(deadline).await.unwrap(),
+        MetadataIoCommitOutcome::CommitOutcomeUnknown(_)
+    ));
+    assert!(!failed.shutdown_until(deadline).await.timed_out);
+    assert_eq!(
+        failed.retire_target_for_new_identity("fenced").unwrap(),
+        MetadataTargetRetirementOutcome::ReconciliationRequired
+    );
+    assert_eq!(
+        context
+            .service_context("stats")
+            .resources()
+            .metadata_target_stats()
+            .fenced_targets,
+        1
+    );
+
+    let old = start_actor_in(
+        &context,
+        "old",
+        Arc::new(RecordingFileSystem::default()),
+        config(4, 1024),
+    );
+    accepted(old.submit(request("shared", 1, b"one"), deadline).unwrap())
+        .wait_until(deadline)
+        .await
+        .unwrap();
+    let identity = old.target_identity("shared").unwrap();
+    let replacement = start_actor_in(
+        &context,
+        "replacement",
+        Arc::new(RecordingFileSystem::default()),
+        config(4, 1024),
+    );
+    accepted(replacement.submit(request("shared", 2, b"two"), deadline).unwrap())
+        .wait_until(deadline)
+        .await
+        .unwrap();
+    assert_eq!(replacement.target_identity("shared").unwrap(), identity);
+    assert!(!replacement.shutdown_until(deadline).await.timed_out);
+    assert_eq!(
+        replacement.retire_target_for_new_identity("shared").unwrap(),
+        MetadataTargetRetirementOutcome::Retired
+    );
+    assert!(old.submit(request("shared", 3, b"stale"), deadline).is_err());
+    assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
 }
 
 #[tokio::test]

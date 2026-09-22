@@ -39,6 +39,8 @@ pub use crate::diagnostics::RuntimeTaskKindSummaryV1;
 pub use crate::diagnostics::RuntimeTaskKindV1;
 pub use crate::diagnostics::RuntimeTaskSectionV2;
 pub use crate::operation::OperationContext;
+pub use crate::operation::OperationOutcome;
+pub use crate::operation::OperationOutcomeObserver;
 pub use crate::owner::RuntimeOwner;
 pub use crate::owner::RuntimeOwnerPlan;
 pub use crate::resource_budget::ResourceBudget;

@@ -49,9 +49,22 @@ pub struct RuntimeOwnerPlan {
     config: RuntimeConfig,
     memory_limit: Option<ProcessMemoryLimit>,
     memory_policy: ManagedMemoryPolicy,
+    metadata_target_capacity: std::num::NonZeroUsize,
 }
 
 impl RuntimeOwnerPlan {
+    /// Sets the maximum retained metadata target histories for this runtime.
+    ///
+    /// Idle and fenced targets consume capacity until explicitly and safely
+    /// retired. The default is 4,096; this is not an in-flight operation limit.
+    /// Each actor also retains at most this many resource histories, including
+    /// tombstones retired by another actor. Replace an actor to release those
+    /// tombstones; removing them while it is open could revive stale authority.
+    #[must_use]
+    pub fn with_metadata_target_capacity(mut self, capacity: std::num::NonZeroUsize) -> Self {
+        self.metadata_target_capacity = capacity;
+        self
+    }
     /// Supplies a container-provided memory limit for this runtime.
     #[must_use]
     pub fn with_memory_limit(mut self, memory_limit: ProcessMemoryLimit) -> Self {
@@ -82,8 +95,9 @@ impl RuntimeOwnerPlan {
             config,
             memory_limit,
             memory_policy,
+            metadata_target_capacity,
         } = self;
-        RuntimeOwner::build_validated(config, move || {
+        RuntimeOwner::build_validated(config, metadata_target_capacity, move || {
             let memory_limit = memory_limit.map_or_else(ProcessMemoryLimit::detect, Ok)?;
             ManagedMemoryBudget::resolve(memory_limit, None, memory_policy).map_err(|violation| {
                 RuntimeError::configuration_failure(crate::RuntimeOperation::ResolveManagedMemoryBudget, violation)
@@ -105,6 +119,8 @@ impl RuntimeOwner {
             config,
             memory_limit: None,
             memory_policy: ManagedMemoryPolicy::default(),
+            metadata_target_capacity: std::num::NonZeroUsize::new(crate::metadata_target::DEFAULT_MAX_METADATA_TARGETS)
+                .expect("the static default metadata target capacity is positive"),
         })
     }
 
@@ -121,12 +137,17 @@ impl RuntimeOwner {
             .build()
     }
 
-    fn build_validated<F>(config: RuntimeConfig, detector: F) -> RuntimeResult<Self>
+    fn build_validated<F>(
+        config: RuntimeConfig,
+        metadata_target_capacity: std::num::NonZeroUsize,
+        detector: F,
+    ) -> RuntimeResult<Self>
     where
         F: FnOnce() -> RuntimeResult<ManagedMemoryBudget>,
     {
         let memory_budget = detector()?;
-        let resources = RuntimeResources::from_memory_budget(memory_budget);
+        let resources =
+            RuntimeResources::from_memory_budget_with_metadata_capacity(memory_budget, metadata_target_capacity.get());
 
         let mut builder = tokio::runtime::Builder::new_multi_thread();
         builder
