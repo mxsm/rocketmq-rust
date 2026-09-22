@@ -331,8 +331,12 @@ impl BrokerRuntime {
                     }
                 };
                 let weak_service = Arc::downgrade(&service);
-                if let Err(error) = service.set_transactional_op_batch_service_start(weak_service).await {
+                if let Err(error) = service.start_transactional_op_batch_service_with_owner(
+                    weak_service,
+                    service_context.component("broker.transaction-operations").task_group().clone(),
+                ).await {
                     error!("Failed to start transactional op batch service: {error}");
+                    return false;
                 }
                 if let Err(error) = service.start_transaction_metrics_flush(
                     service_context.component("broker.transaction-metrics"),
@@ -362,11 +366,15 @@ impl BrokerRuntime {
                 .task_group()
                 .clone()
         });
+        let Some(task_group) = task_group else {
+            error!("Transaction checking requires an injected broker service context");
+            return false;
+        };
         let listener = DefaultTransactionalMessageCheckListener::new(
             broker_name,
             self.composition.state.producer_manager().session_registry(),
             Arc::new(Broker2Client::new(self.composition.state.command_factory())),
-            task_group,
+            Some(task_group.clone()),
         );
         self.composition.state.transactional_message_check_listener = Some(listener.clone());
         self.composition.state.transactional_message_check_service = self
@@ -375,10 +383,11 @@ impl BrokerRuntime {
             .transactional_message_service
             .as_ref()
             .map(|service| {
-                Arc::new(TransactionalMessageCheckService::new(
+                Arc::new(TransactionalMessageCheckService::new_with_task_group(
                     self.composition.state.broker_config_arc(),
                     service.clone(),
                     listener,
+                    task_group,
                 ))
             });
         true

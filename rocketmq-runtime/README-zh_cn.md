@@ -40,6 +40,9 @@ flowchart TD
 
 ## 核心架构
 
+各状态的所有者、私有实现边界和完成语义见
+[架构与契约说明](ARCHITECTURE.md)。
+
 | 类型 | 职责 |
 | --- | --- |
 | `RuntimeConfig` | 配置工作线程数、阻塞线程上限、线程名与栈大小、keep-alive、关闭超时、IO/time 驱动和各阻塞通道的策略。 |
@@ -158,6 +161,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 最后一个任务组引用释放后，子组会注销。名称只是标签，多个组可以同名而不共享身份。
 
 ## 周期任务
+
+按时间语义和所有权选择入口：
+
+| 工作类型 | 推荐入口 | 关键契约 |
+| --- | --- | --- |
+| 串行周期维护 | `schedule_bounded` + fixed-delay + serial policy | 首次执行受 initial delay 控制，完成后再等待 period；拒绝零周期。 |
+| 允许并发的周期工作 | `schedule_bounded` + fixed-rate + bounded policy | 先取得运行槽再提交，显式选择 Skip、CoalesceLatest 或 BoundedCatchUp。 |
+| 可变回调或受控结束 | `schedule_fixed_delay_controlled` | 串行调用 FnMut；正常 Stop 计入已完成运行。 |
+| 属于短期 operation 的可变维护 | `schedule_fixed_delay_controlled_operation` | 复用 fixed-delay 执行与结算，同时服从 operation 的取消和 deadline。 |
+| 日历或触发器任务 | 兼容 `TaskScheduler` 的 Cron/Trigger | 保留独立的日历及触发器协议。 |
+| 专属操作系统线程 | `ActorRuntime` | owner 必须发出停止信号并 join；仅取消 async 任务并不足够。 |
+
+旧 fixed-rate overlap 接口仍允许无界重叠，迁移到 bounded 接口需要明确选择过载策略。
+`ScheduledTaskConfig::shutdown_timeout` 仅保留源码兼容性，实现不读取它；
+关闭预算应传给 task group 的 shutdown API。
 
 通过 `context.scheduled_tasks("maintenance")` 派生调度器，
 并选择与重叠执行需求相符的登记方法：

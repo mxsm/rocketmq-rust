@@ -330,13 +330,21 @@ impl BrokerRuntime {
             self.composition.state.transactional_message_check_service.take()
         {
             transaction_services_present = true;
-            if await_shutdown_deadline(deadline, transactional_message_check_service.shutdown())
-                .await
-                .is_err()
-            {
-                shutdown_report.transaction_services =
-                    BrokerShutdownComponentReport::timed_out("transaction_services", transaction_started.elapsed());
-                return shutdown_report;
+            match await_shutdown_deadline(deadline, transactional_message_check_service.shutdown_with_report()).await {
+                Ok(Some(report)) if !report.is_healthy() => {
+                    shutdown_report.transaction_services = BrokerShutdownComponentReport::from_shutdown_report(
+                        "transaction_services",
+                        Some(&report),
+                        transaction_started.elapsed(),
+                    );
+                    return shutdown_report;
+                }
+                Err(_) => {
+                    shutdown_report.transaction_services =
+                        BrokerShutdownComponentReport::timed_out("transaction_services", transaction_started.elapsed());
+                    return shutdown_report;
+                }
+                _ => {}
             }
         }
         if let Some(transactional_message_check_listener) =
@@ -357,7 +365,9 @@ impl BrokerRuntime {
                 }
             }
         }
-        if let Some(transactional_message_service) = self.composition.state.transactional_message_service.take() {
+        if let Some(transactional_message_service) =
+            self.composition.state.transactional_message_service.as_ref().cloned()
+        {
             transaction_services_present = true;
             if await_shutdown_deadline(deadline, transactional_message_service.shutdown())
                 .await
@@ -367,6 +377,25 @@ impl BrokerRuntime {
                     BrokerShutdownComponentReport::timed_out("transaction_services", transaction_started.elapsed());
                 return shutdown_report;
             }
+            if !transactional_message_service.operation_drain_complete() {
+                shutdown_report.transaction_services = BrokerShutdownComponentReport::unhealthy(
+                    "transaction_services",
+                    transaction_started.elapsed(),
+                    "transaction_operation_drain_incomplete",
+                );
+                return shutdown_report;
+            }
+            if let Some(report) = transactional_message_service.batch_shutdown_report().await {
+                if !report.is_healthy() {
+                    shutdown_report.transaction_services = BrokerShutdownComponentReport::from_shutdown_report(
+                        "transaction_services",
+                        Some(&report),
+                        transaction_started.elapsed(),
+                    );
+                    return shutdown_report;
+                }
+            }
+            self.composition.state.transactional_message_service.take();
         }
         shutdown_report.transaction_services = if transaction_services_present {
             BrokerShutdownComponentReport::completed("transaction_services", transaction_started.elapsed())

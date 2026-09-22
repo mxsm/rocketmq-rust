@@ -14,6 +14,8 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::Weak;
@@ -41,12 +43,15 @@ use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::BudgetLimit;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::FullPolicy;
+use rocketmq_runtime::MissedTickPolicy;
 use rocketmq_runtime::ProcessMemoryLimit;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourceBudgetTree;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store::BrokerMasterAddressStore;
 use rocketmq_store::BrokerWriteStore;
 use rocketmq_store::PutMessageResult;
@@ -64,6 +69,7 @@ use crate::broker_path_config_helper::get_transaction_metrics_path;
 use crate::transaction::operation_result::OperationResult;
 use crate::transaction::queue::get_result::GetResult;
 use crate::transaction::queue::message_queue_op_context::MessageQueueOpContext;
+use crate::transaction::queue::message_queue_op_context::OperationBatch;
 use crate::transaction::queue::transactional_message_bridge::TransactionalMessageBridge;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 use crate::transaction::queue::transactional_op_batch_service::TransactionalOpBatchService;
@@ -111,6 +117,8 @@ pub struct DefaultTransactionalMessageService<MS: BrokerWriteStore + BrokerMaste
     transaction_metrics_flush_tasks: OnceLock<ScheduledTaskGroup>,
     transaction_metrics_blocking: OnceLock<BlockingExecutor>,
     operation_queue_budget: ResourceBudget,
+    operation_admission_open: AtomicBool,
+    operation_owner_cancellation: OnceLock<tokio_util::sync::CancellationToken>,
 }
 
 fn standalone_transaction_resource_budget(broker_config: &BrokerConfig) -> Result<ResourceBudget> {
@@ -209,6 +217,8 @@ where
             transaction_metrics_flush_tasks: OnceLock::new(),
             transaction_metrics_blocking: OnceLock::new(),
             operation_queue_budget,
+            operation_admission_open: AtomicBool::new(true),
+            operation_owner_cancellation: OnceLock::new(),
         })
     }
 
@@ -220,8 +230,9 @@ where
         let scheduled_tasks = service_context.scheduled_tasks("transaction-metrics-flush");
         let metrics = self.transaction_metrics.clone();
         scheduled_tasks
-            .schedule_fixed_rate_no_overlap(
+            .schedule_bounded(
                 ScheduledTaskConfig::fixed_rate_no_overlap("broker.transaction-metrics.flush", FLUSH_INTERVAL),
+                ScheduledExecutionPolicy::serial(MissedTickPolicy::Skip),
                 move || {
                     let blocking = blocking.clone();
                     let metrics = metrics.clone();
@@ -252,6 +263,81 @@ where
             .transactional_op_batch_service
             .get_or_init(|| TransactionalOpBatchService::new(self.broker_config.clone(), weak_this));
         service.start().await
+    }
+
+    pub(crate) async fn start_transactional_op_batch_service_with_owner(
+        &self,
+        weak_this: Weak<Self>,
+        parent: TaskGroup,
+    ) -> crate::broker_error::BrokerResult<()> {
+        let _ = self.operation_owner_cancellation.set(parent.cancellation_token());
+        let service = self.transactional_op_batch_service.get_or_init(|| {
+            TransactionalOpBatchService::new_with_task_group(self.broker_config.clone(), weak_this, parent)
+        });
+        service.start().await
+    }
+
+    pub(crate) async fn drain_operation_queues(&self) {
+        let queues: Vec<_> = {
+            // Creation checks the admission flag under this same map lock.
+            // Existing handles reject publication once their queue is closed.
+            let contexts = self.delete_context.lock().await;
+            self.operation_admission_open.store(false, Ordering::Release);
+            contexts
+                .iter()
+                .map(|(queue, context)| {
+                    context.close_admission();
+                    (*queue, Arc::clone(context))
+                })
+                .collect()
+        };
+        futures::stream::iter(queues)
+            .map(|(queue, context)| async move {
+                loop {
+                    let before = context.get_total_size();
+                    if before == 0 {
+                        break;
+                    }
+                    // Final partial batches bypass the periodic age/size filter.
+                    if let Some(batch) = context
+                        .take_batch(self.broker_config.transaction_op_msg_max_size as usize)
+                        .await
+                    {
+                        self.flush_op_batch(queue, batch).await;
+                    }
+                    if context.get_total_size() >= before {
+                        // A failed attempt retains its original
+                        // payload and evidence; shutdown must report it.
+                        break;
+                    }
+                }
+            })
+            .buffer_unordered(MAX_CONCURRENT_OP_WRITES)
+            .collect::<Vec<_>>()
+            .await;
+        if !self.operation_drain_complete() {
+            warn!("Transaction operation shutdown retains unfinished reservations");
+        }
+    }
+
+    pub(crate) fn operation_drain_complete(&self) -> bool {
+        !self.operation_admission_open.load(Ordering::Acquire)
+            && self.operation_queue_budget.snapshot().current_count == 0
+    }
+
+    pub(crate) async fn batch_shutdown_report(&self) -> Option<rocketmq_runtime::ShutdownReport> {
+        match self.transactional_op_batch_service.get() {
+            Some(service) => service.shutdown_report().await,
+            None => None,
+        }
+    }
+
+    fn accepts_operations(&self) -> bool {
+        self.operation_admission_open.load(Ordering::Acquire)
+            && !self
+                .operation_owner_cancellation
+                .get()
+                .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
     }
 
     async fn get_half_message_by_offset(&self, offset: i64) -> OperationResult {
@@ -308,6 +394,10 @@ where
         let Some(batch) = context.try_take_batch(self.broker_config.transaction_op_msg_max_size as usize) else {
             return;
         };
+        self.flush_op_batch(queue_id, batch).await;
+    }
+
+    async fn flush_op_batch(&self, queue_id: i32, batch: OperationBatch<'_>) {
         let mut message = Message::builder()
             .topic(TransactionalMessageUtil::build_op_topic())
             .tags(TransactionalMessageUtil::REMOVE_TAG)
@@ -1181,6 +1271,9 @@ where
         }
         let context = {
             let mut delete_context = self.delete_context.lock().await;
+            if !self.accepts_operations() {
+                return false;
+            }
             let mq_context = match delete_context.entry(queue_id) {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
@@ -1216,6 +1309,9 @@ where
             error!("Transactional op batch service not initialized");
         }
 
+        if !self.accepts_operations() {
+            return false;
+        }
         self.flush_op_queue(queue_id, &context).await;
         context.push(data).is_ok()
     }
@@ -1253,6 +1349,7 @@ where
         if let Some(batch_service) = self.transactional_op_batch_service.get() {
             batch_service.shutdown().await
         }
+        self.drain_operation_queues().await;
         if let Some(flush_tasks) = self.transaction_metrics_flush_tasks.get() {
             let report = flush_tasks.shutdown(Duration::from_secs(5)).await;
             if !report.is_healthy() {
@@ -1312,6 +1409,224 @@ fn to_message_ext_broker_inner(topic_config: &TopicConfig, msg_ext: &MessageExt)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_store::BrokerReadStore;
+
+    async fn transaction_runtime() -> (tempfile::TempDir, crate::broker_runtime::BrokerRuntime) {
+        let directory = tempfile::TempDir::new().unwrap();
+        let root = directory.path().to_string_lossy().into_owned();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let ha_port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let mut runtime = crate::broker_runtime::BrokerRuntime::new(
+            Arc::new(BrokerConfig {
+                store_path_root_dir: root.clone().into(),
+                auth_config_path: directory.path().join("auth.json").to_string_lossy().into_owned().into(),
+                transaction_op_batch_interval: 3_600_000,
+                ..BrokerConfig::default()
+            }),
+            Arc::new(rocketmq_store::MessageStoreConfig {
+                store_path_root_dir: root.into(),
+                ha_listen_port: usize::from(ha_port),
+                mapped_file_size_commit_log: 1024 * 1024,
+                ..Default::default()
+            }),
+        );
+        runtime.initialize().await.unwrap();
+        (directory, runtime)
+    }
+
+    #[tokio::test]
+    async fn transaction_owner_shutdown_waits_for_batch_and_writes_final_partial_operations() {
+        let (_directory, mut runtime) = transaction_runtime().await;
+        runtime.start_message_store_for_test().await.unwrap();
+        let service = runtime
+            .runtime_state_mut()
+            .transactional_message_service()
+            .unwrap()
+            .clone();
+        service.transaction_metrics.add_and_get("drain-test-topic", 1);
+        let message = MessageExt {
+            queue_offset: 42,
+            ..Default::default()
+        };
+        assert!(service.delete_prepare_message(&message).await);
+        let context = service.delete_context.lock().await.get(&0).unwrap().clone();
+        let in_flight = context.try_take_batch(4096).unwrap();
+        let parent = service
+            .transactional_op_batch_service
+            .get()
+            .unwrap()
+            .parent_for_test
+            .as_ref()
+            .unwrap();
+        let before = runtime
+            .runtime_state_mut()
+            .message_store()
+            .unwrap()
+            .get_max_phy_offset();
+        let shutdown = parent.shutdown(Duration::from_secs(5));
+        tokio::pin!(shutdown);
+        assert!(futures::poll!(&mut shutdown).is_pending());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while service.operation_admission_open.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(futures::poll!(&mut shutdown).is_pending());
+        assert_eq!(service.operation_queue_budget.snapshot().current_count, 1);
+        assert!(!service.operation_drain_complete());
+        assert!(!service.delete_prepare_message(&message).await);
+        assert!(context.push("43,".into()).is_err());
+        let other_queue = MessageExt {
+            queue_id: 1,
+            ..message.clone()
+        };
+        assert!(!service.delete_prepare_message(&other_queue).await);
+        // Releasing an interrupted attempt permits the owned final drain to
+        // retry its original body against the real, still-running Store.
+        drop(in_flight);
+        let report = shutdown.await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(report.remaining_tasks.is_empty());
+        assert!(service.operation_drain_complete());
+        assert_eq!(context.get_total_size(), 0);
+        let stored = runtime
+            .runtime_state_mut()
+            .message_store()
+            .unwrap()
+            .look_message_by_offset(before)
+            .unwrap();
+        assert_eq!(stored.topic(), TransactionalMessageUtil::build_op_topic());
+        assert_eq!(stored.get_body().unwrap().as_ref(), b"42,");
+        let report = runtime.shutdown_basic_service_with_report().await;
+        assert!(report.transaction_services.healthy, "{report:?}");
+        let persisted = TransactionMetrics::open(get_transaction_metrics_path(
+            service.broker_config.store_path_root_dir.as_str(),
+        ))
+        .unwrap();
+        assert_eq!(persisted.count("drain-test-topic"), 1);
+    }
+
+    #[tokio::test]
+    async fn transaction_check_owner_cancels_wait_and_preserves_role_restart() {
+        let (_directory, mut runtime) = transaction_runtime().await;
+        let service = runtime
+            .runtime_state_mut()
+            .transactional_message_service()
+            .unwrap()
+            .clone();
+        let listener = runtime
+            .runtime_state_mut()
+            .transactional_message_check_listener()
+            .as_ref()
+            .unwrap()
+            .clone();
+        let context = rocketmq_runtime::RuntimeContext::from_current("transaction-check-owner-test");
+        let owner = context.service_context("transaction-check");
+        let check = crate::transaction::transactional_message_check_service::TransactionalMessageCheckService::new_with_task_group(
+            Arc::new(BrokerConfig { transaction_check_interval: 3_600_000, ..BrokerConfig::default() }),
+            service,
+            listener,
+            owner.task_group().clone(),
+        );
+        check.start().await.unwrap();
+        let report = check.shutdown_with_report().await.unwrap();
+        assert!(report.is_healthy(), "{}", report.to_json());
+        check.start().await.unwrap();
+        let report = owner.task_group().shutdown(Duration::from_secs(2)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(report.children.len(), 1);
+        assert_eq!(report.children[0].cancelled, 1, "{}", report.to_json());
+        assert!(report.children[0].remaining_tasks.is_empty());
+        assert!(check.start().await.is_err());
+        runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn transaction_shutdown_reports_append_failure_and_retains_retry_payload() {
+        let (_directory, mut runtime) = transaction_runtime().await;
+        runtime.start_message_store_for_test().await.unwrap();
+        let service = runtime
+            .runtime_state_mut()
+            .transactional_message_service()
+            .unwrap()
+            .clone();
+        let message = MessageExt {
+            queue_offset: 42,
+            ..Default::default()
+        };
+        assert!(service.delete_prepare_message(&message).await);
+        // Exercise the real Store's failed-write path rather than replacing
+        // the append result at the transaction boundary.
+        runtime
+            .runtime_state_mut()
+            .message_store()
+            .unwrap()
+            .get_running_flags()
+            .get_and_make_not_writeable();
+        let report = runtime.shutdown_basic_service_with_report().await;
+        assert!(!report.transaction_services.healthy, "{report:?}");
+        assert!(!service.operation_drain_complete());
+        assert!(runtime.runtime_state_mut().transactional_message_service().is_some());
+        assert!(runtime.runtime_state_mut().message_store().is_some());
+        assert_eq!(service.operation_queue_budget.snapshot().current_count, 1);
+        let context = service.delete_context.lock().await.get(&0).unwrap().clone();
+        let pending = context.try_take_batch(4096).unwrap();
+        assert_eq!(pending.body().as_ref(), b"42,");
+        drop(pending);
+        assert!(!service.delete_prepare_message(&message).await);
+
+        // A later confirmed append consumes the retained body and reservation.
+        runtime
+            .runtime_state_mut()
+            .message_store()
+            .unwrap()
+            .get_running_flags()
+            .get_and_make_writeable();
+        service.drain_operation_queues().await;
+        assert!(service.operation_drain_complete());
+        let report = runtime.shutdown_basic_service_with_report().await;
+        assert!(report.transaction_services.healthy, "{report:?}");
+    }
+
+    #[tokio::test]
+    async fn transaction_owner_deadline_retains_an_in_flight_partial_batch() {
+        let (_directory, mut runtime) = transaction_runtime().await;
+        let service = runtime
+            .runtime_state_mut()
+            .transactional_message_service()
+            .unwrap()
+            .clone();
+        assert!(
+            service
+                .delete_prepare_message(&MessageExt {
+                    queue_offset: 42,
+                    ..Default::default()
+                })
+                .await
+        );
+        let context = service.delete_context.lock().await.get(&0).unwrap().clone();
+        let in_flight = context.try_take_batch(4096).unwrap();
+        let parent = service
+            .transactional_op_batch_service
+            .get()
+            .unwrap()
+            .parent_for_test
+            .as_ref()
+            .unwrap();
+        let report = parent.shutdown(Duration::ZERO).await;
+        assert!(!report.is_healthy(), "{}", report.to_json());
+        assert_eq!(service.operation_queue_budget.snapshot().current_count, 1);
+        assert!(!service.operation_drain_complete());
+        assert!(!service.delete_prepare_message(&MessageExt::default()).await);
+        drop(in_flight);
+        runtime.start_message_store_for_test().await.unwrap();
+        service.drain_operation_queues().await;
+        assert!(service.operation_drain_complete());
+        runtime.shutdown().await;
+    }
 
     #[tokio::test]
     async fn transaction_scan_preserves_both_checkpoints_on_half_or_op_read_error() {
