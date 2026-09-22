@@ -34,6 +34,7 @@ pub enum FocusArea {
 }
 
 impl FocusArea {
+    /// Returns the label rendered for this focus area.
     pub fn label(self) -> &'static str {
         match self {
             Self::Namesrv => "NameServer",
@@ -72,6 +73,7 @@ pub enum CommandExecutionState {
 }
 
 impl CommandExecutionState {
+    /// Returns the status label rendered for the current execution state.
     pub fn label(&self) -> String {
         match self {
             Self::Idle => "idle".to_string(),
@@ -83,6 +85,7 @@ impl CommandExecutionState {
         }
     }
 
+    /// Returns the execution identifier for a non-idle state.
     pub fn execution_id(&self) -> Option<u64> {
         match self {
             Self::Idle => None,
@@ -111,6 +114,7 @@ pub struct CommandFormState {
 }
 
 impl CommandFormState {
+    /// Creates form state initialized from a command specification.
     pub fn for_command(command: &CommandSpec) -> Self {
         let values = command
             .args
@@ -126,30 +130,37 @@ impl CommandFormState {
         }
     }
 
+    /// Returns the command identifier this form represents.
     pub fn command_id(&self) -> &str {
         &self.command_id
     }
 
+    /// Returns the index of the focused argument.
     pub fn focused_arg(&self) -> usize {
         self.focused_arg
     }
 
+    /// Returns validation errors keyed by argument name.
     pub fn validation_errors(&self) -> &BTreeMap<String, String> {
         &self.validation_errors
     }
 
+    /// Returns whether validation has recorded any errors.
     pub fn has_errors(&self) -> bool {
         !self.validation_errors.is_empty()
     }
 
+    /// Returns whether any argument value has been edited.
     pub fn dirty(&self) -> bool {
         self.dirty
     }
 
+    /// Returns the unnormalized value for an argument.
     pub fn raw_value(&self, name: &str) -> Option<&str> {
         self.values.get(name).map(String::as_str)
     }
 
+    /// Replaces a known argument value and clears its validation error.
     pub fn set_value(&mut self, name: &str, value: String) {
         if let Some(slot) = self.values.get_mut(name) {
             *slot = value;
@@ -158,20 +169,24 @@ impl CommandFormState {
         }
     }
 
+    /// Returns the specification for the focused argument.
     pub fn current_arg<'a>(&self, command: &'a CommandSpec) -> Option<&'a ArgSpec> {
         command.args.get(self.focused_arg)
     }
 
+    /// Moves focus to the next argument without passing the final argument.
     pub fn focus_next_arg(&mut self, command: &CommandSpec) {
         if !command.args.is_empty() {
             self.focused_arg = (self.focused_arg + 1).min(command.args.len() - 1);
         }
     }
 
+    /// Moves focus to the previous argument with saturation at the first.
     pub fn focus_previous_arg(&mut self) {
         self.focused_arg = self.focused_arg.saturating_sub(1);
     }
 
+    /// Appends a character to the focused text-compatible argument.
     pub fn append_to_current(&mut self, command: &CommandSpec, value: char) {
         let Some(arg) = self.current_arg(command) else {
             return;
@@ -184,6 +199,7 @@ impl CommandFormState {
         self.validation_errors.remove(arg.name);
     }
 
+    /// Removes the last character from the focused argument.
     pub fn backspace_current(&mut self, command: &CommandSpec) {
         let Some(arg) = self.current_arg(command) else {
             return;
@@ -195,6 +211,7 @@ impl CommandFormState {
         }
     }
 
+    /// Toggles a focused Boolean argument or inserts a space into a text argument.
     pub fn toggle_bool_current(&mut self, command: &CommandSpec) {
         let Some(arg) = self.current_arg(command) else {
             return;
@@ -207,6 +224,7 @@ impl CommandFormState {
         self.set_value(arg.name, (!current).to_string());
     }
 
+    /// Selects the next or previous value for a focused enum argument.
     pub fn cycle_enum_current(&mut self, command: &CommandSpec, reverse: bool) {
         let Some(arg) = self.current_arg(command) else {
             return;
@@ -228,6 +246,7 @@ impl CommandFormState {
         self.set_value(arg.name, values[next].to_string());
     }
 
+    /// Validates all form values against the command specification.
     pub fn validate_for(&mut self, command: &CommandSpec) -> bool {
         self.validation_errors.clear();
 
@@ -277,6 +296,11 @@ impl CommandFormState {
         self.validation_errors.is_empty()
     }
 
+    /// Reads a required argument and trims surrounding whitespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for a missing or blank value.
     pub fn required_string(&self, name: &str) -> CanonicalResult<String> {
         self.raw_value(name)
             .map(str::trim)
@@ -285,6 +309,7 @@ impl CommandFormState {
             .ok_or_else(|| crate::errors::argument_invalid(format!("{name} is required")))
     }
 
+    /// Reads an optional argument and removes blank values.
     pub fn optional_string(&self, name: &str) -> Option<String> {
         self.raw_value(name)
             .map(str::trim)
@@ -292,10 +317,20 @@ impl CommandFormState {
             .map(ToOwned::to_owned)
     }
 
+    /// Reads a required enum argument as its catalog spelling.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for a missing or blank value.
     pub fn enum_string(&self, name: &str) -> CanonicalResult<String> {
         self.required_string(name)
     }
 
+    /// Parses a required Boolean argument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error unless the value is `true` or `false`.
     pub fn bool_value(&self, name: &str) -> CanonicalResult<bool> {
         let value = self.required_string(name)?;
         value
@@ -303,6 +338,11 @@ impl CommandFormState {
             .map_err(|error| crate::errors::argument_invalid(format!("{name} must be true or false: {error}")))
     }
 
+    /// Parses a required signed 64-bit integer argument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for a missing or invalid `i64`.
     pub fn number_i64(&self, name: &str) -> CanonicalResult<i64> {
         let value = self.required_string(name)?;
         value
@@ -310,6 +350,11 @@ impl CommandFormState {
             .map_err(|error| crate::errors::argument_invalid(format!("{name} must be a signed integer: {error}")))
     }
 
+    /// Parses an optional signed 64-bit integer argument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for an invalid nonblank `i64`.
     pub fn optional_i64(&self, name: &str) -> CanonicalResult<Option<i64>> {
         self.optional_string(name)
             .map(|value| {
@@ -320,12 +365,22 @@ impl CommandFormState {
             .transpose()
     }
 
+    /// Parses a required signed 32-bit integer argument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for a missing, invalid, or out-of-range value.
     pub fn number_i32(&self, name: &str) -> CanonicalResult<i32> {
         let value = self.number_i64(name)?;
         i32::try_from(value)
             .map_err(|error| crate::errors::argument_invalid(format!("{name} is out of range for i32: {error}")))
     }
 
+    /// Parses an optional signed 32-bit integer argument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for an invalid or out-of-range nonblank value.
     pub fn optional_i32(&self, name: &str) -> CanonicalResult<Option<i32>> {
         self.optional_i64(name)?
             .map(|value| {
@@ -336,6 +391,11 @@ impl CommandFormState {
             .transpose()
     }
 
+    /// Parses a required unsigned 64-bit integer argument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for a missing or invalid `u64`.
     pub fn number_u64(&self, name: &str) -> CanonicalResult<u64> {
         let value = self.required_string(name)?;
         value
@@ -343,12 +403,22 @@ impl CommandFormState {
             .map_err(|error| crate::errors::argument_invalid(format!("{name} must be an unsigned integer: {error}")))
     }
 
+    /// Parses a required unsigned 32-bit integer argument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for a missing, invalid, or out-of-range value.
     pub fn number_u32(&self, name: &str) -> CanonicalResult<u32> {
         let value = self.number_u64(name)?;
         u32::try_from(value)
             .map_err(|error| crate::errors::argument_invalid(format!("{name} is out of range for u32: {error}")))
     }
 
+    /// Parses an optional unsigned 32-bit integer argument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for an invalid or out-of-range nonblank value.
     pub fn optional_u32(&self, name: &str) -> CanonicalResult<Option<u32>> {
         self.optional_string(name)
             .map(|value| {
@@ -362,10 +432,20 @@ impl CommandFormState {
             .transpose()
     }
 
+    /// Parses a required millisecond timestamp as an unsigned integer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for a missing or invalid `u64`.
     pub fn timestamp_millis(&self, name: &str) -> CanonicalResult<u64> {
         self.number_u64(name)
     }
 
+    /// Parses a required semicolon- or newline-delimited `key=value` map.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for a missing or malformed `key=value` entry.
     pub fn key_value_map(&self, name: &str) -> CanonicalResult<BTreeMap<String, String>> {
         let value = self.required_string(name)?;
         parse_key_value_map(&value)
@@ -397,6 +477,11 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Creates application state from the static command catalog.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the static command catalog is empty.
     pub fn new(namesrv_addr: Option<&str>) -> Self {
         let commands = command_catalog();
         let form = CommandFormState::for_command(&commands[0]);
@@ -424,26 +509,32 @@ impl AppState {
         state
     }
 
+    /// Returns the complete command catalog.
     pub fn commands(&self) -> &[CommandSpec] {
         &self.commands
     }
 
+    /// Returns the currently selected command.
     pub fn selected_command(&self) -> &CommandSpec {
         &self.commands[self.selected_command_index]
     }
 
+    /// Returns the catalog index of the selected command.
     pub fn selected_command_index(&self) -> usize {
         self.selected_command_index
     }
 
+    /// Returns the current animation tick.
     pub fn animation_tick(&self) -> u64 {
         self.animation_tick
     }
 
+    /// Advances the animation tick with wrapping arithmetic.
     pub fn advance_animation(&mut self) {
         self.animation_tick = self.animation_tick.wrapping_add(1);
     }
 
+    /// Returns catalog indices for commands visible under the current filter.
     pub fn visible_command_indices(&self) -> Vec<usize> {
         self.visible_tree_items()
             .into_iter()
@@ -454,6 +545,7 @@ impl AppState {
             .collect()
     }
 
+    /// Builds the visible category and command tree for the current filter.
     pub fn visible_tree_items(&self) -> Vec<CommandTreeItem> {
         let search_active = !self.search.trim().is_empty();
         let mut items = Vec::new();
@@ -478,26 +570,32 @@ impl AppState {
         items
     }
 
+    /// Returns the cursor position in the visible command tree.
     pub fn tree_cursor(&self) -> usize {
         self.tree_cursor
     }
 
+    /// Returns the visible tree item under the cursor.
     pub fn focused_tree_item(&self) -> Option<CommandTreeItem> {
         self.visible_tree_items().get(self.tree_cursor).copied()
     }
 
+    /// Returns whether a command category is collapsed.
     pub fn is_category_collapsed(&self, category: CommandCategory) -> bool {
         self.collapsed_categories.contains(&category)
     }
 
+    /// Moves the tree cursor to the next visible item.
     pub fn select_next_tree_item(&mut self) {
         self.move_tree_cursor(1);
     }
 
+    /// Moves the tree cursor to the previous visible item.
     pub fn select_previous_tree_item(&mut self) {
         self.move_tree_cursor(-1);
     }
 
+    /// Toggles the collapsed state of the focused category.
     pub fn toggle_focused_tree_category(&mut self) {
         let Some(category) = self.focused_tree_category() else {
             return;
@@ -508,6 +606,7 @@ impl AppState {
         self.ensure_tree_cursor_valid();
     }
 
+    /// Collapses the category containing the focused tree item.
     pub fn collapse_focused_tree_category(&mut self) {
         if let Some(category) = self.focused_tree_category() {
             self.collapsed_categories.insert(category);
@@ -515,6 +614,7 @@ impl AppState {
         }
     }
 
+    /// Expands the category containing the focused tree item.
     pub fn expand_focused_tree_category(&mut self) {
         if let Some(category) = self.focused_tree_category() {
             self.collapsed_categories.remove(&category);
@@ -522,6 +622,7 @@ impl AppState {
         }
     }
 
+    /// Returns the category containing the focused tree item.
     pub fn focused_tree_category(&self) -> Option<CommandCategory> {
         match self.focused_tree_item()? {
             CommandTreeItem::Category(category) => Some(category),
@@ -529,6 +630,7 @@ impl AppState {
         }
     }
 
+    /// Returns the selected command's position among visible commands.
     pub fn selected_visible_position(&self) -> Option<usize> {
         self.commands.get(self.selected_command_index)?;
         self.visible_command_indices()
@@ -536,33 +638,39 @@ impl AppState {
             .position(|index| index == self.selected_command_index)
     }
 
+    /// Allocates the next local execution identifier.
     pub fn next_execution_id(&mut self) -> u64 {
         let id = self.next_execution_id;
         self.next_execution_id += 1;
         id
     }
 
+    /// Replaces the command filter and realigns the visible selection.
     pub fn set_search(&mut self, search: String) {
         self.search = search;
         self.ensure_tree_cursor_valid();
         self.ensure_selected_visible();
     }
 
+    /// Selects the command at a visible command position when it exists.
     pub fn select_visible_command_at(&mut self, visible_position: usize) {
         if let Some(index) = self.visible_command_indices().get(visible_position).copied() {
             self.select_command_index(index);
         }
     }
 
+    /// Restores the selected command's form to its catalog defaults.
     pub fn reset_form_for_selected_command(&mut self) {
         self.form = CommandFormState::for_command(self.selected_command());
     }
 
+    /// Validates the selected command's current form.
     pub fn validate_selected_form(&mut self) -> bool {
         let command = self.selected_command().clone();
         self.form.validate_for(&command)
     }
 
+    /// Returns the confirmation prompt required by the selected command.
     pub fn confirmation_prompt(&self) -> Option<String> {
         let command = self.selected_command();
         command.expected_confirmation(&self.form).map(|expected| {

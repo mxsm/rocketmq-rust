@@ -20,6 +20,7 @@ use super::CommandSpec;
 use super::ResultViewKind;
 use super::RiskLevel;
 
+/// Builds the complete admin command catalog in display order.
 pub fn command_catalog() -> Vec<CommandSpec> {
     let mut commands = Vec::new();
     topic_commands(&mut commands);

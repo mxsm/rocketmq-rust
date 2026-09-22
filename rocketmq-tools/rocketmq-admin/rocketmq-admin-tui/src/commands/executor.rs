@@ -28,6 +28,12 @@ use crate::view_model::CommandResultViewModel;
 
 type CommandExecutionFuture<'a> = Pin<Box<dyn Future<Output = CanonicalResult<CommandResultViewModel>> + 'a>>;
 
+/// Dispatches a catalog command and reports progress through the supplied callback.
+///
+/// # Errors
+///
+/// The returned future errors on invalid arguments, unknown command IDs, or
+/// admin operation failure.
 pub fn execute_command_with_progress<'a, F>(
     facade: &'a TuiAdminFacade,
     spec: &'a CommandSpec,
