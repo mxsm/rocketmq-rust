@@ -518,3 +518,66 @@ pub trait DashboardAdmin: Send + Sync {
         request: &'a DashboardDirectConsumeRequest,
     ) -> AdminFuture<'a, AdminMutationResult>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CUSTOM_POLICY_TYPE: &str = DashboardAclPolicyType::Custom.as_str();
+
+    fn delete_request(subject: &str, resource: &str) -> DashboardAclEntryDeleteRequest {
+        DashboardAclEntryDeleteRequest {
+            selector: TargetSelector::default(),
+            subject: subject.to_string(),
+            policy_type: DashboardAclPolicyType::Custom,
+            resource: resource.to_string(),
+        }
+    }
+
+    #[test]
+    fn acl_entry_delete_validation_trims_only_for_emptiness() {
+        assert!(delete_request("subject-a", "Topic:orders").validate().is_ok());
+        assert!(delete_request(" subject-a ", " Topic:orders ").validate().is_ok());
+
+        for (subject, resource) in [
+            ("", "Topic:orders"),
+            ("   ", "Topic:orders"),
+            ("subject-a", ""),
+            ("subject-a", "   "),
+        ] {
+            let error = delete_request(subject, resource).validate().unwrap_err();
+            assert_eq!(error.descriptor().code().as_str(), "core.argument.invalid");
+            assert_eq!(error.field(), Some("resource"));
+        }
+    }
+
+    #[test]
+    fn acl_policy_type_strings_preserve_the_wire_spelling() {
+        assert_eq!(CUSTOM_POLICY_TYPE, "Custom");
+        assert_eq!(DashboardAclPolicyType::Default.as_str(), "Default");
+    }
+
+    #[test]
+    fn acl_user_mutation_debug_redacts_password_when_nested() {
+        let request = DashboardAclUserMutationRequest {
+            selector: TargetSelector::default(),
+            username: "user-a".to_string(),
+            password: "secret-value-42".to_string(),
+            user_type: "Normal".to_string(),
+            user_status: Some("Enable".to_string()),
+        };
+
+        for debug in [format!("{request:?}"), format!("{:?}", vec![request])] {
+            assert!(!debug.contains("secret-value-42"));
+            assert!(debug.contains("<redacted>"));
+        }
+    }
+
+    #[test]
+    fn target_selector_defaults_to_no_target() {
+        let selector = TargetSelector::default();
+
+        assert_eq!(selector.cluster_name, None);
+        assert_eq!(selector.broker_name, None);
+    }
+}
