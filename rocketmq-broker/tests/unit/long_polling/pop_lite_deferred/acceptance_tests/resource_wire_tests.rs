@@ -44,6 +44,9 @@ fn capacity_failure(rejection: PopLiteDeferredPrepareRejection) -> CapacityFailu
         PopLiteDeferredPrepareRejection::Admission(DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_)) => {
             CapacityFailure::ParentCapacity
         }
+        PopLiteDeferredPrepareRejection::Admission(DeferredAdmissionAcquireOutcome::Closed) => {
+            panic!("deferred admission unexpectedly closed")
+        }
         PopLiteDeferredPrepareRejection::Admission(DeferredAdmissionAcquireOutcome::Acquired(permit)) => {
             drop(permit);
             panic!("PopLite capacity preparation must not return an acquired permit as an error")

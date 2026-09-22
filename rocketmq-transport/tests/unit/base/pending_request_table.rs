@@ -52,6 +52,28 @@ fn response(completion: PendingRequestCompletion) -> RemotingCommand {
 }
 
 #[tokio::test]
+async fn closed_dynamic_parent_is_reported_as_session_closed_without_capacity_rejection() {
+    use rocketmq_runtime::{BudgetLimit, FullPolicy, ResourceBudgetTree};
+    let tree = ResourceBudgetTree::new("process", BudgetLimit::new(8, 800, FullPolicy::Reject)).unwrap();
+    let key = tree
+        .root()
+        .register_dynamic_child("session", BudgetLimit::new(4, 400, FullPolicy::Reject))
+        .unwrap();
+    let table =
+        PendingRequestTable::try_with_limits_and_budget(PendingRequestLimits::default(), &key.budget()).unwrap();
+    key.close();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    assert!(matches!(
+        table.register_with_bytes(1, RequestDeadline::from_timeout_millis(3_000), 8, sender),
+        PendingRegistrationOutcome::SessionClosed
+    ));
+    assert!(receiver.await.is_err());
+    assert_eq!(table.usage().rejected_count, 0);
+    assert_eq!(table.usage().rejected_bytes, 0);
+    assert_eq!(tree.root().snapshot().current_count, 0);
+}
+
+#[tokio::test]
 async fn response_completion_is_exactly_once_and_releases_the_reservation() {
     let table = PendingRequestTable::new();
     let (sender, receiver) = tokio::sync::oneshot::channel();

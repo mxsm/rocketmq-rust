@@ -145,6 +145,7 @@ pub use resource_budget::BudgetClass;
 pub use resource_budget::BudgetDimension;
 pub use resource_budget::BudgetLimit;
 pub use resource_budget::BudgetRejection;
+pub use resource_budget::BudgetRejectionReason;
 pub use resource_budget::BudgetSnapshot;
 pub use resource_budget::BudgetedItem;
 pub use resource_budget::BudgetedQueue;

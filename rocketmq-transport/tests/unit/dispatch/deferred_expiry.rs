@@ -87,6 +87,9 @@ impl PartsFixture {
         let retained = DeferredRegistry::<()>::try_retained_size(DeferredRetainedSizeParts::new(0))
             .expect("expiry acceptance retained size");
         let permit = match admission.try_reserve(retained) {
+            crate::dispatch::DeferredAdmissionAcquireOutcome::Closed => {
+                panic!("deferred admission unexpectedly closed")
+            }
             crate::dispatch::DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
             crate::dispatch::DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => {
                 panic!("expiry acceptance waiter capacity was unexpectedly exhausted")

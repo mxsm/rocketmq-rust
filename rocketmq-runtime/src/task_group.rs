@@ -228,7 +228,9 @@ struct TaskGroupInner {
     cancellation_token: CancellationToken,
     tracker: TaskTracker,
     registry: Arc<ActiveTaskRegistry>,
-    parent_registry: Option<std::sync::Weak<ActiveTaskRegistry>>,
+    // A live descendant retains the entire ownership path. The parent's
+    // registry points back weakly, so dropping an idle subtree releases it.
+    parent: Option<Arc<TaskGroupInner>>,
     next_group_id: Arc<AtomicU64>,
     next_task_id: AtomicU64,
     completed: AtomicUsize,
@@ -478,7 +480,7 @@ impl TaskGroup {
                 self.inner.runtime.clone(),
                 self.inner.cancellation_token.child_token(),
                 self.inner.next_group_id.clone(),
-                Some(Arc::downgrade(&self.inner.registry)),
+                Some(self.inner.clone()),
             )),
         }
     }
@@ -897,14 +899,12 @@ impl TaskGroup {
             .shutdown
             .deadline()
             .unwrap_or_else(|| ShutdownDeadline::after(Duration::ZERO));
-        let children = {
-            let _spawn_guard = self.inner.spawn_gate.lock();
-            self.inner.lifecycle.store(STATE_CLOSING, Ordering::Release);
-            self.inner.tracker.close();
-            self.inner.cancellation_token.cancel();
-            self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
-            self.inner.registry.components_snapshot()
-        };
+        // Retain the entire accepted subtree before propagating cancellation.
+        // A fast-finishing leaf must not erase its ancestors and outcomes while
+        // shutdown is still walking the tree.
+        let _descendants = self.close_admission_tree();
+        self.inner.cancellation_token.cancel();
+        let children = self.inner.registry.components_snapshot();
         self.abort_detached_abort_on_shutdown_tasks();
 
         let child_reports = async {
@@ -953,16 +953,29 @@ impl TaskGroup {
         report
     }
 
-    fn shutdown_now_inner(&self) -> ShutdownReport {
-        let started_at = Instant::now();
+    fn close_admission_tree(&self) -> Vec<TaskGroup> {
         let children = {
             let _spawn_guard = self.inner.spawn_gate.lock();
-            self.inner.lifecycle.store(STATE_CLOSING, Ordering::Release);
+            if self.inner.lifecycle_state() != TaskGroupLifecycleState::ShutdownCompleted {
+                self.inner.lifecycle.store(STATE_CLOSING, Ordering::Release);
+                self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
+            }
             self.inner.tracker.close();
-            self.inner.cancellation_token.cancel();
-            self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
             self.inner.registry.components_snapshot()
         };
+        let mut retained = Vec::new();
+        for child in children {
+            retained.extend(child.close_admission_tree());
+            retained.push(child);
+        }
+        retained
+    }
+
+    fn shutdown_now_inner(&self) -> ShutdownReport {
+        let started_at = Instant::now();
+        let _descendants = self.close_admission_tree();
+        self.inner.cancellation_token.cancel();
+        let children = self.inner.registry.components_snapshot();
 
         let mut child_reports = Vec::with_capacity(children.len());
         for child in children {
@@ -1053,7 +1066,7 @@ impl TaskGroupInner {
         runtime: RuntimeHandle,
         cancellation_token: CancellationToken,
         next_group_id: Arc<AtomicU64>,
-        parent_registry: Option<std::sync::Weak<ActiveTaskRegistry>>,
+        parent: Option<Arc<TaskGroupInner>>,
     ) -> Self {
         Self {
             id,
@@ -1063,7 +1076,7 @@ impl TaskGroupInner {
             cancellation_token,
             tracker: TaskTracker::new(),
             registry: Arc::new(ActiveTaskRegistry::new()),
-            parent_registry,
+            parent,
             next_group_id,
             next_task_id: AtomicU64::new(1),
             completed: AtomicUsize::new(0),
@@ -1122,8 +1135,8 @@ impl TaskGroupInner {
 
 impl Drop for TaskGroupInner {
     fn drop(&mut self) {
-        if let Some(parent_registry) = self.parent_registry.as_ref().and_then(std::sync::Weak::upgrade) {
-            parent_registry.unregister_component(self.id);
+        if let Some(parent) = &self.parent {
+            parent.registry.unregister_component(self.id);
         }
     }
 }

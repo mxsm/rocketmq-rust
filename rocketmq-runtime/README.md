@@ -11,6 +11,8 @@ persistence, and shutdown diagnostics.
 
 [中文文档](README-zh_cn.md)
 
+[Unreleased API migration and contract corrections](MIGRATION.md)
+
 ## Runtime Model
 
 Production entrypoints own a `RuntimeOwner`. Libraries receive a

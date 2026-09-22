@@ -176,6 +176,8 @@ impl DeferredRetainedSize {
 /// Result of reserving bounded capacity for one deferred wait.
 #[must_use]
 pub enum DeferredAdmissionAcquireOutcome {
+    /// Admission closed when a dynamic parent generation was retired.
+    Closed,
     /// Capacity was acquired and the affine permit is returned.
     Acquired(DeferredWaitPermit),
     /// The deferred owner exhausted its waiter count.
@@ -288,13 +290,17 @@ impl DeferredAdmission {
                 permit: Some(permit),
                 retained_bytes: retained.bytes(),
             }),
+            Err(rejection) if rejection.is_closed() => DeferredAdmissionAcquireOutcome::Closed,
             Err(rejection) if rejection.exhausted_path() != self.inner.budget.path() => {
                 DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(rejection)
             }
             Err(rejection) => match rejection.dimension() {
-                BudgetDimension::Count => DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(rejection),
-                BudgetDimension::Bytes => DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(rejection),
-                BudgetDimension::Rate => DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(rejection),
+                Some(BudgetDimension::Count) => DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(rejection),
+                Some(BudgetDimension::Bytes) => {
+                    DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(rejection)
+                }
+                Some(BudgetDimension::Rate) => DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(rejection),
+                None => DeferredAdmissionAcquireOutcome::Closed,
             },
         }
     }

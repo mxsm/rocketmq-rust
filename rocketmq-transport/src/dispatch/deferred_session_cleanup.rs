@@ -894,6 +894,9 @@ mod tests {
         let response_state = Arc::clone(responder.response_state());
         let permit = match admission.try_reserve(retained) {
             crate::dispatch::DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
+            crate::dispatch::DeferredAdmissionAcquireOutcome::Closed => {
+                panic!("deferred admission unexpectedly closed")
+            }
             crate::dispatch::DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
             | crate::dispatch::DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
             | crate::dispatch::DeferredAdmissionAcquireOutcome::ParentCapacityExhausted(_) => {

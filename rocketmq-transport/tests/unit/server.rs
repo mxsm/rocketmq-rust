@@ -357,6 +357,7 @@ impl RequestProcessor for NetworkDeferredCleanupProcessor {
         let retained = DeferredRegistry::<usize>::try_retained_size(DeferredRetainedSizeParts::new(0))
             .map_err(|error| crate::error_helpers::internal_failure("size network deferred registration", error))?;
         let permit = match self.admission.try_reserve(retained) {
+            DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
             DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
             DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
             | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)
@@ -1213,9 +1214,9 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
     let disconnect_result = tokio::time::timeout(Duration::from_secs(1), &mut disconnected)
         .await
         .expect("disconnect must fail pending response promptly");
-    let disconnect_error = expect_server_request_error(disconnect_result, "disconnect cannot produce a response");
-    assert_eq!(disconnect_error.code(), TRANSPORT_SESSION_FAILED.code());
-    assert_transport_operation(&disconnect_error, "request_await_response");
+    assert!(matches!(disconnect_result, Ok(ServerRequestOutcome::SessionClosed)));
+    assert_eq!(second_sender.pending_usage().count, 0);
+    assert_eq!(second_sender.pending_usage().bytes, 0);
 
     let interrupted = first_sender.request(consumer_status_request(), Duration::from_secs(5));
     tokio::pin!(interrupted);
@@ -1264,12 +1265,7 @@ async fn server_requests_correlate_by_session_owner_and_fail_on_disconnect_and_d
     let interrupted_result = tokio::time::timeout(Duration::from_secs(1), &mut interrupted)
         .await
         .expect("same-session pending request must fail promptly");
-    let interrupted_error = expect_server_request_error(
-        interrupted_result,
-        "same-session pending request cannot survive timeout retirement",
-    );
-    assert_eq!(interrupted_error.code(), TRANSPORT_SESSION_FAILED.code());
-    assert_transport_operation(&interrupted_error, "request_await_response");
+    assert!(matches!(interrupted_result, Ok(ServerRequestOutcome::SessionClosed)));
 
     loop {
         let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
@@ -1337,10 +1333,7 @@ async fn typed_close_completes_healthily_with_a_written_pending_server_request()
         .await
         .expect("pending request close completion deadline")
         .expect("pending request task join");
-    let request_error =
-        expect_server_request_error(request_result, "session close must fail the pending response wait");
-    assert_eq!(request_error.code(), TRANSPORT_SESSION_FAILED.code());
-    assert_transport_operation(&request_error, "request_await_response");
+    assert!(matches!(request_result, Ok(ServerRequestOutcome::SessionClosed)));
     let completion = close.completion_snapshot().await;
     assert!(completion.healthy);
     assert_eq!(completion.remaining_server_outbound_leases, 0);

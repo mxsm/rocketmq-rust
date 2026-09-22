@@ -590,7 +590,8 @@ impl ServiceLifecycle {
 
     /// Executes mark failed.
     pub fn mark_failed(&self) {
-        self.inner.state.store(STATE_FAILED, Ordering::Release);
+        // All lifecycle transitions participate in the same atomic RMW order.
+        self.inner.state.swap(STATE_FAILED, Ordering::AcqRel);
         self.record_progress();
     }
 
@@ -618,10 +619,14 @@ impl ServiceLifecycle {
             deadline: ShutdownDeadline::after(self.inner.config.shutdown_timeout),
         };
         *request = Some(first);
-        let state = self.inner.state.load(Ordering::Acquire);
-        if state != STATE_FAILED && state != STATE_STOPPED {
-            self.inner.state.store(STATE_DRAINING, Ordering::Release);
-        }
+        // Failure and stop can race this request without taking its mutex.
+        // Recheck the terminal states on every compare-and-exchange attempt.
+        let _ = self
+            .inner
+            .state
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                (state != STATE_FAILED && state != STATE_STOPPED).then_some(STATE_DRAINING)
+            });
         self.record_progress();
         self.inner.shutdown_tx.send_replace(Some(first));
         first
@@ -825,6 +830,39 @@ mod tests {
         lifecycle.mark_stopped();
 
         assert_eq!(lifecycle.state(), ServiceLifecycleState::Failed);
+    }
+
+    #[test]
+    fn concurrent_shutdown_cannot_overwrite_a_terminal_state() {
+        for fail in [false, true] {
+            for _ in 0..64 {
+                let lifecycle = ServiceLifecycle::new(config(None));
+                lifecycle.mark_ready().unwrap();
+                let barrier = std::sync::Barrier::new(2);
+                std::thread::scope(|scope| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        lifecycle.request_shutdown(ShutdownReason::Internal);
+                    });
+                    barrier.wait();
+                    if fail {
+                        lifecycle.mark_failed();
+                    } else {
+                        lifecycle.mark_stopped();
+                    }
+                });
+                assert_eq!(
+                    lifecycle.state(),
+                    if fail {
+                        ServiceLifecycleState::Failed
+                    } else {
+                        ServiceLifecycleState::Stopped
+                    }
+                );
+                let first = lifecycle.shutdown_request().unwrap();
+                assert_eq!(lifecycle.request_shutdown(ShutdownReason::Signal), first);
+            }
+        }
     }
 
     #[tokio::test]

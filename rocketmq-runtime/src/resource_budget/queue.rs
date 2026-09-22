@@ -24,6 +24,7 @@ use std::time::Duration;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
+use super::budget::BudgetAdmission;
 use super::budget::BudgetRejection;
 use super::budget::PermitRebindOutcome;
 use super::budget::ResourceBudget;
@@ -200,6 +201,9 @@ impl<T> BudgetedQueue<T> {
 
     /// Attempts to push.
     pub fn try_push(&self, item: T, retained_bytes: usize, class: BudgetClass) -> QueuePushOutcome<T> {
+        // Retained permits are released inside admission; arbitrary item
+        // destructors run only after every queue and dynamic gate is unlocked.
+        let mut discarded = Vec::new();
         let _coalesce_guard = if self.inner.budget.limit().full_policy == FullPolicy::CoalesceLatest {
             Some(
                 self.inner
@@ -210,8 +214,17 @@ impl<T> BudgetedQueue<T> {
         } else {
             None
         };
-        let dropped = self.apply_age_policy();
-        match self.inner.budget.try_acquire(retained_bytes, class) {
+        let admission = match self.inner.budget.admit() {
+            Ok(admission) => admission,
+            Err(_) => {
+                return QueuePushOutcome::Rejected {
+                    item,
+                    rejection: QueuePushRejection::Closed,
+                }
+            }
+        };
+        let dropped = self.apply_age_policy(&mut discarded);
+        match admission.try_acquire(retained_bytes, class) {
             Ok(permit) => {
                 if let Some(rejected) = self.enqueue(item, permit) {
                     return rejected;
@@ -222,7 +235,7 @@ impl<T> BudgetedQueue<T> {
                     QueuePushOutcome::DroppedStale { dropped }
                 }
             }
-            Err(error) => self.handle_full(item, retained_bytes, class, error),
+            Err(error) => self.handle_full(&admission, item, retained_bytes, class, error, &mut discarded),
         }
     }
 
@@ -249,6 +262,13 @@ impl<T> BudgetedQueue<T> {
         item: T,
         mut permit: ResourcePermit,
     ) -> Result<QueuePushOutcome<T>, ForeignPermit<T>> {
+        let mut discarded = Vec::new();
+        if !permit.belongs_to_tree(&self.inner.budget) {
+            return Err(ForeignPermit {
+                item,
+                permit: Box::new(permit),
+            });
+        }
         let _coalesce_guard = if self.inner.budget.limit().full_policy == FullPolicy::CoalesceLatest {
             Some(
                 self.inner
@@ -259,9 +279,18 @@ impl<T> BudgetedQueue<T> {
         } else {
             None
         };
-        let dropped = self.apply_age_policy();
-        match permit.try_rebind(&self.inner.budget) {
-            Ok(PermitRebindOutcome::Rebound | PermitRebindOutcome::Unchanged) => {
+        let admission = match self.inner.budget.admit() {
+            Ok(admission) => admission,
+            Err(_) => {
+                return Ok(QueuePushOutcome::Rejected {
+                    item,
+                    rejection: QueuePushRejection::Closed,
+                })
+            }
+        };
+        let dropped = self.apply_age_policy(&mut discarded);
+        match permit.try_rebind_admitted(&admission) {
+            PermitRebindOutcome::Rebound | PermitRebindOutcome::Unchanged => {
                 if let Some(rejected) = self.enqueue(item, permit) {
                     return Ok(rejected);
                 }
@@ -271,13 +300,9 @@ impl<T> BudgetedQueue<T> {
                     QueuePushOutcome::DroppedStale { dropped }
                 })
             }
-            Ok(PermitRebindOutcome::Rejected(rejection)) => Ok(QueuePushOutcome::Rejected {
+            PermitRebindOutcome::Rejected(rejection) => Ok(QueuePushOutcome::Rejected {
                 item,
                 rejection: QueuePushRejection::BudgetExhausted(rejection),
-            }),
-            Err(_) => Err(ForeignPermit {
-                item,
-                permit: Box::new(permit),
             }),
         }
     }
@@ -319,7 +344,11 @@ impl<T> BudgetedQueue<T> {
         if let Some(rejection) = self.inner.budget.permanent_acquire_rejection(retained_bytes, class) {
             return QueuePushOutcome::Rejected {
                 item,
-                rejection: QueuePushRejection::BudgetExhausted(rejection),
+                rejection: if rejection.is_closed() {
+                    QueuePushRejection::Closed
+                } else {
+                    QueuePushRejection::BudgetExhausted(rejection)
+                },
             };
         }
 
@@ -346,18 +375,31 @@ impl<T> BudgetedQueue<T> {
                 };
             }
 
-            match self.inner.budget.try_acquire_waiting(retained_bytes, class) {
-                Ok(permit) => {
-                    return self.enqueue(item, permit).unwrap_or(QueuePushOutcome::Enqueued);
+            {
+                // Publish the retained item before a dynamic close can wake a
+                // receiver and allow it to conclude that the queue has drained.
+                let admission = match self.inner.budget.admit() {
+                    Ok(admission) => admission,
+                    Err(_) => {
+                        return QueuePushOutcome::Rejected {
+                            item,
+                            rejection: QueuePushRejection::Closed,
+                        }
+                    }
+                };
+                match admission.try_acquire_waiting(retained_bytes, class) {
+                    Ok(permit) => {
+                        return self.enqueue(item, permit).unwrap_or(QueuePushOutcome::Enqueued);
+                    }
+                    Err(error) if error.dimension() == Some(BudgetDimension::Rate) => {
+                        self.inner.budget.record_budget_rejection(&error);
+                        return QueuePushOutcome::Rejected {
+                            item,
+                            rejection: QueuePushRejection::BudgetExhausted(error),
+                        };
+                    }
+                    Err(_) => {}
                 }
-                Err(error) if error.dimension() == BudgetDimension::Rate => {
-                    self.inner.budget.record_budget_rejection(&error);
-                    return QueuePushOutcome::Rejected {
-                        item,
-                        rejection: QueuePushRejection::BudgetExhausted(error),
-                    };
-                }
-                Err(_) => {}
             }
 
             if waiter.is_none() {
@@ -384,7 +426,8 @@ impl<T> BudgetedQueue<T> {
 
     /// Attempts to pop budgeted.
     pub fn try_pop_budgeted(&self) -> Option<BudgetedItem<T>> {
-        self.apply_age_policy();
+        let mut discarded = Vec::new();
+        self.apply_age_policy(&mut discarded);
         let mut state = self
             .inner
             .state
@@ -417,13 +460,24 @@ impl<T> BudgetedQueue<T> {
     pub async fn recv_budgeted(&self) -> Option<BudgetedItem<T>> {
         loop {
             let notified = self.inner.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let budget_changed = self.inner.budget.capacity_notify().notified();
+            tokio::pin!(budget_changed);
+            budget_changed.as_mut().enable();
             if let Some(item) = self.try_pop_budgeted() {
                 return Some(item);
             }
             if self.is_closed() {
-                return None;
+                // An accepted producer can publish between the first pop and
+                // closure observation. Closure has now joined admission, so
+                // this final pop cannot miss a later accepted enqueue.
+                return self.try_pop_budgeted();
             }
-            notified.await;
+            tokio::select! {
+                _ = &mut notified => {},
+                _ = &mut budget_changed => {},
+            }
         }
     }
 
@@ -442,11 +496,13 @@ impl<T> BudgetedQueue<T> {
     #[must_use]
     /// Returns whether closed.
     pub fn is_closed(&self) -> bool {
-        self.inner
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .closed
+        self.inner.budget.is_closed()
+            || self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .closed
     }
 
     #[must_use]
@@ -469,6 +525,7 @@ impl<T> BudgetedQueue<T> {
     #[must_use]
     /// Returns the snapshot.
     pub fn snapshot(&self) -> QueueSnapshot {
+        let budget_closed = self.inner.budget.is_closed();
         let now = self.inner.budget.monotonic_now();
         let state = self
             .inner
@@ -490,7 +547,7 @@ impl<T> BudgetedQueue<T> {
             waiters: self.inner.metrics.waiters.load(Ordering::Acquire),
             wait_count: self.inner.metrics.wait_count.load(Ordering::Relaxed),
             deadline_exceeded_count: self.inner.metrics.deadline_exceeded_count.load(Ordering::Relaxed),
-            closed: state.closed,
+            closed: state.closed || budget_closed,
         }
     }
 
@@ -518,10 +575,12 @@ impl<T> BudgetedQueue<T> {
 
     fn handle_full(
         &self,
+        admission: &BudgetAdmission<'_>,
         item: T,
         retained_bytes: usize,
         class: BudgetClass,
         rejection: BudgetRejection,
+        discarded: &mut Vec<T>,
     ) -> QueuePushOutcome<T> {
         match self.inner.budget.limit().full_policy {
             FullPolicy::Reject | FullPolicy::WaitUntilDeadline | FullPolicy::DropStale => QueuePushOutcome::Rejected {
@@ -529,7 +588,7 @@ impl<T> BudgetedQueue<T> {
                 rejection: QueuePushRejection::BudgetExhausted(rejection),
             },
             FullPolicy::CoalesceLatest => {
-                if rejection.dimension() == BudgetDimension::Rate
+                if rejection.dimension() == Some(BudgetDimension::Rate)
                     || rejection.exhausted_path() != self.inner.budget.path()
                 {
                     return QueuePushOutcome::Rejected {
@@ -556,11 +615,11 @@ impl<T> BudgetedQueue<T> {
                         };
                     }
                     let replaced = state.items.len();
-                    state.items.clear();
+                    discarded.extend(state.items.drain(..).map(BudgetedItem::into_item));
                     replaced
                 };
                 self.inner.budget.record_coalesced(replaced);
-                let permit = match self.inner.budget.try_acquire(retained_bytes, class) {
+                let permit = match admission.try_acquire(retained_bytes, class) {
                     Ok(permit) => permit,
                     Err(retry_error) => {
                         return QueuePushOutcome::Rejected {
@@ -581,7 +640,7 @@ impl<T> BudgetedQueue<T> {
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     state.closed = true;
                     let dropped = state.items.len();
-                    state.items.clear();
+                    discarded.extend(state.items.drain(..).map(BudgetedItem::into_item));
                     dropped
                 };
                 self.inner.budget.record_dropped(dropped);
@@ -607,7 +666,7 @@ impl<T> BudgetedQueue<T> {
         count_capacity > 0 && retained_bytes <= byte_capacity
     }
 
-    fn apply_age_policy(&self) -> usize {
+    fn apply_age_policy(&self, discarded: &mut Vec<T>) -> usize {
         let Some(max_age) = self.inner.budget.limit().max_age else {
             return 0;
         };
@@ -629,7 +688,7 @@ impl<T> BudgetedQueue<T> {
         {
             state.closed = true;
             let dropped = state.items.len();
-            state.items.clear();
+            discarded.extend(state.items.drain(..).map(BudgetedItem::into_item));
             drop(state);
             self.inner.budget.record_dropped(dropped);
             self.inner.budget.record_slow_consumer_closed();
@@ -642,7 +701,9 @@ impl<T> BudgetedQueue<T> {
             .front()
             .is_some_and(|entry| now.saturating_sub(entry.enqueued_at) >= max_age)
         {
-            state.items.pop_front();
+            if let Some(item) = state.items.pop_front() {
+                discarded.push(item.into_item());
+            }
             dropped += 1;
         }
         drop(state);

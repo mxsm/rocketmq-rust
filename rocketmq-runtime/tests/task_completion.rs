@@ -23,10 +23,13 @@ use std::task::Poll;
 use std::time::Duration;
 
 use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::CriticalFailureKind;
+use rocketmq_runtime::CriticalFailureState;
 use rocketmq_runtime::FullPolicy;
 use rocketmq_runtime::ResourceBudgetTree;
 use rocketmq_runtime::ResourcePermit;
 use rocketmq_runtime::RuntimeContext;
+use rocketmq_runtime::TaskKind;
 use tokio::sync::oneshot;
 
 struct PendingResource {
@@ -213,4 +216,44 @@ async fn panic_propagation_also_releases_user_resources_once() {
     let report = group.shutdown(Duration::from_secs(1)).await;
     assert_eq!(report.panicked, 1);
     assert_eq!(report.aborted + report.completed + report.cancelled + report.leaked, 0);
+}
+
+#[tokio::test]
+async fn critical_destructor_panic_is_recorded_before_completion_before_and_after_poll() {
+    for poll_first in [false, true] {
+        let context = RuntimeContext::from_current("critical-destructor-panic");
+        let group = context.service_context("service").task_group().clone();
+        let failures = CriticalFailureState::new();
+        let (budget, dropped, mut future) = pending_resource();
+        let (started_tx, started_rx) = oneshot::channel();
+        future.started = Some(started_tx);
+        future.panic_on_drop = true;
+        let id = group
+            .spawn_critical("pending", TaskKind::Worker, failures.clone(), future)
+            .unwrap();
+        if poll_first {
+            started_rx.await.unwrap();
+        }
+        assert!(group.abort_task_and_wait(id, Duration::from_secs(1)).await);
+        assert!(dropped.load(Ordering::Acquire));
+        assert_eq!(budget.root().snapshot().current_bytes, 0);
+        assert_eq!(failures.occurrences(), 1);
+        assert_eq!(failures.handle().unwrap().kind(), CriticalFailureKind::Panicked);
+        let report = group.shutdown(Duration::from_secs(1)).await;
+        assert_eq!(report.panicked, 1);
+        assert_eq!(report.aborted + report.completed + report.cancelled + report.leaked, 0);
+    }
+}
+
+#[tokio::test]
+async fn critical_abort_without_panic_is_not_a_failure() {
+    let context = RuntimeContext::from_current("critical-abort");
+    let group = context.service_context("service").task_group().clone();
+    let failures = CriticalFailureState::new();
+    let id = group
+        .spawn_critical_service("pending", failures.clone(), std::future::pending())
+        .unwrap();
+    assert!(group.abort_task_and_wait(id, Duration::from_secs(1)).await);
+    assert_eq!(failures.occurrences(), 0);
+    assert_eq!(group.shutdown(Duration::from_secs(1)).await.aborted, 1);
 }

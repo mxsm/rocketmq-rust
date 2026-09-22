@@ -745,7 +745,12 @@ async fn service_context_parents_background_and_worker_tasks() {
     assert_eq!(background_task_group.parent_id(), Some(service.task_group().id()));
     assert_eq!(worker_task_group.parent_id(), Some(service.task_group().id()));
 
-    client.shutdown();
+    // Healthy drain requires the awaited boundary. The immediate compatibility
+    // wrapper intentionally returns before task destruction is confirmed.
+    let client_report = client.shutdown_with_report(Duration::from_secs(1)).await;
+    assert!(client_report.is_healthy(), "{client_report:?}");
+    assert_eq!(background_task_group.task_count(), 0);
+    assert_eq!(worker_task_group.task_count(), 0);
     let report = service.task_group().shutdown(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());
 }

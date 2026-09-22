@@ -55,8 +55,25 @@ fn retained(resume_bytes: usize) -> DeferredRetainedSize {
     DeferredRetainedSize::try_from_parts(DeferredRetainedSizeParts::new(resume_bytes)).expect("small retained size")
 }
 
+#[test]
+fn closed_dynamic_parent_is_not_reported_as_deferred_capacity_exhaustion() {
+    let root = process_budget("process", 8, 8_192);
+    let key = root
+        .register_dynamic_child("component", BudgetLimit::new(4, 4_096, FullPolicy::Reject))
+        .unwrap();
+    let admission = DeferredAdmission::try_new(&key.budget(), DeferredWaitLimits::new(2, 2_048)).unwrap();
+    key.close();
+    assert!(matches!(
+        admission.try_reserve(retained(8)),
+        DeferredAdmissionAcquireOutcome::Closed
+    ));
+    assert_eq!(admission.snapshot().waiting_count(), 0);
+    assert_eq!(root.snapshot().current_count, 0);
+}
+
 fn expect_acquired(admission: &DeferredAdmission, retained: DeferredRetainedSize, context: &str) -> DeferredWaitPermit {
     match admission.try_reserve(retained) {
+        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
         DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
         DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => {
             panic!("{context}: waiter capacity was unexpectedly exhausted")
@@ -72,6 +89,7 @@ fn expect_acquired(admission: &DeferredAdmission, retained: DeferredRetainedSize
 
 fn expect_waiter_capacity_exhausted(outcome: DeferredAdmissionAcquireOutcome) -> BudgetRejection {
     match outcome {
+        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
         DeferredAdmissionAcquireOutcome::Acquired(_) => {
             panic!("reservation unexpectedly acquired waiter capacity")
         }
@@ -87,6 +105,7 @@ fn expect_waiter_capacity_exhausted(outcome: DeferredAdmissionAcquireOutcome) ->
 
 fn expect_retained_byte_capacity_exhausted(outcome: DeferredAdmissionAcquireOutcome) -> BudgetRejection {
     match outcome {
+        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
         DeferredAdmissionAcquireOutcome::Acquired(_) => {
             panic!("reservation unexpectedly acquired retained-byte capacity")
         }
@@ -102,6 +121,7 @@ fn expect_retained_byte_capacity_exhausted(outcome: DeferredAdmissionAcquireOutc
 
 fn expect_parent_capacity_exhausted(outcome: DeferredAdmissionAcquireOutcome) -> BudgetRejection {
     match outcome {
+        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
         DeferredAdmissionAcquireOutcome::Acquired(_) => {
             panic!("reservation unexpectedly acquired parent capacity")
         }
@@ -261,7 +281,7 @@ fn concurrent_equal_configuration_shares_one_owner_and_different_limits_conflict
         .collect::<Vec<_>>();
     assert_eq!(configured[0].snapshot().waiting_count(), 4);
     let rejection = expect_waiter_capacity_exhausted(configured[4].try_reserve(size));
-    assert_eq!(rejection.dimension(), BudgetDimension::Count);
+    assert_eq!(rejection.dimension(), Some(BudgetDimension::Count));
     drop(permits);
 
     let conflict = DeferredAdmission::try_configure(&controller, DeferredWaitLimits::new(5, size.bytes() * 8))
@@ -283,7 +303,7 @@ fn acquire_outcomes_distinguish_local_count_local_bytes_and_parent_capacity() {
             .expect("count admission");
     let count_permit = expect_acquired(&count_admission, size, "first count permit");
     let count_rejection = expect_waiter_capacity_exhausted(count_admission.try_reserve(size));
-    assert_eq!(count_rejection.dimension(), BudgetDimension::Count);
+    assert_eq!(count_rejection.dimension(), Some(BudgetDimension::Count));
     drop(count_permit);
 
     let bytes_process = process_budget("deferred-bytes-process", 16, 1024 * 1024);
@@ -293,7 +313,7 @@ fn acquire_outcomes_distinguish_local_count_local_bytes_and_parent_capacity() {
             .expect("bytes admission");
     let bytes_permit = expect_acquired(&bytes_admission, size, "first bytes permit");
     let bytes_rejection = expect_retained_byte_capacity_exhausted(bytes_admission.try_reserve(size));
-    assert_eq!(bytes_rejection.dimension(), BudgetDimension::Bytes);
+    assert_eq!(bytes_rejection.dimension(), Some(BudgetDimension::Bytes));
     drop(bytes_permit);
 
     let parent_process = process_budget("secret-parent-process", 2, 1024 * 1024);
@@ -304,7 +324,7 @@ fn acquire_outcomes_distinguish_local_count_local_bytes_and_parent_capacity() {
     let unrelated = parent_process.try_acquire_data(1).expect("occupy shared parent");
     let parent_permit = expect_acquired(&parent_admission, size, "remaining parent capacity");
     let parent_rejection = expect_parent_capacity_exhausted(parent_admission.try_reserve(size));
-    assert_eq!(parent_rejection.dimension(), BudgetDimension::Count);
+    assert_eq!(parent_rejection.dimension(), Some(BudgetDimension::Count));
     drop(parent_permit);
     drop(unrelated);
 }
@@ -361,6 +381,7 @@ fn concurrent_reservations_stop_at_the_shared_cap_and_finish_at_zero() {
             workers.push(scope.spawn(move || {
                 start.wait();
                 let permit = match admission.try_reserve(size) {
+                    DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
                     DeferredAdmissionAcquireOutcome::Acquired(permit) => Some(permit),
                     DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => None,
                     DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_) => None,

@@ -781,9 +781,9 @@ async fn terminal_winner_does_not_mask_an_operation_owner_failure_or_leak_admiss
 
 #[tokio::test]
 async fn accepted_never_polled_is_service_stopped_without_leaking_admission() {
-    let (_runtime, _controller, executor) =
+    let (_runtime, controller, executor) =
         executor_with_limits("deferred-resume-never-polled", AdmissionLimits::default());
-    let (job, completion, wait_released, _entered, _executions) = probe_job(128, RequestOrdering::Concurrent, None);
+    let (job, completion, wait_released, _entered, executions) = probe_job(128, RequestOrdering::Concurrent, None);
     let first_poll_entered = Arc::new(Notify::new());
     let never_release = Arc::new(Notify::new());
     let cell = Arc::new(ResumeJobCell::with_first_poll_gate(
@@ -805,8 +805,17 @@ async fn accepted_never_polled_is_service_stopped_without_leaking_admission() {
     assert_eq!(report.active_inline_tasks, 0);
     assert_eq!(report.active_resume_tasks, 1);
     assert_eq!(report.remaining_inline_tasks, 0);
-    assert_eq!(report.remaining_resume_tasks, 1);
+    // An expired drain budget triggers abort, followed by the runtime's
+    // bounded destruction confirmation. The accepted job never reached poll.
+    assert_eq!(report.remaining_resume_tasks, 0);
     assert_eq!(report.shutdown.aborted, 1);
+    assert_eq!(report.shutdown.timed_out, 1);
+    assert_eq!(executions.load(Ordering::Acquire), 0);
+    assert_eq!(executor.operation_context().active_task_count(), 0);
+    let usage = controller.snapshot();
+    assert_eq!(usage.queued.current_count, 0);
+    assert_eq!(usage.inflight.current_count, 0);
+    assert_eq!(usage.processors.current_count, 0);
     assert_eq!(
         completion.wait().await.expect("aborted owner terminalizes the job"),
         DeferredResumeOutcome::Cancelled

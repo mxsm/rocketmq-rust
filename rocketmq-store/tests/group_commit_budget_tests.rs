@@ -58,7 +58,7 @@ fn group_commit_queue_enforces_count_and_holds_permit_until_owner_drop() {
     assert!(matches!(
         error,
         QueuePushRejection::BudgetExhausted(error)
-            if error.dimension() == BudgetDimension::Count
+            if error.dimension() == Some(BudgetDimension::Count)
     ));
 
     let owned = queue.try_pop_budgeted().expect("accepted request");
@@ -81,7 +81,7 @@ fn group_commit_queue_enforces_retained_bytes_before_count() {
     assert!(matches!(
         error,
         QueuePushRejection::BudgetExhausted(error)
-            if error.dimension() == BudgetDimension::Bytes
+            if error.dimension() == Some(BudgetDimension::Bytes)
     ));
 
     drop(queue.try_pop_budgeted());

@@ -285,3 +285,78 @@ fn child_drop_racing_with_parent_snapshot_is_joinable_or_unregistered() {
         assert!(!registry.lock().expect("final child registry lock").registered);
     });
 }
+
+#[test]
+fn descendant_ownership_retains_ancestors_until_final_settlement() {
+    #[derive(Debug)]
+    struct Ancestor {
+        parent: Option<Arc<Ancestor>>,
+        registered: Arc<AtomicBool>,
+    }
+    impl Drop for Ancestor {
+        fn drop(&mut self) {
+            self.registered.store(false, Ordering::Release);
+        }
+    }
+    loom::model(|| {
+        let registered = Arc::new(AtomicBool::new(true));
+        let parent = Arc::new(Ancestor {
+            parent: None,
+            registered: registered.clone(),
+        });
+        let leaf = Arc::new(Ancestor {
+            parent: Some(parent.clone()),
+            registered: Arc::new(AtomicBool::new(true)),
+        });
+        let completed = Arc::new(AtomicBool::new(false));
+        let completion = completed.clone();
+        let task = thread::spawn(move || {
+            assert!(leaf.parent.as_ref().unwrap().registered.load(Ordering::Acquire));
+            completion.store(true, Ordering::Release);
+            drop(leaf);
+        });
+        drop(parent);
+        // Weak parent registration cannot become unreachable while the leaf
+        // finalizer still owns its group and therefore the strong parent chain.
+        if !registered.load(Ordering::Acquire) {
+            assert!(completed.load(Ordering::Acquire));
+        }
+        task.join().unwrap();
+        assert!(!registered.load(Ordering::Acquire));
+    });
+}
+
+#[test]
+fn shutdown_compare_exchange_never_replaces_a_terminal_lifecycle_state() {
+    use loom::sync::atomic::AtomicU8;
+    for terminal in [2, 3] {
+        loom::model(move || {
+            // 0=Ready, 1=Draining, 2=Failed, 3=Stopped. This models the
+            // conditional atomic update used by ServiceLifecycle::request_shutdown.
+            let state = Arc::new(AtomicU8::new(0));
+            let shutdown_state = state.clone();
+            let shutdown = thread::spawn(move || {
+                let mut observed = shutdown_state.load(Ordering::Acquire);
+                while observed != 2 && observed != 3 {
+                    match shutdown_state.compare_exchange_weak(observed, 1, Ordering::AcqRel, Ordering::Acquire) {
+                        Ok(_) => break,
+                        Err(current) => observed = current,
+                    }
+                }
+            });
+            if terminal == 2 {
+                state.swap(terminal, Ordering::AcqRel);
+            } else {
+                let mut observed = state.load(Ordering::Acquire);
+                while observed != 2 {
+                    match state.compare_exchange_weak(observed, terminal, Ordering::AcqRel, Ordering::Acquire) {
+                        Ok(_) => break,
+                        Err(current) => observed = current,
+                    }
+                }
+            }
+            shutdown.join().unwrap();
+            assert_eq!(state.load(Ordering::Acquire), terminal);
+        });
+    }
+}

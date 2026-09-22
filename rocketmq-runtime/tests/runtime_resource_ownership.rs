@@ -44,3 +44,93 @@ fn child_contexts_share_the_runtime_owners_process_budget() {
     drop(permit);
     assert_eq!(owner.resources().process_budget().snapshot().current_bytes, 0);
 }
+
+#[tokio::test]
+async fn active_leaf_keeps_dropped_ancestors_joinable_and_releases_them_after_shutdown() {
+    use rocketmq_runtime::RuntimeContext;
+    use std::time::Duration;
+    let context = RuntimeContext::from_current("ancestry");
+    for _ in 0..64 {
+        let parent = context.service_context("parent");
+        let middle = parent.component("middle");
+        let leaf = middle.component("leaf");
+        let cancellation = leaf.task_group().cancellation_token();
+        leaf.spawn_service("pending", async move {
+            cancellation.cancelled().await;
+        })
+        .unwrap();
+        drop((parent, middle, leaf));
+    }
+    assert_eq!(context.root_group().component_count(), 64);
+    let report = context.shutdown_tasks(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.children.len(), 64);
+    for parent in &report.children {
+        assert_eq!(parent.children[0].children[0].cancelled, 1);
+    }
+    assert_eq!(context.root_group().component_count(), 0);
+}
+
+#[tokio::test]
+async fn dropped_intermediate_cannot_hide_an_uncooperative_or_panicking_leaf() {
+    use rocketmq_runtime::RuntimeContext;
+    use std::time::Duration;
+    for panic in [false, true] {
+        let context = RuntimeContext::from_current("ancestry-failure");
+        let parent = context.service_context("parent");
+        let leaf = parent.component("leaf");
+        let cancellation = leaf.task_group().cancellation_token();
+        let id = leaf
+            .spawn_service("pending", async move {
+                if panic {
+                    cancellation.cancelled().await;
+                    panic!("injected leaf panic");
+                }
+                std::future::pending::<()>().await;
+            })
+            .unwrap();
+        drop(parent);
+        assert_eq!(context.root_group().component_count(), 1);
+        let report = context.shutdown_tasks(Duration::from_millis(10)).await;
+        assert!(!report.is_healthy());
+        let leaf_report = &report.children[0].children[0];
+        if panic {
+            assert_eq!(leaf_report.panicked, 1);
+        } else {
+            assert!(leaf_report.timed_out > 0);
+        }
+        assert!(leaf.task_group().wait_task(id, Duration::from_secs(1)).await);
+        drop(leaf);
+        assert_eq!(context.root_group().component_count(), 0);
+    }
+}
+
+#[tokio::test]
+async fn root_shutdown_waits_for_custom_leaf_drain_after_all_context_handles_are_dropped() {
+    use rocketmq_runtime::RuntimeContext;
+    use std::time::Duration;
+    let context = RuntimeContext::from_current("custom-drain");
+    let parent = context.service_context("parent");
+    let middle = parent.component("middle");
+    let leaf = middle.component("leaf");
+    let cancellation = leaf.task_group().cancellation_token();
+    let (draining_tx, draining_rx) = tokio::sync::oneshot::channel();
+    let (released_tx, released_rx) = tokio::sync::oneshot::channel();
+    leaf.spawn_service("drain", async move {
+        cancellation.cancelled().await;
+        let _ = draining_tx.send(());
+        let _ = released_rx.await;
+    })
+    .unwrap();
+    drop((parent, middle, leaf));
+    let shutdown = context.shutdown_tasks(Duration::from_secs(1));
+    tokio::pin!(shutdown);
+    assert!(futures::poll!(&mut shutdown).is_pending());
+    draining_rx.await.unwrap();
+    assert!(futures::poll!(&mut shutdown).is_pending());
+    released_tx.send(()).unwrap();
+    let report = shutdown.await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.children[0].children[0].children[0].cancelled, 1);
+    assert_eq!(context.root_group().component_count(), 0);
+}

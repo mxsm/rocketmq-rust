@@ -33,7 +33,6 @@ pub(super) struct TaskExecution<F> {
     future: F,
     finalizer: TaskFinalizer,
     propagate_panic: bool,
-    critical: Option<CriticalRegistration>,
 }
 
 impl<F: Future<Output = ()>> TaskExecution<F> {
@@ -52,15 +51,14 @@ impl<F: Future<Output = ()>> TaskExecution<F> {
                 task_id,
                 completion,
                 result: TaskResult::Aborted,
+                critical,
             },
             propagate_panic,
-            critical,
         }
     }
 
     pub(super) async fn run(self) {
         let mut finalizer = self.finalizer;
-        let critical = self.critical;
         let result = AssertUnwindSafe(self.future).catch_unwind().await;
         // The awaited future has been destroyed at this statement boundary.
         // Record the observed result once, independently of subsequent aborts.
@@ -70,26 +68,10 @@ impl<F: Future<Output = ()>> TaskExecution<F> {
                     finalizer.result = TaskResult::Cancelled;
                 } else {
                     finalizer.result = TaskResult::Completed;
-                    // A critical service is contracted to run until its owner is
-                    // cancelled, so returning first is an unexpected exit. Owner
-                    // cancellation never reaches this branch, which is what keeps
-                    // a normal shutdown out of failure handling.
-                    if let Some(critical) = &critical {
-                        if critical.expects_until_cancelled {
-                            critical
-                                .failures
-                                .record(CriticalFailureKind::ExitedUnexpectedly, critical.task_kind);
-                        }
-                    }
                 }
             }
             Err(error) => {
                 finalizer.result = TaskResult::Panicked;
-                if let Some(critical) = &critical {
-                    critical
-                        .failures
-                        .record(CriticalFailureKind::Panicked, critical.task_kind);
-                }
                 tracing::error!(task_id = finalizer.task_id.as_u64(), "task panicked");
                 if self.propagate_panic {
                     std::panic::resume_unwind(error);
@@ -104,6 +86,7 @@ struct TaskFinalizer {
     task_id: TaskId,
     completion: Arc<TaskCompletion>,
     result: TaskResult,
+    critical: Option<CriticalRegistration>,
 }
 
 impl Drop for TaskFinalizer {
@@ -115,6 +98,18 @@ impl Drop for TaskFinalizer {
         } else {
             self.result
         };
+        if let Some(critical) = &self.critical {
+            let failure = match result {
+                TaskResult::Panicked => Some(CriticalFailureKind::Panicked),
+                TaskResult::Completed if critical.expects_until_cancelled => {
+                    Some(CriticalFailureKind::ExitedUnexpectedly)
+                }
+                TaskResult::Completed | TaskResult::Cancelled | TaskResult::Aborted => None,
+            };
+            if let Some(kind) = failure {
+                critical.failures.record(kind, critical.task_kind);
+            }
+        }
         self.inner.finish_task(self.task_id, result);
         self.completion.mark_done();
     }
