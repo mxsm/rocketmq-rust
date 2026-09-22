@@ -393,6 +393,17 @@ const METRIC_LABELS_63: &[&str] = &[
     labels::REASON,
 ];
 
+const METRIC_LABELS_64: &[&str] = &[
+    labels::COMPONENT,
+    labels::TASK_TYPE,
+    labels::OUTCOME,
+];
+
+const METRIC_LABELS_65: &[&str] = &[
+    labels::COMPONENT,
+    labels::OUTCOME,
+];
+
 pub const JAVA_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor {
         name: metrics::PROCESSOR_WATERMARK,
@@ -1957,5 +1968,19 @@ pub const RUST_METRICS: &[MetricDescriptor] = &[
         unit: "{response}",
         labels: METRIC_LABELS_63,
         source: MetricSource::Remoting,
+    },
+    MetricDescriptor {
+        name: metrics::RUNTIME_OPERATION_OUTCOMES_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{task}",
+        labels: METRIC_LABELS_64,
+        source: MetricSource::Runtime,
+    },
+    MetricDescriptor {
+        name: metrics::RUNTIME_BUSINESS_DRAINS_TOTAL,
+        kind: MetricKind::Counter,
+        unit: "{drain}",
+        labels: METRIC_LABELS_65,
+        source: MetricSource::Runtime,
     },
 ];

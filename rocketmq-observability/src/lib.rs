@@ -145,6 +145,7 @@ pub use runtime_diagnostics::start_runtime_diagnostics_endpoint_from_env;
 pub use runtime_diagnostics::start_runtime_diagnostics_endpoint_from_env_with_telemetry;
 pub use runtime_diagnostics::RuntimeDiagnosticsEndpointConfig;
 pub use runtime_diagnostics::RuntimeDiagnosticsEndpointHandle;
+pub use runtime_diagnostics::RuntimeDiagnosticsSources;
 pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_ALLOW_INSECURE_HTTP_ENV;
 pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_BIND_ADDR_ENV;
 pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_ENDPOINT_SCHEMA;
@@ -152,6 +153,11 @@ pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_PATH;
 pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_SAMPLE_INTERVAL_SECONDS_ENV;
 pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_SCOPE;
 pub use runtime_diagnostics::RUNTIME_DIAGNOSTICS_TOKEN_FILE_ENV;
+pub use runtime_diagnostics::RUNTIME_METADATA_TARGETS_PATH;
+pub use runtime_diagnostics::{
+    RuntimeDiagnosticsDataProvider, RuntimeDiagnosticsMode, RuntimeDiagnosticsService, RuntimeDiagnosticsStarted,
+    RUNTIME_DIAGNOSTICS_MODE_ENV,
+};
 pub use sampling::SamplingGate;
 pub use status::ObservabilityCompiledFeaturesV1;
 pub use status::ObservabilitySignalStatusV1;

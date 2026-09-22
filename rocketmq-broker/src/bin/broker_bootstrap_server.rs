@@ -232,6 +232,12 @@ async fn run_inner(service_context: ChildServiceContext, lifecycle: ServiceLifec
 
     // Print startup info
     print_startup_info(broker_config, message_store_config);
+    lifecycle.set_observer(std::sync::Arc::new(
+        rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder::from_handle(
+            &telemetry_guard.handle(),
+            RuntimeComponent::Broker,
+        ),
+    ))?;
     if let Err(error) = lifecycle.start(&service_context).await {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
@@ -244,13 +250,20 @@ async fn run_inner(service_context: ChildServiceContext, lifecycle: ServiceLifec
         }
         return Err(error).context("failed to start broker lifecycle boundary");
     }
-    if let Err(error) = rocketmq_observability::start_runtime_diagnostics_endpoint_from_env_with_telemetry(
+    let diagnostics_sources = rocketmq_observability::RuntimeDiagnosticsSources::default();
+    let diagnostics = rocketmq_observability::RuntimeDiagnosticsService::new(
         &service_context,
         RuntimeComponent::Broker,
-        &telemetry_guard.handle(),
-    )
-    .await
-    {
+        telemetry_guard.handle(),
+        std::sync::Arc::new(diagnostics_sources.clone()),
+    );
+    let diagnostics_start = async {
+        diagnostics
+            .start(rocketmq_observability::RuntimeDiagnosticsMode::from_env()?)
+            .await
+    }
+    .await;
+    if let Err(error) = diagnostics_start {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
         if let Err(shutdown_error) = telemetry_guard
@@ -265,6 +278,7 @@ async fn run_inner(service_context: ChildServiceContext, lifecycle: ServiceLifec
 
     // Start broker
     Builder::new(service_context, telemetry_guard)
+        .with_runtime_diagnostics_sources(diagnostics_sources.clone())
         .with_validated_config(validated_config)
         .require_release_identity_registration(process_telemetry.metrics_enabled())
         .build()

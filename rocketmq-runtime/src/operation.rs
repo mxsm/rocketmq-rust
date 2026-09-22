@@ -15,8 +15,10 @@
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -33,6 +35,60 @@ use crate::task_group::TaskGroup;
 use crate::task_group::TaskGroupId;
 use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
+
+/// Why an accepted operation task finished, after its future was destroyed.
+///
+/// Completion means normal return, not business success. Explicit aborts are
+/// distinct from a cancellation branch selected by the task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum OperationOutcome {
+    /// The future returned normally.
+    Completed = 1,
+    /// The operation-local cancellation branch won.
+    Cancelled = 2,
+    /// The operation's deadline branch won.
+    DeadlineExceeded = 3,
+    /// The component owner's cancellation branch won.
+    OwnerCancelled = 4,
+    /// Polling or destroying the future panicked.
+    Panicked = 5,
+    /// The future was discarded before selecting another terminal outcome.
+    Aborted = 6,
+}
+
+impl OperationOutcome {
+    /// All outcomes in counter snapshot order.
+    pub const ALL: [Self; 6] = [
+        Self::Completed,
+        Self::Cancelled,
+        Self::DeadlineExceeded,
+        Self::OwnerCancelled,
+        Self::Panicked,
+        Self::Aborted,
+    ];
+
+    /// Stable, low-cardinality diagnostic label.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::DeadlineExceeded => "deadline_exceeded",
+            Self::OwnerCancelled => "owner_cancelled",
+            Self::Panicked => "panicked",
+            Self::Aborted => "aborted",
+        }
+    }
+}
+
+/// Observes task outcomes after future destruction.
+///
+/// Callbacks must be short, nonblocking and panic-free, including during panic
+/// unwinding. They must not flush exporters or retain request data.
+pub trait OperationOutcomeObserver: std::fmt::Debug + Send + Sync {
+    /// Records one terminal task outcome using bounded labels.
+    fn on_outcome(&self, kind: TaskKind, outcome: OperationOutcome);
+}
 
 /// Cancellation, deadline, and task-class metadata for one bounded operation.
 ///
@@ -54,6 +110,8 @@ struct OperationContextInner {
     spawn_gate: Mutex<()>,
     owner_id: Mutex<Option<TaskGroupId>>,
     active_tasks: Arc<DashSet<TaskId>>,
+    outcomes: [AtomicU64; 6],
+    observer: OnceLock<Arc<dyn OperationOutcomeObserver>>,
 }
 
 impl OperationContext {
@@ -76,6 +134,8 @@ impl OperationContext {
                 spawn_gate: Mutex::new(()),
                 owner_id: Mutex::new(None),
                 active_tasks: Arc::new(DashSet::new()),
+                outcomes: std::array::from_fn(|_| AtomicU64::new(0)),
+                observer: OnceLock::new(),
             }),
             task_kind,
         }
@@ -129,6 +189,34 @@ impl OperationContext {
     /// Returns the number of operation tasks that have not completed.
     pub fn active_task_count(&self) -> usize {
         self.inner.active_tasks.len()
+    }
+
+    /// Reads counters without retaining individual task history.
+    ///
+    /// Counters share this operation's lifetime and are individually atomic;
+    /// completions can occur between fields in this snapshot.
+    pub fn outcomes(&self) -> [(OperationOutcome, u64); 6] {
+        OperationOutcome::ALL.map(|outcome| {
+            (
+                outcome,
+                self.inner.outcomes[outcome as usize - 1].load(Ordering::Acquire),
+            )
+        })
+    }
+
+    /// Binds an observer before the first submission attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after owner binding or an earlier observer installation.
+    pub fn set_outcome_observer(&self, observer: Arc<dyn OperationOutcomeObserver>) -> RuntimeResult<()> {
+        let _gate = self.inner.spawn_gate.lock();
+        if self.inner.owner_id.lock().is_some() || self.inner.observer.set(observer).is_err() {
+            return Err(RuntimeError::context_unavailable(
+                crate::RuntimeOperation::SpawnOperation,
+            ));
+        }
+        Ok(())
     }
 
     /// Cancels this operation and waits for all tasks registered with `owner`.
@@ -197,14 +285,14 @@ impl OperationContext {
                 crate::RuntimeOperation::SpawnOperation,
             ));
         }
-        Ok(OperationTaskRegistration::new(Arc::clone(&self.inner.active_tasks)))
+        Ok(OperationTaskRegistration::new(Arc::clone(&self.inner), self.task_kind))
     }
 
     pub(crate) fn spawn_guard(&self) -> MutexGuard<'_, ()> {
         self.inner.spawn_gate.lock()
     }
 
-    pub(crate) async fn run<F>(&self, future: F)
+    async fn run<F>(&self, future: F) -> OperationOutcome
     where
         F: Future<Output = ()>,
     {
@@ -212,16 +300,16 @@ impl OperationContext {
             Some(deadline) => {
                 tokio::select! {
                     biased;
-                    _ = self.inner.cancellation.cancelled() => {}
-                    _ = tokio::time::sleep_until(deadline.into()) => {}
-                    _ = future => {}
+                    _ = self.inner.cancellation.cancelled() => OperationOutcome::Cancelled,
+                    _ = tokio::time::sleep_until(deadline.into()) => OperationOutcome::DeadlineExceeded,
+                    _ = future => OperationOutcome::Completed,
                 }
             }
             None => {
                 tokio::select! {
                     biased;
-                    _ = self.inner.cancellation.cancelled() => {}
-                    _ = future => {}
+                    _ = self.inner.cancellation.cancelled() => OperationOutcome::Cancelled,
+                    _ = future => OperationOutcome::Completed,
                 }
             }
         }
@@ -258,16 +346,20 @@ pub(crate) struct OperationTaskRegistration {
 struct OperationTaskRegistrationState {
     task_id: AtomicU64,
     completed: AtomicBool,
-    active_tasks: Arc<DashSet<TaskId>>,
+    operation: Arc<OperationContextInner>,
+    task_kind: TaskKind,
+    outcome: AtomicU8,
 }
 
 impl OperationTaskRegistration {
-    fn new(active_tasks: Arc<DashSet<TaskId>>) -> Self {
+    fn new(operation: Arc<OperationContextInner>, task_kind: TaskKind) -> Self {
         Self {
             state: Arc::new(OperationTaskRegistrationState {
                 task_id: AtomicU64::new(0),
                 completed: AtomicBool::new(false),
-                active_tasks,
+                operation,
+                task_kind,
+                outcome: AtomicU8::new(0),
             }),
         }
     }
@@ -275,29 +367,104 @@ impl OperationTaskRegistration {
     pub(crate) fn guard(&self) -> OperationTaskGuard {
         OperationTaskGuard {
             state: Arc::clone(&self.state),
+            outcome: OperationOutcome::Aborted,
         }
     }
 
-    pub(crate) fn register(self, task_id: TaskId) {
-        self.state.active_tasks.insert(task_id);
+    pub(crate) fn register(&self, task_id: TaskId) {
+        self.state.operation.active_tasks.insert(task_id);
         self.state.task_id.store(task_id.as_u64(), Ordering::Release);
         if self.state.completed.load(Ordering::Acquire) {
-            self.state.active_tasks.remove(&task_id);
+            self.state.operation.active_tasks.remove(&task_id);
         }
+    }
+
+    pub(crate) fn finish_registration(self) {
+        self.state.record_if_ready();
     }
 }
 
 pub(crate) struct OperationTaskGuard {
     state: Arc<OperationTaskRegistrationState>,
+    outcome: OperationOutcome,
 }
 
 impl Drop for OperationTaskGuard {
     fn drop(&mut self) {
+        let outcome = if std::thread::panicking() {
+            OperationOutcome::Panicked
+        } else {
+            self.outcome
+        };
+        self.state.outcome.store(outcome as u8, Ordering::Release);
         self.state.completed.store(true, Ordering::Release);
         let task_id = self.state.task_id.load(Ordering::Acquire);
         if task_id != 0 {
-            self.state.active_tasks.remove(&TaskId::from_raw(task_id));
+            self.state.operation.active_tasks.remove(&TaskId::from_raw(task_id));
         }
+        self.state.record_if_ready();
+    }
+}
+
+impl OperationTaskRegistrationState {
+    fn record_if_ready(&self) {
+        if self.task_id.load(Ordering::Acquire) == 0 {
+            return;
+        }
+        let value = self.outcome.load(Ordering::Acquire);
+        let Some(outcome) = OperationOutcome::ALL
+            .into_iter()
+            .find(|outcome| *outcome as u8 == value)
+        else {
+            return;
+        };
+        if self
+            .outcome
+            .compare_exchange(value, u8::MAX, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.operation.outcomes[value as usize - 1].fetch_add(1, Ordering::Release);
+            if let Some(observer) = self.operation.observer.get() {
+                observer.on_outcome(self.task_kind, outcome);
+            }
+        }
+    }
+}
+
+// Also destroys the user future first when an accepted task is never polled.
+pub(crate) struct OperationExecution<F> {
+    future: F,
+    finalizer: OperationTaskGuard,
+    operation: OperationContext,
+    owner_cancellation: Option<CancellationToken>,
+}
+
+impl<F: Future<Output = ()>> OperationExecution<F> {
+    pub(crate) fn new(
+        future: F,
+        finalizer: OperationTaskGuard,
+        operation: OperationContext,
+        owner_cancellation: Option<CancellationToken>,
+    ) -> Self {
+        Self {
+            future,
+            finalizer,
+            operation,
+            owner_cancellation,
+        }
+    }
+
+    pub(crate) async fn run(self) {
+        let mut finalizer = self.finalizer;
+        let outcome = match self.owner_cancellation {
+            Some(owner) => tokio::select! {
+                biased;
+                _ = owner.cancelled() => OperationOutcome::OwnerCancelled,
+                outcome = self.operation.run(self.future) => outcome,
+            },
+            None => self.operation.run(self.future).await,
+        };
+        finalizer.outcome = outcome;
     }
 }
 
@@ -305,6 +472,138 @@ impl Drop for OperationTaskGuard {
 mod tests {
     use super::*;
     use crate::RuntimeContext;
+
+    struct OutcomeFuture {
+        dropped: Arc<AtomicBool>,
+        ready: bool,
+        panic_poll: bool,
+        panic_drop: bool,
+    }
+
+    impl Future for OutcomeFuture {
+        type Output = ();
+        fn poll(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+            assert!(!self.panic_poll, "operation poll panic");
+            if self.ready {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
+        }
+    }
+
+    impl Drop for OutcomeFuture {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+            assert!(!self.panic_drop, "operation destructor panic");
+        }
+    }
+
+    #[derive(Debug)]
+    struct RecordingOutcomeObserver {
+        dropped: Arc<AtomicBool>,
+        events: Mutex<Vec<OperationOutcome>>,
+    }
+
+    impl OperationOutcomeObserver for RecordingOutcomeObserver {
+        fn on_outcome(&self, _kind: TaskKind, outcome: OperationOutcome) {
+            assert!(
+                self.dropped.load(Ordering::Acquire),
+                "outcome preceded future destruction"
+            );
+            self.events.lock().push(outcome);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn all_outcomes_are_recorded_once_after_future_destruction() {
+        for expected in OperationOutcome::ALL {
+            let runtime = RuntimeContext::from_current("operation-outcome");
+            let owner = runtime.service_context("operation-owner");
+            let operation = if expected == OperationOutcome::DeadlineExceeded {
+                OperationContext::new(Instant::now() + Duration::from_secs(60), TaskKind::Worker)
+            } else {
+                OperationContext::without_deadline(TaskKind::Worker)
+            };
+            let dropped = Arc::new(AtomicBool::new(false));
+            let observer = Arc::new(RecordingOutcomeObserver {
+                dropped: dropped.clone(),
+                events: Mutex::new(Vec::new()),
+            });
+            operation.set_outcome_observer(observer.clone()).unwrap();
+            let id = owner
+                .task_group()
+                .spawn_operation(
+                    &operation,
+                    "selected-outcome",
+                    OutcomeFuture {
+                        dropped,
+                        ready: expected == OperationOutcome::Completed,
+                        panic_poll: expected == OperationOutcome::Panicked,
+                        panic_drop: false,
+                    },
+                )
+                .unwrap();
+            match expected {
+                OperationOutcome::Cancelled => operation.cancel(),
+                OperationOutcome::OwnerCancelled => owner.task_group().cancel(),
+                OperationOutcome::DeadlineExceeded => tokio::time::advance(Duration::from_secs(61)).await,
+                OperationOutcome::Aborted => {
+                    assert!(owner.task_group().abort_task(id));
+                }
+                OperationOutcome::Completed | OperationOutcome::Panicked => {}
+            }
+            while owner.task_group().task_count() != 0 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(*observer.events.lock(), [expected]);
+            assert_eq!(operation.active_task_count(), 0);
+            for (outcome, count) in operation.outcomes() {
+                assert_eq!(count, u64::from(outcome == expected), "{expected:?}: {outcome:?}");
+            }
+            let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
+            assert_eq!(report.is_healthy(), expected != OperationOutcome::Panicked);
+        }
+    }
+
+    #[tokio::test]
+    async fn destructor_panic_is_an_operation_failure_and_rejected_work_has_no_outcome() {
+        let runtime = RuntimeContext::from_current("operation-destructor");
+        let owner = runtime.service_context("operation-owner");
+        let operation = OperationContext::without_deadline(TaskKind::Worker);
+        let dropped = Arc::new(AtomicBool::new(false));
+        let observer = Arc::new(RecordingOutcomeObserver {
+            dropped: dropped.clone(),
+            events: Mutex::new(Vec::new()),
+        });
+        operation.set_outcome_observer(observer.clone()).unwrap();
+        owner
+            .task_group()
+            .spawn_operation(
+                &operation,
+                "destructor-panic",
+                OutcomeFuture {
+                    dropped,
+                    ready: true,
+                    panic_poll: false,
+                    panic_drop: true,
+                },
+            )
+            .unwrap();
+        while owner.task_group().task_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(*observer.events.lock(), [OperationOutcome::Panicked]);
+        runtime.shutdown_tasks(Duration::from_secs(1)).await;
+
+        let rejected = OperationContext::without_deadline(TaskKind::Worker);
+        assert!(owner
+            .task_group()
+            .spawn_operation(&rejected, "closed", async {})
+            .is_err());
+        assert_eq!(rejected.active_task_count(), 0);
+        assert!(rejected.outcomes().into_iter().all(|(_, count)| count == 0));
+    }
 
     #[tokio::test]
     async fn completed_operations_leave_no_registry_history() {
@@ -331,6 +630,7 @@ mod tests {
         .expect("operation tasks should complete");
 
         assert_eq!(owner.task_group().component_count(), baseline_components);
+        assert_eq!(operation.outcomes()[0], (OperationOutcome::Completed, TASKS as u64));
         let report = runtime.shutdown_tasks(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }

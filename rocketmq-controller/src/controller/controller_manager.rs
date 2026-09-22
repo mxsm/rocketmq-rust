@@ -111,11 +111,16 @@ impl BrokerInactiveListener {
     }
 }
 
-fn spawn_inactive_broker_worker<F>(task_group: &TaskGroup, future: F) -> rocketmq_runtime::RuntimeResult<()>
+fn spawn_inactive_broker_worker<F>(
+    task_group: &TaskGroup,
+    recorder: Arc<rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder>,
+    future: F,
+) -> rocketmq_runtime::RuntimeResult<()>
 where
     F: Future<Output = ()> + Send + 'static,
 {
     let operation = OperationContext::without_deadline(TaskKind::Worker);
+    operation.set_outcome_observer(recorder)?;
     task_group
         .spawn_operation(&operation, "controller.broker-inactive", future)
         .map(|_| ())
@@ -143,7 +148,8 @@ impl BrokerLifecycleListener for BrokerInactiveListener {
             return;
         };
 
-        if let Err(error) = spawn_inactive_broker_worker(&task_group, async move {
+        let recorder = Arc::clone(&controller_manager.runtime_metrics);
+        if let Err(error) = spawn_inactive_broker_worker(&task_group, recorder, async move {
             if !controller_manager.is_leader() {
                 warn!(
                     "Broker inactive event ignored on follower controller, cluster={:?}, broker={}, broker_id={:?}",
@@ -332,6 +338,7 @@ pub struct ControllerManager {
     remoting_server_shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
     manager_task_group: Arc<Mutex<Option<TaskGroup>>>,
     leadership_watch_tasks: Arc<Mutex<Option<ScheduledTaskGroup>>>,
+    runtime_metrics: Arc<rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder>,
 
     /// Runtime-neutral security capabilities supplied by the composition root.
     security: Option<ControllerSecurity>,
@@ -547,6 +554,12 @@ impl ControllerManager {
             remoting_server_shutdown_tx: Arc::new(Mutex::new(None)),
             manager_task_group: Arc::new(Mutex::new(None)),
             leadership_watch_tasks: Arc::new(Mutex::new(None)),
+            runtime_metrics: Arc::new(
+                rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder::from_handle(
+                    &telemetry_handle,
+                    rocketmq_runtime::RuntimeComponent::Controller,
+                ),
+            ),
             security,
             remoting_client,
             #[cfg(feature = "metrics")]
@@ -658,6 +671,14 @@ impl ControllerManager {
             .as_ref()
             .map(ScheduledTaskGroup::snapshot)
             .unwrap_or_default()
+    }
+
+    /// Observes the fixed leadership maintenance job without retaining this manager.
+    pub fn leadership_watch_observer(&self) -> Option<rocketmq_runtime::ScheduledTaskObserver> {
+        self.leadership_watch_tasks
+            .lock()
+            .as_ref()
+            .map(|tasks| tasks.observer(&["controller.leadership-watch"]))
     }
 
     pub fn set_raft_runtime_tick_enabled(&self, enabled: bool) -> Result<()> {

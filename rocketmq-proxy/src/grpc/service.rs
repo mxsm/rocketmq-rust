@@ -289,6 +289,7 @@ pub struct ProxyGrpcService<P> {
     drain: rocketmq_proxy_core::ProxyDrainController,
     cpu_crypto: Option<BlockingExecutor>,
     settings_policy: Arc<dyn SettingsPolicyProvider>,
+    diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources,
 }
 
 pub type ProxyHousekeepingRunReport = housekeeping::GrpcHousekeepingRunReport;
@@ -308,6 +309,7 @@ impl<P> Clone for ProxyGrpcService<P> {
             drain: self.drain.clone(),
             cpu_crypto: self.cpu_crypto.clone(),
             settings_policy: Arc::clone(&self.settings_policy),
+            diagnostics_sources: self.diagnostics_sources.clone(),
         }
     }
 }
@@ -357,6 +359,7 @@ where
             drain: rocketmq_proxy_core::ProxyDrainController::default(),
             cpu_crypto: None,
             settings_policy,
+            diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources::default(),
         }
     }
 
@@ -396,6 +399,15 @@ where
 
     pub fn with_metrics(mut self, metrics: ProxyMetrics) -> Self {
         self.metrics = metrics;
+        self
+    }
+
+    /// Publishes fixed housekeeping diagnostics without retaining task ownership.
+    pub fn with_runtime_diagnostics_sources(
+        mut self,
+        sources: rocketmq_observability::RuntimeDiagnosticsSources,
+    ) -> Self {
+        self.diagnostics_sources = sources;
         self
     }
 
@@ -728,7 +740,8 @@ where
     {
         let housekeeping_service = self.clone();
         let renewal_service = self.clone();
-        housekeeping::run_housekeeping_until(
+        let sources = self.diagnostics_sources.clone();
+        housekeeping::run_housekeeping_until_observed(
             self.housekeeping_interval(),
             shutdown,
             task_group,
@@ -741,6 +754,7 @@ where
             async move {
                 renewal_service.run_receipt_renewal_loop().await;
             },
+            move |observer| sources.set_schedules(observer),
         )
         .await
     }

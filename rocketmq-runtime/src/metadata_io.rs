@@ -36,6 +36,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -44,9 +45,11 @@ use tokio::sync::oneshot;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
+use crate::metadata_target::MetadataTargetIdentity;
 use crate::metadata_target::MetadataTargetRegistration;
 use crate::metadata_target::MetadataTargetRegistrationOutcome;
 use crate::metadata_target::MetadataTargetRegistry;
+use crate::metadata_target::MetadataTargetRetirementOutcome;
 use crate::shutdown_deadline::ShutdownDeadline;
 use crate::BlockingExecutor;
 use crate::BlockingPoolPolicy;
@@ -616,6 +619,7 @@ pub struct MetadataIoShutdownReport {
 #[derive(Debug)]
 pub struct MetadataIoReceipt {
     generation: MetadataGeneration,
+    identity: MetadataTargetIdentity,
     durable: oneshot::Receiver<RuntimeResult<MetadataIoCommitOutcome>>,
 }
 
@@ -764,6 +768,12 @@ enum ReceiptConclusion {
 }
 
 impl MetadataIoReceipt {
+    /// Returns the history identity to pair with this receipt's generation.
+    ///
+    /// A retired history cannot prove durability in a later target identity.
+    pub fn target_identity(&self) -> MetadataTargetIdentity {
+        self.identity.clone()
+    }
     /// Returns the accepted resource generation.
     #[must_use]
     pub const fn generation(&self) -> MetadataGeneration {
@@ -802,7 +812,8 @@ impl MetadataIoReceipt {
     /// instead of treating the expiry as a failure.
     ///
     /// This method never returns [`MetadataIoCommitObservation::TargetConflict`]:
-    /// a receipt already owns its target registration.
+    /// a receipt already identifies an admitted write. It retains only the
+    /// result and history identity, not write authority.
     pub async fn observe_until(self, deadline: MetadataDeadline) -> MetadataIoCommitObservation {
         let generation = self.generation;
         match self.conclude(deadline).await {
@@ -857,6 +868,21 @@ pub struct MetadataIoActor {
     sender: mpsc::Sender<Arc<str>>,
 }
 
+/// Read-only access that does not retain metadata admission or target ownership.
+#[derive(Debug, Clone)]
+pub struct MetadataIoObserver {
+    inner: Weak<ActorInner>,
+}
+
+impl MetadataIoObserver {
+    /// Reads bounded actor state, or returns `None` after its owners are released.
+    ///
+    /// The registry capacity bounds the resource scan. This call performs no I/O.
+    pub fn snapshot(&self) -> Option<MetadataIoSnapshot> {
+        self.inner.upgrade().map(|inner| snapshot(&inner))
+    }
+}
+
 #[derive(Debug)]
 struct ActorInner {
     config: MetadataIoConfig,
@@ -879,6 +905,7 @@ struct ActorState {
 
 #[derive(Debug, Default)]
 struct ResourceState {
+    identity: Option<MetadataTargetIdentity>,
     target: Option<Arc<Path>>,
     target_registration: Option<MetadataTargetRegistration>,
     durable_generation: Option<MetadataGeneration>,
@@ -1027,6 +1054,7 @@ impl MetadataIoActor {
                     let _ = waiter_sender.send(Ok(MetadataIoCommitOutcome::Durable(durable_generation)));
                     return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
                         generation,
+                        identity: target_registration.identity(),
                         durable,
                     }));
                 }
@@ -1046,6 +1074,7 @@ impl MetadataIoActor {
                     });
                     return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
                         generation,
+                        identity: target_registration.identity(),
                         durable,
                     }));
                 }
@@ -1065,6 +1094,7 @@ impl MetadataIoActor {
                     });
                     return Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
                         generation,
+                        identity: target_registration.identity(),
                         durable,
                     }));
                 }
@@ -1105,6 +1135,7 @@ impl MetadataIoActor {
         state.pending_operations = next_operations;
         state.pending_bytes = next_bytes;
         let resource_state = state.resources.entry(resource.clone()).or_default();
+        let identity = target_registration.identity();
         resource_state.target = Some(request.target.clone());
         resource_state.target_registration = Some(target_registration.clone());
         resource_state.queued = Some(QueuedMetadataWrite {
@@ -1122,6 +1153,7 @@ impl MetadataIoActor {
         }
         Ok(MetadataIoAdmissionOutcome::Accepted(MetadataIoReceipt {
             generation,
+            identity,
             durable,
         }))
     }
@@ -1292,7 +1324,9 @@ impl MetadataIoActor {
     /// completion history: when the value reaches the unobserved generation,
     /// the change is durable after all. The value is seeded from the
     /// owner-scoped target registration, so it survives actor replacement for
-    /// the same resource and target.
+    /// the same resource and target. After explicit retirement, compare
+    /// [`Self::target_identity`] with the receipt's identity first: generations
+    /// from a different history are not evidence about the old write.
     #[must_use]
     pub fn confirmed_durable_generation(&self, resource: &str) -> Option<MetadataGeneration> {
         let state = self.inner.state.lock();
@@ -1338,6 +1372,67 @@ impl MetadataIoActor {
         snapshot(&self.inner)
     }
 
+    /// Creates a diagnostic observer without retaining write authority.
+    pub fn observer(&self) -> MetadataIoObserver {
+        MetadataIoObserver {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
+    /// Returns the target history associated with this actor's resource state.
+    pub fn target_identity(&self, resource: &str) -> Option<MetadataTargetIdentity> {
+        self.inner
+            .state
+            .lock()
+            .resources
+            .get(resource)
+            .and_then(|state| state.identity.clone())
+    }
+
+    /// Ends a closed, drained resource's durable history to reclaim registry capacity.
+    ///
+    /// This is an explicit identity boundary, not ordinary actor replacement.
+    /// Future actors acquire a new identity and may bind a different resource
+    /// to the path. Old actors cannot resume that history; retained read-only
+    /// receipts keep their original result and identity. Compare generations
+    /// only within the same identity.
+    ///
+    /// Unconfirmed replacements retain their fence. The runtime cannot verify
+    /// business file formats and does not offer unconditional fence clearing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed path normalization error without modifying the history.
+    pub fn retire_target_for_new_identity(&self, resource: &str) -> RuntimeResult<MetadataTargetRetirementOutcome> {
+        let mut state = self.inner.state.lock();
+        if state.accepting {
+            return Ok(MetadataTargetRetirementOutcome::AdmissionOpen);
+        }
+        if !state.worker_finished {
+            return Ok(MetadataTargetRetirementOutcome::WorkInProgress);
+        }
+        let Some(resource_state) = state.resources.get_mut(resource) else {
+            return Ok(MetadataTargetRetirementOutcome::NotFound);
+        };
+        if resource_state.in_flight.is_some() || resource_state.queued.is_some() || !resource_state.waiters.is_empty() {
+            return Ok(MetadataTargetRetirementOutcome::WorkInProgress);
+        }
+        let (Some(target), Some(identity)) = (&resource_state.target, &resource_state.identity) else {
+            return Ok(MetadataTargetRetirementOutcome::NotFound);
+        };
+        // A cached, idle registration has no pending work after coordinator completion.
+        // Real blocking closures retain their own clone and still prevent retirement.
+        resource_state.target_registration.take();
+        let outcome = self
+            .inner
+            .targets
+            .retire(target, resource, identity, resource_state.durable_generation)?;
+        if outcome == MetadataTargetRetirementOutcome::Retired {
+            state.resources.remove(resource);
+        }
+        Ok(outcome)
+    }
+
     /// Returns the metadata I/O limits that are actually in force.
     ///
     /// The view is read-only and derived from the validated configuration and
@@ -1355,10 +1450,15 @@ fn ensure_target_registration(
     request: &MetadataWriteRequest,
 ) -> RuntimeResult<Option<MetadataTargetRegistration>> {
     let resource = &request.resource;
+    // Retired identities remain tombstones in older actors. Bound this cache
+    // independently of the shared registry, whose slots can be reused.
+    if !state.resources.contains_key(resource) && state.resources.len() >= registry.capacity() {
+        return Err(RuntimeError::capacity(crate::RuntimeOperation::AdmitMetadataOperation));
+    }
     let mut target_changed = false;
     if let Some(existing) = state.resources.get(resource) {
         if let Some(target) = &existing.target {
-            target_changed = target.as_ref() != request.target.as_ref();
+            target_changed = !registry.same_target(target.as_ref(), request.target.as_ref())?;
             if target_changed && (existing.in_flight.is_some() || existing.queued.is_some()) {
                 return Ok(None);
             }
@@ -1380,7 +1480,12 @@ fn ensure_target_registration(
         }
     }
 
-    let registration = match registry.register(request.target.as_ref(), Arc::clone(resource))? {
+    let expected = state
+        .resources
+        .get(resource)
+        .filter(|_| !target_changed)
+        .and_then(|state| state.identity.as_ref());
+    let registration = match registry.register_with_identity(request.target.as_ref(), Arc::clone(resource), expected)? {
         MetadataTargetRegistrationOutcome::Registered(registration) => registration,
         MetadataTargetRegistrationOutcome::Conflict => return Ok(None),
         MetadataTargetRegistrationOutcome::ReconciliationRequired => {
@@ -1396,6 +1501,7 @@ fn ensure_target_registration(
         resource_state.durable_generation = None;
     }
     resource_state.target = Some(request.target.clone());
+    resource_state.identity = Some(registration.identity());
     resource_state.target_registration = Some(registration.clone());
     if let Some(durable_generation) = durable_generation {
         resource_state.durable_generation = Some(

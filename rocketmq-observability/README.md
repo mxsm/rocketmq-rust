@@ -1,5 +1,14 @@
 # rocketmq-observability
 
+The protected runtime listener also serves
+`GET /internal/v1/runtime/metadata-targets`, with schema
+`rocketmq.runtime-metadata-targets.v1` and scope `process_shared`.
+It applies the same token rotation, diagnostic scope and request limits.
+Its aggregate data contains capacity, retained targets, live owners, idle
+histories, fenced targets and remaining capacity. It never exposes paths or
+resource keys; fenced and live counts may overlap. Existing V1/V2 diagnostics
+schemas are unchanged.
+
 [English](README.md) | [简体中文](README-zh_cn.md)
 
 Shared telemetry configuration, local logging, OpenTelemetry integration and exporter lifecycle
@@ -141,6 +150,49 @@ context using message property maps and the handle's trace policy. The shared
 `rocketmq-client-rust/observability` enables client traces;
 `observability-metrics` enables client metrics. Client metrics over OTLP also require
 a direct `rocketmq-observability/otlp-metrics` dependency; the client has no feature with that name.
+
+## Owned runtime diagnostics
+
+`RuntimeDiagnosticsService` owns its sampler and optional authenticated listener
+under an injected service context. Retain one instance at the process boundary:
+clones share initialization, repeating the same start is idempotent, and changing
+its mode after start is rejected. Shutdown awaits both outputs with the caller's
+absolute deadline.
+
+| `ROCKETMQ_RUNTIME_DIAGNOSTICS_MODE` | Listener | Periodic sampling |
+| --- | --- | --- |
+| `disabled` | None | None |
+| `metrics_only` | None | Only with an active metrics backend |
+| `endpoint_only` | Token and scope protected | None |
+| `endpoint_and_metrics` | Token and scope protected | Only with an active metrics backend |
+
+An unset mode preserves the previous opt-in behavior: configured bind/token
+settings request both outputs; absent settings disable the service. Metrics-only
+mode requires no token file. The sample interval uses
+`ROCKETMQ_RUNTIME_DIAGNOSTICS_SAMPLE_INTERVAL_SECONDS` (1–300 seconds, default 10).
+Compiling a metrics feature alone creates no diagnostic work.
+
+`RuntimeDiagnosticsSources` accepts read-only weak observers and a bounded copy
+of a shutdown report's local counters. The four process entrypoints publish
+their selected maintenance jobs: Broker registration/member synchronization/
+offset persistence, NameServer broker scan, Controller leadership watch, and
+Proxy gRPC housekeeping. Broker and NameServer also publish their metadata actor.
+These selections do not claim to include every legacy scheduler or TLS reload job.
+The provider performs no I/O and does not retain write authority. Metadata input
+is absent for components that do not publish an actor.
+
+V1 and V2 retain their schemas and token/scope/rotation rules. Empty V2 schedule
+input remains omitted; it does not distinguish known zero from unavailable.
+Output limits continue to report truncation. A retained shutdown summary remains
+readable from a caller-held source after the endpoint stops; no replacement
+listener is started to expose it.
+
+Lifecycle metrics observe committed `ServiceLifecycle` transitions. Repeating a
+state assignment produces no additional event; `Draining` maps to the existing
+`stopping` label. Operation outcomes count accepted **tasks**, after future
+destruction, and normal return does not imply business success. Broker business
+drain is recorded before telemetry finalization; the actual `Stopped` state is
+published afterward and must not be inferred from the drain counter.
 
 ## Source and validation
 

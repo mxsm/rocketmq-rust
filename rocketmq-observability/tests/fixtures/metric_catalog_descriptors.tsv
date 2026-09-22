@@ -221,3 +221,5 @@ rust	219	"rocketmq_transport_response_queue_wait_seconds"	Histogram	"s"	[]	Remot
 rust	220	"rocketmq_transport_response_duplicate_total"	Counter	"{response}"	["code"]	Remoting
 rust	221	"rocketmq_transport_response_abandoned_total"	Counter	"{response}"	["reason"]	Remoting
 rust	222	"rocketmq_transport_deferred_terminal_total"	Counter	"{response}"	["request_code_bucket","reason"]	Remoting
+rust	223	"rocketmq_runtime_operation_outcomes_total"	Counter	"{task}"	["component","task_type","outcome"]	Runtime
+rust	224	"rocketmq_runtime_business_drains_total"	Counter	"{drain}"	["component","outcome"]	Runtime

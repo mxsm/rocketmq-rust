@@ -169,6 +169,14 @@ impl BlockingLanes {
             self.cpu_crypto.snapshot(),
         ]
     }
+
+    fn aggregates(&self) -> Vec<crate::blocking::BlockingExecutorAggregate> {
+        vec![
+            self.storage_io.aggregate(),
+            self.metadata_io.aggregate(),
+            self.cpu_crypto.aggregate(),
+        ]
+    }
 }
 
 /// The unique, non-cloneable lifecycle root owned by [`crate::RuntimeOwner`].
@@ -257,8 +265,12 @@ impl RootServiceContext {
         &self,
         component: crate::diagnostics::RuntimeComponent,
     ) -> crate::diagnostics::RuntimeDiagnosticsViewV1 {
-        self.diagnostics
-            .view_v1(component, &self.task_group, self.blocking_lanes.snapshots())
+        self.diagnostics.view_v1_with_aggregates(
+            component,
+            &self.task_group,
+            self.blocking_lanes.aggregates(),
+            Default::default(),
+        )
     }
 
     pub(crate) fn task_group(&self) -> &TaskGroup {
@@ -400,8 +412,12 @@ impl ChildServiceContext {
         &self,
         component: crate::diagnostics::RuntimeComponent,
     ) -> crate::diagnostics::RuntimeDiagnosticsViewV1 {
-        self.diagnostics
-            .view_v1(component, &self.task_group, self.blocking_lanes.snapshots())
+        self.diagnostics.view_v1_with_aggregates(
+            component,
+            &self.task_group,
+            self.blocking_lanes.aggregates(),
+            Default::default(),
+        )
     }
 
     /// Returns a bounded, explicitly scoped diagnostics view for this subtree.
@@ -430,10 +446,10 @@ impl ChildServiceContext {
         inputs: crate::diagnostics::RuntimeDiagnosticsInputs,
         options: crate::diagnostics::RuntimeDiagnosticsViewOptionsV2,
     ) -> crate::diagnostics::RuntimeDiagnosticsViewV2 {
-        self.diagnostics.view_v2_with_options(
+        self.diagnostics.view_v2_with_aggregates(
             component,
             &self.task_group,
-            self.blocking_lanes.snapshots(),
+            self.blocking_lanes.aggregates(),
             inputs,
             options,
         )

@@ -328,6 +328,12 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     );
     log_security_bootstrap(validated_security);
 
+    lifecycle.set_observer(std::sync::Arc::new(
+        rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder::from_handle(
+            &telemetry_handle,
+            RuntimeComponent::Controller,
+        ),
+    ))?;
     if let Err(error) = lifecycle.start(&service_context).await {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
@@ -340,13 +346,20 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         }
         return Err(controller_internal_by("start controller lifecycle boundary", error).into());
     }
-    if let Err(error) = rocketmq_observability::start_runtime_diagnostics_endpoint_from_env_with_telemetry(
+    let diagnostics_sources = rocketmq_observability::RuntimeDiagnosticsSources::default();
+    let diagnostics = rocketmq_observability::RuntimeDiagnosticsService::new(
         &service_context,
         RuntimeComponent::Controller,
-        &telemetry_handle,
-    )
-    .await
-    {
+        telemetry_handle.clone(),
+        std::sync::Arc::new(diagnostics_sources.clone()),
+    );
+    let diagnostics_start = async {
+        diagnostics
+            .start(rocketmq_observability::RuntimeDiagnosticsMode::from_env()?)
+            .await
+    }
+    .await;
+    if let Err(error) = diagnostics_start {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
         if let Err(shutdown_error) = telemetry_guard
@@ -371,6 +384,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         lifecycle.clone(),
         telemetry_handle,
         process_telemetry.metrics_enabled(),
+        &diagnostics_sources,
     )
     .await;
     if controller_result.is_err() {
@@ -388,8 +402,20 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         controller_result,
         service_context.task_group(),
         shutdown_request.deadline,
+        &diagnostics_sources,
     )
     .await;
+    rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder::from_handle(
+        &telemetry_guard.handle(),
+        rocketmq_runtime::RuntimeComponent::Controller,
+    )
+    .record_business_drain(if shutdown_request.deadline.is_expired() {
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::DeadlineExceeded
+    } else if controller_result.is_ok() {
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Drained
+    } else {
+        rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome::Failed
+    });
     let telemetry_report = match telemetry_flush_lease {
         Some(lease) => {
             telemetry_guard
@@ -479,6 +505,7 @@ async fn run_controller(
     lifecycle: ServiceLifecycle,
     telemetry_handle: rocketmq_observability::TelemetryHandle,
     release_identity_required: bool,
+    diagnostics_sources: &rocketmq_observability::RuntimeDiagnosticsSources,
 ) -> Result<()> {
     // Create controller manager
     info!("Creating Controller Manager...");
@@ -510,6 +537,9 @@ async fn run_controller(
     if let Err(error) = controller_manager.start().await {
         shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
         return Err(error.into());
+    }
+    if let Some(observer) = controller_manager.leadership_watch_observer() {
+        diagnostics_sources.set_schedules(observer);
     }
     if let Err(error) = initialize_cluster_if_configured(&controller_manager).await {
         shutdown_controller_after_startup_failure(&controller_manager, &lifecycle).await;
@@ -556,8 +586,10 @@ async fn finish_controller_process_shutdown(
     controller_result: Result<()>,
     service_tasks: &TaskGroup,
     deadline: ShutdownDeadline,
+    diagnostics_sources: &rocketmq_observability::RuntimeDiagnosticsSources,
 ) -> Result<()> {
     let service_report = service_tasks.shutdown_until(deadline).await;
+    diagnostics_sources.retain_shutdown(&service_report);
     match (controller_result, service_report.is_healthy()) {
         (Ok(()), true) => Ok(()),
         (Err(controller_error), true) => Err(controller_error),

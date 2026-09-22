@@ -258,6 +258,38 @@ struct ServiceLifecycleInner {
     started: AtomicBool,
     lifecycle_tasks: Mutex<Option<TaskGroup>>,
     probe_local_addr: Mutex<Option<SocketAddr>>,
+    observer: Mutex<Option<Arc<dyn ServiceLifecycleObserver>>>,
+}
+
+/// One committed process state change. `from = None` is the initial Starting event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServiceLifecycleTransition {
+    /// Previous committed state, absent only for initial observer attachment.
+    pub from: Option<ServiceLifecycleState>,
+    /// State committed by this transition.
+    pub to: ServiceLifecycleState,
+}
+
+/// Observes committed state changes without owning the lifecycle.
+///
+/// Callbacks run synchronously outside lifecycle locks. They must be short,
+/// nonblocking and panic-free, and must not flush exporters or perform I/O.
+/// Concurrent callers may deliver callbacks out of order; each event carries
+/// the actual atomic transition and is delivered once, without polling.
+pub trait ServiceLifecycleObserver: std::fmt::Debug + Send + Sync {
+    /// Records a committed transition without waiting for external work.
+    fn on_transition(&self, transition: ServiceLifecycleTransition);
+}
+
+struct LifecycleNotification {
+    observer: Arc<dyn ServiceLifecycleObserver>,
+    transition: ServiceLifecycleTransition,
+}
+
+impl LifecycleNotification {
+    fn deliver(self) {
+        self.observer.on_transition(self.transition);
+    }
 }
 
 struct ServiceLifecycleStartAttempt<'a> {
@@ -320,6 +352,7 @@ impl ServiceLifecycle {
                 started: AtomicBool::new(false),
                 lifecycle_tasks: Mutex::new(None),
                 probe_local_addr: Mutex::new(None),
+                observer: Mutex::new(None),
             }),
         }
     }
@@ -332,6 +365,46 @@ impl ServiceLifecycle {
     /// Returns the config.
     pub fn config(&self) -> &ServiceLifecycleConfig {
         &self.inner.config
+    }
+
+    /// Binds one observer before the first state transition and emits Starting.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an observer is already installed or the lifecycle
+    /// has left Starting. Installation is serialized with state transitions.
+    pub fn set_observer(&self, observer: Arc<dyn ServiceLifecycleObserver>) -> RuntimeResult<()> {
+        let mut slot = self.inner.observer.lock();
+        if slot.is_some() || self.state() != ServiceLifecycleState::Starting {
+            return Err(RuntimeError::context_unavailable(
+                crate::RuntimeOperation::StartServiceLifecycle,
+            ));
+        }
+        *slot = Some(Arc::clone(&observer));
+        drop(slot);
+        observer.on_transition(ServiceLifecycleTransition {
+            from: None,
+            to: ServiceLifecycleState::Starting,
+        });
+        Ok(())
+    }
+
+    fn transition(&self, target: u8, mut allowed: impl FnMut(u8) -> bool) -> Result<Option<LifecycleNotification>, u8> {
+        let observer = self.inner.observer.lock();
+        self.inner
+            .state
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                (state != target && allowed(state)).then_some(target)
+            })
+            .map(|from| {
+                observer.as_ref().map(|observer| LifecycleNotification {
+                    observer: Arc::clone(observer),
+                    transition: ServiceLifecycleTransition {
+                        from: Some(ServiceLifecycleState::from_u8(from)),
+                        to: ServiceLifecycleState::from_u8(target),
+                    },
+                })
+            })
     }
 
     /// Starts the progress heartbeat and optional HTTP probe server under a dedicated
@@ -519,13 +592,12 @@ impl ServiceLifecycle {
     ///
     /// Returns an error when shutdown or failure already began.
     pub fn mark_ready(&self) -> RuntimeResult<()> {
-        match self
-            .inner
-            .state
-            .compare_exchange(STATE_STARTING, STATE_READY, Ordering::AcqRel, Ordering::Acquire)
-        {
-            Ok(_) => {
+        match self.transition(STATE_READY, |state| state == STATE_STARTING) {
+            Ok(notification) => {
                 self.record_progress();
+                if let Some(notification) = notification {
+                    notification.deliver();
+                }
                 Ok(())
             }
             Err(STATE_READY) => Ok(()),
@@ -581,20 +653,23 @@ impl ServiceLifecycle {
 
     /// Executes mark failed.
     pub fn mark_failed(&self) {
-        // All lifecycle transitions participate in the same atomic RMW order.
-        self.inner.state.swap(STATE_FAILED, Ordering::AcqRel);
+        let notification = self.transition(STATE_FAILED, |_| true).ok().flatten();
         self.record_progress();
+        if let Some(notification) = notification {
+            notification.deliver();
+        }
     }
 
     /// Executes mark stopped.
     pub fn mark_stopped(&self) {
-        let _ = self
-            .inner
-            .state
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |state| {
-                (state != STATE_FAILED).then_some(STATE_STOPPED)
-            });
+        let notification = self
+            .transition(STATE_STOPPED, |state| state != STATE_FAILED)
+            .ok()
+            .flatten();
         self.record_progress();
+        if let Some(notification) = notification {
+            notification.deliver();
+        }
     }
 
     /// Records the first shutdown request and returns its immutable deadline.
@@ -612,14 +687,16 @@ impl ServiceLifecycle {
         *request = Some(first);
         // Failure and stop can race this request without taking its mutex.
         // Recheck the terminal states on every compare-and-exchange attempt.
-        let _ = self
-            .inner
-            .state
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |state| {
-                (state != STATE_FAILED && state != STATE_STOPPED).then_some(STATE_DRAINING)
-            });
+        let notification = self
+            .transition(STATE_DRAINING, |state| state != STATE_FAILED && state != STATE_STOPPED)
+            .ok()
+            .flatten();
         self.record_progress();
         self.inner.shutdown_tx.send_replace(Some(first));
+        drop(request);
+        if let Some(notification) = notification {
+            notification.deliver();
+        }
         first
     }
 
@@ -666,6 +743,67 @@ mod tests {
 
     use super::*;
     use crate::RuntimeContext;
+
+    #[derive(Debug)]
+    struct RecordingObserver {
+        lifecycle: std::sync::Weak<ServiceLifecycleInner>,
+        events: Mutex<Vec<ServiceLifecycleTransition>>,
+    }
+
+    impl ServiceLifecycleObserver for RecordingObserver {
+        fn on_transition(&self, transition: ServiceLifecycleTransition) {
+            let inner = self.lifecycle.upgrade().unwrap();
+            assert!(
+                inner.shutdown_request.try_lock().is_some(),
+                "shutdown lock held by callback"
+            );
+            assert!(inner.observer.try_lock().is_some(), "observer lock held by callback");
+            self.events.lock().push(transition);
+        }
+    }
+
+    #[test]
+    fn observers_receive_only_committed_transitions_outside_lifecycle_locks() {
+        let lifecycle = ServiceLifecycle::new(config(None));
+        let observer = Arc::new(RecordingObserver {
+            lifecycle: Arc::downgrade(&lifecycle.inner),
+            events: Mutex::new(Vec::new()),
+        });
+        lifecycle.set_observer(observer.clone()).unwrap();
+        assert!(lifecycle.set_observer(observer.clone()).is_err());
+        lifecycle.mark_ready().unwrap();
+        lifecycle.mark_ready().unwrap();
+        let first = lifecycle.request_shutdown(ShutdownReason::Internal);
+        let repeated = lifecycle.request_shutdown(ShutdownReason::Signal);
+        assert_eq!(first.deadline, repeated.deadline);
+        lifecycle.mark_stopped();
+        lifecycle.mark_stopped();
+        let states: Vec<_> = observer.events.lock().iter().map(|event| event.to).collect();
+        assert_eq!(
+            states,
+            [
+                ServiceLifecycleState::Starting,
+                ServiceLifecycleState::Ready,
+                ServiceLifecycleState::Draining,
+                ServiceLifecycleState::Stopped,
+            ]
+        );
+        assert_eq!(observer.events.lock()[2].from, Some(ServiceLifecycleState::Ready));
+
+        let failed = ServiceLifecycle::new(config(None));
+        let observer = Arc::new(RecordingObserver {
+            lifecycle: Arc::downgrade(&failed.inner),
+            events: Mutex::new(Vec::new()),
+        });
+        failed.set_observer(observer.clone()).unwrap();
+        failed.mark_failed();
+        failed.mark_failed();
+        failed.request_shutdown(ShutdownReason::Internal);
+        failed.mark_stopped();
+        assert!(failed.mark_ready().is_err());
+        assert_eq!(observer.events.lock().len(), 2);
+        assert_eq!(observer.events.lock()[1].to, ServiceLifecycleState::Failed);
+    }
 
     fn config(probe_bind_addr: Option<SocketAddr>) -> ServiceLifecycleConfig {
         ServiceLifecycleConfig {

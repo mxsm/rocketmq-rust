@@ -66,7 +66,7 @@ fn combined_catalog_contains_every_semantic_metric_once() {
         .collect::<HashSet<_>>();
 
     assert_eq!(JAVA_METRICS.len(), 94);
-    assert_eq!(RUST_METRICS.len(), 129);
+    assert_eq!(RUST_METRICS.len(), 131);
     assert_eq!(
         combined.len(),
         JAVA_METRICS.len() + RUST_METRICS.len(),

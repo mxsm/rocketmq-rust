@@ -80,6 +80,7 @@ pub(crate) struct BrokerBasicServiceShutdownReport {
 pub(super) struct BrokerShutdownProgress {
     unfinished: Arc<StdMutex<Vec<&'static str>>>,
     message_store_report: Arc<StdMutex<Option<BrokerShutdownComponentReport>>>,
+    business_drain_recorded: Arc<AtomicBool>,
 }
 
 impl BrokerShutdownProgress {
@@ -91,6 +92,7 @@ impl BrokerShutdownProgress {
                     .to_vec(),
             )),
             message_store_report: Arc::new(StdMutex::new(None)),
+            business_drain_recorded: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -99,6 +101,10 @@ impl BrokerShutdownProgress {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|component| *component != name);
+    }
+
+    pub(super) fn claim_business_drain_event(&self) -> bool {
+        !self.business_drain_recorded.swap(true, Ordering::AcqRel)
     }
 
     pub(super) fn unfinished(&self) -> Vec<&'static str> {

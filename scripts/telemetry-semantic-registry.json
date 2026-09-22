@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "registry_version": "1.1.0",
+  "registry_version": "1.2.0",
   "milestone": "M11-01",
   "description": "Canonical telemetry semantics and collector-outage behavior for RocketMQ Rust.",
   "required_families": [
@@ -6319,6 +6319,59 @@
       }
     },
     {
+      "id": "rocketmq_runtime_operation_outcomes_total",
+      "source_symbol": "RUNTIME_OPERATION_OUTCOMES_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{task}",
+      "owner": "runtime",
+      "catalog": "rust",
+      "family": "task",
+      "stability": "stable",
+      "attributes": [
+        "component",
+        "task_type",
+        "outcome"
+      ],
+      "cardinality_budget": 512,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.2.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq_runtime_business_drains_total",
+      "source_symbol": "RUNTIME_BUSINESS_DRAINS_TOTAL",
+      "signal_type": "metric",
+      "kind": "counter",
+      "unit": "{drain}",
+      "owner": "runtime",
+      "catalog": "rust",
+      "family": "task",
+      "stability": "stable",
+      "attributes": [
+        "component",
+        "outcome"
+      ],
+      "cardinality_budget": 32,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "aggregate"
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.2.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
       "id": "RocketMQ BROKER RECEIVE_SEND",
       "source_symbol": "BROKER_RECEIVE_SEND",
       "signal_type": "span",
@@ -6867,6 +6920,31 @@
       "deprecation": {
         "status": "active",
         "since": "1.0.0",
+        "replacement": null,
+        "remove_after": null
+      }
+    },
+    {
+      "id": "rocketmq.runtime.business_drain",
+      "source_symbol": "RUNTIME_BUSINESS_DRAIN",
+      "signal_type": "log",
+      "owner": "runtime",
+      "family": "task",
+      "stability": "stable",
+      "attributes": [
+        "component",
+        "outcome"
+      ],
+      "cardinality_budget": 32,
+      "privacy": "operational",
+      "sampling": {
+        "strategy": "rate_limit",
+        "max_per_second": 100,
+        "max_events_per_operation": 1
+      },
+      "deprecation": {
+        "status": "active",
+        "since": "1.2.0",
         "replacement": null,
         "remove_after": null
       }

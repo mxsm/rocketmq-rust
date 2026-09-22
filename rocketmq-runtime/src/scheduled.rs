@@ -182,6 +182,29 @@ pub struct ScheduledTaskGroup {
     schedules: Arc<DashMap<Arc<str>, Arc<ScheduledTaskMetrics>>>,
 }
 
+/// Reads an explicitly selected set of schedules without retaining their owner.
+///
+/// Lookup cost is bounded by the names supplied at construction. A selected
+/// schedule may be registered later; missing registrations are omitted.
+#[derive(Debug, Clone)]
+pub struct ScheduledTaskObserver {
+    schedules: std::sync::Weak<DashMap<Arc<str>, Arc<ScheduledTaskMetrics>>>,
+    names: Arc<[Arc<str>]>,
+}
+
+impl ScheduledTaskObserver {
+    /// Reads the selected registrations using only in-memory metric state.
+    pub fn snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
+        let Some(schedules) = self.schedules.upgrade() else {
+            return Vec::new();
+        };
+        self.names
+            .iter()
+            .filter_map(|name| schedules.get(name).map(|entry| entry.value().snapshot()))
+            .collect()
+    }
+}
+
 #[derive(Debug)]
 struct ScheduledTaskMetrics {
     config: ScheduledTaskConfig,
@@ -706,6 +729,20 @@ impl ScheduledTaskGroup {
     /// Returns the snapshot.
     pub fn snapshot(&self) -> Vec<ScheduledTaskSnapshot> {
         self.schedules.iter().map(|entry| entry.value().snapshot()).collect()
+    }
+
+    /// Observes a fixed selection of schedule names without keeping tasks alive.
+    ///
+    /// Duplicate names are removed. Callers should select component-level jobs,
+    /// not names derived from requests or resources.
+    pub fn observer(&self, names: &[&str]) -> ScheduledTaskObserver {
+        let mut names: Vec<Arc<str>> = names.iter().map(|name| Arc::from(*name)).collect();
+        names.sort_unstable();
+        names.dedup();
+        ScheduledTaskObserver {
+            schedules: Arc::downgrade(&self.schedules),
+            names: names.into(),
+        }
     }
 
     /// Clears completed schedule registrations so a fixed component owner can

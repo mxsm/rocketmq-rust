@@ -1114,6 +1114,46 @@ mod tests {
         assert_eq!(error.operation(), crate::error::ObservabilityOperation::ShutdownLogs);
     }
 
+    #[tokio::test]
+    async fn final_flush_remains_owned_after_its_observation_deadline() {
+        use std::sync::{Arc, Condvar, Mutex};
+        let context = rocketmq_runtime::RuntimeContext::from_current("flush-deadline");
+        let service = context.service_context("telemetry");
+        let deadline = ShutdownDeadline::after(Duration::from_millis(100));
+        let lease = reserve_telemetry_flush_lease(&service, Some(deadline)).unwrap();
+        assert!(service.task_group().shutdown_until(deadline).await.is_healthy());
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        struct Release(Arc<(Mutex<bool>, Condvar)>);
+        impl Drop for Release {
+            fn drop(&mut self) {
+                *self.0 .0.lock().unwrap() = true;
+                self.0 .1.notify_all();
+            }
+        }
+        let release = Release(gate.clone());
+        let (started, wait_started) = tokio::sync::oneshot::channel();
+        let flush = TelemetryFlushAuthority::Drain(lease).flush("blocked-final-flush", deadline, move || {
+            let _ = started.send(());
+            let mut open = gate.0.lock().unwrap();
+            while !*open {
+                open = gate.1.wait(open).unwrap();
+            }
+            TelemetryRuntimeGuard::noop().shutdown()
+        });
+        let (result, started) = tokio::join!(flush, wait_started);
+        started.unwrap();
+        assert!(result.is_err());
+        assert_eq!(service.metadata_io().blocking_still_running(), 1);
+        drop(release);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while service.metadata_io().blocking_still_running() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
     fn unique_temp_log_dir(test_name: &str) -> PathBuf {
         let id = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
         let nanos = SystemTime::now()

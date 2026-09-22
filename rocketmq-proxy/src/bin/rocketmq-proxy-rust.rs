@@ -200,6 +200,15 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
     );
     log_security_bootstrap(validated_security);
 
+    let diagnostics_sources = rocketmq_observability::RuntimeDiagnosticsSources::default();
+    lifecycle
+        .set_observer(std::sync::Arc::new(
+            rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder::from_handle(
+                &telemetry_guard.handle(),
+                RuntimeComponent::Proxy,
+            ),
+        ))
+        .map_err(proxy_runtime_error("bind Proxy lifecycle observer"))?;
     if let Err(error) = lifecycle.start(&service_context).await {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
@@ -209,16 +218,23 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
             telemetry_guard,
             &service_context,
             request.deadline,
+            &diagnostics_sources,
         )
         .await;
     }
-    if let Err(error) = rocketmq_observability::start_runtime_diagnostics_endpoint_from_env_with_telemetry(
+    let diagnostics = rocketmq_observability::RuntimeDiagnosticsService::new(
         &service_context,
         RuntimeComponent::Proxy,
-        &telemetry_guard.handle(),
-    )
-    .await
-    {
+        telemetry_guard.handle(),
+        std::sync::Arc::new(diagnostics_sources.clone()),
+    );
+    let diagnostics_start = async {
+        diagnostics
+            .start(rocketmq_observability::RuntimeDiagnosticsMode::from_env()?)
+            .await
+    }
+    .await;
+    if let Err(error) = diagnostics_start {
         lifecycle.mark_failed();
         let request = lifecycle.request_shutdown(ShutdownReason::Internal);
         if let Err(shutdown_error) = telemetry_guard
@@ -235,7 +251,9 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         "Starting RocketMQ proxy: mode={:?}, grpc={}, remotingEnabled={}, remoting={}",
         config.mode, config.grpc.listen_addr, config.remoting.enabled, config.remoting.listen_addr
     );
-    let primary_result = match ProxyRuntime::builder(config, service_context.clone(), telemetry_guard.handle()).build()
+    let primary_result = match ProxyRuntime::builder(config, service_context.clone(), telemetry_guard.handle())
+        .with_runtime_diagnostics_sources(diagnostics_sources.clone())
+        .build()
     {
         Ok(proxy_runtime) => proxy_runtime.serve_with_lifecycle(lifecycle.clone()).await,
         Err(error) => Err(error),
@@ -258,6 +276,7 @@ async fn run(service_context: ChildServiceContext, lifecycle: ServiceLifecycle) 
         telemetry_guard,
         &service_context,
         shutdown_request.deadline,
+        &diagnostics_sources,
     )
     .await;
     if shutdown_result.is_ok() {
@@ -271,13 +290,39 @@ async fn complete_proxy_process_shutdown(
     telemetry_guard: rocketmq_observability::TelemetryRuntimeGuard,
     service_context: &ChildServiceContext,
     deadline: ShutdownDeadline,
+    diagnostics_sources: &rocketmq_observability::RuntimeDiagnosticsSources,
 ) -> ProxyResult<()> {
-    let primary_result = finish_proxy_process_shutdown(primary_result, service_context.task_group(), deadline).await;
-    let telemetry_result = telemetry_guard
-        .shutdown_with_service_context(service_context, deadline.remaining())
-        .await
-        .into_result()
-        .map_err(proxy_observability_error);
+    let flush_lease = rocketmq_observability::reserve_telemetry_flush_lease(service_context, Some(deadline));
+    let primary_result = finish_proxy_process_shutdown(
+        primary_result,
+        service_context.task_group(),
+        deadline,
+        diagnostics_sources,
+    )
+    .await;
+    use rocketmq_observability::metrics::runtime::{RuntimeBusinessDrainOutcome, RuntimeMetricsRecorder};
+    let outcome = if deadline.is_expired() {
+        RuntimeBusinessDrainOutcome::DeadlineExceeded
+    } else if primary_result.is_ok() {
+        RuntimeBusinessDrainOutcome::Drained
+    } else {
+        RuntimeBusinessDrainOutcome::Failed
+    };
+    RuntimeMetricsRecorder::from_handle(&telemetry_guard.handle(), RuntimeComponent::Proxy)
+        .record_business_drain(outcome);
+    let telemetry_report = match flush_lease {
+        Some(lease) => {
+            telemetry_guard
+                .shutdown_with_drain_lease(lease, deadline.remaining())
+                .await
+        }
+        None => {
+            telemetry_guard
+                .shutdown_with_service_context(service_context, deadline.remaining())
+                .await
+        }
+    };
+    let telemetry_result = telemetry_report.into_result().map_err(proxy_observability_error);
 
     match (primary_result, telemetry_result) {
         (Err(primary_error), Err(telemetry_error)) => {
@@ -294,8 +339,10 @@ async fn finish_proxy_process_shutdown(
     primary_result: ProxyResult<()>,
     service_tasks: &TaskGroup,
     deadline: ShutdownDeadline,
+    diagnostics_sources: &rocketmq_observability::RuntimeDiagnosticsSources,
 ) -> ProxyResult<()> {
     let service_report = service_tasks.shutdown_until(deadline).await;
+    diagnostics_sources.retain_shutdown(&service_report);
     match (primary_result, service_report.is_healthy()) {
         (Ok(()), true) => Ok(()),
         (Err(primary_error), true) => Err(primary_error),

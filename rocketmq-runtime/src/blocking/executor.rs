@@ -699,7 +699,29 @@ impl BlockingExecutor {
         }
     }
 
-    /// Returns the snapshot.
+    /// Samples aggregate state without allocating task names or a detail list.
+    pub(crate) fn aggregate(&self) -> super::BlockingExecutorAggregate {
+        let mut aggregate =
+            super::BlockingExecutorAggregate::new(self.lane, self.policy.max_concurrency, self.policy.max_queue_depth);
+        let now = Instant::now();
+        for entry in self.tasks.iter() {
+            let task = entry.value();
+            aggregate.record_kind(
+                task.kind,
+                now.saturating_duration_since(task.started_at.unwrap_or(task.queued_at)),
+            );
+            match task.state {
+                BlockingTaskState::Queued => aggregate.queued += 1,
+                BlockingTaskState::Running => aggregate.running += 1,
+                BlockingTaskState::TimedOutStillRunning => aggregate.timed_out_still_running += 1,
+                BlockingTaskState::Completed | BlockingTaskState::JoinFailed => {}
+            }
+        }
+        aggregate.blocking_still_running = aggregate.running + aggregate.timed_out_still_running;
+        aggregate
+    }
+
+    /// Returns the snapshot, including task names and individual elapsed times.
     pub fn snapshot(&self) -> BlockingExecutorSnapshot {
         let tasks = self
             .tasks

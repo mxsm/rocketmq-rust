@@ -155,6 +155,7 @@ pub struct ProxyRuntimeBuilder {
     remoting_backend:
         Option<Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>>,
     service_context: ChildServiceContext,
+    diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources,
 }
 
 fn require_healthy_component_shutdown(component: &'static str, report: ShutdownReport) -> ProxyResult<()> {
@@ -183,6 +184,7 @@ impl ProxyRuntimeBuilder {
             telemetry,
             remoting_backend: None,
             service_context,
+            diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources::default(),
         }
     }
 
@@ -208,6 +210,15 @@ impl ProxyRuntimeBuilder {
 
     pub fn with_metrics(mut self, metrics: ProxyMetrics) -> Self {
         self.metrics = Some(metrics);
+        self
+    }
+
+    /// Connects the fixed gRPC housekeeping job to caller-owned diagnostics.
+    pub fn with_runtime_diagnostics_sources(
+        mut self,
+        sources: rocketmq_observability::RuntimeDiagnosticsSources,
+    ) -> Self {
+        self.diagnostics_sources = sources;
         self
     }
 
@@ -277,7 +288,7 @@ impl ProxyRuntimeBuilder {
             }
         });
         let processor = Arc::new(DefaultMessagingProcessor::new(backend.service_manager));
-        Ok(ProxyRuntime::from_processor_with_local_mode_support_and_guards(
+        let mut runtime = ProxyRuntime::from_processor_with_local_mode_support_and_guards(
             self.config,
             processor,
             session_registry,
@@ -291,7 +302,11 @@ impl ProxyRuntimeBuilder {
             backend.remoting_backend,
             backend.context,
             service_context,
-        ))
+        );
+        runtime.grpc_service = runtime
+            .grpc_service
+            .with_runtime_diagnostics_sources(self.diagnostics_sources);
+        Ok(runtime)
     }
 }
 

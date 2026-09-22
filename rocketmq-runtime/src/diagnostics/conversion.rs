@@ -39,7 +39,7 @@ pub(super) fn task_section_v2(
         scope: RuntimeDiagnosticsScope::Subtree,
         task_group_count: diagnostics.group_count,
         task_count: diagnostics.task_count,
-        local_task_count: root.local_diagnostics(options.long_running_threshold).task_count,
+        local_task_count: diagnostics.local_task_count,
         long_running,
         max_elapsed_millis: duration_millis(max_elapsed),
         truncated: summary_count > options.max_task_kind_summaries,
@@ -59,7 +59,7 @@ pub(super) fn task_section_v2(
 }
 
 pub(super) fn blocking_section_v2(
-    blocking_lanes: Vec<BlockingExecutorSnapshot>,
+    blocking_lanes: Vec<BlockingExecutorAggregate>,
     options: RuntimeDiagnosticsViewOptionsV2,
 ) -> (RuntimeBlockingSectionV2, bool) {
     let lane_count = blocking_lanes.len();
@@ -162,26 +162,12 @@ pub(super) const fn runtime_detail_scope(scope: TaskDetailScope) -> RuntimeDiagn
     }
 }
 
-pub(super) fn sanitize_blocking_lane(snapshot: BlockingExecutorSnapshot) -> RuntimeBlockingLaneSummaryV1 {
+pub(super) fn sanitize_blocking_lane(snapshot: BlockingExecutorAggregate) -> RuntimeBlockingLaneSummaryV1 {
     let lane = match snapshot.lane {
         BlockingLane::StorageIo => RuntimeBlockingLaneV1::StorageIo,
         BlockingLane::MetadataIo => RuntimeBlockingLaneV1::MetadataIo,
         BlockingLane::CpuCrypto => RuntimeBlockingLaneV1::CpuCrypto,
     };
-    let mut task_kinds = [
-        (BlockingKind::ShortIo, 0usize, Duration::ZERO),
-        (BlockingKind::CpuBound, 0usize, Duration::ZERO),
-        (BlockingKind::LongRunning, 0usize, Duration::ZERO),
-    ];
-    for task in snapshot.tasks {
-        let index = match task.kind {
-            BlockingKind::ShortIo => 0,
-            BlockingKind::CpuBound => 1,
-            BlockingKind::LongRunning => 2,
-        };
-        task_kinds[index].1 = task_kinds[index].1.saturating_add(1);
-        task_kinds[index].2 = task_kinds[index].2.max(task.elapsed);
-    }
 
     RuntimeBlockingLaneSummaryV1 {
         lane,
@@ -191,7 +177,8 @@ pub(super) fn sanitize_blocking_lane(snapshot: BlockingExecutorSnapshot) -> Runt
         running: snapshot.running,
         timed_out_still_running: snapshot.timed_out_still_running,
         blocking_still_running: snapshot.blocking_still_running,
-        task_kinds: task_kinds
+        task_kinds: snapshot
+            .task_kinds
             .into_iter()
             .filter_map(|(kind, active, max_elapsed)| {
                 (active > 0).then_some(RuntimeBlockingKindSummaryV1 {

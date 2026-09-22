@@ -112,10 +112,16 @@ async fn inactive_broker_worker_observes_manager_cancellation() {
     let started = Arc::new(tokio::sync::Notify::new());
     let started_task = started.clone();
 
-    spawn_inactive_broker_worker(&task_group, async move {
-        started_task.notify_one();
-        std::future::pending::<()>().await;
-    })
+    spawn_inactive_broker_worker(
+        &task_group,
+        Arc::new(rocketmq_observability::metrics::runtime::RuntimeMetricsRecorder::noop(
+            rocketmq_runtime::RuntimeComponent::Controller,
+        )),
+        async move {
+            started_task.notify_one();
+            std::future::pending::<()>().await;
+        },
+    )
     .expect("spawn inactive broker worker");
     tokio::time::timeout(Duration::from_secs(1), started.notified())
         .await

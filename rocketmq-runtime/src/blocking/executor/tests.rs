@@ -56,6 +56,38 @@ fn assert_released(executor: &BlockingExecutor) {
 }
 
 #[tokio::test]
+async fn diagnostics_aggregate_tracks_real_blocking_timeout_and_completion() {
+    let executor = executor();
+    let (mut task, release) = gated_task(&executor).await;
+    let aggregate = executor.aggregate();
+    let detailed = executor.snapshot();
+    assert_eq!(aggregate.lane, detailed.lane);
+    assert_eq!(aggregate.max_concurrency, detailed.max_concurrency);
+    assert_eq!(aggregate.max_queue_depth, detailed.max_queue_depth);
+    assert_eq!(aggregate.queued, detailed.queued);
+    assert_eq!(aggregate.running, detailed.running);
+    assert_eq!(aggregate.blocking_still_running, detailed.blocking_still_running);
+    assert_eq!(aggregate.task_kinds[0].1, 1);
+    assert_eq!(aggregate.task_kinds[1].1, 0);
+    assert_eq!(aggregate.task_kinds[2].1, 0);
+    assert!(aggregate.task_kinds[0].2 <= detailed.tasks[0].elapsed);
+
+    assert!(task.wait_until(Instant::now()).await.is_err());
+    let aggregate = executor.aggregate();
+    assert_eq!(aggregate.running, 0);
+    assert_eq!(aggregate.timed_out_still_running, 1);
+    assert_eq!(aggregate.blocking_still_running, 1);
+    assert_eq!(aggregate.task_kinds[0].1, 1);
+
+    release.send(()).unwrap();
+    assert_eq!(task.wait().await.unwrap(), 42);
+    let aggregate = executor.aggregate();
+    assert_eq!(aggregate.queued, 0);
+    assert_eq!(aggregate.blocking_still_running, 0);
+    assert!(aggregate.task_kinds.iter().all(|(_, count, _)| *count == 0));
+}
+
+#[tokio::test]
 async fn expired_observation_retains_capacity_and_the_late_result() {
     let executor = executor();
     let (mut task, release) = gated_task(&executor).await;

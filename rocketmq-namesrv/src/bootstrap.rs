@@ -128,6 +128,7 @@ pub struct Builder {
     command_factory: RemotingCommandFactory,
     telemetry: TelemetryHandle,
     service_context: ChildServiceContext,
+    diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources,
 }
 
 /// Core runtime managing NameServer lifecycle and operations
@@ -135,6 +136,7 @@ pub struct Builder {
 /// Coordinates initialization, startup, and graceful shutdown of all components.
 struct NameServerRuntime {
     inner: Arc<NameServerRuntimeInner>,
+    diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources,
     scheduled_tasks: Option<ScheduledTaskGroup>,
     shutdown_tx: Option<watch::Sender<bool>>,
     shutdown_rx: Option<watch::Receiver<bool>>,
@@ -631,6 +633,8 @@ impl NameServerRuntime {
                 }
             })
             .map_err(|error| namesrv_startup_failed("start broker health check scheduled task", error))?;
+        self.diagnostics_sources
+            .set_schedules(scheduled_tasks.observer(&["namesrv.scan-not-active-broker"]));
         self.scheduled_tasks = Some(scheduled_tasks);
 
         info!(
@@ -916,6 +920,7 @@ impl NameServerRuntime {
 
         if let Some(task_group) = self.inner.task_group.get().cloned() {
             let report = task_group.shutdown_until(deadline).await;
+            self.diagnostics_sources.retain_shutdown(&report);
             if let Err(error) = report.assert_no_task_leak() {
                 warn!("NameServer task group shutdown report is unhealthy: {error}");
             }
@@ -1083,12 +1088,22 @@ impl Builder {
             command_factory: application_remoting_command_factory(),
             telemetry,
             service_context,
+            diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources::default(),
         }
     }
 
     #[inline]
     pub fn set_name_server_config(mut self, name_server_config: NamesrvConfig) -> Self {
         self.name_server_config = Some(name_server_config);
+        self
+    }
+
+    /// Publishes fixed maintenance and metadata observations to the process owner.
+    pub fn with_runtime_diagnostics_sources(
+        mut self,
+        sources: rocketmq_observability::RuntimeDiagnosticsSources,
+    ) -> Self {
+        self.diagnostics_sources = sources;
         self
     }
 
@@ -1183,6 +1198,9 @@ impl Builder {
                 .start(&service_context.component("namesrv.metadata-io")),
         );
         let config_metadata_io = metadata_io.clone();
+        if let Some(Ok(actor)) = metadata_io.as_ref() {
+            self.diagnostics_sources.set_metadata(actor.observer());
+        }
         let cluster_test_route_lookup = if name_server_config.cluster_test {
             self.cluster_test_route_lookup.or_else(|| {
                 Some(Arc::new(TransportClusterTestRouteLookup::new(
@@ -1308,6 +1326,7 @@ impl Builder {
         NameServerBootstrap {
             name_server_runtime: NameServerRuntime {
                 inner,
+                diagnostics_sources: self.diagnostics_sources,
                 scheduled_tasks: None,
                 shutdown_rx: None,
                 shutdown_tx: None,

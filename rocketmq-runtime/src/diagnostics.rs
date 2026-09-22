@@ -26,6 +26,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::blocking::BlockingExecutorAggregate;
 use crate::blocking::BlockingExecutorSnapshot;
 use crate::blocking::BlockingKind;
 use crate::blocking::BlockingLane;
@@ -313,6 +314,21 @@ impl RuntimeDiagnostics {
         blocking_lanes: Vec<BlockingExecutorSnapshot>,
         options: RuntimeDiagnosticsViewOptions,
     ) -> RuntimeDiagnosticsViewV1 {
+        self.view_v1_with_aggregates(
+            component,
+            root,
+            blocking_lanes.into_iter().map(Into::into).collect(),
+            options,
+        )
+    }
+
+    pub(crate) fn view_v1_with_aggregates(
+        &self,
+        component: RuntimeComponent,
+        root: &TaskGroup,
+        blocking_lanes: Vec<BlockingExecutorAggregate>,
+        options: RuntimeDiagnosticsViewOptions,
+    ) -> RuntimeDiagnosticsViewV1 {
         let task_diagnostics = root.diagnostics(options.long_running_threshold);
         let task_kind_count = task_diagnostics.task_kinds.len();
         let task_kinds = task_diagnostics
@@ -366,8 +382,11 @@ pub enum RuntimeDiagnosticsScope {
 
 /// Bounds applied while creating [`RuntimeDiagnosticsViewV2`].
 ///
-/// The detail budgets default to zero, so a routine sample reads only bounded
-/// aggregates and a task list is always an explicit request.
+/// The detail budgets default to zero, so a routine sample emits only bounded
+/// aggregates and a task list is always an explicit request. Task age and group
+/// summaries still scan the active population; detail bounds do not cap that
+/// aggregate scan. Concurrent submissions and completions can be observed at
+/// different instants across groups; the snapshot is not a global transaction.
 #[derive(Debug, Clone, Copy)]
 pub struct RuntimeDiagnosticsViewOptionsV2 {
     /// Elapsed time after which an active task is classified as long-running.
@@ -606,6 +625,23 @@ impl RuntimeDiagnostics {
         component: RuntimeComponent,
         root: &TaskGroup,
         blocking_lanes: Vec<BlockingExecutorSnapshot>,
+        inputs: RuntimeDiagnosticsInputs,
+        options: RuntimeDiagnosticsViewOptionsV2,
+    ) -> RuntimeDiagnosticsViewV2 {
+        self.view_v2_with_aggregates(
+            component,
+            root,
+            blocking_lanes.into_iter().map(Into::into).collect(),
+            inputs,
+            options,
+        )
+    }
+
+    pub(crate) fn view_v2_with_aggregates(
+        &self,
+        component: RuntimeComponent,
+        root: &TaskGroup,
+        blocking_lanes: Vec<BlockingExecutorAggregate>,
         inputs: RuntimeDiagnosticsInputs,
         options: RuntimeDiagnosticsViewOptionsV2,
     ) -> RuntimeDiagnosticsViewV2 {

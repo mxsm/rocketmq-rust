@@ -49,6 +49,29 @@ process-local, not a cross-process lock or crash-recovery proof.
 generations reject new admission, including rebinds, but outstanding permits
 can release or migrate out.
 
+## Observation boundaries
+
+`ServiceLifecycleObserver` attaches once while the process is Starting. State
+changes and observer installation share a short synchronization boundary;
+callbacks run after all lifecycle locks have been released. Only committed
+changes emit events. Concurrent transitions can deliver callbacks out of order,
+so each event identifies its actual previous and next state. Callbacks must be
+nonblocking and panic-free. Exporter shutdown belongs to the composition root.
+
+`OperationOutcome` is separate from `ShutdownReport.completed`. It describes
+each accepted operation task: normal return, operation cancellation, deadline,
+owner cancellation, panic, or abort before another outcome was selected. A
+finalizer publishes the result only after the user future is destroyed, including
+an unpolled abort or a destructor panic. Rejected submissions do not increment
+outcomes. The operation retains six counters rather than per-task history.
+Draining operations continue to ignore owner cancellation until their accepted
+work completes, is operation-cancelled, expires, or is explicitly aborted.
+
+`MetadataIoObserver` and selected-name `ScheduledTaskObserver` use weak
+references, so diagnostic consumers do not become write or execution owners.
+The metadata registry capacity bounds its resource scan; schedule lookup cost
+is proportional to the fixed selection supplied by the component.
+
 ## Maintenance example
 
 Partial or reordered blocking-lane inputs exposed a label bug: conversion used
@@ -87,3 +110,46 @@ Transaction-metrics persistence uses the bounded serial scheduler with explicit
 `MissedTickPolicy::Skip`: a delayed flush never replays missed ticks or overlaps
 another flush. Shutdown still performs a final dirty-metrics persist. This
 consumer decision does not change legacy scheduler defaults.
+
+## Sampling cost and consistency
+
+Service-context V1/V2 sampling reads blocking aggregates directly from the
+registry. It does not allocate individual blocking task names or detail
+objects. The explicit `BlockingExecutor::snapshot` API retains its full-detail
+contract. Task subtree and local counts now come from the same traversal.
+
+Age maxima, long-running thresholds and group counts still require an exact
+scan of each observed entry. No new counter is maintained on submission or
+completion, so this optimization adds no accounting responsibility to those
+paths. A scan is consistent per visited registry entry, not a globally atomic
+instant across groups or blocking lanes. Concurrent changes may therefore be
+observed at different times. Local counts are included in the subtree total
+from that same traversal.
+
+The diagnostics benchmark creates one stable task population outside each
+timed sampling loop, and shuts it down after measurement. Task population and
+group count vary independently. Detail scan/output budgets still describe the
+detail section alone; they do not limit the aggregate age scan. Sampling
+measurements exclude runtime construction, population and shutdown costs.
+
+## Metadata target retirement
+
+An owner plan accepts a nonzero metadata target capacity (default 4,096).
+Idle history and fenced history consume slots. Each actor independently bounds
+its retained resource cache by the same capacity: another actor retiring shared
+history must not grow an older actor's tombstones without limit.
+
+Normal actor replacement inherits target identity, resource ownership and
+confirmed generation. Explicit retirement has a different contract: after
+admission closes and the coordinator finishes, the registry atomically checks
+identity, durable generation, absence of live write authority and absence of a
+reconciliation fence. Only then may a new identity reuse the path and slot.
+Old open actors cannot rebind that retired identity; replace them to release
+their tombstones. Settled receipts retain their original result without owning
+a writer. Compare receipt and actor target identities before using a newer
+generation as evidence about an old write.
+
+Registry statistics expose capacity, retained histories, live owners, idle
+histories, fenced targets and remaining capacity without paths. Fenced and
+live counts can overlap. Unknown commits stay fenced: runtime has no generic
+format-independent recovery or unconditional fence-clearing operation.
