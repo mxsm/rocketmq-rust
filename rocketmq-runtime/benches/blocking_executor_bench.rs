@@ -209,7 +209,10 @@ fn write_blocking_report_artifact() {
         .parent()
         .expect("rocketmq-runtime should live below workspace root")
         .to_path_buf();
-    let output_dir = workspace_root.join("target/runtime-baseline/prototype");
+    let output_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root.join("target"))
+        .join("runtime-measurements");
     fs::create_dir_all(&output_dir).expect("runtime benchmark artifact directory should be created");
 
     let generated_at_unix_ms = SystemTime::now()
@@ -251,9 +254,10 @@ fn bench_blocking_executor(criterion: &mut Criterion) {
             BenchmarkId::new("spawn_io_completed", task_count),
             &task_count,
             |bencher, task_count| {
-                bencher.iter(|| {
-                    let output = run_completed_blocking(black_box(*task_count), 4, Duration::from_millis(1));
-                    black_box(output.elapsed);
+                bencher.iter_custom(|iterations| {
+                    (0..iterations)
+                        .map(|_| run_completed_blocking(black_box(*task_count), 4, Duration::from_millis(1)).elapsed)
+                        .sum()
                 });
             },
         );
