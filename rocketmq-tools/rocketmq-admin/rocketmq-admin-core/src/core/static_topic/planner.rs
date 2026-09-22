@@ -24,13 +24,39 @@ use crate::core::AdminResult;
 
 const EPOCH_STEP_MILLIS: u64 = 1_000;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StaticTopicPlanRequest {
     topic: String,
     queue_count: u32,
     target_brokers: Vec<String>,
     existing_epochs: Vec<u64>,
     existing_queue_count: Option<u32>,
+}
+
+impl<'de> Deserialize<'de> for StaticTopicPlanRequest {
+    fn deserialize<Deserializer>(deserializer: Deserializer) -> Result<Self, Deserializer::Error>
+    where
+        Deserializer: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct SerializedRequest {
+            topic: String,
+            queue_count: u32,
+            target_brokers: Vec<String>,
+            existing_epochs: Vec<u64>,
+            existing_queue_count: Option<u32>,
+        }
+
+        let request = SerializedRequest::deserialize(deserializer)?;
+        Self::try_new(
+            request.topic,
+            request.queue_count,
+            request.target_brokers,
+            request.existing_epochs,
+            request.existing_queue_count,
+        )
+        .map_err(serde::de::Error::custom)
+    }
 }
 
 impl StaticTopicPlanRequest {
@@ -83,6 +109,12 @@ impl StaticTopicPlanRequest {
     }
 
     pub fn plan_at(&self, now_millis: u64) -> AdminResult<StaticTopicPlan> {
+        if self.target_brokers.is_empty() {
+            return Err(AdminError::invalid_argument(
+                "targetBrokers",
+                "at least one broker must be provided",
+            ));
+        }
         let old_epoch = self.existing_epochs.iter().copied().max().unwrap_or(now_millis);
         let new_epoch = if self.existing_epochs.is_empty() {
             now_millis.checked_add(EPOCH_STEP_MILLIS)
@@ -205,5 +237,35 @@ mod tests {
         let request = StaticTopicPlanRequest::try_new("TopicA", 1, ["broker-a".to_string()], [], None).unwrap();
 
         assert!(request.plan_at(u64::MAX).is_err());
+    }
+
+    #[test]
+    fn deserialization_cannot_bypass_request_validation() {
+        let request = StaticTopicPlanRequest::try_new("orders", 1, ["broker-a".to_string()], [], None).unwrap();
+        let encoded = serde_json::to_string(&request).unwrap();
+        let decoded: StaticTopicPlanRequest = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, request);
+
+        for invalid in [
+            r#"{"topic":"orders","queue_count":4,"target_brokers":[],"existing_epochs":[],"existing_queue_count":null}"#,
+            r#"{"topic":"orders","queue_count":0,"target_brokers":["broker-a"],"existing_epochs":[],"existing_queue_count":null}"#,
+        ] {
+            assert!(serde_json::from_str::<StaticTopicPlanRequest>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn plan_at_defensively_rejects_an_empty_broker_list() {
+        let request = StaticTopicPlanRequest {
+            topic: "orders".to_string(),
+            queue_count: 4,
+            target_brokers: Vec::new(),
+            existing_epochs: Vec::new(),
+            existing_queue_count: None,
+        };
+
+        let error = request.plan_at(1_000).unwrap_err();
+        assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+        assert_eq!(error.field(), Some("targetBrokers"));
     }
 }
