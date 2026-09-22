@@ -42,7 +42,7 @@ pub struct UpdateTopicSubCommand {
         long = "clusterName",
         required = false,
         conflicts_with = "broker_addr",
-        help = "create topic to which cluster"
+        help = "cluster that owns the topic"
     )]
     cluster_name: Option<String>,
 

@@ -29,7 +29,7 @@ pub struct TopicListSubCommand {
         short = 'c',
         long = "clusterName",
         required = false,
-        help = "create topic to which cluster"
+        help = "cluster whose topics are listed"
     )]
     cluster_name: Option<String>,
 }

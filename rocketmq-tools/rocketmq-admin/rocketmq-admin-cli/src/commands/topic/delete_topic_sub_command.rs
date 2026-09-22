@@ -30,7 +30,7 @@ pub struct DeleteTopicSubCommand {
         short = 'c',
         long = "clusterName",
         required = false,
-        help = "create topic to which cluster"
+        help = "cluster from which to delete the topic"
     )]
     cluster_name: Option<String>,
 
