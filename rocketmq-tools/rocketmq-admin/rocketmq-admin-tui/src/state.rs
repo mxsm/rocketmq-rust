@@ -775,4 +775,32 @@ mod tests {
         assert_eq!(state.animation_tick(), 2);
         assert_eq!(state.selected_command_index(), selected);
     }
+
+    #[test]
+    fn confirmation_prompt_marks_dangerous_commands_and_omits_the_word_for_mutating() {
+        let mut state = AppState::new(None);
+
+        state.set_search("auth.user.delete".to_string());
+        assert_eq!(state.selected_command().id, "auth.user.delete");
+        state.form.set_value("username", "admin-user".to_string());
+        let prompt = state.confirmation_prompt().unwrap();
+        assert!(prompt.contains("dangerous"));
+        assert!(prompt.contains("'admin-user'"));
+
+        state.set_search("auth.user.update".to_string());
+        assert_eq!(state.selected_command().id, "auth.user.update");
+        let prompt = state.confirmation_prompt().unwrap();
+        assert!(!prompt.contains("dangerous"));
+        assert!(prompt.contains("'confirm'"));
+    }
+
+    #[test]
+    fn confirmation_prompt_is_none_without_confirmation_requirement() {
+        let mut state = AppState::new(None);
+
+        state.set_search("message.decode_id".to_string());
+        assert_eq!(state.selected_command().id, "message.decode_id");
+
+        assert!(state.confirmation_prompt().is_none());
+    }
 }
