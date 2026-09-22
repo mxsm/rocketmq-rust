@@ -35,8 +35,7 @@ fn queue(capacity: usize, policy: FullPolicy) -> BudgetedQueue<usize> {
     BudgetedQueue::new(budget.root())
 }
 
-fn reject_batch(size: usize) {
-    let queue = queue(size, FullPolicy::Reject);
+fn reject_batch(queue: &BudgetedQueue<usize>, size: usize) {
     for item in 0..size {
         let outcome = queue.try_push_data(black_box(item), 1);
         assert!(!matches!(&outcome, QueuePushOutcome::Rejected { .. }));
@@ -56,8 +55,8 @@ fn reject_batch(size: usize) {
     }
 }
 
-async fn wait_release_batch(size: usize) {
-    let queue = queue(size, FullPolicy::WaitUntilDeadline);
+async fn wait_release_batch(queue: &BudgetedQueue<usize>, size: usize) {
+    let prior_waits = queue.snapshot().wait_count;
     for item in 0..size {
         assert!(!matches!(
             queue.try_push_data(item, 1),
@@ -68,7 +67,7 @@ async fn wait_release_batch(size: usize) {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut producers = JoinSet::new();
     for item in size..size.saturating_mul(2) {
-        let queue = queue.clone();
+        let queue = BudgetedQueue::clone(queue);
         producers.spawn(async move {
             assert!(
                 !matches!(
@@ -94,7 +93,7 @@ async fn wait_release_batch(size: usize) {
     }
 
     let snapshot = queue.snapshot();
-    assert_eq!(snapshot.wait_count, size as u64);
+    assert_eq!(snapshot.wait_count, prior_waits + size as u64);
     assert_eq!(snapshot.reserved_count, 0);
     assert_eq!(snapshot.retained_bytes, 0);
 }
@@ -102,14 +101,7 @@ async fn wait_release_batch(size: usize) {
 /// Runs steady-state cycles at capacity: fill the queue, then replace every
 /// item one at a time, so admission and release stay interleaved instead of
 /// draining between batches.
-fn churn_cycles(size: usize, cycles: usize) {
-    let queue = queue(size, FullPolicy::Reject);
-    for item in 0..size {
-        assert!(!matches!(
-            queue.try_push_data(item, 1),
-            QueuePushOutcome::Rejected { .. }
-        ));
-    }
+fn churn_cycles(queue: &BudgetedQueue<usize>, size: usize, cycles: usize) {
     let mut next = size;
     for _ in 0..cycles {
         for _ in 0..size {
@@ -131,7 +123,8 @@ fn bench_budgeted_queue(criterion: &mut Criterion) {
     let mut reject = criterion.benchmark_group("budgeted_queue_reject");
     for size in [128usize, 1024] {
         reject.bench_with_input(BenchmarkId::new("push_pop", size), &size, |bencher, size| {
-            bencher.iter(|| reject_batch(black_box(*size)));
+            let queue = queue(*size, FullPolicy::Reject);
+            bencher.iter(|| reject_batch(&queue, black_box(*size)));
         });
     }
     reject.finish();
@@ -143,7 +136,8 @@ fn bench_budgeted_queue(criterion: &mut Criterion) {
     let mut wait = criterion.benchmark_group("budgeted_queue_wait_release");
     for size in [128usize, 1024] {
         wait.bench_with_input(BenchmarkId::new("contended", size), &size, |bencher, size| {
-            bencher.iter(|| runtime.block_on(wait_release_batch(black_box(*size))));
+            let queue = queue(*size, FullPolicy::WaitUntilDeadline);
+            bencher.iter(|| runtime.block_on(wait_release_batch(&queue, black_box(*size))));
         });
     }
     wait.finish();
@@ -154,7 +148,14 @@ fn bench_budgeted_queue(criterion: &mut Criterion) {
             BenchmarkId::new("replace_at_capacity", size),
             &(size, cycles),
             |bencher, (size, cycles)| {
-                bencher.iter(|| churn_cycles(black_box(*size), black_box(*cycles)));
+                let queue = queue(*size, FullPolicy::Reject);
+                for item in 0..*size {
+                    assert!(!matches!(
+                        queue.try_push_data(item, 1),
+                        QueuePushOutcome::Rejected { .. }
+                    ));
+                }
+                bencher.iter(|| churn_cycles(&queue, black_box(*size), black_box(*cycles)));
             },
         );
     }

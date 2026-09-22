@@ -77,12 +77,22 @@ struct DiagnosticsFixture {
 
 impl DiagnosticsFixture {
     fn new(task_count: usize, group_count: usize) -> Self {
+        Self::with_depth(task_count, group_count, 1)
+    }
+
+    fn with_depth(task_count: usize, group_count: usize, depth: usize) -> Self {
         assert!(group_count > 0 && task_count >= group_count);
+        assert!(depth > 0 && group_count.is_multiple_of(depth));
         let owner = RuntimeOwner::plan(runtime_config()).unwrap().build().unwrap();
         let root = owner.root_context().component("bench.diagnostics-root");
+        let mut parent = root.clone();
         for group_index in 0..group_count {
-            let component =
-                root.component(rocketmq_runtime::ScopeId::try_new(format!("bench.diagnostics.{group_index}")).unwrap());
+            if group_index % depth == 0 {
+                parent = root.clone();
+            }
+            let component = parent
+                .component(rocketmq_runtime::ScopeId::try_new(format!("bench.diagnostics.{group_index}")).unwrap());
+            parent = component.clone();
             for task_index in (group_index..task_count).step_by(group_count) {
                 let cancellation = component.task_group().cancellation_token();
                 component
@@ -332,6 +342,14 @@ fn bench_runtime_diagnostics(criterion: &mut Criterion) {
                 fixture.finish();
             },
         );
+    }
+    for depth in [1usize, 4, 16] {
+        group.bench_with_input(BenchmarkId::new("aggregate_depth", depth), &depth, |bencher, depth| {
+            let fixture = DiagnosticsFixture::with_depth(10_000, 32, *depth);
+            assert_eq!(fixture.aggregate().tasks.task_group_count, 33);
+            bencher.iter(|| black_box(fixture.aggregate()));
+            fixture.finish();
+        });
     }
     group.finish();
 }
