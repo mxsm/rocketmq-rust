@@ -1288,6 +1288,64 @@ fn phase_five_monitoring_events_render_as_table() {
 }
 
 #[test]
+fn broker_multiline_errors_are_escaped_in_monitoring_and_message_rows() {
+    let monitoring = CommandResultViewModel::consumer_monitoring(
+        "Start Monitoring",
+        &MonitoringResult {
+            events: vec![
+                MonitoringEvent::ConsumerRunningInfo {
+                    round: 1,
+                    consumer_group: "GroupA".to_string(),
+                    client_count: 1,
+                    subscription_consistent: Some(true),
+                    process_queue_analysis: vec!["queue stalled\nretry pending".to_string()],
+                },
+                MonitoringEvent::Error {
+                    round: 1,
+                    consumer_group: Some("GroupA".to_string()),
+                    operation: "consumerRunningInfo".to_string(),
+                    error: "broker failed\r\nretry later".to_string(),
+                },
+            ],
+            rounds_completed: 1,
+            groups_scanned: 1,
+            error_count: 1,
+            truncated: false,
+        },
+    );
+    let CommandResultViewModel::Table(monitoring) = monitoring else {
+        panic!("monitoring result must be a table");
+    };
+    assert!(monitoring
+        .rows
+        .iter()
+        .flatten()
+        .all(|cell| !cell.contains('\r') && !cell.contains('\n')));
+    assert!(monitoring.rows.iter().flatten().any(|cell| cell.contains("\\n")));
+    assert!(monitoring.rows.iter().flatten().any(|cell| cell.contains("\\r\\n")));
+
+    let messages = CommandResultViewModel::message_pull_events(
+        "Print Messages",
+        &MessagePullCapture {
+            events: vec![MessagePullEvent::PullError {
+                error: "pull failed\nretry later".to_string(),
+            }],
+            event_limit: 1,
+            truncated: false,
+        },
+    );
+    let CommandResultViewModel::Table(messages) = messages else {
+        panic!("message pull result must be a table");
+    };
+    assert!(messages
+        .rows
+        .iter()
+        .flatten()
+        .all(|cell| !cell.contains('\r') && !cell.contains('\n')));
+    assert!(messages.rows.iter().flatten().any(|cell| cell.contains("\\n")));
+}
+
+#[test]
 fn phase_five_direct_consume_result_renders_as_table() {
     let result = CommandResultViewModel::direct_consume_message(
         "Direct Consume Message",
