@@ -29,6 +29,13 @@ use rocketmq_store::CommitLogRecordOutcome;
 use tabled::Table;
 use tabled::Tabled;
 
+/// Prints identifiers from the selected range of a local CommitLog file.
+///
+/// # Errors
+///
+/// Returns `core.argument.invalid` when the path is absent or the range is
+/// reversed. Returns `storage.read.failed` when the file cannot be opened or
+/// its metadata cannot be read.
 pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) -> CanonicalResult<()> {
     let path = path.ok_or_else(|| crate::errors::argument_invalid("message log file path must be provided"))?;
     let from = from.unwrap_or_default();

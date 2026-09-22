@@ -124,6 +124,14 @@ struct DeclaredFormat {
 }
 
 /// Inspects every Rust-owned format relevant to a downgrade and returns a fail-closed report.
+///
+/// # Errors
+///
+/// Returns `core.argument.invalid` when the target version cannot be parsed or
+/// the primary CommitLog path is absent. Configuration, Store-file, and lock
+/// failures return `storage.read.failed`; POP profile backend inspection
+/// failures return `core.internal.failure`. Policy refusals are returned in
+/// the report.
 pub fn run_preflight(request: &DowngradePreflightRequest) -> Result<DowngradePreflightReport, CanonicalError> {
     let target_major = parse_target_major(&request.target_version)?;
     let loaded = config::Config::builder()

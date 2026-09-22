@@ -83,6 +83,12 @@ struct Segment {
 }
 
 /// Consolidates all source segments and atomically publishes the target directory.
+///
+/// # Errors
+///
+/// Returns an I/O error when the Store lock cannot be acquired, the source or
+/// target layout fails the documented validation checks, capacity is
+/// insufficient, or copying, synchronizing, and publishing the target fails.
 pub fn consolidate_multipath(request: &ConsolidationRequest) -> io::Result<ConsolidationReport> {
     consolidate_multipath_with_environment(request, |path| fs2::available_space(path), |_| Ok(()))
 }
