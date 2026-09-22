@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn test_validation_success() {
-        let builder = MappedFileBuilder::new("test/file").size(1024 * 1024);
+        let builder = MappedFileBuilder::new("test/00000000000000000000").size(1024 * 1024);
         assert!(builder.validate().is_ok());
     }
 }

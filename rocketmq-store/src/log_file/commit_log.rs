@@ -3053,9 +3053,25 @@ mod tests {
 
     fn new_test_message_store_with_config(
         root: &Path,
+        message_store_config: MessageStoreConfig,
+        broker_role: BrokerRole,
+        all_ack_in_sync_state_set: bool,
+    ) -> LocalFileMessageStore {
+        new_test_message_store_with_policy(
+            root,
+            message_store_config,
+            broker_role,
+            all_ack_in_sync_state_set,
+            MicroBatchPolicy::disabled(1).expect("valid test policy"),
+        )
+    }
+
+    fn new_test_message_store_with_policy(
+        root: &Path,
         mut message_store_config: MessageStoreConfig,
         broker_role: BrokerRole,
         all_ack_in_sync_state_set: bool,
+        micro_batch_policy: MicroBatchPolicy,
     ) -> LocalFileMessageStore {
         std::fs::create_dir_all(root).expect("create temp store dir");
         let broker_config = Arc::new(StoreRuntimeConfig {
@@ -3071,7 +3087,7 @@ mod tests {
         let topic_table: Arc<DashMap<CheetahString, Arc<TopicConfig>>> = Arc::new(DashMap::new());
         let mut store = LocalFileMessageStore::new(
             message_store_config,
-            MicroBatchPolicy::disabled(1).expect("valid test policy"),
+            micro_batch_policy,
             broker_config,
             topic_table,
             None,
@@ -3909,25 +3925,26 @@ mod tests {
     #[tokio::test]
     async fn append_sequencer_projects_fifo_offsets_across_segment_rollover() {
         let temp_dir = tempfile::tempdir().expect("create append sequencer temp dir");
-        let mut store = new_test_message_store_with_config(
+        let mut store = new_test_message_store_with_policy(
             temp_dir.path(),
             MessageStoreConfig {
                 flush_disk_type: FlushDiskType::AsyncFlush,
                 mapped_file_size_commit_log: 256,
                 ha_listen_port: 0,
-                commit_log_micro_batch_max_items: 4,
-                commit_log_micro_batch_max_bytes: 4096,
-                commit_log_micro_batch_max_wait_micros: 1000,
                 ..MessageStoreConfig::default()
             },
             BrokerRole::AsyncMaster,
             false,
+            MicroBatchPolicy::try_new(3, 4096, Duration::from_secs(1)).expect("valid batching policy"),
         );
         store.init().await.expect("init append sequencer store");
         assert!(store.load().await, "load append sequencer store");
         store.start().await.expect("start append sequencer store");
 
         let commit_log = store.get_commit_log();
+        let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+        assert!(commit_log
+            .install_controller_write_lease(WriteLeaseToken::try_new(authority, 1).unwrap(), Duration::from_secs(60)));
         let (first, second, third) = tokio::join!(
             commit_log.put_message(append_test_message("append-sequencer-rollover", b"first-message-body")),
             commit_log.put_message(append_test_message("append-sequencer-rollover", b"second-message-body")),
@@ -4007,6 +4024,10 @@ mod tests {
         store.init().await.expect("init caller-drop store");
         assert!(store.load().await, "load caller-drop store");
         store.start().await.expect("start caller-drop store");
+        let authority = WriteAuthority::try_new(0, MasterEpoch::try_from(1).unwrap()).unwrap();
+        assert!(store
+            .get_commit_log()
+            .install_controller_write_lease(WriteLeaseToken::try_new(authority, 1).unwrap(), Duration::from_secs(60)));
         let store = Arc::new(store);
 
         let writer_lock = Arc::clone(&store.get_commit_log().put_message_lock).lock_owned().await;
