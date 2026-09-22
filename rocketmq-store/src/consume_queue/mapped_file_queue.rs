@@ -89,6 +89,8 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::default_mapped_file_impl::LazyMmapStats;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
+use crate::store_error::StoreComponent;
+use crate::store_error::StoreOperation;
 enum MappedFileGenerationState {
     Legacy(MappedFileQueueGeneration<DefaultMappedFile>),
     Managed {
@@ -692,6 +694,7 @@ impl CleanupOutcome {
 /// Narrow capability for cleanup and read-only allocation eligibility probes.
 #[derive(Clone)]
 pub(crate) struct MappedFileQueueCleanupHandle {
+    store_path: PathBuf,
     commit_log_paths: Option<Arc<CommitLogPathSet>>,
     mapped_files: MappedFileGeneration,
     mapped_file_size: u64,
@@ -707,10 +710,12 @@ impl MappedFileQueueCleanupHandle {
 
     pub(crate) fn allocation_candidates(&self) -> Vec<std::path::PathBuf> {
         // Reuse allocation eligibility; never treat a readonly/retired root as a spare.
-        self.commit_log_paths
-            .as_ref()
-            .and_then(|paths| paths.creation_candidates(StoreFaultPoint::CreateSegment).ok())
-            .unwrap_or_default()
+        match self.commit_log_paths.as_ref() {
+            Some(paths) => paths
+                .creation_candidates(StoreFaultPoint::CreateSegment)
+                .unwrap_or_default(),
+            None => vec![self.store_path.clone()],
+        }
     }
 
     fn check_self(&self) {
@@ -910,13 +915,29 @@ impl MappedFileQueueFlushHandle {
             |offset, return_first_on_not_found| {
                 self.find_mapped_file_by_offset(offset, return_first_on_not_found)
                     .map(|mapped_file| {
-                        mapped_file.try_flush(flush_least_pages).map(|flushed_position| {
-                            SegmentFlushProgress::new(
-                                mapped_file.get_file_from_offset(),
-                                flushed_position,
-                                mapped_file.get_store_timestamp(),
-                            )
-                        })
+                        let mut flushed_position = mapped_file.try_flush(flush_least_pages)?;
+                        // A closed file returns its previous watermark for compatibility. At
+                        // queue level, pending bytes still require an observable flush failure.
+                        if !mapped_file.is_available() {
+                            // Another flush may have completed before the file closed.
+                            let read_position = mapped_file.get_read_position();
+                            flushed_position = mapped_file.get_flushed_position();
+                            if flushed_position < read_position {
+                                return Err(
+                                    StoreError::new(&rocketmq_error::STORAGE_IO_FAILED, StoreOperation::Flush)
+                                        .in_component(StoreComponent::MappedFile)
+                                        .with_source(io::Error::new(
+                                            io::ErrorKind::NotConnected,
+                                            "mapped file closed before pending data was flushed",
+                                        )),
+                                );
+                            }
+                        }
+                        Ok(SegmentFlushProgress::new(
+                            mapped_file.get_file_from_offset(),
+                            flushed_position,
+                            mapped_file.get_store_timestamp(),
+                        ))
                     })
                     .transpose()
             },
@@ -1204,6 +1225,7 @@ impl MappedFileQueue {
     #[inline]
     pub(crate) fn cleanup_handle(&self) -> MappedFileQueueCleanupHandle {
         MappedFileQueueCleanupHandle {
+            store_path: PathBuf::from(self.storage.store_path()),
             commit_log_paths: self.commit_log_paths.clone(),
             mapped_files: self.storage.mapped_files().clone(),
             mapped_file_size: self.storage.mapped_file_size(),
@@ -2653,6 +2675,24 @@ mod tests {
     }
 
     #[test]
+    fn try_flush_closed_file_preserves_already_durable_progress() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 1024, None);
+        let mapped_file = queue.try_create_mapped_file(0).expect("create mapped file");
+        let payload = b"durable-before-close";
+        assert!(mapped_file.append_message_bytes(payload));
+        let flushed = queue.try_flush(0).expect("flush before closing");
+        assert_eq!(flushed.durable, payload.len() as i64);
+        MappedFile::shutdown(mapped_file.as_ref(), 0);
+
+        let progress = queue.try_flush(0).expect("closed file has no pending bytes");
+
+        assert_eq!(progress.durable_before, flushed.durable);
+        assert_eq!(progress.durable, flushed.durable);
+        queue.destroy();
+    }
+
+    #[test]
     fn truncate_dirty_files_delegates_positions_and_removals_to_local_plan() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), 1024, None);
@@ -2728,6 +2768,20 @@ mod tests {
         assert!(queue.try_truncate_dirty_files(0));
         assert!(queue.is_managed());
         assert!(queue.get_mapped_files().is_empty());
+    }
+
+    #[test]
+    fn empty_managed_queue_exposes_its_allocation_root_to_cleanup() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().into_owned(), 1024, None);
+        let cleanup = queue.cleanup_handle();
+        let managed =
+            rocketmq_store_local::mapped_file::queue_io::load_reconciled_mapped_file_queue(temp_dir.path(), Vec::new())
+                .expect("construct an empty reconciled generation");
+        assert!(queue.install_reconciled_generation(managed));
+
+        assert!(cleanup.active_root().is_none());
+        assert_eq!(cleanup.allocation_candidates(), vec![temp_dir.path().to_path_buf()]);
     }
 
     #[test]

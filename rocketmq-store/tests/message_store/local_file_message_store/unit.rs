@@ -1444,7 +1444,7 @@ fn local_store_owned_wiring_does_not_retain_its_complete_root_handle() {
     assert!(init.contains("GeneralHAService::new_with_auto_switch_ha_service(service)"));
     assert!(init.contains("self.ensure_root_dependencies_wired(\"init\")?;"));
     assert!(init.contains("self.pending_ha_service.take()"));
-    assert!(init.contains("let _ = ha_service.init();"));
+    assert!(init.contains("ha_service.init().map_err(StoreError::from)?;"));
     assert!(init.contains("self.ha_service = Some(ha_service);"));
 }
 
@@ -4208,7 +4208,30 @@ async fn store_stats_records_batch_put_append_totals() {
 #[tokio::test]
 async fn shared_put_message_micro_batches_concurrent_appends() {
     let temp_dir = tempdir().unwrap();
-    let store = new_async_flush_test_store(&temp_dir);
+    let mut store = LocalFileMessageStore::try_new(
+        Arc::new(MessageStoreConfig {
+            store_path_root_dir: temp_dir.path().to_string_lossy().to_string().into(),
+            flush_disk_type: FlushDiskType::AsyncFlush,
+            timer_wheel_enable: false,
+            ..MessageStoreConfig::default()
+        }),
+        rocketmq_store_local::commit_log::append::micro_batch::MicroBatchPolicy::try_new(
+            2,
+            4096,
+            Duration::from_secs(5),
+        )
+        .expect("valid two-request micro-batch policy"),
+        Arc::new(StoreRuntimeConfig::default()),
+        Arc::new(DashMap::<CheetahString, Arc<TopicConfig>>::new()),
+        None,
+        false,
+        crate::runtime::test_service_context("micro-batch-local-file-store-test"),
+    )
+    .expect("create micro-batch test store")
+    .expect("valid micro-batch test configuration");
+    store
+        .wire_owned_root_dependencies()
+        .expect("wire micro-batch test store");
     let topic = CheetahString::from_static_str("shared-put-message-topic");
 
     let first = store.put_message_shared(build_test_message(&topic, Bytes::from_static(b"first")));
@@ -4595,13 +4618,20 @@ fn reput_once_initializes_from_minimum_dispatcher_progress() {
         .as_ref()
         .expect("reput offset should exist")
         .load(Ordering::SeqCst);
-    assert_eq!(reput_from_offset, 100);
+    // The index frontier is the end of the last indexed record, behind the CQ frontier at 164.
+    assert_eq!(reput_from_offset, 132);
 }
 
 #[test]
 fn do_recheck_reput_offset_from_dispatchers_rewinds_to_dispatched_commitlog_offset() {
     let temp_dir = tempdir().unwrap();
-    let mut store = new_controller_test_store(&temp_dir, MessageStoreConfig::default());
+    let mut store = new_controller_test_store(
+        &temp_dir,
+        MessageStoreConfig {
+            message_index_enable: false,
+            ..MessageStoreConfig::default()
+        },
+    );
     let topic = CheetahString::from_static_str("recheck-reput-offset-topic");
 
     store.set_confirm_offset(256);
@@ -4676,7 +4706,8 @@ fn do_recheck_reput_offset_from_dispatchers_uses_minimum_progress_across_cq_and_
         .as_ref()
         .expect("reput offset should exist")
         .load(Ordering::SeqCst);
-    assert_eq!(reput_from_offset, 100);
+    // The index frontier is the end of the last indexed record, behind the CQ frontier at 164.
+    assert_eq!(reput_from_offset, 132);
 }
 
 #[test]
@@ -5099,6 +5130,19 @@ fn multi_dispatch_arrival_ignores_invalid_offsets_without_panicking() {
     assert!(arrivals.lock().unwrap().is_empty());
 }
 
+fn expire_commit_log_files_for_cleanup(temp_dir: &tempfile::TempDir) {
+    for entry in fs::read_dir(temp_dir.path().join("commitlog")).expect("read cleanup fixture files") {
+        let file = OpenOptions::new()
+            .write(true)
+            .open(entry.expect("read cleanup fixture entry").path())
+            .expect("open cleanup fixture file");
+        file.sync_all().expect("flush cleanup fixture file");
+        // Filesystem timestamps may be finer than the cleanup clock's milliseconds.
+        file.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1))
+            .expect("expire cleanup fixture file");
+    }
+}
+
 #[tokio::test]
 async fn clean_commit_log_service_run_deletes_expired_files_and_advances_min_offset() {
     let temp_dir = tempdir().unwrap();
@@ -5131,6 +5175,7 @@ async fn clean_commit_log_service_run_deletes_expired_files_and_advances_min_off
     assert_eq!(store.get_min_phy_offset(), 0);
     assert_eq!(store.get_last_file_from_offset(), 64);
 
+    expire_commit_log_files_for_cleanup(&temp_dir);
     store.clean_commit_log_service.execute_delete_files_manually();
     store.clean_commit_log_service.run();
 
@@ -5176,6 +5221,7 @@ async fn clean_commit_log_service_never_crosses_derived_wal_pin() {
         Some(Arc::new(|| Some(32))),
     ));
 
+    expire_commit_log_files_for_cleanup(&temp_dir);
     store.clean_commit_log_service.execute_delete_files_manually();
     store.clean_commit_log_service.run();
 
@@ -5211,6 +5257,7 @@ async fn clean_commit_log_service_run_skips_expired_files_outside_delete_window(
             .expect("append commitlog file"));
     }
 
+    expire_commit_log_files_for_cleanup(&temp_dir);
     store
         .clean_commit_log_service
         .set_disk_clean_decision_override(Some(DiskCleanDecision::default()));
@@ -5319,6 +5366,7 @@ async fn clean_commit_log_service_run_deletes_when_disk_usage_is_unavailable() {
             .expect("append commitlog file"));
     }
 
+    expire_commit_log_files_for_cleanup(&temp_dir);
     store.clean_commit_log_service.run();
 
     assert_eq!(store.get_min_phy_offset(), 64);
@@ -5372,6 +5420,7 @@ async fn correct_logic_offset_service_run_updates_min_offset_after_commitlog_cle
     let consume_queue = store.consume_queue_store.find_or_create_consume_queue(&topic, 0);
     assert_eq!(consume_queue.read().get_min_offset_in_queue(), 0);
 
+    expire_commit_log_files_for_cleanup(&temp_dir);
     store.clean_commit_log_service.execute_delete_files_manually();
     store.clean_commit_log_service.run();
     assert_eq!(store.get_min_phy_offset(), 64);
@@ -5439,6 +5488,7 @@ async fn clean_consume_queue_service_run_cleans_files_and_removes_fully_expired_
             ..Default::default()
         });
 
+    expire_commit_log_files_for_cleanup(&temp_dir);
     store.clean_commit_log_service.execute_delete_files_manually();
     store.clean_commit_log_service.run();
     assert_eq!(store.get_min_phy_offset(), 64);
@@ -5496,6 +5546,7 @@ async fn clean_expired_removes_trimmed_queue_directly() {
             ..Default::default()
         });
 
+    expire_commit_log_files_for_cleanup(&temp_dir);
     store.clean_commit_log_service.execute_delete_files_manually();
     store.clean_commit_log_service.run();
     store.correct_logic_offset_service.run();

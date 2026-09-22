@@ -196,7 +196,8 @@ pub(super) fn remove_abort_marker(root: &File) -> io::Result<()> {
 pub(super) fn is_unsafe_path_error(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::InvalidData
         || error.kind() == io::ErrorKind::InvalidInput
-        || error.raw_os_error() == Some(libc::ELOOP)
+        // O_DIRECTORY | O_NOFOLLOW may report ENOTDIR for a symbolic link on Linux.
+        || matches!(error.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR))
 }
 
 fn open_directory_at(parent: &File, name: &CString) -> io::Result<File> {
