@@ -991,6 +991,213 @@ mod tests {
         );
     }
 
+    fn select_dangerous_auth_user_delete(app: &mut RocketmqTuiApp) {
+        app.apply_action(Action::SearchChanged("auth.user.delete".to_string()));
+        app.apply_action(Action::CommandSelected("auth.user.delete".to_string()));
+        app.state.reset_form_for_selected_command();
+        app.state.form.set_value("username", "admin-user".to_string());
+    }
+
+    fn type_text(app: &mut RocketmqTuiApp, text: &str) {
+        for character in text.chars() {
+            app.handle_key_event(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+    }
+
+    fn execute_request() -> KeyEvent {
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn execute_request_on_dangerous_command_enters_confirmation_with_expected_text() {
+        let mut app = RocketmqTuiApp::new(test_client_runtime());
+        select_dangerous_auth_user_delete(&mut app);
+
+        app.handle_key_event(execute_request());
+
+        assert!(matches!(
+            &app.state.execution,
+            CommandExecutionState::Confirming { command_id, expected, .. }
+                if command_id == "auth.user.delete" && expected == "admin-user"
+        ));
+        assert!(app.state.confirm_input.is_empty());
+        assert!(app.running_task.is_none());
+        assert!(app.state.last_error.is_none());
+    }
+
+    #[test]
+    fn execute_request_on_safe_command_skips_confirmation_and_runs_directly() {
+        let local = tokio::task::LocalSet::new();
+
+        local.block_on(
+            &tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+            async {
+                let mut app = RocketmqTuiApp::new(test_client_runtime());
+                app.apply_action(Action::SearchChanged("message.decode_id".to_string()));
+                app.apply_action(Action::CommandSelected("message.decode_id".to_string()));
+                app.state.reset_form_for_selected_command();
+                app.state
+                    .form
+                    .set_value("message_ids", "7F0000010007D8260BF075769D36C348".to_string());
+
+                app.handle_key_event(execute_request());
+
+                assert!(matches!(app.state.execution, CommandExecutionState::Running { .. }));
+                assert!(app.running_task.is_some());
+                app.shutdown_commands().await;
+            },
+        );
+    }
+
+    #[test]
+    fn exact_confirmation_text_starts_execution() {
+        let local = tokio::task::LocalSet::new();
+
+        local.block_on(
+            &tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+            async {
+                let mut app = RocketmqTuiApp::new(test_client_runtime());
+                select_dangerous_auth_user_delete(&mut app);
+                app.handle_key_event(execute_request());
+
+                type_text(&mut app, "admin-user");
+                app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+                assert!(matches!(app.state.execution, CommandExecutionState::Running { .. }));
+                assert!(app.running_task.is_some());
+                assert!(app.state.last_error.is_none());
+                app.shutdown_commands().await;
+            },
+        );
+    }
+
+    #[test]
+    fn confirmation_match_trims_surrounding_whitespace() {
+        let local = tokio::task::LocalSet::new();
+
+        local.block_on(
+            &tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+            async {
+                let mut app = RocketmqTuiApp::new(test_client_runtime());
+                select_dangerous_auth_user_delete(&mut app);
+                app.handle_key_event(execute_request());
+
+                type_text(&mut app, "  admin-user  ");
+                app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+                assert!(matches!(app.state.execution, CommandExecutionState::Running { .. }));
+                assert!(app.running_task.is_some());
+                app.shutdown_commands().await;
+            },
+        );
+    }
+
+    #[test]
+    fn mismatched_confirmation_keeps_confirming_and_reports_expected() {
+        let mut app = RocketmqTuiApp::new(test_client_runtime());
+        select_dangerous_auth_user_delete(&mut app);
+        app.handle_key_event(execute_request());
+
+        type_text(&mut app, "wrong-text");
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(app.state.execution, CommandExecutionState::Confirming { .. }));
+        assert!(app
+            .state
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("admin-user")));
+        assert!(app.running_task.is_none());
+    }
+
+    #[test]
+    fn correct_confirmation_after_mismatch_still_starts_execution() {
+        let local = tokio::task::LocalSet::new();
+
+        local.block_on(
+            &tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+            async {
+                let mut app = RocketmqTuiApp::new(test_client_runtime());
+                select_dangerous_auth_user_delete(&mut app);
+                app.handle_key_event(execute_request());
+                type_text(&mut app, "wrong");
+                app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                assert!(matches!(app.state.execution, CommandExecutionState::Confirming { .. }));
+
+                for _ in 0.."wrong".len() {
+                    app.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+                }
+                assert!(app.state.confirm_input.is_empty());
+                type_text(&mut app, "admin-user");
+                app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+                assert!(matches!(app.state.execution, CommandExecutionState::Running { .. }));
+                assert!(app.running_task.is_some());
+                app.shutdown_commands().await;
+            },
+        );
+    }
+
+    #[test]
+    fn backspace_edits_confirmation_input_and_tolerates_empty_input() {
+        let mut app = RocketmqTuiApp::new(test_client_runtime());
+        select_dangerous_auth_user_delete(&mut app);
+        app.handle_key_event(execute_request());
+
+        type_text(&mut app, "ab");
+        app.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(app.state.confirm_input, "a");
+
+        for _ in 0..4 {
+            app.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        }
+        assert_eq!(app.state.confirm_input, "");
+        assert!(matches!(app.state.execution, CommandExecutionState::Confirming { .. }));
+    }
+
+    #[test]
+    fn escape_cancels_confirmation_and_clears_input() {
+        let mut app = RocketmqTuiApp::new(test_client_runtime());
+        select_dangerous_auth_user_delete(&mut app);
+        app.handle_key_event(execute_request());
+        type_text(&mut app, "admin");
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(matches!(
+            &app.state.execution,
+            CommandExecutionState::Cancelled { command_id, .. } if command_id == "auth.user.delete"
+        ));
+        assert!(app.state.confirm_input.is_empty());
+        assert!(app.running_task.is_none());
+    }
+
+    #[test]
+    fn character_keys_append_to_confirmation_input_instead_of_triggering_shortcuts() {
+        let mut app = RocketmqTuiApp::new(test_client_runtime());
+        select_dangerous_auth_user_delete(&mut app);
+        app.handle_key_event(execute_request());
+
+        type_text(&mut app, "qjk?");
+
+        assert_eq!(app.state.confirm_input, "qjk?");
+        assert!(!app.should_quit());
+        assert!(!app.state.show_help);
+        assert!(matches!(app.state.execution, CommandExecutionState::Confirming { .. }));
+    }
+
     struct AbortProbe {
         aborted: Rc<Cell<bool>>,
     }
