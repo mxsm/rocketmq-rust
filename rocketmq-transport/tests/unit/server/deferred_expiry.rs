@@ -117,6 +117,7 @@ impl RequestProcessor for TcpDeferredExpiryProcessor {
         let retained = DeferredRegistry::<i32>::try_retained_size(DeferredRetainedSizeParts::new(0))
             .map_err(|_| crate::error_helpers::argument_invalid())?;
         let permit = match self.admission.try_reserve(retained) {
+            DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
             DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
             DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
             | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)

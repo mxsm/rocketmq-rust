@@ -330,10 +330,11 @@ impl<T> TelemetryOutageQueue<T> {
                 QueuePushRejection::Closed | QueuePushRejection::SlowConsumerClosed => TelemetryDropReason::Closed,
                 QueuePushRejection::DeadlineExceeded => TelemetryDropReason::ItemLimit,
                 QueuePushRejection::BudgetExhausted(error) => match error.dimension() {
-                    BudgetDimension::Bytes => TelemetryDropReason::ByteLimit,
+                    Some(BudgetDimension::Bytes) => TelemetryDropReason::ByteLimit,
                     // This queue has no rate budget. Keep the exhaustive fallback fail-closed if
                     // the shared budget implementation ever reports one.
-                    BudgetDimension::Count | BudgetDimension::Rate => TelemetryDropReason::ItemLimit,
+                    Some(BudgetDimension::Count | BudgetDimension::Rate) => TelemetryDropReason::ItemLimit,
+                    None => TelemetryDropReason::Closed,
                 },
             };
             self.record_drop(estimated_bytes);

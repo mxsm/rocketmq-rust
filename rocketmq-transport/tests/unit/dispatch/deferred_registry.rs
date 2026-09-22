@@ -68,6 +68,7 @@ trait DeferredAdmissionTestExt {
 impl DeferredAdmissionTestExt for DeferredAdmissionAcquireOutcome {
     fn expect(self, message: &str) -> DeferredWaitPermit {
         match self {
+            DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
             DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
             DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
             | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)

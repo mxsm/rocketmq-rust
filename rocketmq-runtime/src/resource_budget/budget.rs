@@ -15,6 +15,7 @@
 use std::fmt;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 
 use smallvec::SmallVec;
 use std::time::Duration;
@@ -61,8 +62,17 @@ pub struct BudgetSnapshot {
 pub struct BudgetRejection {
     path: Arc<str>,
     exhausted_path: Arc<str>,
-    dimension: BudgetDimension,
+    reason: BudgetRejectionReason,
     policy: FullPolicy,
+}
+
+/// Why a resource budget refused new work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetRejectionReason {
+    /// Count, byte, or rate capacity is exhausted.
+    Capacity(BudgetDimension),
+    /// This dynamic generation or one of its ancestors has closed admission.
+    Closed,
 }
 
 impl BudgetRejection {
@@ -79,9 +89,24 @@ impl BudgetRejection {
     }
 
     #[must_use]
-    /// Returns the dimension.
-    pub const fn dimension(&self) -> BudgetDimension {
-        self.dimension
+    /// Returns the exhausted capacity dimension, or `None` for closed admission.
+    pub const fn dimension(&self) -> Option<BudgetDimension> {
+        match self.reason {
+            BudgetRejectionReason::Capacity(dimension) => Some(dimension),
+            BudgetRejectionReason::Closed => None,
+        }
+    }
+
+    /// Returns the admission rejection reason without projecting closure onto capacity.
+    #[must_use]
+    pub const fn reason(&self) -> BudgetRejectionReason {
+        self.reason
+    }
+
+    /// Returns whether admission has permanently closed for this handle.
+    #[must_use]
+    pub const fn is_closed(&self) -> bool {
+        matches!(self.reason, BudgetRejectionReason::Closed)
     }
 
     #[must_use]
@@ -148,6 +173,7 @@ impl ResourceBudgetTree {
                 chain: Arc::from([node]),
                 capacity_notify,
                 keys: DynamicKeyRegistry::new(),
+                admission_gates: Arc::from([]),
             },
         })
     }
@@ -184,6 +210,34 @@ pub struct ResourceBudget {
     chain: Arc<[Arc<BudgetNode>]>,
     capacity_notify: Arc<Notify>,
     keys: DynamicKeyRegistry,
+    admission_gates: Arc<[Arc<AdmissionGate>]>,
+}
+
+struct AdmissionGate {
+    path: Arc<str>,
+    closed: Mutex<bool>,
+}
+
+// Always acquire gates root-to-leaf, before node or queue state locks. Static
+// budgets have no gates. Keeping this guard across a synchronous queue admission
+// also prevents closure from triggering destructive capacity/age policies.
+pub(super) struct BudgetAdmission<'a> {
+    budget: &'a ResourceBudget,
+    _guards: SmallVec<[MutexGuard<'a, bool>; 2]>,
+}
+
+impl BudgetAdmission<'_> {
+    pub(super) fn try_acquire(&self, bytes: usize, class: BudgetClass) -> Result<ResourcePermit, BudgetRejection> {
+        self.budget.try_acquire_open(bytes, class, true)
+    }
+
+    pub(super) fn try_acquire_waiting(
+        &self,
+        bytes: usize,
+        class: BudgetClass,
+    ) -> Result<ResourcePermit, BudgetRejection> {
+        self.budget.try_acquire_open(bytes, class, false)
+    }
 }
 
 impl fmt::Debug for ResourceBudget {
@@ -197,7 +251,10 @@ impl fmt::Debug for ResourceBudget {
 }
 
 impl ResourceBudget {
-    /// Returns the child.
+    /// Creates a child that inherits every dynamic ancestor's admission state.
+    ///
+    /// Creating a static child after closure is allowed; the resulting handle
+    /// remains closed and cannot acquire or accept rebound permits.
     ///
     /// # Errors
     ///
@@ -216,6 +273,7 @@ impl ResourceBudget {
             chain: Arc::from(chain),
             capacity_notify: Arc::clone(&self.capacity_notify),
             keys: self.keys.clone(),
+            admission_gates: self.admission_gates.clone(),
         })
     }
 
@@ -231,19 +289,64 @@ impl ResourceBudget {
     /// # Errors
     ///
     /// Returns [`DynamicKeyRegistrationFailure`] when the child contract is
-    /// invalid, the name is still held, or the tree holds its maximum number of
-    /// dynamic keys.
+    /// invalid, a dynamic ancestor has closed, the name is still held, or the
+    /// tree holds its maximum number of dynamic keys.
     pub fn register_dynamic_child(
         &self,
         name: impl Into<String>,
         limit: BudgetLimit,
     ) -> Result<DynamicBudgetKey, DynamicKeyRegistrationFailure> {
+        let _admission = self.admit().map_err(|_| DynamicKeyRegistrationFailure::Closed)?;
         let name = validated_name(name.into()).map_err(DynamicKeyRegistrationFailure::Invalid)?;
-        let child = self
+        let mut child = self
             .child(name.as_str(), limit)
             .map_err(DynamicKeyRegistrationFailure::Invalid)?;
         let name: Arc<str> = Arc::clone(&child.node.path);
+        let mut gates = child.admission_gates.to_vec();
+        gates.push(Arc::new(AdmissionGate {
+            path: name.clone(),
+            closed: Mutex::new(false),
+        }));
+        child.admission_gates = Arc::from(gates);
         self.keys.register(child, name)
+    }
+
+    /// Returns whether a dynamic ancestor has permanently closed admission.
+    /// Existing permits remain valid and can still be released or moved to an open budget.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.admission_gates
+            .iter()
+            .any(|gate| *gate.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+
+    pub(super) fn close_dynamic(&self) {
+        if let Some(gate) = self.admission_gates.last() {
+            *gate.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+            self.capacity_notify.notify_waiters();
+        }
+    }
+
+    pub(super) fn admit(&self) -> Result<BudgetAdmission<'_>, BudgetRejection> {
+        let mut guards = SmallVec::new();
+        for gate in self.admission_gates.iter() {
+            let guard = gate.closed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *guard {
+                let rejection = BudgetRejection {
+                    path: self.node.path.clone(),
+                    exhausted_path: gate.path.clone(),
+                    reason: BudgetRejectionReason::Closed,
+                    policy: self.node.limit.full_policy,
+                };
+                self.record_budget_rejection(&rejection);
+                return Err(rejection);
+            }
+            guards.push(guard);
+        }
+        Ok(BudgetAdmission {
+            budget: self,
+            _guards: guards,
+        })
     }
 
     /// Attempts to acquire.
@@ -254,15 +357,17 @@ impl ResourceBudget {
         self.try_acquire_internal(bytes, class, true)
     }
 
-    pub(crate) fn try_acquire_waiting(
+    fn try_acquire_internal(
         &self,
         bytes: usize,
         class: BudgetClass,
+        record_failure: bool,
     ) -> Result<ResourcePermit, BudgetRejection> {
-        self.try_acquire_internal(bytes, class, false)
+        let _admission = self.admit()?;
+        self.try_acquire_open(bytes, class, record_failure)
     }
 
-    fn try_acquire_internal(
+    fn try_acquire_open(
         &self,
         bytes: usize,
         class: BudgetClass,
@@ -274,12 +379,12 @@ impl ResourceBudget {
                 Ok(reservation) => reservations.push(reservation),
                 Err(dimension) => {
                     if record_failure {
-                        self.record_node_rejection(node, dimension);
+                        self.record_node_rejection(node, BudgetRejectionReason::Capacity(dimension));
                     }
                     return Err(BudgetRejection {
                         path: Arc::clone(&self.node.path),
                         exhausted_path: Arc::clone(&node.path),
-                        dimension,
+                        reason: BudgetRejectionReason::Capacity(dimension),
                         policy: self.node.limit.full_policy,
                     });
                 }
@@ -297,13 +402,17 @@ impl ResourceBudget {
     }
 
     pub(crate) fn permanent_acquire_rejection(&self, bytes: usize, class: BudgetClass) -> Option<BudgetRejection> {
+        let _admission = match self.admit() {
+            Ok(admission) => admission,
+            Err(rejection) => return Some(rejection),
+        };
         self.chain.iter().find_map(|node| {
             let dimension = node.permanent_exhaustion_dimension(bytes, class)?;
-            self.record_node_rejection(node, dimension);
+            self.record_node_rejection(node, BudgetRejectionReason::Capacity(dimension));
             Some(BudgetRejection {
                 path: Arc::clone(&self.node.path),
                 exhausted_path: Arc::clone(&node.path),
-                dimension,
+                reason: BudgetRejectionReason::Capacity(dimension),
                 policy: self.node.limit.full_policy,
             })
         })
@@ -315,14 +424,14 @@ impl ResourceBudget {
             .iter()
             .find(|node| node.path.as_ref() == error.exhausted_path())
         {
-            self.record_node_rejection(node, error.dimension());
+            self.record_node_rejection(node, error.reason());
         }
     }
 
-    fn record_node_rejection(&self, exhausted_node: &Arc<BudgetNode>, dimension: BudgetDimension) {
-        exhausted_node.record_rejection(dimension);
+    fn record_node_rejection(&self, exhausted_node: &Arc<BudgetNode>, reason: BudgetRejectionReason) {
+        exhausted_node.record_rejection(reason);
         if !Arc::ptr_eq(exhausted_node, &self.node) {
-            self.node.record_rejection(dimension);
+            self.node.record_rejection(reason);
         }
     }
 
@@ -473,17 +582,37 @@ impl ResourcePermit {
         &mut self,
         target: &ResourceBudget,
     ) -> Result<PermitRebindOutcome, crate::RuntimeContractViolation> {
+        if !self.belongs_to_tree(target) {
+            return Err(crate::RuntimeContractViolation::PermitTargetInDifferentTree);
+        }
+        let admission = match target.admit() {
+            Ok(admission) => admission,
+            Err(rejection) => return Ok(PermitRebindOutcome::Rejected(rejection)),
+        };
+        Ok(self.try_rebind_admitted(&admission))
+    }
+
+    pub(super) fn belongs_to_tree(&self, target: &ResourceBudget) -> bool {
+        self.reservations
+            .first()
+            .zip(target.chain.first())
+            .is_some_and(|(reservation, node)| Arc::ptr_eq(&reservation.node, node))
+    }
+
+    pub(super) fn try_rebind_admitted(&mut self, admission: &BudgetAdmission<'_>) -> PermitRebindOutcome {
+        let target = admission.budget;
         let common_ancestors = self
             .reservations
             .iter()
             .zip(target.chain.iter())
             .take_while(|(reservation, target_node)| Arc::ptr_eq(&reservation.node, target_node))
             .count();
-        if common_ancestors == 0 {
-            return Err(crate::RuntimeContractViolation::PermitTargetInDifferentTree);
-        }
+        debug_assert!(
+            common_ancestors > 0,
+            "caller validates the permit tree before admission"
+        );
         if common_ancestors == self.reservations.len() && common_ancestors == target.chain.len() {
-            return Ok(PermitRebindOutcome::Unchanged);
+            return PermitRebindOutcome::Unchanged;
         }
 
         let mut target_reservations =
@@ -492,13 +621,13 @@ impl ResourcePermit {
             match node.try_reserve(self.bytes, self.class) {
                 Ok(reservation) => target_reservations.push(reservation),
                 Err(dimension) => {
-                    target.record_node_rejection(node, dimension);
-                    return Ok(PermitRebindOutcome::Rejected(BudgetRejection {
+                    target.record_node_rejection(node, BudgetRejectionReason::Capacity(dimension));
+                    return PermitRebindOutcome::Rejected(BudgetRejection {
                         path: Arc::clone(&target.node.path),
                         exhausted_path: Arc::clone(&node.path),
-                        dimension,
+                        reason: BudgetRejectionReason::Capacity(dimension),
                         policy: target.node.limit.full_policy,
-                    }));
+                    });
                 }
             }
         }
@@ -509,7 +638,7 @@ impl ResourcePermit {
         self.reservations.truncate(common_ancestors);
         self.reservations.extend(target_reservations);
         self.capacity_notify.notify_waiters();
-        Ok(PermitRebindOutcome::Rebound)
+        PermitRebindOutcome::Rebound
     }
 }
 
@@ -621,10 +750,10 @@ impl BudgetNode {
         }
     }
 
-    fn record_rejection(&self, dimension: BudgetDimension) {
+    fn record_rejection(&self, reason: BudgetRejectionReason) {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.rejected_count = state.rejected_count.saturating_add(1);
-        if dimension == BudgetDimension::Rate {
+        if reason == BudgetRejectionReason::Capacity(BudgetDimension::Rate) {
             state.throttled_count = state.throttled_count.saturating_add(1);
         }
     }

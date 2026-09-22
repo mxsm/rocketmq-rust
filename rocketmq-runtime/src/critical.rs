@@ -246,14 +246,20 @@ impl CriticalFailureState {
         F: Fn(CriticalFailure) + Send + 'static,
     {
         let failures = self.clone();
+        let cancellation = owner.cancellation_token();
         owner.spawn(name, TaskKind::Worker, async move {
             loop {
-                let failure = failures.wait().await;
-                // Another handler may have taken the record first.
-                if failures.handle() != Some(failure) {
-                    continue;
+                tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => break,
+                    _ = failures.wait() => {
+                        // Take the current record atomically. Another handler
+                        // may have consumed the notification's older record.
+                        if let Some(failure) = failures.handle() {
+                            on_failure(failure);
+                        }
+                    }
                 }
-                on_failure(failure);
             }
         })
     }

@@ -14,7 +14,6 @@
 
 use std::future::Future;
 use std::num::NonZeroUsize;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -183,7 +182,6 @@ struct ScheduledTaskMetrics {
     max_concurrency: usize,
     pending_runs: AtomicU64,
     completion: Notify,
-    running: AtomicBool,
     active_runs: AtomicU64,
     runs: AtomicU64,
     skips: AtomicU64,
@@ -205,13 +203,13 @@ pub struct ScheduledTaskSnapshot {
     pub running: bool,
     /// The active runs value.
     pub active_runs: u64,
-    /// The runs value.
+    /// Runs that returned normally, including a controlled stop.
     pub runs: u64,
     /// The skips value.
     pub skips: u64,
     /// The overlaps value.
     pub overlaps: u64,
-    /// The failures value.
+    /// Reserved runs that timed out, panicked, were cancelled, or could not start.
     pub failures: u64,
     /// The last drift duration in milliseconds.
     pub last_drift_ms: u64,
@@ -324,9 +322,10 @@ impl ScheduledTaskGroup {
                     }
 
                     let started_at = Instant::now();
-                    metrics.begin_serial_run(started_at);
+                    let mut run = metrics.begin_serial_run(started_at);
+                    run.start();
                     let (control, timed_out) = run_controlled_with_optional_timeout(task(), config.max_run_time).await;
-                    metrics.finish_run(started_at, timed_out);
+                    run.finish(timed_out);
                     if control == ScheduledTaskControl::Stop {
                         return;
                     }
@@ -383,21 +382,17 @@ impl ScheduledTaskGroup {
                         return;
                     }
 
-                    if !metrics.try_begin_no_overlap_run(expected_tick) {
-                        expected_tick = next_expected_tick(expected_tick, config.period);
-                    } else {
+                    if let Some(mut run) = metrics.try_begin_no_overlap_run(expected_tick) {
                         let run_name = format!("scheduled-run:{name}");
-                        let run_metrics = metrics.clone();
                         let run_task = task.clone();
                         let max_run_time = config.max_run_time;
-                        let spawn_result = run_group.spawn_operation(&run_operation, run_name, async move {
-                            let started_at = Instant::now();
+                        let _ = run_group.spawn_operation(&run_operation, run_name, async move {
+                            run.start();
                             let timed_out = run_with_optional_timeout(run_task(), max_run_time).await;
-                            run_metrics.finish_run(started_at, timed_out);
+                            run.finish(timed_out);
                         });
-                        if spawn_result.is_err() {
-                            metrics.rollback_started_run();
-                        }
+                        expected_tick = next_expected_tick(expected_tick, config.period);
+                    } else {
                         expected_tick = next_expected_tick(expected_tick, config.period);
                     }
 
@@ -447,9 +442,10 @@ impl ScheduledTaskGroup {
                     }
 
                     let started_at = Instant::now();
-                    metrics.begin_serial_run(started_at);
+                    let mut run = metrics.begin_serial_run(started_at);
+                    run.start();
                     let (control, timed_out) = run_controlled_with_optional_timeout(task(), config.max_run_time).await;
-                    metrics.finish_run(started_at, timed_out);
+                    run.finish(timed_out);
                     if control == ScheduledTaskControl::Stop {
                         return;
                     }
@@ -504,21 +500,17 @@ impl ScheduledTaskGroup {
                         return;
                     }
 
-                    if !metrics.try_begin_no_overlap_run(expected_tick) {
-                        expected_tick = next_expected_tick(expected_tick, config.period);
-                    } else {
+                    if let Some(mut run) = metrics.try_begin_no_overlap_run(expected_tick) {
                         let run_name = format!("scheduled-run:{name}");
-                        let run_metrics = metrics.clone();
                         let run_task = task.clone();
                         let max_run_time = config.max_run_time;
-                        let spawn_result = run_group.spawn(run_name, TaskKind::ScheduledRun, async move {
-                            let started_at = Instant::now();
+                        let _ = run_group.spawn(run_name, TaskKind::ScheduledRun, async move {
+                            run.start();
                             let timed_out = run_with_optional_timeout(run_task(), max_run_time).await;
-                            run_metrics.finish_run(started_at, timed_out);
+                            run.finish(timed_out);
                         });
-                        if spawn_result.is_err() {
-                            metrics.rollback_started_run();
-                        }
+                        expected_tick = next_expected_tick(expected_tick, config.period);
+                    } else {
                         expected_tick = next_expected_tick(expected_tick, config.period);
                     }
 
@@ -572,19 +564,15 @@ impl ScheduledTaskGroup {
                         return;
                     }
 
-                    metrics.begin_overlapping_run(expected_tick);
+                    let mut run = metrics.begin_overlapping_run(expected_tick);
                     let run_name = format!("scheduled-run:{name}");
-                    let run_metrics = metrics.clone();
                     let run_task = task.clone();
                     let max_run_time = config.max_run_time;
-                    let spawn_result = run_group.spawn(run_name, TaskKind::ScheduledRun, async move {
-                        let started_at = Instant::now();
+                    let _ = run_group.spawn(run_name, TaskKind::ScheduledRun, async move {
+                        run.start();
                         let timed_out = run_with_optional_timeout(run_task(), max_run_time).await;
-                        run_metrics.finish_run(started_at, timed_out);
+                        run.finish(timed_out);
                     });
-                    if spawn_result.is_err() {
-                        metrics.rollback_started_run();
-                    }
 
                     expected_tick = next_expected_tick(expected_tick, config.period);
                     if !sleep_or_cancel(&token, config.period).await {
@@ -679,9 +667,10 @@ impl ScheduledTaskGroup {
                             return;
                         }
                         let started_at = Instant::now();
-                        metrics.begin_serial_run(started_at);
+                        let mut run = metrics.begin_serial_run(started_at);
+                        run.start();
                         let timed_out = run_with_optional_timeout(task(), max_run_time).await;
-                        metrics.finish_run(started_at, timed_out);
+                        run.finish(timed_out);
                         if !sleep_or_cancel(&token, period).await {
                             return;
                         }
@@ -709,15 +698,15 @@ impl ScheduledTaskGroup {
                                     u64::try_from(overdue.as_nanos() / period.as_nanos()).unwrap_or(u64::MAX),
                                 );
                                 let mut remaining = total_missed;
-                                while remaining > 0 && metrics.try_reserve_run() {
+                                while remaining > 0 {
+                                    let Some(run) = metrics.try_reserve_run() else { break; };
                                     if !spawn_bounded_run(
                                         &run_group,
-                                        &metrics,
+                                        run,
                                         &task,
                                         &name,
                                         max_run_time,
                                     ) {
-                                        metrics.rollback_started_run();
                                         break;
                                     }
                                     remaining -= 1;
@@ -729,13 +718,14 @@ impl ScheduledTaskGroup {
                                 expected_tick = expected_tick.checked_add(advance).unwrap_or(now);
                             }
                         }
-                        while metrics.pending_runs.load(Ordering::Acquire) > 0 && metrics.try_reserve_run() {
+                        while metrics.pending_runs.load(Ordering::Acquire) > 0 {
+                            let Some(run) = metrics.try_reserve_run() else {
+                                break;
+                            };
                             if !metrics.take_pending_run() {
-                                metrics.rollback_started_run();
                                 break;
                             }
-                            if !spawn_bounded_run(&run_group, &metrics, &task, &name, max_run_time) {
-                                metrics.rollback_started_run();
+                            if !spawn_bounded_run(&run_group, run, &task, &name, max_run_time) {
                                 break;
                             }
                         }
@@ -791,7 +781,6 @@ impl ScheduledTaskGroup {
             max_concurrency,
             pending_runs: AtomicU64::new(0),
             completion: Notify::new(),
-            running: AtomicBool::new(false),
             active_runs: AtomicU64::new(0),
             runs: AtomicU64::new(0),
             skips: AtomicU64::new(0),
@@ -813,19 +802,18 @@ impl ScheduledTaskGroup {
 }
 
 impl ScheduledTaskMetrics {
-    fn try_reserve_run(&self) -> bool {
+    fn try_reserve_run(self: &Arc<Self>) -> Option<ScheduledRunGuard> {
         let mut active = self.active_runs.load(Ordering::Acquire);
         loop {
             if active >= self.max_concurrency as u64 {
-                return false;
+                return None;
             }
             match self
                 .active_runs
                 .compare_exchange_weak(active, active + 1, Ordering::AcqRel, Ordering::Acquire)
             {
                 Ok(_) => {
-                    self.running.store(true, Ordering::Release);
-                    return true;
+                    return Some(ScheduledRunGuard::reserved(self.clone()));
                 }
                 Err(observed) => active = observed,
             }
@@ -874,55 +862,29 @@ impl ScheduledTaskMetrics {
         self.skips.fetch_add(skipped, Ordering::Relaxed);
     }
 
-    fn begin_serial_run(&self, expected_at: Instant) {
+    fn begin_serial_run(self: &Arc<Self>, expected_at: Instant) -> ScheduledRunGuard {
         self.active_runs.fetch_add(1, Ordering::AcqRel);
-        self.running.store(true, Ordering::Release);
         self.record_drift(expected_at);
+        ScheduledRunGuard::reserved(self.clone())
     }
 
-    fn try_begin_no_overlap_run(&self, expected_at: Instant) -> bool {
-        if self.running.swap(true, Ordering::AcqRel) {
-            self.skips.fetch_add(1, Ordering::Relaxed);
-            false
-        } else {
-            self.active_runs.fetch_add(1, Ordering::AcqRel);
+    fn try_begin_no_overlap_run(self: &Arc<Self>, expected_at: Instant) -> Option<ScheduledRunGuard> {
+        if let Some(run) = self.try_reserve_run() {
             self.record_drift(expected_at);
-            true
+            Some(run)
+        } else {
+            self.skips.fetch_add(1, Ordering::Relaxed);
+            None
         }
     }
 
-    fn begin_overlapping_run(&self, expected_at: Instant) {
+    fn begin_overlapping_run(self: &Arc<Self>, expected_at: Instant) -> ScheduledRunGuard {
         let previous_runs = self.active_runs.fetch_add(1, Ordering::AcqRel);
         if previous_runs > 0 {
             self.overlaps.fetch_add(1, Ordering::Relaxed);
         }
-        self.running.store(true, Ordering::Release);
         self.record_drift(expected_at);
-    }
-
-    fn finish_run(&self, started_at: Instant, timed_out: bool) {
-        let elapsed_ms = started_at.elapsed().as_millis() as u64;
-        self.last_elapsed_ms.store(elapsed_ms, Ordering::Relaxed);
-        self.max_elapsed_ms.fetch_max(elapsed_ms, Ordering::Relaxed);
-        if timed_out {
-            self.failures.fetch_add(1, Ordering::Relaxed);
-        } else {
-            self.runs.fetch_add(1, Ordering::Relaxed);
-        }
-        self.finish_active_run();
-        self.completion.notify_one();
-    }
-
-    fn rollback_started_run(&self) {
-        self.failures.fetch_add(1, Ordering::Relaxed);
-        self.finish_active_run();
-        self.completion.notify_one();
-    }
-
-    fn finish_active_run(&self) {
-        if self.active_runs.fetch_sub(1, Ordering::AcqRel) == 1 {
-            self.running.store(false, Ordering::Release);
-        }
+        ScheduledRunGuard::reserved(self.clone())
     }
 
     fn record_drift(&self, expected_at: Instant) {
@@ -948,9 +910,77 @@ impl ScheduledTaskMetrics {
     }
 }
 
+// Reservation owns settlement even before a submitted future is first polled.
+// Drop covers construction/poll/destructor panics, rejection, and cancellation.
+struct ScheduledRunGuard {
+    metrics: Arc<ScheduledTaskMetrics>,
+    started_at: Option<Instant>,
+    outcome: ScheduledRunOutcome,
+}
+
+#[derive(Clone, Copy)]
+enum ScheduledRunOutcome {
+    Completed,
+    TimedOut,
+    Panicked,
+    Cancelled,
+    RejectedBeforeStart,
+}
+
+impl ScheduledRunGuard {
+    fn reserved(metrics: Arc<ScheduledTaskMetrics>) -> Self {
+        Self {
+            metrics,
+            started_at: None,
+            outcome: ScheduledRunOutcome::RejectedBeforeStart,
+        }
+    }
+
+    fn start(&mut self) {
+        self.started_at = Some(Instant::now());
+        self.outcome = ScheduledRunOutcome::Cancelled;
+    }
+
+    fn finish(mut self, timed_out: bool) {
+        self.outcome = if timed_out {
+            ScheduledRunOutcome::TimedOut
+        } else {
+            ScheduledRunOutcome::Completed
+        };
+    }
+}
+
+impl Drop for ScheduledRunGuard {
+    fn drop(&mut self) {
+        if let Some(started_at) = self.started_at {
+            let elapsed_ms = started_at.elapsed().as_millis() as u64;
+            self.metrics.last_elapsed_ms.store(elapsed_ms, Ordering::Relaxed);
+            self.metrics.max_elapsed_ms.fetch_max(elapsed_ms, Ordering::Relaxed);
+        }
+        let outcome = if std::thread::panicking() {
+            ScheduledRunOutcome::Panicked
+        } else {
+            self.outcome
+        };
+        match outcome {
+            ScheduledRunOutcome::Completed => {
+                self.metrics.runs.fetch_add(1, Ordering::Relaxed);
+            }
+            ScheduledRunOutcome::TimedOut
+            | ScheduledRunOutcome::Panicked
+            | ScheduledRunOutcome::Cancelled
+            | ScheduledRunOutcome::RejectedBeforeStart => {
+                self.metrics.failures.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        self.metrics.active_runs.fetch_sub(1, Ordering::AcqRel);
+        self.metrics.completion.notify_one();
+    }
+}
+
 fn spawn_bounded_run<F, Fut>(
     group: &TaskGroup,
-    metrics: &Arc<ScheduledTaskMetrics>,
+    mut run: ScheduledRunGuard,
     task: &Arc<F>,
     name: &Arc<str>,
     max_run_time: Option<Duration>,
@@ -959,13 +989,12 @@ where
     F: Fn() -> Fut + Send + Sync + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    let run_metrics = metrics.clone();
     let run_task = task.clone();
     group
         .spawn(format!("scheduled-run:{name}"), TaskKind::ScheduledRun, async move {
-            let started_at = Instant::now();
+            run.start();
             let timed_out = run_with_optional_timeout(run_task(), max_run_time).await;
-            run_metrics.finish_run(started_at, timed_out);
+            run.finish(timed_out);
         })
         .is_ok()
 }
@@ -1025,6 +1054,167 @@ mod tests {
 
     use super::*;
     use crate::RuntimeContext;
+
+    fn panicking_run(construction: bool) -> impl Future<Output = ()> + Send {
+        assert!(!construction, "injected run construction panic");
+        async { panic!("injected run poll panic") }
+    }
+
+    fn panicking_controlled_run(construction: bool) -> impl Future<Output = ScheduledTaskControl> + Send {
+        assert!(!construction, "injected controlled construction panic");
+        async { panic!("injected controlled poll panic") }
+    }
+
+    #[tokio::test]
+    async fn every_schedule_entry_settles_construction_and_poll_panics() {
+        for construction in [false, true] {
+            for entry in 0..8 {
+                let context = RuntimeContext::from_current("scheduled-panic");
+                let scheduled = ScheduledTaskGroup::new(context.root_group().clone());
+                let config = ScheduledTaskConfig::fixed_rate("panic", Duration::from_secs(60));
+                let operation = OperationContext::without_deadline(TaskKind::ScheduledDriver);
+                let result = match entry {
+                    0 => scheduled.schedule_bounded(
+                        config,
+                        ScheduledExecutionPolicy::serial(MissedTickPolicy::Skip),
+                        move || panicking_run(construction),
+                    ),
+                    1 => scheduled.schedule_fixed_delay(config, move || panicking_run(construction)),
+                    2 => scheduled
+                        .schedule_fixed_delay_controlled(config, move || panicking_controlled_run(construction)),
+                    3 => scheduled.schedule_fixed_rate_no_overlap(config, move || panicking_run(construction)),
+                    4 => scheduled.schedule_fixed_rate(config, move || panicking_run(construction)),
+                    5 => scheduled
+                        .schedule_fixed_delay_operation(&operation, config, move || panicking_run(construction)),
+                    6 => scheduled.schedule_fixed_delay_controlled_operation(&operation, config, move || {
+                        panicking_controlled_run(construction)
+                    }),
+                    _ => scheduled.schedule_fixed_rate_no_overlap_operation(&operation, config, move || {
+                        panicking_run(construction)
+                    }),
+                };
+                result.unwrap();
+                for _ in 0..100 {
+                    if scheduled.snapshot()[0].failures == 1 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                let snapshot = &scheduled.snapshot()[0];
+                assert_eq!(snapshot.active_runs, 0, "entry {entry}, construction {construction}");
+                assert!(!snapshot.running);
+                assert_eq!(snapshot.failures, 1);
+                assert_eq!(snapshot.runs, 0);
+                let report = context.shutdown_tasks(Duration::from_secs(1)).await;
+                assert_eq!(report.panicked, 1);
+                assert_eq!(report.leaked, 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reserved_run_settles_if_rejected_or_aborted_before_first_poll() {
+        let context = RuntimeContext::from_current("run-guard");
+        let scheduled = ScheduledTaskGroup::new(context.root_group().clone());
+        let name: Arc<str> = Arc::from("guard");
+        let metrics = scheduled
+            .register(
+                name.clone(),
+                ScheduledTaskConfig::fixed_rate("guard", Duration::from_secs(1)),
+                1,
+            )
+            .unwrap();
+        let run = metrics.try_reserve_run().unwrap();
+        let (id, handle) = scheduled
+            .group
+            .spawn_with_handle("never-polled", TaskKind::ScheduledRun, async move {
+                let mut run = run;
+                run.start();
+                std::future::pending::<()>().await;
+                run.finish(false);
+            })
+            .unwrap();
+        handle.abort();
+        assert!(handle.await.unwrap_err().is_cancelled());
+        assert!(scheduled.group.wait_task(id, Duration::ZERO).await);
+        assert_eq!(metrics.snapshot().active_runs, 0);
+        assert_eq!(metrics.snapshot().failures, 1);
+        assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
+        let run = metrics.try_reserve_run().unwrap();
+        assert!(!spawn_bounded_run(
+            &scheduled.group,
+            run,
+            &Arc::new(|| async {}),
+            &name,
+            None
+        ));
+        assert_eq!(metrics.snapshot().active_runs, 0);
+        assert_eq!(metrics.snapshot().failures, 2);
+    }
+
+    #[tokio::test]
+    async fn operation_cancellation_settles_an_active_scheduled_run() {
+        let context = RuntimeContext::from_current("scheduled-operation-cancel");
+        let scheduled = ScheduledTaskGroup::new(context.root_group().clone());
+        let operation = OperationContext::without_deadline(TaskKind::ScheduledDriver);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let mut started = Some(started_tx);
+        scheduled
+            .schedule_fixed_delay_operation(
+                &operation,
+                ScheduledTaskConfig::fixed_delay("cancel", Duration::from_secs(1)),
+                move || {
+                    let started = started.take();
+                    async move {
+                        if let Some(started) = started {
+                            let _ = started.send(());
+                        }
+                        std::future::pending::<()>().await;
+                    }
+                },
+            )
+            .unwrap();
+        started_rx.await.unwrap();
+        assert!(operation
+            .cancel_and_wait(&scheduled.group, Duration::from_secs(1))
+            .await
+            .unwrap());
+        assert_eq!(scheduled.snapshot()[0].active_runs, 0);
+        assert_eq!(scheduled.snapshot()[0].failures, 1);
+        assert_eq!(scheduled.snapshot()[0].runs, 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_timed_out_run_releases_its_slot_once_before_the_next_controlled_run() {
+        let context = RuntimeContext::from_current("scheduled-timeout");
+        let scheduled = ScheduledTaskGroup::new(context.root_group().clone());
+        let (second_tx, second_rx) = tokio::sync::oneshot::channel();
+        let mut second_tx = Some(second_tx);
+        let mut calls = 0;
+        let mut config = ScheduledTaskConfig::fixed_delay("timeout", Duration::from_secs(1));
+        config.max_run_time = Some(Duration::from_secs(1));
+        scheduled
+            .schedule_fixed_delay_controlled(config, move || {
+                calls += 1;
+                let second = if calls == 2 { second_tx.take() } else { None };
+                async move {
+                    if let Some(second) = second {
+                        let _ = second.send(());
+                        ScheduledTaskControl::Stop
+                    } else {
+                        std::future::pending().await
+                    }
+                }
+            })
+            .unwrap();
+        second_rx.await.unwrap();
+        let report = context.shutdown_tasks(Duration::from_secs(1)).await;
+        assert!(report.is_healthy());
+        let snapshot = &scheduled.snapshot()[0];
+        assert_eq!(snapshot.active_runs, 0);
+        assert_eq!(snapshot.runs, 1);
+        assert_eq!(snapshot.failures, 1);
+    }
 
     #[tokio::test(start_paused = true)]
     async fn coalesced_bounded_schedule_never_exceeds_one_active_and_one_pending_run() {

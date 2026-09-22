@@ -20,6 +20,7 @@ mod memory;
 mod queue;
 
 pub use budget::BudgetRejection;
+pub use budget::BudgetRejectionReason;
 pub use budget::BudgetSnapshot;
 pub use budget::PermitRebindOutcome;
 pub use budget::ResourceBudget;

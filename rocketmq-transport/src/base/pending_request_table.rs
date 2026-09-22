@@ -383,12 +383,13 @@ impl PendingRequestTable {
             Ok(permit) => permit,
             Err(error) => {
                 match error.dimension() {
-                    BudgetDimension::Bytes => {
+                    Some(BudgetDimension::Bytes) => {
                         self.inner.rejected_bytes.fetch_add(1, Ordering::Relaxed);
                     }
-                    BudgetDimension::Count | BudgetDimension::Rate => {
+                    Some(BudgetDimension::Count | BudgetDimension::Rate) => {
                         self.inner.rejected_count.fetch_add(1, Ordering::Relaxed);
                     }
+                    None => return PendingRegistrationOutcome::SessionClosed,
                 }
                 return PendingRegistrationOutcome::QueueSaturated;
             }

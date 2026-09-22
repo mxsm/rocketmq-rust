@@ -239,3 +239,50 @@ async fn the_handling_policy_decides_the_lifecycle_outcome() {
     );
     assert_eq!(ordered.state(), ServiceLifecycleState::Failed);
 }
+
+#[tokio::test]
+async fn idle_monitor_shutdown_is_cooperative_and_preserves_unhandled_failures() {
+    let context = RuntimeContext::from_current("idle-monitor");
+    let supervisor = context.service_context("supervisor");
+    let failures = CriticalFailureState::new();
+    failures
+        .spawn_monitor(&supervisor.task_spawner(), "monitor", |_| {
+            panic!("cancelled monitor ran")
+        })
+        .unwrap();
+    // Cancellation wins even if the monitor has not been polled yet.
+    supervisor.task_group().cancel();
+    let pending = failures.record(CriticalFailureKind::Unrecoverable, TaskKind::Worker);
+    let report = supervisor.task_group().shutdown(Duration::from_secs(1)).await;
+    assert!(report.is_healthy(), "{}", report.to_json());
+    assert_eq!(report.cancelled, 1);
+    assert_eq!(report.aborted + report.timed_out, 0);
+    assert_eq!(failures.handle(), Some(pending));
+}
+
+#[tokio::test]
+async fn competing_monitors_handle_each_taken_record_once() {
+    let context = RuntimeContext::from_current("competing-monitors");
+    let supervisor = context.service_context("supervisor");
+    let failures = CriticalFailureState::new();
+    let (sender, mut handled) = tokio::sync::mpsc::unbounded_channel();
+    for name in ["first", "second"] {
+        let sender = sender.clone();
+        failures
+            .spawn_monitor(&supervisor.task_spawner(), name, move |failure| {
+                sender.send(failure).unwrap();
+            })
+            .unwrap();
+    }
+    for _ in 0..32 {
+        let recorded = failures.record(CriticalFailureKind::Unrecoverable, TaskKind::Worker);
+        assert_eq!(handled.recv().await, Some(recorded));
+        assert!(handled.try_recv().is_err());
+        assert!(failures.pending().is_none());
+    }
+    assert!(supervisor
+        .task_group()
+        .shutdown(Duration::from_secs(1))
+        .await
+        .is_healthy());
+}

@@ -29,8 +29,8 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::application_remoting_command_factory;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::BudgetDimension;
 use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::BudgetRejectionReason;
 use rocketmq_runtime::BudgetSnapshot;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::FullPolicy;
@@ -732,7 +732,7 @@ impl BrokerFastFailure {
                     kind,
                     retained_bytes,
                     &usage,
-                    error.dimension(),
+                    error.reason(),
                 ))
             })?;
         let (response_tx, response_rx) = oneshot::channel();
@@ -871,13 +871,17 @@ fn pending_budget_busy_response(
     kind: FastFailureQueueKind,
     retained_bytes: usize,
     usage: &BudgetSnapshot,
-    dimension: BudgetDimension,
+    reason: BudgetRejectionReason,
 ) -> RemotingCommand {
+    let exhausted = match reason {
+        BudgetRejectionReason::Capacity(dimension) => format!("{dimension:?}"),
+        BudgetRejectionReason::Closed => "Closed".to_owned(),
+    };
     command_factory
         .create_response_command_with_code_remark(
             ResponseCode::SystemBusy,
             format!(
-                "[PENDING_BUDGET]broker busy, retry later, queue: {}, exhausted: {dimension:?}, request bytes: \
+                "[PENDING_BUDGET]broker busy, retry later, queue: {}, exhausted: {exhausted}, request bytes: \
              {retained_bytes}, pending count: {}, pending bytes: {}",
                 kind.name(),
                 usage.current_count,

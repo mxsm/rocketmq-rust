@@ -193,3 +193,40 @@ fn queue_waiter_owner_cancellation_and_close_preserve_permit_conservation() {
         assert_eq!(state.acquired_count, state.released_count);
     });
 }
+
+#[test]
+fn dynamic_gate_serializes_escaped_admission_with_close_and_retirement() {
+    loom::model(|| {
+        // As in ResourceBudget::admit, the dynamic gate encloses the entire
+        // reservation transaction, while release needs only the node lock.
+        let gate = Arc::new(Mutex::new(false));
+        let budget = Budget::new(1, 8);
+        let acquiring_gate = gate.clone();
+        let acquiring_budget = budget.clone();
+        let acquiring = thread::spawn(move || {
+            let closed = acquiring_gate.lock().unwrap();
+            if *closed {
+                return None;
+            }
+            let permit = acquiring_budget.try_acquire(8);
+            drop(closed);
+            permit
+        });
+        let closing_gate = gate.clone();
+        let closing_budget = budget.clone();
+        let retiring = thread::spawn(move || {
+            *closing_gate.lock().unwrap() = true;
+            // This is the generation-release precondition. An accepted permit
+            // is returned to the main thread, so it cannot disappear early.
+            closing_budget.state.lock().unwrap().current_count == 0
+        });
+        let permit = acquiring.join().unwrap();
+        let released = retiring.join().unwrap();
+        assert_eq!(released, permit.is_none());
+        assert!(*gate.lock().unwrap());
+        drop(permit);
+        let state = budget.state.lock().unwrap();
+        assert_eq!(state.current_count, 0);
+        assert_eq!(state.acquired_count, state.released_count);
+    });
+}

@@ -9,6 +9,8 @@
 
 [English](README.md)
 
+[未发布的 API 迁移与契约修正说明](MIGRATION.md)
+
 ## 运行时模型
 
 生产应用入口拥有 `RuntimeOwner`。库接收 `ChildServiceContext` 或更窄的能力对象，

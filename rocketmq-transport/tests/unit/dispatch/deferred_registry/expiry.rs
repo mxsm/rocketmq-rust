@@ -53,6 +53,7 @@ where
         .deferred_seed_for_test(telemetry, harness.session.view().id(), control)
         .into_responder(original);
     let permit = match harness.admission.try_reserve(retained) {
+        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
         DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
         DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_) => {
             panic!("telemetry wait permit unexpectedly exhausted waiter capacity")

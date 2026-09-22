@@ -42,6 +42,7 @@ fn terminal_responder(outcome: DeferredResponderOutcome) -> DeferredResponder {
 
 fn terminal_permit(outcome: DeferredAdmissionAcquireOutcome) -> crate::dispatch::DeferredWaitPermit {
     match outcome {
+        DeferredAdmissionAcquireOutcome::Closed => panic!("deferred admission unexpectedly closed"),
         DeferredAdmissionAcquireOutcome::Acquired(permit) => permit,
         DeferredAdmissionAcquireOutcome::WaiterCapacityExhausted(_)
         | DeferredAdmissionAcquireOutcome::RetainedByteCapacityExhausted(_)

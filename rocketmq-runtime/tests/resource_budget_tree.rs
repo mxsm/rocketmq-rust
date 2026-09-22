@@ -22,6 +22,7 @@ use rocketmq_runtime::BudgetCapacity;
 use rocketmq_runtime::BudgetClass;
 use rocketmq_runtime::BudgetDimension;
 use rocketmq_runtime::BudgetLimit;
+use rocketmq_runtime::BudgetRejectionReason;
 use rocketmq_runtime::BudgetedQueue;
 use rocketmq_runtime::DynamicKeyAdmissionRejection;
 use rocketmq_runtime::DynamicKeyRegistrationFailure;
@@ -141,7 +142,7 @@ fn parent_budget_bounds_the_sum_of_independent_children() {
     let error = second
         .try_acquire_data(60)
         .expect_err("root byte limit must cover siblings");
-    assert_eq!(error.dimension(), BudgetDimension::Bytes);
+    assert_eq!(error.dimension(), Some(BudgetDimension::Bytes));
     assert_eq!(error.path(), "process/second");
     assert_eq!(error.exhausted_path(), "process");
     assert_eq!(second.snapshot().rejected_count, 1);
@@ -219,7 +220,7 @@ fn failed_rebind_keeps_the_source_permit_valid() {
         .expect("same-tree rebind must return an outcome");
     assert!(matches!(
         outcome,
-        PermitRebindOutcome::Rejected(ref error) if error.dimension() == BudgetDimension::Count
+        PermitRebindOutcome::Rejected(ref error) if error.dimension() == Some(BudgetDimension::Count)
     ));
     assert_eq!(source.snapshot().current_count, 1);
     assert_eq!(source.snapshot().current_bytes, 8);
@@ -282,7 +283,7 @@ fn rate_limit_uses_injected_monotonic_time_and_preserves_control_tokens() {
         root.try_acquire_data(1)
             .expect_err("data burst must retain one control token")
             .dimension(),
-        BudgetDimension::Rate
+        Some(BudgetDimension::Rate)
     );
     let control = root.try_acquire_control(1).expect("control rate reserve");
     assert!(root.try_acquire_control(1).is_err());
@@ -663,7 +664,7 @@ async fn wait_until_deadline_rejects_item_that_cannot_fit_ancestor_data_reserve(
 
     match rejection {
         QueuePushRejection::BudgetExhausted(error) => {
-            assert_eq!(error.dimension(), BudgetDimension::Bytes);
+            assert_eq!(error.dimension(), Some(BudgetDimension::Bytes));
             assert_eq!(error.exhausted_path(), "reserved-root");
         }
         other => panic!("unexpected error: {other:?}"),
@@ -691,7 +692,7 @@ async fn wait_until_deadline_returns_rate_exhaustion_without_capacity_wait() {
 
     match rejection {
         QueuePushRejection::BudgetExhausted(error) => {
-            assert_eq!(error.dimension(), BudgetDimension::Rate);
+            assert_eq!(error.dimension(), Some(BudgetDimension::Rate));
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -887,6 +888,211 @@ async fn the_dynamic_key_registry_is_bounded() {
         .root()
         .register_dynamic_child("second", limit(1, 16, FullPolicy::Reject))
         .is_ok());
+}
+
+#[tokio::test]
+async fn retired_generation_closes_escaped_budgets_descendants_and_rebinds() {
+    let tree = ResourceBudgetTree::new("process", limit(16, 160, FullPolicy::Reject)).unwrap();
+    let root = tree.root();
+    let key = root
+        .register_dynamic_child("key", limit(8, 80, FullPolicy::Reject))
+        .unwrap();
+    let old = key.budget();
+    let left = old.child("left", limit(4, 40, FullPolicy::Reject)).unwrap();
+    let right = old.child("right", limit(4, 40, FullPolicy::Reject)).unwrap();
+    let mut same = old.try_acquire_control(8).unwrap();
+    let mut sibling = left.try_acquire_data(8).unwrap();
+    key.close();
+    for budget in [&old, &left, &right] {
+        for class in [BudgetClass::Data, BudgetClass::Control] {
+            let rejection = budget.try_acquire(1, class).unwrap_err();
+            assert_eq!(rejection.reason(), BudgetRejectionReason::Closed);
+            assert_eq!(rejection.dimension(), None);
+            assert_eq!(rejection.exhausted_path(), old.path());
+        }
+    }
+    for result in [same.try_rebind(&old).unwrap(), sibling.try_rebind(&right).unwrap()] {
+        assert!(matches!(result, PermitRebindOutcome::Rejected(error) if error.is_closed()));
+    }
+    assert_eq!(root.snapshot().current_count, 2);
+    assert_eq!(old.snapshot().current_bytes, 16);
+    assert!(matches!(
+        old.register_dynamic_child("nested", limit(1, 1, FullPolicy::Reject)),
+        Err(DynamicKeyRegistrationFailure::Closed)
+    ));
+    assert!(old
+        .child("closed-child", limit(1, 1, FullPolicy::Reject))
+        .unwrap()
+        .try_acquire_data(1)
+        .unwrap_err()
+        .is_closed());
+    assert!(!key.retire_until(tokio::time::Instant::now()).await.released);
+    // Migration out preserves the root reservation while draining the old key.
+    assert_eq!(same.try_rebind(&root).unwrap(), PermitRebindOutcome::Rebound);
+    drop(sibling);
+    assert!(key.retire_until(tokio::time::Instant::now()).await.released);
+    let next = root
+        .register_dynamic_child("key", limit(8, 80, FullPolicy::Reject))
+        .unwrap();
+    let next_permit = next.try_acquire(8, BudgetClass::Data).unwrap();
+    assert!(!key.retire_until(tokio::time::Instant::now()).await.released);
+    assert!(old.try_acquire_control(8).unwrap_err().is_closed());
+    assert_eq!(root.snapshot().current_count, 2);
+    drop((same, next_permit));
+    assert!(next.retire_until(tokio::time::Instant::now()).await.released);
+    let snapshot = root.snapshot();
+    assert_eq!(snapshot.current_count, 0);
+    assert_eq!(snapshot.admitted_count, snapshot.released_count);
+}
+
+#[test]
+fn closure_does_not_run_destructive_queue_policies_or_retain_rejected_permits() {
+    for policy in [
+        FullPolicy::Reject,
+        FullPolicy::WaitUntilDeadline,
+        FullPolicy::CoalesceLatest,
+        FullPolicy::DropStale,
+        FullPolicy::CloseSlowConsumer,
+    ] {
+        let clock = Arc::new(ManualClock::default());
+        let tree = ResourceBudgetTree::with_clock("process", limit(8, 80, FullPolicy::Reject), clock.clone()).unwrap();
+        let key = tree
+            .root()
+            .register_dynamic_child("key", limit(2, 20, policy).with_max_age(Duration::from_secs(1)))
+            .unwrap();
+        let queue = BudgetedQueue::new(key.budget());
+        accepted(queue.try_push_data("accepted", 8));
+        let permit = key.budget().try_acquire_data(8).unwrap();
+        key.close();
+        clock.advance(Duration::from_secs(2));
+        assert_eq!(
+            rejected(queue.try_push_data("rejected", 8)),
+            ("rejected", QueuePushRejection::Closed)
+        );
+        assert_eq!(
+            rejected(queue.try_push_budgeted("budgeted", permit).unwrap()),
+            ("budgeted", QueuePushRejection::Closed)
+        );
+        let snapshot = queue.snapshot();
+        assert_eq!(snapshot.depth, 1);
+        assert_eq!(snapshot.reserved_count, 1);
+        assert_eq!(
+            snapshot.dropped_count + snapshot.coalesced_count + snapshot.closed_slow_consumer_count,
+            0
+        );
+        let foreign = ResourceBudgetTree::new("foreign", limit(1, 8, FullPolicy::Reject)).unwrap();
+        let rejected = queue
+            .try_push_budgeted("foreign", foreign.root().try_acquire_data(8).unwrap())
+            .unwrap_err();
+        assert_eq!(rejected.item, "foreign");
+        assert_eq!(foreign.root().snapshot().current_bytes, 8);
+        drop(rejected);
+        drop(queue);
+        assert_eq!(tree.root().snapshot().current_count, 0);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn dynamic_close_wakes_queue_waiters_and_receivers_without_deadline_expiry() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 32, FullPolicy::Reject)).unwrap();
+    let key = tree
+        .root()
+        .register_dynamic_child("key", limit(1, 8, FullPolicy::WaitUntilDeadline))
+        .unwrap();
+    let queue = BudgetedQueue::new(key.budget());
+    accepted(queue.try_push_data("first", 8));
+    let waiting = queue.push_until(
+        "waiting",
+        8,
+        BudgetClass::Data,
+        tokio::time::Instant::now() + Duration::from_secs(100),
+    );
+    tokio::pin!(waiting);
+    assert!(futures::poll!(&mut waiting).is_pending());
+    assert_eq!(queue.snapshot().waiters, 1);
+    key.close();
+    assert_eq!(rejected(waiting.await), ("waiting", QueuePushRejection::Closed));
+    assert_eq!(queue.snapshot().deadline_exceeded_count, 0);
+    assert_eq!(queue.recv().await, Some("first"));
+    assert_eq!(queue.recv().await, None);
+
+    let other = tree
+        .root()
+        .register_dynamic_child("other", limit(1, 8, FullPolicy::Reject))
+        .unwrap();
+    let empty = BudgetedQueue::<()>::new(other.budget());
+    let receiving = empty.recv();
+    tokio::pin!(receiving);
+    assert!(futures::poll!(&mut receiving).is_pending());
+    other.close();
+    assert_eq!(receiving.await, None);
+}
+
+#[tokio::test]
+async fn concurrent_close_and_escaped_acquisition_cannot_escape_retirement_accounting() {
+    let tree = ResourceBudgetTree::new("process", limit(4, 32, FullPolicy::Reject)).unwrap();
+    for _ in 0..64 {
+        let key = tree
+            .root()
+            .register_dynamic_child("key", limit(2, 16, FullPolicy::Reject))
+            .unwrap();
+        let escaped = key.budget();
+        let barrier = std::sync::Barrier::new(2);
+        let acquired = std::thread::scope(|scope| {
+            let acquiring = scope.spawn(|| {
+                barrier.wait();
+                escaped.try_acquire_data(8)
+            });
+            barrier.wait();
+            key.close();
+            acquiring.join().unwrap()
+        });
+        let before_drop = key.retire_until(tokio::time::Instant::now()).await;
+        assert_eq!(before_drop.outstanding_reservations, usize::from(acquired.is_ok()));
+        assert_eq!(before_drop.released, acquired.is_err());
+        assert!(escaped.try_acquire_data(1).unwrap_err().is_closed());
+        drop(acquired);
+        if !before_drop.released {
+            assert!(key.retire_until(tokio::time::Instant::now()).await.released);
+        }
+        assert_eq!(tree.root().snapshot().current_count, 0);
+    }
+}
+
+#[test]
+fn coalesced_item_destructors_can_close_the_dynamic_key_after_admission_unlocks() {
+    struct CloseOnDrop(Option<rocketmq_runtime::DynamicBudgetKey>);
+    impl Drop for CloseOnDrop {
+        fn drop(&mut self) {
+            if let Some(key) = self.0.take() {
+                key.close();
+            }
+        }
+    }
+    let (finished, result) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let root = ResourceBudgetTree::new("root", limit(2, 16, FullPolicy::Reject))
+            .unwrap()
+            .root();
+        let key = root
+            .register_dynamic_child("key", limit(1, 8, FullPolicy::CoalesceLatest))
+            .unwrap();
+        let queue = BudgetedQueue::new(key.budget());
+        accepted(queue.try_push_data(CloseOnDrop(Some(key.clone())), 8));
+        assert!(matches!(
+            queue.try_push_data(CloseOnDrop(None), 8),
+            QueuePushOutcome::Coalesced { replaced: 1 }
+        ));
+        assert!(key.is_closed());
+        assert_eq!(queue.len(), 1);
+        drop(queue);
+        assert_eq!(root.snapshot().current_count, 0);
+        finished.send(()).unwrap();
+    });
+    result
+        .recv_timeout(Duration::from_secs(5))
+        .expect("item destructor must not run under an admission gate");
+    worker.join().unwrap();
 }
 
 #[test]

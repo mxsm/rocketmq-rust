@@ -444,7 +444,10 @@ pub enum ServerRequestOutcome {
     QueueSaturated,
     /// The immutable deadline elapsed before the first socket write.
     DeadlineExpired,
-    /// The session no longer accepts server-originated work.
+    /// The session closed before admission or while waiting for its response.
+    ///
+    /// This normal close outcome is not evidence that the peer did not process
+    /// an already-written request. It does not grant permission to retry it.
     SessionClosed,
 }
 

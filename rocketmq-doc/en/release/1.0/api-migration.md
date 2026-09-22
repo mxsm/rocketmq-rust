@@ -171,6 +171,14 @@ those outcomes directly. Reserve `RuntimeError` for catalog-backed operational
 failure, preserving its closed operation and typed source rather than parsing a
 rendered message.
 
+Dynamic budget closure is a distinct normal outcome. `BudgetRejection::reason()`
+returns `BudgetRejectionReason::Capacity(dimension)` or `Closed`, and
+`dimension()` now returns `Option<BudgetDimension>`. Migrate exhaustive matches
+and closure handling together; do not publish this source-breaking accessor
+change as a compatible patch. Transport deferred admission also adds a `Closed`
+outcome. See the [runtime migration notes](../../../../rocketmq-runtime/MIGRATION.md)
+for permit transfer, queue ownership, and corrected shutdown/schedule semantics.
+
 Make the periodic-work policy visible at the call site. The no-overlap choice
 below is the closest replacement for the legacy `Fn` callback. It keeps a
 fixed cadence, skips a tick if the prior run is active, and lets shutdown track

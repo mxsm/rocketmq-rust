@@ -28,7 +28,6 @@
 //! capacity notification, so the wait needs no extra primitive.
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -51,6 +50,8 @@ pub const DEFAULT_MAX_DYNAMIC_BUDGET_KEYS: usize = 4_096;
 /// Why a dynamic key could not be registered.
 #[derive(Debug)]
 pub enum DynamicKeyRegistrationFailure {
+    /// The parent generation has closed admission.
+    Closed,
     /// The name or limit violated the budget contract.
     Invalid(RuntimeContractViolation),
     /// The name is already held by a live or retiring key.
@@ -109,7 +110,6 @@ struct DynamicKeyInner {
     budget: ResourceBudget,
     name: Arc<str>,
     generation: u64,
-    closed: AtomicBool,
 }
 
 impl std::fmt::Debug for DynamicBudgetKey {
@@ -150,12 +150,12 @@ impl DynamicBudgetKey {
     /// Returns whether admission is closed for this key.
     #[must_use]
     pub fn is_closed(&self) -> bool {
-        self.inner.closed.load(Ordering::Acquire)
+        self.inner.budget.is_closed()
     }
 
     /// Closes admission for this key without waiting for its work.
     pub fn close(&self) {
-        self.inner.closed.store(true, Ordering::Release);
+        self.inner.budget.close_dynamic();
     }
 
     /// Acquires capacity from this key.
@@ -169,13 +169,13 @@ impl DynamicBudgetKey {
         bytes: usize,
         class: BudgetClass,
     ) -> Result<ResourcePermit, DynamicKeyAdmissionRejection> {
-        if self.is_closed() {
-            return Err(DynamicKeyAdmissionRejection::Closed);
-        }
-        self.inner
-            .budget
-            .try_acquire(bytes, class)
-            .map_err(DynamicKeyAdmissionRejection::Budget)
+        self.inner.budget.try_acquire(bytes, class).map_err(|rejection| {
+            if rejection.is_closed() {
+                DynamicKeyAdmissionRejection::Closed
+            } else {
+                DynamicKeyAdmissionRejection::Budget(rejection)
+            }
+        })
     }
 
     /// Closes admission and waits for the reservations on this key to drain.
@@ -300,7 +300,6 @@ impl DynamicKeyRegistry {
                 budget,
                 name,
                 generation,
-                closed: AtomicBool::new(false),
             }),
         })
     }
