@@ -207,4 +207,49 @@ mod tests {
         assert!(builder.configured_use_tls());
         assert_eq!(builder.configured_clock().now_millis(), 42);
     }
+
+    #[test]
+    fn default_builder_matches_new_builder() {
+        let new_builder = AdminBuilder::new();
+        let default_builder = AdminBuilder::default();
+        assert!(new_builder.configured_namesrv_addr().is_none());
+        assert!(new_builder.configured_instance_name().is_none());
+        assert_eq!(new_builder.configured_timeout_millis(), 5_000);
+        assert!(!default_builder.configured_vip_channel_enabled());
+        assert!(!default_builder.configured_use_tls());
+        //This is a weak assert, maybe we can improve this assert better.
+        assert_ne!(default_builder.configured_clock().now_millis(), 0);
+        assert_ne!(new_builder.configured_clock().now_millis(), 0);
+        assert_eq!(
+            new_builder.configured_namesrv_addr(),
+            default_builder.configured_namesrv_addr()
+        );
+        assert_eq!(
+            new_builder.configured_instance_name(),
+            default_builder.configured_instance_name()
+        );
+        assert_eq!(
+            new_builder.configured_timeout_millis(),
+            default_builder.configured_timeout_millis()
+        );
+        assert_eq!(
+            new_builder.configured_vip_channel_enabled(),
+            default_builder.configured_vip_channel_enabled()
+        );
+        assert_eq!(new_builder.configured_use_tls(), default_builder.configured_use_tls());
+    }
+
+    #[test]
+    fn builder_debug_fmt_redacts_namesrv_addr() {
+        let builder = AdminBuilder::new()
+            .namesrv_addr("namesrv-value-42:9876")
+            .admin_group("test_admin_group_unmasked");
+        let builder_str = format!("{builder:?}");
+        assert!(builder_str.contains("[REDACTED]"));
+        assert!(builder_str.contains("test_admin_group_unmasked"));
+        assert!(!builder_str.contains("namesrv-value-42:9876"));
+        let default_builder = AdminBuilder::default();
+        let default_debug_str = format!("{default_builder:?}");
+        assert!(default_debug_str.contains("AdminBuilder"));
+    }
 }
