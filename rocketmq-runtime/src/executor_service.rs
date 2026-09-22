@@ -67,6 +67,11 @@ impl TokioExecutorService {
 
 impl TokioExecutorService {
     /// Creates a new `TokioExecutorService`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if runtime construction fails. Use [`Self::try_new`] to handle
+    /// memory-discovery or thread-creation failures.
     pub fn new() -> TokioExecutorService {
         Self::try_new().unwrap_or_else(|error| panic!("failed to create TokioExecutorService: {error:#}"))
     }
@@ -78,7 +83,7 @@ impl TokioExecutorService {
     /// Returns an operational runtime error when the executor cannot start.
     pub fn try_new() -> RuntimeResult<TokioExecutorService> {
         Self::plan()
-            .expect("internally derived Tokio executor profile is valid")
+            .map_err(|error| RuntimeError::internal(crate::RuntimeOperation::BuildTokioRuntime, error))?
             .build()
     }
 
@@ -86,16 +91,15 @@ impl TokioExecutorService {
     ///
     /// # Errors
     ///
-    /// Returns a deterministic contract violation only if the platform's CPU
-    /// count cannot form a supported runtime profile.
+    /// Returns a contract violation if the derived runtime profile is invalid.
+    /// The global blocking limit is capped by [`RuntimeConfig::for_parallelism`].
     pub fn plan() -> Result<TokioExecutorServicePlan, RuntimeContractViolation> {
-        let workers = num_cpus::get().max(1);
-        Self::plan_with_config(
-            workers,
-            Some("rocketmq-runtime-tokio-executor"),
-            Duration::from_secs(30),
-            workers.saturating_mul(4),
-        )
+        Ok(TokioExecutorServicePlan {
+            runtime: RuntimeOwner::plan(default_executor_config(
+                "rocketmq-runtime-tokio-executor",
+                num_cpus::get(),
+            ))?,
+        })
     }
 
     /// Validates an explicit Tokio executor profile.
@@ -291,6 +295,11 @@ impl Default for ScheduledExecutorService {
 }
 impl ScheduledExecutorService {
     /// Creates a new `ScheduledExecutorService`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if runtime construction fails. Use [`Self::try_new`] to handle
+    /// memory-discovery or thread-creation failures.
     pub fn new() -> ScheduledExecutorService {
         Self::try_new().unwrap_or_else(|error| panic!("failed to create ScheduledExecutorService: {error:#}"))
     }
@@ -302,7 +311,7 @@ impl ScheduledExecutorService {
     /// Returns an operational runtime error when the executor cannot start.
     pub fn try_new() -> RuntimeResult<ScheduledExecutorService> {
         Self::plan()
-            .expect("internally derived scheduled executor profile is valid")
+            .map_err(|error| RuntimeError::internal(crate::RuntimeOperation::BuildTokioRuntime, error))?
             .build()
     }
 
@@ -310,16 +319,15 @@ impl ScheduledExecutorService {
     ///
     /// # Errors
     ///
-    /// Returns a deterministic contract violation only if the platform's CPU
-    /// count cannot form a supported runtime profile.
+    /// Returns a contract violation if the derived runtime profile is invalid.
+    /// The global blocking limit is capped by [`RuntimeConfig::for_parallelism`].
     pub fn plan() -> Result<ScheduledExecutorServicePlan, RuntimeContractViolation> {
-        let workers = num_cpus::get().max(1);
-        Self::plan_with_config(
-            workers,
-            Some("rocketmq-runtime-scheduled-executor"),
-            Duration::from_secs(30),
-            workers.saturating_mul(4),
-        )
+        Ok(ScheduledExecutorServicePlan {
+            runtime: RuntimeOwner::plan(default_executor_config(
+                "rocketmq-runtime-scheduled-executor",
+                num_cpus::get(),
+            ))?,
+        })
     }
 
     /// Validates an explicit scheduled executor profile.
@@ -395,6 +403,18 @@ impl ScheduledExecutorServicePlan {
     }
 }
 
+fn default_executor_config(thread_name: &str, parallelism: usize) -> RuntimeConfig {
+    let derived = RuntimeConfig::for_parallelism(thread_name, parallelism);
+    // Preserve compatibility lane limits and keep-alive while sharing the
+    // entrypoint's saturating, bounded global capacity derivation.
+    common_runtime_config(
+        derived.worker_threads,
+        derived.thread_name,
+        derived.thread_keep_alive,
+        derived.max_blocking_threads,
+    )
+}
+
 fn common_runtime_config(
     thread_num: usize,
     thread_name: impl Into<String>,
@@ -414,6 +434,46 @@ fn common_runtime_config(
 #[cfg(test)]
 mod runtime_config_tests {
     use super::*;
+
+    #[test]
+    fn derived_executor_profiles_remain_valid_without_starting_threads() {
+        for parallelism in [0, 1, 128, 129, 512, usize::MAX] {
+            for name in ["rocketmq-runtime-tokio-executor", "rocketmq-runtime-scheduled-executor"] {
+                let config = default_executor_config(name, parallelism);
+                config.validate().unwrap();
+                assert_eq!(config.worker_threads, parallelism.max(1));
+                assert_eq!(config.thread_name, name);
+                assert_eq!(config.thread_keep_alive, Duration::from_secs(30));
+                assert!(config.max_blocking_threads <= crate::config::MAX_ENTRYPOINT_BLOCKING_THREADS);
+                for lane in [
+                    &config.blocking_lane_policies.storage_io,
+                    &config.blocking_lane_policies.metadata_io,
+                    &config.blocking_lane_policies.cpu_crypto,
+                ] {
+                    assert_eq!(lane.max_concurrency, config.max_blocking_threads);
+                }
+                RuntimeOwner::plan(config).unwrap();
+            }
+        }
+        for blocking_limit in [0, 513, usize::MAX] {
+            for result in [
+                TokioExecutorService::plan_with_config(1, Some("explicit"), Duration::from_secs(1), blocking_limit)
+                    .map(|_| ()),
+                ScheduledExecutorService::plan_with_config(1, Some("explicit"), Duration::from_secs(1), blocking_limit)
+                    .map(|_| ()),
+            ] {
+                let expected = if blocking_limit == 0 {
+                    crate::RuntimeContractPolicy::MaxBlockingThreadsPositive
+                } else {
+                    crate::RuntimeContractPolicy::MaxBlockingThreadsWithinSupportedRange
+                };
+                assert!(matches!(
+                    result,
+                    Err(RuntimeContractViolation::InvalidConfiguration { policy }) if policy == expected
+                ));
+            }
+        }
+    }
 
     #[test]
     fn tokio_executor_try_new_with_config_rejects_invalid_thread_counts() {

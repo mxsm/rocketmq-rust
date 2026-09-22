@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod conversion;
+
+use conversion::*;
+
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -24,6 +28,7 @@ use serde::Serialize;
 
 use crate::blocking::BlockingExecutorSnapshot;
 use crate::blocking::BlockingKind;
+use crate::blocking::BlockingLane;
 use crate::metadata_io::MetadataIoSnapshot;
 use crate::scheduled::ScheduledTaskSnapshot;
 use crate::shutdown_report::ShutdownReport;
@@ -166,8 +171,8 @@ impl Default for RuntimeDiagnosticsViewOptions {
     fn default() -> Self {
         Self {
             long_running_threshold: Duration::from_secs(30),
-            max_task_kind_summaries: 7,
-            max_blocking_lane_summaries: 3,
+            max_task_kind_summaries: TaskKind::COUNT,
+            max_blocking_lane_summaries: BlockingLane::ALL.len(),
         }
     }
 }
@@ -325,9 +330,8 @@ impl RuntimeDiagnostics {
         let blocking_lane_count = blocking_lanes.len();
         let blocking_lanes = blocking_lanes
             .into_iter()
-            .enumerate()
-            .take(options.max_blocking_lane_summaries.min(3))
-            .map(|(index, snapshot)| sanitize_blocking_lane(index, snapshot))
+            .take(options.max_blocking_lane_summaries.min(BlockingLane::ALL.len()))
+            .map(sanitize_blocking_lane)
             .collect();
 
         RuntimeDiagnosticsViewV1 {
@@ -386,8 +390,8 @@ impl Default for RuntimeDiagnosticsViewOptionsV2 {
     fn default() -> Self {
         Self {
             long_running_threshold: Duration::from_secs(30),
-            max_task_kind_summaries: 7,
-            max_blocking_lane_summaries: 3,
+            max_task_kind_summaries: TaskKind::COUNT,
+            max_blocking_lane_summaries: BlockingLane::ALL.len(),
             max_schedule_tasks: 16,
             max_metadata_resources: 32,
             max_detail_entries: 0,
@@ -656,230 +660,94 @@ impl RuntimeDiagnostics {
     }
 }
 
-fn task_section_v2(root: &TaskGroup, options: RuntimeDiagnosticsViewOptionsV2) -> (RuntimeTaskSectionV2, bool) {
-    let diagnostics = root.diagnostics(options.long_running_threshold);
-    let summary_count = diagnostics.task_kinds.len();
-    // Totals cover every kind, so a truncated summary list still reports the
-    // long-running and maximum-elapsed values for the whole population, and the
-    // truncation is stated rather than folded into the numbers.
-    let long_running = diagnostics
-        .task_kinds
-        .iter()
-        .fold(0usize, |total, summary| total.saturating_add(summary.long_running));
-    let max_elapsed = diagnostics
-        .task_kinds
-        .iter()
-        .map(|summary| summary.max_elapsed)
-        .max()
-        .unwrap_or(Duration::ZERO);
-    let section = RuntimeTaskSectionV2 {
-        scope: RuntimeDiagnosticsScope::Subtree,
-        task_group_count: diagnostics.group_count,
-        task_count: diagnostics.task_count,
-        local_task_count: root.local_diagnostics(options.long_running_threshold).task_count,
-        long_running,
-        max_elapsed_millis: duration_millis(max_elapsed),
-        truncated: summary_count > options.max_task_kind_summaries,
-        task_kinds: diagnostics
-            .task_kinds
-            .into_iter()
-            .take(options.max_task_kind_summaries)
-            .map(|summary| RuntimeTaskKindSummaryV1 {
-                kind: runtime_task_kind(summary.kind),
-                active: summary.active,
-                long_running: summary.long_running,
-                max_elapsed_millis: duration_millis(summary.max_elapsed),
-            })
-            .collect(),
-    };
-    (section, summary_count > options.max_task_kind_summaries)
-}
-
-fn blocking_section_v2(
-    blocking_lanes: Vec<BlockingExecutorSnapshot>,
-    options: RuntimeDiagnosticsViewOptionsV2,
-) -> (RuntimeBlockingSectionV2, bool) {
-    let lane_count = blocking_lanes.len();
-    let limit = options.max_blocking_lane_summaries.min(3);
-    let mut queued = 0usize;
-    let mut running = 0usize;
-    let mut timed_out_still_running = 0usize;
-    let mut blocking_still_running = 0usize;
-    let lanes = blocking_lanes
-        .into_iter()
-        .enumerate()
-        .take(limit)
-        .map(|(index, snapshot)| {
-            queued = queued.saturating_add(snapshot.queued);
-            running = running.saturating_add(snapshot.running);
-            timed_out_still_running = timed_out_still_running.saturating_add(snapshot.timed_out_still_running);
-            blocking_still_running = blocking_still_running.saturating_add(snapshot.blocking_still_running);
-            sanitize_blocking_lane(index, snapshot)
-        })
-        .collect();
-    (
-        RuntimeBlockingSectionV2 {
-            scope: RuntimeDiagnosticsScope::ProcessShared,
-            queued,
-            running,
-            timed_out_still_running,
-            blocking_still_running,
-            lanes,
-            truncated: lane_count > limit,
-        },
-        lane_count > limit,
-    )
-}
-
-fn schedule_section_v2(
-    schedule: &[ScheduledTaskSnapshot],
-    options: RuntimeDiagnosticsViewOptionsV2,
-) -> RuntimeScheduleSectionV2 {
-    let scanned = schedule.len();
-    let mut section = RuntimeScheduleSectionV2 {
-        scope: RuntimeDiagnosticsScope::Local,
-        tasks_scanned: scanned,
-        tasks_emitted: 0,
-        active_runs: 0,
-        runs: 0,
-        skips: 0,
-        overlaps: 0,
-        failures: 0,
-        max_elapsed_millis: 0,
-        truncated: scanned > options.max_schedule_tasks,
-    };
-    for snapshot in schedule.iter().take(options.max_schedule_tasks) {
-        section.tasks_emitted = section.tasks_emitted.saturating_add(1);
-        section.active_runs = section.active_runs.saturating_add(snapshot.active_runs);
-        section.runs = section.runs.saturating_add(snapshot.runs);
-        section.skips = section.skips.saturating_add(snapshot.skips);
-        section.overlaps = section.overlaps.saturating_add(snapshot.overlaps);
-        section.failures = section.failures.saturating_add(snapshot.failures);
-        section.max_elapsed_millis = section.max_elapsed_millis.max(snapshot.max_elapsed_ms);
-    }
-    section
-}
-
-fn metadata_section_v2(
-    snapshot: &MetadataIoSnapshot,
-    options: RuntimeDiagnosticsViewOptionsV2,
-) -> RuntimeMetadataSectionV2 {
-    let scanned = snapshot.resources.len();
-    let waiters = snapshot
-        .resources
-        .iter()
-        .take(options.max_metadata_resources)
-        .fold(0usize, |total, resource| total.saturating_add(resource.waiter_count));
-    RuntimeMetadataSectionV2 {
-        scope: RuntimeDiagnosticsScope::Local,
-        accepting: snapshot.accepting,
-        retained_operations: snapshot.pending_operations,
-        retained_bytes: snapshot.pending_bytes,
-        waiters,
-        resources_scanned: scanned,
-        resources_emitted: scanned.min(options.max_metadata_resources),
-        truncated: scanned > options.max_metadata_resources,
-    }
-}
-
-fn shutdown_section_v2(report: &ShutdownReport) -> RuntimeShutdownSectionV2 {
-    RuntimeShutdownSectionV2 {
-        scope: RuntimeDiagnosticsScope::Local,
-        elapsed_millis: duration_millis(report.elapsed),
-        cancelled: report.cancelled,
-        failed: report.failed,
-        timed_out: report.timed_out,
-        leaked: report.leaked,
-    }
-}
-
-const fn runtime_detail_scope(scope: TaskDetailScope) -> RuntimeDiagnosticsScope {
-    match scope {
-        TaskDetailScope::Local => RuntimeDiagnosticsScope::Local,
-        TaskDetailScope::Subtree => RuntimeDiagnosticsScope::Subtree,
-    }
-}
-
-fn sanitize_blocking_lane(index: usize, snapshot: BlockingExecutorSnapshot) -> RuntimeBlockingLaneSummaryV1 {
-    let lane = match index {
-        0 => RuntimeBlockingLaneV1::StorageIo,
-        1 => RuntimeBlockingLaneV1::MetadataIo,
-        _ => RuntimeBlockingLaneV1::CpuCrypto,
-    };
-    let mut task_kinds = [
-        (BlockingKind::ShortIo, 0usize, Duration::ZERO),
-        (BlockingKind::CpuBound, 0usize, Duration::ZERO),
-        (BlockingKind::LongRunning, 0usize, Duration::ZERO),
-    ];
-    for task in snapshot.tasks {
-        let index = match task.kind {
-            BlockingKind::ShortIo => 0,
-            BlockingKind::CpuBound => 1,
-            BlockingKind::LongRunning => 2,
-        };
-        task_kinds[index].1 = task_kinds[index].1.saturating_add(1);
-        task_kinds[index].2 = task_kinds[index].2.max(task.elapsed);
-    }
-
-    RuntimeBlockingLaneSummaryV1 {
-        lane,
-        max_concurrency: Some(snapshot.max_concurrency),
-        max_queue_depth: Some(snapshot.max_queue_depth),
-        queued: snapshot.queued,
-        running: snapshot.running,
-        timed_out_still_running: snapshot.timed_out_still_running,
-        blocking_still_running: snapshot.blocking_still_running,
-        task_kinds: task_kinds
-            .into_iter()
-            .filter_map(|(kind, active, max_elapsed)| {
-                (active > 0).then_some(RuntimeBlockingKindSummaryV1 {
-                    kind: runtime_blocking_kind(kind),
-                    active,
-                    max_elapsed_millis: duration_millis(max_elapsed),
-                })
-            })
-            .collect(),
-    }
-}
-
-const fn runtime_lifecycle_state(state: TaskGroupLifecycleState) -> RuntimeLifecycleStateV1 {
-    match state {
-        TaskGroupLifecycleState::Open => RuntimeLifecycleStateV1::Open,
-        TaskGroupLifecycleState::Closing => RuntimeLifecycleStateV1::Closing,
-        TaskGroupLifecycleState::Closed => RuntimeLifecycleStateV1::Closed,
-        TaskGroupLifecycleState::ShutdownCompleted => RuntimeLifecycleStateV1::ShutdownCompleted,
-        TaskGroupLifecycleState::Poisoned => RuntimeLifecycleStateV1::Poisoned,
-    }
-}
-
-const fn runtime_task_kind(kind: TaskKind) -> RuntimeTaskKindV1 {
-    match kind {
-        TaskKind::Service => RuntimeTaskKindV1::Service,
-        TaskKind::Worker => RuntimeTaskKindV1::Worker,
-        TaskKind::ScheduledDriver => RuntimeTaskKindV1::ScheduledDriver,
-        TaskKind::ScheduledRun => RuntimeTaskKindV1::ScheduledRun,
-        TaskKind::BlockingReaper => RuntimeTaskKindV1::BlockingReaper,
-        TaskKind::Shutdown => RuntimeTaskKindV1::Shutdown,
-        TaskKind::Other => RuntimeTaskKindV1::Other,
-    }
-}
-
-const fn runtime_blocking_kind(kind: BlockingKind) -> RuntimeBlockingKindV1 {
-    match kind {
-        BlockingKind::ShortIo => RuntimeBlockingKindV1::ShortIo,
-        BlockingKind::CpuBound => RuntimeBlockingKindV1::CpuBound,
-        BlockingKind::LongRunning => RuntimeBlockingKindV1::LongRunning,
-    }
-}
-
-fn duration_millis(duration: Duration) -> u64 {
-    duration.as_millis().min(u128::from(u64::MAX)) as u64
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::RuntimeContext;
+
+    #[tokio::test]
+    async fn lane_identity_survives_partial_and_reordered_inputs_in_both_schemas() {
+        let context = RuntimeContext::from_current("lane-identity");
+        let diagnostics = RuntimeDiagnostics::new();
+        let snapshot = |lane: BlockingLane| BlockingExecutorSnapshot {
+            name: "private-lane".to_owned(),
+            lane,
+            max_concurrency: 8,
+            max_queue_depth: 32,
+            global_capacity: 8,
+            global_running: 0,
+            global_available: 8,
+            lane_reserved: 1,
+            lane_running: 0,
+            lane_borrowed: 0,
+            queued: lane.index() + 10,
+            running: 0,
+            timed_out_still_running: 0,
+            blocking_still_running: 0,
+            rejected: 0,
+            oldest_queue_wait: Duration::ZERO,
+            tasks: Vec::new(),
+        };
+        for lanes in [
+            vec![BlockingLane::MetadataIo],
+            vec![
+                BlockingLane::CpuCrypto,
+                BlockingLane::StorageIo,
+                BlockingLane::MetadataIo,
+            ],
+            vec![BlockingLane::MetadataIo, BlockingLane::CpuCrypto],
+            vec![],
+        ] {
+            let snapshots: Vec<_> = lanes.iter().copied().map(snapshot).collect();
+            let v1 = diagnostics.view_v1(RuntimeComponent::Broker, context.root_group(), snapshots.clone());
+            let v2 = diagnostics.view_v2(
+                RuntimeComponent::Broker,
+                context.root_group(),
+                snapshots,
+                RuntimeDiagnosticsInputs::default(),
+            );
+            assert_eq!(v1.blocking_lanes, v2.blocking.lanes);
+            assert_eq!(v1.blocking_lanes.len(), lanes.len());
+            for (summary, lane) in v1.blocking_lanes.iter().zip(lanes) {
+                let expected = match lane {
+                    BlockingLane::StorageIo => "storage_io",
+                    BlockingLane::MetadataIo => "metadata_io",
+                    BlockingLane::CpuCrypto => "cpu_crypto",
+                };
+                assert_eq!(serde_json::to_value(summary.lane).unwrap(), expected);
+                assert_eq!(summary.queued, lane.index() + 10);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn every_task_kind_keeps_its_own_population_and_wire_label() {
+        let context = RuntimeContext::from_current("kind-population");
+        let root = context.root_group();
+        let labels = [
+            "service",
+            "worker",
+            "scheduled_driver",
+            "scheduled_run",
+            "blocking_reaper",
+            "shutdown",
+            "other",
+        ];
+        for (kind, count) in TaskKind::ALL.into_iter().zip(1..) {
+            for _ in 0..count {
+                let cancellation = root.cancellation_token();
+                root.spawn("pending", kind, async move { cancellation.cancelled().await })
+                    .unwrap();
+            }
+        }
+        let view = RuntimeDiagnostics::new().view_v1(RuntimeComponent::Broker, root, Vec::new());
+        assert_eq!(view.task_kinds.len(), labels.len());
+        for ((summary, label), count) in view.task_kinds.iter().zip(labels).zip(1..) {
+            assert_eq!(serde_json::to_value(summary.kind).unwrap(), label);
+            assert_eq!(summary.active, count);
+        }
+        assert!(root.shutdown(Duration::from_secs(1)).await.is_healthy());
+    }
 
     #[tokio::test]
     async fn sanitized_view_does_not_expose_runtime_or_task_names() {

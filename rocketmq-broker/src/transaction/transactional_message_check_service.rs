@@ -20,6 +20,7 @@ use crate::config::broker_config::BrokerConfig;
 use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store::BrokerMasterAddressStore;
 use rocketmq_store::BrokerWriteStore;
 use tracing::info;
@@ -34,6 +35,7 @@ pub struct TransactionalMessageCheckService<MS: BrokerWriteStore + BrokerMasterA
 }
 
 struct TransactionalMessageCheckServiceInner<MS: BrokerWriteStore + BrokerMasterAddressStore> {
+    cancellation: tokio_util::sync::CancellationToken,
     broker_config: Arc<BrokerConfig>,
     transactional_message_service: Arc<DefaultTransactionalMessageService<MS>>,
     transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
@@ -47,12 +49,14 @@ impl<MS: BrokerWriteStore + BrokerMasterAddressStore> ServiceTask for Transactio
     async fn run(&self, context: &ServiceTaskContext) {
         info!("Starting transactional check service");
 
-        while !context.is_stopped() {
+        while !context.is_stopped() && !self.cancellation.is_cancelled() {
             let transaction_check_interval = self.broker_config.transaction_check_interval;
-            context
-                .wait_for_running(Duration::from_millis(transaction_check_interval))
-                .await;
-            if context.is_stopped() {
+            tokio::select! {
+                biased;
+                _ = self.cancellation.cancelled() => break,
+                _ = context.wait_for_running(Duration::from_millis(transaction_check_interval)) => {}
+            }
+            if context.is_stopped() || self.cancellation.is_cancelled() {
                 break;
             }
             self.on_wait_end().await;
@@ -89,11 +93,48 @@ impl<MS: BrokerWriteStore + BrokerMasterAddressStore> TransactionalMessageCheckS
         transactional_message_service: Arc<DefaultTransactionalMessageService<MS>>,
         transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
     ) -> Self {
-        let task_impl = ServiceManager::new_legacy_compatibility(TransactionalMessageCheckServiceInner {
+        Self::with_owner(
             broker_config,
             transactional_message_service,
             transactional_message_check_listener,
-        });
+            None,
+        )
+    }
+
+    /// Owns transaction checks under the supplied broker task group.
+    ///
+    /// Parent cancellation prevents another scan and allows an active scan to
+    /// finish until the parent's shutdown deadline forces cancellation.
+    pub fn new_with_task_group(
+        broker_config: Arc<BrokerConfig>,
+        transactional_message_service: Arc<DefaultTransactionalMessageService<MS>>,
+        transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
+        parent: TaskGroup,
+    ) -> Self {
+        Self::with_owner(
+            broker_config,
+            transactional_message_service,
+            transactional_message_check_listener,
+            Some(parent),
+        )
+    }
+
+    fn with_owner(
+        broker_config: Arc<BrokerConfig>,
+        transactional_message_service: Arc<DefaultTransactionalMessageService<MS>>,
+        transactional_message_check_listener: DefaultTransactionalMessageCheckListener,
+        parent: Option<TaskGroup>,
+    ) -> Self {
+        let inner = TransactionalMessageCheckServiceInner {
+            cancellation: parent.as_ref().map(TaskGroup::cancellation_token).unwrap_or_default(),
+            broker_config,
+            transactional_message_service,
+            transactional_message_check_listener,
+        };
+        let task_impl = match parent {
+            Some(parent) => ServiceManager::new_with_task_group(inner, parent),
+            None => ServiceManager::new_legacy_compatibility(inner),
+        };
         TransactionalMessageCheckService { task_impl }
     }
 }
@@ -110,6 +151,11 @@ impl<MS: BrokerWriteStore + BrokerMasterAddressStore> TransactionalMessageCheckS
         if let Err(error) = self.task_impl.shutdown().await {
             warn!(error = %error, "TransactionalMessageCheckService shutdown failed");
         }
+    }
+
+    pub(crate) async fn shutdown_with_report(&self) -> Option<rocketmq_runtime::ShutdownReport> {
+        self.shutdown().await;
+        self.task_impl.last_task_group_shutdown_report().await
     }
 
     pub async fn shutdown_interrupt(&self, interrupt: bool) {

@@ -419,12 +419,19 @@ impl<T> BudgetedQueue<T> {
         }
     }
 
-    /// Attempts to pop.
+    /// Removes one item and releases its reservation before returning the payload.
+    ///
+    /// Use [`Self::try_pop_budgeted`] when processing must retain the charge
+    /// after the item leaves the queue.
     pub fn try_pop(&self) -> Option<T> {
         self.try_pop_budgeted().map(BudgetedItem::into_item)
     }
 
-    /// Attempts to pop budgeted.
+    /// Removes one item while transferring its reservation to the caller.
+    ///
+    /// The charge remains until the returned [`BudgetedItem`] or its permit is
+    /// dropped, consumed, or rebound. Queue depth alone does not measure the
+    /// number of outstanding reservations.
     pub fn try_pop_budgeted(&self) -> Option<BudgetedItem<T>> {
         let mut discarded = Vec::new();
         self.apply_age_policy(&mut discarded);
@@ -451,12 +458,17 @@ impl<T> BudgetedQueue<T> {
         previous_len - state.items.len()
     }
 
-    /// Returns the recv.
+    /// Asynchronously receives a payload, releasing its reservation on return.
+    ///
+    /// Returns `None` after closed admission and queued work have drained.
     pub async fn recv(&self) -> Option<T> {
         self.recv_budgeted().await.map(BudgetedItem::into_item)
     }
 
-    /// Returns the recv budgeted.
+    /// Asynchronously receives an item with its reservation still attached.
+    ///
+    /// Returns `None` after closed admission and queued work have drained.
+    /// Cancellation of this wait does not consume a queued item.
     pub async fn recv_budgeted(&self) -> Option<BudgetedItem<T>> {
         loop {
             let notified = self.inner.notify.notified();

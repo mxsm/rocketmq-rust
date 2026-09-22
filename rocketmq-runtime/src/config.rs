@@ -18,31 +18,44 @@ use crate::blocking::BlockingLanePolicies;
 use crate::error::RuntimeContractViolation;
 use crate::RuntimeContractPolicy;
 
-/// The min entrypoint blocking threads constant.
+/// Minimum global blocking capacity that can reserve one slot per lane.
 pub const MIN_ENTRYPOINT_BLOCKING_THREADS: usize = 3;
-/// The max entrypoint blocking threads constant.
+/// Maximum supported global blocking capacity.
 pub const MAX_ENTRYPOINT_BLOCKING_THREADS: usize = 512;
 
 #[derive(Debug, Clone)]
-/// Represents runtime config.
+/// Thread, driver and shutdown policy for one owned Tokio runtime.
+///
+/// [`Default`] uses the available CPU parallelism, falling back to four
+/// workers. [`Self::for_parallelism`] derives a saturating, capped blocking
+/// limit and aligns lane concurrency with it. Lanes share the global limit;
+/// their individual maxima are not independent thread pools.
+///
+/// Validation performs no I/O or thread creation. Disabling a driver is a
+/// caller capability choice: networking needs I/O, while timers, scheduling
+/// and deadline-based waits need the time driver.
 pub struct RuntimeConfig {
-    /// The worker threads value.
+    /// Number of asynchronous worker threads; must be positive.
     pub worker_threads: usize,
-    /// The max blocking threads value.
+    /// Global Tokio blocking-thread ceiling, also shared by blocking lanes.
     pub max_blocking_threads: usize,
-    /// The thread name value.
+    /// Nonblank prefix used for runtime worker threads.
     pub thread_name: String,
-    /// The thread stack size value.
+    /// Optional stack size in bytes; `None` retains Tokio's default.
     pub thread_stack_size: Option<usize>,
-    /// The thread keep alive value.
+    /// Idle blocking-thread lifetime.
     pub thread_keep_alive: Duration,
-    /// The shutdown timeout value.
+    /// Default budget for owner shutdown entrypoints.
+    ///
+    /// Calls that accept an explicit absolute deadline use that deadline.
+    /// This is not a per-task execution timeout and cannot stop a blocking
+    /// closure already running on an operating-system thread.
     pub shutdown_timeout: Duration,
-    /// The blocking lane policies value.
+    /// Per-lane admission, queueing and deadline policies.
     pub blocking_lane_policies: BlockingLanePolicies,
-    /// Whether enable io.
+    /// Enables Tokio's I/O driver; enabled in the default profile.
     pub enable_io: bool,
-    /// Whether enable time.
+    /// Enables Tokio's timer driver; enabled in the default profile.
     pub enable_time: bool,
 }
 

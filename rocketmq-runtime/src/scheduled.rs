@@ -127,15 +127,21 @@ pub enum ScheduledTaskRegistrationOutcome {
 pub struct ScheduledTaskConfig {
     /// The name value.
     pub name: String,
-    /// The initial delay value.
+    /// Delay before the first run; zero means the first run is immediately due.
     pub initial_delay: Duration,
-    /// The period value.
+    /// Delay between completions or fixed-rate tick interval, according to mode.
     pub period: Duration,
     /// The mode value.
     pub mode: ScheduleMode,
-    /// The max run time value.
+    /// Optional limit on each asynchronous run, starting when it is polled.
+    ///
+    /// Expiry drops the run future; it cannot interrupt blocking work already
+    /// started by that future.
     pub max_run_time: Option<Duration>,
-    /// The shutdown timeout value.
+    /// Legacy compatibility field; this group does not read it.
+    ///
+    /// Shutdown is governed by the group's explicit deadline. Changing this
+    /// field does not change cancellation, drain time, or the owner budget.
     pub shutdown_timeout: Duration,
 }
 
@@ -295,7 +301,7 @@ impl ScheduledTaskGroup {
         &self,
         operation: &OperationContext,
         mut config: ScheduledTaskConfig,
-        mut task: F,
+        task: F,
     ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
     where
         F: FnMut() -> Fut + Send + 'static,
@@ -312,28 +318,7 @@ impl ScheduledTaskGroup {
         let spawn_result = self
             .group
             .spawn_operation(&driver, format!("scheduled-driver:{name}"), async move {
-                if !sleep_or_cancel(&token, config.initial_delay).await {
-                    return;
-                }
-
-                loop {
-                    if token.is_cancelled() {
-                        return;
-                    }
-
-                    let started_at = Instant::now();
-                    let mut run = metrics.begin_serial_run(started_at);
-                    run.start();
-                    let (control, timed_out) = run_controlled_with_optional_timeout(task(), config.max_run_time).await;
-                    run.finish(timed_out);
-                    if control == ScheduledTaskControl::Stop {
-                        return;
-                    }
-
-                    if !sleep_or_cancel(&token, config.period).await {
-                        return;
-                    }
-                }
+                fixed_delay_driver(token, config, metrics, task).await;
             });
         if spawn_result.is_err() {
             self.schedules.remove(&name_for_cleanup);
@@ -415,7 +400,7 @@ impl ScheduledTaskGroup {
     pub fn schedule_fixed_delay_controlled<F, Fut>(
         &self,
         mut config: ScheduledTaskConfig,
-        mut task: F,
+        task: F,
     ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
     where
         F: FnMut() -> Fut + Send + 'static,
@@ -432,28 +417,7 @@ impl ScheduledTaskGroup {
             format!("scheduled-driver:{name}"),
             TaskKind::ScheduledDriver,
             async move {
-                if !sleep_or_cancel(&token, config.initial_delay).await {
-                    return;
-                }
-
-                loop {
-                    if token.is_cancelled() {
-                        return;
-                    }
-
-                    let started_at = Instant::now();
-                    let mut run = metrics.begin_serial_run(started_at);
-                    run.start();
-                    let (control, timed_out) = run_controlled_with_optional_timeout(task(), config.max_run_time).await;
-                    run.finish(timed_out);
-                    if control == ScheduledTaskControl::Stop {
-                        return;
-                    }
-
-                    if !sleep_or_cancel(&token, config.period).await {
-                        return;
-                    }
-                }
+                fixed_delay_driver(token, config, metrics, task).await;
             },
         );
         if spawn_result.is_err() {
@@ -1032,6 +996,41 @@ where
     }
 }
 
+// Both adapters share timing and settlement; their outer task registration
+// retains the distinct component or operation cancellation boundary.
+async fn fixed_delay_driver<F, Fut>(
+    token: CancellationToken,
+    config: ScheduledTaskConfig,
+    metrics: Arc<ScheduledTaskMetrics>,
+    mut task: F,
+) where
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
+{
+    if !sleep_or_cancel(&token, config.initial_delay).await {
+        return;
+    }
+
+    loop {
+        if token.is_cancelled() {
+            return;
+        }
+
+        let started_at = Instant::now();
+        let mut run = metrics.begin_serial_run(started_at);
+        run.start();
+        let (control, timed_out) = run_controlled_with_optional_timeout(task(), config.max_run_time).await;
+        run.finish(timed_out);
+        if control == ScheduledTaskControl::Stop {
+            return;
+        }
+
+        if !sleep_or_cancel(&token, config.period).await {
+            return;
+        }
+    }
+}
+
 async fn sleep_or_cancel(token: &CancellationToken, duration: Duration) -> bool {
     if duration.is_zero() {
         return !token.is_cancelled();
@@ -1182,6 +1181,74 @@ mod tests {
         assert_eq!(scheduled.snapshot()[0].active_runs, 0);
         assert_eq!(scheduled.snapshot()[0].failures, 1);
         assert_eq!(scheduled.snapshot()[0].runs, 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fixed_delay_adapters_share_first_tick_completion_delay_and_controlled_stop() {
+        for operation_owned in [false, true] {
+            let context = RuntimeContext::from_current("fixed-delay-contract");
+            let scheduled = ScheduledTaskGroup::new(context.root_group().clone());
+            let operation = OperationContext::without_deadline(TaskKind::ScheduledDriver);
+            let mut config = ScheduledTaskConfig::fixed_delay("serial", Duration::from_secs(3));
+            config.initial_delay = Duration::from_secs(2);
+            config.shutdown_timeout = Duration::ZERO;
+            let release = Arc::new(Semaphore::new(0));
+            let task_release = release.clone();
+            let (starts, mut started) = tokio::sync::mpsc::unbounded_channel();
+            let (finished, first_finished) = tokio::sync::oneshot::channel();
+            let mut finished = Some(finished);
+            let mut count = 0;
+            let task = move || {
+                count += 1;
+                let count = count;
+                let starts = starts.clone();
+                let release = task_release.clone();
+                let finished = finished.take();
+                async move {
+                    starts.send((count, tokio::time::Instant::now())).unwrap();
+                    if let Some(finished) = finished {
+                        release.acquire().await.unwrap().forget();
+                        finished.send(()).unwrap();
+                        ScheduledTaskControl::Continue
+                    } else {
+                        ScheduledTaskControl::Stop
+                    }
+                }
+            };
+            let begin = tokio::time::Instant::now();
+            let result = if operation_owned {
+                scheduled.schedule_fixed_delay_controlled_operation(&operation, config.clone(), task)
+            } else {
+                scheduled.schedule_fixed_delay_controlled(config.clone(), task)
+            };
+            assert!(matches!(
+                result.unwrap(),
+                ScheduledTaskRegistrationOutcome::Scheduled(_)
+            ));
+            assert_eq!(
+                scheduled
+                    .schedule_fixed_delay(config, || async { panic!("duplicate ran") })
+                    .unwrap(),
+                ScheduledTaskRegistrationOutcome::AlreadyPresent,
+            );
+            let (count, first) = started.recv().await.unwrap();
+            assert_eq!(count, 1);
+            assert_eq!(first - begin, Duration::from_secs(2));
+            tokio::time::advance(Duration::from_secs(10)).await;
+            assert!(started.try_recv().is_err());
+            assert_eq!(scheduled.snapshot()[0].active_runs, 1);
+            release.add_permits(1);
+            first_finished.await.unwrap();
+            let first_completion = tokio::time::Instant::now();
+            let (count, second) = started.recv().await.unwrap();
+            assert_eq!(count, 2);
+            assert_eq!(second - first_completion, Duration::from_secs(3));
+            assert!(context.shutdown_tasks(Duration::from_secs(1)).await.is_healthy());
+            let snapshot = &scheduled.snapshot()[0];
+            assert_eq!(snapshot.runs, 2);
+            assert_eq!(snapshot.active_runs, 0);
+            assert_eq!(snapshot.failures, 0);
+        }
     }
 
     #[tokio::test(start_paused = true)]

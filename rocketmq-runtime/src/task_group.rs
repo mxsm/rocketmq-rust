@@ -44,10 +44,11 @@ use crate::shutdown_report::ShutdownReport;
 use crate::shutdown_report::TaskSnapshot;
 
 mod completion;
+mod diagnostics;
 mod registry;
 mod shutdown;
+mod submission;
 
-use completion::TaskExecution;
 use registry::ActiveTaskRegistry;
 use shutdown::ShutdownCoordinator;
 
@@ -104,6 +105,31 @@ pub enum TaskKind {
     Shutdown,
     /// Represents the other case.
     Other,
+}
+
+impl TaskKind {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Service,
+        Self::Worker,
+        Self::ScheduledDriver,
+        Self::ScheduledRun,
+        Self::BlockingReaper,
+        Self::Shutdown,
+        Self::Other,
+    ];
+    pub(crate) const COUNT: usize = Self::ALL.len();
+
+    pub(crate) const fn index(self) -> usize {
+        match self {
+            Self::Service => 0,
+            Self::Worker => 1,
+            Self::ScheduledDriver => 2,
+            Self::ScheduledRun => 3,
+            Self::BlockingReaper => 4,
+            Self::Shutdown => 5,
+            Self::Other => 6,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -168,6 +194,12 @@ pub enum TaskGroupLifecycleState {
 /// Cloning a task group keeps the same owner and cancellation token. Use
 /// [`Self::try_child`] when work needs an independently cancellable owner whose
 /// lifetime remains bounded by this parent.
+///
+/// Dropping a handle does not request cancellation or wait for cleanup.
+/// Active descendants retain their ancestor ownership path. Call
+/// [`Self::shutdown_until`] to close admission, cancel and await the subtree.
+/// A task panic poisons its group against new submissions; it remains owned
+/// and can still be shut down and reported.
 pub struct TaskGroup {
     inner: Arc<TaskGroupInner>,
 }
@@ -344,7 +376,9 @@ impl TaskGroup {
         self.inner.lifecycle_state()
     }
 
-    /// Returns the task count.
+    /// Returns the active count registered directly in this group.
+    ///
+    /// Descendants are excluded; subtree diagnostics aggregate them separately.
     pub fn task_count(&self) -> usize {
         self.inner.registry.tasks.len()
     }
@@ -352,85 +386,6 @@ impl TaskGroup {
     /// Returns the number of active component groups directly owned by this group.
     pub fn component_count(&self) -> usize {
         self.inner.registry.component_count()
-    }
-
-    pub(crate) fn diagnostics(&self, long_running_threshold: Duration) -> TaskGroupDiagnostics {
-        let mut aggregate = TaskGroupDiagnosticsAccumulator::default();
-        self.accumulate_diagnostics(long_running_threshold, &mut aggregate);
-        aggregate.finish()
-    }
-
-    /// Returns diagnostics for this group's own tasks without descending into
-    /// child groups.
-    pub(crate) fn local_diagnostics(&self, long_running_threshold: Duration) -> TaskGroupDiagnostics {
-        let mut aggregate = TaskGroupDiagnosticsAccumulator {
-            group_count: 1,
-            ..TaskGroupDiagnosticsAccumulator::default()
-        };
-        for task in self.inner.registry.tasks.iter() {
-            let elapsed = task.started_at.elapsed();
-            aggregate.record_task(task.kind, elapsed, elapsed >= long_running_threshold);
-        }
-        aggregate.finish()
-    }
-
-    /// Scans this group and its descendants for a bounded detail list.
-    ///
-    /// The scan budget bounds the work and the output budget bounds the payload.
-    /// When either is reached the result reports how many tasks were examined, so
-    /// a partial list is never presented as the complete tree.
-    pub(crate) fn bounded_task_details(&self, scan_budget: usize, output_budget: usize) -> TaskDetailScan {
-        let mut scan = TaskDetailScan::default();
-        self.collect_task_details(scan_budget, output_budget, TaskDetailScope::Local, &mut scan);
-        scan
-    }
-
-    fn collect_task_details(
-        &self,
-        scan_budget: usize,
-        output_budget: usize,
-        scope: TaskDetailScope,
-        scan: &mut TaskDetailScan,
-    ) {
-        for task in self.inner.registry.tasks.iter() {
-            if scan.scanned >= scan_budget {
-                scan.truncated = true;
-                return;
-            }
-            scan.scanned = scan.scanned.saturating_add(1);
-            if scan.details.len() < output_budget {
-                scan.details.push(TaskDetail {
-                    kind: task.kind,
-                    scope,
-                    elapsed: task.started_at.elapsed(),
-                });
-            } else {
-                scan.truncated = true;
-            }
-        }
-        for child in self.inner.registry.components_snapshot() {
-            if scan.scanned >= scan_budget {
-                scan.truncated = true;
-                return;
-            }
-            child.collect_task_details(scan_budget, output_budget, TaskDetailScope::Subtree, scan);
-        }
-    }
-
-    fn accumulate_diagnostics(
-        &self,
-        long_running_threshold: Duration,
-        aggregate: &mut TaskGroupDiagnosticsAccumulator,
-    ) {
-        aggregate.group_count = aggregate.group_count.saturating_add(1);
-        for task in self.inner.registry.tasks.iter() {
-            let elapsed = task.started_at.elapsed();
-            aggregate.record_task(task.kind, elapsed, elapsed >= long_running_threshold);
-        }
-
-        for child in self.inner.registry.components_snapshot() {
-            child.accumulate_diagnostics(long_running_threshold, aggregate);
-        }
     }
 
     /// Returns the contains task.
@@ -681,7 +636,11 @@ impl TaskGroup {
         self.spawn_with_handle(name, TaskKind::Service, future)
     }
 
-    /// Executes cancel.
+    /// Signals cancellation to this group and its descendants without waiting.
+    ///
+    /// The signal does not close submission admission or confirm task
+    /// destruction. Services must observe it and perform their own cleanup.
+    /// Use [`Self::shutdown_until`] for the complete shutdown boundary.
     pub fn cancel(&self) {
         self.inner.cancellation_token.cancel();
     }
@@ -714,7 +673,12 @@ impl TaskGroup {
         tokio::time::timeout(timeout, completion.wait()).await.is_ok()
     }
 
-    /// Returns the wait task.
+    /// Asynchronously waits for a local task's future to be destroyed.
+    ///
+    /// Returns `true` when the task is already absent, including after earlier
+    /// completion, and `false` when a registered task outlives the timeout.
+    /// Unlike [`Self::abort_task_and_wait`], absence is treated as success.
+    /// This does not request cancellation or prove business-level success.
     pub async fn wait_task(&self, task_id: TaskId, timeout: Duration) -> bool {
         let Some(completion) = self
             .inner
@@ -737,12 +701,20 @@ impl TaskGroup {
         tokio::time::timeout(timeout, completion.wait()).await.is_ok()
     }
 
-    /// Shuts down the owned service.
+    /// Closes and asynchronously drains this subtree within a relative budget.
+    ///
+    /// The budget is converted once to an absolute deadline. See
+    /// [`Self::shutdown_until`] for repeated calls and completion semantics.
     pub fn shutdown(&self, timeout: Duration) -> BoxFuture<'_, ShutdownReport> {
         self.shutdown_until(ShutdownDeadline::after(timeout))
     }
 
-    /// Shuts down until.
+    /// Closes admission, signals cancellation and asynchronously awaits owned work.
+    ///
+    /// All children share the absolute deadline. A later call can tighten but
+    /// cannot extend it. Tasks that do not finish in time are asked to abort;
+    /// the report distinguishes confirmed destruction from remaining work.
+    /// Once published, the report is retained and returned by subsequent calls.
     pub fn shutdown_until(&self, deadline: ShutdownDeadline) -> BoxFuture<'_, ShutdownReport> {
         self.tighten_shutdown_deadline(deadline);
         async move {
@@ -756,7 +728,11 @@ impl TaskGroup {
         .boxed()
     }
 
-    /// Shuts down now.
+    /// Requests immediate shutdown without waiting for future destruction.
+    ///
+    /// The retained report may contain unconfirmed remaining work even when
+    /// cancellation completes shortly afterward. A later graceful call returns
+    /// that same report; it does not turn this call into an awaited drain.
     pub fn shutdown_now(&self) -> ShutdownReport {
         if let Some(report) = self.inner.shutdown.report.get() {
             return report.clone();
@@ -772,124 +748,6 @@ impl TaskGroup {
         for child in self.inner.registry.components_snapshot() {
             child.tighten_shutdown_deadline(installed);
         }
-    }
-
-    fn spawn_inner<F>(
-        &self,
-        name: Arc<str>,
-        kind: TaskKind,
-        detached_policy: Option<DetachedTaskPolicy>,
-        future: F,
-    ) -> RuntimeResult<TaskId>
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let (task_id, join_handle) = self.spawn_inner_with_handle(name, kind, detached_policy, false, None, future)?;
-        drop(join_handle);
-        Ok(task_id)
-    }
-
-    fn spawn_inner_with_handle<F>(
-        &self,
-        name: Arc<str>,
-        kind: TaskKind,
-        detached_policy: Option<DetachedTaskPolicy>,
-        propagate_panic: bool,
-        critical: Option<CriticalRegistration>,
-        future: F,
-    ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        if std::mem::size_of::<F>() > MAX_INLINE_TASK_FUTURE_SIZE {
-            self.spawn_registered(name, kind, detached_policy, propagate_panic, critical, Box::pin(future))
-        } else {
-            self.spawn_registered(name, kind, detached_policy, propagate_panic, critical, future)
-        }
-    }
-
-    fn spawn_registered<F>(
-        &self,
-        name: Arc<str>,
-        kind: TaskKind,
-        detached_policy: Option<DetachedTaskPolicy>,
-        propagate_panic: bool,
-        critical: Option<CriticalRegistration>,
-        future: F,
-    ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let _spawn_guard = self.inner.spawn_gate.lock();
-        if self.inner.lifecycle_state() != TaskGroupLifecycleState::Open {
-            return Err(RuntimeError::context_unavailable(
-                crate::RuntimeOperation::SpawnTaskGroupTask,
-            ));
-        }
-
-        let task_id = TaskId(self.inner.next_task_id.fetch_add(1, Ordering::Relaxed));
-        let completion = Arc::new(TaskCompletion::new());
-        self.inner.registry.tasks.insert(
-            task_id,
-            TaskMeta {
-                id: task_id,
-                name: name.clone(),
-                group_id: self.inner.id,
-                group_name: self.inner.name.clone(),
-                kind,
-                state: TaskState::Queued,
-                started_at: Instant::now(),
-                detached: detached_policy.is_some(),
-                detached_policy,
-                abort_handle: None,
-                abort_requested: false,
-                completion: completion.clone(),
-            },
-        );
-
-        let wrapped = TaskExecution::new(
-            future,
-            self.inner.clone(),
-            task_id,
-            completion,
-            propagate_panic,
-            critical,
-        )
-        .run();
-
-        let join_handle = if detached_policy.is_some() {
-            self.inner.runtime.spawn_owned(wrapped)
-        } else {
-            self.inner.tracker.spawn_on(wrapped, self.inner.runtime.tokio_handle())
-        };
-        let abort_handle = join_handle.abort_handle();
-
-        let abort_requested = if let Some(mut meta) = self.inner.registry.tasks.get_mut(&task_id) {
-            meta.abort_handle = Some(abort_handle);
-            meta.state = TaskState::Running;
-            meta.abort_requested
-        } else {
-            false
-        };
-        // A diagnostic reader can discover the registered ID before this
-        // handle is installed. Honor any cancellation requested in that gap.
-        if abort_requested {
-            join_handle.abort();
-        }
-
-        Ok((task_id, join_handle))
-    }
-
-    fn abort_task_inner(&self, task_id: TaskId) -> Option<Arc<TaskCompletion>> {
-        let (abort_handle, completion) = {
-            let mut meta = self.inner.registry.tasks.get_mut(&task_id)?;
-            meta.abort_requested = true;
-            (meta.abort_handle.clone(), meta.completion.clone())
-        };
-        if let Some(abort_handle) = abort_handle {
-            abort_handle.abort();
-        }
-        Some(completion)
     }
 
     async fn shutdown_inner(&self) -> ShutdownReport {
@@ -1154,68 +1012,5 @@ impl TaskMeta {
             detached: self.detached,
             detached_policy: self.detached_policy,
         }
-    }
-}
-
-#[derive(Debug, Default)]
-struct TaskGroupDiagnosticsAccumulator {
-    group_count: usize,
-    task_count: usize,
-    active_by_kind: [usize; 7],
-    long_running_by_kind: [usize; 7],
-    max_elapsed_by_kind: [Duration; 7],
-}
-
-impl TaskGroupDiagnosticsAccumulator {
-    fn record_task(&mut self, kind: TaskKind, elapsed: Duration, long_running: bool) {
-        let index = task_kind_index(kind);
-        self.task_count = self.task_count.saturating_add(1);
-        self.active_by_kind[index] = self.active_by_kind[index].saturating_add(1);
-        if long_running {
-            self.long_running_by_kind[index] = self.long_running_by_kind[index].saturating_add(1);
-        }
-        self.max_elapsed_by_kind[index] = self.max_elapsed_by_kind[index].max(elapsed);
-    }
-
-    fn finish(self) -> TaskGroupDiagnostics {
-        let kinds = [
-            TaskKind::Service,
-            TaskKind::Worker,
-            TaskKind::ScheduledDriver,
-            TaskKind::ScheduledRun,
-            TaskKind::BlockingReaper,
-            TaskKind::Shutdown,
-            TaskKind::Other,
-        ];
-        let task_kinds = kinds
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, kind)| {
-                (self.active_by_kind[index] > 0).then_some(TaskKindDiagnostics {
-                    kind,
-                    active: self.active_by_kind[index],
-                    long_running: self.long_running_by_kind[index],
-                    max_elapsed: self.max_elapsed_by_kind[index],
-                })
-            })
-            .collect();
-
-        TaskGroupDiagnostics {
-            group_count: self.group_count,
-            task_count: self.task_count,
-            task_kinds,
-        }
-    }
-}
-
-const fn task_kind_index(kind: TaskKind) -> usize {
-    match kind {
-        TaskKind::Service => 0,
-        TaskKind::Worker => 1,
-        TaskKind::ScheduledDriver => 2,
-        TaskKind::ScheduledRun => 3,
-        TaskKind::BlockingReaper => 4,
-        TaskKind::Shutdown => 5,
-        TaskKind::Other => 6,
     }
 }

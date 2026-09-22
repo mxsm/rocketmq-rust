@@ -45,6 +45,9 @@ dedicated thread helpers retain their own explicit ownership boundaries.
 
 ## Core Architecture
 
+See [implementation boundaries and completion contracts](ARCHITECTURE.md)
+for the state owner of admission, settlement, probes and metadata persistence.
+
 | Type | Responsibility |
 | --- | --- |
 | `RuntimeConfig` | Worker threads, blocking-thread limit, thread name and stack size, keep-alive, shutdown timeout, IO/time drivers, and per-lane blocking policies. |
@@ -183,6 +186,22 @@ serializes registration with shutdown transitions. The
 Names are labels, so multiple groups can share a name without sharing identity.
 
 ## Scheduled Tasks
+
+Choose the entrypoint by its timing and ownership contract:
+
+| Work | Recommended entrypoint | Timing and ownership |
+| --- | --- | --- |
+| Periodic serial maintenance | `schedule_bounded` with fixed-delay configuration and a serial policy | First run follows `initial_delay`; the next delay begins after completion. A zero period is rejected. |
+| Overlapping periodic work | `schedule_bounded` with fixed-rate configuration and an explicit bounded policy | Acquires a run slot before spawning; choose Skip, CoalesceLatest or BoundedCatchUp for missed ticks. |
+| Mutable callback or explicit stop result | `schedule_fixed_delay_controlled` | Serial `FnMut`; a normal Stop result ends the driver and counts as one completed run. |
+| Operation-bound mutable maintenance | `schedule_fixed_delay_controlled_operation` | Shares fixed-delay execution and settlement, with the operation's additional cancellation/deadline boundary. |
+| Calendar or trigger-based jobs | Compatibility `TaskScheduler` with Cron/Trigger | Retains its separate calendar and trigger semantics; it does not inherit bounded-driver timing. |
+| Dedicated operating-system thread | `ActorRuntime` | The owner must signal stop and join the thread; async cancellation alone is insufficient. |
+
+The legacy fixed-rate overlap API retains its unbounded overlap behavior.
+Moving a caller to bounded scheduling is an explicit overload-policy choice.
+`ScheduledTaskConfig::shutdown_timeout` is retained for source compatibility
+and is not read; pass the shutdown budget to the group's shutdown API.
 
 Derive a scheduler with `context.scheduled_tasks("maintenance")` and select
 the registration method matching the desired overlap behavior:

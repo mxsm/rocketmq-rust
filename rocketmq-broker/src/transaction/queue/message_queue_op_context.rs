@@ -119,6 +119,10 @@ impl MessageQueueOpContext {
         self.state.lock().total_size
     }
 
+    pub(crate) fn close_admission(&self) {
+        self.pending_operations.close();
+    }
+
     pub fn get_last_write_timestamp(&self) -> u64 {
         self.state.lock().last_write_timestamp
     }
@@ -142,6 +146,18 @@ impl MessageQueueOpContext {
 
     pub(crate) fn try_take_batch(&self, max_bytes: usize) -> Option<OperationBatch<'_>> {
         let drainer = self.drainer.try_lock().ok()?;
+        self.take_batch_with_guard(max_bytes, drainer)
+    }
+
+    pub(crate) async fn take_batch(&self, max_bytes: usize) -> Option<OperationBatch<'_>> {
+        self.take_batch_with_guard(max_bytes, self.drainer.lock().await)
+    }
+
+    fn take_batch_with_guard<'a>(
+        &'a self,
+        max_bytes: usize,
+        drainer: MutexGuard<'a, ()>,
+    ) -> Option<OperationBatch<'a>> {
         let mut state = self.state.lock();
         let body = if let Some(body) = &state.pending {
             body.clone()

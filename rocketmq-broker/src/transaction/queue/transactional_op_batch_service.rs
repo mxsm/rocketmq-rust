@@ -22,6 +22,7 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_store::BrokerMasterAddressStore;
 use rocketmq_store::BrokerWriteStore;
 use tracing::info;
@@ -34,6 +35,8 @@ where
     MS: BrokerWriteStore + BrokerMasterAddressStore,
 {
     service_manager: ServiceManager<TransactionalOpBatchServiceInner<MS>>,
+    #[cfg(test)]
+    pub(super) parent_for_test: Option<TaskGroup>,
 }
 
 impl<MS> TransactionalOpBatchService<MS>
@@ -44,13 +47,45 @@ where
         broker_config: Arc<BrokerConfig>,
         transactional_message_service: Weak<DefaultTransactionalMessageService<MS>>,
     ) -> Self {
+        Self::with_owner(broker_config, transactional_message_service, None)
+    }
+
+    /// Owns the batch loop and its final queue drain under the broker group.
+    ///
+    /// A cooperative exit closes operation admission and attempts to flush
+    /// accepted partial batches while the Store is available. A failed append
+    /// or forced cancellation retains its payload and resource reservations;
+    /// task completion alone does not prove the business drain succeeded.
+    pub fn new_with_task_group(
+        broker_config: Arc<BrokerConfig>,
+        transactional_message_service: Weak<DefaultTransactionalMessageService<MS>>,
+        parent: TaskGroup,
+    ) -> Self {
+        Self::with_owner(broker_config, transactional_message_service, Some(parent))
+    }
+
+    fn with_owner(
+        broker_config: Arc<BrokerConfig>,
+        transactional_message_service: Weak<DefaultTransactionalMessageService<MS>>,
+        parent: Option<TaskGroup>,
+    ) -> Self {
         let inner = TransactionalOpBatchServiceInner {
+            cancellation: parent.as_ref().map(TaskGroup::cancellation_token).unwrap_or_default(),
             broker_config,
             transactional_message_service,
             wakeup_timestamp: AtomicU64::new(0),
         };
-        let service_manager = ServiceManager::new_legacy_compatibility(inner);
-        TransactionalOpBatchService { service_manager }
+        #[cfg(test)]
+        let parent_for_test = parent.clone();
+        let service_manager = match parent {
+            Some(parent) => ServiceManager::new_with_task_group(inner, parent),
+            None => ServiceManager::new_legacy_compatibility(inner),
+        };
+        TransactionalOpBatchService {
+            service_manager,
+            #[cfg(test)]
+            parent_for_test,
+        }
     }
 
     pub async fn start(&self) -> crate::broker_error::BrokerResult<()> {
@@ -66,6 +101,10 @@ where
         }
     }
 
+    pub(super) async fn shutdown_report(&self) -> Option<rocketmq_runtime::ShutdownReport> {
+        self.service_manager.last_task_group_shutdown_report().await
+    }
+
     pub fn wakeup(&self) {
         self.service_manager.wakeup();
     }
@@ -75,6 +114,7 @@ struct TransactionalOpBatchServiceInner<MS>
 where
     MS: BrokerWriteStore + BrokerMasterAddressStore,
 {
+    cancellation: tokio_util::sync::CancellationToken,
     broker_config: Arc<BrokerConfig>,
     transactional_message_service: Weak<DefaultTransactionalMessageService<MS>>,
     wakeup_timestamp: AtomicU64,
@@ -95,16 +135,24 @@ where
             current_millis() + transaction_op_batch_interval,
             std::sync::atomic::Ordering::Relaxed,
         );
-        while !context.is_stopped() {
+        while !context.is_stopped() && !self.cancellation.is_cancelled() {
             let mut interval =
                 self.wakeup_timestamp.load(std::sync::atomic::Ordering::Relaxed) as i64 - current_millis() as i64;
             if interval <= 0 {
                 interval = 0;
                 context.wakeup();
             }
-            if context.wait_for_running(Duration::from_millis(interval as u64)).await {
+            tokio::select! {
+                biased;
+                _ = self.cancellation.cancelled() => break,
+                _ = context.wait_for_running(Duration::from_millis(interval as u64)) => {}
+            }
+            if !context.is_stopped() && !self.cancellation.is_cancelled() {
                 self.on_wait_end().await;
             }
+        }
+        if let Some(service) = self.transactional_message_service.upgrade() {
+            service.drain_operation_queues().await;
         }
     }
 
