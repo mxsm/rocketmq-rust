@@ -897,9 +897,14 @@ mod tests {
     #[cfg(feature = "prometheus")]
     #[tokio::test]
     async fn four_modes_with_real_metrics_export_without_duplicate_samplers() {
-        let mut config = crate::ObservabilityConfig::default();
-        config.enabled = true;
-        config.metrics.enabled = true;
+        let config = crate::ObservabilityConfig {
+            enabled: true,
+            metrics: crate::config::MetricsConfig {
+                enabled: true,
+                ..crate::config::MetricsConfig::default()
+            },
+            ..crate::ObservabilityConfig::default()
+        };
         let (provider, registry) = crate::exporter::prometheus::init_prometheus_metrics(&config)
             .unwrap()
             .into_parts();
