@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
-#[derive(Debug, Default, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[derive(Debug, Default, Serialize, Deserialize, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::notification_request_header::NotificationRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.NotificationRequestHeader",
@@ -106,7 +106,7 @@ mod tests {
     }
 
     #[test]
-    fn notification_v3_defaults_and_required_fields_match_the_wire_contract() {
+    fn notification_header_defaults_and_required_fields_match_the_wire_contract() {
         let mut fields = HeaderMap::from([
             ("consumerGroup".into(), "group-a".into()),
             ("topic".into(), "topic-a".into()),

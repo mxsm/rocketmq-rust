@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.DeleteTopicFromNamesrvRequestHeader",
@@ -45,7 +45,7 @@ impl DeleteTopicFromNamesrvRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.RegisterTopicRequestHeader"
@@ -68,7 +68,7 @@ impl RegisterTopicRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::GetTopicsByClusterRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.GetTopicsByClusterRequestHeader"
@@ -86,7 +86,7 @@ impl GetTopicsByClusterRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::namesrv::topic_operation_header::TopicRequestHeader",
     java_class = "org.apache.rocketmq.remoting.rpc.TopicRequestHeader"

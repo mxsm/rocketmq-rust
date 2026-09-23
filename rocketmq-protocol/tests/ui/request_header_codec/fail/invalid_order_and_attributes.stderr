@@ -1,0 +1,23 @@
+error: unsupported RequestHeaderCodec field option
+  --> tests/ui/request_header_codec/fail/invalid_order_and_attributes.rs:24:24
+   |
+24 |     #[header(required, mystery = "value")]
+   |                        ^^^^^^^
+
+error: required is a flag and does not accept a value
+  --> tests/ui/request_header_codec/fail/invalid_order_and_attributes.rs:26:14
+   |
+26 |     #[header(required = true)]
+   |              ^^^^^^^^
+
+error: required is declared by both #[header] and #[required]
+  --> tests/ui/request_header_codec/fail/invalid_order_and_attributes.rs:29:14
+   |
+29 |     #[header(required)]
+   |              ^^^^^^^^
+
+error: binary_order `7` is already used by field `first`
+  --> tests/ui/request_header_codec/fail/invalid_order_and_attributes.rs:22:39
+   |
+22 |     #[header(required, binary_order = 7)]
+   |                                       ^

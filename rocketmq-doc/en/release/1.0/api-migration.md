@@ -27,20 +27,22 @@ reviewed post-freeze approval.
 
 ## Direct source migrations
 
-### Request-header derive retirement
+### Request-header derive migration
 
-`rocketmq_macros::RequestHeaderCodec` (V1) and
-`rocketmq_macros::RequestHeaderCodecV2` were removed before 1.0. Use
-`rocketmq_macros::RequestHeaderCodecV3` with explicit `#[header(...)]` wire
-metadata. Existing V1/V2 consumers must migrate before upgrading to 1.0; the
-macro README documents the attribute and behavior differences that require
-review.
+The historical V1 implementation of `rocketmq_macros::RequestHeaderCodec` and
+`rocketmq_macros::RequestHeaderCodecV2` were retired before 1.0. The current
+`rocketmq_macros::RequestHeaderCodec` is the former V3 implementation under its
+permanent name. Existing V3 consumers only need to rename their derive from
+`RequestHeaderCodecV3` to `RequestHeaderCodec`. V1/V2 consumers must migrate
+to explicit `#[header(...)]` wire metadata and review the attribute and decode
+behavior differences in the [macro README](../../../../rocketmq-macros/README.md).
 
-The checked-in migration inventory records `153 registered, 153 V3, 0 V2, 0
-pending`. The production protocol source contains no V1 or V2 derive use, so
-this source-compatibility break does not change the registered request-header
-wire contracts. Repository-owner approval for this 1.0 retirement is recorded
-in #10790.
+The archived migration inventory records `153 registered, 153 V3, 0 V2, 0
+pending`; its historical `currentCodec` values are not renamed. The production
+protocol source contains no V1 or V2 derive use, so this source-compatibility
+break does not change the registered request-header wire contracts.
+Repository-owner approval for the original V1/V2 retirement is recorded in
+[#10790](https://github.com/mxsm/rocketmq-rust/issues/10790).
 
 ### Auth security-contract ownership and policy models
 

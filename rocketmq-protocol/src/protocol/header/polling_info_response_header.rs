@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV3;
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default, RequestHeaderCodecV3)]
+use rocketmq_macros::RequestHeaderCodec;
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::polling_info_response_header::PollingInfoResponseHeader",
@@ -46,7 +46,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_codec_round_trips_signed_boundaries_and_requires_the_value() {
+    fn request_header_codec_round_trips_signed_boundaries_and_requires_the_value() {
         for polling_num in [i32::MIN, 0, i32::MAX] {
             let header = PollingInfoResponseHeader { polling_num };
             let map = header.to_map().unwrap();

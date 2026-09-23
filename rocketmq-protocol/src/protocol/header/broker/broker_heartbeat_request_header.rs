@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::broker::broker_heartbeat_request_header::BrokerHeartbeatRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.BrokerHeartbeatRequestHeader"

@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodec, Clone)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::pop_message_response_header::PopMessageResponseHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.PopMessageResponseHeader"

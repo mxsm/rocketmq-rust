@@ -13,21 +13,21 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
-#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.UpdateConsumerOffsetResponseHeader"
 )]
 pub struct UpdateConsumerOffsetResponseHeader {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.UpdateConsumerOffsetRequestHeader"
@@ -157,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_codec_round_trips_required_fields_and_always_creates_the_rpc_envelope() {
+    fn request_header_codec_round_trips_required_fields_and_always_creates_the_rpc_envelope() {
         let header = UpdateConsumerOffsetRequestHeader {
             topic_request_header: None,
             ..request_with_rpc_envelope()
@@ -178,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_codec_rejects_missing_or_invalid_required_values() {
+    fn request_header_codec_rejects_missing_or_invalid_required_values() {
         assert!(<UpdateConsumerOffsetRequestHeader as FromMap>::from(&HashMap::new()).is_err());
 
         let mut map = request_with_rpc_envelope().to_map().unwrap();
@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_response_header_has_empty_serde_and_v3_representations() {
+    fn empty_response_header_has_empty_serde_and_codec_representations() {
         let header = UpdateConsumerOffsetResponseHeader::default();
 
         assert_eq!(serde_json::to_string(&header).unwrap(), "{}");

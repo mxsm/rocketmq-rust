@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::get_earliest_msg_storetime_request_header::GetEarliestMsgStoretimeRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.GetEarliestMsgStoretimeRequestHeader"

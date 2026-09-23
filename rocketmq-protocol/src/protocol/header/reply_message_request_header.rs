@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
 /// Represents the header of a reply message request.
-#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodecV3)]
+#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::reply_message_request_header::ReplyMessageRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.ReplyMessageRequestHeader"

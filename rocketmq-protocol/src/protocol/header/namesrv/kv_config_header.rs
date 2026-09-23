@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::namesrv::kv_config_header::PutKVConfigRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.PutKVConfigRequestHeader"
@@ -54,7 +54,7 @@ impl PutKVConfigRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.GetKVConfigRequestHeader"
@@ -76,7 +76,7 @@ impl GetKVConfigRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.GetKVConfigResponseHeader"
@@ -91,7 +91,7 @@ impl GetKVConfigResponseHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.DeleteKVConfigRequestHeader"
@@ -113,7 +113,7 @@ impl DeleteKVConfigRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::namesrv::kv_config_header::GetKVListByNamespaceRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.namesrv.GetKVListByNamespaceRequestHeader"

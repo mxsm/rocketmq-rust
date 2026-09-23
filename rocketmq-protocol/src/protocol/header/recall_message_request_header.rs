@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -24,7 +24,7 @@ use crate::rpc::topic_request_header::TopicRequestHeader;
 /// This header is used with `RequestCode::RECALL_MESSAGE` to recall a previously
 /// sent message from the broker. The recall operation requires the producer group,
 /// topic, and a recall handle that identifies the message to be recalled.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::recall_message_request_header::RecallMessageRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.RecallMessageRequestHeader"

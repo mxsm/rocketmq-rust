@@ -686,7 +686,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "request-header-codec-v3-renamed-consumer"
+name = "request-header-codec-renamed-consumer"
 version = "0.0.0"
 dependencies = [
  "rocketmq-macros",

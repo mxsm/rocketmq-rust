@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.GetMinOffsetResponseHeader"
@@ -50,7 +50,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_codec_round_trips_signed_boundaries_and_rejects_missing_or_invalid_values() {
+    fn request_header_codec_round_trips_signed_boundaries_and_rejects_missing_or_invalid_values() {
         for offset in [i64::MIN, 0, i64::MAX] {
             let map = GetMinOffsetResponseHeader { offset }.to_map().unwrap();
             let decoded = <GetMinOffsetResponseHeader as FromMap>::from(&map).unwrap();

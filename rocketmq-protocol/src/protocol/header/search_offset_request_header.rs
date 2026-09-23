@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use rocketmq_model::boundary_type::BoundaryType;
 use serde::Deserialize;
 use serde::Serialize;
@@ -21,7 +21,7 @@ use serde::Serialize;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Default, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[derive(Default, Debug, Serialize, Deserialize, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::search_offset_request_header::SearchOffsetRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.SearchOffsetRequestHeader"
@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_codec_preserves_java_keys_and_numeric_boundaries() {
+    fn request_header_codec_preserves_java_keys_and_numeric_boundaries() {
         let header = SearchOffsetRequestHeader {
             topic_request_header: None,
             ..header_with_rpc_envelope()

@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV3)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::notify_broker_role_change_request_header::NotifyBrokerRoleChangedRequestHeader",

@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodecV3)]
+#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::heartbeat_request_header::HeartbeatRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.HeartbeatRequestHeader"
@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_codec_decodes_partial_rpc_fields() {
+    fn request_header_codec_decodes_partial_rpc_fields() {
         let map = HashMap::from([
             ("namespace".into(), "namespace-a".into()),
             ("brokerName".into(), "broker-a".into()),

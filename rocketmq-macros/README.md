@@ -11,16 +11,18 @@ or remoting crates instead of depending on it directly.
 
 | Macro | Status | Purpose |
 | --- | --- | --- |
-| `RequestHeaderCodecV3` | Recommended | Generates typed map/source codecs, wire schema, validation, key resolution, compatibility adapters, and optional reviewed direct encoding. |
+| `RequestHeaderCodec` | Recommended | Generates typed map/source codecs, wire schema, validation, key resolution, compatibility adapters, and optional reviewed direct encoding. |
 | `RemotingSerializable` | Legacy utility | Emits an implementation for the old crate-local serialization trait; incompatible with the current protocol trait. See [Serialization](#serialization). |
 
-`RequestHeaderCodecV3` is the only supported request-header derive. The V1 `RequestHeaderCodec` and
-`RequestHeaderCodecV2` entry points were removed before 1.0 after all registered production headers migrated to
-V3. V3 generates `HeaderCodec`, `CommandCustomHeader`, and `FromMap` implementations over one explicit wire model.
+`RequestHeaderCodec` is the only supported request-header derive. It is the former V3 implementation under its
+permanent name and generates `HeaderCodec`, `CommandCustomHeader`, and `FromMap` implementations over one explicit
+wire model. The historical V1 implementation with the same name and the V2 entry point were retired before 1.0.
+Existing V3 consumers only need to rename the derive; V1/V2 consumers must migrate their header metadata and review
+behavior differences below.
 
 ## Quick start
 
-V3 uses dedicated `#[header(...)]` metadata as the only RocketMQ wire contract. Serde attributes remain independent
+The derive uses dedicated `#[header(...)]` metadata as the only RocketMQ wire contract. Serde attributes remain independent
 and must not be used to infer header keys, defaults, aliases, or flattening.
 
 Consumers need `rocketmq-macros` and `rocketmq-protocol`; this example also uses `cheetah-string`. Within a member
@@ -37,10 +39,10 @@ This is a small Rust-only example, not the complete production `SendMessageReque
 
 ```rust
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use rocketmq_protocol::{CommandCustomHeader, HeaderCodec, HeaderMap, ProtocolContractViolation};
 
-#[derive(Debug, RequestHeaderCodecV3)]
+#[derive(Debug, RequestHeaderCodec)]
 #[header(type_id = "example::MessageHeader")]
 struct MessageHeader {
     #[header(required)]
@@ -85,7 +87,7 @@ The generated implementation provides:
 
 ## Supported inputs
 
-V3 accepts named structs, including empty braced structs and structs with generics. Tuple structs, unit structs,
+The derive accepts named structs, including empty braced structs and structs with generics. Tuple structs, unit structs,
 enums, and unions are rejected. Generated implementations preserve generics and where clauses and require the
 header type to be `'static`.
 
@@ -104,11 +106,11 @@ Container metadata:
 | --- | --- |
 | `type_id = "..."` | Required stable schema identity, written as a Rust path with at least two segments, no leading `::`, and no generic arguments. |
 | `java_class = "..."` | Java peer FQCN. The macro checks its syntax; compatibility tests check the pinned Java schema. Omit it for Rust-only headers. |
-| `crate = "path"` | Optional protocol-crate path override. V3 also detects renamed Cargo dependencies automatically. |
+| `crate = "path"` | Optional protocol-crate path override. The derive also detects renamed Cargo dependencies automatically. |
 | `fast` | Enables direct binary and JSON encoding in the generated compatibility shim. Production use requires correctness and performance review; the macro does not enforce that review. |
 | `validate = "path"` | Calls `path(&self)`, returning `Result<(), ProtocolContractViolation>`, before this header layer writes fields and after constructing it during decode. |
 | `legacy_shim = "generated"` or `"manual"` | Defaults to `generated`. `manual` suppresses both compatibility impls, including their direct-encoding methods; the caller supplies the adapters. |
-| `lookup = "auto"`, `"scan"`, or `"get"` | Accepted metadata; defaults to `auto`. Currently all V3 source decoders scan via `visit_fields_while`, so this option does not select a different lookup algorithm. |
+| `lookup = "auto"`, `"scan"`, or `"get"` | Accepted metadata; defaults to `auto`. Currently all source decoders scan via `visit_fields_while`, so this option does not select a different lookup algorithm. |
 
 Field metadata:
 
@@ -127,7 +129,7 @@ Field metadata:
 | `binary_order = N` | `u16` encoding/schema order, defaulting to the zero-based source field index. Effective orders must be unique across local scalar and flatten fields. Does not order `HeaderMap` iteration. |
 | `java_type = "..."` | Accepted compatibility metadata with type-consistency checks. Registered production schemas require it to be omitted. |
 
-Do not write `java_type` on production fields. V3 infers the ordinary wire kind from the Rust type. Use `range`
+Do not write `java_type` on production fields. The derive infers the ordinary wire kind from the Rust type. Use `range`
 for unsigned Rust fields constrained by Java signed integers. Declaring `java_class` on a container requires
 `range = "i32"` on each scalar `u32` field and `range = "i64"` on each scalar `u64` field, including optional
 fields. Explicit field-level `java_type` also requires the matching range on unsigned fields. Signed Rust fields
@@ -144,8 +146,8 @@ missing input as `None` and omits `None` during encoding. On `Option<T>`, `defau
 32, and keep its schema description aligned with its implementation. Default providers are responsible for
 returning valid values; generated defaults do not pass through wire-text parsing.
 
-Legacy `#[required]` is temporarily accepted by V3 with a deprecation diagnostic. Use `#[header(required)]`;
-declaring both is an error. Serde helper attributes require a Serde derive to register them; V3 itself registers
+Legacy `#[required]` is temporarily accepted by the derive with a deprecation diagnostic. Use `#[header(required)]`;
+declaring both is an error. Serde helper attributes require a Serde derive to register them; this derive registers
 only `header` and `required`.
 
 ### Aliases and flattening
@@ -192,9 +194,10 @@ branch or environment lookup to every message.
 
 ## Migrating V1/V2 consumers
 
-V2 metadata is not silently reinterpreted. Review it against the fixed Java schema and convert it explicitly:
+V2 metadata is not silently reinterpreted as the current wire model. Review it against the fixed Java schema and
+convert it explicitly:
 
-| V2 source | V3 decision |
+| V2 source | `RequestHeaderCodec` decision |
 | --- | --- |
 | `#[required]` | `#[header(required)]` |
 | `serde(rename = "...")` | `#[header(key = "...")]` when it is a wire key |
@@ -207,28 +210,31 @@ V2 metadata is not silently reinterpreted. Review it against the fixed Java sche
 | unsigned field matching Java `int`/`long` | `range = "i32"` / `range = "i64"` |
 
 V2 ignores container-level `serde(rename_all)` and does not apply scalar `Option<T>` default providers during
-decode. Review these differences before copying attributes to V3. V3 also has a narrower set of supported
+decode. Review these differences before copying attributes to `RequestHeaderCodec`. The current derive also has a narrower set of supported
 scalar types than V2's `ToString`/`FromStr` path.
 
-The V1 and V2 derive entry points are not exported in 1.0. Downstream consumers must migrate their header models
-to V3 before upgrading. Register new production headers in the typed registry and checked-in inventory.
-`request_header_codec_v3_registry` compares that registry with `migration.json` and the pinned Java contracts.
+The historical V1 implementation and V2 derive are no longer exported. Downstream V1/V2 consumers must migrate
+their header models to the current derive before upgrading. Register new production headers in the typed registry
+and checked-in inventory.
+`request_header_codec_registry` compares that registry with the archived `migration.json` inventory and pinned Java
+contracts. Its `currentCodec = "v3"` values record the historical implementation and remain unchanged after the rename.
 Migration generators and the Java extraction harness have been retired; there is no active migration guard that
 automatically discovers and rejects every new source header.
 
-V1 (`RequestHeaderCodec`) had historical parsing and decode quirks. For example, malformed optional primitive
-values could become `None`, and malformed non-required primitive values could fall back to `Default`. V3 returns
-conversion errors instead, so V1 consumers must review those cases while moving directly to the explicit V3 model.
+Historical V1 (`RequestHeaderCodec`) had parsing and decode quirks. For example, malformed optional primitive
+values could become `None`, and malformed non-required primitive values could fall back to `Default`. The current
+derive returns conversion errors instead, so V1 consumers must review those cases while moving to the explicit
+wire model. The identical derive name does not restore V1 behavior.
 
 ## Renamed protocol dependency
 
-V3 resolves `rocketmq-protocol` from the consumer's Cargo manifest, including a dependency renamed to
+`RequestHeaderCodec` resolves `rocketmq-protocol` from the consumer's Cargo manifest, including a dependency renamed to
 `protocol_api`. Generated/re-exported environments can override the path explicitly:
 
 ```rust
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 
-#[derive(RequestHeaderCodecV3)]
+#[derive(RequestHeaderCodec)]
 #[header(type_id = "example::Header", crate = "protocol_api")]
 struct Header {
     #[header(required)]
@@ -236,7 +242,7 @@ struct Header {
 }
 ```
 
-The standalone [`tests/fixtures/renamed-consumer`](tests/fixtures/renamed-consumer/) project checks V3's automatic
+The standalone [`tests/fixtures/renamed-consumer`](tests/fixtures/renamed-consumer/) project checks automatic
 dependency-name resolution.
 
 ## Serialization
@@ -256,7 +262,7 @@ Likewise, owned deserializable types receive `RemotingDeserializable` through it
 | Path | Purpose |
 | --- | --- |
 | [`src/lib.rs`](src/lib.rs) | Public derive entry points and shared parsing helpers. |
-| [`src/request_header_codec_v3/`](src/request_header_codec_v3/) | Canonical V3 metadata, semantic model, validation, and code generation. |
+| [`src/request_header_codec/`](src/request_header_codec/) | Canonical metadata, semantic model, validation, and code generation. |
 | [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | Historical crate-local serialization expansion. |
 
 No Java checkout is accessed during Cargo builds. Java schemas, golden frames, header registry data, and
@@ -270,9 +276,9 @@ expansion; protocol tests compile consumers and exercise runtime behavior.
 
 ```powershell
 cargo test -p rocketmq-macros --lib
-cargo test -p rocketmq-protocol --test request_header_codec_v3_typed_map
-cargo test -p rocketmq-protocol --test request_header_codec_v3_registry
-cargo test -p rocketmq-protocol --test request_header_codec_v3_ui
+cargo test -p rocketmq-protocol --test request_header_codec_typed_map
+cargo test -p rocketmq-protocol --test request_header_codec_registry
+cargo test -p rocketmq-protocol --test request_header_codec_ui
 cargo test -p rocketmq-protocol --test request_header_codec_runtime_ui
 cargo test -p rocketmq-protocol --test request_header_java_compatibility
 ```

@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV3, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodec, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::query_message_response_header::QueryMessageResponseHeader",
@@ -61,7 +61,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_codec_round_trips_signed_boundaries_and_requires_both_values() {
+    fn request_header_codec_round_trips_signed_boundaries_and_requires_both_values() {
         let header = QueryMessageResponseHeader {
             index_last_update_timestamp: i64::MIN,
             index_last_update_phyoffset: i64::MAX,

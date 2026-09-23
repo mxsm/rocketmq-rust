@@ -295,7 +295,7 @@ pub trait FromMap {
 
     /// Converts the implementing type from a borrowed field source.
     ///
-    /// Generated V3 implementations override this method. The default is an
+    /// Generated request-header implementations override this method. The default is an
     /// additive compatibility fallback for existing implementations and is not
     /// selected by production dispatch while the capability remains `false`.
     fn from_field_source(source: &dyn HeaderFieldSource) -> Result<Self::Target, Self::Error> {

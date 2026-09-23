@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.GetMinOffsetRequestHeader"

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
@@ -26,7 +26,7 @@ use serde::Serialize;
 /// Controller session-fencing capacity indefinitely.
 pub const MAX_BROKER_HEARTBEAT_TIMEOUT_MILLIS: u64 = 24 * 60 * 60 * 1_000;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader",
@@ -72,7 +72,7 @@ impl Display for UnRegisterBrokerRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader",
@@ -97,7 +97,7 @@ pub struct BrokerHeartbeatRequestHeader {
     pub election_priority: Option<i32>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::namesrv::broker_request::GetBrokerMemberGroupRequestHeader",

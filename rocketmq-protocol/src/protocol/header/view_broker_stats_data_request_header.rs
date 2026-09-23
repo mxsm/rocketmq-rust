@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV3)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::view_broker_stats_data_request_header::ViewBrokerStatsDataRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.ViewBrokerStatsDataRequestHeader"

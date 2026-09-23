@@ -8,7 +8,7 @@ benchmarks. Cargo builds do not require Python, Maven, or a local Java checkout.
 | `java-schema.json` | Pinned Java field semantics used by the typed-schema tests |
 | `schema-overrides.json` | Reviewed differences between Rust and Java field semantics |
 | `extension-allowlist.json` | Rust-only headers and extension fields |
-| `migration.json` | Archived V3 type inventory used to check typed registry coverage |
+| `migration.json` | Archived V3 type inventory used to check typed registry coverage; historical `currentCodec` values remain `v3` |
 | `perf-corpus-v1.json` | Shared encode/decode cases for the registry test and benchmark |
 | `manifest.json`, `golden/`, `rust-only/` | Wire and semantic compatibility cases |
 
@@ -20,7 +20,7 @@ The migration generators and Java extraction harness have been retired.
 Select the relevant validation from the repository root:
 
 ```bash
-cargo test -p rocketmq-protocol --test request_header_codec_v3_registry
+cargo test -p rocketmq-protocol --test request_header_codec_registry
 cargo test -p rocketmq-protocol --test request_header_java_compatibility
 cargo bench -p rocketmq-protocol --bench request_header_codec
 ```

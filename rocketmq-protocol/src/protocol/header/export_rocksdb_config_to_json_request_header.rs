@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -41,7 +41,7 @@ impl ExportRocksdbConfigType {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::export_rocksdb_config_to_json_request_header::ExportRocksdbConfigToJsonRequestHeader",
