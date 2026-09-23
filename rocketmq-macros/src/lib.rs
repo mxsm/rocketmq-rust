@@ -15,16 +15,16 @@
 use proc_macro::TokenStream;
 
 use crate::remoting_serializable::remoting_serializable_inner;
-use crate::request_header_codec_v3::request_header_codec_inner_v3;
+use crate::request_header_codec::request_header_codec_inner;
 
 mod remoting_serializable;
-mod request_header_codec_v3;
+mod request_header_codec;
 
-/// Recommended request-header derive. Generates typed map codecs, schema
+/// Request-header derive. Generates typed map codecs, schema
 /// metadata, and compatibility adapters for an explicit wire model.
-#[proc_macro_derive(RequestHeaderCodecV3, attributes(header, required))]
-pub fn request_header_codec_v3(input: TokenStream) -> TokenStream {
-    request_header_codec_inner_v3(input)
+#[proc_macro_derive(RequestHeaderCodec, attributes(header, required))]
+pub fn request_header_codec(input: TokenStream) -> TokenStream {
+    request_header_codec_inner(input)
 }
 
 #[proc_macro_derive(RemotingSerializable)]

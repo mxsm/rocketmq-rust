@@ -15,13 +15,13 @@
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodecV3)]
+#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.ChangeInvisibleTimeRequestHeader"

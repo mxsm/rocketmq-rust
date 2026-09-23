@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -21,7 +21,7 @@ fn default_invoke_time() -> u64 {
     rocketmq_model::time::current_millis()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::controller::clean_broker_data_request_header::CleanBrokerDataRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.controller.admin.CleanControllerBrokerDataRequestHeader",

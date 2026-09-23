@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -21,7 +21,7 @@ fn default_invoke_time() -> u64 {
     rocketmq_model::time::current_millis()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader",

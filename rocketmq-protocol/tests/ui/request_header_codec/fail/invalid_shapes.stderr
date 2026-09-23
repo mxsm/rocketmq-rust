@@ -1,0 +1,23 @@
+error: RequestHeaderCodec requires a named struct
+  --> tests/ui/request_header_codec/fail/invalid_shapes.rs:19:13
+   |
+19 | struct Tuple(#[header(required)] String);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: RequestHeaderCodec does not support unit structs
+  --> tests/ui/request_header_codec/fail/invalid_shapes.rs:23:8
+   |
+23 | struct Unit;
+   |        ^^^^
+
+error: RequestHeaderCodec does not support enums
+  --> tests/ui/request_header_codec/fail/invalid_shapes.rs:27:1
+   |
+27 | enum HeaderEnum {
+   | ^^^^
+
+error: RequestHeaderCodec does not support unions
+  --> tests/ui/request_header_codec/fail/invalid_shapes.rs:33:1
+   |
+33 | union HeaderUnion {
+   | ^^^^^

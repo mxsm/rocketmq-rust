@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::update_user_request_header::UpdateUserRequestHeader",
@@ -41,7 +41,7 @@ mod tests {
     use crate::protocol::command_custom_header::{CommandCustomHeader, FromMap};
 
     #[test]
-    fn serde_and_v3_codec_preserve_the_username() {
+    fn serde_and_request_header_codec_preserve_the_username() {
         let mut header = UpdateUserRequestHeader::default();
         header.set_username(CheetahString::from("user-a"));
         let json = serde_json::to_string(&header).unwrap();

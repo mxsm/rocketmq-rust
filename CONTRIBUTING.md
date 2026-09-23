@@ -88,9 +88,10 @@ cargo test
 
 ### Foundation safety and compatibility
 
-- Production request headers use `RequestHeaderCodecV3`, the only supported
-  request-header derive. Register new headers in the typed registry and checked-in
-  migration inventory.
+- Production request headers use `RequestHeaderCodec`, the only supported
+  request-header derive. Register new headers in the typed registry and
+  checked-in inventory. Preserve historical `currentCodec = "v3"` records in
+  the migration inventory.
 - A process entrypoint owns its runtime through `RuntimeOwner`. Background work
   receives an injected `ServiceContext`/`ChildServiceContext` or a parent
   `TaskGroup` rather than creating another runtime or detached task.
@@ -104,7 +105,7 @@ cargo test
 Before opening a pull request that changes these boundaries, run:
 
 ```shell
-cargo test -p rocketmq-protocol --test request_header_codec_v3_registry
+cargo test -p rocketmq-protocol --test request_header_codec_registry
 python scripts/rust_hygiene_guard.py --scope core-release
 ```
 

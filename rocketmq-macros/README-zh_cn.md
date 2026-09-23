@@ -10,14 +10,14 @@ RocketMQ-Rust 协议类型和 Remoting Header 使用的过程宏。
 
 | 宏 | 状态 | 用途 |
 | --- | --- | --- |
-| `RequestHeaderCodecV3` | 推荐 | 生成类型化 map/source codec、wire schema、校验、键解析、兼容适配器，以及经过审查的可选直接编码。 |
+| `RequestHeaderCodec` | 推荐 | 生成类型化 map/source codec、wire schema、校验、键解析、兼容适配器，以及经过审查的可选直接编码。 |
 | `RemotingSerializable` | 旧版工具 | 为旧版 crate 本地序列化 trait 生成实现；与当前协议 trait 不兼容。参见[序列化](#序列化)。 |
 
-`RequestHeaderCodecV3` 是唯一受支持的请求头 derive。在所有已登记的生产 Header 迁移到 V3 后，V1 `RequestHeaderCodec` 和 `RequestHeaderCodecV2` 入口已在 1.0 前移除。V3 基于单一显式 wire model 生成 `HeaderCodec`、`CommandCustomHeader` 和 `FromMap` 实现。
+`RequestHeaderCodec` 是唯一受支持的请求头 derive。它沿用原 V3 实现，只是采用正式名称；基于单一显式 wire model 生成 `HeaderCodec`、`CommandCustomHeader` 和 `FromMap` 实现。历史 V1 实现曾使用同名入口，已与 V2 一起在 1.0 前退役。当前 V3 使用方只需改名；V1/V2 使用方必须迁移 Header 元数据并审核下述行为差异。
 
 ## 快速开始
 
-V3 只把专用 `#[header(...)]` 元数据作为 RocketMQ wire 契约。Serde 属性继续独立服务 JSON/DTO，不能用于推断 Header 的 key、default、alias 或 flatten。
+当前 derive 只把专用 `#[header(...)]` 元数据作为 RocketMQ wire 契约。Serde 属性继续独立服务 JSON/DTO，不能用于推断 Header 的 key、default、alias 或 flatten。
 
 使用方需要依赖 `rocketmq-macros` 和 `rocketmq-protocol`；以下示例还使用了 `cheetah-string`。在本仓库工作空间的成员中，可以这样声明依赖：
 
@@ -32,10 +32,10 @@ cheetah-string.workspace = true
 
 ```rust
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use rocketmq_protocol::{CommandCustomHeader, HeaderCodec, HeaderMap, ProtocolContractViolation};
 
-#[derive(Debug, RequestHeaderCodecV3)]
+#[derive(Debug, RequestHeaderCodec)]
 #[header(type_id = "example::MessageHeader")]
 struct MessageHeader {
     #[header(required)]
@@ -79,7 +79,7 @@ fn main() -> Result<(), ProtocolContractViolation> {
 
 ## 支持的输入
 
-V3 接受具名字段结构体，包括使用花括号的空结构体和泛型结构体。元组结构体、单元结构体、枚举和联合体均不支持。生成的实现保留泛型及 where 子句，并要求 Header 类型满足 `'static`。
+当前 derive 接受具名字段结构体，包括使用花括号的空结构体和泛型结构体。元组结构体、单元结构体、枚举和联合体均不支持。生成的实现保留泛型及 where 子句，并要求 Header 类型满足 `'static`。
 
 标量字段支持 `String`、`CheetahString`、`bool`、`i32`、`i64`、`u32`、`u64`、协议使用的 `BoundaryType`，以及这些类型的 `Option<T>`。泛型标量参数会添加 `HeaderValue` 约束；展平类型会添加 `HeaderCodec` 约束。`HeaderValue` 在 `rocketmq-protocol` 中是封闭 trait，因此不能通过泛型支持任意下游 wire value 实现。`Vec<T>`、`&str`、`usize` 和浮点数等其他具体类型不支持作为标量字段。宏根据语法判断类型，不会自动解析指向受支持类型的类型别名。
 
@@ -91,11 +91,11 @@ V3 接受具名字段结构体，包括使用花括号的空结构体和泛型�
 | --- | --- |
 | `type_id = "..."` | 必填的稳定 schema 标识，使用至少包含两段的 Rust 路径，不允许以 `::` 开头或包含泛型参数。 |
 | `java_class = "..."` | Java 对应类型的 FQCN。宏检查名称语法，兼容性测试检查固定的 Java schema。Rust-only Header 不填写。 |
-| `crate = "path"` | 可选的 protocol crate 路径覆盖。V3 也会自动识别重命名后的 Cargo 依赖。 |
+| `crate = "path"` | 可选的 protocol crate 路径覆盖。当前 derive 也会自动识别重命名后的 Cargo 依赖。 |
 | `fast` | 在生成的兼容适配器中启用直接二进制和 JSON 编码。生产使用需要正确性和性能审查；宏本身不强制检查审查结果。 |
 | `validate = "path"` | 调用返回 `Result<(), ProtocolContractViolation>` 的 `path(&self)`；在当前 Header 层写入字段前，以及解码构造该层后执行。 |
 | `legacy_shim = "generated"` 或 `"manual"` | 默认为 `generated`。`manual` 禁止生成两个兼容实现及其中的直接编码方法，由使用方提供适配器。 |
-| `lookup = "auto"`、`"scan"` 或 `"get"` | 可接受的元数据，默认为 `auto`。当前所有 V3 字段源解码器均通过 `visit_fields_while` 扫描，该选项不会切换查找算法。 |
+| `lookup = "auto"`、`"scan"` 或 `"get"` | 可接受的元数据，默认为 `auto`。当前所有字段源解码器均通过 `visit_fields_while` 扫描，该选项不会切换查找算法。 |
 
 字段属性：
 
@@ -114,7 +114,7 @@ V3 接受具名字段结构体，包括使用花括号的空结构体和泛型�
 | `binary_order = N` | `u16` 类型的编码/schema 顺序，默认为从零开始的源字段索引。本地标量字段和展平字段的最终顺序值必须唯一。不会控制 `HeaderMap` 的迭代顺序。 |
 | `java_type = "..."` | 可接受的兼容元数据，会检查类型一致性。已登记的生产 schema 要求省略该属性。 |
 
-生产字段不填写 `java_type`。V3 会根据 Rust 类型推断普通 wire kind。受 Java 有符号整数范围约束的无符号 Rust 字段使用 `range`。容器声明 `java_class` 后，每个标量 `u32` 字段都必须声明 `range = "i32"`，每个标量 `u64` 字段都必须声明 `range = "i64"`，可选字段也不例外。字段显式声明 `java_type` 时，无符号字段同样需要匹配的范围。有符号 Rust 字段禁止声明 `range`；不含 Java 元数据的 Rust-only 无符号字段可以使用完整的 Rust 数值范围。
+生产字段不填写 `java_type`。当前 derive 会根据 Rust 类型推断普通 wire kind。受 Java 有符号整数范围约束的无符号 Rust 字段使用 `range`。容器声明 `java_class` 后，每个标量 `u32` 字段都必须声明 `range = "i32"`，每个标量 `u64` 字段都必须声明 `range = "i64"`，可选字段也不例外。字段显式声明 `java_type` 时，无符号字段同样需要匹配的范围。有符号 Rust 字段禁止声明 `range`；不含 Java 元数据的 Rust-only 无符号字段可以使用完整的 Rust 数值范围。
 
 ### 缺失值与默认值
 
@@ -122,7 +122,7 @@ V3 接受具名字段结构体，包括使用花括号的空结构体和泛型�
 
 `default_semantic = "literal:32"` 不会使 `default` 返回 32。应通过 `default_with` 指定返回 32 的函数，并保持 schema 描述与实现一致。默认值提供函数负责返回有效值；生成的默认值不会经过 wire 文本解析。
 
-V3 暂时接受旧版 `#[required]`，但会发出弃用诊断。应使用 `#[header(required)]`；同时声明两者会报错。Serde 辅助属性需要由 Serde derive 注册；V3 本身只注册 `header` 和 `required`。
+当前 derive 暂时接受旧版 `#[required]`，但会发出弃用诊断。应使用 `#[header(required)]`；同时声明两者会报错。Serde 辅助属性需要由 Serde derive 注册；当前 derive 本身只注册 `header` 和 `required`。
 
 ### 别名与展平
 
@@ -148,9 +148,9 @@ canonical key 和别名必须非空、不包含 NUL，并满足 ROCKETMQ 的 `u1
 
 ## 迁移 V1/V2 使用方
 
-V2 元数据不会被静默解释成 V3。必须对照固定 Java schema 审核后显式转换：
+V2 元数据不会被静默解释成当前 wire model。必须对照固定 Java schema 审核后显式转换：
 
-| V2 来源 | V3 决策 |
+| V2 来源 | `RequestHeaderCodec` 决策 |
 | --- | --- |
 | `#[required]` | `#[header(required)]` |
 | `serde(rename = "...")` | 确认是 wire key 后改为 `#[header(key = "...")]` |
@@ -162,20 +162,20 @@ V2 元数据不会被静默解释成 V3。必须对照固定 Java schema 审核�
 | `request_header(validate = "method")` | 改为 `#[header(validate = "Self::method")]`，并将返回类型适配为 `ProtocolContractViolation` |
 | 对应 Java `int`/`long` 的无符号字段 | `range = "i32"` / `range = "i64"` |
 
-V2 忽略容器级 `serde(rename_all)`，解码时也不使用标量 `Option<T>` 的默认值提供函数。将属性复制到 V3 前应审核这些差异。与 V2 的 `ToString`/`FromStr` 路径相比，V3 支持的标量类型范围也更窄。
+V2 忽略容器级 `serde(rename_all)`，解码时也不使用标量 `Option<T>` 的默认值提供函数。将属性复制到 `RequestHeaderCodec` 前应审核这些差异。与 V2 的 `ToString`/`FromStr` 路径相比，当前 derive 支持的标量类型范围也更窄。
 
-1.0 不再导出 V1 和 V2 derive 入口。下游使用方必须在升级前将 Header model 迁移到 V3。新增生产 Header 应登记到类型化 registry 和仓库内的类型清单。`request_header_codec_v3_registry` 对照 `migration.json` 和固定的 Java 契约检查该 registry。迁移生成器和 Java 提取工具已退役；当前不存在自动发现并拒绝所有新增源码 Header 的 migration guard。
+历史 V1 实现和 V2 derive 已不再导出。下游 V1/V2 使用方必须在升级前将 Header model 迁移到当前 derive。新增生产 Header 应登记到类型化 registry 和仓库内的类型清单。`request_header_codec_registry` 对照历史清单 `migration.json` 和固定的 Java 契约检查该 registry。迁移生成器和 Java 提取工具已退役；当前不存在自动发现并拒绝所有新增源码 Header 的 migration guard。
 
-V1（`RequestHeaderCodec`）曾包含历史解析和解码特殊行为。例如，格式错误的可选基础类型值可能变为 `None`，格式错误的非必填基础类型值可能回退到 `Default`。V3 则返回转换错误，因此 V1 使用方直接迁移到显式 V3 model 时必须审核这些差异。
+历史 V1（`RequestHeaderCodec`）曾包含解析和解码特殊行为。例如，格式错误的可选基础类型值可能变为 `None`，格式错误的非必填基础类型值可能回退到 `Default`。当前 derive 则返回转换错误，因此 V1 使用方迁移到显式 wire model 时必须审核这些差异。derive 名称相同并不意味着恢复 V1 行为。
 
 ## 重命名 Protocol 依赖
 
-V3 从使用方的 Cargo manifest 解析 `rocketmq-protocol`，包括重命名为 `protocol_api` 的依赖。生成代码或 re-export 场景可显式覆盖路径：
+`RequestHeaderCodec` 从使用方的 Cargo manifest 解析 `rocketmq-protocol`，包括重命名为 `protocol_api` 的依赖。生成代码或 re-export 场景可显式覆盖路径：
 
 ```rust
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 
-#[derive(RequestHeaderCodecV3)]
+#[derive(RequestHeaderCodec)]
 #[header(type_id = "example::Header", crate = "protocol_api")]
 struct Header {
     #[header(required)]
@@ -183,7 +183,7 @@ struct Header {
 }
 ```
 
-独立项目 [`tests/fixtures/renamed-consumer`](tests/fixtures/renamed-consumer/) 检查 V3 自动解析依赖名称的能力。
+独立项目 [`tests/fixtures/renamed-consumer`](tests/fixtures/renamed-consumer/) 检查当前 derive 自动解析依赖名称的能力。
 
 ## 序列化
 
@@ -196,7 +196,7 @@ struct Header {
 | 路径 | 用途 |
 | --- | --- |
 | [`src/lib.rs`](src/lib.rs) | 公开 derive 入口和共享解析辅助函数。 |
-| [`src/request_header_codec_v3/`](src/request_header_codec_v3/) | canonical V3 元数据、语义模型、校验和代码生成。 |
+| [`src/request_header_codec/`](src/request_header_codec/) | canonical 元数据、语义模型、校验和代码生成。 |
 | [`src/remoting_serializable.rs`](src/remoting_serializable.rs) | 历史 crate 本地序列化展开逻辑。 |
 
 Cargo 构建不会访问 Java checkout。Java schema、golden frame、请求头注册数据和基准测试输入保存在协议 crate 的[兼容性夹具目录](../rocketmq-protocol/tests/fixtures/request_header_codec/README.md)中。
@@ -207,9 +207,9 @@ Cargo 构建不会访问 Java checkout。Java schema、golden frame、请求头�
 
 ```powershell
 cargo test -p rocketmq-macros --lib
-cargo test -p rocketmq-protocol --test request_header_codec_v3_typed_map
-cargo test -p rocketmq-protocol --test request_header_codec_v3_registry
-cargo test -p rocketmq-protocol --test request_header_codec_v3_ui
+cargo test -p rocketmq-protocol --test request_header_codec_typed_map
+cargo test -p rocketmq-protocol --test request_header_codec_registry
+cargo test -p rocketmq-protocol --test request_header_codec_ui
 cargo test -p rocketmq-protocol --test request_header_codec_runtime_ui
 cargo test -p rocketmq-protocol --test request_header_java_compatibility
 ```

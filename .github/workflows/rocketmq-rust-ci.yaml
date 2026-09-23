@@ -72,8 +72,8 @@ jobs:
       - name: Use repository Rust 1.95 toolchain
         run: rustup show active-toolchain
 
-      - name: Check complete V3 typed registry
-        run: cargo test --locked -p rocketmq-protocol --test request_header_codec_v3_registry
+      - name: Check complete request-header typed registry
+        run: cargo test --locked -p rocketmq-protocol --test request_header_codec_registry
 
   error-architecture:
     needs: check

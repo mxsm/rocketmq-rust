@@ -28,7 +28,7 @@ pub(crate) fn has_custom_ext_collision(header: &dyn CommandCustomHeader, dynamic
     dynamic.is_some_and(|fields| fields.keys().any(|key| header.contains_wire_key(key.as_str())))
 }
 
-/// Merges typed and dynamic extension fields under the authoritative V3 policy.
+/// Merges typed and dynamic extension fields under the request-header codec policy.
 ///
 /// The typed map is also the result map. Temporary selection metadata is only
 /// allocated after a typed/dynamic semantic overlap is found.
@@ -111,12 +111,12 @@ pub(crate) fn merge_header_and_dynamic(
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
-    use rocketmq_macros::RequestHeaderCodecV3;
+    use rocketmq_macros::RequestHeaderCodec;
 
     use super::*;
     use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-    #[derive(RequestHeaderCodecV3)]
+    #[derive(RequestHeaderCodec)]
     #[header(type_id = "rocketmq_protocol::tests::StrictAliasHeader")]
     struct StrictAliasHeader {
         #[header(key = "canonical", alias = "legacy")]

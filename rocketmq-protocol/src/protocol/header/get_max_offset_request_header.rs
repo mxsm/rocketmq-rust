@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -24,7 +24,7 @@ const fn default_committed() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.GetMaxOffsetRequestHeader"

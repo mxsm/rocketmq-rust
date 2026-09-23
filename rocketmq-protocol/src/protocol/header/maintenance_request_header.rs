@@ -16,7 +16,7 @@ use std::fmt;
 
 use cheetah_string::CheetahString;
 use rocketmq_error::Sensitive;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -25,7 +25,7 @@ use serde::Serialize;
 /// Authentication fields remain owned by the existing signed Remoting command.
 /// These fields bind the authenticated operation to a policy revision, absolute
 /// deadline, idempotency key, and Kubernetes Lease fencing token.
-#[derive(Clone, Deserialize, Eq, PartialEq, RequestHeaderCodecV3, Serialize)]
+#[derive(Clone, Deserialize, Eq, PartialEq, RequestHeaderCodec, Serialize)]
 #[header(type_id = "rocketmq_protocol::protocol::header::maintenance_request_header::MaintenanceRequestHeader")]
 #[serde(rename_all = "camelCase")]
 pub struct MaintenanceRequestHeader {

@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV3, Default)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodec, Default)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::query_topics_by_consumer_request_header::QueryTopicsByConsumerRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.QueryTopicsByConsumerRequestHeader"
@@ -93,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_codec_requires_the_group_and_decodes_the_rpc_envelope() {
+    fn request_header_codec_requires_the_group_and_decodes_the_rpc_envelope() {
         let map = HashMap::from([
             ("group".into(), "group-a".into()),
             ("namespace".into(), "namespace-a".into()),

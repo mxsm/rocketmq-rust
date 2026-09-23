@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV3, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodec, Clone, Default)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.GetProducerConnectionListRequestHeader"

@@ -101,7 +101,7 @@ struct TestCustomHeader {
     value: i32,
 }
 
-#[derive(Debug, Default, rocketmq_macros::RequestHeaderCodecV3)]
+#[derive(Debug, Default, rocketmq_macros::RequestHeaderCodec)]
 #[header(type_id = "rocketmq_protocol::tests::RawStrictAliasHeader")]
 struct RawStrictAliasHeader {
     #[header(key = "canonical", alias = "legacy")]
@@ -770,7 +770,7 @@ fn json_decode_preserves_absent_null_and_empty_extension_fields() {
 }
 
 #[test]
-fn v3_production_json_decode_uses_raw_fields_without_materializing_the_map() {
+fn request_header_production_json_decode_uses_raw_fields_without_materializing_the_map() {
     use crate::protocol::header::notification_request_header::NotificationRequestHeader;
 
     let header = NotificationRequestHeader {
@@ -847,7 +847,7 @@ fn json_envelope_rejects_non_string_extension_field_values() {
 }
 
 #[test]
-fn v3_production_decode_uses_raw_fields_without_materializing_the_map() {
+fn request_header_production_decode_uses_raw_fields_without_materializing_the_map() {
     use crate::protocol::header::notification_request_header::NotificationRequestHeader;
 
     let header = NotificationRequestHeader {

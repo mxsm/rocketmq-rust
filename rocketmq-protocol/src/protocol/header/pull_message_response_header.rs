@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, RequestHeaderCodecV3)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::pull_message_response_header::PullMessageResponseHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.PullMessageResponseHeader",

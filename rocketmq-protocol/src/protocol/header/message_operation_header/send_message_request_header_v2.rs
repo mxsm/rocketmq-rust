@@ -17,7 +17,7 @@ use std::str::FromStr;
 
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -59,7 +59,7 @@ const FIELD_NAMESPACED: &str = "nsd";
 const FIELD_ONEWAY: &str = "oway";
 const FIELD_LO: &str = "lo";
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, RequestHeaderCodecV3)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2",
     java_class = "org.apache.rocketmq.remoting.protocol.header.SendMessageRequestHeaderV2",
@@ -146,7 +146,7 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         // topic/RPC fields remain available through the compatibility map.
         let result = {
             let mut sink = BinarySink::new(out);
-            self.__request_header_codec_v3_encode_local(&mut sink)
+            self.__request_header_codec_encode_local(&mut sink)
         };
         if result.is_err() {
             out.truncate(checkpoint);
@@ -753,7 +753,7 @@ mod tests {
     }
 
     #[test]
-    fn manual_v3_shim_opts_into_direct_field_source_decode() {
+    fn manual_header_shim_opts_into_direct_field_source_decode() {
         let header = minimal_header_v2();
         let fields = header.to_map().unwrap();
 
@@ -768,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn single_scan_field_source_decode_matches_generated_v3_semantics() {
+    fn single_scan_field_source_decode_matches_generated_codec_semantics() {
         let mut fields = required_fast_fields();
         fields.extend([
             (FIELD_I.into(), "properties".into()),
@@ -795,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn single_scan_field_source_decode_preserves_v3_error_classification() {
+    fn single_scan_field_source_decode_preserves_codec_error_classification() {
         for (key, value) in [(FIELD_J, "invalid-i32"), (FIELD_NAMESPACED, "invalid-bool")] {
             let mut fields = required_fast_fields();
             fields.insert(key.into(), value.into());

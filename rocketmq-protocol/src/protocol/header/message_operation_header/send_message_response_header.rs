@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodecV3;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,7 +26,7 @@ use crate::protocol::command_custom_header::HeaderMap;
 )]
 use crate::protocol::FastCodesHeader;
 
-#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV3)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[header(
     type_id = "rocketmq_protocol::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader",
     java_class = "org.apache.rocketmq.remoting.protocol.header.SendMessageResponseHeader",
@@ -157,7 +157,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated, reason = "verifies the source-compatible legacy adapter delegates to V3")]
+    #[allow(
+        deprecated,
+        reason = "verifies the source-compatible legacy adapter delegates to the generated codec"
+    )]
     fn send_message_response_header_encode_decode_fast() {
         let mut header = SendMessageResponseHeader::new(
             CheetahString::from("msg123"),
@@ -201,7 +204,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated, reason = "verifies the source-compatible legacy adapter delegates to V3")]
+    #[allow(
+        deprecated,
+        reason = "verifies the source-compatible legacy adapter delegates to the generated codec"
+    )]
     fn send_message_response_header_fast_encode_writes_signed_numeric_fields() {
         let mut header = SendMessageResponseHeader::new(CheetahString::from("msg123"), -1, -42, None, None, None);
         let mut out = bytes::BytesMut::new();
