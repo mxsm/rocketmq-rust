@@ -2,7 +2,7 @@
 schema_version: "rocketmq-sre.capability-catalog.v1"
 source:
   path: "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui/src/commands/catalog.rs"
-  revision: "sha256:a076560ad40c4958f1ff991e2064099f57ff96336db556fcac6da4dcc3b5cb14"
+  revision: "sha256:6a840e6a46e285168480a18a0d5cad27fc1f860e12e08d9e906b3d84f5c0825a"
   domains: 17
   actions: 100
   component_surfaces: 14

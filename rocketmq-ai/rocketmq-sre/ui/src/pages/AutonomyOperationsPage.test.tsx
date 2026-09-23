@@ -77,7 +77,7 @@ describe("AutonomyOperationsPage", () => {
       screen.getByRole("combobox", { name: "报告周期" }),
     );
     await user.click(
-      screen.getByRole("option", { name: "本月运营" }),
+      await screen.findByRole("option", { name: "本月运营" }),
     );
 
     expect(await screen.findByText("186 / 139")).toBeInTheDocument();
