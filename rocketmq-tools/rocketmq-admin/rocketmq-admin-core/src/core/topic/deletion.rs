@@ -193,6 +193,28 @@ pub(crate) async fn execute_deletion(
 mod tests {
     use super::*;
 
+    fn result(
+        broker_addrs: &[&str],
+        failures: Vec<TopicOperationFailure>,
+        name_server_deleted: bool,
+    ) -> DeleteTopicResult {
+        DeleteTopicResult {
+            topic: "TopicA".into(),
+            cluster_name: "ClusterA".into(),
+            broker_addrs: broker_addrs.iter().copied().map(Into::into).collect(),
+            failures,
+            name_server_deleted,
+        }
+    }
+
+    fn failure(error_code: &str) -> TopicOperationFailure {
+        TopicOperationFailure {
+            broker_addr: "127.0.0.1:10911".into(),
+            error_code: error_code.to_string(),
+            error: "operation failed".to_string(),
+        }
+    }
+
     struct Backend {
         targets: Vec<CheetahString>,
         failure: Option<&'static str>,
@@ -276,5 +298,74 @@ mod tests {
             &rocketmq_error::ROUTE_CLUSTER_NOT_FOUND
         );
         assert_eq!(backend.calls, ["targets"]);
+    }
+
+    #[test]
+    fn request_normalizes_values_and_rejects_invalid_inputs() {
+        let request = DeleteTopicRequest::try_new(" TopicA ", Some(" cluster-a ".into())).unwrap();
+        assert_eq!(request.topic().as_str(), "TopicA");
+        assert_eq!(request.cluster_name().as_str(), "cluster-a");
+
+        for cluster_name in [None, Some(String::new()), Some("   ".to_string())] {
+            let error = DeleteTopicRequest::try_new("TopicA", cluster_name).unwrap_err();
+            assert_eq!(error.descriptor().code().as_str(), "core.argument.invalid");
+        }
+        for topic in ["Topic/A", "Topic:A"] {
+            let error = DeleteTopicRequest::try_new(topic, Some("cluster-a".into())).unwrap_err();
+            assert_eq!(error.descriptor().code().as_str(), "core.argument.invalid");
+        }
+    }
+
+    #[test]
+    fn optional_namesrv_address_is_trimmed_or_removed() {
+        let request = DeleteTopicRequest::try_new("TopicA", Some("cluster-a".into()))
+            .unwrap()
+            .with_optional_namesrv_addr(Some(" 127.0.0.1:9876 ".into()));
+        assert_eq!(request.namesrv_addr(), Some("127.0.0.1:9876"));
+
+        for namesrv_addr in [None, Some("   ".to_string())] {
+            let request = DeleteTopicRequest::try_new("TopicA", Some("cluster-a".into()))
+                .unwrap()
+                .with_optional_namesrv_addr(namesrv_addr);
+            assert_eq!(request.namesrv_addr(), None);
+        }
+    }
+
+    #[test]
+    fn result_classification_preserves_complete_and_partial_states() {
+        let complete = result(&["127.0.0.1:10911"], Vec::new(), true);
+        assert!(complete.is_complete_success());
+        assert!(!complete.is_partial_failure());
+
+        let route_retained = result(&["127.0.0.1:10911"], Vec::new(), false);
+        assert!(!route_retained.is_complete_success());
+        assert!(route_retained.is_partial_failure());
+
+        // Partial failure classification requires at least one successful Broker target.
+        let no_successful_broker = result(&[], vec![failure("BROKER_ERROR")], true);
+        assert!(!no_successful_broker.is_complete_success());
+        assert!(!no_successful_broker.is_partial_failure());
+    }
+
+    #[test]
+    fn ensure_complete_projects_permission_and_broker_failures() {
+        let error = result(&[], vec![failure("BROKER_PERMISSION_DENIED")], false)
+            .ensure_complete()
+            .unwrap_err();
+        assert_eq!(error.descriptor().code().as_str(), "auth.permission.denied");
+
+        let error = result(
+            &[],
+            vec![failure("BROKER_ERROR"), failure("auth.permission.denied")],
+            false,
+        )
+        .ensure_complete()
+        .unwrap_err();
+        assert_eq!(error.descriptor().code().as_str(), "broker.operation.failed");
+
+        let error = result(&["127.0.0.1:10911"], Vec::new(), false)
+            .ensure_complete()
+            .unwrap_err();
+        assert_eq!(error.descriptor().code().as_str(), "broker.operation.failed");
     }
 }
