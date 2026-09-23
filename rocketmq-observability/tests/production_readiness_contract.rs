@@ -369,15 +369,20 @@ fn five_services_publish_readiness_from_complete_evidence() {
     }
 
     let lifecycle = read("rocketmq-runtime/src/service_lifecycle.rs");
-    for marker in [
-        r#""/readyz""#,
-        "probe_response(200",
-        "probe_response(503",
-        "pub fn mark_ready",
-    ] {
+    for marker in ["mod probe;", "pub fn mark_ready"] {
         assert!(
             lifecycle.contains(marker),
             "service lifecycle readiness marker missing: {marker}"
+        );
+    }
+    let probe = read("rocketmq-runtime/src/service_lifecycle/probe.rs");
+    for marker in [
+        r#""/readyz" if self.is_ready() => probe_response(200, "ready", self.state()),"#,
+        r#""/readyz" => probe_response(503, "not_ready", self.state()),"#,
+    ] {
+        assert!(
+            probe.contains(marker),
+            "service readiness probe marker missing: {marker}"
         );
     }
 }
