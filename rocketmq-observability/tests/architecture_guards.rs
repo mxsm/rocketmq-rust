@@ -856,14 +856,35 @@ fn core_services_install_telemetry_before_business_lifecycle() {
             install < lifecycle,
             "{relative_path} must install telemetry before starting the business lifecycle"
         );
-        let diagnostics_start = source
-            .find("start_runtime_diagnostics_endpoint_from_env_with_telemetry")
+        let diagnostics_service = source
+            .find("RuntimeDiagnosticsService::new(")
+            .unwrap_or_else(|| panic!("{relative_path} must create an owned runtime diagnostics service"));
+        assert!(
+            lifecycle < diagnostics_service,
+            "{relative_path} must start the lifecycle before runtime diagnostics"
+        );
+        let diagnostics_start = source[diagnostics_service..]
+            .find(".start(rocketmq_observability::RuntimeDiagnosticsMode::from_env()?)")
+            .map(|offset| diagnostics_service + offset)
             .unwrap_or_else(|| panic!("{relative_path} must start protected runtime diagnostics"));
+        assert!(
+            source[diagnostics_service..diagnostics_start].contains("&service_context"),
+            "{relative_path} must own runtime diagnostics with its service context"
+        );
         let diagnostics_error_path = &source[diagnostics_start..];
+        let rollback_start = diagnostics_error_path
+            .find("if let Err(error) = diagnostics_start {")
+            .unwrap_or_else(|| panic!("{relative_path} must handle diagnostics startup failure"));
+        let diagnostics_error_path = &diagnostics_error_path[rollback_start..];
         let rollback_end = diagnostics_error_path
             .find("return Err")
             .unwrap_or_else(|| panic!("{relative_path} diagnostics startup failure must return an error"));
         let diagnostics_rollback = &diagnostics_error_path[..rollback_end];
+        assert!(
+            diagnostics_rollback.contains("lifecycle.mark_failed()")
+                && diagnostics_rollback.contains("lifecycle.request_shutdown(ShutdownReason::Internal)"),
+            "{relative_path} must shut down its lifecycle after diagnostics startup failure"
+        );
         assert!(
             diagnostics_rollback
                 .contains("shutdown_with_service_context(&service_context, request.deadline.remaining())"),
