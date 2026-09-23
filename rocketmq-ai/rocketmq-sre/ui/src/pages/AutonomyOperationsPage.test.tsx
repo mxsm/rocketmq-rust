@@ -73,9 +73,8 @@ describe("AutonomyOperationsPage", () => {
     renderPage();
 
     await screen.findByText("42 / 31");
-    await user.click(
-      screen.getByRole("combobox", { name: "报告周期" }),
-    );
+    screen.getByRole("combobox", { name: "报告周期" }).focus();
+    await user.keyboard("{ArrowDown}");
     await user.click(
       await screen.findByRole("option", { name: "本月运营" }),
     );
