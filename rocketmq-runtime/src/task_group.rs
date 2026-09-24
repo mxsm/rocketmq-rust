@@ -133,7 +133,7 @@ impl TaskKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-/// Identifies the task state state.
+/// Identifies the task state.
 pub enum TaskState {
     /// Represents the queued case.
     Queued,
