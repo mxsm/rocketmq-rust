@@ -56,7 +56,7 @@ impl StringUtils {
                 }
                 Some(value) => value,
             };
-            let tu = *time_unit_table.get(&ch).ok_or(format!("Unknown time unit: {ch}"))?;
+            let tu: i64 = *time_unit_table.get(&ch).ok_or(format!("Unknown time unit: {ch}"))?;
 
             let level = i as i32 + 1;
             if level > max_delay_level {
@@ -65,7 +65,9 @@ impl StringUtils {
 
             let num_str = &value[0..value.len() - 1];
             let num = num_str.parse::<i64>().map_err(|e| e.to_string())?;
-            let delay_time_millis = tu * num;
+            let delay_time_millis = tu
+                .checked_mul(num)
+                .ok_or_else(|| format!("Delay level milliseconds overflow: {num}{ch}"))?;
             delay_level_table.insert(level, delay_time_millis);
         }
 
@@ -136,5 +138,32 @@ mod tests {
     fn parse_delay_level_with_empty_string() {
         let result = StringUtils::parse_delay_level("");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_delay_level_with_millisecond_overflow() {
+        let result = StringUtils::parse_delay_level("9223372036854775807s");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_delay_level_with_millisecond_overflow_for_each_time_unit() {
+        for level_string in [
+            "9223372036854775807s",
+            "9223372036854775807m",
+            "9223372036854775807h",
+            "9223372036854775807d",
+        ] {
+            let result = StringUtils::parse_delay_level(level_string);
+            assert!(result.is_err(), "expected overflow error for {level_string}");
+        }
+    }
+
+    #[test]
+    fn parse_delay_level_with_max_valid_delay_time() {
+        let result = StringUtils::parse_delay_level("9223372036854775s").unwrap();
+        let (delay_level_table, max_delay_level) = result;
+        assert_eq!(delay_level_table[&1], i64::MAX - (i64::MAX % 1000));
+        assert_eq!(max_delay_level, 1);
     }
 }
