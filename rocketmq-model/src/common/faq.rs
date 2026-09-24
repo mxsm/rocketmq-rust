@@ -39,7 +39,9 @@ impl FAQUrl {
 
     pub fn attach_default_url(error_message: Option<&str>) -> String {
         if let Some(err_msg) = error_message {
-            if !err_msg.contains(Self::TIP_STRING_BEGIN) {
+            let already_has_see_tip = err_msg.contains(Self::TIP_STRING_BEGIN);
+            let already_has_default = err_msg.contains(Self::MORE_INFORMATION);
+            if !already_has_see_tip && !already_has_default {
                 return format!(
                     "{}\n{}{}",
                     err_msg,
@@ -49,5 +51,33 @@ impl FAQUrl {
             }
         }
         error_message.unwrap_or_default().to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attach_default_url_is_idempotent_and_preserves_format() {
+        let ordinary_error = "Test error";
+        let first_message = FAQUrl::attach_default_url(Some(ordinary_error));
+        assert_eq!(
+            first_message,
+            format!(
+                "{}\n{}{}",
+                ordinary_error,
+                FAQUrl::MORE_INFORMATION,
+                FAQUrl::UNEXPECTED_EXCEPTION_URL
+            )
+        );
+        let second_message = FAQUrl::attach_default_url(Some(&first_message));
+        assert_eq!(second_message, first_message);
+        let err_message_with_tip = format!("Error with tip {}", FAQUrl::TIP_STRING_BEGIN);
+        assert_eq!(
+            err_message_with_tip,
+            FAQUrl::attach_default_url(Some(&err_message_with_tip))
+        );
+        assert_eq!("", FAQUrl::attach_default_url(None));
     }
 }
