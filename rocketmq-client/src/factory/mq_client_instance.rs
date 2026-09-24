@@ -770,16 +770,12 @@ impl MQClientInstance {
                 );
                 self.shutdown_nameserver_discovery().await;
                 if let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() {
-                    if !mq_client_api_impl
-                        .shutdown_background_tasks(Duration::from_secs(1))
-                        .await
-                    {
+                    if !mq_client_api_impl.shutdown_graceful(Duration::from_secs(1)).await {
                         warn!(
-                            "MQClientInstance[{}] client API background tasks did not finish in time",
+                            "MQClientInstance[{}] client API did not shut down cleanly",
                             self.client_id
                         );
                     }
-                    mq_client_api_impl.shutdown();
                 }
                 self.shutdown_connection_event_listener(Duration::from_secs(1)).await;
                 self.shutdown_rebalance_delay_tasks(Duration::from_secs(1)).await;
@@ -833,16 +829,12 @@ impl MQClientInstance {
                 "MQClientInstance[{}] shutting down client API background tasks and network client",
                 self.client_id
             );
-            if !mq_client_api_impl
-                .shutdown_background_tasks(Duration::from_secs(1))
-                .await
-            {
+            if !mq_client_api_impl.shutdown_graceful(Duration::from_secs(1)).await {
                 warn!(
-                    "MQClientInstance[{}] client API background tasks did not finish in time",
+                    "MQClientInstance[{}] client API did not shut down cleanly",
                     self.client_id
                 );
             }
-            mq_client_api_impl.shutdown();
         }
 
         self.shutdown_connection_event_listener(Duration::from_secs(1)).await;
@@ -3207,14 +3199,6 @@ mod tests {
             ]
         );
 
-        // `instance.shutdown()` aborts the transport this test started without waiting, and that
-        // immediate snapshot becomes the transport group's cached report. The runtime shutdown
-        // below reads it as a leak whenever the shared test runtime has not yet polled the aborted
-        // scans, so drain the transport gracefully first and leave a confirmed report instead.
-        api.get_remoting_client()
-            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
-            .await
-            .expect("drain route preparation transport");
         instance.shutdown().await;
         client_runtime
             .shutdown()
