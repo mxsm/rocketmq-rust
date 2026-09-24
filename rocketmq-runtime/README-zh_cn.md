@@ -41,7 +41,7 @@ flowchart TD
 ## 核心架构
 
 各状态的所有者、私有实现边界和完成语义见
-[架构与契约说明](ARCHITECTURE.md)。
+[架构与契约说明](ARCHITECTURE-zh_cn.md)。
 
 | 类型 | 职责 |
 | --- | --- |
@@ -405,6 +405,61 @@ cargo test -p rocketmq-runtime --test runtime_model
 全工作区检查、运行时审计、Loom 模型和 Criterion 基准测试用于需要相应证据的变更，
 或对应的 CI、集成任务。基准测试提供特定运行条件下的测量结果，不构成固定性能保证。
 参见[仓库验证指南](../AGENTS.md)。
+
+### 平台与规模实验
+
+这些检查在相关变更需要平台或负载证据时运行，不是日常必经检查。
+在 Windows 和 Linux 上运行 `cargo test -p rocketmq-runtime --no-default-features`，
+覆盖未启用特性的路径。元数据 actor 测试既覆盖真实文件系统上的替换与清理，
+也覆盖注入的故障和关卡；它不能证明断电恢复或独立进程之间的协调行为。
+
+`cargo test -p rocketmq-runtime --test runtime_scale -- --nocapture` 检查
+5,000 次嵌套作用域与动态键生成，以及 1,024 段显式退役的元数据历史。
+后者使用注入的成功文件系统；真实持久化行为由元数据 actor 测试和基准测试覆盖。
+保留的旧回执和逃逸的预算不能重新激活已退役的身份。
+
+Linux cgroup 测试默认被忽略。先在受限单元之外编译，再将可执行文件放到真实限制下运行：
+
+```bash
+cargo test -p rocketmq-runtime --no-default-features --test runtime_scale \
+  --no-run --message-format=json > /tmp/runtime-scale-build.json
+test_bin=$(python3 -c 'import json; rows=[json.loads(x) for x in open("/tmp/runtime-scale-build.json")]; print(next(x["executable"] for x in rows if x.get("executable") and x.get("target", {}).get("name") == "runtime_scale"))')
+sudo systemd-run --wait --pipe --collect \
+  --property=MemoryMax=536870912 --property=MemorySwapMax=0 \
+  --setenv=ROCKETMQ_TEST_CGROUP_BYTES=536870912 \
+  "$test_bin" --ignored --exact \
+  detects_actual_cgroup_limit_and_uses_it_in_owner_planning --nocapture
+```
+
+此测试要求 Linux cgroup v2 和 systemd，验证实际检测到的来源、字节限制，
+以及运行时所有者据此生成的内存预算。文件视图测试仅提供独立的解析器证据。
+被忽略的测试不能算作通过。
+
+### 基准测试的测量边界
+
+运行基准测试前，将 `CARGO_TARGET_DIR` 设置到预期的构建磁盘。
+使用 `cargo bench -p rocketmq-runtime --bench <name>` 运行指定基准测试。
+
+| 基准测试 | 测试规模与计时范围 |
+| --- | --- |
+| `runtime_diagnostics_bench` | 稳定的 1k/10k/100k 任务、八个子组；另有组数量变化和固定 32 组、深度 1/4/16 的场景。设置与关闭不计时；Criterion 包含返回值销毁。 |
+| `budgeted_queue_bench` | 复用队列，测量填充/拒绝/排空、等待/释放或容量已满时的替换。队列和 Tokio 运行时构造不计时；等待场景包含生产者的生成与等待结束。 |
+| `blocking_executor_bench` | 四个通道槽位、1 ms 模拟阻塞工作，测量 8/32 个任务从提交到完成。运行时创建与关闭不计时；超时场景保留真实阻塞闭包，直到释放。 |
+| `metadata_io_bench` | 将首次真实文件系统写入停在关卡，测量排队提交到释放和回执完成。断言合并写入与冷热顺序；首次到达关卡、设置和关闭不计时。 |
+
+Criterion 提供按批次得出的估计值和置信区间，不是单次请求的 P99。
+拒绝场景会有意在每个满额批次额外拒绝一项；等待和周转场景会断言成功准入及资源释放。
+计时范围改变后，不应将旧结果与新结果直接比较并解释为代码提速。
+
+运行诊断基准测试时设置 `ROCKETMQ_MEASURE_SAMPLING=1`，可额外采集独立的
+分配样本和逐次提交观察值。生成的 `sampling-costs.json` 对每个任务规模与详情场景
+保存 101 个样本，并在 10 ms 采样延迟下保存三组、每组 5,000 次提交与完成观察值。
+分配计数仅覆盖采样线程上的成功分配或重分配请求，不代表进程的实时或峰值内存。
+这些独立计时排除设置、清理和返回值销毁。
+
+产物写入 `CARGO_TARGET_DIR/runtime-measurements`；Criterion 另行保留原始样本。
+记录结果时应附上操作系统、CPU、工具链、后台负载、实际采样数、预热与重复次数，
+以及分位数算法。这里的计时值都不是发布 SLO，无需源码指纹或文件哈希。
 
 ## Crate 结构
 

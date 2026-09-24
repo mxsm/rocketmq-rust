@@ -1,155 +1,70 @@
-# Runtime ownership and implementation boundaries
+# Runtime architecture and invariants
 
-Application entrypoints own `RuntimeOwner`; components receive
-`ChildServiceContext` or narrower capabilities. A task scope owns lifecycle,
-while a resource budget owns explicit accounting. Neither substitutes for the
-other. Managed retained bytes describe reservations, not allocator usage, RSS,
-or an operating-system memory limit.
+[中文文档](ARCHITECTURE-zh_cn.md)
+
+This guide describes internal state ownership and ordering constraints. See the [README](README.md) for integration, API selection, and validation commands.
+
+Application entrypoints own `RuntimeOwner`; components receive `ChildServiceContext` or narrower capabilities. A task scope owns lifecycle, while a resource budget owns explicit accounting. Neither substitutes for the other. Managed retained bytes describe reservations, not allocator usage, RSS, or an operating-system memory limit.
 
 ## State responsibility
 
 | Responsibility | Implementation | Invariant |
 | --- | --- | --- |
+| Runtime composition | [owner](src/owner.rs), [service context](src/service_context.rs) | Child contexts share the owner's runtime and process resources. |
 | Task admission and submission | [submission](src/task_group/submission.rs) | Registration and handle installation use the owner admission gate. |
 | Final task settlement | [completion](src/task_group/completion.rs) | Future destruction precedes failure accounting and completion publication. |
 | Active task and child registration | [registry](src/task_group/registry.rs) | Child links are weak; live descendants retain their ancestors. |
 | Deadline and retained shutdown result | [coordinator](src/task_group/shutdown.rs), [group façade](src/task_group.rs) | Later calls never extend an accepted deadline or replace a published report. |
+| Blocking admission and execution | [admission](src/blocking/admission.rs), [executor](src/blocking/executor.rs) | Managed lanes share one global capacity limit; a running closure retains its permit until it exits. |
+| Resource reservations and dynamic generations | [budget](src/resource_budget/budget.rs), [dynamic keys](src/resource_budget/dynamic.rs), [queue](src/resource_budget/queue.rs) | Reservations account along the ancestor chain; closed generations reject new admission and incoming permit rebinds. |
+| Scheduled drivers and runs | [scheduled tasks](src/scheduled.rs) | Both belong to the scheduler's task group; the entrypoint determines cancellation ownership. |
 | Aggregate and bounded task scans | [task diagnostics](src/task_group/diagnostics.rs) | Local counts exclude children; bounded details disclose truncation. |
 | Diagnostic schemas and collection | [diagnostics](src/diagnostics.rs) | V1/V2 public types and wire names remain stable. |
 | Sanitized conversion | [conversion](src/diagnostics/conversion.rs) | Labels derive from typed identity, never vector position; conversion performs no business I/O. |
 | Process lifecycle transitions | [service lifecycle](src/service_lifecycle.rs) | Readiness, terminal states and the first shutdown request are state decisions. |
 | Health-probe transport and routing | [probe](src/service_lifecycle/probe.rs) | Routes call lifecycle APIs instead of modifying state atomics. |
 | Metadata admission and publication | [metadata actor](src/metadata_io.rs) | Actor state owns waiters, retained bytes and generation ordering under one coordination protocol. |
+| Metadata target identity and retirement | [target registry](src/metadata_target.rs) | Actors under one owner share target histories; a slot is reusable only after retirement checks pass. |
 | Atomic replacement and durability | [filesystem](src/metadata_io/filesystem.rs) | Platform operations do not modify actor state or diagnostic schemas. |
 
-These submodules are private. A split does not create another state owner or
-require a public helper API. Public paths retain their original façade modules.
+Keep state with its existing owner and expose capabilities through the established public façade modules. Splitting implementation files must not introduce a second state owner. A new task classification must update the exhaustive `TaskKind` mapping and wire conversion; task-kind arrays and traversal share the same private enumeration.
 
-## Completion and observation
+## Completion and shutdown ordering
 
-`TaskGroup::wait_task` succeeds when a task is already absent;
-`abort_task_and_wait` returns false for an absent task. Both refer to local
-registration and destruction, not business success. A normal `Future<Output =
-()>` return does not establish that its business operation succeeded.
+Task completion records the destruction of a registered future, not business success. Destruction precedes failure accounting and completion publication, including an abort before the first poll or a panic during destruction. `TaskGroup::wait_task` treats an absent local task as finished; `abort_task_and_wait` returns false for an absent task.
 
-`cancel` only signals. `shutdown_until` seals admission and awaits owned work.
-`shutdown_now` cannot confirm destruction and retains its immediate report.
-Dropping a group handle is neither cancellation nor graceful shutdown. A
-service with final I/O must observe cancellation and perform its cleanup;
-dropping the service future cannot perform that cleanup.
+`OperationOutcome` records each accepted operation task separately from `ShutdownReport.completed`: normal return, operation cancellation, deadline, owner cancellation, panic, or abort before another outcome was selected. Its finalizer publishes only after the user future is destroyed. Rejected submissions do not increment the six outcome counters, and no per-task outcome history is retained. Draining operations ignore owner cancellation until the accepted work completes, is operation-cancelled, expires, or is explicitly aborted.
 
-A blocking timeout stops the observer's wait. The real closure can still run,
-so capacity and result obligations remain owned until it exits. Metadata
-acceptance is not durability, and observer timeout is not rollback. Unknown
-outcomes retain reconciliation obligations. Target registration is
-process-local, not a cross-process lock or crash-recovery proof.
+The shutdown coordinator seals admission and retains the published result. An immediate shutdown report cannot confirm future destruction or final I/O; services with final I/O must perform it through cooperative cleanup. See the [shutdown API contracts](README.md#service-lifecycle-and-shutdown) for the guarantees of each entrypoint.
 
-`BudgetedQueue::try_pop` releases accounting before returning the payload.
-`try_pop_budgeted` transfers the charge to the consumer. Closed dynamic
-generations reject new admission, including rebinds, but outstanding permits
-can release or migrate out.
+A blocking observer's timeout does not release the real closure's capacity or settle its result. Metadata acceptance does not establish durability, and an observer timeout does not establish rollback. Unknown write outcomes retain reconciliation obligations.
+
+Closed dynamic generations reject admission and incoming permit rebinds, while outstanding permits can still release or move out. Queue accounting follows the [dequeue API's transfer policy](README.md#resource-budgets-and-queues).
 
 ## Observation boundaries
 
-`ServiceLifecycleObserver` attaches once while the process is Starting. State
-changes and observer installation share a short synchronization boundary;
-callbacks run after all lifecycle locks have been released. Only committed
-changes emit events. Concurrent transitions can deliver callbacks out of order,
-so each event identifies its actual previous and next state. Callbacks must be
-nonblocking and panic-free. Exporter shutdown belongs to the composition root.
+`ServiceLifecycleObserver` attaches once while the process is Starting. State changes and observer installation share a short synchronization boundary; callbacks run after all lifecycle locks have been released. Only committed changes emit events. Concurrent transitions can deliver callbacks out of order, so each event identifies its actual previous and next state. Callbacks must be short, nonblocking and panic-free; they must not perform I/O or flush exporters. Exporter shutdown belongs to the composition root.
 
-`OperationOutcome` is separate from `ShutdownReport.completed`. It describes
-each accepted operation task: normal return, operation cancellation, deadline,
-owner cancellation, panic, or abort before another outcome was selected. A
-finalizer publishes the result only after the user future is destroyed, including
-an unpolled abort or a destructor panic. Rejected submissions do not increment
-outcomes. The operation retains six counters rather than per-task history.
-Draining operations continue to ignore owner cancellation until their accepted
-work completes, is operation-cancelled, expires, or is explicitly aborted.
-
-`MetadataIoObserver` and selected-name `ScheduledTaskObserver` use weak
-references, so diagnostic consumers do not become write or execution owners.
-The metadata registry capacity bounds its resource scan; schedule lookup cost
-is proportional to the fixed selection supplied by the component.
-
-## Maintenance example
-
-Partial or reordered blocking-lane inputs exposed a label bug: conversion used
-array position. The fix belongs in
-`diagnostics/conversion.rs::sanitize_blocking_lane`; the behavioral regression
-belongs beside V1/V2 consumer tests in `diagnostics.rs`. Task submission,
-lifecycle state and metadata persistence need no change. Tests cover a single
-lane, reordered lanes, missing lanes and distinct counts.
-
-A probe route belongs in `probe.rs`, a platform replacement operation belongs
-in `filesystem.rs`, and a new task classification updates the exhaustive
-`TaskKind` mapping and wire conversion. Task-kind arrays and traversal share
-the same private enumeration.
+`MetadataIoObserver` and selected-name `ScheduledTaskObserver` use weak references, so diagnostic consumers do not become write or execution owners. The metadata registry capacity bounds its resource scan; schedule lookup cost is proportional to the fixed selection supplied by the component.
 
 ## Scheduling boundaries
 
-The [entrypoint matrix](README.md#scheduled-tasks) distinguishes serial
-maintenance, bounded overlap, mutable callbacks, operation ownership,
-calendar/trigger jobs and dedicated threads. Ordinary and operation-bound
-fixed-delay adapters share execution and final settlement; their outer
-cancellation owners remain distinct. Legacy rate and Cron protocols retain
-their timing semantics. Unread compatibility fields remain documented as such.
+Ordinary and operation-bound fixed-delay adapters share execution and final settlement; their outer cancellation owners remain distinct. Legacy rate and Cron protocols retain their timing semantics. See the [entrypoint matrix](README.md#scheduled-tasks) for scheduling policies and compatibility fields.
 
-The Broker transaction adapter uses an injected parent group for checks and
-operation batching. Cancellation stops new operation admission even if the
-batch task is aborted before polling. A cooperative exit closes existing
-queues, waits for each active batch, and writes remaining partial batches while
-the Store is still available. A failed append retains its body and reservations;
-the Broker report remains unhealthy and retains the service for inspection or
-retry. The shared Broker deadline bounds this drain; aborting at that deadline
-cannot establish durability. Queue retirement is permanent for that service
-instance. Compatibility constructors remain available, while production
-composition supplies the owner.
-
-Transaction-metrics persistence uses the bounded serial scheduler with explicit
-`MissedTickPolicy::Skip`: a delayed flush never replays missed ticks or overlaps
-another flush. Shutdown still performs a final dirty-metrics persist. This
-consumer decision does not change legacy scheduler defaults.
+Consumer-specific drain ordering and persistence policies are documented with the consumer; see [Broker transaction maintenance](../rocketmq-broker/README.md#transaction-maintenance).
 
 ## Sampling cost and consistency
 
-Service-context V1/V2 sampling reads blocking aggregates directly from the
-registry. It does not allocate individual blocking task names or detail
-objects. The explicit `BlockingExecutor::snapshot` API retains its full-detail
-contract. Task subtree and local counts now come from the same traversal.
+Service-context V1/V2 sampling reads blocking aggregates directly from the registry. It does not allocate individual blocking task names or detail objects. The explicit `BlockingExecutor::snapshot` API retains its full-detail contract. Task subtree and local counts come from the same traversal.
 
-Age maxima, long-running thresholds and group counts still require an exact
-scan of each observed entry. No new counter is maintained on submission or
-completion, so this optimization adds no accounting responsibility to those
-paths. A scan is consistent per visited registry entry, not a globally atomic
-instant across groups or blocking lanes. Concurrent changes may therefore be
-observed at different times. Local counts are included in the subtree total
-from that same traversal.
+Age maxima, long-running thresholds and group counts require scanning the observed entries; aggregate sampling does not maintain extra counters on task submission or completion. A scan is consistent per visited registry entry, not globally atomic across groups or blocking lanes. Concurrent changes may therefore be observed at different times. Local counts are included in the subtree total from that same traversal.
 
-The diagnostics benchmark creates one stable task population outside each
-timed sampling loop, and shuts it down after measurement. Task population and
-group count vary independently. Detail scan/output budgets still describe the
-detail section alone; they do not limit the aggregate age scan. Sampling
-measurements exclude runtime construction, population and shutdown costs.
+Detail scan/output budgets bound only the detail section; they do not limit the aggregate age scan. See [benchmark measurement boundaries](README.md#benchmark-measurement-boundaries) for sampling setup, timing scope, and allocation measurements.
 
 ## Metadata target retirement
 
-An owner plan accepts a nonzero metadata target capacity (default 4,096).
-Idle history and fenced history consume slots. Each actor independently bounds
-its retained resource cache by the same capacity: another actor retiring shared
-history must not grow an older actor's tombstones without limit.
+Target registration is process-local, not a cross-process lock or a guarantee of crash recovery. An [owner plan](src/owner.rs) accepts a nonzero metadata target capacity (default 4,096). Idle history and fenced history consume slots. Each actor independently bounds its retained resource cache by the same capacity: another actor retiring shared history must not grow an older actor's tombstones without limit.
 
-Normal actor replacement inherits target identity, resource ownership and
-confirmed generation. Explicit retirement has a different contract: after
-admission closes and the coordinator finishes, the registry atomically checks
-identity, durable generation, absence of live write authority and absence of a
-reconciliation fence. Only then may a new identity reuse the path and slot.
-Old open actors cannot rebind that retired identity; replace them to release
-their tombstones. Settled receipts retain their original result without owning
-a writer. Compare receipt and actor target identities before using a newer
-generation as evidence about an old write.
+Normal actor replacement inherits target identity, resource ownership and confirmed generation. Explicit retirement has a different contract: after admission closes and the coordinator finishes, the registry atomically checks identity, durable generation, absence of live write authority and absence of a reconciliation fence. Only then may a new identity reuse the path and slot. Old open actors cannot rebind that retired identity; replace them to release their tombstones. Settled receipts retain their original result without owning a writer. Compare receipt and actor target identities before using a newer generation as evidence about an old write.
 
-Registry statistics expose capacity, retained histories, live owners, idle
-histories, fenced targets and remaining capacity without paths. Fenced and
-live counts can overlap. Unknown commits stay fenced: runtime has no generic
-format-independent recovery or unconditional fence-clearing operation.
+Registry statistics expose capacity, retained histories, live owners, idle histories, fenced targets and remaining capacity without paths. Fenced and live counts can overlap. Unknown commits stay fenced: runtime has no generic format-independent recovery or unconditional fence-clearing operation.

@@ -267,6 +267,27 @@ Signal handling and lifecycle shutdown share a deadline configured by `ROCKETMQ_
 (default `45`, accepted range `1..=300`). Startup rollback and shutdown reports account for owned services;
 an unhealthy shutdown result propagates to a nonzero binary exit status.
 
+### Transaction Maintenance
+
+Transaction checks and operation batching use an injected parent task group.
+Cancellation stops new operation admission even if the batch task is aborted
+before its first poll. Cooperative shutdown closes the existing queues, waits
+for active batches, and writes remaining partial batches while the Store is
+still available. Queue retirement is permanent for that service instance.
+Compatibility constructors remain available; production composition supplies
+the owner. See the [transaction service](src/transaction/queue/default_transactional_message_service.rs).
+
+A failed append retains its body and resource reservations. The Broker shutdown
+report remains unhealthy, and the service is retained for inspection or retry.
+The shared Broker deadline bounds the drain; aborting at that deadline cannot
+establish durability. The [lifecycle coordinator](src/broker_runtime/lifecycle.rs)
+enforces this order before releasing the Store.
+
+Transaction-metrics persistence uses the bounded serial scheduler with explicit
+`MissedTickPolicy::Skip`: a delayed flush neither replays missed ticks nor
+overlaps another flush. Shutdown also performs a final dirty-metrics persist.
+This consumer policy does not change the runtime's legacy scheduler defaults.
+
 ## Feature Flags
 
 | Feature | Build-time capability |
