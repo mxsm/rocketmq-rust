@@ -127,6 +127,8 @@ use rocketmq_proxy_core::UpdateOffsetRequest;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ShutdownDeadline;
+use rocketmq_runtime::TaskGroup;
+use rocketmq_runtime::TaskId;
 use rocketmq_runtime::{
     BudgetCapacity, BudgetClass, BudgetLimit, FullPolicy, ResourceBudget, ResourceBudgetTree, ResourcePermit,
 };
@@ -162,6 +164,12 @@ pub struct LocalBrokerFacadeClient {
     broker_name: String,
     context_deadline: Option<Instant>,
     cancellation: CancellationToken,
+    worker_shutdown: Option<Arc<LocalBrokerWorkerShutdown>>,
+}
+
+struct LocalBrokerWorkerShutdown {
+    task_group: TaskGroup,
+    task_id: TaskId,
 }
 
 pub(crate) struct QueuedLocalBrokerCommand {
@@ -453,6 +461,24 @@ fn local_command_budget(config: &LocalConfig) -> ProxyResult<ResourceBudget> {
 }
 
 impl LocalBrokerFacadeClient {
+    /// Stops the embedded Broker while its Store and metadata I/O scopes are
+    /// still open, then waits for the worker to release them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable error if the worker does not finish by `deadline`.
+    pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> ProxyResult<()> {
+        self.cancellation.cancel();
+        if let Some(worker) = &self.worker_shutdown {
+            if !worker.task_group.wait_task(worker.task_id, deadline.remaining()).await {
+                return Err(ProxyError::Transport {
+                    message: "embedded Broker shutdown exceeded the shared deadline".to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub async fn readiness_check(&self) -> ProxyResult<()> {
         self.execute(|reply| LocalBrokerCommand::ReadinessCheck { reply }).await
     }
@@ -498,9 +524,12 @@ impl LocalBrokerFacadeClient {
                 ))
             })?;
         let shutdown_context = service_context.clone();
-        let cancellation = worker_context.task_group().cancellation_token();
+        // This child token lets the Proxy stop the worker before closing the
+        // parent task group and its Store and metadata I/O descendants.
+        let cancellation = worker_context.task_group().cancellation_token().child_token();
+        let shutdown_cancellation = cancellation.clone();
         let lane_context = worker_context.component("command-lanes");
-        worker_context
+        let task_id = worker_context
             .spawn_service("proxy.local.worker", async move {
                 run_local_broker_worker(
                     config,
@@ -520,7 +549,11 @@ impl LocalBrokerFacadeClient {
             rejected,
             broker_name,
             context_deadline: None,
-            cancellation: service_context.task_group().cancellation_token(),
+            cancellation: shutdown_cancellation,
+            worker_shutdown: Some(Arc::new(LocalBrokerWorkerShutdown {
+                task_group: worker_context.task_group().clone(),
+                task_id,
+            })),
         })
     }
 
@@ -743,6 +776,10 @@ impl ProxyRemotingBackend for LocalRemotingBackend {
 
     fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, EmbeddedDispatchOutcome> {
         Box::pin(async move { self.client.process_remoting(request).await })
+    }
+
+    fn shutdown_until(&self, deadline: ShutdownDeadline) -> ProxyServiceFuture<'_, ()> {
+        Box::pin(self.client.shutdown_until(deadline))
     }
 }
 
@@ -3302,6 +3339,10 @@ mod tests {
             }
         ));
 
+        client
+            .shutdown_until(ShutdownDeadline::after(Duration::from_secs(5)))
+            .await
+            .expect("embedded Broker should stop before its owner scope closes");
         let report = service.task_group().shutdown(Duration::from_secs(5)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
     }
@@ -3316,6 +3357,7 @@ mod tests {
             broker_name: "broker-a".to_owned(),
             context_deadline: None,
             cancellation: tokio_util::sync::CancellationToken::new(),
+            worker_shutdown: None,
         };
         let _first_reply = client
             .enqueue(|reply| super::LocalBrokerCommand::QueryRoute {
@@ -3348,6 +3390,7 @@ mod tests {
             broker_name: "broker-a".to_owned(),
             context_deadline: None,
             cancellation: tokio_util::sync::CancellationToken::new(),
+            worker_shutdown: None,
         };
         let backend = LocalRemotingBackend::new(client);
         let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig).set_opaque(9_852);
@@ -3398,6 +3441,7 @@ mod tests {
             broker_name: "broker-a".to_owned(),
             context_deadline: None,
             cancellation: tokio_util::sync::CancellationToken::new(),
+            worker_shutdown: None,
         };
         let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig).set_opaque(9_857);
 
@@ -3513,9 +3557,12 @@ mod tests {
             .expect("embedded startup must remain bounded")
             .expect("started embedded Broker must have a writable Store");
         let deadline = ShutdownDeadline::after(Duration::from_secs(5));
+        client
+            .shutdown_until(deadline)
+            .await
+            .expect("embedded Broker should stop before its owner scope closes");
         let report = service.task_group().shutdown_until(deadline).await;
         assert!(report.is_healthy(), "{}", report.to_json());
-        assert!(report.to_json().contains("command-lanes"), "{}", report.to_json());
         assert_eq!(service.task_group().task_count(), 0);
         assert!(client.readiness_check().await.is_err());
     }
@@ -3530,6 +3577,7 @@ mod tests {
             broker_name: "broker-a".to_owned(),
             context_deadline: None,
             cancellation: tokio_util::sync::CancellationToken::new(),
+            worker_shutdown: None,
         };
         let mut call = Box::pin(client.query_route(ResourceIdentity::new("", "topic")));
         tokio::select! { result = &mut call => panic!("must wait for worker: {result:?}"), () = tokio::task::yield_now() => {} }
@@ -3555,6 +3603,7 @@ mod tests {
             broker_name: "broker-a".to_owned(),
             context_deadline: Some(Instant::now()),
             cancellation: tokio_util::sync::CancellationToken::new(),
+            worker_shutdown: None,
         };
         let error = client
             .send_message(
@@ -3639,6 +3688,7 @@ mod tests {
                 broker_name: "test".into(),
                 context_deadline: None,
                 cancellation: CancellationToken::new(),
+                worker_shutdown: None,
             };
             let data_bytes = config.command_queue_max_bytes - local_control_reserve_bytes(&config).unwrap();
             let count = if bytes_full {

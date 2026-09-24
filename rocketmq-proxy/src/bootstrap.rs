@@ -540,6 +540,7 @@ where
             backend_context,
             service_context,
         } = self;
+        let remoting_backend_for_shutdown = remoting_backend.clone();
         let auth_context = service_context.component("auth");
         let mut auth_runtime_for_shutdown = auth_runtime.clone();
         let lifecycle_for_shutdown = lifecycle.clone();
@@ -642,6 +643,7 @@ where
         finalize_proxy_run(
             listener_result,
             Some(&mut dependency_health),
+            remoting_backend_for_shutdown.as_ref(),
             backend_context.as_ref(),
             auth_runtime_for_shutdown.as_ref(),
             &auth_context,
@@ -667,6 +669,9 @@ fn resolve_shutdown_deadline(
 async fn finalize_proxy_run(
     primary_result: ProxyResult<()>,
     dependency_health: Option<&mut DependencyHealthMonitor>,
+    remoting_backend: Option<
+        &Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+    >,
     backend_context: Option<&ChildServiceContext>,
     auth_runtime: Option<&ProxyAuthRuntime>,
     auth_context: &ChildServiceContext,
@@ -675,6 +680,7 @@ async fn finalize_proxy_run(
 ) -> ProxyResult<()> {
     let cleanup_result = shutdown_proxy_components(
         dependency_health,
+        remoting_backend,
         backend_context,
         auth_runtime,
         auth_context,
@@ -703,6 +709,9 @@ async fn finalize_proxy_run(
 
 async fn shutdown_proxy_components(
     dependency_health: Option<&mut DependencyHealthMonitor>,
+    remoting_backend: Option<
+        &Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>>,
+    >,
     backend_context: Option<&ChildServiceContext>,
     auth_runtime: Option<&ProxyAuthRuntime>,
     auth_context: &ChildServiceContext,
@@ -716,6 +725,12 @@ async fn shutdown_proxy_components(
             if let Err(error) = require_healthy_component_shutdown("Proxy dependency health", report) {
                 failures.push(error);
             }
+        }
+    }
+
+    if let Some(remoting_backend) = remoting_backend {
+        if let Err(error) = remoting_backend.shutdown_until(deadline).await {
+            failures.push(error);
         }
     }
 
@@ -810,6 +825,8 @@ fn default_service_manager_and_backend(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -824,7 +841,35 @@ mod tests {
     use super::ProxyRuntimeBuilder;
     use crate::config::ProxyConfig;
     use crate::config::ProxyMode;
+    use crate::remoting::ProxyRemotingBackend;
     use crate::service::DefaultMetadataService;
+
+    struct ShutdownOrderBackend {
+        context: rocketmq_runtime::ChildServiceContext,
+        called: Arc<AtomicBool>,
+    }
+
+    impl ProxyRemotingBackend for ShutdownOrderBackend {
+        type Response = rocketmq_transport::api::EmbeddedDispatchOutcome;
+
+        fn process(
+            &self,
+            _request: rocketmq_protocol::protocol::remoting_command::RemotingCommand,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'_, Self::Response> {
+            Box::pin(async { Err(crate::error::ProxyError::not_implemented("test backend request")) })
+        }
+
+        fn shutdown_until(
+            &self,
+            _deadline: rocketmq_runtime::ShutdownDeadline,
+        ) -> rocketmq_proxy_core::ProxyServiceFuture<'_, ()> {
+            Box::pin(async move {
+                assert!(!self.context.task_group().cancellation_token().is_cancelled());
+                self.called.store(true, Ordering::Release);
+                Ok(())
+            })
+        }
+    }
 
     fn lifecycle() -> ServiceLifecycle {
         ServiceLifecycle::new(ServiceLifecycleConfig {
@@ -905,12 +950,19 @@ mod tests {
             .start(Arc::new(DefaultMetadataService), &service_context, None)
             .await
             .unwrap();
+        let backend_shutdown_called = Arc::new(AtomicBool::new(false));
+        let backend: Arc<dyn ProxyRemotingBackend<Response = rocketmq_transport::api::EmbeddedDispatchOutcome>> =
+            Arc::new(ShutdownOrderBackend {
+                context: backend_context.clone(),
+                called: Arc::clone(&backend_shutdown_called),
+            });
 
         let result = finalize_proxy_run(
             Err(crate::error::ProxyError::not_implemented(
                 "test startup failure after backend creation",
             )),
             Some(&mut health),
+            Some(&backend),
             Some(&backend_context),
             None,
             &auth_context,
@@ -921,6 +973,7 @@ mod tests {
 
         assert_eq!(health_handle.snapshot().state, crate::DependencyHealthState::Stopped);
         assert_eq!(health_handle.snapshot().mode, ProxyMode::Local);
+        assert!(backend_shutdown_called.load(Ordering::Acquire));
 
         assert!(
             matches!(
