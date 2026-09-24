@@ -79,6 +79,7 @@ pub mod shutdown_deadline;
 pub mod shutdown_report;
 /// Signal types and operations.
 pub mod signal;
+mod stack;
 /// Task types and operations.
 pub mod task;
 /// Task group types and operations.

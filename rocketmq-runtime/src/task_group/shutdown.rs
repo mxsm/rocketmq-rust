@@ -29,6 +29,7 @@ pub(super) struct ShutdownCoordinator {
     deadline: Mutex<Option<ShutdownDeadline>>,
     changed: Notify,
     pub(super) report: OnceCell<ShutdownReport>,
+    pub(super) report_ready: Notify,
 }
 
 impl ShutdownCoordinator {
@@ -37,11 +38,22 @@ impl ShutdownCoordinator {
             deadline: Mutex::new(None),
             changed: Notify::new(),
             report: OnceCell::new(),
+            report_ready: Notify::new(),
         }
     }
 
     pub(super) fn deadline(&self) -> Option<ShutdownDeadline> {
         *self.deadline.lock()
+    }
+
+    pub(super) async fn wait_report(&self) -> &ShutdownReport {
+        loop {
+            let ready = self.report_ready.notified();
+            if let Some(report) = self.report.get() {
+                return report;
+            }
+            ready.await;
+        }
     }
 
     pub(super) fn tighten(&self, deadline: ShutdownDeadline) -> ShutdownDeadline {

@@ -23,7 +23,7 @@ use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
 use crate::task_group::TaskState;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize)]
 /// Represents shutdown report.
 pub struct ShutdownReport {
     /// The name value.
@@ -59,7 +59,39 @@ pub struct ShutdownReport {
     pub annotations: Vec<ShutdownAnnotation>,
 }
 
+impl Clone for ShutdownReport {
+    fn clone(&self) -> Self {
+        let mut copy = self.clone_local();
+        let mut pending = vec![(self, &mut copy)];
+        while let Some((source, target)) = pending.pop() {
+            target.children = source.children.iter().map(Self::clone_local).collect();
+            pending.extend(source.children.iter().zip(target.children.iter_mut()));
+        }
+        copy
+    }
+}
+
 impl ShutdownReport {
+    fn clone_local(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            elapsed: self.elapsed,
+            completed: self.completed,
+            cancelled: self.cancelled,
+            aborted: self.aborted,
+            failed: self.failed,
+            panicked: self.panicked,
+            timed_out: self.timed_out,
+            leaked: self.leaked,
+            blocking_still_running: self.blocking_still_running,
+            detached_still_running: self.detached_still_running,
+            children: Vec::new(),
+            remaining_tasks: self.remaining_tasks.clone(),
+            blocking_tasks: self.blocking_tasks.clone(),
+            annotations: self.annotations.clone(),
+        }
+    }
+
     /// Creates a new `ShutdownReport`.
     pub fn new(name: impl Into<String>, elapsed: Duration) -> Self {
         Self {
@@ -83,13 +115,20 @@ impl ShutdownReport {
 
     /// Returns whether healthy.
     pub fn is_healthy(&self) -> bool {
-        self.leaked == 0
-            && self.failed == 0
-            && self.panicked == 0
-            && self.timed_out == 0
-            && self.blocking_still_running == 0
-            && self.detached_still_running == 0
-            && self.children.iter().all(Self::is_healthy)
+        let mut pending = vec![self];
+        while let Some(report) = pending.pop() {
+            if report.leaked != 0
+                || report.failed != 0
+                || report.panicked != 0
+                || report.timed_out != 0
+                || report.blocking_still_running != 0
+                || report.detached_still_running != 0
+            {
+                return false;
+            }
+            pending.extend(&report.children);
+        }
+        true
     }
 
     /// Returns the assert no task leak.
