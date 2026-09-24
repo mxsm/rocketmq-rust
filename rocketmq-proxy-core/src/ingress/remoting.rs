@@ -23,6 +23,7 @@ use rocketmq_model::result::SendStatus;
 use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::code::response_code::ResponseCode;
 use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
+use rocketmq_runtime::ShutdownDeadline;
 
 use crate::proto::v2;
 use crate::status::ProxyPayloadStatus;
@@ -42,6 +43,11 @@ pub trait ProxyRemotingBackend: Send + Sync {
     /// remote providers wrap their response command in a `RemotingResponse`
     /// without introducing a reverse response-to-command adapter.
     fn process(&self, request: RemotingCommand) -> ProxyServiceFuture<'_, Self::Response>;
+
+    /// Drains backend-owned work before its service task group is closed.
+    fn shutdown_until(&self, _deadline: ShutdownDeadline) -> ProxyServiceFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Stable operations recognized by the Remoting ingress.
