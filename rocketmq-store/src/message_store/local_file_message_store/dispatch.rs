@@ -852,10 +852,9 @@ impl ReputMessageService {
         if let Some(inner) = self.inner.as_mut() {
             inner.do_reput().await;
         }
-        let deadline = ShutdownDeadline::after(Duration::from_secs(5));
-        if !self.wait_until_release_checkpoint_drained(deadline).await {
-            warn!("manual reput did not drain every derived-state dispatch within five seconds");
-        }
+        // Without a background task group, do_reput awaits every derived-state
+        // dispatch before returning. A trailing incomplete record cannot be
+        // dispatched yet and must not keep a manual reput call waiting.
     }
 
     pub async fn shutdown(&mut self) {
