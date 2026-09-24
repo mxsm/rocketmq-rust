@@ -13,7 +13,6 @@ persistence, and shutdown diagnostics.
 
 [Unreleased API migration and contract corrections](MIGRATION.md)
 
-[Stack safety design, regression coverage, and limits (中文)](STACK_SAFETY.md)
 
 ## Runtime Model
 
