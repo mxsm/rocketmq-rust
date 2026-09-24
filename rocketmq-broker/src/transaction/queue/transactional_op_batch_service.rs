@@ -148,22 +148,74 @@ where
                 _ = context.wait_for_running(Duration::from_millis(interval as u64)) => {}
             }
             if !context.is_stopped() && !self.cancellation.is_cancelled() {
-                self.on_wait_end().await;
+                let Some(service) = self.transactional_message_service.upgrade() else {
+                    // A dropped owner cannot return. Retrying with the expired
+                    // wakeup timestamp would self-notify forever without yielding.
+                    break;
+                };
+                let time = service.batch_send_op_message().await;
+                self.wakeup_timestamp.store(time, std::sync::atomic::Ordering::Relaxed);
             }
         }
         if let Some(service) = self.transactional_message_service.upgrade() {
             service.drain_operation_queues().await;
         }
     }
+}
 
-    async fn on_wait_end(&self) {
-        if let Some(transactional_message_service) = self.transactional_message_service.upgrade() {
-            let time = transactional_message_service.batch_send_op_message().await;
-            self.wakeup_timestamp.store(time, std::sync::atomic::Ordering::Relaxed);
-        } else {
-            const WARN_MESSAGE: &str =
-                "TransactionalMessageService has been dropped, skipping batch send operation message.";
-            warn!(WARN_MESSAGE);
-        }
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
+
+    use rocketmq_runtime::RuntimeConfig;
+    use rocketmq_runtime::RuntimeOwner;
+    use rocketmq_store::LocalFileMessageStore;
+    use tokio::sync::Notify;
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+
+    #[test]
+    fn orphaned_batch_service_exits_without_starving_its_runtime() {
+        let owner = RuntimeOwner::plan(RuntimeConfig::for_parallelism("orphaned-transaction-batch", 1))
+            .expect("valid test runtime")
+            .build()
+            .expect("start test runtime");
+        let cancellation = CancellationToken::new();
+        let service = TransactionalOpBatchServiceInner::<LocalFileMessageStore> {
+            cancellation: cancellation.clone(),
+            broker_config: Arc::new(BrokerConfig {
+                transaction_op_batch_interval: 1,
+                ..BrokerConfig::default()
+            }),
+            transactional_message_service: Weak::new(),
+            wakeup_timestamp: AtomicU64::new(0),
+        };
+        let context = ServiceTaskContext::new(
+            Arc::new(Notify::new()),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let (finished_tx, finished_rx) = mpsc::channel();
+        owner
+            .root_context()
+            .component("transaction-batch")
+            .task_group()
+            .spawn_service("orphaned-batch", async move {
+                service.run(&context).await;
+                let _ = finished_tx.send(());
+            })
+            .expect("spawn batch service");
+
+        // The observer must be outside the runtime: a self-waking loop can
+        // monopolize its only worker and prevent a Tokio timeout from firing.
+        let exited = finished_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+        cancellation.cancel();
+        let report = owner
+            .shutdown_runtime_blocking_with_timeout(Duration::from_secs(5))
+            .expect("shut down test runtime");
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert!(exited, "batch service must exit after its transaction owner disappears");
     }
 }
