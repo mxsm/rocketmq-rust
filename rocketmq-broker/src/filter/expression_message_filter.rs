@@ -235,6 +235,7 @@ mod tests {
                 mapped_file_size_commit_log: 4096,
                 mapped_file_size_consume_queue: 200,
                 timer_wheel_enable: false,
+                enable_async_reput: false,
                 ..MessageStoreConfig::default()
             }),
             rocketmq_store::MicroBatchPolicy::disabled(1).expect("valid test policy"),
