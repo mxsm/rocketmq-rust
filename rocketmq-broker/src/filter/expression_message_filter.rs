@@ -185,7 +185,6 @@ mod tests {
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::path::Path;
-    use std::path::PathBuf;
     use std::sync::Arc;
 
     use super::*;
@@ -199,6 +198,7 @@ mod tests {
     use rocketmq_protocol::common::message::message_decoder::message_properties_to_string;
     use rocketmq_protocol::protocol::filter::filter_api::FilterAPI;
     use rocketmq_store::BrokerReadStore;
+    use rocketmq_store::BrokerReplicationStore;
     use rocketmq_store::BrokerStorePort;
     use rocketmq_store::BrokerWriteStore;
     use rocketmq_store::GetMessageStatus;
@@ -222,18 +222,6 @@ mod tests {
             sub_version: 11,
             ..Default::default()
         }
-    }
-
-    fn temp_test_root(label: &str) -> PathBuf {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "rocketmq-rust-expression-filter-{}-{}",
-            std::process::id(),
-            label
-        ));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).expect("create temp test root");
-        path
     }
 
     fn new_store(temp_root: &Path, topic: &CheetahString) -> LocalFileMessageStore {
@@ -370,13 +358,13 @@ mod tests {
     async fn tag_filter_skips_non_matching_messages_in_store_read_path() {
         let topic = CheetahString::from_static_str("TopicTest");
         let group = CheetahString::from_static_str("GroupTest");
-        let temp_root = temp_test_root("store-read-path");
+        let temp_root = tempfile::tempdir().expect("create temp test root");
         let subscription = FilterAPI::build_subscription_data(&topic, &CheetahString::from_static_str("blue"))
             .expect("tag subscription should build");
         let filter = ExpressionMessageFilter::new(Some(subscription), None, Arc::new(new_manager()));
         assert!(!filter.requires_commit_log_payload());
 
-        let mut store = new_store(&temp_root, &topic);
+        let mut store = new_store(temp_root.path(), &topic);
         store.init().await.expect("init store");
         assert!(store.load().await, "load store");
 
@@ -388,6 +376,13 @@ mod tests {
             .put_message(build_tagged_message(&topic, "blue", b"phase6-blue"))
             .await;
         assert_eq!(second_put.put_message_status(), PutMessageStatus::PutOk);
+        // Reput must return when the next CommitLog record is not complete yet.
+        let partial_frame = [0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 0];
+        let append_offset = store.get_commit_log().get_max_offset();
+        assert!(store
+            .append_to_commit_log(append_offset, &partial_frame, 0, partial_frame.len() as i32)
+            .await
+            .expect("append incomplete trailing record"));
         store.reput_once().await;
 
         let result = store
@@ -400,6 +395,7 @@ mod tests {
         assert_eq!(result.message_queue_offset(), &vec![1]);
         assert_eq!(result.next_begin_offset(), 2);
 
-        let _ = std::fs::remove_dir_all(temp_root);
+        drop(result);
+        drop(store);
     }
 }

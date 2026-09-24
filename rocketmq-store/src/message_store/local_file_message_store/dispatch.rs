@@ -1028,6 +1028,7 @@ impl ReputMessageServiceInner {
             };
             self.reput_from_offset
                 .store(result.start_offset() as i64, Ordering::Release);
+            let scan_start_offset = result.start_offset() as i64;
             let mut read_size = 0i32;
             while read_size < result.size()
                 && self.reput_from_offset.load(Ordering::Acquire) < self.get_reput_end_offset()
@@ -1132,6 +1133,11 @@ impl ReputMessageServiceInner {
                         warn!("reput reached an unsupported DLedger branch; stopping batch dispatch for this tick");
                     }
                 }
+            }
+            // An incomplete trailing record must wait for the next trigger rather than
+            // repeatedly reading the same bytes in this invocation.
+            if self.reput_from_offset.load(Ordering::Acquire) <= scan_start_offset {
+                break;
             }
         }
 
