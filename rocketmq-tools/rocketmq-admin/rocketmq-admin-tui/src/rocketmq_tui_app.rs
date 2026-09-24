@@ -289,18 +289,24 @@ impl RocketmqTuiApp {
             return;
         }
 
+        let text_input_focused = matches!(
+            self.state.focus,
+            FocusArea::Namesrv | FocusArea::Search | FocusArea::Args
+        );
         match key.code {
-            KeyCode::Char('?') => self.apply_action(Action::HelpToggled),
-            KeyCode::Char('q') => self.apply_action(Action::Quit),
+            KeyCode::Char('?') if !text_input_focused => self.apply_action(Action::HelpToggled),
+            KeyCode::Char('q') if !text_input_focused => self.apply_action(Action::Quit),
             KeyCode::Esc => self.handle_escape(),
             KeyCode::Tab => self.apply_action(Action::FocusNext),
             KeyCode::BackTab => self.apply_action(Action::FocusPrevious),
-            KeyCode::Char('n') if self.state.focus != FocusArea::Args => self.apply_action(Action::FocusNamesrv),
-            KeyCode::Char('/') if self.state.focus != FocusArea::Args => self.apply_action(Action::FocusSearch),
+            KeyCode::Char('n') if !text_input_focused => self.apply_action(Action::FocusNamesrv),
+            KeyCode::Char('/') if !text_input_focused => self.apply_action(Action::FocusSearch),
             KeyCode::Char('s') if self.state.focus == FocusArea::CommandTree => self.apply_action(Action::FocusSearch),
             KeyCode::Enter => self.handle_enter(),
-            KeyCode::Down | KeyCode::Char('j') => self.move_down(),
-            KeyCode::Up | KeyCode::Char('k') => self.move_up(),
+            KeyCode::Down => self.move_down(),
+            KeyCode::Char('j') if !text_input_focused => self.move_down(),
+            KeyCode::Up => self.move_up(),
+            KeyCode::Char('k') if !text_input_focused => self.move_up(),
             KeyCode::Left => self.move_left(),
             KeyCode::Right => self.move_right(),
             KeyCode::Backspace => self.handle_backspace(),
@@ -911,6 +917,30 @@ mod tests {
         assert_eq!(app.state.execution, CommandExecutionState::Idle);
         assert!(app.running_task.is_none());
         assert!(app.state.last_error.is_none());
+    }
+
+    #[test]
+    fn shortcut_characters_are_typed_in_text_inputs() {
+        let mut namesrv_app = RocketmqTuiApp::new(test_client_runtime());
+        namesrv_app.state.focus = FocusArea::Namesrv;
+        let mut search_app = RocketmqTuiApp::new(test_client_runtime());
+        search_app.state.focus = FocusArea::Search;
+        let mut args_app = RocketmqTuiApp::new(test_client_runtime());
+        args_app.state.focus = FocusArea::Args;
+        let name = args_app.state.selected_command().args[0].name;
+        let before = args_app.state.form.raw_value(name).unwrap_or_default().to_string();
+
+        for value in "q?jk/n".chars() {
+            namesrv_app.handle_key_event(KeyEvent::new(KeyCode::Char(value), KeyModifiers::NONE));
+            search_app.handle_key_event(KeyEvent::new(KeyCode::Char(value), KeyModifiers::NONE));
+            args_app.handle_key_event(KeyEvent::new(KeyCode::Char(value), KeyModifiers::NONE));
+        }
+        assert_eq!(namesrv_app.state.namesrv_addr, "q?jk/n");
+        assert_eq!(search_app.state.search, "q?jk/n");
+        assert_eq!(
+            args_app.state.form.raw_value(name),
+            Some(format!("{before}q?jk/n").as_str())
+        );
     }
 
     #[test]
