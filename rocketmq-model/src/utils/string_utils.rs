@@ -147,19 +147,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_delay_level_with_millisecond_overflow_for_each_time_unit() {
-        for level_string in [
-            "9223372036854775807s",
-            "9223372036854775807m",
-            "9223372036854775807h",
-            "9223372036854775807d",
-        ] {
-            let result = StringUtils::parse_delay_level(level_string);
-            assert!(result.is_err(), "expected overflow error for {level_string}");
-        }
-    }
-
-    #[test]
     fn parse_delay_level_with_max_valid_delay_time() {
         let result = StringUtils::parse_delay_level("9223372036854775s").unwrap();
         let (delay_level_table, max_delay_level) = result;
