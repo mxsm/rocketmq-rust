@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use rocketmq_runtime::ShutdownDeadline;
 mod nameserver_callback;
 
 impl MQClientAPIImpl {
@@ -97,6 +98,26 @@ impl MQClientAPIImpl {
         self.background_tasks.close();
         self.callback_executor.close();
         self.remoting_client.shutdown();
+    }
+
+    pub(crate) async fn shutdown_graceful(&self, timeout: Duration) -> bool {
+        let deadline = ShutdownDeadline::after(timeout);
+        let background_healthy = self.shutdown_background_tasks(deadline.remaining()).await;
+        // Transport scans belong to the client runtime task tree, so wait for
+        // their destruction before the parent runtime collects its report.
+        let transport_healthy = match self.remoting_client.shutdown_until(deadline).await {
+            Ok(report) => {
+                if !report.is_healthy() {
+                    warn!(?report, "client transport did not shut down cleanly");
+                }
+                report.is_healthy()
+            }
+            Err(error) => {
+                warn!(?error, "client transport shutdown failed");
+                false
+            }
+        };
+        background_healthy && transport_healthy
     }
 
     pub async fn shutdown_background_tasks(&self, timeout: Duration) -> bool {
