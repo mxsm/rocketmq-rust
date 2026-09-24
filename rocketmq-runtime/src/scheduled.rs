@@ -276,6 +276,32 @@ impl ScheduledTaskGroup {
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
+        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
+            let mut task = Box::new(task);
+            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+                self.schedule_fixed_delay_inner(config, move || Box::pin(task()))
+            } else {
+                self.schedule_fixed_delay_inner(config, task)
+            };
+        }
+        // Select the representation before the driver and timeout adapters
+        // capture the business future in their state machines.
+        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+            self.schedule_fixed_delay_inner(config, move || Box::pin(task()))
+        } else {
+            self.schedule_fixed_delay_inner(config, task)
+        }
+    }
+
+    fn schedule_fixed_delay_inner<F, Fut>(
+        &self,
+        config: ScheduledTaskConfig,
+        mut task: F,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
         self.schedule_fixed_delay_controlled(config, move || {
             let future = task();
             async move {
@@ -305,6 +331,33 @@ impl ScheduledTaskGroup {
         F: FnMut() -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
+        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
+            let mut task = Box::new(task);
+            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+                self.schedule_fixed_delay_operation_inner(operation, config, move || Box::pin(task()))
+            } else {
+                self.schedule_fixed_delay_operation_inner(operation, config, task)
+            };
+        }
+        // Select the representation before the driver and timeout adapters
+        // capture the business future in their state machines.
+        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+            self.schedule_fixed_delay_operation_inner(operation, config, move || Box::pin(task()))
+        } else {
+            self.schedule_fixed_delay_operation_inner(operation, config, task)
+        }
+    }
+
+    fn schedule_fixed_delay_operation_inner<F, Fut>(
+        &self,
+        operation: &OperationContext,
+        config: ScheduledTaskConfig,
+        mut task: F,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
         self.schedule_fixed_delay_controlled_operation(operation, config, move || {
             let future = task();
             async move {
@@ -321,6 +374,33 @@ impl ScheduledTaskGroup {
     /// Returns an operational error when the bounded task driver cannot be
     /// spawned.
     pub fn schedule_fixed_delay_controlled_operation<F, Fut>(
+        &self,
+        operation: &OperationContext,
+        config: ScheduledTaskConfig,
+        mut task: F,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
+    {
+        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
+            let mut task = Box::new(task);
+            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+                self.schedule_fixed_delay_controlled_operation_inner(operation, config, move || Box::pin(task()))
+            } else {
+                self.schedule_fixed_delay_controlled_operation_inner(operation, config, task)
+            };
+        }
+        // Select the representation before the driver and timeout adapters
+        // capture the business future in their state machines.
+        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+            self.schedule_fixed_delay_controlled_operation_inner(operation, config, move || Box::pin(task()))
+        } else {
+            self.schedule_fixed_delay_controlled_operation_inner(operation, config, task)
+        }
+    }
+
+    fn schedule_fixed_delay_controlled_operation_inner<F, Fut>(
         &self,
         operation: &OperationContext,
         mut config: ScheduledTaskConfig,
@@ -356,6 +436,33 @@ impl ScheduledTaskGroup {
     /// Returns an operational error when the bounded task driver cannot be
     /// spawned.
     pub fn schedule_fixed_rate_no_overlap_operation<F, Fut>(
+        &self,
+        operation: &OperationContext,
+        config: ScheduledTaskConfig,
+        task: F,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
+            let task = Box::new(task);
+            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+                self.schedule_fixed_rate_no_overlap_operation_inner(operation, config, move || Box::pin(task()))
+            } else {
+                self.schedule_fixed_rate_no_overlap_operation_inner(operation, config, task)
+            };
+        }
+        // Select the representation before the driver and timeout adapters
+        // capture the business future in their state machines.
+        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+            self.schedule_fixed_rate_no_overlap_operation_inner(operation, config, move || Box::pin(task()))
+        } else {
+            self.schedule_fixed_rate_no_overlap_operation_inner(operation, config, task)
+        }
+    }
+
+    fn schedule_fixed_rate_no_overlap_operation_inner<F, Fut>(
         &self,
         operation: &OperationContext,
         mut config: ScheduledTaskConfig,
@@ -422,6 +529,32 @@ impl ScheduledTaskGroup {
     /// Returns an operational error when the task driver cannot be spawned.
     pub fn schedule_fixed_delay_controlled<F, Fut>(
         &self,
+        config: ScheduledTaskConfig,
+        mut task: F,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = ScheduledTaskControl> + Send + 'static,
+    {
+        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
+            let mut task = Box::new(task);
+            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+                self.schedule_fixed_delay_controlled_inner(config, move || Box::pin(task()))
+            } else {
+                self.schedule_fixed_delay_controlled_inner(config, task)
+            };
+        }
+        // Select the representation before the driver and timeout adapters
+        // capture the business future in their state machines.
+        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+            self.schedule_fixed_delay_controlled_inner(config, move || Box::pin(task()))
+        } else {
+            self.schedule_fixed_delay_controlled_inner(config, task)
+        }
+    }
+
+    fn schedule_fixed_delay_controlled_inner<F, Fut>(
+        &self,
         mut config: ScheduledTaskConfig,
         task: F,
     ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
@@ -455,6 +588,32 @@ impl ScheduledTaskGroup {
     ///
     /// Returns an operational error when the task driver cannot be spawned.
     pub fn schedule_fixed_rate_no_overlap<F, Fut>(
+        &self,
+        config: ScheduledTaskConfig,
+        task: F,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
+            let task = Box::new(task);
+            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+                self.schedule_fixed_rate_no_overlap_inner(config, move || Box::pin(task()))
+            } else {
+                self.schedule_fixed_rate_no_overlap_inner(config, task)
+            };
+        }
+        // Select the representation before the driver and timeout adapters
+        // capture the business future in their state machines.
+        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+            self.schedule_fixed_rate_no_overlap_inner(config, move || Box::pin(task()))
+        } else {
+            self.schedule_fixed_rate_no_overlap_inner(config, task)
+        }
+    }
+
+    fn schedule_fixed_rate_no_overlap_inner<F, Fut>(
         &self,
         mut config: ScheduledTaskConfig,
         task: F,
@@ -519,6 +678,32 @@ impl ScheduledTaskGroup {
     ///
     /// Returns an operational error when the task driver cannot be spawned.
     pub fn schedule_fixed_rate<F, Fut>(
+        &self,
+        config: ScheduledTaskConfig,
+        task: F,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
+            let task = Box::new(task);
+            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+                self.schedule_fixed_rate_inner(config, move || Box::pin(task()))
+            } else {
+                self.schedule_fixed_rate_inner(config, task)
+            };
+        }
+        // Select the representation before the driver and timeout adapters
+        // capture the business future in their state machines.
+        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+            self.schedule_fixed_rate_inner(config, move || Box::pin(task()))
+        } else {
+            self.schedule_fixed_rate_inner(config, task)
+        }
+    }
+
+    fn schedule_fixed_rate_inner<F, Fut>(
         &self,
         mut config: ScheduledTaskConfig,
         task: F,
@@ -602,6 +787,33 @@ impl ScheduledTaskGroup {
     /// Returns an operational error when the period is zero or the driver
     /// cannot be registered.
     pub fn schedule_bounded<F, Fut>(
+        &self,
+        config: ScheduledTaskConfig,
+        policy: ScheduledExecutionPolicy,
+        task: F,
+    ) -> RuntimeResult<ScheduledTaskRegistrationOutcome>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
+            let task = Box::new(task);
+            return if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+                self.schedule_bounded_inner(config, policy, move || Box::pin(task()))
+            } else {
+                self.schedule_bounded_inner(config, policy, task)
+            };
+        }
+        // Select the representation before the driver and timeout adapters
+        // capture the business future in their state machines.
+        if std::mem::size_of::<Fut>() > crate::stack::MAX_INLINE_SIZE {
+            self.schedule_bounded_inner(config, policy, move || Box::pin(task()))
+        } else {
+            self.schedule_bounded_inner(config, policy, task)
+        }
+    }
+
+    fn schedule_bounded_inner<F, Fut>(
         &self,
         mut config: ScheduledTaskConfig,
         policy: ScheduledExecutionPolicy,

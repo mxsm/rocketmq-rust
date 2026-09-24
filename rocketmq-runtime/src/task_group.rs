@@ -60,7 +60,7 @@ const STATE_POISONED: u8 = 4;
 
 // Apply the large-future boundary before adding lifecycle and tracker wrappers. Waiting for
 // Tokio's spawn boundary leaves their by-value stack frames live during task submission.
-const MAX_INLINE_TASK_FUTURE_SIZE: usize = 16 * 1024;
+const MAX_INLINE_TASK_FUTURE_SIZE: usize = crate::stack::MAX_INLINE_SIZE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 /// Represents task id.
@@ -543,6 +543,17 @@ impl TaskGroup {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        if std::mem::size_of::<F>() > MAX_INLINE_TASK_FUTURE_SIZE {
+            self.spawn_cancellable_service_inner(name.into(), Box::pin(future))
+        } else {
+            self.spawn_cancellable_service_inner(name.into(), future)
+        }
+    }
+
+    fn spawn_cancellable_service_inner<F>(&self, name: Arc<str>, future: F) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
         let owner_cancellation = self.cancellation_token();
         self.spawn_service(name, async move {
             tokio::select! {
@@ -566,16 +577,7 @@ impl TaskGroup {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let _operation_spawn_guard = context.spawn_guard();
-        let registration = context.prepare_spawn(self.id())?;
-        let guard = registration.guard();
-        let execution =
-            crate::operation::OperationExecution::new(future, guard, context.clone(), Some(self.cancellation_token()));
-        let task_id = self.spawn(name, context.task_kind(), execution.run())?;
-        registration.register(task_id);
-        drop(_operation_spawn_guard);
-        registration.finish_registration();
-        Ok(task_id)
+        self.spawn_operation_with_cancellation(context, name.into(), future, Some(self.cancellation_token()))
     }
 
     /// Spawns accepted operation work that must drain during owner shutdown.
@@ -595,10 +597,40 @@ impl TaskGroup {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        self.spawn_operation_with_cancellation(context, name.into(), future, None)
+    }
+
+    fn spawn_operation_with_cancellation<F>(
+        &self,
+        context: &OperationContext,
+        name: Arc<str>,
+        future: F,
+        owner_cancellation: Option<CancellationToken>,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        if std::mem::size_of::<F>() > MAX_INLINE_TASK_FUTURE_SIZE {
+            self.spawn_operation_inner(context, name, Box::pin(future), owner_cancellation)
+        } else {
+            self.spawn_operation_inner(context, name, future, owner_cancellation)
+        }
+    }
+
+    fn spawn_operation_inner<F>(
+        &self,
+        context: &OperationContext,
+        name: Arc<str>,
+        future: F,
+        owner_cancellation: Option<CancellationToken>,
+    ) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
         let _operation_spawn_guard = context.spawn_guard();
         let registration = context.prepare_spawn(self.id())?;
         let guard = registration.guard();
-        let execution = crate::operation::OperationExecution::new(future, guard, context.clone(), None);
+        let execution = crate::operation::OperationExecution::new(future, guard, context.clone(), owner_cancellation);
         let task_id = self.spawn(name, context.task_kind(), execution.run())?;
         registration.register(task_id);
         drop(_operation_spawn_guard);
@@ -713,12 +745,14 @@ impl TaskGroup {
     pub fn shutdown_until(&self, deadline: ShutdownDeadline) -> BoxFuture<'_, ShutdownReport> {
         self.tighten_shutdown_deadline(deadline);
         async move {
-            self.inner
+            let report = self
+                .inner
                 .shutdown
                 .report
                 .get_or_init(|| async { self.shutdown_inner().await })
-                .await
-                .clone()
+                .await;
+            self.inner.shutdown.report_ready.notify_waiters();
+            report.clone()
         }
         .boxed()
     }
@@ -735,13 +769,22 @@ impl TaskGroup {
 
         let report = self.shutdown_now_inner();
         let _ = self.inner.shutdown.report.set(report.clone());
+        self.inner.shutdown.report_ready.notify_waiters();
         report
     }
 
     fn tighten_shutdown_deadline(&self, deadline: ShutdownDeadline) {
-        let installed = self.inner.shutdown.tighten(deadline);
-        for child in self.inner.registry.components_snapshot() {
-            child.tighten_shutdown_deadline(installed);
+        let mut pending = vec![(self.clone(), deadline)];
+        while let Some((group, deadline)) = pending.pop() {
+            let installed = group.inner.shutdown.tighten(deadline);
+            pending.extend(
+                group
+                    .inner
+                    .registry
+                    .components_snapshot()
+                    .into_iter()
+                    .map(|child| (child, installed)),
+            );
         }
     }
 
@@ -755,8 +798,24 @@ impl TaskGroup {
         // Retain the entire accepted subtree before propagating cancellation.
         // A fast-finishing leaf must not erase its ancestors and outcomes while
         // shutdown is still walking the tree.
-        let _descendants = self.close_admission_tree();
+        let descendants = self.close_admission_tree();
+        // Reapply after sealing admission, including children created between
+        // the initial deadline traversal and the admission traversal.
+        self.tighten_shutdown_deadline(deadline);
         self.inner.cancellation_token.cancel();
+        // Poll every scope at one level. A scope observes child reports via
+        // notifications rather than recursively polling their shutdown futures.
+        let children = join_all(descendants.iter().map(|group| async move {
+            group.inner.shutdown.report.get_or_init(|| group.shutdown_one()).await;
+            group.inner.shutdown.report_ready.notify_waiters();
+        }));
+        let (_, mut report) = tokio::join!(children, self.shutdown_one());
+        report.elapsed = started_at.elapsed();
+        report
+    }
+
+    async fn shutdown_one(&self) -> ShutdownReport {
+        let started_at = Instant::now();
         let children = self.inner.registry.components_snapshot();
         self.abort_detached_abort_on_shutdown_tasks();
 
@@ -764,7 +823,7 @@ impl TaskGroup {
             join_all(
                 children
                     .into_iter()
-                    .map(|child| async move { child.shutdown_until(deadline).await }),
+                    .map(|child| async move { child.inner.shutdown.wait_report().await.clone() }),
             )
             .await
         };
@@ -807,33 +866,64 @@ impl TaskGroup {
     }
 
     fn close_admission_tree(&self) -> Vec<TaskGroup> {
-        let children = {
-            let _spawn_guard = self.inner.spawn_gate.lock();
-            if self.inner.lifecycle_state() != TaskGroupLifecycleState::ShutdownCompleted {
-                self.inner.lifecycle.store(STATE_CLOSING, Ordering::Release);
-                self.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
-            }
-            self.inner.tracker.close();
-            self.inner.registry.components_snapshot()
-        };
         let mut retained = Vec::new();
-        for child in children {
-            retained.extend(child.close_admission_tree());
-            retained.push(child);
+        let mut pending = vec![self.clone()];
+        while let Some(group) = pending.pop() {
+            {
+                let _spawn_guard = group.inner.spawn_gate.lock();
+                if group.inner.lifecycle_state() != TaskGroupLifecycleState::ShutdownCompleted {
+                    group.inner.lifecycle.store(STATE_CLOSING, Ordering::Release);
+                    group.inner.lifecycle.store(STATE_CLOSED, Ordering::Release);
+                }
+                group.inner.tracker.close();
+                pending.extend(group.inner.registry.components_snapshot());
+            }
+            if group.id() != self.id() {
+                retained.push(group);
+            }
         }
+        // Descendants precede parents for immediate report assembly.
+        retained.reverse();
         retained
     }
 
     fn shutdown_now_inner(&self) -> ShutdownReport {
         let started_at = Instant::now();
-        let _descendants = self.close_admission_tree();
+        let descendants = self.close_admission_tree();
         self.inner.cancellation_token.cancel();
-        let children = self.inner.registry.components_snapshot();
-
-        let mut child_reports = Vec::with_capacity(children.len());
-        for child in children {
-            child_reports.push(child.shutdown_now());
+        let mut reports = std::collections::HashMap::new();
+        for group in &descendants {
+            let children = group
+                .inner
+                .registry
+                .components_snapshot()
+                .into_iter()
+                .filter_map(|child| reports.remove(&child.id()))
+                .collect();
+            let report = if let Some(report) = group.inner.shutdown.report.get() {
+                report.clone()
+            } else {
+                let report = group.shutdown_now_one(children);
+                let _ = group.inner.shutdown.report.set(report.clone());
+                group.inner.shutdown.report_ready.notify_waiters();
+                report
+            };
+            reports.insert(group.id(), report);
         }
+        let children = self
+            .inner
+            .registry
+            .components_snapshot()
+            .into_iter()
+            .filter_map(|child| reports.remove(&child.id()))
+            .collect();
+        let mut report = self.shutdown_now_one(children);
+        report.elapsed = started_at.elapsed();
+        report
+    }
+
+    fn shutdown_now_one(&self, child_reports: Vec<ShutdownReport>) -> ShutdownReport {
+        let started_at = Instant::now();
 
         self.abort_detached_abort_on_shutdown_tasks();
         self.abort_tracked_tasks();
@@ -988,8 +1078,17 @@ impl TaskGroupInner {
 
 impl Drop for TaskGroupInner {
     fn drop(&mut self) {
-        if let Some(parent) = &self.parent {
-            parent.registry.unregister_component(self.id);
+        let mut parent = self.parent.take();
+        let mut child_id = self.id;
+        while let Some(ancestor) = parent {
+            ancestor.registry.unregister_component(child_id);
+            let Some(mut ancestor) = Arc::into_inner(ancestor) else {
+                break;
+            };
+            child_id = ancestor.id;
+            parent = ancestor.parent.take();
+            // Its parent is now detached, so dropping this owned node does
+            // not recursively destroy the rest of a long ownership chain.
         }
     }
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
 use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
@@ -105,26 +106,30 @@ impl BlockingDrainLease {
     /// The existing lane capacity and deadline policy still apply. A running
     /// closure retains its execution permit until it exits. This does not
     /// reopen the scope's ordinary admission.
-    pub async fn spawn_io<F, R>(&self, name: impl Into<Arc<str>>, operation: F) -> RuntimeResult<R>
+    pub fn spawn_io<F, R>(
+        &self,
+        name: impl Into<Arc<str>>,
+        operation: F,
+    ) -> impl Future<Output = RuntimeResult<R>> + Send + '_
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.executor.spawn_io(name, operation).await
+        self.executor.spawn_io(name, operation)
     }
 
     /// Runs one short I/O operation without extending this lease's deadline.
-    pub async fn spawn_io_until<F, R>(
+    pub fn spawn_io_until<F, R>(
         &self,
         name: impl Into<Arc<str>>,
         deadline: ShutdownDeadline,
         operation: F,
-    ) -> RuntimeResult<R>
+    ) -> impl Future<Output = RuntimeResult<R>> + Send + '_
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.executor.spawn_io_until(name, deadline, operation).await
+        self.executor.spawn_io_until(name, deadline, operation)
     }
 
     /// Returns the number of submissions that this lease can still admit.
@@ -418,28 +423,31 @@ impl BlockingExecutor {
         &self.policy
     }
 
-    /// Spawns io.
-    pub async fn spawn_io<F, R>(&self, name: impl Into<Arc<str>>, operation: F) -> RuntimeResult<R>
-    where
-        F: FnOnce() -> R + Send + 'static,
-        R: Send + 'static,
-    {
-        let task = self.submit_io(name, operation).await?;
-        self.wait_for_caller(task).await
-    }
-
-    /// Admits short I/O and returns its execution-owned completion ticket.
-    pub(crate) async fn submit_io<F, R>(
+    /// Runs short blocking I/O with the preparation and polling behavior of [`Self::spawn`].
+    pub fn spawn_io<F, R>(
         &self,
         name: impl Into<Arc<str>>,
         operation: F,
-    ) -> RuntimeResult<BlockingTask<R>>
+    ) -> impl Future<Output = RuntimeResult<R>> + Send + '_
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.submit_inner(name.into(), BlockingKind::ShortIo, None, operation)
-            .await
+        self.spawn(name, BlockingKind::ShortIo, operation)
+    }
+
+    /// Admits short I/O and returns its execution-owned completion ticket.
+    #[cfg(test)]
+    pub(crate) fn submit_io<F, R>(
+        &self,
+        name: impl Into<Arc<str>>,
+        operation: F,
+    ) -> impl Future<Output = RuntimeResult<BlockingTask<R>>> + Send + '_
+    where
+        F: FnOnce() -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        self.submit_inner(name.into(), BlockingKind::ShortIo, None, Box::new(operation))
     }
 
     /// Admits short I/O under an optional caller deadline and returns its
@@ -448,59 +456,70 @@ impl BlockingExecutor {
     /// The deadline is combined with the lane phase budgets by `phase_deadline`,
     /// so it can only tighten them. An expired deadline refuses the submission
     /// instead of starting the closure.
-    pub(crate) async fn submit_io_until<F, R>(
+    pub(crate) fn submit_io_until<F, R>(
         &self,
         name: impl Into<Arc<str>>,
         deadline: Option<ShutdownDeadline>,
         operation: F,
-    ) -> RuntimeResult<BlockingTask<R>>
+    ) -> impl Future<Output = RuntimeResult<BlockingTask<R>>> + Send + '_
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.submit_inner(name.into(), BlockingKind::ShortIo, deadline, operation)
-            .await
+        self.submit_inner(name.into(), BlockingKind::ShortIo, deadline, Box::new(operation))
     }
 
     /// Runs short blocking I/O without admitting or waiting for work beyond `deadline`.
-    pub async fn spawn_io_until<F, R>(
+    pub fn spawn_io_until<F, R>(
         &self,
         name: impl Into<Arc<str>>,
         deadline: ShutdownDeadline,
         operation: F,
-    ) -> RuntimeResult<R>
+    ) -> impl Future<Output = RuntimeResult<R>> + Send + '_
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.spawn_until(name, BlockingKind::ShortIo, deadline, operation).await
+        self.spawn_until(name, BlockingKind::ShortIo, deadline, operation)
     }
 
     /// Spawns the supplied task.
-    pub async fn spawn<F, R>(&self, name: impl Into<Arc<str>>, kind: BlockingKind, operation: F) -> RuntimeResult<R>
+    ///
+    /// Converts the name and boxes the closure immediately to keep large
+    /// captures out of the returned future. Admission and submission begin
+    /// only when that future is polled.
+    pub fn spawn<F, R>(
+        &self,
+        name: impl Into<Arc<str>>,
+        kind: BlockingKind,
+        operation: F,
+    ) -> impl Future<Output = RuntimeResult<R>> + Send + '_
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.spawn_inner(name.into(), kind, None, operation).await
+        // A synchronous boundary keeps F out of every admission/wait future.
+        // One closure allocation also avoids a size-dependent public future
+        // layout: an enum containing an inline F would still be as large as F.
+        self.spawn_inner(name.into(), kind, None, Box::new(operation))
     }
 
     /// Runs blocking work with one absolute deadline for admission and waiting.
     ///
     /// Expiry stops waiting; an already running closure retains its capacity
     /// until it exits and may still produce side effects.
-    pub async fn spawn_until<F, R>(
+    pub fn spawn_until<F, R>(
         &self,
         name: impl Into<Arc<str>>,
         kind: BlockingKind,
         deadline: ShutdownDeadline,
         operation: F,
-    ) -> RuntimeResult<R>
+    ) -> impl Future<Output = RuntimeResult<R>> + Send + '_
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.spawn_inner(name.into(), kind, Some(deadline), operation).await
+        self.spawn_inner(name.into(), kind, Some(deadline), Box::new(operation))
     }
 
     async fn spawn_inner<F, R>(
@@ -514,8 +533,17 @@ impl BlockingExecutor {
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let task = self.submit_inner(name, kind, deadline, operation).await?;
-        self.wait_for_caller(task).await
+        if std::mem::size_of::<R>() > crate::stack::MAX_INLINE_SIZE {
+            // Keep a large result out of nested JoinHandle/timeout/Result poll
+            // frames; unwrap it only once at the public return boundary.
+            let task = self
+                .submit_inner(name, kind, deadline, move || Box::new(operation()))
+                .await?;
+            self.wait_for_caller(task).await.map(|value| *value)
+        } else {
+            let task = self.submit_inner(name, kind, deadline, operation).await?;
+            self.wait_for_caller(task).await
+        }
     }
 
     async fn wait_for_caller<R: Send + 'static>(&self, mut task: BlockingTask<R>) -> RuntimeResult<R> {
