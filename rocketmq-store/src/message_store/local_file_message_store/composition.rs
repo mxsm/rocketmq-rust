@@ -493,7 +493,6 @@ impl LocalFileMessageStore {
             broker_config,
             put_message_hook_list: HookRegistry::new(),
             topic_config_table,
-            // message_store_runtime: Some(RocketMQRuntime::new_multi(10, "message-store-thread")),
             commit_log,
             compaction_service,
             store_checkpoint: Some(store_checkpoint.clone()),

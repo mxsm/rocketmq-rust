@@ -67,8 +67,8 @@ flowchart TD
 注册有界周期任务而不是自己驱动裸循环，最后在关闭预算内排空收尾 I/O 并读取关闭报告。
 `RuntimeContext` 是迁移与测试夹具，不是生产入口。
 
-旧入口集中在 `rocketmq_runtime::compat`，让迁移方把它们当作一组并看到明确方向：
-`RocketMQRuntime`、保留的 executor service 以及旧调度器类型。该模块是增量式的，
+旧入口集中在 `rocketmq_runtime::compat`，让迁移方把保留的 executor service
+和旧调度器类型当作一组并看到明确方向。该模块是增量式的，
 不会新增任何弃用标记；`ActorRuntime` 不纳入其中，因为它拥有独立线程而非适配所有权 API。
 
 ## 运行时所有权与快速开始
@@ -347,10 +347,10 @@ V1 的字段和含义保持不变。
 
 ## 兼容边界与工作区接入
 
-`RocketMQRuntime` 已弃用，但在 1.x 中仍可使用。构造方式应迁移到
+`RocketMQRuntime` 及其根模块和 `compat` 模块导出已移除。构造方式应迁移到
 `RuntimeOwner::plan(config)?.build()?`，向组件注入 `ChildServiceContext`，
-明确选择调度重叠策略，并检查关闭报告。未来移除属于 2.0 兼容性边界，仍须满足
-[API 迁移指南](../rocketmq-doc/en/release/1.0/api-migration.md)中的发布与所有者批准要求。
+明确选择调度重叠策略，并检查关闭报告。替代方式见
+[API 迁移指南](../rocketmq-doc/en/release/1.0/api-migration.md)。
 
 `RuntimeContext` 用于迁移和测试。其他保留的辅助类型包括 `TokioExecutorService`、
 `ScheduledExecutorService`、`FuturesExecutorService`、`TaskScheduler` 和 `ActorRuntime`；
@@ -486,7 +486,6 @@ rocketmq-runtime/
   src/shutdown_deadline.rs shared absolute shutdown deadline
   src/shutdown_report.rs   serializable shutdown evidence
   src/diagnostics.rs       raw snapshots and sanitized V1 views
-  src/legacy.rs            deprecated RocketMQRuntime wrapper
   src/executor_service.rs  retained executor adapters
   src/schedule/            retained scheduler APIs
   src/common/              common filesystem, time, and thread helpers
