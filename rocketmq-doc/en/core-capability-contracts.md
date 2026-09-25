@@ -54,8 +54,7 @@ Crate: `rocketmq-runtime`
   reserve, blocking-thread, and blocking-queue limits. Child budgets cannot
   exceed an ancestor.
 - Compatibility: `RuntimeContext` is a test and migration harness.
-  `RocketMQRuntime` is a deprecated compatibility boundary; new production code
-  uses `RuntimeOwner`.
+  Production code uses `RuntimeOwner`.
 - Performance assumptions: blocking work uses the bounded blocking executor.
   The runtime does not promise scheduling latency, fairness, or throughput.
 - Failure modes: closed admission, queue full, deadline exceeded, panic,

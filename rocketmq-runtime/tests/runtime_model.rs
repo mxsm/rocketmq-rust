@@ -199,22 +199,6 @@ fn server_runtime_config_supports_optional_thread_stack_size() {
     ));
 }
 
-#[test]
-fn legacy_rocketmq_runtime_is_marked_deprecated() {
-    let legacy_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/legacy.rs");
-    let source = fs::read_to_string(&legacy_path)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", legacy_path.display()));
-    let enum_position = source
-        .find("pub enum RocketMQRuntime")
-        .expect("legacy runtime enum should exist");
-    let prefix = &source[..enum_position];
-
-    assert!(
-        prefix.contains("#[deprecated"),
-        "RocketMQRuntime must remain marked deprecated"
-    );
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn diagnostics_snapshot_reports_runtime_state() {
     let context = RuntimeContext::from_current("diagnostics-root");

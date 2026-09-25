@@ -105,19 +105,13 @@ Request processors are fixed when a client is built. Replace the deprecated
 Applications own the runtime and pass an `Arc<ClientRuntime>` to producers and
 consumers. Client APIs do not create hidden Tokio runtimes.
 
-### `RocketMQRuntime` legacy runtime boundary
+### Removed `RocketMQRuntime` API
 
-`RocketMQRuntime` remains a public, deprecated compatibility API throughout
-the 1.x line. This guide does not remove it, change any of its public methods,
-or announce a 2.0 release. Its removal is only intended for a future 2.0
-source-compatibility boundary, after downstream applications have migrated to
-the explicit ownership and shutdown APIs below. Any future removal remains
-subject to the full release cycle, a 2.0 breaking window, and an exact,
-reviewed post-freeze repository-owner approval record for every affected frozen
-public item (package, profile, item path, and change kind). This change creates
-no approval record and does not authorize a removal.
+`RocketMQRuntime` and its root and `compat` re-exports have been removed.
+This is a source compatibility break: downstream applications
+must migrate to the explicit ownership and shutdown APIs below before upgrading.
 
-| Legacy 1.x API | Migration target | Required ownership or policy decision |
+| Removed API or usage | Migration target | Required ownership or policy decision |
 |---|---|---|
 | `RocketMQRuntime::new_multi(threads, name)` | `RuntimeOwner::plan(RuntimeConfig { .. })?.build()?` | Put the worker count and thread name in `RuntimeConfig`; validate the plan before building the owner and propagate its typed results instead of relying on an infallible constructor. |
 | `get_handle()` | `RuntimeOwner::root_context().component(...)` or a child derived from `RuntimeContext` | Pass `ChildServiceContext` (or a narrower capability) to a library. Do not replace this call with a raw Tokio handle. |

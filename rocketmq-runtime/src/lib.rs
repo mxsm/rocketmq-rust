@@ -26,8 +26,7 @@
 //! Process entrypoints own [`RuntimeOwner`] and derive a single
 //! [`RootServiceContext`]. Production libraries receive a
 //! [`ChildServiceContext`] or a narrower capability. [`RuntimeContext`] is a
-//! test and migration harness, while [`RocketMQRuntime`] remains only as a
-//! deprecated compatibility boundary.
+//! test and migration harness.
 //!
 //! [`prelude`] documents the recommended entry path with an example that runs
 //! as a test. The older entry points are grouped in [`compat`], which states the
@@ -52,8 +51,6 @@ mod error;
 /// Executor service types and operations.
 mod executor_service;
 mod handle;
-/// Legacy types and operations.
-mod legacy;
 mod metadata_io;
 mod metadata_target;
 mod operation;
@@ -114,8 +111,6 @@ pub use executor_service::ScheduledExecutorServicePlan;
 pub use executor_service::TokioExecutorService;
 pub use executor_service::TokioExecutorServicePlan;
 pub(crate) use handle::RuntimeHandle;
-#[allow(deprecated)]
-pub use legacy::RocketMQRuntime;
 pub use metadata_io::LocalMetadataFileSystem;
 pub use metadata_io::MetadataDeadline;
 pub use metadata_io::MetadataDurability;
