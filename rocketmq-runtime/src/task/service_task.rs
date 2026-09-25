@@ -201,8 +201,8 @@ impl ServiceTaskHandle {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
 /// Represents service manager lifecycle probe.
+#[derive(Debug, Clone, Serialize)]
 pub struct ServiceManagerLifecycleProbe {
     /// Whether healthy.
     pub healthy: bool,
@@ -318,8 +318,8 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
         Self::new_with_optional_task_group(service, None)
     }
 
-    #[deprecated(note = "use ServiceManager::new_arc_with_task_group; the ambient-runtime adapter is removed in 2.0.0")]
     /// Creates arc.
+    #[deprecated(note = "use ServiceManager::new_arc_with_task_group; the ambient-runtime adapter is removed in 2.0.0")]
     pub fn new_arc(service: Arc<T>) -> Self {
         Self::new_arc_legacy_compatibility(service)
     }
