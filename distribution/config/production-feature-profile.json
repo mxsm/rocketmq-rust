@@ -38,7 +38,8 @@
       "features": [
         "otlp-metrics",
         "otlp-traces",
-        "otlp-logs"
+        "otlp-logs",
+        "tls"
       ],
       "resolved_features": [
         "default",
@@ -48,7 +49,8 @@
         "otel-traces",
         "otlp-logs",
         "otlp-metrics",
-        "otlp-traces"
+        "otlp-traces",
+        "tls"
       ]
     },
     "namesrv": {
