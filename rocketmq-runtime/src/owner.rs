@@ -202,14 +202,19 @@ impl RuntimeOwner {
     }
 
     /// Blocks the current thread until `future` completes.
+    ///
+    /// A future above the runtime's inline boundary is polled from the heap,
+    /// so a process entrypoint does not need to box its root future.
     pub fn block_on<F>(&self, future: F) -> F::Output
     where
         F: Future,
     {
-        self.runtime
-            .as_ref()
-            .expect("runtime owner must still own the runtime")
-            .block_on(future)
+        let runtime = self.runtime.as_ref().expect("runtime owner must still own the runtime");
+        if std::mem::size_of::<F>() > crate::stack::MAX_INLINE_SIZE {
+            runtime.block_on(Box::pin(future))
+        } else {
+            runtime.block_on(future)
+        }
     }
 
     /// Cancels and awaits tracked tasks until the configured deadline.
