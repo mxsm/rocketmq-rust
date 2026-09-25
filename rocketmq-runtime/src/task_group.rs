@@ -62,8 +62,8 @@ const STATE_POISONED: u8 = 4;
 // Tokio's spawn boundary leaves their by-value stack frames live during task submission.
 const MAX_INLINE_TASK_FUTURE_SIZE: usize = crate::stack::MAX_INLINE_SIZE;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 /// Represents task id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct TaskId(u64);
 
 impl TaskId {
@@ -77,8 +77,8 @@ impl TaskId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 /// Represents task group id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct TaskGroupId(u64);
 
 impl TaskGroupId {
@@ -88,8 +88,8 @@ impl TaskGroupId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 /// Identifies the task kind state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum TaskKind {
     /// Represents the service case.
     Service,
@@ -132,8 +132,8 @@ impl TaskKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 /// Identifies the task state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum TaskState {
     /// Represents the queued case.
     Queued,
@@ -151,8 +151,8 @@ pub enum TaskState {
     Leaked,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 /// Identifies the task result state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum TaskResult {
     /// Represents the completed case.
     Completed,
@@ -164,8 +164,8 @@ pub enum TaskResult {
     Panicked,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 /// Identifies the detached task policy state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum DetachedTaskPolicy {
     /// Represents the track only case.
     TrackOnly,
@@ -173,8 +173,8 @@ pub enum DetachedTaskPolicy {
     AbortOnShutdown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 /// Identifies the task group lifecycle state state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum TaskGroupLifecycleState {
     /// Represents the open case.
     Open,
@@ -188,7 +188,6 @@ pub enum TaskGroupLifecycleState {
     Poisoned,
 }
 
-#[derive(Debug, Clone)]
 /// Represents a task-group owner.
 ///
 /// Cloning a task group keeps the same owner and cancellation token. Use
@@ -200,6 +199,7 @@ pub enum TaskGroupLifecycleState {
 /// [`Self::shutdown_until`] to close admission, cancel and await the subtree.
 /// A task panic poisons its group against new submissions; it remains owned
 /// and can still be shut down and reported.
+#[derive(Debug, Clone)]
 pub struct TaskGroup {
     inner: Arc<TaskGroupInner>,
 }
