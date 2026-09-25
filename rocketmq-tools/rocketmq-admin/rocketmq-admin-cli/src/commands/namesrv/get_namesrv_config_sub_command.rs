@@ -47,17 +47,7 @@ impl CommandExecute for GetNamesrvConfigSubCommand {
         credentials: Option<rocketmq_admin_core::core::security::AdminCredentials>,
         client_runtime: std::sync::Arc<rocketmq_admin_core::client_adapter::ClientRuntime>,
     ) -> CanonicalResult<()> {
-        let request = match self.request() {
-            Ok(request) => request,
-            Err(_) => {
-                eprintln!("Please set the namesrvAddr parameter");
-                return Ok(());
-            }
-        };
-        if self.common.namesrv_addr.is_none() {
-            eprintln!("Please set the namesrvAddr parameter");
-            return Ok(());
-        }
+        let request = self.request()?;
 
         let result =
             NameServerService::query_namesrv_config_by_request_with_credentials(request, credentials, client_runtime)
@@ -125,5 +115,15 @@ mod tests {
                 CheetahString::from("127.0.0.2:9876")
             ]
         );
+    }
+
+    #[test]
+    fn get_namesrv_config_requires_namesrv_address() {
+        for args in [vec!["getNamesrvConfig"], vec!["getNamesrvConfig", "--namesrvAddr", ""]] {
+            let cmd = GetNamesrvConfigSubCommand::try_parse_from(args).unwrap();
+            let error = cmd.request().unwrap_err();
+
+            assert_eq!(error.descriptor(), &rocketmq_error::CORE_ARGUMENT_INVALID);
+        }
     }
 }
