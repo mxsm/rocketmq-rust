@@ -1342,12 +1342,22 @@ mod tests {
                     }),
                 };
                 result.unwrap();
-                for _ in 0..100 {
-                    if scheduled.snapshot()[0].failures == 1 {
-                        break;
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        let snapshot = &scheduled.snapshot()[0];
+                        if snapshot.failures == 1 && snapshot.active_runs == 0 {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
                     }
-                    tokio::task::yield_now().await;
-                }
+                })
+                .await
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "entry {entry}, construction {construction} did not settle: {:?}",
+                        scheduled.snapshot()
+                    )
+                });
                 let snapshot = &scheduled.snapshot()[0];
                 assert_eq!(snapshot.active_runs, 0, "entry {entry}, construction {construction}");
                 assert!(!snapshot.running);
