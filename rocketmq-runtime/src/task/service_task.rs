@@ -383,9 +383,19 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
         let wait_point = self.wait_point.clone();
         let task_handle = self.task_handle.clone();
 
-        // Spawn the service task
+        // The service loop is created on the heap by the worker's first poll. An
+        // inline loop would make this future as large as the service's state,
+        // and unoptimized builds copy it at every hop down to the task group.
         let future = async move {
-            Self::run_internal(service, state, stopped, started, has_notified, wait_point).await;
+            Box::pin(Self::run_internal(
+                service,
+                state,
+                stopped,
+                started,
+                has_notified,
+                wait_point,
+            ))
+            .await;
         };
         let handle = match match self.parent_task_group.as_ref() {
             Some(parent_task_group) => spawn_service_task_with_task_group(

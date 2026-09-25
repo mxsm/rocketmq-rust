@@ -14,4 +14,9 @@
 
 // Normalize before adding lifecycle/select/timeout wrappers. This bounds
 // inline state, not arbitrary user poll frames or recursive user destructors.
-pub(crate) const MAX_INLINE_SIZE: usize = 16 * 1024;
+//
+// Unoptimized builds give every by-value move its own stack slot, so each
+// wrapper and forwarding call below this boundary keeps another copy of an
+// inline future and submission can take many times the future's size. Such
+// builds use Tokio's debug boxing boundary instead.
+pub(crate) const MAX_INLINE_SIZE: usize = if cfg!(debug_assertions) { 2 * 1024 } else { 16 * 1024 };

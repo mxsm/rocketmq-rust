@@ -13,8 +13,12 @@
 // limitations under the License.
 
 use std::process::Command;
+use std::sync::mpsc::SyncSender;
 use std::time::Duration;
 
+use rocketmq_runtime::task::service_task::ServiceTask;
+use rocketmq_runtime::task::service_task::ServiceTaskContext;
+use rocketmq_runtime::task::ServiceManager;
 use rocketmq_runtime::MissedTickPolicy;
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeConfig;
@@ -23,10 +27,16 @@ use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskControl;
 use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::TaskGroup;
 use rocketmq_runtime::TaskKind;
 
 const CHILD_MODE: &str = "ROCKETMQ_RUNTIME_STACK_TEST_CHILD";
 const STACK_SIZE: usize = 1024 * 1024;
+// A submitting thread whose stack is already mostly used, such as a Broker
+// entrypoint starting services deep inside its startup future.
+const SUBMITTER_STACK_SIZE: usize = 256 * 1024;
+// Below the release inline boundary, like the Broker transaction check loop.
+const MID_SIZE_PAYLOAD: usize = 12 * 1024;
 
 #[test]
 fn large_tasks_submit_on_one_mib_stack() {
@@ -102,6 +112,10 @@ async fn large_task() {
 }
 
 fn isolated_stack_probe(name: &str, probe: fn()) {
+    isolated_stack_probe_on(name, STACK_SIZE, probe);
+}
+
+fn isolated_stack_probe_on(name: &str, stack_size: usize, probe: fn()) {
     if std::env::var_os(CHILD_MODE).is_none() {
         let output = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", name, "--nocapture"])
@@ -118,7 +132,7 @@ fn isolated_stack_probe(name: &str, probe: fn()) {
     }
     std::thread::Builder::new()
         .name(name.into())
-        .stack_size(STACK_SIZE)
+        .stack_size(stack_size)
         .spawn(probe)
         .unwrap()
         .join()
@@ -140,6 +154,33 @@ async fn payload_task<const N: usize>() {
     let payload = [7_u8; N];
     tokio::task::yield_now().await;
     assert_eq!(std::hint::black_box(&payload)[0], 7);
+}
+
+struct PayloadService<const N: usize> {
+    running: SyncSender<()>,
+}
+
+impl<const N: usize> ServiceTask for PayloadService<N> {
+    fn get_service_name(&self) -> String {
+        "payload-service".to_owned()
+    }
+
+    async fn run(&self, context: &ServiceTaskContext) {
+        let payload = [7_u8; N];
+        self.running.send(()).unwrap();
+        while !context.is_stopped() {
+            context.wait_for_running(Duration::from_millis(10)).await;
+        }
+        assert_eq!(std::hint::black_box(&payload)[0], 7);
+    }
+}
+
+fn start_and_stop_payload_service<const N: usize>(owner: &RuntimeOwner, group: &TaskGroup) {
+    let (running, started) = std::sync::mpsc::sync_channel(1);
+    let service = ServiceManager::new_with_task_group(PayloadService::<N> { running }, group.clone());
+    owner.block_on(service.start()).unwrap();
+    started.recv_timeout(Duration::from_secs(5)).unwrap();
+    owner.block_on(service.shutdown()).unwrap();
 }
 
 #[test]
@@ -165,6 +206,30 @@ fn large_operations_fit_on_one_mib_stack() {
         assert!(owner.block_on(context.task_group().wait_task(id, Duration::from_secs(5))));
         assert!(owner.shutdown_runtime_blocking().unwrap().is_healthy());
     });
+}
+
+#[test]
+fn service_and_task_submission_fit_on_a_small_submitter_stack() {
+    isolated_stack_probe_on(
+        "service_and_task_submission_fit_on_a_small_submitter_stack",
+        SUBMITTER_STACK_SIZE,
+        || {
+            let owner = small_stack_owner();
+            let context = owner.root_context().component("submitter-stack");
+            let group = context.task_group();
+
+            // Unoptimized builds copy an inline future into every wrapper frame.
+            let id = group
+                .spawn("mid-size", TaskKind::Worker, payload_task::<MID_SIZE_PAYLOAD>())
+                .unwrap();
+            assert!(owner.block_on(group.wait_task(id, Duration::from_secs(5))));
+
+            // A service loop is built by the worker, not moved down from the caller.
+            start_and_stop_payload_service::<MID_SIZE_PAYLOAD>(&owner, group);
+            start_and_stop_payload_service::<65536>(&owner, group);
+            assert!(owner.shutdown_runtime_blocking().unwrap().is_healthy());
+        },
+    );
 }
 
 #[test]
