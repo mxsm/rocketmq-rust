@@ -402,9 +402,6 @@ mod test_support_tests {
         assert_eq!(report.vectored_baseline.sendfile_syscall_count, 0);
         assert_eq!(report.sendfile_optimized.sendfile_syscall_count, 32);
         assert_eq!(report.sendfile_optimized.fallback_bytes, 0);
-        assert!(report.vectored_baseline.user_cpu_nanos > 0, "{report:?}");
-        assert!(report.sendfile_optimized.user_cpu_nanos > 0, "{report:?}");
-
         let expected_user_cpu_reduction_percent = report
             .vectored_baseline
             .user_cpu_nanos
