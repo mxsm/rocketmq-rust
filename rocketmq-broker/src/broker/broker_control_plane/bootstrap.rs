@@ -307,14 +307,11 @@ impl<MS: BrokerReplicationStore> BrokerControllerRuntime<MS> {
     }
 
     async fn remove_broker_id_temporary(&self, target: PathBuf) -> Result<()> {
-        if let Some(blocking) = self.blocking.as_ref() {
-            return blocking
-                .spawn_io("broker.identity.remove-pending", move || remove_file_if_exists(&target))
-                .await
-                .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?
-                .map_err(crate::broker_error::io);
-        }
-        remove_file_if_exists(&target).map_err(crate::broker_error::io)
+        self.blocking
+            .spawn_io("broker.identity.remove-pending", move || remove_file_if_exists(&target))
+            .await
+            .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))?
+            .map_err(crate::broker_error::io)
     }
 
     pub(crate) async fn ensure_controller_broker_id(

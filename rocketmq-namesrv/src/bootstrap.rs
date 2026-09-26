@@ -49,6 +49,7 @@ use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
 use rocketmq_runtime::MetadataIoActor;
 use rocketmq_runtime::MetadataIoConfig;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ServiceLifecycle;
@@ -503,12 +504,7 @@ impl NameServerRuntime {
                 .inner
                 .controller_config()
                 .expect("controller config should exist when embedded controller is enabled");
-            let controller_context = self
-                .inner
-                .service_context
-                .as_ref()
-                .expect("NameServerRuntime always has an injected ChildServiceContext")
-                .component("namesrv.embedded-controller");
+            let controller_context = self.inner.service_context.component("namesrv.embedded-controller");
             let controller_manager = Arc::new(
                 ControllerManager::new_with_remoting_command_factory(
                     (*controller_config).clone(),
@@ -544,12 +540,7 @@ impl NameServerRuntime {
         if auth_config.cluster_name.trim().is_empty() {
             auth_config.cluster_name = CheetahString::from_string(namesrv_config.product_env_name.clone());
         }
-        let service_context = self
-            .inner
-            .service_context
-            .as_ref()
-            .expect("NameServerRuntime always has an injected ChildServiceContext")
-            .component("namesrv.auth");
+        let service_context = self.inner.service_context.component("namesrv.auth");
         let mut builder = AuthRuntimeBuilder::new(auth_config, service_context);
         if let Some(Ok(metadata_io)) = self.inner.config_metadata_io.as_ref() {
             builder = builder.with_metadata_io_actor(metadata_io.clone());
@@ -570,11 +561,7 @@ impl NameServerRuntime {
     /// Initialize network server for handling client requests
     fn initialize_network_components(&mut self) {
         let config = self.inner.server_config();
-        let context = self
-            .inner
-            .service_context
-            .as_ref()
-            .expect("NameServerRuntime always has an injected ChildServiceContext");
+        let context = &self.inner.service_context;
         let mut server = TransportServer::new_with_telemetry(
             config,
             context.component("namesrv.remoting-server"),
@@ -622,7 +609,7 @@ impl NameServerRuntime {
         config.initial_delay = Duration::from_secs(5);
 
         scheduled_tasks
-            .schedule_fixed_rate_no_overlap(config, move || {
+            .schedule(config, ScheduledExecutionPolicy::default(), move || {
                 let name_server_runtime_inner = name_server_runtime_inner.clone();
                 async move {
                     debug!("Running scheduled broker health check");
@@ -918,14 +905,12 @@ impl NameServerRuntime {
         }
         shutdown_report.remoting_client = Some(remoting_client_report);
 
-        if let Some(task_group) = self.inner.task_group.get().cloned() {
-            let report = task_group.shutdown_until(deadline).await;
-            self.diagnostics_sources.retain_shutdown(&report);
-            if let Err(error) = report.assert_no_task_leak() {
-                warn!("NameServer task group shutdown report is unhealthy: {error}");
-            }
-            shutdown_report.root = Some(report);
+        let report = self.inner.task_group().shutdown_until(deadline).await;
+        self.diagnostics_sources.retain_shutdown(&report);
+        if let Err(error) = report.assert_no_task_leak() {
+            warn!("NameServer task group shutdown report is unhealthy: {error}");
         }
+        shutdown_report.root = Some(report);
 
         // Transition to Stopped state
         if self.current_state() != RuntimeState::Stopped {
@@ -1308,8 +1293,7 @@ impl Builder {
                 #[cfg(feature = "embedded-controller")]
                 controller_manager: OnceLock::new(),
                 cluster_test_route_lookup,
-                service_context: Some(service_context),
-                task_group: OnceLock::new(),
+                service_context,
                 in_flight_requests: Arc::new(InFlightRequestTracker::default()),
                 namesrv_metrics: namesrv_metrics.clone(),
                 #[cfg(feature = "embedded-controller")]
@@ -1366,8 +1350,7 @@ pub(crate) struct NameServerRuntimeInner {
     transport_principal: Option<Principal>,
     command_factory: RemotingCommandFactory,
     cluster_test_route_lookup: Option<Arc<dyn ClusterTestRouteLookup>>,
-    service_context: Option<ChildServiceContext>,
-    task_group: OnceLock<TaskGroup>,
+    service_context: ChildServiceContext,
     in_flight_requests: Arc<InFlightRequestTracker>,
     namesrv_metrics: NameServerMetrics,
 }
@@ -1433,7 +1416,7 @@ impl NameServerRuntimeHandle {
         self.runtime().kvconfig_manager()
     }
 
-    pub(crate) fn task_group(&self) -> Option<TaskGroup> {
+    pub(crate) fn task_group(&self) -> TaskGroup {
         self.runtime().task_group()
     }
 
@@ -1473,26 +1456,12 @@ impl NameServerRuntimeInner {
         Arc::clone(&self.config.load().name_server_config)
     }
 
-    pub(crate) fn task_group(&self) -> Option<TaskGroup> {
-        if let Some(task_group) = self.task_group.get() {
-            return Some(task_group.clone());
-        }
-
-        let service_context = self
-            .service_context
-            .as_ref()
-            .expect("NameServerRuntime always has an injected ChildServiceContext");
-        let _ = self.task_group.set(service_context.task_group().clone());
-        self.task_group.get().cloned()
+    pub(crate) fn task_group(&self) -> TaskGroup {
+        self.service_context.task_group().clone()
     }
 
     pub(crate) fn component_task_group(&self, scope: &'static str) -> TaskGroup {
-        self.service_context
-            .as_ref()
-            .expect("NameServerRuntime always has an injected ChildServiceContext")
-            .component(scope)
-            .task_group()
-            .clone()
+        self.service_context.component(scope).task_group().clone()
     }
 
     pub(crate) fn in_flight_request_tracker(&self) -> Arc<InFlightRequestTracker> {
@@ -2592,11 +2561,7 @@ mod tests {
         let service = context.service_context("namesrv-service");
         let bootstrap = Builder::new(service.clone(), TelemetryHandle::noop()).build();
 
-        let task_group = bootstrap
-            .name_server_runtime
-            .inner
-            .task_group()
-            .expect("service context should provide namesrv task group");
+        let task_group = bootstrap.name_server_runtime.inner.task_group();
 
         assert_eq!(task_group.parent_id(), Some(service.task_group().id()));
         assert_eq!(task_group.name(), "rocketmq-namesrv");

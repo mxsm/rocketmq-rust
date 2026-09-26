@@ -117,9 +117,7 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
                 .as_ref()
                 .and_then(|result| result.as_ref().ok())
                 .cloned(),
-            self.service_context
-                .as_ref()
-                .map(|context| context.metadata_io().clone()),
+            self.service_context.metadata_io().clone(),
         ))
     }
 
@@ -221,10 +219,7 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         let order = self.consumer_order_info_manager_handle();
         let escape_bridge = self.escape_bridge();
         let service_context = self.service_context.clone();
-        let queue_lock_manager = service_context
-            .clone()
-            .map(QueueLockManager::new_with_service_context)
-            .expect("BrokerRuntime always has an injected ChildServiceContext");
+        let queue_lock_manager = QueueLockManager::new_with_service_context(service_context.clone());
         let context = Arc::new(
             PopMessageProcessorContext::new(
                 self.pop_policy_state.clone(),
@@ -237,11 +232,7 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
                 PopStoreCapability::new(&escape_bridge),
                 self.broker_stats_manager_handle(),
                 self.pop_inflight_message_counter().clone(),
-                service_context
-                    .as_ref()
-                    .expect("BrokerRuntime always has an injected ChildServiceContext")
-                    .metadata_io()
-                    .clone(),
+                service_context.metadata_io().clone(),
             )
             .with_command_factory(self.command_factory),
         );
@@ -362,9 +353,7 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
                 .as_ref()
                 .and_then(|result| result.as_ref().ok())
                 .cloned(),
-            self.service_context
-                .as_ref()
-                .map(|context| context.metadata_io().clone()),
+            self.service_context.metadata_io().clone(),
         );
         BrokerPreOnlineService::new(context, self.broker_service_task_group())
     }
@@ -401,21 +390,15 @@ impl<MS: BrokerStorePort> BrokerRuntimeState<MS> {
         )
     }
 
-    pub(crate) fn broker_task_group_or_current(
-        &self,
-        name: impl Into<Arc<str>>,
-        no_runtime_warning: &'static str,
-    ) -> Option<TaskGroup> {
-        crate::broker_runtime::broker_task_group_or_current(self.service_context.as_ref(), name, no_runtime_warning)
+    pub(crate) fn broker_component_task_group(&self, name: impl Into<Arc<str>>) -> TaskGroup {
+        crate::broker_runtime::broker_component_task_group(&self.service_context, name)
     }
 
-    pub(crate) fn broker_service_task_group(&self) -> Option<TaskGroup> {
-        self.service_context
-            .as_ref()
-            .map(|service_context| service_context.task_group().clone())
+    pub(crate) fn broker_service_task_group(&self) -> TaskGroup {
+        self.service_context.task_group().clone()
     }
 
-    pub(crate) fn broker_service_context(&self) -> Option<ChildServiceContext> {
+    pub(crate) fn broker_service_context(&self) -> ChildServiceContext {
         self.service_context.clone()
     }
 
@@ -1167,12 +1150,8 @@ impl BrokerRuntime {
         let store_host = broker_address
             .parse::<SocketAddr>()
             .unwrap_or_else(|_| SocketAddr::new(network.bind_address(), network.listen_port()));
-        let scheduled_task_manager = BrokerScheduledTasks::new_with_task_group(service_context.task_group().clone());
-        let bounded_scheduled_tasks = rocketmq_runtime::ScheduledTaskGroup::new(
-            service_context
-                .component("broker.bounded-scheduled")
-                .task_group()
-                .clone(),
+        let scheduled_tasks = rocketmq_runtime::ScheduledTaskGroup::new(
+            service_context.component("broker.scheduled").task_group().clone(),
         );
         let metadata_io = Some(
             MetadataIoConfig::default()
@@ -1339,15 +1318,14 @@ impl BrokerRuntime {
             slave_synchronize: None,
             slave_master_addr,
             broker_pre_online_service: None,
-            service_context: Some(service_context.clone()),
+            service_context: service_context.clone(),
             lock: Default::default(),
         });
         let broker_config_snapshot = state.broker_config_arc();
         let message_store_config_snapshot = state.message_store_config_arc();
         let store_runtime_config = Arc::new(broker_config_snapshot.store_runtime_config());
-        let mut stats_manager = BrokerStatsManager::new_with_scheduler(
+        let mut stats_manager = BrokerStatsManager::new_with_sampling(
             Arc::clone(&store_runtime_config),
-            Some(Arc::new(scheduled_task_manager.clone())),
             service_context.component("broker.statistics").task_group().clone(),
         );
         #[cfg(feature = "rocksdb_store")]
@@ -1388,11 +1366,7 @@ impl BrokerRuntime {
         let stats_manager = Arc::new(stats_manager);
         state.topic_config_coordinator = Some(Arc::new(TopicConfigCoordinator::new_with_metadata_io(
             state.topic_config_manager_handle(),
-            state
-                .service_context
-                .clone()
-                .expect("BrokerRuntime always owns an injected service context")
-                .component("broker.topic-config"),
+            state.service_context.component("broker.topic-config"),
             state
                 .metadata_io
                 .as_ref()
@@ -1513,10 +1487,7 @@ impl BrokerRuntime {
             Arc::clone(&broker_config_snapshot),
             Arc::clone(&message_store_config_snapshot),
             Arc::downgrade(&escape_bridge),
-            state
-                .service_context
-                .clone()
-                .expect("BrokerRuntime always owns an injected service context"),
+            state.service_context.clone(),
         )));
         let client_housekeeping_service = Arc::new(ClientHousekeepingService::new(
             state.producer_manager.connection_housekeeping(),
@@ -1551,10 +1522,7 @@ impl BrokerRuntime {
                     .as_ref()
                     .and_then(|result| result.as_ref().ok())
                     .cloned(),
-                state
-                    .service_context
-                    .as_ref()
-                    .map(|context| context.metadata_io().clone()),
+                state.service_context.metadata_io().clone(),
             ),
             Arc::clone(&state.slave_master_addr),
         )));
@@ -1569,16 +1537,15 @@ impl BrokerRuntime {
                 #[cfg(feature = "rocksdb_store")]
                 rocksdb_config_managers,
             ),
-            lifecycle: BrokerLifecycle::new(scheduled_task_manager, bounded_scheduled_tasks),
+            lifecycle: BrokerLifecycle::new(scheduled_tasks),
         }
     }
 
     pub(crate) fn set_telemetry_runtime_guard(&mut self, guard: rocketmq_observability::TelemetryRuntimeGuard) {
         self.composition.state.log_filter_control = guard.log_filter_handle().and_then(|handle| {
-            let service_context = self.composition.state.service_context.as_ref()?;
             match crate::broker::log_filter_control::BrokerLogFilterControl::start(
                 handle,
-                service_context,
+                &self.composition.state.service_context,
                 self.composition.state.broker_config().store_path_root_dir.as_str(),
             ) {
                 Ok(control) => Some(control),
@@ -1599,7 +1566,7 @@ impl BrokerRuntime {
         &mut self,
         sources: rocketmq_observability::RuntimeDiagnosticsSources,
     ) {
-        sources.set_schedules(self.lifecycle.bounded_scheduled_tasks.observer(&[
+        sources.set_schedules(self.lifecycle.scheduled_tasks.observer(&[
             "broker.registration",
             "broker.member-group.sync",
             "broker.consumer-offset.flush",
@@ -1618,8 +1585,8 @@ impl BrokerRuntime {
         self.composition.state.message_store_config_arc()
     }
 
-    pub(crate) fn scheduled_task_manager(&self) -> &BrokerScheduledTasks {
-        &self.lifecycle.scheduled_task_manager
+    pub(crate) fn scheduled_tasks(&self) -> &rocketmq_runtime::ScheduledTaskGroup {
+        &self.lifecycle.scheduled_tasks
     }
 
     pub(crate) fn runtime_state_mut(&mut self) -> &mut BrokerRuntimeState<BrokerMessageStore> {

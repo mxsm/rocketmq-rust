@@ -252,18 +252,20 @@ impl BrokerRuntime {
                 cardinality_limit,
             ));
             let refresh_snapshot = Arc::clone(&consumer_lag_snapshot);
-            let schedule_result = self
-                .lifecycle
-                .scheduled_task_manager
-                .add_fixed_rate_no_overlap_task_async(Duration::ZERO, refresh_interval, move |ctx| {
+            let cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
+            let schedule_result = self.lifecycle.scheduled_tasks.schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap("broker.consumer-lag.refresh", refresh_interval),
+                ScheduledExecutionPolicy::default(),
+                move || {
+                    let ctx = cancellation.clone();
                     let refresh_snapshot = Arc::clone(&refresh_snapshot);
                     async move {
                         if !ctx.is_cancelled() {
                             refresh_snapshot.refresh().await;
                         }
-                        Ok(())
                     }
-                });
+                },
+            );
             if let Err(error) = schedule_result {
                 error!(%error, "Failed to start consumer lag snapshot refresh");
                 return;
@@ -292,24 +294,26 @@ impl BrokerRuntime {
         let period = Duration::from_secs(24 * 60 * 60);
         let broker_stats_shutdown = Arc::clone(&self.composition.state.shutdown);
         let broker_stats = self.composition.state.broker_stats.clone();
+        let cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
         Self::log_scheduled_task_start(
             "daily_broker_stats_record",
-            self.lifecycle.scheduled_task_manager.add_fixed_rate_task_async(
-                Duration::from_millis(initial_delay),
-                period,
-                move |ctx| {
+            self.lifecycle.scheduled_tasks.schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap("broker.stats.daily-record", period)
+                    .with_initial_delay(Duration::from_millis(initial_delay)),
+                ScheduledExecutionPolicy::default(),
+                move || {
+                    let ctx = cancellation.clone();
                     let broker_stats_shutdown = Arc::clone(&broker_stats_shutdown);
                     let broker_stats = broker_stats.clone();
                     async move {
                         if ctx.is_cancelled() || broker_stats_shutdown.load(Ordering::Acquire) {
-                            return Ok(());
+                            return;
                         }
                         if let Some(broker_stats) = broker_stats.as_ref() {
                             broker_stats.record();
                         } else {
                             warn!("BrokerStats is not initialized");
                         }
-                        Ok(())
                     }
                 },
             ),
@@ -325,21 +329,16 @@ impl BrokerRuntime {
             .as_ref()
             .and_then(|result| result.as_ref().ok())
             .cloned();
-        let metadata_blocking = self
-            .composition
-            .state
-            .service_context
-            .as_ref()
-            .map(|context| context.metadata_io().clone());
+        let metadata_blocking = self.composition.state.service_context.metadata_io().clone();
 
-        let mut consumer_offset_config = ScheduledTaskConfig::fixed_rate(
+        let mut consumer_offset_config = ScheduledTaskConfig::fixed_rate_no_overlap(
             "broker.consumer-offset.flush",
             Duration::from_millis(flush_consumer_offset_interval),
         );
         consumer_offset_config.initial_delay = Duration::from_secs(10);
-        Self::log_bounded_scheduled_task_start(
+        Self::log_scheduled_task_start(
             "flush_consumer_offset",
-            self.lifecycle.bounded_scheduled_tasks.schedule_bounded(
+            self.lifecycle.scheduled_tasks.schedule(
                 consumer_offset_config,
                 ScheduledExecutionPolicy::serial(MissedTickPolicy::CoalesceLatest),
                 move || {
@@ -351,19 +350,14 @@ impl BrokerRuntime {
                         if consumer_offset_shutdown.load(Ordering::Acquire) {
                             return;
                         }
-                        let result = match metadata_blocking {
-                            Some(blocking) => {
-                                persist_config_manager(
-                                    consumer_offset_manager,
-                                    "broker.consumer-offset",
-                                    metadata_io,
-                                    blocking,
-                                    MetadataDeadline::after(Duration::from_secs(5)),
-                                )
-                                .await
-                            }
-                            None => consumer_offset_manager.persist(),
-                        };
+                        let result = persist_config_manager(
+                            consumer_offset_manager,
+                            "broker.consumer-offset",
+                            metadata_io,
+                            metadata_blocking,
+                            MetadataDeadline::after(Duration::from_secs(5)),
+                        )
+                        .await;
                         if let Err(error) = result {
                             warn!(%error, "Failed to persist consumer offsets");
                         }
@@ -382,18 +376,19 @@ impl BrokerRuntime {
             .as_ref()
             .and_then(|result| result.as_ref().ok())
             .cloned();
-        let metadata_blocking = self
-            .composition
-            .state
-            .service_context
-            .as_ref()
-            .map(|context| context.metadata_io().clone());
+        let metadata_blocking = self.composition.state.service_context.metadata_io().clone();
+        let cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
         Self::log_scheduled_task_start(
             "persist_consumer_filter_and_order_info",
-            self.lifecycle.scheduled_task_manager.add_fixed_rate_task_async(
-                Duration::from_secs(10),
-                Duration::from_secs(10),
-                move |ctx| {
+            self.lifecycle.scheduled_tasks.schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap(
+                    "broker.consumer-filter-order.persist",
+                    Duration::from_secs(10),
+                )
+                .with_initial_delay(Duration::from_secs(10)),
+                ScheduledExecutionPolicy::default(),
+                move || {
+                    let ctx = cancellation.clone();
                     let persistence_shutdown = Arc::clone(&persistence_shutdown);
                     let consumer_filter_manager = consumer_filter_manager.clone();
                     let consumer_order_info_manager = consumer_order_info_manager.clone();
@@ -401,22 +396,17 @@ impl BrokerRuntime {
                     let metadata_blocking = metadata_blocking.clone();
                     async move {
                         if ctx.is_cancelled() || persistence_shutdown.load(Ordering::Acquire) {
-                            return Ok(());
+                            return;
                         }
                         if let Some(consumer_filter_manager) = consumer_filter_manager.as_ref() {
-                            let result = match metadata_blocking.clone() {
-                                Some(blocking) => {
-                                    persist_config_manager(
-                                        consumer_filter_manager.clone(),
-                                        "broker.consumer-filter",
-                                        metadata_io.clone(),
-                                        blocking,
-                                        MetadataDeadline::after(Duration::from_secs(5)),
-                                    )
-                                    .await
-                                }
-                                None => consumer_filter_manager.persist(),
-                            };
+                            let result = persist_config_manager(
+                                consumer_filter_manager.clone(),
+                                "broker.consumer-filter",
+                                metadata_io.clone(),
+                                metadata_blocking.clone(),
+                                MetadataDeadline::after(Duration::from_secs(5)),
+                            )
+                            .await;
                             if let Err(error) = result {
                                 warn!(%error, "Failed to persist consumer filters");
                             }
@@ -424,27 +414,20 @@ impl BrokerRuntime {
                             warn!("ConsumerFilterManager is not initialized");
                         }
                         if let Some(consumer_order_info_manager) = consumer_order_info_manager.as_ref() {
-                            let result = match metadata_blocking {
-                                Some(blocking) => {
-                                    persist_config_manager(
-                                        consumer_order_info_manager.clone(),
-                                        "broker.consumer-order-info",
-                                        metadata_io,
-                                        blocking,
-                                        MetadataDeadline::after(Duration::from_secs(5)),
-                                    )
-                                    .await
-                                }
-                                None => consumer_order_info_manager.persist(),
-                            };
+                            let result = persist_config_manager(
+                                consumer_order_info_manager.clone(),
+                                "broker.consumer-order-info",
+                                metadata_io,
+                                metadata_blocking,
+                                MetadataDeadline::after(Duration::from_secs(5)),
+                            )
+                            .await;
                             if let Err(error) = result {
                                 warn!(%error, "Failed to persist consumer order info");
                             }
                         } else {
                             warn!("ConsumerOrderInfoManager is not initialized");
                         }
-
-                        Ok(())
                     }
                 },
             ),
@@ -456,18 +439,21 @@ impl BrokerRuntime {
         let protect_broker_config = self.composition.state.broker_config();
         let protect_slow_consumers = protect_broker_config.disable_consume_if_consumer_read_slowly;
         let consumer_fallbehind_threshold = protect_broker_config.consumer_fallbehind_threshold;
+        let cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
         Self::log_scheduled_task_start(
             "protect_broker",
-            self.lifecycle.scheduled_task_manager.add_fixed_rate_task_async(
-                Duration::from_mins(3),
-                Duration::from_mins(3),
-                move |ctx| {
+            self.lifecycle.scheduled_tasks.schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap("broker.protect", Duration::from_mins(3))
+                    .with_initial_delay(Duration::from_mins(3)),
+                ScheduledExecutionPolicy::default(),
+                move || {
+                    let ctx = cancellation.clone();
                     let protect_broker_shutdown = Arc::clone(&protect_broker_shutdown);
                     let protect_broker_stats = protect_broker_stats.clone();
                     let protect_subscription_groups = protect_subscription_groups.clone();
                     async move {
                         if ctx.is_cancelled() || protect_broker_shutdown.load(Ordering::Acquire) {
-                            return Ok(());
+                            return;
                         }
                         if protect_slow_consumers {
                             if let Some(fall_size_set) = protect_broker_stats
@@ -497,7 +483,6 @@ impl BrokerRuntime {
                                 }
                             }
                         }
-                        Ok(())
                     }
                 },
             ),
@@ -505,17 +490,20 @@ impl BrokerRuntime {
 
         let dispatch_report_shutdown = Arc::clone(&self.composition.state.shutdown);
         let dispatch_report_store = self.composition.state.escape_bridge().store_capability();
+        let cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
         Self::log_scheduled_task_start(
             "report_dispatch_behind_bytes",
-            self.lifecycle.scheduled_task_manager.add_fixed_rate_task_async(
-                Duration::from_secs(10),
-                Duration::from_secs(60),
-                move |ctx| {
+            self.lifecycle.scheduled_tasks.schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap("broker.dispatch-behind.report", Duration::from_secs(60))
+                    .with_initial_delay(Duration::from_secs(10)),
+                ScheduledExecutionPolicy::default(),
+                move || {
+                    let ctx = cancellation.clone();
                     let dispatch_report_shutdown = Arc::clone(&dispatch_report_shutdown);
                     let dispatch_report_store = dispatch_report_store.clone();
                     async move {
                         if ctx.is_cancelled() || dispatch_report_shutdown.load(Ordering::Acquire) {
-                            return Ok(());
+                            return;
                         }
                         if let Err(_unavailable) = dispatch_report_store.with_store(|message_store| {
                             let behind = message_store.dispatch_behind_bytes();
@@ -523,7 +511,6 @@ impl BrokerRuntime {
                         }) {
                             warn!("BrokerStorePort is not initialized");
                         }
-                        Ok(())
                     }
                 },
             ),
@@ -557,19 +544,22 @@ impl BrokerRuntime {
                 let slave_synchronize = self.composition.state.slave_synchronize.clone();
                 let config_state = self.composition.state.config_state.clone();
                 let last_sync_time_ms = Arc::new(AtomicU64::new(current_millis()));
+                let cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
                 Self::log_scheduled_task_start(
                     "slave_synchronize",
-                    self.lifecycle.scheduled_task_manager.add_fixed_rate_task_async(
-                        Duration::from_secs(10),
-                        Duration::from_secs(3),
-                        move |ctx| {
+                    self.lifecycle.scheduled_tasks.schedule(
+                        ScheduledTaskConfig::fixed_rate_no_overlap("broker.slave.synchronize", Duration::from_secs(3))
+                            .with_initial_delay(Duration::from_secs(10)),
+                        ScheduledExecutionPolicy::default(),
+                        move || {
+                            let ctx = cancellation.clone();
                             let slave_sync_shutdown = Arc::clone(&slave_sync_shutdown);
                             let slave_synchronize = slave_synchronize.clone();
                             let config_state = config_state.clone();
                             let last_sync_time_ms = Arc::clone(&last_sync_time_ms);
                             async move {
                                 if ctx.is_cancelled() || slave_sync_shutdown.load(Ordering::Acquire) {
-                                    return Ok(());
+                                    return;
                                 }
                                 if current_millis() - last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
                                     if let Some(slave_synchronize) = slave_synchronize.as_ref() {
@@ -582,7 +572,6 @@ impl BrokerRuntime {
                                         slave_synchronize.sync_timer_check_point().await
                                     }
                                 }
-                                Ok(())
                             }
                         },
                     ),
@@ -590,17 +579,23 @@ impl BrokerRuntime {
             } else {
                 let master_diff_shutdown = Arc::clone(&self.composition.state.shutdown);
                 let master_diff_store = self.composition.data_plane.escape_bridge_owner.store_capability();
+                let cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
                 Self::log_scheduled_task_start(
                     "print_master_and_slave_diff",
-                    self.lifecycle.scheduled_task_manager.add_fixed_rate_task_async(
-                        Duration::from_secs(10),
-                        Duration::from_secs(60),
-                        move |ctx| {
+                    self.lifecycle.scheduled_tasks.schedule(
+                        ScheduledTaskConfig::fixed_rate_no_overlap(
+                            "broker.replication-diff.report",
+                            Duration::from_secs(60),
+                        )
+                        .with_initial_delay(Duration::from_secs(10)),
+                        ScheduledExecutionPolicy::default(),
+                        move || {
+                            let ctx = cancellation.clone();
                             let master_diff_shutdown = Arc::clone(&master_diff_shutdown);
                             let master_diff_store = master_diff_store.clone();
                             async move {
                                 if ctx.is_cancelled() || master_diff_shutdown.load(Ordering::Acquire) {
-                                    return Ok(());
+                                    return;
                                 }
                                 match (
                                     master_diff_store.append_progress(),
@@ -623,7 +618,6 @@ impl BrokerRuntime {
                                         );
                                     }
                                 }
-                                Ok(())
                             }
                         },
                     ),
@@ -641,48 +635,42 @@ impl BrokerRuntime {
             let namesrv_shutdown = Arc::clone(&self.composition.state.shutdown);
             let namesrv_config = self.composition.state.config_state.clone();
             let broker_outer_api = self.composition.state.broker_outer_api.clone();
+            let cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
             Self::log_scheduled_task_start(
                 "update_namesrv_addr",
-                self.lifecycle
-                    .scheduled_task_manager
-                    .add_fixed_rate_no_overlap_task_async(
-                        Duration::from_secs(10),
-                        Duration::from_secs(60),
-                        move |ctx| {
-                            let namesrv_shutdown = Arc::clone(&namesrv_shutdown);
-                            let namesrv_config = namesrv_config.clone();
-                            let broker_outer_api = broker_outer_api.clone();
-                            async move {
-                                if ctx.is_cancelled() || namesrv_shutdown.load(Ordering::Acquire) {
-                                    return Ok(());
-                                }
-                                let broker_config = namesrv_config.broker_snapshot();
-                                if broker_config.fetch_name_srv_addr_by_dns_lookup {
-                                    if let Some(namesrv_addr) = &broker_config.namesrv_addr {
-                                        broker_outer_api
-                                            .update_name_server_address_list_by_dns_lookup(namesrv_addr.clone())
-                                            .await;
-                                    }
-                                } else if let Some(namesrv_addr) = &broker_config.namesrv_addr {
+                self.lifecycle.scheduled_tasks.schedule(
+                    ScheduledTaskConfig::fixed_rate_no_overlap("broker.namesrv-addr.update", Duration::from_secs(60))
+                        .with_initial_delay(Duration::from_secs(10)),
+                    ScheduledExecutionPolicy::default(),
+                    move || {
+                        let ctx = cancellation.clone();
+                        let namesrv_shutdown = Arc::clone(&namesrv_shutdown);
+                        let namesrv_config = namesrv_config.clone();
+                        let broker_outer_api = broker_outer_api.clone();
+                        async move {
+                            if ctx.is_cancelled() || namesrv_shutdown.load(Ordering::Acquire) {
+                                return;
+                            }
+                            let broker_config = namesrv_config.broker_snapshot();
+                            if broker_config.fetch_name_srv_addr_by_dns_lookup {
+                                if let Some(namesrv_addr) = &broker_config.namesrv_addr {
                                     broker_outer_api
-                                        .update_name_server_address_list(namesrv_addr.clone())
+                                        .update_name_server_address_list_by_dns_lookup(namesrv_addr.clone())
                                         .await;
                                 }
-                                Ok(())
+                            } else if let Some(namesrv_addr) = &broker_config.namesrv_addr {
+                                broker_outer_api
+                                    .update_name_server_address_list(namesrv_addr.clone())
+                                    .await;
                             }
-                        },
-                    ),
+                        }
+                    },
+                ),
             );
         }
     }
 
-    pub(super) fn log_scheduled_task_start(task_name: &str, task_id: rocketmq_runtime::RuntimeResult<u64>) {
-        if let Err(error) = task_id {
-            error!("Failed to start scheduled task {task_name}: {error}");
-        }
-    }
-
-    pub(super) fn log_bounded_scheduled_task_start(
+    pub(super) fn log_scheduled_task_start(
         task_name: &str,
         task_id: rocketmq_runtime::RuntimeResult<rocketmq_runtime::ScheduledTaskRegistrationOutcome>,
     ) {
@@ -694,72 +682,81 @@ impl BrokerRuntime {
     pub(crate) fn schedule_send_heartbeat(&mut self) {
         let broker_heartbeat_interval = self.composition.state.broker_config().broker_heartbeat_interval;
         let controller_runtime = self.composition.state.build_controller_runtime();
+        let cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
         Self::log_scheduled_task_start(
             "send_heartbeat",
-            self.lifecycle
-                .scheduled_task_manager
-                .add_fixed_rate_no_overlap_task_async(
-                    Duration::from_millis(1000),
+            self.lifecycle.scheduled_tasks.schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap(
+                    "broker.controller.heartbeat",
                     Duration::from_millis(broker_heartbeat_interval),
-                    move |ctx| {
-                        let controller_runtime = controller_runtime.clone();
-                        async move {
-                            if ctx.is_cancelled() {
-                                return Ok(());
-                            }
-                            controller_runtime.run_heartbeat_cycle().await;
-                            Ok(())
+                )
+                .with_initial_delay(Duration::from_millis(1000)),
+                ScheduledExecutionPolicy::default(),
+                move || {
+                    let ctx = cancellation.clone();
+                    let controller_runtime = controller_runtime.clone();
+                    async move {
+                        if ctx.is_cancelled() {
+                            return;
                         }
-                    },
-                ),
+                        controller_runtime.run_heartbeat_cycle().await;
+                    }
+                },
+            ),
         );
     }
 
     pub(crate) fn schedule_sync_controller_metadata(&mut self) {
         let period = self.composition.state.broker_config().sync_controller_metadata_period;
         let controller_runtime = self.composition.state.build_controller_runtime();
+        let cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
         Self::log_scheduled_task_start(
             "sync_controller_metadata",
-            self.lifecycle
-                .scheduled_task_manager
-                .add_fixed_rate_no_overlap_task_async(
-                    Duration::from_millis(1000),
+            self.lifecycle.scheduled_tasks.schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap(
+                    "broker.controller.metadata-sync",
                     Duration::from_millis(period),
-                    move |ctx| {
-                        let controller_runtime = controller_runtime.clone();
-                        async move {
-                            if ctx.is_cancelled() {
-                                return Ok(());
-                            }
-                            controller_runtime.refresh_controller_leader().await;
-                            Ok(())
+                )
+                .with_initial_delay(Duration::from_millis(1000)),
+                ScheduledExecutionPolicy::default(),
+                move || {
+                    let ctx = cancellation.clone();
+                    let controller_runtime = controller_runtime.clone();
+                    async move {
+                        if ctx.is_cancelled() {
+                            return;
                         }
-                    },
-                ),
+                        controller_runtime.refresh_controller_leader().await;
+                    }
+                },
+            ),
         );
     }
 
     pub(crate) fn schedule_sync_controller_replica_info(&mut self) {
         let period = self.composition.state.broker_config().sync_broker_metadata_period;
         let controller_runtime = self.composition.state.build_controller_runtime();
+        let cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
         Self::log_scheduled_task_start(
             "sync_controller_replica_info",
-            self.lifecycle
-                .scheduled_task_manager
-                .add_fixed_rate_no_overlap_task_async(
-                    Duration::from_millis(3000),
+            self.lifecycle.scheduled_tasks.schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap(
+                    "broker.controller.replica-sync",
                     Duration::from_millis(period),
-                    move |ctx| {
-                        let controller_runtime = controller_runtime.clone();
-                        async move {
-                            if ctx.is_cancelled() {
-                                return Ok(());
-                            }
-                            controller_runtime.sync_controller_replica_info().await;
-                            Ok(())
+                )
+                .with_initial_delay(Duration::from_millis(3000)),
+                ScheduledExecutionPolicy::default(),
+                move || {
+                    let ctx = cancellation.clone();
+                    let controller_runtime = controller_runtime.clone();
+                    async move {
+                        if ctx.is_cancelled() {
+                            return;
                         }
-                    },
-                ),
+                        controller_runtime.sync_controller_replica_info().await;
+                    }
+                },
+            ),
         );
     }
 

@@ -16,16 +16,17 @@ use std::future::Future;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicU8;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
-use dashmap::DashSet;
 use futures::future::join_all;
 use parking_lot::Mutex;
 use parking_lot::MutexGuard;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::RuntimeError;
@@ -33,7 +34,6 @@ use crate::error::RuntimeResult;
 use crate::shutdown_deadline::ABORT_CONFIRMATION_TIMEOUT;
 use crate::task_group::TaskGroup;
 use crate::task_group::TaskGroupId;
-use crate::task_group::TaskId;
 use crate::task_group::TaskKind;
 
 /// Why an accepted operation task finished, after its future was destroyed.
@@ -104,12 +104,19 @@ pub struct OperationContext {
 
 #[derive(Debug)]
 struct OperationContextInner {
+    /// Process-unique id; the owner's task registry tags operation tasks with it.
+    id: u64,
     cancellation: CancellationToken,
     deadline: Option<Instant>,
     accepting: AtomicBool,
+    /// Serializes admission with `close_admission` and `cancel`.
     spawn_gate: Mutex<()>,
-    owner_id: Mutex<Option<TaskGroupId>>,
-    active_tasks: Arc<DashSet<TaskId>>,
+    /// Id of the component owner, or zero before the first submission.
+    owner_id: AtomicU64,
+    /// Accepted tasks whose futures have not yet been destroyed.
+    active: AtomicUsize,
+    /// Woken when `active` drops to zero.
+    idle: Notify,
     outcomes: [AtomicU64; 6],
     observer: OnceLock<Arc<dyn OperationOutcomeObserver>>,
 }
@@ -126,19 +133,26 @@ impl OperationContext {
     }
 
     fn from_parts(deadline: Option<Instant>, task_kind: TaskKind) -> Self {
+        static NEXT_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
         Self {
             inner: Arc::new(OperationContextInner {
+                id: NEXT_OPERATION_ID.fetch_add(1, Ordering::Relaxed),
                 cancellation: CancellationToken::new(),
                 deadline,
                 accepting: AtomicBool::new(true),
                 spawn_gate: Mutex::new(()),
-                owner_id: Mutex::new(None),
-                active_tasks: Arc::new(DashSet::new()),
+                owner_id: AtomicU64::new(0),
+                active: AtomicUsize::new(0),
+                idle: Notify::new(),
                 outcomes: std::array::from_fn(|_| AtomicU64::new(0)),
                 observer: OnceLock::new(),
             }),
             task_kind,
         }
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        self.inner.id
     }
 
     /// Returns the operation-local cancellation token.
@@ -188,7 +202,7 @@ impl OperationContext {
 
     /// Returns the number of operation tasks that have not completed.
     pub fn active_task_count(&self) -> usize {
-        self.inner.active_tasks.len()
+        self.inner.active.load(Ordering::Acquire)
     }
 
     /// Reads counters without retaining individual task history.
@@ -211,7 +225,7 @@ impl OperationContext {
     /// Returns an error after owner binding or an earlier observer installation.
     pub fn set_outcome_observer(&self, observer: Arc<dyn OperationOutcomeObserver>) -> RuntimeResult<()> {
         let _gate = self.inner.spawn_gate.lock();
-        if self.inner.owner_id.lock().is_some() || self.inner.observer.set(observer).is_err() {
+        if self.inner.owner_id.load(Ordering::Acquire) != 0 || self.inner.observer.set(observer).is_err() {
             return Err(RuntimeError::context_unavailable(
                 crate::RuntimeOperation::SpawnOperation,
             ));
@@ -235,9 +249,14 @@ impl OperationContext {
         self.wait(owner, timeout).await
     }
 
-    /// Waits for all currently registered operation tasks without requesting
-    /// cancellation. Tasks still running at the shared deadline are aborted and
-    /// awaited for a bounded confirmation window.
+    /// Waits until no operation task is active and `owner` has settled every
+    /// one, without requesting cancellation. Tasks still running at the
+    /// deadline are aborted and awaited for a bounded confirmation window.
+    ///
+    /// Tasks accepted during the wait are waited for too; close admission
+    /// first when new tasks may still be submitted. Returns `true` when every
+    /// task finished before the deadline; `owner` then no longer lists any of
+    /// them.
     ///
     /// # Errors
     ///
@@ -246,45 +265,53 @@ impl OperationContext {
     pub async fn wait(&self, owner: &TaskGroup, timeout: Duration) -> RuntimeResult<bool> {
         self.ensure_owner(owner.id())?;
         let deadline = Instant::now() + timeout;
-        let task_ids = self
-            .inner
-            .active_tasks
-            .iter()
-            .map(|task_id| *task_id)
-            .collect::<Vec<_>>();
+        loop {
+            // Registered before the check, so a wakeup in between is not lost.
+            let idle = self.inner.idle.notified();
+            if self.inner.active.load(Ordering::Acquire) == 0 {
+                // A task stops counting as active when its future is
+                // destroyed; its owner settles it just afterwards. Wait for
+                // that too, so a caller never finds a finished task still
+                // registered with the owner.
+                let unsettled = owner.operation_task_ids(self.inner.id);
+                if unsettled.is_empty() {
+                    return Ok(true);
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let settled = join_all(unsettled.into_iter().map(|task_id| owner.wait_task(task_id, remaining))).await;
+                if settled.into_iter().all(|settled| settled) {
+                    continue;
+                }
+                break;
+            }
+            if tokio::time::timeout_at(deadline.into(), idle).await.is_err() {
+                break;
+            }
+        }
 
-        let completed = join_all(task_ids.iter().copied().map(|task_id| {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            owner.wait_task(task_id, remaining)
-        }))
-        .await;
-        let timed_out = task_ids
-            .into_iter()
-            .zip(completed)
-            .filter_map(|(task_id, completed)| (!completed && owner.contains_task(task_id)).then_some(task_id))
-            .collect::<Vec<_>>();
-
+        let remaining = owner.operation_task_ids(self.inner.id);
         join_all(
-            timed_out
-                .iter()
-                .copied()
+            remaining
+                .into_iter()
                 .map(|task_id| owner.abort_task_and_wait(task_id, ABORT_CONFIRMATION_TIMEOUT)),
         )
         .await;
-
-        Ok(timed_out.is_empty() && self.active_task_count() == 0)
+        Ok(false)
     }
 
+    /// Admits one task: binds the owner and counts the task as active.
+    ///
+    /// The caller holds [`Self::spawn_guard`], so admission cannot interleave
+    /// with `close_admission` or `cancel`.
     pub(crate) fn prepare_spawn(&self, owner_id: TaskGroupId) -> RuntimeResult<OperationTaskRegistration> {
         self.bind_owner(owner_id)?;
         if !self.inner.accepting.load(Ordering::Acquire)
             || self.is_cancelled()
             || self.inner.deadline.is_some_and(|deadline| deadline <= Instant::now())
         {
-            return Err(RuntimeError::context_unavailable(
-                crate::RuntimeOperation::SpawnOperation,
-            ));
+            return Err(RuntimeError::closed(crate::RuntimeOperation::SpawnOperation));
         }
+        self.inner.active.fetch_add(1, Ordering::AcqRel);
         Ok(OperationTaskRegistration::new(Arc::clone(&self.inner), self.task_kind))
     }
 
@@ -316,25 +343,22 @@ impl OperationContext {
     }
 
     fn bind_owner(&self, owner_id: TaskGroupId) -> RuntimeResult<()> {
-        let mut bound_owner = self.inner.owner_id.lock();
-        match *bound_owner {
-            Some(bound_owner) if bound_owner != owner_id => {
-                Err(RuntimeError::internal_failure(crate::RuntimeOperation::OperationOwner))
-            }
-            Some(_) => Ok(()),
-            None => {
-                *bound_owner = Some(owner_id);
-                Ok(())
-            }
+        match self
+            .inner
+            .owner_id
+            .compare_exchange(0, owner_id.as_u64(), Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => Ok(()),
+            Err(bound_owner) if bound_owner == owner_id.as_u64() => Ok(()),
+            Err(_) => Err(RuntimeError::internal_failure(crate::RuntimeOperation::OperationOwner)),
         }
     }
 
     fn ensure_owner(&self, owner_id: TaskGroupId) -> RuntimeResult<()> {
-        match *self.inner.owner_id.lock() {
-            Some(bound_owner) if bound_owner != owner_id => {
-                Err(RuntimeError::internal_failure(crate::RuntimeOperation::OperationOwner))
-            }
-            _ => Ok(()),
+        match self.inner.owner_id.load(Ordering::Acquire) {
+            0 => Ok(()),
+            bound_owner if bound_owner == owner_id.as_u64() => Ok(()),
+            _ => Err(RuntimeError::internal_failure(crate::RuntimeOperation::OperationOwner)),
         }
     }
 }
@@ -343,23 +367,29 @@ pub(crate) struct OperationTaskRegistration {
     state: Arc<OperationTaskRegistrationState>,
 }
 
+/// Set once the owner accepted the task.
+const TASK_REGISTERED: u8 = 1;
+/// Set once the task's future was destroyed.
+const TASK_COMPLETED: u8 = 2;
+
 struct OperationTaskRegistrationState {
-    task_id: AtomicU64,
-    completed: AtomicBool,
+    /// `TASK_REGISTERED` and `TASK_COMPLETED` bits. Both sides set their bit
+    /// with one read-modify-write, so exactly one sees the other bit and
+    /// records the outcome.
+    progress: AtomicU8,
+    outcome: AtomicU8,
     operation: Arc<OperationContextInner>,
     task_kind: TaskKind,
-    outcome: AtomicU8,
 }
 
 impl OperationTaskRegistration {
     fn new(operation: Arc<OperationContextInner>, task_kind: TaskKind) -> Self {
         Self {
             state: Arc::new(OperationTaskRegistrationState {
-                task_id: AtomicU64::new(0),
-                completed: AtomicBool::new(false),
+                progress: AtomicU8::new(0),
+                outcome: AtomicU8::new(0),
                 operation,
                 task_kind,
-                outcome: AtomicU8::new(0),
             }),
         }
     }
@@ -371,16 +401,13 @@ impl OperationTaskRegistration {
         }
     }
 
-    pub(crate) fn register(&self, task_id: TaskId) {
-        self.state.operation.active_tasks.insert(task_id);
-        self.state.task_id.store(task_id.as_u64(), Ordering::Release);
-        if self.state.completed.load(Ordering::Acquire) {
-            self.state.operation.active_tasks.remove(&task_id);
-        }
-    }
-
+    /// Marks the task as accepted by its owner. A task the owner rejected
+    /// never records an outcome.
     pub(crate) fn finish_registration(self) {
-        self.state.record_if_ready();
+        let previous = self.state.progress.fetch_or(TASK_REGISTERED, Ordering::AcqRel);
+        if previous & TASK_COMPLETED != 0 {
+            self.state.record(self.state.outcome.load(Ordering::Acquire));
+        }
     }
 }
 
@@ -397,36 +424,29 @@ impl Drop for OperationTaskGuard {
             self.outcome
         };
         self.state.outcome.store(outcome as u8, Ordering::Release);
-        self.state.completed.store(true, Ordering::Release);
-        let task_id = self.state.task_id.load(Ordering::Acquire);
-        if task_id != 0 {
-            self.state.operation.active_tasks.remove(&TaskId::from_raw(task_id));
+        let previous = self.state.progress.fetch_or(TASK_COMPLETED, Ordering::AcqRel);
+        if previous & TASK_REGISTERED != 0 {
+            self.state.record(outcome as u8);
         }
-        self.state.record_if_ready();
+        // Counters are published before a waiter can observe the operation idle.
+        let operation = &self.state.operation;
+        if operation.active.fetch_sub(1, Ordering::AcqRel) == 1 {
+            operation.idle.notify_waiters();
+        }
     }
 }
 
 impl OperationTaskRegistrationState {
-    fn record_if_ready(&self) {
-        if self.task_id.load(Ordering::Acquire) == 0 {
-            return;
-        }
-        let value = self.outcome.load(Ordering::Acquire);
+    fn record(&self, value: u8) {
         let Some(outcome) = OperationOutcome::ALL
             .into_iter()
             .find(|outcome| *outcome as u8 == value)
         else {
             return;
         };
-        if self
-            .outcome
-            .compare_exchange(value, u8::MAX, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            self.operation.outcomes[value as usize - 1].fetch_add(1, Ordering::Release);
-            if let Some(observer) = self.operation.observer.get() {
-                observer.on_outcome(self.task_kind, outcome);
-            }
+        self.operation.outcomes[value as usize - 1].fetch_add(1, Ordering::Release);
+        if let Some(observer) = self.operation.observer.get() {
+            observer.on_outcome(self.task_kind, outcome);
         }
     }
 }
@@ -472,6 +492,48 @@ impl<F: Future<Output = ()>> OperationExecution<F> {
 mod tests {
     use super::*;
     use crate::RuntimeContext;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_returns_only_after_the_owner_settles_the_tasks() {
+        let context = RuntimeContext::from_current("operation-settlement");
+        let owner = context.service_context("owner").task_group().clone();
+        let operation = OperationContext::without_deadline(TaskKind::Worker);
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<()>();
+        let task_id = owner
+            .spawn_operation(&operation, "settles-late", async move {
+                let _ = finish_rx.await;
+            })
+            .unwrap();
+
+        // Hold the owner's settlement gate on another thread, so the task's
+        // future can be destroyed while the owner cannot yet settle it.
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let gate_owner = owner.clone();
+        let holder = std::thread::spawn(move || {
+            let _settlement = gate_owner.lock_settlement_for_test();
+            locked_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        locked_rx.recv().unwrap();
+        finish_tx.send(()).unwrap();
+        while operation.active_task_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+
+        let mut wait = Box::pin(operation.wait(&owner, Duration::from_secs(5)));
+        assert!(
+            futures::poll!(wait.as_mut()).is_pending(),
+            "a task the owner has not settled still belongs to the operation"
+        );
+        assert!(owner.contains_task(task_id));
+
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+        assert!(wait.await.unwrap());
+        assert!(!owner.contains_task(task_id));
+        assert_eq!(owner.task_count(), 0);
+    }
 
     struct OutcomeFuture {
         dropped: Arc<AtomicBool>,

@@ -24,6 +24,7 @@ use rocketmq_error::SharedError;
 use rocketmq_proxy_core::GrpcTlsClientAuth;
 use rocketmq_proxy_core::GrpcTlsConfig;
 use rocketmq_runtime::BlockingExecutor;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
@@ -93,7 +94,7 @@ impl ReloadableGrpcTlsAcceptor {
         let mut schedule = ScheduledTaskConfig::fixed_rate_no_overlap("proxy.grpc.tls-reload", interval);
         schedule.initial_delay = interval;
         scheduled_tasks
-            .schedule_fixed_rate_no_overlap(schedule, move || {
+            .schedule(schedule, ScheduledExecutionPolicy::default(), move || {
                 let runtime = runtime.clone();
                 async move {
                     runtime.reload_if_changed().await;

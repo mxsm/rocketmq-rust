@@ -56,8 +56,8 @@ use rocketmq_protocol::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
+use rocketmq_runtime::common::time_utils;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_transport::api::RPCHook;
 use rocketmq_transport::api::RpcRequestHeader;
@@ -805,7 +805,7 @@ impl DefaultMQPushConsumerImpl {
             .consumer_config_snapshot()
             .consume_timestamp
             .as_deref()
-            .and_then(|timestamp| util_all::parse_date_to_millis(timestamp, util_all::YYYYMMDDHHMMSS))
+            .and_then(|timestamp| time_utils::parse_date_to_millis(timestamp, time_utils::YYYYMMDDHHMMSS))
             .is_some();
         if !valid_consume_timestamp {
             return Err(mq_client_err!(format!(

@@ -795,9 +795,9 @@ impl MetadataIoReceipt {
         }
         match self.conclude(deadline).await {
             ReceiptConclusion::Delivered(result) => result,
-            ReceiptConclusion::CoordinatorStopped => Err(RuntimeError::context_unavailable(
-                crate::RuntimeOperation::MetadataWorkerStopped,
-            )),
+            ReceiptConclusion::CoordinatorStopped => {
+                Err(RuntimeError::closed(crate::RuntimeOperation::MetadataWorkerStopped))
+            }
             ReceiptConclusion::Expired => Err(RuntimeError::timed_out(crate::RuntimeOperation::WaitForDurableMetadata)),
         }
     }
@@ -1038,9 +1038,7 @@ impl MetadataIoActor {
         let (waiter_sender, durable) = oneshot::channel();
         let mut state = self.inner.state.lock();
         if !state.accepting {
-            return Err(RuntimeError::context_unavailable(
-                crate::RuntimeOperation::MetadataIoClosed,
-            ));
+            return Err(RuntimeError::closed(crate::RuntimeOperation::MetadataIoClosed));
         }
 
         let Some(target_registration) = ensure_target_registration(&mut state, &self.inner.targets, &request)? else {
@@ -1063,9 +1061,7 @@ impl MetadataIoActor {
                 if generation <= in_flight.generation {
                     let waiter_permit = self.inner.reserve_waiter(existing.waiters.len())?;
                     let Some(resource_state) = state.resources.get_mut(&resource) else {
-                        return Err(RuntimeError::context_unavailable(
-                            crate::RuntimeOperation::MetadataWorkerStopped,
-                        ));
+                        return Err(RuntimeError::closed(crate::RuntimeOperation::MetadataWorkerStopped));
                     };
                     resource_state.waiters.push(GenerationWaiter {
                         generation,
@@ -1083,9 +1079,7 @@ impl MetadataIoActor {
                 if generation <= queued.request.generation {
                     let waiter_permit = self.inner.reserve_waiter(existing.waiters.len())?;
                     let Some(resource_state) = state.resources.get_mut(&resource) else {
-                        return Err(RuntimeError::context_unavailable(
-                            crate::RuntimeOperation::MetadataWorkerStopped,
-                        ));
+                        return Err(RuntimeError::closed(crate::RuntimeOperation::MetadataWorkerStopped));
                     };
                     resource_state.waiters.push(GenerationWaiter {
                         generation,
@@ -1727,7 +1721,7 @@ fn finish_worker(inner: &ActorInner) {
         }
     }
     for (_resource, waiter) in abandoned {
-        let _ = waiter.sender.send(Err(RuntimeError::context_unavailable(
+        let _ = waiter.sender.send(Err(RuntimeError::closed(
             crate::RuntimeOperation::MetadataWorkerStopped,
         )));
     }

@@ -60,12 +60,7 @@ impl BrokerRuntime {
         self.initialize_deferred_lifecycle()?;
         let (mut prepared_processor, _fast_request_processor) = self.init_processor_checked()?;
         self.initialize_consumer_lag_observability();
-        let service_context = self.composition.state.service_context.as_ref().ok_or_else(|| {
-            BrokerStartupError::initialization(
-                "service_context",
-                "broker remoting servers require an injected service context".to_owned(),
-            )
-        })?;
+        let service_context = &self.composition.state.service_context;
         let admission = self
             .composition
             .request_pipeline
@@ -121,15 +116,7 @@ impl BrokerRuntime {
             .startup_journal
             .complete(BrokerComponent::RequestProcessors);
 
-        let Some(remoting_server_task_group) = self.broker_task_group_or_current(
-            "rocketmq-broker.remoting-server",
-            "failed to start broker remoting servers outside Tokio runtime",
-        ) else {
-            return Err(BrokerStartupError::component_start_detail(
-                "remoting_servers",
-                "a Tokio runtime and owned task group are required",
-            ));
-        };
+        let remoting_server_task_group = self.broker_component_task_group("rocketmq-broker.remoting-server");
         self.lifecycle.remoting_server_task_group = Some(remoting_server_task_group.clone());
 
         let broker_config = self.composition.state.broker_config();
@@ -255,17 +242,26 @@ impl BrokerRuntime {
 
         if !self.composition.control_plane.broadcast_offset_scan_started {
             let broadcast_offset_manager = self.composition.state.broadcast_offset_manager.clone();
+            let scan_cancellation = self.lifecycle.scheduled_tasks.group().cancellation_token();
             self.lifecycle
-                .scheduled_task_manager
-                .add_fixed_rate_no_overlap_task(SCAN_INTERVAL, SCAN_INTERVAL, move |cancellation| {
-                    let broadcast_offset_manager = broadcast_offset_manager.clone();
-                    async move {
-                        if !cancellation.is_cancelled() {
-                            broadcast_offset_manager.scan_offset_data();
+                .scheduled_tasks
+                .schedule(
+                    rocketmq_runtime::ScheduledTaskConfig::fixed_rate_no_overlap(
+                        "broker.broadcast-offset.scan",
+                        SCAN_INTERVAL,
+                    )
+                    .with_initial_delay(SCAN_INTERVAL),
+                    rocketmq_runtime::ScheduledExecutionPolicy::default(),
+                    move || {
+                        let cancellation = scan_cancellation.clone();
+                        let broadcast_offset_manager = broadcast_offset_manager.clone();
+                        async move {
+                            if !cancellation.is_cancelled() {
+                                broadcast_offset_manager.scan_offset_data();
+                            }
                         }
-                        Ok(())
-                    }
-                })
+                    },
+                )
                 .map_err(|error| BrokerStartupError::component_start("broadcast_offset_manager", error))?;
             self.composition.control_plane.broadcast_offset_scan_started = true;
         }

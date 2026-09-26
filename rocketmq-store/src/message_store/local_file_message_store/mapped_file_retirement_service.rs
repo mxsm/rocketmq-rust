@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ShutdownDeadline;
@@ -201,8 +202,9 @@ impl<D: RetirementBatchDriver> MappedFileRetirementService<D> {
         let accepting = Arc::clone(&self.accepting);
         let latest_report = Arc::clone(&self.latest_report);
         let batch_size = self.config.batch_size;
-        if let Err(source) = scheduled_tasks.schedule_fixed_delay(
+        if let Err(source) = scheduled_tasks.schedule(
             ScheduledTaskConfig::fixed_delay("mapped-file-retirement-reaper", self.config.period),
+            ScheduledExecutionPolicy::default(),
             move || {
                 let driver = driver.clone();
                 let runtime_scope = runtime_scope.clone();

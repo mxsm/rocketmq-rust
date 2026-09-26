@@ -377,8 +377,8 @@ fn five_services_publish_readiness_from_complete_evidence() {
     }
     let probe = read("rocketmq-runtime/src/service_lifecycle/probe.rs");
     for marker in [
-        r#""/readyz" if self.is_ready() => probe_response(200, "ready", self.state()),"#,
-        r#""/readyz" => probe_response(503, "not_ready", self.state()),"#,
+        r#""/readyz" if self.is_ready() => probe_response(200, "ready", self.state(), None),"#,
+        r#""/readyz" => probe_response(503, "not_ready", self.state(), None),"#,
     ] {
         assert!(
             probe.contains(marker),

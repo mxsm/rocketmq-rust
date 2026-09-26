@@ -68,7 +68,6 @@ use rocketmq_protocol::protocol::remoting_command::RemotingCommand;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_runtime::common::time_utils;
-use rocketmq_runtime::common::util_all;
 use rocketmq_store::store_append_receipt;
 use rocketmq_store::BrokerMasterAddressStore;
 use rocketmq_store::BrokerStatsManager;
@@ -1309,7 +1308,7 @@ where
                 .set_code(RemotingSysResponseCode::SystemError)
                 .set_remark(format!(
                     "broker unable to service, until {}",
-                    util_all::time_millis_to_human_string2(start_timestamp)
+                    time_utils::time_millis_to_human_string2(start_timestamp)
                 ));
             return response;
         }

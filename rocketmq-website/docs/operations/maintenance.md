@@ -29,7 +29,7 @@ Observe actual minimum queue offsets and disk usage after a change. Restoring th
 1. Identify the exact process/Pod, identity, current role, data roots, and replacement command/configuration.
 2. Verify surviving Controller majority and Broker replication/write capacity. If the selected topology cannot maintain writes during the restart, plan a write pause instead of assuming availability.
 3. Stop routing new application work to the affected path where the application/deployment supports it. Let admitted operations and business work settle; account for uncertain sends, POP receipts, prepared transactions, and retained response streams.
-4. Request normal service shutdown through its process supervisor or deployment lifecycle. The core chart invokes `/drainz` before termination and budgets service shutdown inside Pod grace time.
+4. Request normal service shutdown through its process supervisor or deployment lifecycle. The core chart invokes `/drainz` before termination and budgets service shutdown inside Pod grace time. A manual drain request uses `POST`; `GET` is accepted only where `ROCKETMQ_HEALTH_DRAIN_METHODS=GET,POST` is set.
 5. Inspect shutdown results and confirm the old owner has stopped before reopening the same store. Cancellation and timeout are not proof that a blocking operation has finished.
 
 Stopping a consumer can cause another consumer to receive unfinished work. Idempotent business handling and the mode's offset/ACK completion remain necessary during maintenance. Draining a Proxy does not by itself drain every application connected directly to Brokers.

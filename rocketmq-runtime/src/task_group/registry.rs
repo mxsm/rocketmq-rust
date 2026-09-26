@@ -24,6 +24,13 @@ use super::TaskGroupInner;
 use super::TaskId;
 use super::TaskMeta;
 
+/// Shards of a group's task table.
+///
+/// Dashmap defaults to four shards per CPU, which costs several KiB for every
+/// idle connection group. Eight keep concurrent submissions to one shared
+/// group spread out.
+const TASK_TABLE_SHARDS: usize = 8;
+
 #[derive(Debug)]
 struct ChildRegistration {
     inner: Weak<TaskGroupInner>,
@@ -38,7 +45,7 @@ pub(super) struct ActiveTaskRegistry {
 impl ActiveTaskRegistry {
     pub(super) fn new() -> Self {
         Self {
-            tasks: DashMap::new(),
+            tasks: DashMap::with_shard_amount(TASK_TABLE_SHARDS),
             children: Mutex::new(HashMap::new()),
         }
     }

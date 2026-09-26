@@ -72,7 +72,6 @@ impl RuntimeContext {
     ) -> RuntimeResult<Self> {
         let name = name.into();
         let global_blocking_capacity = blocking_policies.total_max_concurrency();
-        let root_group = TaskGroup::root(name.clone(), runtime.clone());
         let diagnostics = RuntimeDiagnostics::new();
         let resources = RuntimeResources::from_memory_budget(
             ManagedMemoryBudget::resolve(
@@ -86,7 +85,6 @@ impl RuntimeContext {
         let root = RootServiceContext::new(
             name,
             runtime,
-            root_group,
             blocking_policies,
             global_blocking_capacity,
             diagnostics,

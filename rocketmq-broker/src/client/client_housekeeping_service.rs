@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -35,7 +36,7 @@ use tokio::sync::Notify;
 use tracing::debug;
 use tracing::warn;
 
-use crate::broker_runtime::broker_task_group_or_current;
+use crate::broker_runtime::broker_component_task_group;
 use crate::client::manager::consumer_manager::ConsumerConnectionHousekeeping;
 use crate::client::manager::producer_manager::ProducerConnectionHousekeeping;
 
@@ -45,7 +46,7 @@ pub struct ClientHousekeepingService {
     producer_housekeeping: ProducerConnectionHousekeeping,
     consumer_housekeeping: ConsumerConnectionHousekeeping,
     broker_stats_manager: Arc<BrokerStatsManager>,
-    service_context: Option<ChildServiceContext>,
+    service_context: ChildServiceContext,
     shutdown: Arc<Notify>,
     shutdown_requested: Arc<AtomicBool>,
     task_group: Arc<Mutex<Option<TaskGroup>>>,
@@ -72,7 +73,7 @@ impl ClientHousekeepingService {
         producer_housekeeping: ProducerConnectionHousekeeping,
         consumer_housekeeping: ConsumerConnectionHousekeeping,
         broker_stats_manager: Arc<BrokerStatsManager>,
-        service_context: Option<ChildServiceContext>,
+        service_context: ChildServiceContext,
     ) -> Self {
         Self {
             producer_housekeeping,
@@ -92,9 +93,7 @@ impl ClientHousekeepingService {
             return;
         }
 
-        let Some(task_group) = self.task_group() else {
-            return;
-        };
+        let task_group = self.task_group();
 
         if self.task_count() > 0 {
             debug!("Broker client housekeeping service is already running");
@@ -103,11 +102,12 @@ impl ClientHousekeepingService {
 
         let broker_runtime_inner = self.clone();
         let scheduled_tasks = ScheduledTaskGroup::new(task_group.clone());
-        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(
+        if let Err(error) = scheduled_tasks.schedule(
             ScheduledTaskConfig::fixed_rate_no_overlap(
                 "broker.client-housekeeping.scan",
                 tokio::time::Duration::from_millis(10_000),
             ),
+            ScheduledExecutionPolicy::default(),
             move || {
                 let broker_runtime_inner = broker_runtime_inner.clone();
                 async move {
@@ -160,21 +160,17 @@ impl ClientHousekeepingService {
         }
     }
 
-    fn task_group(&self) -> Option<TaskGroup> {
+    fn task_group(&self) -> TaskGroup {
         let mut task_group = self.task_group.lock();
         if let Some(group) = task_group.as_ref() {
             if group.lifecycle_state() == TaskGroupLifecycleState::Open {
-                return Some(group.clone());
+                return group.clone();
             }
         }
 
-        let group = broker_task_group_or_current(
-            self.service_context.as_ref(),
-            "rocketmq-broker.client-housekeeping",
-            "failed to start broker client housekeeping outside Tokio runtime",
-        )?;
+        let group = broker_component_task_group(&self.service_context, "rocketmq-broker.client-housekeeping");
         *task_group = Some(group.clone());
-        Some(group)
+        group
     }
 
     pub(crate) fn task_count(&self) -> usize {

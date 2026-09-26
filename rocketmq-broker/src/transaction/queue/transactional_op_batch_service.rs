@@ -36,20 +36,13 @@ where
 {
     service_manager: ServiceManager<TransactionalOpBatchServiceInner<MS>>,
     #[cfg(test)]
-    pub(super) parent_for_test: Option<TaskGroup>,
+    pub(super) parent_for_test: TaskGroup,
 }
 
 impl<MS> TransactionalOpBatchService<MS>
 where
     MS: BrokerWriteStore + BrokerMasterAddressStore,
 {
-    pub fn new(
-        broker_config: Arc<BrokerConfig>,
-        transactional_message_service: Weak<DefaultTransactionalMessageService<MS>>,
-    ) -> Self {
-        Self::with_owner(broker_config, transactional_message_service, None)
-    }
-
     /// Owns the batch loop and its final queue drain under the broker group.
     ///
     /// A cooperative exit closes operation admission and attempts to flush
@@ -61,30 +54,16 @@ where
         transactional_message_service: Weak<DefaultTransactionalMessageService<MS>>,
         parent: TaskGroup,
     ) -> Self {
-        Self::with_owner(broker_config, transactional_message_service, Some(parent))
-    }
-
-    fn with_owner(
-        broker_config: Arc<BrokerConfig>,
-        transactional_message_service: Weak<DefaultTransactionalMessageService<MS>>,
-        parent: Option<TaskGroup>,
-    ) -> Self {
         let inner = TransactionalOpBatchServiceInner {
-            cancellation: parent.as_ref().map(TaskGroup::cancellation_token).unwrap_or_default(),
+            cancellation: parent.cancellation_token(),
             broker_config,
             transactional_message_service,
             wakeup_timestamp: AtomicU64::new(0),
         };
-        #[cfg(test)]
-        let parent_for_test = parent.clone();
-        let service_manager = match parent {
-            Some(parent) => ServiceManager::new_with_task_group(inner, parent),
-            None => ServiceManager::new_legacy_compatibility(inner),
-        };
         TransactionalOpBatchService {
-            service_manager,
             #[cfg(test)]
-            parent_for_test,
+            parent_for_test: parent.clone(),
+            service_manager: ServiceManager::new_with_task_group(inner, parent),
         }
     }
 
@@ -95,14 +74,15 @@ where
             .map_err(|source| crate::broker_error::broker_task_failed("TransactionalOpBatchService", source))
     }
 
-    pub async fn shutdown(&self) {
-        if let Err(error) = self.service_manager.shutdown().await {
+    /// Stops the batch loop, waiting no later than `deadline`.
+    pub async fn shutdown_until(&self, deadline: rocketmq_runtime::ShutdownDeadline) {
+        if let Err(error) = self.service_manager.shutdown_until(deadline).await {
             warn!(error = %error, "TransactionalOpBatchService shutdown failed");
         }
     }
 
-    pub(super) async fn shutdown_report(&self) -> Option<rocketmq_runtime::ShutdownReport> {
-        self.service_manager.last_task_group_shutdown_report().await
+    pub(super) fn shutdown_report(&self) -> Option<rocketmq_runtime::ShutdownReport> {
+        self.service_manager.last_task_group_shutdown_report()
     }
 
     pub fn wakeup(&self) {
@@ -165,13 +145,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicBool;
     use std::sync::mpsc;
 
     use rocketmq_runtime::RuntimeConfig;
     use rocketmq_runtime::RuntimeOwner;
     use rocketmq_store::LocalFileMessageStore;
-    use tokio::sync::Notify;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
@@ -192,11 +170,7 @@ mod tests {
             transactional_message_service: Weak::new(),
             wakeup_timestamp: AtomicU64::new(0),
         };
-        let context = ServiceTaskContext::new(
-            Arc::new(Notify::new()),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
-        );
+        let context = ServiceTaskContext::new();
         let (finished_tx, finished_rx) = mpsc::channel();
         owner
             .root_context()

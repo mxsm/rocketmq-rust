@@ -270,11 +270,7 @@ mod tests {
         let inputs = rocketmq_observability::RuntimeDiagnosticsDataProvider::snapshot(&sources);
         assert!(inputs.metadata.unwrap().accepting);
 
-        let broker_task_group = bootstrap
-            .broker_runtime
-            .runtime_state_mut()
-            .broker_service_task_group()
-            .expect("broker service task group should come from service context");
+        let broker_task_group = bootstrap.broker_runtime.runtime_state_mut().broker_service_task_group();
 
         assert_eq!(broker_task_group.id(), service_context.task_group().id());
     }

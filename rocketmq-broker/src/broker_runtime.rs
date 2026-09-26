@@ -51,9 +51,8 @@ use rocketmq_protocol::code::request_code::RequestCode;
 use rocketmq_protocol::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_protocol::protocol::remoting_command_defaults::RemotingCommandFactory;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use rocketmq_runtime::common::time_utils::compute_next_morning_time_millis;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all::compute_next_morning_time_millis;
-use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::MetadataDeadline;
@@ -288,8 +287,6 @@ pub(crate) type DefaultServerProcessor = BrokerRequestProcessor<
 
 pub(crate) type DefaultBrokerDispatcher = rocketmq_transport::api::AuthorizedCommandDispatcher<DefaultServerProcessor>;
 
-type BrokerScheduledTasks = ScheduledTaskManager;
-
 pub(crate) async fn complete_topic_config_creation<F, Fut>(
     coordinator: Arc<TopicConfigCoordinator>,
     creation: TopicConfigCreation,
@@ -354,7 +351,6 @@ where
 
 #[derive(Debug)]
 enum BrokerBlockingShutdownError {
-    MissingServiceContext,
     Spawn(rocketmq_runtime::RuntimeError),
     Execution(rocketmq_runtime::RuntimeError),
     ResultChannelClosed,
@@ -368,7 +364,6 @@ impl BrokerBlockingShutdownError {
 
     fn detail(&self) -> String {
         match self {
-            Self::MissingServiceContext => "missing shutdown service context".to_string(),
             Self::Spawn(error) => format!("failed to spawn owned shutdown task: {error}"),
             Self::Execution(error) => format!("blocking shutdown operation failed: {error}"),
             Self::ResultChannelClosed => "owned shutdown task closed without a result".to_string(),
@@ -793,24 +788,22 @@ pub(crate) struct BrokerRuntimeState<MS: BrokerStorePort> {
     slave_synchronize: Option<Arc<SlaveSynchronize<MS>>>,
     slave_master_addr: Arc<SlaveMasterAddress>,
     broker_pre_online_service: Option<BrokerPreOnlineService<MS>>,
-    service_context: Option<ChildServiceContext>,
+    service_context: ChildServiceContext,
     lock: Mutex<()>,
 }
 
-pub(crate) fn broker_task_group_or_current(
-    service_context: Option<&ChildServiceContext>,
+/// Returns the task group of the Broker component `name` under `service_context`.
+///
+/// # Panics
+///
+/// Panics when `name` is blank. Every caller passes a fixed, nonblank lifecycle label.
+pub(crate) fn broker_component_task_group(
+    service_context: &ChildServiceContext,
     name: impl Into<Arc<str>>,
-    no_runtime_warning: &'static str,
-) -> Option<TaskGroup> {
-    let name = name.into();
-    let scope = rocketmq_runtime::ScopeId::try_new(name)
+) -> TaskGroup {
+    let scope = rocketmq_runtime::ScopeId::try_new(name.into())
         .expect("broker task-group callers use fixed nonblank lifecycle labels");
-    service_context
-        .map(|service_context| service_context.component(scope).task_group().clone())
-        .or_else(|| {
-            warn!("{no_runtime_warning}");
-            None
-        })
+    service_context.component(scope).task_group().clone()
 }
 
 #[cfg(test)]

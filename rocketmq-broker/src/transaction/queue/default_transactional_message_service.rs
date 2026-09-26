@@ -84,6 +84,8 @@ const MAX_RETRY_COUNT_WHEN_HALF_NULL: i32 = 1;
 const OP_MSG_PULL_NUMS: i32 = 32;
 const SLEEP_WHILE_NO_OP: i32 = 1000;
 const MAX_CONCURRENT_OP_WRITES: usize = 32;
+/// Budget for [`TransactionalMessageService::close`], which has no caller deadline.
+const TRANSACTION_CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 type TransactionReadOutcome = ReadOutcome<MessageExt>;
 
@@ -230,7 +232,7 @@ where
         let scheduled_tasks = service_context.scheduled_tasks("transaction-metrics-flush");
         let metrics = self.transaction_metrics.clone();
         scheduled_tasks
-            .schedule_bounded(
+            .schedule(
                 ScheduledTaskConfig::fixed_rate_no_overlap("broker.transaction-metrics.flush", FLUSH_INTERVAL),
                 ScheduledExecutionPolicy::serial(MissedTickPolicy::Skip),
                 move || {
@@ -253,16 +255,6 @@ where
             .set(scheduled_tasks)
             .map_err(|_| crate::broker_error::configuration_invalid("transactionMetrics.flushService"))?;
         Ok(())
-    }
-
-    pub async fn set_transactional_op_batch_service_start(
-        &self,
-        weak_this: Weak<DefaultTransactionalMessageService<MS>>,
-    ) -> crate::broker_error::BrokerResult<()> {
-        let service = self
-            .transactional_op_batch_service
-            .get_or_init(|| TransactionalOpBatchService::new(self.broker_config.clone(), weak_this));
-        service.start().await
     }
 
     pub(crate) async fn start_transactional_op_batch_service_with_owner(
@@ -325,11 +317,10 @@ where
             && self.operation_queue_budget.snapshot().current_count == 0
     }
 
-    pub(crate) async fn batch_shutdown_report(&self) -> Option<rocketmq_runtime::ShutdownReport> {
-        match self.transactional_op_batch_service.get() {
-            Some(service) => service.shutdown_report().await,
-            None => None,
-        }
+    pub(crate) fn batch_shutdown_report(&self) -> Option<rocketmq_runtime::ShutdownReport> {
+        self.transactional_op_batch_service
+            .get()
+            .and_then(TransactionalOpBatchService::shutdown_report)
     }
 
     fn accepts_operations(&self) -> bool {
@@ -422,8 +413,34 @@ where
         }
     }
 
-    pub async fn shutdown(&self) {
-        self.close().await
+    /// Stops the batch service, drains queued operations, and persists the
+    /// transaction metrics, waiting no later than `deadline` for owned tasks.
+    pub async fn shutdown_until(&self, deadline: rocketmq_runtime::ShutdownDeadline) {
+        if let Some(batch_service) = self.transactional_op_batch_service.get() {
+            batch_service.shutdown_until(deadline).await
+        }
+        self.drain_operation_queues().await;
+        if let Some(flush_tasks) = self.transaction_metrics_flush_tasks.get() {
+            let report = flush_tasks.shutdown_until(deadline).await;
+            if !report.is_healthy() {
+                warn!(report = %report.to_json(), "Transaction metrics flush shutdown was unhealthy");
+            }
+        }
+        let metrics = self.transaction_metrics.clone();
+        let persist_result = if let Some(blocking) = self.transaction_metrics_blocking.get() {
+            blocking
+                .spawn_io("broker.transaction-metrics.shutdown-persist", move || {
+                    metrics.persist_if_dirty()
+                })
+                .await
+                .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))
+                .and_then(|result| result)
+        } else {
+            metrics.persist_if_dirty()
+        };
+        if let Err(error) = persist_result {
+            error!(%error, "Failed to persist transaction metrics during shutdown");
+        }
     }
 
     async fn resolve_discard_msg(&self, msg_ext: MessageExt) {
@@ -1346,31 +1363,8 @@ where
     }
 
     async fn close(&self) {
-        if let Some(batch_service) = self.transactional_op_batch_service.get() {
-            batch_service.shutdown().await
-        }
-        self.drain_operation_queues().await;
-        if let Some(flush_tasks) = self.transaction_metrics_flush_tasks.get() {
-            let report = flush_tasks.shutdown(Duration::from_secs(5)).await;
-            if !report.is_healthy() {
-                warn!(report = %report.to_json(), "Transaction metrics flush shutdown was unhealthy");
-            }
-        }
-        let metrics = self.transaction_metrics.clone();
-        let persist_result = if let Some(blocking) = self.transaction_metrics_blocking.get() {
-            blocking
-                .spawn_io("broker.transaction-metrics.shutdown-persist", move || {
-                    metrics.persist_if_dirty()
-                })
-                .await
-                .map_err(|error| crate::broker_error::io(std::io::Error::other(error)))
-                .and_then(|result| result)
-        } else {
-            metrics.persist_if_dirty()
-        };
-        if let Err(error) = persist_result {
-            error!(%error, "Failed to persist transaction metrics during shutdown");
-        }
+        self.shutdown_until(rocketmq_runtime::ShutdownDeadline::after(TRANSACTION_CLOSE_TIMEOUT))
+            .await
     }
 
     fn get_transaction_metrics(&self) -> &TransactionMetrics {
@@ -1457,8 +1451,7 @@ mod tests {
             .get()
             .unwrap()
             .parent_for_test
-            .as_ref()
-            .unwrap();
+            .clone();
         let before = runtime
             .runtime_state_mut()
             .message_store()
@@ -1532,7 +1525,10 @@ mod tests {
             owner.task_group().clone(),
         );
         check.start().await.unwrap();
-        let report = check.shutdown_with_report().await.unwrap();
+        let report = check
+            .shutdown_with_report_until(rocketmq_runtime::ShutdownDeadline::after(Duration::from_secs(5)))
+            .await
+            .unwrap();
         assert!(report.is_healthy(), "{}", report.to_json());
         check.start().await.unwrap();
         let report = owner.task_group().shutdown(Duration::from_secs(2)).await;
@@ -1614,8 +1610,7 @@ mod tests {
             .get()
             .unwrap()
             .parent_for_test
-            .as_ref()
-            .unwrap();
+            .clone();
         let report = parent.shutdown(Duration::ZERO).await;
         assert!(!report.is_healthy(), "{}", report.to_json());
         assert_eq!(service.operation_queue_budget.snapshot().current_count, 1);
@@ -1842,7 +1837,7 @@ mod tests {
         assert!(!listener_source.contains(concat!("Arc", "Mut")));
         assert!(!listener_source.contains(concat!("BrokerRuntime", "Inner")));
         assert!(!listener_source.contains("BrokerWriteStore"));
-        assert!(!listener_source.contains("broker_task_group_or_current"));
+        assert!(!listener_source.contains("broker_component_task_group"));
         assert!(!listener_source.contains("TaskGroup::root"));
         assert!(!bridge_source.contains(concat!("mut_from", "_ref")));
         assert!(!bridge_source.contains(concat!("BrokerRuntime", "Inner")));

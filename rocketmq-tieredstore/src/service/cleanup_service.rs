@@ -15,6 +15,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::TaskGroup;
@@ -70,12 +71,13 @@ where
         let cleanup_error_on_error = cleanup_error.clone();
 
         scheduled_tasks
-            .schedule_fixed_rate_no_overlap_operation(
+            .schedule_operation(
                 owner.operation(),
                 ScheduledTaskConfig::fixed_rate_no_overlap(
                     "tieredstore.cleanup.expired-files",
                     self.config.delete_file_interval,
                 ),
+                ScheduledExecutionPolicy::default(),
                 move || {
                     let flat_file_store = flat_file_store.clone();
                     let operation_on_error = operation_on_error.clone();

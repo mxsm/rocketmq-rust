@@ -69,10 +69,11 @@ use rocketmq_protocol::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_protocol::protocol::route_facade::BrokerDataExt;
 use rocketmq_protocol::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::schedule::simple_scheduler::ScheduledTaskManager;
-use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::ResourceBudget;
+use rocketmq_runtime::ScheduledExecutionPolicy;
+use rocketmq_runtime::ScheduledTaskConfig;
+use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_transport::api::ConnectionNetEvent;
 use rocketmq_transport::api::RPCHook;
 use rocketmq_transport::api::RequestDeadline;
@@ -244,9 +245,9 @@ pub struct MQClientInstance {
     pub(crate) mq_admin_impl: Arc<MQAdminImpl>,
     pub(crate) topic_route_table: SharedTopicRouteTable,
     topic_end_points_table: SharedTopicEndPointsTable,
-    lock_namesrv: Arc<RocketMQTokioMutex<()>>,
+    lock_namesrv: Arc<tokio::sync::Mutex<()>>,
     route_update_coordinator: RouteUpdateCoordinator,
-    lock_heartbeat: Arc<RocketMQTokioMutex<()>>,
+    lock_heartbeat: Arc<tokio::sync::Mutex<()>>,
 
     lifecycle_transition: Mutex<()>,
     service_state: StdRwLock<ServiceState>,
@@ -256,7 +257,7 @@ pub struct MQClientInstance {
     broker_addr_table: SharedBrokerAddrTable,
     broker_version_table: SharedBrokerVersionTable,
     send_heartbeat_times_total: Arc<AtomicI64>,
-    scheduled_task_manager: ScheduledTaskManager,
+    scheduled_tasks: ScheduledTaskGroup,
     /// HeartbeatV2: Cache of broker address -> last fingerprint
     broker_heartbeat_fingerprint_table: SharedBrokerHeartbeatFingerprintTable,
     /// HeartbeatV2: Set of brokers that support V2 protocol
@@ -414,7 +415,7 @@ impl MQClientInstance {
         let broker_version_table = Arc::new(DashMap::default());
         let broker_heartbeat_fingerprint_table = Arc::new(DashMap::default());
         let broker_support_v2_heartbeat_set = Arc::new(DashMap::default());
-        let lock_namesrv: Arc<RocketMQTokioMutex<()>> = Arc::default();
+        let lock_namesrv: Arc<tokio::sync::Mutex<()>> = Arc::default();
         let route_refresh_state = Arc::new(TopicRouteRefreshState::default());
         let route_update_coordinator = RouteUpdateCoordinator::new(
             producer_table.clone(),
@@ -474,7 +475,7 @@ impl MQClientInstance {
             broker_addr_table,
             broker_version_table,
             send_heartbeat_times_total: Arc::new(AtomicI64::new(0)),
-            scheduled_task_manager: ScheduledTaskManager::new_legacy_compatibility(),
+            scheduled_tasks: service_context.scheduled_tasks("client-instance-schedules"),
             broker_heartbeat_fingerprint_table,
             broker_support_v2_heartbeat_set,
             route_refresh_state,
@@ -841,19 +842,14 @@ impl MQClientInstance {
         self.shutdown_rebalance_delay_tasks(Duration::from_secs(1)).await;
 
         info!("MQClientInstance[{}] shutting down scheduled tasks", self.client_id);
-        let scheduled_report = self
-            .scheduled_task_manager
-            .shutdown_all(SCHEDULED_TASK_SHUTDOWN_TIMEOUT)
-            .await;
+        let scheduled_report = self.scheduled_tasks.shutdown(SCHEDULED_TASK_SHUTDOWN_TIMEOUT).await;
         if scheduled_report.is_healthy() {
-            info!(
-                "MQClientInstance[{}] scheduled tasks stopped: {:?}",
-                self.client_id, scheduled_report
-            );
+            info!("MQClientInstance[{}] scheduled tasks stopped", self.client_id);
         } else {
             warn!(
-                "MQClientInstance[{}] scheduled task shutdown unhealthy: {:?}",
-                self.client_id, scheduled_report
+                "MQClientInstance[{}] scheduled task shutdown unhealthy: {}",
+                self.client_id,
+                scheduled_report.to_json()
             );
         }
 
@@ -1073,19 +1069,26 @@ impl MQClientInstance {
     }
 
     fn start_scheduled_task(&self, this: Arc<Self>) -> crate::ClientResult<()> {
-        info!("Starting scheduled tasks with ScheduledTaskManager");
+        info!("Starting client instance scheduled tasks");
 
         if self.client_config.namesrv_addr.is_none() {
             if let Some(mq_client_api_impl) = self.mq_client_api_impl.load_full() {
-                self.scheduled_task_manager
-                    .add_fixed_rate_task_async(Duration::from_secs(10), Duration::from_secs(120), move |_token| {
-                        let mq_client_api_impl = Arc::clone(&mq_client_api_impl);
-                        async move {
-                            info!("ScheduledTask: fetchNameServerAddr");
-                            mq_client_api_impl.fetch_name_server_addr().await;
-                            Ok(())
-                        }
-                    })
+                self.scheduled_tasks
+                    .schedule(
+                        ScheduledTaskConfig::fixed_rate_no_overlap(
+                            "client.fetch-name-server-addr",
+                            Duration::from_secs(120),
+                        )
+                        .with_initial_delay(Duration::from_secs(10)),
+                        ScheduledExecutionPolicy::default(),
+                        move || {
+                            let mq_client_api_impl = Arc::clone(&mq_client_api_impl);
+                            async move {
+                                info!("ScheduledTask: fetchNameServerAddr");
+                                mq_client_api_impl.fetch_name_server_addr().await;
+                            }
+                        },
+                    )
                     .map_err(|error| client_scheduled_task_startup_failed("fetchNameServerAddr", error))?;
             } else {
                 warn!(
@@ -1097,16 +1100,19 @@ impl MQClientInstance {
 
         let client_instance = this.clone();
         let poll_name_server_interval = self.client_config.poll_name_server_interval;
-        self.scheduled_task_manager
-            .add_fixed_rate_task_async(
-                Duration::from_millis(10),
-                Duration::from_millis(poll_name_server_interval as u64),
-                move |_token| {
+        self.scheduled_tasks
+            .schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap(
+                    "client.update-topic-route",
+                    Duration::from_millis(poll_name_server_interval as u64),
+                )
+                .with_initial_delay(Duration::from_millis(10)),
+                ScheduledExecutionPolicy::default(),
+                move || {
                     let instance = Arc::clone(&client_instance);
                     async move {
                         info!("ScheduledTask: update_topic_route_info_from_name_server");
                         instance.update_topic_route_info_from_name_server().await;
-                        Ok(())
                     }
                 },
             )
@@ -1114,17 +1120,20 @@ impl MQClientInstance {
 
         let client_instance = this.clone();
         let heartbeat_broker_interval = self.client_config.heartbeat_broker_interval;
-        self.scheduled_task_manager
-            .add_fixed_rate_task_async(
-                Duration::from_secs(1),
-                Duration::from_millis(heartbeat_broker_interval as u64),
-                move |_token| {
+        self.scheduled_tasks
+            .schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap(
+                    "client.heartbeat",
+                    Duration::from_millis(heartbeat_broker_interval as u64),
+                )
+                .with_initial_delay(Duration::from_secs(1)),
+                ScheduledExecutionPolicy::default(),
+                move || {
                     let instance = Arc::clone(&client_instance);
                     async move {
                         info!("ScheduledTask: clean_offline_broker and send_heartbeat");
                         instance.clean_offline_broker().await;
                         instance.send_heartbeat_to_all_broker_with_lock().await;
-                        Ok(())
                     }
                 },
             )
@@ -1132,16 +1141,19 @@ impl MQClientInstance {
 
         let client_instance = this;
         let persist_consumer_offset_interval = self.client_config.persist_consumer_offset_interval as u64;
-        self.scheduled_task_manager
-            .add_fixed_rate_task_async(
-                Duration::from_secs(10),
-                Duration::from_millis(persist_consumer_offset_interval),
-                move |_token| {
+        self.scheduled_tasks
+            .schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap(
+                    "client.persist-consumer-offset",
+                    Duration::from_millis(persist_consumer_offset_interval),
+                )
+                .with_initial_delay(Duration::from_secs(10)),
+                ScheduledExecutionPolicy::default(),
+                move || {
                     let instance = Arc::clone(&client_instance);
                     async move {
                         info!("ScheduledTask: persistAllConsumerOffset");
                         instance.persist_all_consumer_offset().await;
-                        Ok(())
                     }
                 },
             )
@@ -1149,7 +1161,7 @@ impl MQClientInstance {
 
         info!(
             "All scheduled tasks started, total tasks: {}",
-            self.scheduled_task_manager.task_count()
+            self.scheduled_tasks.snapshot().len()
         );
         Ok(())
     }
@@ -1580,11 +1592,8 @@ impl MQClientInstance {
     }
 
     pub async fn clean_offline_broker(&self) {
-        let lock = self
-            .lock_namesrv
-            .try_lock_timeout(Duration::from_millis(LOCK_TIMEOUT_MILLIS))
-            .await;
-        if let Some(_lock) = lock {
+        let lock = tokio::time::timeout(Duration::from_millis(LOCK_TIMEOUT_MILLIS), self.lock_namesrv.lock()).await;
+        if let Ok(_lock) = lock {
             let mut updated_table = HashMap::new();
             let mut broker_name_set = HashSet::new();
 
@@ -1617,7 +1626,7 @@ impl MQClientInstance {
         }
     }
     pub async fn send_heartbeat_to_all_broker_with_lock(&self) -> bool {
-        let _guard = match self.lock_heartbeat.try_lock().await {
+        let _guard = match self.lock_heartbeat.try_lock().ok() {
             Some(g) => g,
             None => {
                 warn!("lock heartBeat, but failed. [{}]", self.client_id);
@@ -1635,7 +1644,10 @@ impl MQClientInstance {
     }
 
     pub async fn send_heartbeat_to_all_broker_with_lock_v2(&self, is_rebalance: bool) -> bool {
-        let _guard = match self.lock_heartbeat.try_lock_timeout(Duration::from_secs(2)).await {
+        let _guard = match tokio::time::timeout(Duration::from_secs(2), self.lock_heartbeat.lock())
+            .await
+            .ok()
+        {
             Some(g) => g,
             None => {
                 warn!("lock heartBeat, but failed. [{}]", self.client_id);
@@ -2121,7 +2133,7 @@ impl MQClientInstance {
         addr: &CheetahString,
         strict_lock_mode: bool,
     ) -> bool {
-        let _guard = match self.lock_heartbeat.try_lock().await {
+        let _guard = match self.lock_heartbeat.try_lock().ok() {
             Some(g) => g,
             None => {
                 if strict_lock_mode {
@@ -3681,18 +3693,21 @@ mod tests {
         instance.set_service_state(ServiceState::Running);
         assert!(instance.connection_event_task_count() > 0);
         instance
-            .scheduled_task_manager
-            .add_fixed_delay_task(Duration::from_secs(60), Duration::from_secs(60), |_token| async {
-                Ok(())
-            })
+            .scheduled_tasks
+            .schedule(
+                ScheduledTaskConfig::fixed_delay("client.shutdown-test", Duration::from_secs(60))
+                    .with_initial_delay(Duration::from_secs(60)),
+                ScheduledExecutionPolicy::default(),
+                || async {},
+            )
             .expect("scheduled shutdown test task should start");
 
-        assert_eq!(instance.scheduled_task_manager.task_count(), 1);
+        assert_eq!(instance.scheduled_tasks.group().task_count(), 1);
 
         instance.shutdown().await;
 
         assert_eq!(instance.service_state(), ServiceState::ShutdownAlready);
-        assert_eq!(instance.scheduled_task_manager.task_count(), 0);
+        assert_eq!(instance.scheduled_tasks.group().task_count(), 0);
         assert_eq!(instance.connection_event_task_count(), 0);
     }
 

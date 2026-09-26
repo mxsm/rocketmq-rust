@@ -970,10 +970,7 @@ impl RouteInfoManager {
             .insert(broker_name.clone(), notification_version);
 
         // Send notification to each broker asynchronously
-        let Some(task_group) = self.name_server_runtime_inner.task_group() else {
-            warn!("skip min broker id notification because NameServer task group is unavailable");
-            return;
-        };
+        let task_group = self.name_server_runtime_inner.task_group();
         let remoting_client = self.name_server_runtime_inner.clone();
         let broker_name = broker_name.clone();
         let notification_versions = Arc::clone(&self.min_broker_notify_versions);

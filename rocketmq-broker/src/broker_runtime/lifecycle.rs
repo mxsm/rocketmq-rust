@@ -21,12 +21,12 @@ use rocketmq_runtime::MissedTickPolicy;
 use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
+use rocketmq_runtime::ShutdownReport;
 use rocketmq_store::BrokerReadStore;
 use rocketmq_store::BrokerStorePort;
 pub(super) struct BrokerLifecycle {
     pub(super) shutdown_hook: Option<BrokerShutdownHook>,
-    pub(super) scheduled_task_manager: BrokerScheduledTasks,
-    pub(super) bounded_scheduled_tasks: ScheduledTaskGroup,
+    pub(super) scheduled_tasks: ScheduledTaskGroup,
     pub(super) diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources,
     pub(super) remoting_server_task_group: Option<TaskGroup>,
     pub(super) remoting_server_report_receivers: Vec<BrokerRemotingServerReportReceiver>,
@@ -35,14 +35,10 @@ pub(super) struct BrokerLifecycle {
 }
 
 impl BrokerLifecycle {
-    pub(super) fn new(
-        scheduled_task_manager: BrokerScheduledTasks,
-        bounded_scheduled_tasks: ScheduledTaskGroup,
-    ) -> Self {
+    pub(super) fn new(scheduled_tasks: ScheduledTaskGroup) -> Self {
         Self {
             shutdown_hook: None,
-            scheduled_task_manager,
-            bounded_scheduled_tasks,
+            scheduled_tasks,
             diagnostics_sources: rocketmq_observability::RuntimeDiagnosticsSources::default(),
             remoting_server_task_group: None,
             remoting_server_report_receivers: Vec::new(),
@@ -54,11 +50,10 @@ impl BrokerLifecycle {
 
 impl Drop for BrokerRuntime {
     fn drop(&mut self) {
-        // Abort all scheduled tasks spawned on the current tokio runtime so that their
-        // ticker loops cannot spin at full speed and block the runtime from completing
-        // shutdown when the broker is dropped (e.g. during test panic unwind).
-        self.lifecycle.scheduled_task_manager.abort_all();
-        self.lifecycle.bounded_scheduled_tasks.group().cancel();
+        // Cancel the scheduled drivers so that their loops stop and cannot keep the
+        // runtime from completing shutdown when the broker is dropped (e.g. during
+        // test panic unwind).
+        self.lifecycle.scheduled_tasks.group().cancel();
     }
 }
 
@@ -303,7 +298,7 @@ impl BrokerRuntime {
         // Pre-online synchronization depends on metadata providers and Store/HA. Stop it before
         // detaching any of those providers so shutdown cannot race another online transition.
         if let Some(broker_pre_online_service) = self.composition.state.broker_pre_online_service.take() {
-            if let Err(error) = broker_pre_online_service.shutdown().await {
+            if let Err(error) = broker_pre_online_service.shutdown_until(deadline).await {
                 warn!(?error, "Failed to shutdown BrokerPreOnlineService cleanly");
             }
         }
@@ -348,7 +343,12 @@ impl BrokerRuntime {
             self.composition.state.transactional_message_check_service.take()
         {
             transaction_services_present = true;
-            match await_shutdown_deadline(deadline, transactional_message_check_service.shutdown_with_report()).await {
+            match await_shutdown_deadline(
+                deadline,
+                transactional_message_check_service.shutdown_with_report_until(deadline),
+            )
+            .await
+            {
                 Ok(Some(report)) if !report.is_healthy() => {
                     shutdown_report.transaction_services = BrokerShutdownComponentReport::from_shutdown_report(
                         "transaction_services",
@@ -369,25 +369,23 @@ impl BrokerRuntime {
             self.composition.state.transactional_message_check_listener.take()
         {
             transaction_services_present = true;
-            if let Some(listener_report) = transactional_message_check_listener
+            let listener_report = transactional_message_check_listener
                 .shutdown(deadline.remaining())
-                .await
-            {
-                if !listener_report.is_healthy() {
-                    shutdown_report.transaction_services = BrokerShutdownComponentReport::from_shutdown_report(
-                        "transaction_services",
-                        Some(&listener_report),
-                        transaction_started.elapsed(),
-                    );
-                    return shutdown_report;
-                }
+                .await;
+            if !listener_report.is_healthy() {
+                shutdown_report.transaction_services = BrokerShutdownComponentReport::from_shutdown_report(
+                    "transaction_services",
+                    Some(&listener_report),
+                    transaction_started.elapsed(),
+                );
+                return shutdown_report;
             }
         }
         if let Some(transactional_message_service) =
             self.composition.state.transactional_message_service.as_ref().cloned()
         {
             transaction_services_present = true;
-            if await_shutdown_deadline(deadline, transactional_message_service.shutdown())
+            if await_shutdown_deadline(deadline, transactional_message_service.shutdown_until(deadline))
                 .await
                 .is_err()
             {
@@ -403,7 +401,7 @@ impl BrokerRuntime {
                 );
                 return shutdown_report;
             }
-            if let Some(report) = transactional_message_service.batch_shutdown_report().await {
+            if let Some(report) = transactional_message_service.batch_shutdown_report() {
                 if !report.is_healthy() {
                     shutdown_report.transaction_services = BrokerShutdownComponentReport::from_shutdown_report(
                         "transaction_services",
@@ -464,18 +462,17 @@ impl BrokerRuntime {
         shutdown_report.scheduled_tasks = if scheduled_outcome.is_healthy() {
             BrokerShutdownComponentReport::completed("scheduled_tasks", started.elapsed())
         } else {
-            let scheduled_report = &scheduled_outcome.drivers;
             BrokerShutdownComponentReport::unhealthy(
                 "scheduled_tasks",
                 started.elapsed(),
                 format!(
-                    "task_count={}, completed={}, aborted={}, panicked={}, timed_out={}, task_group_count={}",
-                    scheduled_report.task_count,
-                    scheduled_report.completed,
-                    scheduled_report.aborted,
-                    scheduled_report.panicked,
-                    scheduled_report.timed_out,
-                    scheduled_outcome.task_groups.len()
+                    "completed={}, cancelled={}, aborted={}, panicked={}, timed_out={}, leaked={}",
+                    scheduled_outcome.completed,
+                    scheduled_outcome.cancelled,
+                    scheduled_outcome.aborted,
+                    scheduled_outcome.panicked,
+                    scheduled_outcome.timed_out,
+                    scheduled_outcome.leaked
                 ),
             )
         };
@@ -531,14 +528,15 @@ impl BrokerRuntime {
         }
 
         if let Some(hook) = self.lifecycle.shutdown_hook.clone() {
-            let hook_result = if let Some(service_context) = self.composition.state.service_context.as_ref() {
-                run_shutdown_blocking_operation(service_context, deadline, "broker.shutdown-hook", move || {
+            let hook_result = run_shutdown_blocking_operation(
+                &self.composition.state.service_context,
+                deadline,
+                "broker.shutdown-hook",
+                move || {
                     hook.before_shutdown();
-                })
-                .await
-            } else {
-                Err(BrokerBlockingShutdownError::MissingServiceContext)
-            };
+                },
+            )
+            .await;
             if let Err(error) = hook_result {
                 warn!(error = %error.detail(), "Broker shutdown hook did not complete cleanly");
             }
@@ -579,49 +577,37 @@ impl BrokerRuntime {
         progress.complete("fast_failure");
 
         if let Some(consumer_filter_manager) = self.composition.state.consumer_filter_manager.take() {
-            let result = if let Some(service_context) = self.composition.state.service_context.as_ref() {
-                persist_config_manager(
-                    Arc::new(consumer_filter_manager),
-                    "broker.consumer-filter",
-                    self.composition
-                        .state
-                        .metadata_io
-                        .as_ref()
-                        .and_then(|result| result.as_ref().ok())
-                        .cloned(),
-                    service_context.metadata_io().clone(),
-                    MetadataDeadline::after(deadline.remaining()),
-                )
-                .await
-            } else {
-                Err(crate::broker_error::not_initialized(
-                    "broker consumer-filter persistence requires ChildServiceContext",
-                ))
-            };
+            let result = persist_config_manager(
+                Arc::new(consumer_filter_manager),
+                "broker.consumer-filter",
+                self.composition
+                    .state
+                    .metadata_io
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .cloned(),
+                self.composition.state.service_context.metadata_io().clone(),
+                MetadataDeadline::after(deadline.remaining()),
+            )
+            .await;
             if let Err(error) = result {
                 warn!(%error, "Failed to persist consumer filters during shutdown");
             }
         }
         if let Some(consumer_order_info_manager) = self.composition.state.consumer_order_info_manager.take() {
-            let result = if let Some(service_context) = self.composition.state.service_context.as_ref() {
-                persist_config_manager(
-                    consumer_order_info_manager,
-                    "broker.consumer-order-info",
-                    self.composition
-                        .state
-                        .metadata_io
-                        .as_ref()
-                        .and_then(|result| result.as_ref().ok())
-                        .cloned(),
-                    service_context.metadata_io().clone(),
-                    MetadataDeadline::after(deadline.remaining()),
-                )
-                .await
-            } else {
-                Err(crate::broker_error::not_initialized(
-                    "broker consumer-order persistence requires ChildServiceContext",
-                ))
-            };
+            let result = persist_config_manager(
+                consumer_order_info_manager,
+                "broker.consumer-order-info",
+                self.composition
+                    .state
+                    .metadata_io
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .cloned(),
+                self.composition.state.service_context.metadata_io().clone(),
+                MetadataDeadline::after(deadline.remaining()),
+            )
+            .await;
             if let Err(error) = result {
                 warn!(%error, "Failed to persist consumer order info during shutdown");
             }
@@ -643,30 +629,23 @@ impl BrokerRuntime {
 
         let started = Instant::now();
         if let Some(subscription_group_manager) = self.composition.state.subscription_group_manager.take() {
-            let result = if let Some(service_context) = self.composition.state.service_context.as_ref() {
-                let manager = Arc::new(subscription_group_manager);
-                let result = persist_config_manager(
-                    manager.clone(),
-                    "broker.subscription-group",
-                    self.composition
-                        .state
-                        .metadata_io
-                        .as_ref()
-                        .and_then(|result| result.as_ref().ok())
-                        .cloned(),
-                    service_context.metadata_io().clone(),
-                    MetadataDeadline::after(deadline.remaining()),
-                )
-                .await;
-                if let Ok(mut manager) = Arc::try_unwrap(manager) {
-                    manager.stop();
-                }
-                result
-            } else {
-                Err(crate::broker_error::not_initialized(
-                    "broker subscription-group persistence requires ChildServiceContext",
-                ))
-            };
+            let manager = Arc::new(subscription_group_manager);
+            let result = persist_config_manager(
+                manager.clone(),
+                "broker.subscription-group",
+                self.composition
+                    .state
+                    .metadata_io
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .cloned(),
+                self.composition.state.service_context.metadata_io().clone(),
+                MetadataDeadline::after(deadline.remaining()),
+            )
+            .await;
+            if let Ok(mut manager) = Arc::try_unwrap(manager) {
+                manager.stop();
+            }
             shutdown_report.subscription_group = match result {
                 Ok(()) => {
                     progress.complete("subscription_group");
@@ -691,37 +670,30 @@ impl BrokerRuntime {
             &mut self.composition.state.consumer_offset_manager,
             Arc::new(ConsumerOffsetManager::new(broker_config, message_store_config)),
         );
-        let result = if let Some(service_context) = self.composition.state.service_context.as_ref() {
-            let result = persist_config_manager(
-                consumer_offset_manager.clone(),
-                "broker.consumer-offset",
-                self.composition
-                    .state
-                    .metadata_io
-                    .as_ref()
-                    .and_then(|result| result.as_ref().ok())
-                    .cloned(),
-                service_context.metadata_io().clone(),
-                MetadataDeadline::after(deadline.remaining()),
-            )
-            .await;
-            match Arc::try_unwrap(consumer_offset_manager) {
-                Ok(mut manager) => {
-                    manager.stop();
-                }
-                Err(manager) => {
-                    warn!(
-                        strong_count = Arc::strong_count(&manager),
-                        "Consumer offset manager still has live capability owners during shutdown"
-                    );
-                }
+        let result = persist_config_manager(
+            consumer_offset_manager.clone(),
+            "broker.consumer-offset",
+            self.composition
+                .state
+                .metadata_io
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .cloned(),
+            self.composition.state.service_context.metadata_io().clone(),
+            MetadataDeadline::after(deadline.remaining()),
+        )
+        .await;
+        match Arc::try_unwrap(consumer_offset_manager) {
+            Ok(mut manager) => {
+                manager.stop();
             }
-            result
-        } else {
-            Err(crate::broker_error::not_initialized(
-                "broker consumer-offset persistence requires ChildServiceContext",
-            ))
-        };
+            Err(manager) => {
+                warn!(
+                    strong_count = Arc::strong_count(&manager),
+                    "Consumer offset manager still has live capability owners during shutdown"
+                );
+            }
+        }
         shutdown_report.consumer_offset = match result {
             Ok(()) => {
                 progress.complete("consumer_offset");
@@ -738,43 +710,33 @@ impl BrokerRuntime {
         #[cfg(feature = "rocksdb_store")]
         if shutdown_report.subscription_group.healthy && shutdown_report.consumer_offset.healthy {
             if let Some(rocksdb_config_managers) = self.composition.metadata.rocksdb_config_managers.take() {
-                if let Some(service_context) = self.composition.state.service_context.as_ref() {
-                    if let Err(error) = run_shutdown_blocking_operation(
-                        service_context,
-                        deadline,
-                        "broker.config-rocksdb.close",
-                        move || rocksdb_config_managers.close_all(),
-                    )
-                    .await
-                    {
-                        warn!(error = %error.detail(), "Failed to close broker config RocksDB owners");
-                    }
-                } else {
-                    // Compatibility builders share no injected BlockingExecutor. Their config
-                    // stores are nevertheless closed by the aggregate owner, never by a leaf.
-                    rocksdb_config_managers.close_all();
+                if let Err(error) = run_shutdown_blocking_operation(
+                    &self.composition.state.service_context,
+                    deadline,
+                    "broker.config-rocksdb.close",
+                    move || rocksdb_config_managers.close_all(),
+                )
+                .await
+                {
+                    warn!(error = %error.detail(), "Failed to close broker config RocksDB owners");
                 }
             }
         }
 
-        let metadata_flush_error = if let Some(service_context) = self.composition.state.service_context.as_ref() {
-            persist_config_manager(
-                self.composition.state.topic_queue_mapping_manager_handle(),
-                "broker.topic-queue-mapping",
-                self.composition
-                    .state
-                    .metadata_io
-                    .as_ref()
-                    .and_then(|result| result.as_ref().ok())
-                    .cloned(),
-                service_context.metadata_io().clone(),
-                MetadataDeadline::after(deadline.remaining()),
-            )
-            .await
-            .err()
-        } else {
-            None
-        };
+        let metadata_flush_error = persist_config_manager(
+            self.composition.state.topic_queue_mapping_manager_handle(),
+            "broker.topic-queue-mapping",
+            self.composition
+                .state
+                .metadata_io
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .cloned(),
+            self.composition.state.service_context.metadata_io().clone(),
+            MetadataDeadline::after(deadline.remaining()),
+        )
+        .await
+        .err();
 
         let started = Instant::now();
         shutdown_report.metadata_io = match self.composition.state.metadata_io.take() {
@@ -852,17 +814,16 @@ impl BrokerRuntime {
         let telemetry_flush_lease = self.reserve_telemetry_flush_lease(deadline);
 
         let started = Instant::now();
-        shutdown_report.service_tasks = if let Some(service_context) = self.composition.state.service_context.as_ref() {
-            let report = service_context.task_group().shutdown_until(deadline).await;
-            self.lifecycle.diagnostics_sources.retain_shutdown(&report);
-            BrokerShutdownComponentReport::from_shutdown_report("service_tasks", Some(&report), started.elapsed())
-        } else {
-            BrokerShutdownComponentReport::unhealthy(
-                "service_tasks",
-                started.elapsed(),
-                BrokerBlockingShutdownError::MissingServiceContext.detail(),
-            )
-        };
+        let report = self
+            .composition
+            .state
+            .service_context
+            .task_group()
+            .shutdown_until(deadline)
+            .await;
+        self.lifecycle.diagnostics_sources.retain_shutdown(&report);
+        shutdown_report.service_tasks =
+            BrokerShutdownComponentReport::from_shutdown_report("service_tasks", Some(&report), started.elapsed());
         progress.complete("service_tasks");
 
         use rocketmq_observability::metrics::runtime::RuntimeBusinessDrainOutcome;
@@ -877,30 +838,22 @@ impl BrokerRuntime {
 
         let started = Instant::now();
         if let Some(guard) = self.composition.state.observability_guard.take() {
+            let telemetry_report = match telemetry_flush_lease {
+                Some(lease) => guard.shutdown_with_drain_lease(lease, deadline.remaining()).await,
+                None => {
+                    guard
+                        .shutdown_with_service_context(&self.composition.state.service_context, deadline.remaining())
+                        .await
+                }
+            };
+            if !telemetry_report.is_healthy() {
+                warn!(
+                    report = %telemetry_report.to_json(),
+                    "Failed to shutdown observability runtime cleanly"
+                );
+            }
             shutdown_report.observability =
-                if let Some(service_context) = self.composition.state.service_context.as_ref() {
-                    let telemetry_report = match telemetry_flush_lease {
-                        Some(lease) => guard.shutdown_with_drain_lease(lease, deadline.remaining()).await,
-                        None => {
-                            guard
-                                .shutdown_with_service_context(service_context, deadline.remaining())
-                                .await
-                        }
-                    };
-                    if !telemetry_report.is_healthy() {
-                        warn!(
-                            report = %telemetry_report.to_json(),
-                            "Failed to shutdown observability runtime cleanly"
-                        );
-                    }
-                    BrokerShutdownComponentReport::from_telemetry_shutdown_report(&telemetry_report, started.elapsed())
-                } else {
-                    BrokerShutdownComponentReport::unhealthy(
-                        "observability",
-                        started.elapsed(),
-                        BrokerBlockingShutdownError::MissingServiceContext.detail(),
-                    )
-                };
+                BrokerShutdownComponentReport::from_telemetry_shutdown_report(&telemetry_report, started.elapsed());
         } else {
             shutdown_report.observability = BrokerShutdownComponentReport::skipped("observability");
         }
@@ -919,8 +872,7 @@ impl BrokerRuntime {
     fn reserve_telemetry_flush_lease(&self, deadline: ShutdownDeadline) -> Option<BlockingDrainLease> {
         // Only an installed observability guard produces a flush to finalize.
         self.composition.state.observability_guard.as_ref()?;
-        let service_context = self.composition.state.service_context.as_ref()?;
-        rocketmq_observability::reserve_telemetry_flush_lease(service_context, Some(deadline))
+        rocketmq_observability::reserve_telemetry_flush_lease(&self.composition.state.service_context, Some(deadline))
     }
 
     fn record_business_drain(
@@ -937,37 +889,23 @@ impl BrokerRuntime {
         }
     }
 
-    pub(crate) async fn shutdown_scheduled_tasks_with_timeout(
-        &self,
-        timeout: Duration,
-    ) -> rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownReport {
+    pub(crate) async fn shutdown_scheduled_tasks_with_timeout(&self, timeout: Duration) -> ShutdownReport {
         self.shutdown_scheduled_tasks_until(rocketmq_runtime::ShutdownDeadline::after(timeout))
             .await
-            .drivers
     }
 
     pub(crate) async fn shutdown_scheduled_tasks_until(
         &self,
         deadline: rocketmq_runtime::ShutdownDeadline,
-    ) -> rocketmq_runtime::schedule::simple_scheduler::ScheduledShutdownOutcome {
-        let mut outcome = self.lifecycle.scheduled_task_manager.shutdown_all_until(deadline).await;
-        outcome
-            .task_groups
-            .push(self.lifecycle.bounded_scheduled_tasks.shutdown_until(deadline).await);
-        if !outcome.is_healthy() {
-            let report = &outcome.drivers;
+    ) -> ShutdownReport {
+        let report = self.lifecycle.scheduled_tasks.shutdown_until(deadline).await;
+        if !report.is_healthy() {
             warn!(
-                task_count = report.task_count,
-                completed = report.completed,
-                aborted = report.aborted,
-                panicked = report.panicked,
-                timed_out = report.timed_out,
-                elapsed_ms = report.elapsed.as_millis(),
-                task_group_count = outcome.task_groups.len(),
+                report = %report.to_json(),
                 "Broker scheduled task shutdown report is unhealthy"
             );
         }
-        outcome
+        report
     }
 
     pub(crate) async fn shutdown_remoting_servers(
@@ -1029,12 +967,7 @@ impl BrokerRuntime {
 
     #[doc(hidden)]
     pub(crate) fn install_remoting_server_report_probe(&mut self) -> bool {
-        let Some(task_group) = self.broker_task_group_or_current(
-            "rocketmq-broker.remoting-server.probe",
-            "failed to install broker remoting server report probe outside Tokio runtime",
-        ) else {
-            return false;
-        };
+        let task_group = self.broker_component_task_group("rocketmq-broker.remoting-server.probe");
         let shutdown_token = task_group.cancellation_token();
         let (report_tx, report_rx) = oneshot::channel();
         if let Err(error) = task_group.spawn_service("broker.remoting-server.probe", async move {
@@ -1064,12 +997,7 @@ impl BrokerRuntime {
             return false;
         }
 
-        let Some(task_group) = self.broker_task_group_or_current(
-            "rocketmq-broker.request-processor.probe",
-            "failed to install broker request processor task probe outside Tokio runtime",
-        ) else {
-            return false;
-        };
+        let task_group = self.broker_component_task_group("rocketmq-broker.request-processor.probe");
         let shutdown_token = task_group.cancellation_token();
         if let Err(error) = task_group.spawn_service("broker.request-processor.probe", async move {
             shutdown_token.cancelled().await;
@@ -1082,14 +1010,8 @@ impl BrokerRuntime {
         true
     }
 
-    pub(super) fn broker_task_group_or_current(
-        &self,
-        name: &'static str,
-        no_runtime_warning: &'static str,
-    ) -> Option<TaskGroup> {
-        self.composition
-            .state
-            .broker_task_group_or_current(name, no_runtime_warning)
+    pub(super) fn broker_component_task_group(&self, name: &'static str) -> TaskGroup {
+        self.composition.state.broker_component_task_group(name)
     }
 
     pub(super) async fn shutdown_request_processor_tasks(
@@ -1204,11 +1126,12 @@ impl BrokerRuntime {
             10000.max(60000.min(self.composition.state.broker_config().register_name_server_period)),
         );
         let initial_delay = Duration::from_secs(10);
-        let mut registration_config_schedule = ScheduledTaskConfig::fixed_rate("broker.registration", period);
+        let mut registration_config_schedule =
+            ScheduledTaskConfig::fixed_rate_no_overlap("broker.registration", period);
         registration_config_schedule.initial_delay = initial_delay;
-        Self::log_bounded_scheduled_task_start(
+        Self::log_scheduled_task_start(
             "register_broker_to_namesrv",
-            self.lifecycle.bounded_scheduled_tasks.schedule_bounded(
+            self.lifecycle.scheduled_tasks.schedule(
                 registration_config_schedule,
                 ScheduledExecutionPolicy::serial(MissedTickPolicy::Skip),
                 move || {
@@ -1251,9 +1174,9 @@ impl BrokerRuntime {
                 Duration::from_millis(sync_broker_member_group_period),
             );
             sync_member_group_config.initial_delay = Duration::from_millis(1000);
-            Self::log_bounded_scheduled_task_start(
+            Self::log_scheduled_task_start(
                 "sync_broker_member_group",
-                self.lifecycle.bounded_scheduled_tasks.schedule_bounded(
+                self.lifecycle.scheduled_tasks.schedule(
                     sync_member_group_config,
                     ScheduledExecutionPolicy::serial(MissedTickPolicy::CoalesceLatest),
                     move || {
@@ -1284,19 +1207,21 @@ impl BrokerRuntime {
         let initial_delay = Duration::from_secs(10);
         Self::log_scheduled_task_start(
             "refresh_broker_metadata",
-            self.lifecycle
-                .scheduled_task_manager
-                .add_fixed_rate_task_async(initial_delay, period, move |_ctx| {
+            self.lifecycle.scheduled_tasks.schedule(
+                ScheduledTaskConfig::fixed_rate_no_overlap("broker.metadata.refresh", period)
+                    .with_initial_delay(initial_delay),
+                ScheduledExecutionPolicy::default(),
+                move || {
                     let metadata_shutdown = Arc::clone(&metadata_shutdown);
                     let broker_outer_api = broker_outer_api.clone();
                     async move {
                         if metadata_shutdown.load(Ordering::Acquire) {
-                            return Ok(());
+                            return;
                         }
                         broker_outer_api.refresh_metadata();
-                        Ok(())
                     }
-                }),
+                },
+            ),
         );
         let live_broker_config = self.composition.state.broker_config();
         // Controller-mode brokers start fenced and acquire write authority only after the

@@ -494,18 +494,7 @@ impl BrokerRuntime {
             return Ok(admission_controller);
         }
         let config = self.composition.state.broker_config();
-        let admission_budget = self
-            .composition
-            .state
-            .service_context
-            .as_ref()
-            .ok_or_else(|| {
-                BrokerStartupError::initialization(
-                    "deferred_admission",
-                    "Broker deferred admission requires an injected service context".to_owned(),
-                )
-            })?
-            .process_budget();
+        let admission_budget = self.composition.state.service_context.process_budget();
         let retained_bytes = usize::try_from(
             self.composition
                 .state

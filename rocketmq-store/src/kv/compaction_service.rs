@@ -18,6 +18,7 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_model::common::config::TopicConfig;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -94,7 +95,7 @@ impl CompactionService {
         let mut config = ScheduledTaskConfig::fixed_rate_no_overlap("store.kv.compaction", schedule_interval);
         config.initial_delay = schedule_interval;
 
-        if let Err(error) = scheduled_tasks.schedule_fixed_rate_no_overlap(config, move || {
+        if let Err(error) = scheduled_tasks.schedule(config, ScheduledExecutionPolicy::default(), move || {
             let compaction_store = compaction_store.clone();
             let topic_config_table = topic_config_table.clone();
             async move {

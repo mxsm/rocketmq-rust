@@ -16,11 +16,10 @@
 
 use super::completion::TaskExecution;
 use super::{
-    DetachedTaskPolicy, TaskCompletion, TaskGroup, TaskGroupLifecycleState, TaskId, TaskKind, TaskMeta, TaskState,
+    TaskCompletion, TaskGroup, TaskGroupLifecycleState, TaskId, TaskKind, TaskMeta, TaskName, TaskState,
     MAX_INLINE_TASK_FUTURE_SIZE,
 };
 use crate::critical::CriticalRegistration;
-use crate::RuntimeError;
 use crate::RuntimeResult;
 use std::future::Future;
 use std::sync::atomic::Ordering;
@@ -28,79 +27,77 @@ use std::sync::Arc;
 use std::time::Instant;
 
 impl TaskGroup {
-    pub(super) fn spawn_inner<F>(
+    pub(super) fn spawn_inner<F>(&self, name: TaskName, kind: TaskKind, future: F) -> RuntimeResult<TaskId>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let (task_id, join_handle) = self.spawn_inner_with_handle(name, kind, false, None, None, future)?;
+        drop(join_handle);
+        Ok(task_id)
+    }
+
+    /// Spawns a task of the operation with id `operation`, tagged in the registry.
+    pub(super) fn spawn_operation_task<F>(
         &self,
-        name: Arc<str>,
+        name: TaskName,
         kind: TaskKind,
-        detached_policy: Option<DetachedTaskPolicy>,
+        operation: u64,
         future: F,
     ) -> RuntimeResult<TaskId>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let (task_id, join_handle) = self.spawn_inner_with_handle(name, kind, detached_policy, false, None, future)?;
+        let (task_id, join_handle) = self.spawn_inner_with_handle(name, kind, false, None, Some(operation), future)?;
         drop(join_handle);
         Ok(task_id)
     }
 
     pub(super) fn spawn_inner_with_handle<F>(
         &self,
-        name: Arc<str>,
+        name: TaskName,
         kind: TaskKind,
-        detached_policy: Option<DetachedTaskPolicy>,
         propagate_panic: bool,
         critical: Option<CriticalRegistration>,
+        operation: Option<u64>,
         future: F,
     ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
     where
         F: Future<Output = ()> + Send + 'static,
     {
         if std::mem::size_of::<F>() > MAX_INLINE_TASK_FUTURE_SIZE {
-            self.spawn_registered(name, kind, detached_policy, propagate_panic, critical, Box::pin(future))
+            self.spawn_registered(name, kind, propagate_panic, critical, operation, Box::pin(future))
         } else {
-            self.spawn_registered(name, kind, detached_policy, propagate_panic, critical, future)
+            self.spawn_registered(name, kind, propagate_panic, critical, operation, future)
         }
     }
 
     pub(super) fn spawn_registered<F>(
         &self,
-        name: Arc<str>,
+        name: TaskName,
         kind: TaskKind,
-        detached_policy: Option<DetachedTaskPolicy>,
         propagate_panic: bool,
         critical: Option<CriticalRegistration>,
+        operation: Option<u64>,
         future: F,
     ) -> RuntimeResult<(TaskId, tokio::task::JoinHandle<()>)>
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let _spawn_guard = self.inner.spawn_gate.lock();
-        if self.inner.lifecycle_state() != TaskGroupLifecycleState::Open {
-            return Err(RuntimeError::context_unavailable(
-                crate::RuntimeOperation::SpawnTaskGroupTask,
-            ));
-        }
-
-        let task_id = TaskId(self.inner.next_task_id.fetch_add(1, Ordering::Relaxed));
+        let task_id = TaskId::new(self.inner.id, self.inner.next_task_id.fetch_add(1, Ordering::Relaxed));
         let completion = Arc::new(TaskCompletion::new());
-        self.inner.registry.tasks.insert(
-            task_id,
-            TaskMeta {
-                id: task_id,
-                name: name.clone(),
-                group_id: self.inner.id,
-                group_name: self.inner.name.clone(),
-                kind,
-                state: TaskState::Queued,
-                started_at: Instant::now(),
-                detached: detached_policy.is_some(),
-                detached_policy,
-                abort_handle: None,
-                abort_requested: false,
-                completion: completion.clone(),
-            },
-        );
-
+        let meta = TaskMeta {
+            id: task_id,
+            name,
+            group_id: self.inner.id,
+            group_name: self.inner.name.clone(),
+            kind,
+            state: TaskState::Queued,
+            started_at: Instant::now(),
+            abort_handle: None,
+            abort_requested: false,
+            completion: completion.clone(),
+            operation,
+        };
         let wrapped = TaskExecution::new(
             future,
             self.inner.clone(),
@@ -111,11 +108,21 @@ impl TaskGroup {
         )
         .run();
 
-        let join_handle = if detached_policy.is_some() {
-            self.inner.runtime.spawn_owned(wrapped)
-        } else {
-            self.inner.tracker.spawn_on(wrapped, self.inner.runtime.tokio_handle())
+        // Registration is serialized with shutdown; dispatch to Tokio is not.
+        // The tracker token taken under the gate keeps a shutdown's join
+        // waiting until the task has run, and an abort requested before the
+        // handle is installed is honored below.
+        let tracked = {
+            let _spawn_guard = self.inner.spawn_gate.lock();
+            let state = self.inner.lifecycle_state();
+            if state != TaskGroupLifecycleState::Open {
+                return Err(state.admission_error(crate::RuntimeOperation::SpawnTaskGroupTask));
+            }
+            self.inner.registry.tasks.insert(task_id, meta);
+            self.inner.tracker.track_future(wrapped)
         };
+
+        let join_handle = self.inner.runtime.tokio_handle().spawn(tracked);
         let abort_handle = join_handle.abort_handle();
 
         let abort_requested = if let Some(mut meta) = self.inner.registry.tasks.get_mut(&task_id) {

@@ -921,7 +921,6 @@ fn warn_immediate_shutdown_faults(stage: &'static str, report: Option<&ShutdownR
         failed = faults.failed,
         panicked = faults.panicked,
         still_tracked = report.leaked,
-        detached_still_running = report.detached_still_running,
         "RemotingClient task group reported faults during immediate shutdown"
     );
 }

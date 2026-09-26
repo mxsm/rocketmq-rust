@@ -101,7 +101,7 @@ Before installation, inspect rendered image names, service DNS, mount paths, Sec
 
 For Pending Pods, inspect scheduling events and PVC binding. For failed startup, inspect the selected container's current and previous logs, mounted configuration, and Secret key names. Processes run as UID/GID `10001` with a read-only root filesystem; writable state belongs on the intended volume.
 
-The chart uses HTTP `/livez` for startup/liveness, `/readyz` for readiness, and `/drainz` for pre-stop draining on the internal health port, default `8088`. Default shutdown time is 45 seconds inside a 60-second Pod grace period. Probe success is service lifecycle evidence; it does not prove that a Topic is writable, a consumer commits progress, or replicas have caught up.
+The chart uses HTTP `/livez` for startup/liveness, `/readyz` for readiness, and `/drainz` for pre-stop draining on the internal health port, default `8088`. Default shutdown time is 45 seconds inside a 60-second Pod grace period. `/drainz` accepts only `POST` unless `ROCKETMQ_HEALTH_DRAIN_METHODS=GET,POST` is set; the chart sets it because a `preStop.httpGet` hook can only send `GET`. Keep it when you replace the hook. Probe success is service lifecycle evidence; it does not prove that a Topic is writable, a consumer commits progress, or replicas have caught up.
 
 From an allowed client location, use [Admin observations](../operations/admin.md), create isolated test resources, and perform the [first-message path](../getting-started/quick-start.md) with reachable cluster addresses and credentials. For Proxy, use the TLS/auth equivalent of the [gRPC probe](proxy.md). Record actual payload results and consumer completion.
 

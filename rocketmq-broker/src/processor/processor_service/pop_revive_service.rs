@@ -288,14 +288,7 @@ impl<MS: BrokerReadWriteStore> PopReviveService<MS> {
         }
 
         this.shutdown.store(false, Ordering::Release);
-        let Some(task_group) = this.context.task_group(this.queue_id) else {
-            this.running.store(false, Ordering::Release);
-            warn!(
-                revive_queue_id = this.queue_id,
-                "failed to start PopReviveService outside Tokio runtime"
-            );
-            return;
-        };
+        let task_group = this.context.task_group(this.queue_id);
         let cancellation_token = task_group.cancellation_token();
         let service = this.clone();
 

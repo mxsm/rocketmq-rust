@@ -22,12 +22,11 @@ use std::time::Instant;
 
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeError;
-use rocketmq_runtime::RuntimeOperation;
+use rocketmq_runtime::RuntimeErrorKind;
 use rocketmq_runtime::RuntimeResult;
 use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::ShutdownReport;
 use rocketmq_runtime::TaskGroup;
-use rocketmq_runtime::TaskGroupLifecycleState;
 use rocketmq_runtime::TaskId;
 use rocketmq_runtime::TaskKind;
 
@@ -179,13 +178,7 @@ impl SessionExecutor {
             },
         ) {
             Ok(task_id) => Ok(SessionDispatchAttempt::Accepted(task_id)),
-            Err(error) if error.operation() == RuntimeOperation::SpawnOperation => {
-                Ok(SessionDispatchAttempt::SessionClosed { retained_partial: None })
-            }
-            Err(error)
-                if error.operation() == RuntimeOperation::SpawnTaskGroupTask
-                    && self.inner.request_group.lifecycle_state() != TaskGroupLifecycleState::Open =>
-            {
+            Err(error) if session_stopped_admission(&error) => {
                 Ok(SessionDispatchAttempt::SessionClosed { retained_partial: None })
             }
             Err(error) => Err(error),
@@ -419,16 +412,15 @@ impl DeferredResumeExecutor {
             },
         ) {
             Ok(task_id) => DeferredResumeEnqueueOutcome::Submitted(task_id),
-            Err(source) if source.operation() == RuntimeOperation::SpawnOperation => {
-                DeferredResumeEnqueueOutcome::ExecutorClosing { cell }
-            }
-            Err(source)
-                if source.operation() == RuntimeOperation::SpawnTaskGroupTask
-                    && inner.request_group.lifecycle_state() != TaskGroupLifecycleState::Open =>
-            {
-                DeferredResumeEnqueueOutcome::ExecutorClosing { cell }
-            }
+            Err(source) if session_stopped_admission(&source) => DeferredResumeEnqueueOutcome::ExecutorClosing { cell },
             Err(source) => DeferredResumeEnqueueOutcome::OperationalFailure { source, cell },
         }
     }
+}
+
+/// Returns whether a submission failed because the session's request
+/// operation or task group stopped admitting work, rather than failing
+/// operationally.
+fn session_stopped_admission(error: &RuntimeError) -> bool {
+    matches!(error.kind(), RuntimeErrorKind::Closed | RuntimeErrorKind::Poisoned)
 }

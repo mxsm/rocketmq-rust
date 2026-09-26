@@ -744,31 +744,22 @@ async fn broker_runtime_service_context_parents_probe_task_groups() {
     assert!(report.timed_out_component_names().is_empty());
     assert!(report.component_names().contains(&"scheduled_tasks"));
 
-    let scheduled_task_group_report = runtime
-        .lifecycle
-        .scheduled_task_manager
-        .last_task_group_shutdown_report()
-        .expect("scheduled task group shutdown report should be retained by its owner");
-    assert!(
-        scheduled_task_group_report.is_healthy(),
-        "{}",
-        scheduled_task_group_report.to_json()
-    );
-    assert_eq!(
-        scheduled_task_group_report.name,
-        rocketmq_runtime::schedule::simple_scheduler::LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY
+    assert!(report.scheduled_tasks.present && report.scheduled_tasks.healthy);
+    let scheduled_group = runtime.lifecycle.scheduled_tasks.group().clone();
+    assert_eq!(scheduled_group.parent_id(), Some(service.task_group().id()));
+    assert_ne!(
+        scheduled_group.lifecycle_state(),
+        rocketmq_runtime::TaskGroupLifecycleState::Open
     );
 
+    // The owner's later shutdown reuses the report retained by the scheduled group.
     let service_report = service.task_group().shutdown(Duration::from_secs(1)).await;
-    assert!(
-        !service_report
-            .children
-            .iter()
-            .any(|child| child.name
-                == rocketmq_runtime::schedule::simple_scheduler::LEGACY_SCHEDULED_TASK_MANAGER_BOUNDARY),
-        "{}",
-        service_report.to_json()
-    );
+    let scheduled_report = service_report
+        .children
+        .iter()
+        .find(|child| child.name == scheduled_group.name())
+        .expect("the broker scheduled group should report under its owner");
+    assert!(scheduled_report.is_healthy(), "{}", service_report.to_json());
 }
 
 #[tokio::test]
@@ -1194,20 +1185,24 @@ async fn shutdown_scheduled_tasks_waits_for_running_task_drop() {
     let dropped = Arc::new(AtomicBool::new(false));
     runtime
         .lifecycle
-        .scheduled_task_manager
-        .add_fixed_delay_task(Duration::ZERO, Duration::from_secs(60), {
-            let started = Arc::clone(&started);
-            let dropped = Arc::clone(&dropped);
-            move |_token| {
+        .scheduled_tasks
+        .schedule(
+            rocketmq_runtime::ScheduledTaskConfig::fixed_delay("broker.test.pending-run", Duration::from_secs(60)),
+            rocketmq_runtime::ScheduledExecutionPolicy::default(),
+            {
                 let started = Arc::clone(&started);
                 let dropped = Arc::clone(&dropped);
-                async move {
-                    let _marker = DropMarker(dropped);
-                    started.store(true, Ordering::Release);
-                    future::pending::<rocketmq_runtime::RuntimeResult<()>>().await
+                move || {
+                    let started = Arc::clone(&started);
+                    let dropped = Arc::clone(&dropped);
+                    async move {
+                        let _marker = DropMarker(dropped);
+                        started.store(true, Ordering::Release);
+                        future::pending::<()>().await
+                    }
                 }
-            }
-        })
+            },
+        )
         .expect("scheduled shutdown test task should start");
     tokio::time::timeout(Duration::from_secs(1), async {
         while !started.load(Ordering::Acquire) {
@@ -1221,7 +1216,7 @@ async fn shutdown_scheduled_tasks_waits_for_running_task_drop() {
         .shutdown_scheduled_tasks_with_timeout(Duration::from_millis(10))
         .await;
 
-    assert_eq!(runtime.lifecycle.scheduled_task_manager.task_count(), 0);
+    assert_eq!(runtime.lifecycle.scheduled_tasks.group().task_count(), 0);
     assert!(
         dropped.load(Ordering::Acquire),
         "broker scheduled shutdown should wait until aborted tasks release their running future"
@@ -1255,22 +1250,27 @@ async fn broker_shutdown_cancels_scheduled_store_lease_before_store_lock_release
 
     let store = runtime.composition.data_plane.escape_bridge_owner.store_capability();
     let lease_started = Arc::new(AtomicBool::new(false));
+    let token = runtime.lifecycle.scheduled_tasks.group().cancellation_token();
     runtime
         .lifecycle
-        .scheduled_task_manager
-        .add_fixed_delay_task(Duration::ZERO, Duration::from_secs(60), {
-            let lease_started = Arc::clone(&lease_started);
-            move |token| {
-                let store = store.clone();
+        .scheduled_tasks
+        .schedule(
+            rocketmq_runtime::ScheduledTaskConfig::fixed_delay("broker.test.store-lease", Duration::from_secs(60)),
+            rocketmq_runtime::ScheduledExecutionPolicy::default(),
+            {
                 let lease_started = Arc::clone(&lease_started);
-                async move {
-                    let _lease = store.read_lease().expect("scheduled task should acquire a Store lease");
-                    lease_started.store(true, Ordering::Release);
-                    token.cancelled().await;
-                    Ok(())
+                move || {
+                    let store = store.clone();
+                    let lease_started = Arc::clone(&lease_started);
+                    let token = token.clone();
+                    async move {
+                        let _lease = store.read_lease().expect("scheduled task should acquire a Store lease");
+                        lease_started.store(true, Ordering::Release);
+                        token.cancelled().await;
+                    }
                 }
-            }
-        })
+            },
+        )
         .expect("scheduled Store lease task should start");
     tokio::time::timeout(Duration::from_secs(1), async {
         while !lease_started.load(Ordering::Acquire) {
@@ -3878,16 +3878,7 @@ async fn broker_composition_owns_and_installs_one_deferred_lifecycle() {
         .expect("deferred producer task group should be retained by its lifecycle owner");
     assert_eq!(
         producer_task_group.parent_id(),
-        Some(
-            runtime
-                .composition
-                .state
-                .service_context
-                .as_ref()
-                .expect("phase3 runtime should retain a service context")
-                .task_group()
-                .id()
-        )
+        Some(runtime.composition.state.service_context.task_group().id())
     );
     assert!(
         producer_task_group.task_count() >= 2,

@@ -95,6 +95,9 @@ spec:
             {{- end }}
             - name: ROCKETMQ_HEALTH_BIND_ADDR
               value: "0.0.0.0:{{ $.Values.runtime.healthPort }}"
+            {{- /* The preStop httpGet hook below can only send GET. */}}
+            - name: ROCKETMQ_HEALTH_DRAIN_METHODS
+              value: "GET,POST"
             - name: ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS
               value: {{ $.Values.runtime.shutdownTimeoutSeconds | quote }}
             - name: ROCKETMQ_LIVENESS_STALE_SECONDS

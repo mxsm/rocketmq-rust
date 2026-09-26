@@ -38,7 +38,6 @@ use rocketmq_runtime::QueuePushOutcome;
 use rocketmq_runtime::RateLimit;
 use rocketmq_runtime::ResourceBudget;
 use rocketmq_runtime::ResourcePermit;
-use rocketmq_runtime::Shutdown;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tokio::time::Instant as TokioInstant;
@@ -698,7 +697,8 @@ impl PullMessageService {
         let shard_queues = (0..self.shard_count)
             .map(|index| self.build_request_queue(format!("pull-worker-shard-{index}"), FullPolicy::Reject))
             .collect::<Result<Vec<BudgetedQueue<PullRequest>>, ClientError>>()?;
-        let (mut shutdown, tx_shutdown) = Shutdown::new(1);
+        // The main loop and every shard worker subscribe to one shutdown signal.
+        let (tx_shutdown, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
         let pop_instance = instance.clone();
         let service_context = instance.service_context().component("pull-message-service");
         *self
@@ -714,7 +714,7 @@ impl PullMessageService {
 
                 loop {
                     tokio::select! {
-                        _ = shutdown.recv() => {
+                        _ = shutdown_rx.recv() => {
                             info!("{} received shutdown signal", "PullMessageService");
                             break;
                         }

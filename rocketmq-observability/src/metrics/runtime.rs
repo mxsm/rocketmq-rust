@@ -533,6 +533,7 @@ mod tests {
             probe_bind_addr: None,
             shutdown_timeout: Duration::from_secs(1),
             liveness_stale_after: Duration::from_secs(3),
+            drain_request_methods: rocketmq_runtime::DrainRequestMethods::PostOnly,
         });
         lifecycle.set_observer(recorder.clone()).unwrap();
         lifecycle.mark_ready().unwrap();
@@ -629,6 +630,7 @@ mod tests {
                 probe_bind_addr: None,
                 shutdown_timeout: Duration::from_secs(1),
                 liveness_stale_after: Duration::from_secs(3),
+                drain_request_methods: rocketmq_runtime::DrainRequestMethods::PostOnly,
             });
             lifecycle.set_observer(recorder.clone()).unwrap();
             if critical {

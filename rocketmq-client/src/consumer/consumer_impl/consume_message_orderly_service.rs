@@ -40,7 +40,6 @@ use rocketmq_protocol::protocol::body::cm_result::CMResult;
 use rocketmq_protocol::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_protocol::protocol::namespace_util::NamespaceUtil;
-use rocketmq_runtime::tokio_lock::RocketMQTokioMutex;
 use rocketmq_runtime::ScheduledTaskSnapshot;
 use serde::Serialize;
 use std::sync::LazyLock;
@@ -83,7 +82,7 @@ pub struct ConsumeMessageOrderlyService {
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcMessageListenerOrderly,
     pub(crate) stopped: Arc<AtomicBool>,
-    pub(crate) global_lock: Arc<RocketMQTokioMutex<()>>,
+    pub(crate) global_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) message_queue_lock: MessageQueueLock,
     pub(crate) lock_periodic_task_handle: Arc<Mutex<Option<OrderlyTaskHandle>>>,
     pub(crate) active_tasks: Arc<AtomicUsize>,
@@ -252,7 +251,6 @@ impl ConsumeMessageOrderlyService {
             "rocketmq-client-orderly-lock-periodic",
             initial_delay,
             period,
-            Duration::from_secs(5),
             move || {
                 let service = this.clone();
                 let stopped = stopped.clone();

@@ -172,7 +172,6 @@ impl RequestFutureHolder {
             "rocketmq-client-request-future-scan",
             initial_delay,
             scan_interval.max(Duration::from_millis(1)),
-            REQUEST_SCAN_SHUTDOWN_TIMEOUT,
             move || {
                 let holder = Arc::clone(&holder);
                 async move {

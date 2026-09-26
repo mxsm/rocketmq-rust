@@ -99,6 +99,7 @@ use rocketmq_protocol::protocol::RemotingDeserializable;
 use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::BlockingKind;
 use rocketmq_runtime::ChildServiceContext;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -1003,7 +1004,7 @@ impl Controller for OpenRaftController {
             Duration::from_millis(initial_config.scan_not_active_broker_interval.max(1)),
         );
         task_config.initial_delay = Duration::from_millis(2000);
-        if let Err(error) = scheduled_tasks.schedule_fixed_delay(task_config, move || {
+        if let Err(error) = scheduled_tasks.schedule(task_config, ScheduledExecutionPolicy::default(), move || {
             let node = node.clone();
             let config = config.clone();
             let listeners = listeners.clone();

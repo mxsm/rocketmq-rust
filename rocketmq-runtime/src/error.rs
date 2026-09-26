@@ -42,8 +42,6 @@ pub type RuntimeResult<T> = Result<T, RuntimeError>;
 pub enum RuntimeOperation {
     /// Builds an owned Tokio runtime.
     BuildTokioRuntime,
-    /// Builds a futures thread pool.
-    BuildFuturesThreadPool,
     /// Loads a runtime configuration file.
     LoadConfigFile,
     /// Deserializes a runtime configuration file.
@@ -96,8 +94,6 @@ pub enum RuntimeOperation {
     MetadataWorkerStopped,
     /// Uses a closed metadata actor.
     MetadataIoClosed,
-    /// Resolves a local IP address.
-    ResolveLocalIp,
     /// Registers the SIGTERM handler.
     RegisterSigtermHandler,
     /// Registers the SIGINT handler.
@@ -112,10 +108,6 @@ pub enum RuntimeOperation {
     SpawnServiceTask,
     /// Spawns a scheduler task.
     SpawnSchedulerTask,
-    /// Creates an executor task group.
-    CreateExecutorTaskGroup,
-    /// Spawns an executor task.
-    SpawnExecutorTask,
     /// Uses the ambient runtime context.
     RuntimeContext,
     /// Starts a service lifecycle.
@@ -158,8 +150,6 @@ pub enum RuntimeOperation {
     SessionExecutor,
     /// Performs metadata I/O through an adapter.
     MetadataIo,
-    /// Resumes a transport session executor.
-    DeferredResumeSessionExecutor,
     /// Uses the auth metadata I/O lane.
     AuthMetadataIoLane,
     /// Runs high-availability runtime work.
@@ -180,10 +170,6 @@ pub enum RuntimeOperation {
     KvPersistenceFault,
     /// Represents a test-only runtime failure injection.
     TestFailure,
-    /// Validates the process resource budget.
-    ProcessResourceBudget,
-    /// Validates a service-context scope.
-    ServiceContextScope,
     /// Reads service lifecycle environment configuration.
     ServiceLifecycleEnvironment,
     /// Parses a service lifecycle probe address.
@@ -192,20 +178,16 @@ pub enum RuntimeOperation {
     ServiceLifecycleDuration,
     /// Validates a service lifecycle duration range.
     ServiceLifecycleDurationRange,
-    /// Validates metadata I/O configuration.
-    MetadataIoConfiguration,
+    /// Parses the HTTP methods accepted by the drain probe.
+    ServiceLifecycleDrainMethods,
     /// Validates metadata resource targeting.
     MetadataResourceTarget,
-    /// Validates executor-service configuration.
-    ExecutorServiceConfiguration,
     /// Uses a tiered-store runtime adapter.
     TieredStoreRuntime,
     /// Uses a tiered-store cleanup task group.
     CleanupTaskGroup,
     /// Uses a tiered-store dispatcher task group.
     DispatcherTaskGroup,
-    /// Completes a runtime future exceptionally.
-    CompletableFuture,
     /// Persists runtime metadata in a test.
     PersistRuntimeMetadata,
 }
@@ -214,7 +196,6 @@ impl RuntimeOperation {
     const fn diagnostic_label(self) -> &'static str {
         match self {
             Self::BuildTokioRuntime => "build-tokio-runtime",
-            Self::BuildFuturesThreadPool => "build-futures-thread-pool",
             Self::LoadConfigFile => "load-config-file",
             Self::DeserializeConfigFile => "deserialize-config-file",
             Self::DetectProcessMemoryLimit => "detect-process-memory-limit",
@@ -241,7 +222,6 @@ impl RuntimeOperation {
             Self::AdmitMetadataBytes => "admit-metadata-bytes",
             Self::MetadataWorkerStopped => "metadata-worker-stopped",
             Self::MetadataIoClosed => "metadata-io-closed",
-            Self::ResolveLocalIp => "resolve-local-ip",
             Self::RegisterSigtermHandler => "register-sigterm-handler",
             Self::RegisterSigintHandler => "register-sigint-handler",
             Self::WaitForSignal => "wait-for-signal",
@@ -249,8 +229,6 @@ impl RuntimeOperation {
             Self::SpawnTaskGroupTask => "spawn-task-group-task",
             Self::SpawnServiceTask => "spawn-service-task",
             Self::SpawnSchedulerTask => "spawn-scheduler-task",
-            Self::CreateExecutorTaskGroup => "create-executor-task-group",
-            Self::SpawnExecutorTask => "spawn-executor-task",
             Self::RuntimeContext => "runtime-context",
             Self::StartServiceLifecycle => "start-service-lifecycle",
             Self::ServiceLifecycleTaskGroup => "service-lifecycle-task-group",
@@ -272,7 +250,6 @@ impl RuntimeOperation {
             Self::TransportListener => "transport-listener",
             Self::SessionExecutor => "session-executor",
             Self::MetadataIo => "metadata-io",
-            Self::DeferredResumeSessionExecutor => "deferred-resume-session-executor",
             Self::AuthMetadataIoLane => "auth-metadata-io-lane",
             Self::HaRuntime => "ha-runtime",
             Self::InitializeBroker => "initialize-broker",
@@ -283,19 +260,15 @@ impl RuntimeOperation {
             Self::AdmitKvMutationBytes => "admit-kv-mutation-bytes",
             Self::KvPersistenceFault => "injected-kv-persistence-failure",
             Self::TestFailure => "test-runtime-failure",
-            Self::ProcessResourceBudget => "process-resource-budget",
-            Self::ServiceContextScope => "service-context-scope",
             Self::ServiceLifecycleEnvironment => "service-lifecycle-environment",
             Self::ServiceLifecycleProbeAddress => "service-lifecycle-probe-address",
             Self::ServiceLifecycleDuration => "service-lifecycle-duration",
             Self::ServiceLifecycleDurationRange => "service-lifecycle-duration-range",
-            Self::MetadataIoConfiguration => "metadata-io-config",
+            Self::ServiceLifecycleDrainMethods => "service-lifecycle-drain-methods",
             Self::MetadataResourceTarget => "metadata-resource-target",
-            Self::ExecutorServiceConfiguration => "executor-service-config",
             Self::TieredStoreRuntime => "tieredstore-runtime",
             Self::CleanupTaskGroup => "cleanup-task-group",
             Self::DispatcherTaskGroup => "dispatcher-task-group",
-            Self::CompletableFuture => "completable-future",
             Self::PersistRuntimeMetadata => "persist-runtime-metadata",
         }
     }
@@ -328,8 +301,6 @@ pub enum RuntimeContractPolicy {
     BlockingTimeoutRepresentable,
     /// The global blocking capacity must cover every lane.
     BlockingGlobalCapacityCoversLanes,
-    /// The futures executor pool size must be positive.
-    FuturesExecutorPoolSizePositive,
     /// A service-context scope must not be blank.
     ServiceContextScopeNotBlank,
     /// An explicitly configured process memory limit must be positive.
@@ -344,12 +315,6 @@ pub enum RuntimeContractPolicy {
     ManagedMemoryBudgetPositive,
     /// A critical failure subscription capacity must be positive.
     CriticalFailureSubscriptionCapacityPositive,
-    /// A cron schedule expression must be valid.
-    CronExpression,
-    /// A schedule interval must be positive.
-    IntervalMustBePositive,
-    /// A delayed schedule interval must be positive.
-    DelayedIntervalMustBePositive,
     /// The metadata I/O operation count must be positive.
     MetadataMaxPendingOperationsPositive,
     /// The metadata I/O byte capacity must be positive.
@@ -370,7 +335,6 @@ impl RuntimeContractPolicy {
             Self::BlockingMaxQueueDepthPositive => "blocking-max-queue-depth-positive",
             Self::BlockingTimeoutRepresentable => "blocking-timeout-representable",
             Self::BlockingGlobalCapacityCoversLanes => "blocking-global-capacity-covers-lanes",
-            Self::FuturesExecutorPoolSizePositive => "futures-executor-pool-size-positive",
             Self::ServiceContextScopeNotBlank => "service-context-scope-not-blank",
             Self::ConfiguredMemoryLimitPositive => "configured-limit-must-be-positive",
             Self::MemoryFractionPositiveAndBounded => "fraction-must-be-positive-and-bounded",
@@ -378,9 +342,6 @@ impl RuntimeContractPolicy {
             Self::ManagedMemoryHeadroomBelowEffectiveLimit => "managed-memory-headroom-below-effective-limit",
             Self::ManagedMemoryBudgetPositive => "managed-memory-budget-positive",
             Self::CriticalFailureSubscriptionCapacityPositive => "critical-failure-subscription-capacity-positive",
-            Self::CronExpression => "cron-expression",
-            Self::IntervalMustBePositive => "interval-must-be-positive",
-            Self::DelayedIntervalMustBePositive => "delayed-interval-must-be-positive",
             Self::MetadataMaxPendingOperationsPositive => "max-pending-operations-positive",
             Self::MetadataMaxPendingBytesPositive => "max-pending-bytes-positive",
             Self::MetadataBlockingTaskTimeoutPositive => "blocking-task-timeout-positive",
@@ -477,28 +438,68 @@ impl RuntimeContractViolation {
     }
 }
 
+/// Why a runtime operation failed, for callers that branch on the reason.
+///
+/// [`RuntimeError::operation`] names what was attempted; the kind says why it
+/// failed. Several kinds share one catalog descriptor: a closed or poisoned
+/// owner and a missing runtime context all report
+/// `runtime.context.unavailable`, so only the kind tells them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RuntimeErrorKind {
+    /// The owner, operation, lane or worker no longer admits work: it is
+    /// shutting down, closed its admission, was cancelled or passed its
+    /// deadline.
+    Closed,
+    /// The owning task group was poisoned by a task panic and rejects new work.
+    Poisoned,
+    /// A timeout or deadline elapsed while waiting.
+    TimedOut,
+    /// A bounded queue, budget or capacity is full.
+    CapacityExhausted,
+    /// The request is not supported, for example a schedule whose policy
+    /// contradicts its configuration.
+    Unsupported,
+    /// A required context is missing or in the wrong state, for example no
+    /// current Tokio runtime.
+    ContextUnavailable,
+    /// The configuration is invalid or could not be loaded.
+    Configuration,
+    /// An I/O operation failed, including building the Tokio runtime.
+    Io,
+    /// An unexpected internal failure, including a failed task join.
+    Internal,
+}
+
 /// Stable, catalog-backed operational runtime failure.
 ///
-/// The facade exposes descriptor identity, closed operation/component labels,
-/// a bounded context and an optional typed source. It intentionally does not
-/// expose implementation variants for callers to match.
+/// The facade exposes descriptor identity, a matchable [`RuntimeErrorKind`],
+/// closed operation/component labels, a bounded context and an optional
+/// typed source. It intentionally does not expose implementation variants.
 #[derive(Clone)]
 pub struct RuntimeError {
     error: SharedError,
+    kind: RuntimeErrorKind,
     operation: RuntimeOperation,
-    component: Arc<str>,
+    component: &'static str,
 }
 
 impl RuntimeError {
     /// Creates a source-free operational failure.
     #[must_use]
     #[track_caller]
-    fn new(descriptor: &'static ErrorDescriptor, operation: RuntimeOperation, component: impl Into<Arc<str>>) -> Self {
+    fn new(
+        descriptor: &'static ErrorDescriptor,
+        kind: RuntimeErrorKind,
+        operation: RuntimeOperation,
+        component: &'static str,
+    ) -> Self {
         let error = CanonicalError::new(descriptor).with_context(runtime_context(operation, false));
         Self {
             error: Arc::new(error),
+            kind,
             operation,
-            component: component.into(),
+            component,
         }
     }
 
@@ -507,16 +508,28 @@ impl RuntimeError {
     #[track_caller]
     fn caused_by(
         descriptor: &'static ErrorDescriptor,
+        kind: RuntimeErrorKind,
         operation: RuntimeOperation,
-        component: impl Into<Arc<str>>,
+        component: &'static str,
         source: impl Error + Send + Sync + 'static,
     ) -> Self {
         let error = CanonicalError::caused_by(descriptor, source).with_context(runtime_context(operation, true));
         Self {
             error: Arc::new(error),
+            kind,
             operation,
-            component: component.into(),
+            component,
         }
+    }
+
+    /// Reports `source` as a failure of `operation`.
+    ///
+    /// The result keeps the descriptor, kind and component of `source` and
+    /// retains it as the typed cause.
+    #[must_use]
+    #[track_caller]
+    pub(crate) fn within(operation: RuntimeOperation, source: RuntimeError) -> Self {
+        Self::caused_by(source.descriptor(), source.kind, operation, source.component, source)
     }
 
     /// Returns the catalog descriptor.
@@ -543,6 +556,12 @@ impl RuntimeError {
         self.error.recovery_hint()
     }
 
+    /// Returns why the operation failed.
+    #[must_use]
+    pub const fn kind(&self) -> RuntimeErrorKind {
+        self.kind
+    }
+
     /// Returns the closed operation label.
     #[must_use]
     pub const fn operation(&self) -> RuntimeOperation {
@@ -552,7 +571,7 @@ impl RuntimeError {
     /// Returns the closed runtime component label.
     #[must_use]
     pub fn component(&self) -> &str {
-        &self.component
+        self.component
     }
 
     /// Returns bounded descriptor context.
@@ -599,8 +618,9 @@ impl RuntimeError {
     pub fn configuration(operation: RuntimeOperation) -> Self {
         Self::new(
             &rocketmq_error::RUNTIME_CONFIGURATION_FAILED,
+            RuntimeErrorKind::Configuration,
             operation,
-            Arc::<str>::from("runtime"),
+            "runtime",
         )
     }
 
@@ -610,8 +630,9 @@ impl RuntimeError {
     pub fn configuration_failure(operation: RuntimeOperation, source: impl Error + Send + Sync + 'static) -> Self {
         Self::caused_by(
             &rocketmq_error::RUNTIME_CONFIGURATION_FAILED,
+            RuntimeErrorKind::Configuration,
             operation,
-            Arc::<str>::from("runtime"),
+            "runtime",
             source,
         )
     }
@@ -622,8 +643,9 @@ impl RuntimeError {
     pub fn build(operation: RuntimeOperation, source: std::io::Error) -> Self {
         Self::caused_by(
             &rocketmq_error::RUNTIME_BUILD_FAILED,
+            RuntimeErrorKind::Io,
             operation,
-            Arc::<str>::from("runtime"),
+            "runtime",
             source,
         )
     }
@@ -634,8 +656,9 @@ impl RuntimeError {
     pub fn io(operation: RuntimeOperation, source: std::io::Error) -> Self {
         Self::caused_by(
             &rocketmq_error::RUNTIME_IO_FAILED,
+            RuntimeErrorKind::Io,
             operation,
-            Arc::<str>::from("runtime"),
+            "runtime",
             source,
         )
     }
@@ -646,8 +669,38 @@ impl RuntimeError {
     pub fn context_unavailable(operation: RuntimeOperation) -> Self {
         Self::new(
             &rocketmq_error::RUNTIME_CONTEXT_UNAVAILABLE,
+            RuntimeErrorKind::ContextUnavailable,
             operation,
-            Arc::<str>::from("runtime"),
+            "runtime",
+        )
+    }
+
+    /// Creates a failure for an owner, operation or worker that no longer
+    /// admits work.
+    ///
+    /// It shares the `runtime.context.unavailable` descriptor with
+    /// [`Self::context_unavailable`]; [`Self::kind`] reports
+    /// [`RuntimeErrorKind::Closed`].
+    #[must_use]
+    #[track_caller]
+    pub fn closed(operation: RuntimeOperation) -> Self {
+        Self::new(
+            &rocketmq_error::RUNTIME_CONTEXT_UNAVAILABLE,
+            RuntimeErrorKind::Closed,
+            operation,
+            "runtime",
+        )
+    }
+
+    /// Creates a failure for a task group poisoned by a task panic.
+    #[must_use]
+    #[track_caller]
+    pub(crate) fn poisoned(operation: RuntimeOperation) -> Self {
+        Self::new(
+            &rocketmq_error::RUNTIME_CONTEXT_UNAVAILABLE,
+            RuntimeErrorKind::Poisoned,
+            operation,
+            "runtime",
         )
     }
 
@@ -657,8 +710,9 @@ impl RuntimeError {
     pub fn capacity(operation: RuntimeOperation) -> Self {
         Self::new(
             &rocketmq_error::RUNTIME_CAPACITY_EXHAUSTED,
+            RuntimeErrorKind::CapacityExhausted,
             operation,
-            Arc::<str>::from("runtime"),
+            "runtime",
         )
     }
 
@@ -668,8 +722,9 @@ impl RuntimeError {
     pub fn timed_out(operation: RuntimeOperation) -> Self {
         Self::new(
             &rocketmq_error::RUNTIME_OPERATION_TIMED_OUT,
+            RuntimeErrorKind::TimedOut,
             operation,
-            Arc::<str>::from("runtime"),
+            "runtime",
         )
     }
 
@@ -679,8 +734,9 @@ impl RuntimeError {
     pub fn unsupported(operation: RuntimeOperation) -> Self {
         Self::new(
             &rocketmq_error::RUNTIME_OPERATION_UNSUPPORTED,
+            RuntimeErrorKind::Unsupported,
             operation,
-            Arc::<str>::from("runtime"),
+            "runtime",
         )
     }
 
@@ -690,8 +746,9 @@ impl RuntimeError {
     pub fn join(operation: RuntimeOperation, source: tokio::task::JoinError) -> Self {
         Self::caused_by(
             &rocketmq_error::RUNTIME_TASK_JOIN_FAILED,
+            RuntimeErrorKind::Internal,
             operation,
-            Arc::<str>::from("task"),
+            "task",
             source,
         )
     }
@@ -702,8 +759,9 @@ impl RuntimeError {
     pub fn internal(operation: RuntimeOperation, source: impl Error + Send + Sync + 'static) -> Self {
         Self::caused_by(
             &rocketmq_error::RUNTIME_INTERNAL_FAILURE,
+            RuntimeErrorKind::Internal,
             operation,
-            Arc::<str>::from("runtime"),
+            "runtime",
             source,
         )
     }
@@ -714,8 +772,9 @@ impl RuntimeError {
     pub fn internal_failure(operation: RuntimeOperation) -> Self {
         Self::new(
             &rocketmq_error::RUNTIME_INTERNAL_FAILURE,
+            RuntimeErrorKind::Internal,
             operation,
-            Arc::<str>::from("runtime"),
+            "runtime",
         )
     }
 }
@@ -744,6 +803,7 @@ impl fmt::Debug for RuntimeError {
             .debug_struct("RuntimeError")
             .field("code", &self.code())
             .field("condition", &self.condition())
+            .field("kind", &self.kind)
             .field("operation", &self.operation)
             .field("component", &self.component)
             .field("has_source", &self.error.source().is_some())
@@ -848,6 +908,84 @@ mod tests {
             constructor(RuntimeOperation::TestFailure).operation(),
             RuntimeOperation::TestFailure
         );
+    }
+
+    #[test]
+    fn each_constructor_reports_a_matchable_kind() {
+        let cases = [
+            (
+                RuntimeError::configuration(RuntimeOperation::LoadConfigFile),
+                RuntimeErrorKind::Configuration,
+            ),
+            (
+                RuntimeError::build(RuntimeOperation::BuildTokioRuntime, io::Error::other("build")),
+                RuntimeErrorKind::Io,
+            ),
+            (
+                RuntimeError::io(RuntimeOperation::ReadFile, io::Error::other("read")),
+                RuntimeErrorKind::Io,
+            ),
+            (
+                RuntimeError::context_unavailable(RuntimeOperation::RuntimeContext),
+                RuntimeErrorKind::ContextUnavailable,
+            ),
+            (
+                RuntimeError::closed(RuntimeOperation::SpawnTaskGroupTask),
+                RuntimeErrorKind::Closed,
+            ),
+            (
+                RuntimeError::poisoned(RuntimeOperation::SpawnTaskGroupTask),
+                RuntimeErrorKind::Poisoned,
+            ),
+            (
+                RuntimeError::capacity(RuntimeOperation::BlockingQueueAdmission),
+                RuntimeErrorKind::CapacityExhausted,
+            ),
+            (
+                RuntimeError::timed_out(RuntimeOperation::BlockingTask),
+                RuntimeErrorKind::TimedOut,
+            ),
+            (
+                RuntimeError::unsupported(RuntimeOperation::RegisterScheduledTask),
+                RuntimeErrorKind::Unsupported,
+            ),
+            (
+                RuntimeError::internal_failure(RuntimeOperation::TestFailure),
+                RuntimeErrorKind::Internal,
+            ),
+        ];
+        for (error, kind) in cases {
+            assert_eq!(error.kind(), kind, "{error:?}");
+        }
+    }
+
+    #[test]
+    fn closed_and_poisoned_keep_the_unavailable_descriptor() {
+        let unavailable = RuntimeError::context_unavailable(RuntimeOperation::SpawnTaskGroupTask);
+        for error in [
+            RuntimeError::closed(RuntimeOperation::SpawnTaskGroupTask),
+            RuntimeError::poisoned(RuntimeOperation::SpawnTaskGroupTask),
+        ] {
+            assert_eq!(error.code(), unavailable.code());
+            assert_eq!(error.condition(), unavailable.condition());
+            assert_ne!(error.kind(), unavailable.kind());
+        }
+    }
+
+    #[test]
+    fn a_relabelled_failure_keeps_its_kind_and_cause() {
+        let closed = RuntimeError::closed(RuntimeOperation::SpawnTaskGroupTask);
+        let error = RuntimeError::within(RuntimeOperation::SpawnServiceTask, closed.clone());
+
+        assert_eq!(error.kind(), RuntimeErrorKind::Closed);
+        assert_eq!(error.operation(), RuntimeOperation::SpawnServiceTask);
+        assert_eq!(error.code(), closed.code());
+        assert_eq!(error.component(), closed.component());
+        let source = error
+            .source()
+            .and_then(|source| source.downcast_ref::<RuntimeError>())
+            .expect("the original failure is the typed cause");
+        assert_eq!(source.operation(), RuntimeOperation::SpawnTaskGroupTask);
     }
 
     #[test]

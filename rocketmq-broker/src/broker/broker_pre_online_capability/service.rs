@@ -28,6 +28,7 @@ use rocketmq_protocol::protocol::DataVersion;
 use rocketmq_runtime::task::service_task::ServiceTask;
 use rocketmq_runtime::task::service_task::ServiceTaskContext;
 use rocketmq_runtime::task::ServiceManager;
+use rocketmq_runtime::ShutdownDeadline;
 use rocketmq_runtime::TaskGroup;
 use rocketmq_store::BrokerReplicationStore;
 use tracing::error;
@@ -42,16 +43,14 @@ pub struct BrokerPreOnlineService<MS: BrokerReplicationStore> {
 }
 
 impl<MS: BrokerReplicationStore> BrokerPreOnlineService<MS> {
-    pub(crate) fn new(context: BrokerPreOnlineContext<MS>, parent_task_group: Option<TaskGroup>) -> Self {
+    pub(crate) fn new(context: BrokerPreOnlineContext<MS>, parent_task_group: TaskGroup) -> Self {
         let inner = BrokerPreOnlineServiceInner {
             context,
             wait_broker_index: AtomicU32::new(0),
         };
-        let service_manager = match parent_task_group {
-            Some(parent_task_group) => ServiceManager::new_with_task_group(inner, parent_task_group),
-            None => ServiceManager::new_legacy_compatibility(inner),
-        };
-        BrokerPreOnlineService { service_manager }
+        BrokerPreOnlineService {
+            service_manager: ServiceManager::new_with_task_group(inner, parent_task_group),
+        }
     }
 }
 
@@ -464,9 +463,10 @@ where
             .map_err(|source| crate::broker_error::broker_task_failed("BrokerPreOnlineService", source))
     }
 
-    pub async fn shutdown(&self) -> crate::broker_error::BrokerResult<()> {
+    /// Stops the pre-online loop, waiting no later than `deadline`.
+    pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> crate::broker_error::BrokerResult<()> {
         self.service_manager
-            .shutdown()
+            .shutdown_until(deadline)
             .await
             .map_err(|source| crate::broker_error::broker_task_failed("BrokerPreOnlineService", source))
     }

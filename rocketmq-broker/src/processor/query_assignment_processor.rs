@@ -988,7 +988,11 @@ mod tests {
             owner.root_context().component("query-assignment-test.outer-api"),
             TransportTelemetry::noop(),
         );
-        let topic_route_info_manager = TopicRouteInfoManager::new(broker_outer_api, 60_000, None);
+        let topic_route_info_manager = TopicRouteInfoManager::new(
+            broker_outer_api,
+            60_000,
+            owner.root_context().component("query-assignment-test.route-info"),
+        );
         topic_route_info_manager.topic_subscribe_info_table.insert(
             CheetahString::from_static_str("assignment-topic"),
             [MessageQueue::from_parts("assignment-topic", "broker-a", 0)]

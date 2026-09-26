@@ -35,6 +35,7 @@ use crate::scheduled::ScheduledTaskSnapshot;
 use crate::shutdown_report::ShutdownReport;
 use crate::task_group::TaskDetailScope;
 use crate::task_group::TaskGroup;
+use crate::task_group::TaskGroupEventCounts;
 use crate::task_group::TaskGroupId;
 use crate::task_group::TaskGroupLifecycleState;
 use crate::task_group::TaskKind;
@@ -68,6 +69,8 @@ pub struct RuntimeDiagnosticsSnapshot {
     pub active_tasks: usize,
     /// The number of active child registry slots.
     pub registry_slots: usize,
+    /// Failures absorbed anywhere in the root's tree.
+    pub events: TaskGroupEventCounts,
     /// The blocking lanes value.
     pub blocking_lanes: Vec<BlockingExecutorSnapshot>,
 }
@@ -287,6 +290,7 @@ impl RuntimeDiagnostics {
             child_count: root.component_count(),
             active_tasks: root.task_count(),
             registry_slots: root.component_count(),
+            events: root.event_counts(),
             blocking_lanes,
         }
     }

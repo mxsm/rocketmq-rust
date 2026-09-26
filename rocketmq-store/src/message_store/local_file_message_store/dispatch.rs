@@ -131,9 +131,9 @@ impl LocalFileMessageStore {
                 let batch_consume_queue_dir =
                     PathBuf::from(get_store_path_batch_consume_queue(root_dir)).join(topic.as_str());
 
-                util_all::delete_empty_directory(consume_queue_dir);
-                util_all::delete_empty_directory(consume_queue_ext_dir);
-                util_all::delete_empty_directory(batch_consume_queue_dir);
+                store_util::delete_empty_directory(consume_queue_dir);
+                store_util::delete_empty_directory(consume_queue_ext_dir);
+                store_util::delete_empty_directory(batch_consume_queue_dir);
                 true
             });
             if !removed {

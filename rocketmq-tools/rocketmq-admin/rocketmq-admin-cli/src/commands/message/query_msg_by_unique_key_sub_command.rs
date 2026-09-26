@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use rocketmq_error::Result as CanonicalResult;
 use rocketmq_model::common::message::message_ext::MessageExt;
-use rocketmq_runtime::common::util_all::time_millis_to_human_string2;
+use rocketmq_runtime::common::time_utils::time_millis_to_human_string2;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::message::DirectConsumeMessageResult;

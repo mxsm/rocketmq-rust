@@ -55,6 +55,7 @@ use rocketmq_runtime::common::time_utils::current_millis;
 use rocketmq_runtime::BlockingExecutor;
 use rocketmq_runtime::ChildServiceContext;
 use rocketmq_runtime::OperationContext;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ScheduledTaskSnapshot;
@@ -640,34 +641,38 @@ impl<MS: BrokerWriteStore> ScheduleMessageService<MS> {
         let period = Duration::from_millis(this.message_store_config.flush_delay_offset_interval.max(1));
         let mut config = ScheduledTaskConfig::fixed_delay("broker.schedule.persist-delay-offset", period);
         config.initial_delay = initial_delay;
-        config.shutdown_timeout = Duration::from_millis(WAIT_FOR_SHUTDOWN);
 
         scheduled_tasks
-            .schedule_fixed_delay_operation(&run_context.operation, config, move || {
-                let service = service.clone();
-                let context = context.clone();
-                let mut activation = activation.clone();
-                let first_persist = first_persist.take();
-                async move {
-                    if !wait_for_schedule_activation(&mut activation, &context.cancellation).await {
-                        return;
+            .schedule_operation(
+                &run_context.operation,
+                config,
+                ScheduledExecutionPolicy::default(),
+                move || {
+                    let service = service.clone();
+                    let context = context.clone();
+                    let mut activation = activation.clone();
+                    let first_persist = first_persist.take();
+                    async move {
+                        if !wait_for_schedule_activation(&mut activation, &context.cancellation).await {
+                            return;
+                        }
+                        let Some(service) = service.upgrade() else {
+                            return;
+                        };
+                        let result = service.persist_generation(&context).await;
+                        if let Err(error) = &result {
+                            warn!(
+                                ?error,
+                                generation = context.generation,
+                                "failed to persist schedule offsets"
+                            );
+                        }
+                        if let Some(completion) = first_persist {
+                            let _ = completion.send(result);
+                        }
                     }
-                    let Some(service) = service.upgrade() else {
-                        return;
-                    };
-                    let result = service.persist_generation(&context).await;
-                    if let Err(error) = &result {
-                        warn!(
-                            ?error,
-                            generation = context.generation,
-                            "failed to persist schedule offsets"
-                        );
-                    }
-                    if let Some(completion) = first_persist {
-                        let _ = completion.send(result);
-                    }
-                }
-            })
+                },
+            )
             .map(|_| ())
             .map_err(schedule_message_service_startup_failed)
     }

@@ -21,8 +21,8 @@ use rocketmq_model::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_model::common::message::message_enum::MessageRequestMode;
 use rocketmq_model::common::mix_all;
 use rocketmq_protocol::protocol::heartbeat::message_model::MessageModel;
+use rocketmq_runtime::common::time_utils;
 use rocketmq_runtime::common::time_utils::current_millis;
-use rocketmq_runtime::common::util_all;
 
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
@@ -89,7 +89,7 @@ pub struct LitePullConsumerConfig {
 
 pub(crate) fn default_lite_pull_consume_timestamp() -> CheetahString {
     let thirty_minutes_ago = current_millis().saturating_sub(1000 * 60 * 30);
-    CheetahString::from_string(util_all::time_millis_to_human_string3(thirty_minutes_ago as i64))
+    CheetahString::from_string(time_utils::time_millis_to_human_string3(thirty_minutes_ago as i64))
 }
 
 #[allow(deprecated)]

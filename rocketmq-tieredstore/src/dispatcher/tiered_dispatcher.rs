@@ -27,6 +27,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskGroup;
 use rocketmq_runtime::ShutdownReport;
@@ -651,12 +652,13 @@ where
         let retry_tick = Arc::new(Notify::new());
         let retry_tick_scheduler = retry_tick.clone();
         ScheduledTaskGroup::new(owner.task_group().clone())
-            .schedule_fixed_rate_no_overlap_operation(
+            .schedule_operation(
                 owner.operation(),
                 ScheduledTaskConfig::fixed_rate_no_overlap(
                     "tieredstore.dispatcher.retry-ledger",
                     self.progress.retry_poll_interval(),
                 ),
+                ScheduledExecutionPolicy::default(),
                 move || {
                     retry_tick_scheduler.notify_one();
                     std::future::ready(())

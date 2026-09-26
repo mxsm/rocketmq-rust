@@ -247,6 +247,8 @@ path = "/metrics"
 将 `ROCKETMQ_HEALTH_BIND_ADDR` 设为 `127.0.0.1:5558` 等地址，可启用共享生命周期 HTTP 监听器。
 `/readyz` 报告就绪状态，`/livez` 报告存活状态，返回 HTTP `200` 或 `503`。
 未设置该变量时不会启动探针监听器。该监听器还暴露可触发关闭的 `/drainz` 路由，需要限制其访问范围。
+`/drainz` 默认只接受 `POST`，对 `GET` 返回 `405`。由 Kubernetes `preStop.httpGet` 钩子调用时，需设置
+`ROCKETMQ_HEALTH_DRAIN_METHODS=GET,POST`；仓库提供的 chart 和清单已经设置。
 
 Broker 就绪检查涵盖普通和快速监听器、存储就绪状态、处理器安装情况、安全状态及注册就绪状态。
 存储就绪字段不保证当前角色或 Controller 租约允许生产者写入。

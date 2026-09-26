@@ -3717,6 +3717,7 @@ mod tests {
             probe_bind_addr: None,
             shutdown_timeout: std::time::Duration::from_secs(45),
             liveness_stale_after: std::time::Duration::from_secs(30),
+            drain_request_methods: rocketmq_runtime::DrainRequestMethods::PostOnly,
         });
         lifecycle.mark_ready().expect("lifecycle should become ready");
         drain

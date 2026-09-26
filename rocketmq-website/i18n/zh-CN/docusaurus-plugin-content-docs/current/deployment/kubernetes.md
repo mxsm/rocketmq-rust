@@ -101,7 +101,7 @@ kubectl -n rocketmq logs core-broker-0 --tail=100
 
 Pod 处于 Pending 时，查看调度事件和 PVC 绑定情况。启动失败时，查看对应容器当前及上一次运行的日志、挂载配置和 Secret 键名。进程以 UID/GID `10001` 运行，根文件系统只读；可写状态应落在指定卷中。
 
-Chart 在内部健康端口（默认 `8088`）使用 HTTP `/livez` 做启动与存活探针，`/readyz` 做就绪探针，`/drainz` 做停止前排空。默认关闭预算为 45 秒，Pod 终止宽限期为 60 秒。探针成功说明服务生命周期状态，并不能证明主题可写、消费者已提交进度或副本已经追平。
+Chart 在内部健康端口（默认 `8088`）使用 HTTP `/livez` 做启动与存活探针，`/readyz` 做就绪探针，`/drainz` 做停止前排空。默认关闭预算为 45 秒，Pod 终止宽限期为 60 秒。`/drainz` 默认只接受 `POST`，除非设置 `ROCKETMQ_HEALTH_DRAIN_METHODS=GET,POST`；`preStop.httpGet` 钩子只能发送 `GET`，因此 Chart 已设置该变量，替换钩子时请保留。探针成功说明服务生命周期状态，并不能证明主题可写、消费者已提交进度或副本已经追平。
 
 从允许访问的位置执行[管理查询](../operations/admin.md)，创建隔离的测试资源，并使用可达的集群地址和凭据完成[第一条消息链路](../getting-started/quick-start.md)。Proxy 使用带 TLS/认证的 [gRPC 探测](proxy.md)。记录实际响应结果与消费完成情况。
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -25,12 +26,16 @@ use rocketmq_runtime::BlockingKind;
 use rocketmq_runtime::BlockingLane;
 use rocketmq_runtime::BlockingLanePolicies;
 use rocketmq_runtime::BlockingPoolPolicy;
+use rocketmq_runtime::MissedTickPolicy;
 use rocketmq_runtime::OperationContext;
 use rocketmq_runtime::RuntimeComponent;
 use rocketmq_runtime::RuntimeConfig;
 use rocketmq_runtime::RuntimeContext;
 use rocketmq_runtime::RuntimeDiagnosticsViewV1;
+use rocketmq_runtime::RuntimeErrorKind;
+use rocketmq_runtime::RuntimeOperation;
 use rocketmq_runtime::RuntimeOwner;
+use rocketmq_runtime::ScheduledExecutionPolicy;
 use rocketmq_runtime::ScheduledTaskConfig;
 use rocketmq_runtime::ScheduledTaskControl;
 use rocketmq_runtime::ScheduledTaskRegistrationOutcome;
@@ -554,17 +559,45 @@ async fn task_group_enters_poisoned_state_after_task_panic_and_rejects_new_work(
     })
     .await
     .expect("task group should enter poisoned state after task panic");
+    assert_eq!(group.event_counts().poisoned_groups, 1);
 
+    let error = group
+        .spawn_service("late-task-after-panic", async {})
+        .expect_err("poisoned task group should reject new tasks");
+    assert_eq!(error.condition(), CanonicalCondition::Unavailable);
+    assert_eq!(error.kind(), RuntimeErrorKind::Poisoned);
     assert_eq!(
-        group
-            .spawn_service("late-task-after-panic", async {})
-            .expect_err("poisoned task group should reject new tasks")
-            .condition(),
-        CanonicalCondition::Unavailable
+        group.try_child("late-child").unwrap_err().kind(),
+        RuntimeErrorKind::Poisoned
     );
     let report = group.shutdown(Duration::from_secs(1)).await;
     assert_eq!(report.panicked, 1, "{}", report.to_json());
     assert_eq!(group.lifecycle_state(), TaskGroupLifecycleState::ShutdownCompleted);
+}
+
+#[tokio::test]
+async fn rejected_submissions_report_why_they_were_rejected() {
+    let context = RuntimeContext::from_current("rejection-kinds");
+    let group = context.service_context("service").task_group().clone();
+
+    let operation = OperationContext::without_deadline(TaskKind::Worker);
+    operation.close_admission();
+    let error = group
+        .spawn_operation(&operation, "late-operation-task", async {})
+        .unwrap_err();
+    assert_eq!(error.kind(), RuntimeErrorKind::Closed);
+    assert_eq!(error.operation(), RuntimeOperation::SpawnOperation);
+
+    assert!(group.shutdown(Duration::from_secs(1)).await.is_healthy());
+    let error = group.spawn_service("late-task", async {}).unwrap_err();
+    assert_eq!(error.kind(), RuntimeErrorKind::Closed);
+    assert_eq!(error.operation(), RuntimeOperation::SpawnTaskGroupTask);
+    let error = group.try_child("late-child").unwrap_err();
+    assert_eq!(error.kind(), RuntimeErrorKind::Closed);
+    assert_eq!(error.operation(), RuntimeOperation::CreateTaskGroupChild);
+    // Closed and poisoned owners share the unavailable condition; only the
+    // kind tells them apart.
+    assert_eq!(error.condition(), CanonicalCondition::Unavailable);
 }
 
 #[tokio::test]
@@ -786,6 +819,36 @@ async fn service_context_rejects_component_work_after_shutdown() {
         rocketmq_runtime::TaskGroupLifecycleState::ShutdownCompleted
     );
     assert!(late_child.spawn_service("late-task", async {}).is_err());
+    assert_eq!(group.event_counts().closed_component_requests, 1);
+    let _second_late_child = service.component("late-component");
+    assert_eq!(group.event_counts().closed_component_requests, 2);
+}
+
+#[tokio::test]
+async fn a_component_requested_while_closing_is_noted_in_the_shutdown_report() {
+    let context = RuntimeContext::from_current("task-group-closing-child-test");
+    let service = context.service_context("service");
+    let group = service.task_group().clone();
+    let token = group.cancellation_token();
+    let late = service.clone();
+    group
+        .spawn_service("requests-component-on-cancel", async move {
+            token.cancelled().await;
+            let child = late.component("during-shutdown");
+            assert!(child.spawn_service("rejected", async {}).is_err());
+        })
+        .unwrap();
+
+    let report = group.shutdown(Duration::from_secs(1)).await;
+    assert!(
+        report.annotations.iter().any(
+            |annotation| annotation.message == "1 component requests after admission closed received closed groups"
+        ),
+        "{}",
+        report.to_json()
+    );
+    assert_eq!(group.event_counts().closed_component_requests, 1);
+    assert_eq!(context.diagnostics_snapshot().events.closed_component_requests, 1);
 }
 
 #[tokio::test]
@@ -903,7 +966,7 @@ async fn scheduled_no_overlap_skips_while_previous_run_is_active() {
     let config = ScheduledTaskConfig::fixed_rate_no_overlap("slow-task", Duration::from_millis(10));
 
     scheduled
-        .schedule_fixed_rate_no_overlap(config, || async {
+        .schedule(config, ScheduledExecutionPolicy::default(), || async {
             tokio::time::sleep(Duration::from_millis(50)).await;
         })
         .unwrap();
@@ -932,8 +995,10 @@ async fn scheduled_fixed_rate_allows_overlap_and_reports_overlap_metrics() {
     let scheduled = service.scheduled_tasks("scheduled");
     let config = ScheduledTaskConfig::fixed_rate("overlap-task", Duration::from_millis(10));
 
+    // Up to six runs overlap at this rate; a bound of eight never skips.
+    let policy = ScheduledExecutionPolicy::bounded(NonZeroUsize::new(8).unwrap(), MissedTickPolicy::Skip);
     scheduled
-        .schedule_fixed_rate(config, || async {
+        .schedule(config, policy, || async {
             tokio::time::sleep(Duration::from_millis(50)).await;
         })
         .unwrap();
@@ -964,7 +1029,7 @@ async fn scheduled_fixed_delay_controlled_stops_when_task_requests_stop() {
     let runs_in_task = runs.clone();
 
     scheduled
-        .schedule_fixed_delay_controlled(
+        .schedule_controlled(
             ScheduledTaskConfig::fixed_delay("self-stopping-task", Duration::from_millis(5)),
             move || {
                 let runs = runs_in_task.clone();
@@ -1008,8 +1073,9 @@ async fn scheduled_spawn_failure_rolls_back_registered_metrics() {
     let report = scheduled.shutdown(Duration::from_secs(1)).await;
     assert!(report.is_healthy(), "{}", report.to_json());
 
-    let result = scheduled.schedule_fixed_delay(
+    let result = scheduled.schedule(
         ScheduledTaskConfig::fixed_delay("late-task", Duration::from_secs(1)),
+        ScheduledExecutionPolicy::default(),
         || async {},
     );
 
@@ -1026,8 +1092,9 @@ async fn scheduled_duplicate_is_an_outcome_without_replacing_driver_or_metrics()
     let scheduled = context.service_context("scheduled").scheduled_tasks("duplicate");
 
     let first = scheduled
-        .schedule_fixed_delay(
+        .schedule(
             ScheduledTaskConfig::fixed_delay("stable-task", Duration::from_secs(60)),
+            ScheduledExecutionPolicy::default(),
             || async {},
         )
         .expect("first schedule should start");
@@ -1035,8 +1102,9 @@ async fn scheduled_duplicate_is_an_outcome_without_replacing_driver_or_metrics()
     let before = scheduled.snapshot();
 
     let duplicate = scheduled
-        .schedule_fixed_delay(
-            ScheduledTaskConfig::fixed_rate("stable-task", Duration::from_millis(1)),
+        .schedule(
+            ScheduledTaskConfig::fixed_rate_no_overlap("stable-task", Duration::from_millis(1)),
+            ScheduledExecutionPolicy::default(),
             || async {},
         )
         .expect("duplicate registration is a normal outcome");

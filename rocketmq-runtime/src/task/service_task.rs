@@ -14,77 +14,179 @@
 
 use std::future::Future;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::RuntimeError;
-use crate::RuntimeHandle;
-use crate::RuntimeResult;
-use crate::ShutdownReport;
-use crate::TaskGroup;
-use crate::TaskId;
-use serde::Serialize;
+use parking_lot::Mutex;
 use tokio::sync::Notify;
-use tokio::sync::RwLock;
 use tokio::time::timeout;
 use tracing::info;
 use tracing::warn;
 
-/// Service thread context that gets passed to the service
-/// This contains all the control mechanisms
-pub struct ServiceTaskContext {
-    /// Wait point for notifications
-    wait_point: Arc<Notify>,
-    /// Notification flag
-    has_notified: Arc<AtomicBool>,
-    /// Stop flag
-    stopped: Arc<AtomicBool>,
+use crate::config::DEFAULT_SHUTDOWN_TIMEOUT;
+use crate::shutdown_deadline::ABORT_CONFIRMATION_TIMEOUT;
+use crate::RuntimeError;
+use crate::RuntimeResult;
+use crate::ShutdownDeadline;
+use crate::ShutdownReport;
+use crate::TaskGroup;
+use crate::TaskId;
+
+/// Lifecycle state of a [`ServiceManager`] and the loop it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceTaskState {
+    /// The service has never been started.
+    NotStarted,
+    /// `start` accepted the request and is spawning the loop.
+    Starting,
+    /// The loop is running.
+    Running,
+    /// A stop was requested and the loop has not finished yet.
+    Stopping,
+    /// The loop finished, or shutdown completed.
+    Stopped,
 }
 
-impl ServiceTaskContext {
-    /// Creates a new `ServiceTaskContext`.
-    pub fn new(wait_point: Arc<Notify>, has_notified: Arc<AtomicBool>, stopped: Arc<AtomicBool>) -> Self {
+impl ServiceTaskState {
+    const fn as_bits(self) -> u64 {
+        match self {
+            Self::NotStarted => 0,
+            Self::Starting => 1,
+            Self::Running => 2,
+            Self::Stopping => 3,
+            Self::Stopped => 4,
+        }
+    }
+
+    const fn from_bits(bits: u64) -> Self {
+        match bits {
+            0 => Self::NotStarted,
+            1 => Self::Starting,
+            2 => Self::Running,
+            3 => Self::Stopping,
+            _ => Self::Stopped,
+        }
+    }
+}
+
+const STATE_BITS: u32 = 8;
+const STATE_MASK: u64 = (1 << STATE_BITS) - 1;
+const GENERATION_MASK: u64 = u64::MAX >> STATE_BITS;
+
+fn pack(generation: u64, state: ServiceTaskState) -> u64 {
+    (generation << STATE_BITS) | state.as_bits()
+}
+
+fn generation_of(word: u64) -> u64 {
+    word >> STATE_BITS
+}
+
+fn state_of(word: u64) -> ServiceTaskState {
+    ServiceTaskState::from_bits(word & STATE_MASK)
+}
+
+/// Control state shared by a [`ServiceManager`] and the loop it runs.
+///
+/// One atomic word holds the state together with the generation of the
+/// current run. `start` begins a new generation, so a loop left over from an
+/// earlier run that outlived its shutdown sees itself as stopped and cannot
+/// overwrite the state of the run that replaced it.
+#[derive(Debug)]
+struct ServiceSignals {
+    word: AtomicU64,
+    has_notified: AtomicBool,
+    wait_point: Notify,
+}
+
+impl ServiceSignals {
+    fn new() -> Self {
         Self {
-            wait_point,
-            has_notified,
-            stopped,
+            word: AtomicU64::new(pack(0, ServiceTaskState::NotStarted)),
+            has_notified: AtomicBool::new(false),
+            wait_point: Notify::new(),
         }
     }
 
-    /// Check if service is stopped
-    pub fn is_stopped(&self) -> bool {
-        self.stopped.load(Ordering::Acquire)
+    fn state(&self) -> ServiceTaskState {
+        state_of(self.word.load(Ordering::Acquire))
     }
 
-    /// Wait for running with interval
-    pub async fn wait_for_running(&self, interval: Duration) -> bool {
-        // Check if already notified
-        if self
-            .has_notified
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+    /// Starts a new generation from `NotStarted` or `Stopped`.
+    ///
+    /// Returns the replaced word and the new generation, or the current state
+    /// when a run is still active.
+    fn begin_start(&self) -> Result<(u64, u64), ServiceTaskState> {
+        let mut word = self.word.load(Ordering::Acquire);
+        loop {
+            let state = state_of(word);
+            if !matches!(state, ServiceTaskState::NotStarted | ServiceTaskState::Stopped) {
+                return Err(state);
+            }
+            let generation = generation_of(word).wrapping_add(1) & GENERATION_MASK;
+            match self.word.compare_exchange_weak(
+                word,
+                pack(generation, ServiceTaskState::Starting),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok((word, generation)),
+                Err(actual) => word = actual,
+            }
+        }
+    }
+
+    /// Moves `generation` from `from` to `to`; does nothing if either changed.
+    fn transition(&self, generation: u64, from: ServiceTaskState, to: ServiceTaskState) -> bool {
+        self.word
+            .compare_exchange(
+                pack(generation, from),
+                pack(generation, to),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
             .is_ok()
-        {
-            return true; // Should call on_wait_end
-        }
-
-        // Entry to wait
-        match timeout(interval, self.wait_point.notified()).await {
-            Ok(_) => {
-                // Notified
-            }
-            Err(_) => {
-                // Timeout occurred - this is normal behavior
-            }
-        }
-        // Reset notification flag
-        self.has_notified.store(false, Ordering::Release);
-        true // Should call on_wait_end
     }
 
-    /// Executes wakeup.
-    pub fn wakeup(&self) {
+    /// Marks `generation` stopped unless a newer run already replaced it.
+    fn finish(&self, generation: u64) -> bool {
+        self.word
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |word| {
+                (generation_of(word) == generation).then(|| pack(generation, ServiceTaskState::Stopped))
+            })
+            .is_ok()
+    }
+
+    /// Requests a stop of the current run and returns its state and generation.
+    fn request_stop(&self) -> (ServiceTaskState, u64) {
+        let mut word = self.word.load(Ordering::Acquire);
+        loop {
+            let state = state_of(word);
+            let generation = generation_of(word);
+            if !matches!(state, ServiceTaskState::Starting | ServiceTaskState::Running) {
+                return (state, generation);
+            }
+            match self.word.compare_exchange_weak(
+                word,
+                pack(generation, ServiceTaskState::Stopping),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return (state, generation),
+                Err(actual) => word = actual,
+            }
+        }
+    }
+
+    fn is_stopped_for(&self, generation: u64) -> bool {
+        let word = self.word.load(Ordering::Acquire);
+        generation_of(word) != generation
+            || matches!(state_of(word), ServiceTaskState::Stopping | ServiceTaskState::Stopped)
+    }
+
+    fn wakeup(&self) {
         if self
             .has_notified
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -92,6 +194,75 @@ impl ServiceTaskContext {
         {
             self.wait_point.notify_one();
         }
+    }
+}
+
+/// Stops the run it belongs to when the loop returns or is aborted.
+struct StopOnExit {
+    signals: Arc<ServiceSignals>,
+    generation: u64,
+}
+
+impl Drop for StopOnExit {
+    fn drop(&mut self) {
+        if self.signals.finish(self.generation) {
+            self.signals.has_notified.store(false, Ordering::Release);
+        }
+    }
+}
+
+/// Control handle passed to [`ServiceTask::run`].
+pub struct ServiceTaskContext {
+    signals: Arc<ServiceSignals>,
+    generation: u64,
+}
+
+impl ServiceTaskContext {
+    /// Creates a context that is not stopped and has no pending wakeup.
+    ///
+    /// [`ServiceManager`] creates the context it passes to [`ServiceTask::run`];
+    /// this constructor lets a test drive a service loop directly.
+    pub fn new() -> Self {
+        Self {
+            signals: Arc::new(ServiceSignals::new()),
+            generation: 0,
+        }
+    }
+
+    /// Returns whether this run was asked to stop, or was replaced by a newer run.
+    pub fn is_stopped(&self) -> bool {
+        self.signals.is_stopped_for(self.generation)
+    }
+
+    /// Waits until woken up or until `interval` elapses.
+    ///
+    /// Returns at once when a wakeup is already pending. Always returns
+    /// `true`, after which the loop does its `on_wait_end` work.
+    pub async fn wait_for_running(&self, interval: Duration) -> bool {
+        if self
+            .signals
+            .has_notified
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return true;
+        }
+
+        // A timeout is the normal way to leave the wait.
+        let _ = timeout(interval, self.signals.wait_point.notified()).await;
+        self.signals.has_notified.store(false, Ordering::Release);
+        true
+    }
+
+    /// Wakes the loop if it is waiting, or makes its next wait return at once.
+    pub fn wakeup(&self) {
+        self.signals.wakeup();
+    }
+}
+
+impl Default for ServiceTaskContext {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -109,42 +280,24 @@ pub trait ServiceTask: Sync + Send {
             // Default implementation does nothing
         }
     }
-
-    /// Get join time for shutdown (default 90 seconds)
-    fn get_join_time(&self) -> Duration {
-        Duration::from_millis(90_000)
-    }
 }
 
-/// Service thread implementation with lifecycle management
+/// Runs a [`ServiceTask`] loop as a service task of an owned task group.
+///
+/// Each run is spawned in a `rocketmq.service-manager` child of the task group
+/// given at construction, so the owner's shutdown report and diagnostics
+/// include it. A stopped manager can be started again.
+///
+/// Shutdown waits no longer than the earliest of the deadline passed to
+/// [`Self::shutdown_until`] and the deadline installed on the parent task
+/// group by an owner that is shutting down. When neither exists, it uses the
+/// runtime's default shutdown budget.
 pub struct ServiceManager<T: ServiceTask + 'static> {
-    /// The actual service implementation
     service: Arc<T>,
-
-    /// Thread state management
-    state: Arc<RwLock<ServiceLifecycle>>,
-
-    /// Stop flag
-    stopped: Arc<AtomicBool>,
-
-    /// Started flag for restart capability
-    started: Arc<AtomicBool>,
-
-    /// Notification flag
-    has_notified: Arc<AtomicBool>,
-
-    /// Wait point for notifications
-    wait_point: Arc<Notify>,
-
-    /// Task handle for the running service
-    task_handle: Arc<RwLock<Option<ServiceTaskHandle>>>,
-
-    last_task_group_shutdown_report: Arc<RwLock<Option<ShutdownReport>>>,
-
-    parent_task_group: Option<TaskGroup>,
-
-    /// Whether this is a daemon service
-    is_daemon: AtomicBool,
+    signals: Arc<ServiceSignals>,
+    task_handle: Mutex<Option<ServiceTaskHandle>>,
+    last_task_group_shutdown_report: Mutex<Option<ShutdownReport>>,
+    parent_task_group: TaskGroup,
 }
 
 struct ServiceTaskHandle {
@@ -153,35 +306,19 @@ struct ServiceTaskHandle {
 }
 
 impl ServiceTaskHandle {
-    fn new(task_id: TaskId, task_group: TaskGroup) -> Self {
-        Self { task_id, task_group }
-    }
-
-    async fn shutdown(self, timeout_duration: Duration, interrupt: bool, service_name: &str) -> ShutdownReport {
-        if interrupt {
-            let aborted = self
-                .task_group
-                .abort_task_and_wait(self.task_id, timeout_duration)
-                .await;
-            if !aborted {
+    async fn shutdown(self, deadline: ShutdownDeadline, interrupt: bool, service_name: &str) -> ShutdownReport {
+        let report = if interrupt {
+            // The abort needs a window to confirm even after the deadline passed.
+            let confirmation = deadline.remaining().max(ABORT_CONFIRMATION_TIMEOUT);
+            if !self.task_group.abort_task_and_wait(self.task_id, confirmation).await {
                 warn!(
                     "Service thread {} interrupt did not finish before timeout",
                     service_name
                 );
             }
-            let report = self.task_group.shutdown(Duration::ZERO).await;
-            if !report.is_healthy() {
-                warn!(
-                    "Service thread {} shutdown report is unhealthy: {}",
-                    service_name,
-                    report.to_json()
-                );
-            }
-            return report;
-        }
-
-        let report = if self.task_group.wait_task(self.task_id, timeout_duration).await {
-            self.task_group.shutdown(timeout_duration).await
+            self.task_group.shutdown(Duration::ZERO).await
+        } else if self.task_group.wait_task(self.task_id, deadline.remaining()).await {
+            self.task_group.shutdown_until(deadline).await
         } else {
             warn!("Service thread {} shutdown timeout", service_name);
             self.task_group.shutdown(Duration::ZERO).await
@@ -195,79 +332,21 @@ impl ServiceTaskHandle {
         }
         report
     }
-
-    fn task_count(&self) -> usize {
-        usize::from(self.task_group.contains_task(self.task_id))
-    }
-}
-
-/// Represents service manager lifecycle probe.
-#[derive(Debug, Clone, Serialize)]
-pub struct ServiceManagerLifecycleProbe {
-    /// Whether healthy.
-    pub healthy: bool,
-    /// The task count before shutdown value.
-    pub task_count_before_shutdown: usize,
-    /// The task count after shutdown value.
-    pub task_count_after_shutdown: usize,
-    /// The task group count before shutdown value.
-    pub task_group_count_before_shutdown: usize,
-    /// The task group count after shutdown value.
-    pub task_group_count_after_shutdown: usize,
-    /// The task group completed value.
-    pub task_group_completed: usize,
-    /// The task group cancelled value.
-    pub task_group_cancelled: usize,
-    /// The task group aborted value.
-    pub task_group_aborted: usize,
-    /// The task group timed out value.
-    pub task_group_timed_out: usize,
-    /// Whether task group healthy.
-    pub task_group_healthy: bool,
-    /// The shutdown elapsed us value.
-    pub shutdown_elapsed_us: u128,
 }
 
 fn spawn_service_task<F>(
-    operation: crate::RuntimeOperation,
+    parent_task_group: &TaskGroup,
     task_name: String,
-    future: F,
-) -> RuntimeResult<ServiceTaskHandle>
-where
-    F: Future<Output = ()> + Send + 'static,
-{
-    let handle =
-        tokio::runtime::Handle::try_current().map_err(|_error| RuntimeError::context_unavailable(operation))?;
-    let task_group = TaskGroup::root("rocketmq.service-manager", RuntimeHandle::new(handle));
-    spawn_service_task_with_group(operation, task_name, task_group, future)
-}
-
-fn spawn_service_task_with_task_group<F>(
-    operation: crate::RuntimeOperation,
-    task_name: String,
-    parent_task_group: TaskGroup,
     future: F,
 ) -> RuntimeResult<ServiceTaskHandle>
 where
     F: Future<Output = ()> + Send + 'static,
 {
     let task_group = parent_task_group.component("rocketmq.service-manager");
-    spawn_service_task_with_group(operation, task_name, task_group, future)
-}
-
-fn spawn_service_task_with_group<F>(
-    operation: crate::RuntimeOperation,
-    task_name: String,
-    task_group: TaskGroup,
-    future: F,
-) -> RuntimeResult<ServiceTaskHandle>
-where
-    F: Future<Output = ()> + Send + 'static,
-{
     let task_id = task_group
         .spawn_service(task_name, future)
-        .map_err(|error| RuntimeError::internal(operation, error))?;
-    Ok(ServiceTaskHandle::new(task_id, task_group))
+        .map_err(|error| RuntimeError::within(crate::RuntimeOperation::SpawnServiceTask, error))?;
+    Ok(ServiceTaskHandle { task_id, task_group })
 }
 
 impl<T: ServiceTask> AsRef<T> for ServiceManager<T> {
@@ -276,550 +355,249 @@ impl<T: ServiceTask> AsRef<T> for ServiceManager<T> {
     }
 }
 
-/// Service state enumeration
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ServiceLifecycle {
-    /// Represents the not started case.
-    NotStarted,
-    /// Represents the starting case.
-    Starting,
-    /// Represents the running case.
-    Running,
-    /// Represents the stopping case.
-    Stopping,
-    /// Represents the stopped case.
-    Stopped,
-}
-
 impl<T: ServiceTask + 'static> ServiceManager<T> {
-    /// Creates a service manager that discovers the current runtime when started.
-    ///
-    /// This compatibility constructor exists for callers that have not yet
-    /// received an injected [`TaskGroup`]. New production code must use
-    /// [`Self::new_with_task_group`].
-    pub fn new_legacy_compatibility(service: T) -> Self {
-        Self::new_with_optional_task_group(Arc::new(service), None)
-    }
-
-    /// Create new service thread implementation.
-    #[deprecated(note = "use ServiceManager::new_with_task_group; the ambient-runtime adapter is removed in 2.0.0")]
-    pub fn new(service: T) -> Self {
-        Self::new_legacy_compatibility(service)
-    }
-
-    /// Creates with task group.
+    /// Creates a manager whose runs are owned by `parent_task_group`.
     pub fn new_with_task_group(service: T, parent_task_group: TaskGroup) -> Self {
-        Self::new_with_optional_task_group(Arc::new(service), Some(parent_task_group))
+        Self::new_arc_with_task_group(Arc::new(service), parent_task_group)
     }
 
-    /// Creates an Arc-backed compatibility manager that discovers the current
-    /// runtime when started.
-    pub fn new_arc_legacy_compatibility(service: Arc<T>) -> Self {
-        Self::new_with_optional_task_group(service, None)
-    }
-
-    /// Creates arc.
-    #[deprecated(note = "use ServiceManager::new_arc_with_task_group; the ambient-runtime adapter is removed in 2.0.0")]
-    pub fn new_arc(service: Arc<T>) -> Self {
-        Self::new_arc_legacy_compatibility(service)
-    }
-
-    /// Creates arc with task group.
+    /// Creates a manager for a shared service whose runs are owned by
+    /// `parent_task_group`.
     pub fn new_arc_with_task_group(service: Arc<T>, parent_task_group: TaskGroup) -> Self {
-        Self::new_with_optional_task_group(service, Some(parent_task_group))
-    }
-
-    fn new_with_optional_task_group(service: Arc<T>, parent_task_group: Option<TaskGroup>) -> Self {
         Self {
             service,
-            state: Arc::new(RwLock::new(ServiceLifecycle::NotStarted)),
-            stopped: Arc::new(AtomicBool::new(false)),
-            started: Arc::new(AtomicBool::new(false)),
-            has_notified: Arc::new(AtomicBool::new(false)),
-            wait_point: Arc::new(Notify::new()),
-            task_handle: Arc::new(RwLock::new(None)),
-            last_task_group_shutdown_report: Arc::new(RwLock::new(None)),
+            signals: Arc::new(ServiceSignals::new()),
+            task_handle: Mutex::new(None),
+            last_task_group_shutdown_report: Mutex::new(None),
             parent_task_group,
-            is_daemon: AtomicBool::new(false),
         }
     }
 
-    /// Start the service thread
+    /// Starts a run of the service loop.
+    ///
+    /// Starting a manager whose loop is still active only logs a warning.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the parent task group no longer accepts work.
     pub async fn start(&self) -> RuntimeResult<()> {
         let service_name = self.service.get_service_name();
+        let (replaced, generation) = match self.signals.begin_start() {
+            Ok(started) => started,
+            Err(state) => {
+                warn!(
+                    "Service thread {} is already started, current_state: {:?}",
+                    service_name, state
+                );
+                return Ok(());
+            }
+        };
+        info!("Try to start service thread: {}", service_name);
 
-        info!(
-            "Try to start service thread: {} started: {} current_state: {:?}",
-            service_name,
-            self.started.load(Ordering::Acquire),
-            self.get_lifecycle_state().await
-        );
-
-        // Check if already started
-        if self
-            .started
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            warn!("Service thread {} is already started", service_name);
-            return Ok(());
-        }
-
-        // Update state
-        {
-            let mut state = self.state.write().await;
-            *state = ServiceLifecycle::Starting;
-        }
-
-        // Reset stopped flag
-        self.stopped.store(false, Ordering::Release);
-
-        // Clone necessary components for the task
         let service = self.service.clone();
-        let state = self.state.clone();
-        let stopped = self.stopped.clone();
-        let started = self.started.clone();
-        let has_notified = self.has_notified.clone();
-        let wait_point = self.wait_point.clone();
-        let task_handle = self.task_handle.clone();
-
+        let signals = self.signals.clone();
         // The service loop is created on the heap by the worker's first poll. An
         // inline loop would make this future as large as the service's state,
         // and unoptimized builds copy it at every hop down to the task group.
         let future = async move {
-            Box::pin(Self::run_internal(
-                service,
-                state,
-                stopped,
-                started,
-                has_notified,
-                wait_point,
-            ))
-            .await;
+            Box::pin(Self::run_internal(service, signals, generation)).await;
         };
-        let handle = match match self.parent_task_group.as_ref() {
-            Some(parent_task_group) => spawn_service_task_with_task_group(
-                crate::RuntimeOperation::SpawnServiceTask,
-                service_name.clone(),
-                parent_task_group.clone(),
-                future,
-            ),
-            None => spawn_service_task(crate::RuntimeOperation::SpawnServiceTask, service_name.clone(), future),
-        } {
+        let handle = match spawn_service_task(&self.parent_task_group, service_name.clone(), future) {
             Ok(handle) => handle,
             Err(error) => {
-                self.started.store(false, Ordering::Release);
-                self.has_notified.store(false, Ordering::Release);
-                {
-                    let mut state = self.state.write().await;
-                    *state = ServiceLifecycle::NotStarted;
-                }
+                // Nothing was spawned, so restore the state this start replaced.
+                let _ = self.signals.word.compare_exchange(
+                    pack(generation, ServiceTaskState::Starting),
+                    replaced,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
                 return Err(error);
             }
         };
 
-        // Store the task handle
-        {
-            let mut handle_guard = task_handle.write().await;
-            *handle_guard = Some(handle);
+        // A run that ended on its own leaves its task group behind; release it.
+        let previous = self.task_handle.lock().replace(handle);
+        if let Some(previous) = previous {
+            let _ = previous.task_group.shutdown_now();
         }
+        self.signals
+            .transition(generation, ServiceTaskState::Starting, ServiceTaskState::Running);
 
-        // Update state to running
-        {
-            let mut state = self.state.write().await;
-            *state = ServiceLifecycle::Running;
-        }
-
-        info!(
-            "Started service thread: {} started: {}",
-            service_name,
-            self.started.load(Ordering::Acquire)
-        );
-
+        info!("Started service thread: {}", service_name);
         Ok(())
     }
 
-    /// Internal run method
-    async fn run_internal(
-        service: Arc<T>,
-        state: Arc<RwLock<ServiceLifecycle>>,
-        stopped: Arc<AtomicBool>,
-        started: Arc<AtomicBool>,
-        has_notified: Arc<AtomicBool>,
-        wait_point: Arc<Notify>,
-    ) {
+    async fn run_internal(service: Arc<T>, signals: Arc<ServiceSignals>, generation: u64) {
         let service_name = service.get_service_name();
+        let _stop_on_exit = StopOnExit {
+            signals: signals.clone(),
+            generation,
+        };
         info!("Service thread {} is running", service_name);
+        signals.transition(generation, ServiceTaskState::Starting, ServiceTaskState::Running);
 
-        // Set state to running
-        {
-            let mut state_guard = state.write().await;
-            *state_guard = ServiceLifecycle::Running;
-        }
-        // Create context for the service
-        let context = ServiceTaskContext::new(wait_point.clone(), has_notified.clone(), stopped.clone());
-        // Run the service
+        let context = ServiceTaskContext { signals, generation };
         service.run(&context).await;
-
-        // Clean up after run completes
-        started.store(false, Ordering::Release);
-        stopped.store(true, Ordering::Release);
-        has_notified.store(false, Ordering::Release);
-
-        {
-            let mut state_guard = state.write().await;
-            *state_guard = ServiceLifecycle::Stopped;
-        }
 
         info!("Service thread {} has stopped", service_name);
     }
 
-    /// Shutdown the service
+    /// Stops the service and waits for its loop.
+    ///
+    /// The wait ends at the deadline installed on the parent task group, or
+    /// after the runtime's default shutdown budget when there is none. A loop
+    /// still running then is aborted.
+    ///
+    /// # Errors
+    ///
+    /// Currently always succeeds; the result is kept for callers that
+    /// propagate shutdown failures.
     pub async fn shutdown(&self) -> RuntimeResult<()> {
-        self.shutdown_with_interrupt(false).await
+        self.shutdown_inner(false, None).await
     }
 
-    /// Shutdown the service with optional interrupt
+    /// Stops the service like [`Self::shutdown`], aborting the loop at once
+    /// when `interrupt` is set.
+    ///
+    /// # Errors
+    ///
+    /// Currently always succeeds; the result is kept for callers that
+    /// propagate shutdown failures.
     pub async fn shutdown_with_interrupt(&self, interrupt: bool) -> RuntimeResult<()> {
+        self.shutdown_inner(interrupt, None).await
+    }
+
+    /// Stops the service and waits for its loop no later than `deadline`.
+    ///
+    /// # Errors
+    ///
+    /// Currently always succeeds; the result is kept for callers that
+    /// propagate shutdown failures.
+    pub async fn shutdown_until(&self, deadline: ShutdownDeadline) -> RuntimeResult<()> {
+        self.shutdown_inner(false, Some(deadline)).await
+    }
+
+    /// Stops the service no later than `deadline`, aborting the loop at once
+    /// when `interrupt` is set.
+    ///
+    /// # Errors
+    ///
+    /// Currently always succeeds; the result is kept for callers that
+    /// propagate shutdown failures.
+    pub async fn shutdown_with_interrupt_until(
+        &self,
+        interrupt: bool,
+        deadline: ShutdownDeadline,
+    ) -> RuntimeResult<()> {
+        self.shutdown_inner(interrupt, Some(deadline)).await
+    }
+
+    async fn shutdown_inner(&self, interrupt: bool, requested: Option<ShutdownDeadline>) -> RuntimeResult<()> {
         let service_name = self.service.get_service_name();
-
-        info!(
-            "Try to shutdown service thread: {} started: {} current_state: {:?}",
-            service_name,
-            self.started.load(Ordering::Acquire),
-            self.get_lifecycle_state().await
-        );
-
-        // Check if not started
-        if self
-            .started
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
+        let handle = self.task_handle.lock().take();
+        let (state, generation) = self.signals.request_stop();
+        if handle.is_none()
+            && !matches!(
+                state,
+                ServiceTaskState::Starting | ServiceTaskState::Running | ServiceTaskState::Stopping
+            )
         {
             warn!("Service thread {} is not running", service_name);
             return Ok(());
         }
 
-        // Update state
-        {
-            let mut state = self.state.write().await;
-            *state = ServiceLifecycle::Stopping;
-        }
-
-        // Set stopped flag
-        self.stopped.store(true, Ordering::Release);
-
         info!("Shutdown thread[{}] interrupt={}", service_name, interrupt);
+        self.signals.wakeup();
 
-        // Wake up if thread is waiting
-        self.wakeup();
-
+        let deadline = self.shutdown_deadline(requested);
         let begin_time = Instant::now();
-
-        // Wait for the task to complete
-        let join_time = self.service.get_join_time();
-        let result = if !self.is_daemon() {
-            let handle = {
-                let mut handle_guard = self.task_handle.write().await;
-                handle_guard.take()
-            };
-            if let Some(handle) = handle {
-                let report = handle.shutdown(join_time, interrupt, &service_name).await;
-                *self.last_task_group_shutdown_report.write().await = Some(report);
-                Ok(())
-            } else {
-                Ok(())
-            }
-        } else {
-            Ok(())
-        };
-
-        let elapsed_time = begin_time.elapsed();
+        if let Some(handle) = handle {
+            let report = handle.shutdown(deadline, interrupt, &service_name).await;
+            *self.last_task_group_shutdown_report.lock() = Some(report);
+        }
         info!(
-            "Join thread[{}], elapsed time: {}ms, join time: {}ms",
+            "Join thread[{}], elapsed time: {}ms",
             service_name,
-            elapsed_time.as_millis(),
-            join_time.as_millis()
+            begin_time.elapsed().as_millis()
         );
 
-        // Update final state
-        {
-            let mut state = self.state.write().await;
-            *state = ServiceLifecycle::Stopped;
-        }
-
-        result
+        self.signals.finish(generation);
+        Ok(())
     }
 
-    /// Make the service stop (without waiting)
+    fn shutdown_deadline(&self, requested: Option<ShutdownDeadline>) -> ShutdownDeadline {
+        match (requested, self.parent_task_group.shutdown_deadline()) {
+            (Some(requested), Some(installed)) => requested.earliest(installed),
+            (Some(deadline), None) | (None, Some(deadline)) => deadline,
+            (None, None) => ShutdownDeadline::after(DEFAULT_SHUTDOWN_TIMEOUT),
+        }
+    }
+
+    /// Asks the loop to stop without waiting for it.
     pub fn make_stop(&self) {
-        if !self.started.load(Ordering::Acquire) {
-            return;
+        let (state, _) = self.signals.request_stop();
+        if matches!(state, ServiceTaskState::Starting | ServiceTaskState::Running) {
+            info!("Make stop thread[{}]", self.service.get_service_name());
         }
-
-        self.stopped.store(true, Ordering::Release);
-        info!("Make stop thread[{}]", self.service.get_service_name());
     }
 
-    /// Wake up the service thread
+    /// Wakes the loop if it is waiting, or makes its next wait return at once.
     pub fn wakeup(&self) {
-        if self
-            .has_notified
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            self.wait_point.notify_one();
-        }
+        self.signals.wakeup();
     }
 
-    /// Wait for running with interval
-    pub async fn wait_for_running(&self, interval: Duration) {
-        // Check if already notified
-        if self
-            .has_notified
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            self.service.on_wait_end().await;
-            return;
-        }
-
-        // Wait for notification or timeout
-        let wait_result = timeout(interval, self.wait_point.notified()).await;
-
-        // Reset notification flag
-        self.has_notified.store(false, Ordering::Release);
-
-        // Call on_wait_end regardless of how we were woken up
-        self.service.on_wait_end().await;
-
-        if wait_result.is_err() {
-            // Timeout occurred - this is normal behavior
-        }
+    /// Returns the current lifecycle state.
+    pub fn get_lifecycle_state(&self) -> ServiceTaskState {
+        self.signals.state()
     }
 
-    /// Check if service is stopped
-    pub fn is_stopped(&self) -> bool {
-        self.stopped.load(Ordering::Acquire)
-    }
-
-    /// Check if service is daemon
-    pub fn is_daemon(&self) -> bool {
-        self.is_daemon.load(Ordering::Acquire)
-    }
-
-    /// Set daemon flag
-    pub fn set_daemon(&self, daemon: bool) {
-        self.is_daemon.store(daemon, Ordering::Release);
-    }
-
-    /// Get current service state
-    pub async fn get_lifecycle_state(&self) -> ServiceLifecycle {
-        *self.state.read().await
-    }
-
-    /// Check if service is started
-    pub fn is_started(&self) -> bool {
-        self.started.load(Ordering::Acquire)
-    }
-
-    /// Returns the task count.
-    pub async fn task_count(&self) -> usize {
-        self.task_handle
-            .read()
-            .await
-            .as_ref()
-            .map(ServiceTaskHandle::task_count)
-            .unwrap_or_default()
-    }
-
-    /// Returns the last task group shutdown report.
-    pub async fn last_task_group_shutdown_report(&self) -> Option<ShutdownReport> {
-        self.last_task_group_shutdown_report.read().await.clone()
-    }
-}
-
-struct LifecycleProbeService;
-
-impl ServiceTask for LifecycleProbeService {
-    fn get_service_name(&self) -> String {
-        "service-manager-lifecycle-probe".to_string()
-    }
-
-    async fn run(&self, context: &ServiceTaskContext) {
-        while !context.is_stopped() {
-            context.wait_for_running(Duration::from_millis(1)).await;
-        }
-    }
-
-    fn get_join_time(&self) -> Duration {
-        Duration::from_secs(1)
-    }
-}
-
-#[doc(hidden)]
-pub async fn run_service_manager_lifecycle_probe() -> ServiceManagerLifecycleProbe {
-    let manager = ServiceManager::new_legacy_compatibility(LifecycleProbeService);
-    let start_result = manager.start().await;
-    let task_count_before_shutdown = manager.task_count().await;
-    let task_group_count_before_shutdown = task_count_before_shutdown;
-
-    let shutdown_started = Instant::now();
-    let shutdown_result = manager.shutdown().await;
-    let shutdown_elapsed_us = shutdown_started.elapsed().as_micros();
-    let task_count_after_shutdown = manager.task_count().await;
-    let report = manager.last_task_group_shutdown_report().await;
-    let task_group_healthy = report.as_ref().is_some_and(ShutdownReport::is_healthy);
-    let task_group_completed = report.as_ref().map(|report| report.completed).unwrap_or_default();
-    let task_group_cancelled = report.as_ref().map(|report| report.cancelled).unwrap_or_default();
-    let task_group_aborted = report.as_ref().map(|report| report.aborted).unwrap_or_default();
-    let task_group_timed_out = report.as_ref().map(|report| report.timed_out).unwrap_or_default();
-    let task_group_count_after_shutdown = manager.task_count().await;
-
-    ServiceManagerLifecycleProbe {
-        healthy: start_result.is_ok()
-            && shutdown_result.is_ok()
-            && task_count_before_shutdown == 1
-            && task_count_after_shutdown == 0
-            && task_group_healthy
-            && task_group_completed == 1
-            && task_group_cancelled == 0
-            && task_group_timed_out == 0,
-        task_count_before_shutdown,
-        task_count_after_shutdown,
-        task_group_count_before_shutdown,
-        task_group_count_after_shutdown,
-        task_group_completed,
-        task_group_cancelled,
-        task_group_aborted,
-        task_group_timed_out,
-        task_group_healthy,
-        shutdown_elapsed_us,
+    /// Returns the shutdown report of the task group used by the last stopped run.
+    pub fn last_task_group_shutdown_report(&self) -> Option<ShutdownReport> {
+        self.last_task_group_shutdown_report.lock().clone()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::future;
-
-    use rocketmq_error::CanonicalCondition;
     use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
-    use crate::RuntimeContext;
-    use tokio::time::sleep;
+    use tokio::sync::Notify;
     use tokio::time::Duration;
 
     use super::*;
-    use crate::service_manager;
+    use crate::RuntimeContext;
 
-    /// Example implementation - Transaction Check Service
-    pub struct ExampleTransactionCheckService {
-        check_interval: Duration,
-        transaction_timeout: Duration,
+    /// Counts loop iterations and signals each one.
+    struct CountingService {
+        iterations: Arc<AtomicUsize>,
+        iterated: Arc<Notify>,
     }
 
-    impl ExampleTransactionCheckService {
-        pub fn new(check_interval: Duration, transaction_timeout: Duration) -> Self {
-            Self {
-                check_interval,
-                transaction_timeout,
-            }
-        }
-    }
-
-    impl ServiceTask for ExampleTransactionCheckService {
+    impl ServiceTask for CountingService {
         fn get_service_name(&self) -> String {
-            "ExampleTransactionCheckService".to_string()
+            "counting-service".to_string()
         }
 
         async fn run(&self, context: &ServiceTaskContext) {
-            info!("Start transaction check service thread!");
-
             while !context.is_stopped() {
-                context.wait_for_running(self.check_interval).await;
+                context.wait_for_running(Duration::from_secs(60)).await;
+                self.on_wait_end().await;
             }
-
-            info!("End transaction check service thread!");
         }
 
         async fn on_wait_end(&self) {
-            let begin = Instant::now();
-            info!("Begin to check prepare message, begin time: {:?}", begin);
-
-            // Simulate transaction check work
-            self.perform_transaction_check().await;
-
-            let elapsed = begin.elapsed();
-            info!("End to check prepare message, consumed time: {}ms", elapsed.as_millis());
+            self.iterations.fetch_add(1, Ordering::AcqRel);
+            self.iterated.notify_one();
         }
     }
-
-    impl ExampleTransactionCheckService {
-        async fn perform_transaction_check(&self) {
-            // Simulate work
-            sleep(Duration::from_millis(100)).await;
-            info!(
-                "Transaction check completed with timeout: {:?}",
-                self.transaction_timeout
-            );
-        }
-    }
-
-    impl Clone for ExampleTransactionCheckService {
-        fn clone(&self) -> Self {
-            Self {
-                check_interval: self.check_interval,
-                transaction_timeout: self.transaction_timeout,
-            }
-        }
-    }
-
-    // Use the macro to add service thread functionality
-    service_manager!(ExampleTransactionCheckService);
-
-    #[derive(Clone)]
-    struct TestService {
-        name: String,
-        work_duration: Duration,
-    }
-
-    impl TestService {
-        fn new(name: String, work_duration: Duration) -> Self {
-            Self { name, work_duration }
-        }
-    }
-
-    impl ServiceTask for TestService {
-        fn get_service_name(&self) -> String {
-            self.name.clone()
-        }
-
-        async fn run(&self, context: &ServiceTaskContext) {
-            println!("TestService {} starting {}", self.name, context.is_stopped());
-
-            let mut counter = 0;
-
-            while !context.is_stopped() && counter < 5 {
-                context.wait_for_running(Duration::from_millis(100)).await;
-                println!("TestService {} running iteration {}", self.name, counter);
-                counter += 1;
-            }
-
-            println!("TestService {} finished after {} iterations", self.name, counter);
-        }
-
-        async fn on_wait_end(&self) {
-            println!("TestService {} performing work", self.name);
-            sleep(self.work_duration).await;
-            println!("TestService {} work completed", self.name);
-        }
-    }
-
-    service_manager!(TestService);
 
     struct PendingService {
+        entered: Arc<Notify>,
         dropped: Arc<AtomicBool>,
     }
 
@@ -842,46 +620,54 @@ mod tests {
             let _marker = DropMarker {
                 dropped: Arc::clone(&self.dropped),
             };
+            self.entered.notify_one();
             future::pending::<()>().await;
-        }
-
-        fn get_join_time(&self) -> Duration {
-            Duration::from_millis(10)
         }
     }
 
-    #[test]
-    fn spawn_service_task_without_tokio_runtime_returns_error() {
-        let error = match spawn_service_task(
-            crate::RuntimeOperation::SpawnServiceTask,
-            "test-service".to_string(),
-            async {},
-        ) {
-            Ok(_) => panic!("spawning without a Tokio runtime should return an error"),
-            Err(error) => error,
-        };
+    fn counting_service() -> (CountingService, Arc<AtomicUsize>, Arc<Notify>) {
+        let iterations = Arc::new(AtomicUsize::new(0));
+        let iterated = Arc::new(Notify::new());
+        (
+            CountingService {
+                iterations: iterations.clone(),
+                iterated: iterated.clone(),
+            },
+            iterations,
+            iterated,
+        )
+    }
 
-        assert_eq!(
-            error.condition(),
-            CanonicalCondition::Unavailable,
-            "unexpected error: {error}"
-        );
+    /// Returns a service that never stops on its own, with its entry signal
+    /// and a flag set when its loop future is dropped.
+    fn pending_service() -> (PendingService, Arc<Notify>, Arc<AtomicBool>) {
+        let entered = Arc::new(Notify::new());
+        let dropped = Arc::new(AtomicBool::new(false));
+        (
+            PendingService {
+                entered: entered.clone(),
+                dropped: dropped.clone(),
+            },
+            entered,
+            dropped,
+        )
     }
 
     #[tokio::test]
-    async fn new_with_task_group_parents_service_task() {
+    async fn service_runs_under_its_parent_task_group() {
         let context = RuntimeContext::from_current("service-manager-parent-test");
         let service_context = context.service_context("service-manager-service");
-        let service = TestService::new("parented-service".to_string(), Duration::from_millis(10));
-        let service_thread = ServiceManager::new_with_task_group(service, service_context.task_group().clone());
+        let (service, _, _) = counting_service();
+        let manager = ServiceManager::new_with_task_group(service, service_context.task_group().clone());
 
-        service_thread.start().await.unwrap();
-        service_thread.shutdown().await.unwrap();
-        let child_report = service_thread
+        manager.start().await.unwrap();
+        assert_eq!(service_context.task_group().component_count(), 1);
+        manager.shutdown().await.unwrap();
+        let child_report = manager
             .last_task_group_shutdown_report()
-            .await
             .expect("service manager shutdown report should exist");
         assert_eq!(child_report.name, "rocketmq.service-manager");
+        assert!(child_report.is_healthy(), "{}", child_report.to_json());
 
         let report = service_context.task_group().shutdown(Duration::from_secs(1)).await;
         assert!(report.is_healthy(), "{}", report.to_json());
@@ -889,88 +675,102 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_service_lifecycle() {
-        let service = TestService::new("test-service".to_string(), Duration::from_millis(50));
-        let service_thread = service.create_service_task();
+    async fn lifecycle_moves_through_running_and_stopped() {
+        let context = RuntimeContext::from_current("service-manager-lifecycle-test");
+        let service_context = context.service_context("service-manager-lifecycle");
+        let (service, iterations, iterated) = counting_service();
+        let manager = ServiceManager::new_with_task_group(service, service_context.task_group().clone());
+        assert_eq!(manager.get_lifecycle_state(), ServiceTaskState::NotStarted);
 
-        // Test initial state
-        assert_eq!(service_thread.get_lifecycle_state().await, ServiceLifecycle::NotStarted);
-        assert!(!service_thread.is_started());
-        assert!(!service_thread.is_stopped());
+        manager.start().await.unwrap();
+        assert_eq!(manager.get_lifecycle_state(), ServiceTaskState::Running);
 
-        // Test start
-        service_thread.start().await.unwrap();
-        assert_eq!(service_thread.get_lifecycle_state().await, ServiceLifecycle::Running);
-        assert!(service_thread.is_started());
-        assert!(!service_thread.is_stopped());
+        let iteration = iterated.notified();
+        manager.wakeup();
+        iteration.await;
+        assert!(iterations.load(Ordering::Acquire) >= 1);
 
-        // Let it run for a bit
-        sleep(Duration::from_millis(300)).await;
-
-        // Test wakeup
-        service_thread.wakeup();
-        sleep(Duration::from_millis(100)).await;
-
-        // Test shutdown
-        service_thread.shutdown().await.unwrap();
-        assert_eq!(service_thread.get_lifecycle_state().await, ServiceLifecycle::Stopped);
-        assert!(!service_thread.is_started());
-        assert!(service_thread.is_stopped());
+        manager.shutdown().await.unwrap();
+        assert_eq!(manager.get_lifecycle_state(), ServiceTaskState::Stopped);
     }
 
     #[tokio::test]
-    async fn test_daemon_service() {
-        let service = TestService::new("daemon-service".to_string(), Duration::from_millis(10));
-        let service_thread = service.create_service_task();
+    async fn second_start_while_running_is_ignored() {
+        let context = RuntimeContext::from_current("service-manager-multi-start-test");
+        let service_context = context.service_context("service-manager-multi-start");
+        let (service, _, _) = counting_service();
+        let manager = ServiceManager::new_with_task_group(service, service_context.task_group().clone());
 
-        // Set as daemon
-        service_thread.set_daemon(true);
-        assert!(service_thread.is_daemon());
+        manager.start().await.unwrap();
+        manager.start().await.unwrap();
+        assert_eq!(service_context.task_group().component_count(), 1);
+        assert_eq!(manager.get_lifecycle_state(), ServiceTaskState::Running);
 
-        // Start and shutdown
-        service_thread.start().await.unwrap();
-        sleep(Duration::from_millis(100)).await;
-        service_thread.shutdown().await.unwrap();
+        manager.shutdown().await.unwrap();
+        assert_eq!(manager.get_lifecycle_state(), ServiceTaskState::Stopped);
     }
 
     #[tokio::test]
-    async fn test_multiple_start_attempts() {
-        let service = TestService::new("multi-start-service".to_string(), Duration::from_millis(10));
-        let service_thread = service.create_service_task();
+    async fn stopped_manager_can_start_again() {
+        let context = RuntimeContext::from_current("service-manager-restart-test");
+        let service_context = context.service_context("service-manager-restart");
+        let (service, _, _) = counting_service();
+        let manager = ServiceManager::new_with_task_group(service, service_context.task_group().clone());
 
-        // First start should succeed
-        service_thread.start().await.unwrap();
-        assert!(service_thread.is_started());
+        manager.start().await.unwrap();
+        manager.shutdown().await.unwrap();
+        manager.start().await.unwrap();
+        assert_eq!(manager.get_lifecycle_state(), ServiceTaskState::Running);
+        manager.shutdown().await.unwrap();
+        assert_eq!(manager.get_lifecycle_state(), ServiceTaskState::Stopped);
 
-        // Second start should be ignored
-        service_thread.start().await.unwrap();
-        assert!(service_thread.is_started());
-
-        // Shutdown
-        service_thread.shutdown().await.unwrap();
-        assert!(!service_thread.is_started());
+        let report = service_context.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
     }
 
     #[tokio::test]
-    async fn shutdown_timeout_aborts_service_task() {
-        let dropped = Arc::new(AtomicBool::new(false));
-        let service_thread = ServiceManager::new_legacy_compatibility(PendingService {
-            dropped: Arc::clone(&dropped),
-        });
+    async fn make_stop_ends_the_loop_without_shutdown() {
+        let context = RuntimeContext::from_current("service-manager-make-stop-test");
+        let service_context = context.service_context("service-manager-make-stop");
+        let (service, _, _) = counting_service();
+        let manager = ServiceManager::new_with_task_group(service, service_context.task_group().clone());
 
-        service_thread.start().await.unwrap();
-        service_thread.shutdown().await.unwrap();
+        manager.start().await.unwrap();
+        manager.make_stop();
+        assert_eq!(manager.get_lifecycle_state(), ServiceTaskState::Stopping);
+        manager.wakeup();
+
+        let report = service_context.task_group().shutdown(Duration::from_secs(1)).await;
+        assert!(report.is_healthy(), "{}", report.to_json());
+        assert_eq!(manager.get_lifecycle_state(), ServiceTaskState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn shutdown_deadline_aborts_a_loop_that_does_not_stop() {
+        let context = RuntimeContext::from_current("service-manager-deadline-test");
+        let service_context = context.service_context("service-manager-deadline");
+        let (service, entered, dropped) = pending_service();
+        let manager = ServiceManager::new_with_task_group(service, service_context.task_group().clone());
+
+        manager.start().await.unwrap();
+        entered.notified().await;
+        let started = std::time::Instant::now();
+        manager
+            .shutdown_until(ShutdownDeadline::after(Duration::from_millis(20)))
+            .await
+            .unwrap();
 
         assert!(
-            dropped.load(Ordering::Acquire),
-            "service future should be dropped after shutdown timeout aborts the task"
+            started.elapsed() < Duration::from_secs(5),
+            "shutdown should stop at the deadline instead of a fixed join time"
         );
-        assert_eq!(service_thread.get_lifecycle_state().await, ServiceLifecycle::Stopped);
-        assert!(!service_thread.is_started());
-        assert!(service_thread.is_stopped());
-        let report = service_thread
+        assert!(
+            dropped.load(Ordering::Acquire),
+            "service future should be dropped after the deadline aborts the task"
+        );
+        assert_eq!(manager.get_lifecycle_state(), ServiceTaskState::Stopped);
+        let report = manager
             .last_task_group_shutdown_report()
-            .await
             .expect("service task group shutdown report should be recorded");
         assert!(!report.is_healthy(), "{}", report.to_json());
         assert_eq!(report.aborted, 1, "{}", report.to_json());
@@ -978,46 +778,70 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_manager_lifecycle_probe_reports_clean_shutdown() {
-        let probe = run_service_manager_lifecycle_probe().await;
+    async fn shutdown_follows_the_deadline_installed_by_the_parent_owner() {
+        let context = RuntimeContext::from_current("service-manager-installed-deadline-test");
+        let service_context = context.service_context("service-manager-installed-deadline");
+        let (service, entered, dropped) = pending_service();
+        let manager = ServiceManager::new_with_task_group(service, service_context.task_group().clone());
+        manager.start().await.unwrap();
+        entered.notified().await;
 
-        assert!(probe.healthy, "{probe:?}");
-        assert_eq!(probe.task_count_before_shutdown, 1);
-        assert_eq!(probe.task_count_after_shutdown, 0);
-        assert_eq!(probe.task_group_count_before_shutdown, 1);
-        assert_eq!(probe.task_group_count_after_shutdown, 0);
-        assert_eq!(probe.task_group_completed, 1);
-        assert_eq!(probe.task_group_cancelled, 0);
-        assert_eq!(probe.task_group_aborted, 0);
-        assert_eq!(probe.task_group_timed_out, 0);
-        assert!(probe.task_group_healthy);
+        let started = std::time::Instant::now();
+        // The owner installs its deadline when the shutdown call is made, so
+        // the manager's unbounded shutdown below inherits it.
+        let owner_shutdown = service_context.task_group().shutdown(Duration::from_millis(20));
+        let (report, stopped) = tokio::join!(owner_shutdown, manager.shutdown());
+        stopped.unwrap();
+
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "an unbounded shutdown call should inherit the owner's deadline"
+        );
+        assert!(dropped.load(Ordering::Acquire));
+        assert!(!report.is_healthy(), "{}", report.to_json());
     }
 
     #[tokio::test]
-    async fn test_make_stop() {
-        let service = TestService::new("stop-service".to_string(), Duration::from_millis(10));
-        let service_thread = service.create_service_task();
+    async fn interrupt_aborts_the_loop_at_once() {
+        let context = RuntimeContext::from_current("service-manager-interrupt-test");
+        let service_context = context.service_context("service-manager-interrupt");
+        let (service, entered, dropped) = pending_service();
+        let manager = ServiceManager::new_with_task_group(service, service_context.task_group().clone());
 
-        service_thread.start().await.unwrap();
-        sleep(Duration::from_millis(50)).await;
+        manager.start().await.unwrap();
+        entered.notified().await;
+        manager.shutdown_with_interrupt(true).await.unwrap();
 
-        // Make stop should set stopped flag
-        service_thread.make_stop();
-        assert!(service_thread.is_stopped());
+        assert!(dropped.load(Ordering::Acquire));
+        assert_eq!(manager.get_lifecycle_state(), ServiceTaskState::Stopped);
+    }
 
-        // Wait a bit for cleanup
-        sleep(Duration::from_millis(100)).await;
+    #[test]
+    fn a_replaced_run_sees_itself_stopped() {
+        let signals = Arc::new(ServiceSignals::new());
+        let (_, first) = signals.begin_start().expect("first run starts");
+        let old = ServiceTaskContext {
+            signals: signals.clone(),
+            generation: first,
+        };
+        signals.transition(first, ServiceTaskState::Starting, ServiceTaskState::Running);
+        assert!(!old.is_stopped());
+
+        signals.request_stop();
+        assert!(signals.finish(first));
+        let (_, second) = signals.begin_start().expect("second run starts");
+        signals.transition(second, ServiceTaskState::Starting, ServiceTaskState::Running);
+
+        assert!(old.is_stopped(), "a loop from the first run must not keep running");
+        assert!(!signals.finish(first), "the first run must not stop the second");
+        assert_eq!(signals.state(), ServiceTaskState::Running);
     }
 
     #[tokio::test]
-    async fn test_example_transaction_service() {
-        let service = ExampleTransactionCheckService::new(Duration::from_millis(100), Duration::from_millis(1000));
-        let service_thread = service.create_service_task();
-
-        service_thread.start().await.unwrap();
-        sleep(Duration::from_millis(350)).await;
-        service_thread.wakeup();
-        sleep(Duration::from_millis(150)).await;
-        service_thread.shutdown().await.unwrap();
+    async fn standalone_context_returns_at_once_for_a_pending_wakeup() {
+        let context = ServiceTaskContext::new();
+        assert!(!context.is_stopped());
+        context.wakeup();
+        assert!(context.wait_for_running(Duration::from_secs(60)).await);
     }
 }

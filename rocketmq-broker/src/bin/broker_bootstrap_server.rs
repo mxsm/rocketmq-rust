@@ -90,8 +90,13 @@ fn print_release_version_if_requested(component: &str) -> bool {
     true
 }
 
+/// Set by the Windows process test to read the main thread's stack peak.
+const MAIN_STACK_REPORT_ENV: &str = "ROCKETMQ_REPORT_MAIN_STACK";
+
 fn main() {
-    if let Err(source) = try_main() {
+    let result = try_main();
+    report_main_stack_if_requested();
+    if let Err(source) = result {
         let error = rocketmq_error::Error::new(&CORE_SERVICE_FAILED)
             .with_boxed_source(source.into_boxed_dyn_error())
             .with_context(
@@ -102,6 +107,19 @@ fn main() {
         let output = CliErrorView::from_error(&error).output(CliVerbosity::Default);
         eprintln!("{}", output.stderr());
         std::process::exit(output.exit_code().as_i32());
+    }
+}
+
+/// Prints the main thread's committed stack once the runtime is gone.
+///
+/// Committed stack pages stay committed until the thread exits, so this is the
+/// deepest the main thread went during the whole run.
+fn report_main_stack_if_requested() {
+    if std::env::var_os(MAIN_STACK_REPORT_ENV).is_none() {
+        return;
+    }
+    if let Some(bytes) = rocketmq_runtime::current_thread_committed_stack_bytes() {
+        eprintln!("main_thread_stack_committed_bytes={bytes}");
     }
 }
 

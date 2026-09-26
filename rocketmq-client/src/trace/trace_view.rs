@@ -15,11 +15,15 @@
 use cheetah_string::CheetahString;
 use rocketmq_model::common::message::message_enum::MessageType;
 use rocketmq_model::common::message::message_ext::MessageExt;
-use rocketmq_runtime::common::util_all;
+use rocketmq_transport::api::NetworkUtil;
 
 use crate::trace::trace_data_encoder::TraceDataEncoder;
 
-static LOCAL_ADDRESS: std::sync::LazyLock<CheetahString> = std::sync::LazyLock::new(util_all::get_ip_str);
+static LOCAL_ADDRESS: std::sync::LazyLock<CheetahString> = std::sync::LazyLock::new(|| {
+    NetworkUtil::get_local_address()
+        .map(CheetahString::from_string)
+        .unwrap_or_else(CheetahString::empty)
+});
 
 #[derive(Debug, Clone)]
 pub struct TraceView {

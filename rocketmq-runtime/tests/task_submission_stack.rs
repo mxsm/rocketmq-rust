@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::num::NonZeroUsize;
 use std::process::Command;
 use std::sync::mpsc::SyncSender;
 use std::time::Duration;
@@ -85,8 +86,9 @@ fn run_stack_probe() {
     let schedules = ScheduledTaskGroup::new(group.clone());
     let (completed, received) = std::sync::mpsc::sync_channel(1);
     schedules
-        .schedule_fixed_delay(
+        .schedule(
             ScheduledTaskConfig::fixed_delay("large-scheduled-task", Duration::from_secs(60)),
+            ScheduledExecutionPolicy::default(),
             move || {
                 let completed = completed.clone();
                 async move {
@@ -240,8 +242,9 @@ fn scheduled_runs_fit_on_one_mib_worker_stack() {
         let schedules = ScheduledTaskGroup::new(context.task_group().clone());
         let (sent, received) = std::sync::mpsc::sync_channel(1);
         schedules
-            .schedule_fixed_delay(
+            .schedule(
                 ScheduledTaskConfig::fixed_delay("large-run", Duration::from_secs(60)),
+                ScheduledExecutionPolicy::default(),
                 move || {
                     let sent = sent.clone();
                     async move {
@@ -349,8 +352,9 @@ fn large_scheduler_factories_fit_on_one_mib_stack() {
         let payload = [7_u8; 65536];
         let (sent, received) = std::sync::mpsc::sync_channel(1);
         schedules
-            .schedule_fixed_delay(
+            .schedule(
                 ScheduledTaskConfig::fixed_delay("large-factory", Duration::from_secs(60)),
+                ScheduledExecutionPolicy::default(),
                 move || {
                     let value = std::hint::black_box(&payload)[0];
                     let sent = sent.clone();
@@ -374,53 +378,76 @@ fn scheduling_adapters_fit_on_one_mib_worker_stack() {
         let operation = OperationContext::without_deadline(TaskKind::Worker);
 
         macro_rules! check_schedule {
-            ($method:ident, $result:expr $(, $prefix:expr)*) => {{
+            ($name:literal, $mode:ident, |$config:ident, $task:ident| $register:expr, $result:expr) => {{
                 let (sent, received) = std::sync::mpsc::sync_channel(1);
-                let mut config = ScheduledTaskConfig::fixed_delay(stringify!($method), Duration::from_secs(60));
-                config.max_run_time = Some(Duration::from_secs(5));
-                schedules.$method($($prefix,)* config, move || {
+                let mut $config = ScheduledTaskConfig::$mode($name, Duration::from_secs(60));
+                $config.max_run_time = Some(Duration::from_secs(5));
+                let $task = move || {
                     let sent = sent.clone();
                     async move {
                         payload_task::<32768>().await;
                         sent.send(()).unwrap();
                         $result
                     }
-                }).unwrap();
+                };
+                $register.unwrap();
                 received.recv_timeout(Duration::from_secs(5)).unwrap();
             }};
         }
 
-        check_schedule!(schedule_fixed_delay, ());
-        check_schedule!(schedule_fixed_delay_operation, (), &operation);
-        check_schedule!(schedule_fixed_delay_controlled, ScheduledTaskControl::Stop);
+        let serial = ScheduledExecutionPolicy::default();
+        let overlapping = ScheduledExecutionPolicy::bounded(NonZeroUsize::new(2).unwrap(), MissedTickPolicy::Skip);
         check_schedule!(
-            schedule_fixed_delay_controlled_operation,
-            ScheduledTaskControl::Stop,
-            &operation
+            "delay",
+            fixed_delay,
+            |config, task| schedules.schedule(config, serial, task),
+            ()
         );
-        check_schedule!(schedule_fixed_rate_no_overlap_operation, (), &operation);
-        check_schedule!(schedule_fixed_rate_no_overlap, ());
-        check_schedule!(schedule_fixed_rate, ());
-        check_schedule!(schedule_fixed_rate_allow_overlap, ());
+        check_schedule!(
+            "delay-operation",
+            fixed_delay,
+            |config, task| schedules.schedule_operation(&operation, config, serial, task),
+            ()
+        );
+        check_schedule!(
+            "controlled",
+            fixed_delay,
+            |config, task| schedules.schedule_controlled(config, task),
+            ScheduledTaskControl::Stop
+        );
+        check_schedule!(
+            "no-overlap",
+            fixed_rate_no_overlap,
+            |config, task| schedules.schedule(config, serial, task),
+            ()
+        );
+        check_schedule!(
+            "no-overlap-operation",
+            fixed_rate_no_overlap,
+            |config, task| schedules.schedule_operation(&operation, config, serial, task),
+            ()
+        );
+        check_schedule!(
+            "overlap",
+            fixed_rate,
+            |config, task| schedules.schedule(config, overlapping, task),
+            ()
+        );
 
         // Exercise both boxing decisions together: a large factory and a large run.
         let payload = [7_u8; 65536];
         let (sent, received) = std::sync::mpsc::sync_channel(1);
-        let mut config = ScheduledTaskConfig::fixed_rate("bounded", Duration::from_secs(60));
+        let mut config = ScheduledTaskConfig::fixed_rate_no_overlap("bounded", Duration::from_secs(60));
         config.max_run_time = Some(Duration::from_secs(5));
         schedules
-            .schedule_bounded(
-                config,
-                ScheduledExecutionPolicy::serial(MissedTickPolicy::Skip),
-                move || {
-                    let value = std::hint::black_box(&payload)[0];
-                    let sent = sent.clone();
-                    async move {
-                        payload_task::<32768>().await;
-                        sent.send(value).unwrap();
-                    }
-                },
-            )
+            .schedule(config, serial, move || {
+                let value = std::hint::black_box(&payload)[0];
+                let sent = sent.clone();
+                async move {
+                    payload_task::<32768>().await;
+                    sent.send(value).unwrap();
+                }
+            })
             .unwrap();
         assert_eq!(received.recv_timeout(Duration::from_secs(5)).unwrap(), 7);
         assert!(owner.shutdown_runtime_blocking().unwrap().is_healthy());

@@ -36,7 +36,6 @@ flowchart TD
 ```
 
 图中展示生产环境的组装路径。`RuntimeContext` 是借用现有 Tokio 运行时的迁移与测试工具。
-兼容执行器和专用线程辅助工具保留各自明确的所有权边界。
 
 ## 核心架构
 
@@ -45,12 +44,13 @@ flowchart TD
 
 | 类型 | 职责 |
 | --- | --- |
-| `RuntimeConfig` | 配置工作线程数、阻塞线程上限、线程名与栈大小、keep-alive、关闭超时、IO/time 驱动和各阻塞通道的策略。 |
+| `RuntimeConfig` | 配置工作线程数、受管阻塞容量、线程名与栈大小、keep-alive、兜底关闭超时、IO/time 驱动和各阻塞通道的策略。 |
 | `RuntimeOwner` / `RuntimeOwnerPlan` | 校验配置，构建并拥有 Tokio 多线程运行时，提供根上下文并协调关闭。 |
 | `RootServiceContext` | 不可克隆且没有公开构造函数的根上下文；派生组件上下文，提供共享资源与诊断。 |
 | `ChildServiceContext` / `TaskSpawner` | 组件拥有任务所需的能力。任务提交器提供任务提交和取消信号访问能力，不暴露原始运行时。 |
 | `TaskGroup` / `OperationContext` | 跟踪组件任务，提供操作级取消、截止时间和有界等待；操作不会创建新的任务组。 |
-| `ScheduledTaskGroup` | 按明确的重叠执行策略运行周期任务并记录调度指标。 |
+| `ScheduledTaskGroup` | 按明确的重叠执行策略运行周期任务并记录调度指标；它是唯一的调度器。 |
+| `ServiceManager` / `ServiceTask` | 以所属任务组的服务任务运行由唤醒驱动的服务循环，关闭受截止时间约束。 |
 | `BlockingExecutor` | 通过有界通道接收短时阻塞工作，并保留其容量，直到闭包实际退出。 |
 | `RuntimeResources` / `ResourceBudget` | 共享进程预算，派生组件级数量、保留字节数和可选速率限制。 |
 | `ResourcePermit` / `BudgetedQueue` | 通过 RAII 在排队或执行中的工作之间携带资源配额，并应用明确的过载策略。 |
@@ -66,10 +66,6 @@ flowchart TD
 并以会真实运行的测试示例给出：拥有运行时、从密封根派生唯一组件上下文、注册服务、
 注册有界周期任务而不是自己驱动裸循环，最后在关闭预算内排空收尾 I/O 并读取关闭报告。
 `RuntimeContext` 是迁移与测试夹具，不是生产入口。
-
-旧入口集中在 `rocketmq_runtime::compat`，让迁移方把保留的 executor service
-和旧调度器类型当作一组并看到明确方向。该模块是增量式的，
-不会新增任何弃用标记；`ActorRuntime` 不纳入其中，因为它拥有独立线程而非适配所有权 API。
 
 ## 运行时所有权与快速开始
 
@@ -106,6 +102,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 - `RuntimeContractViolation` 表示调用方配置无效或不变量被违反，包括 `plan()` 返回的错误。
 - `RuntimeResult<T>` 使用 `RuntimeError` 表示运行故障，例如运行时构建、I/O、容量或超时错误。
+  应按 `RuntimeError::kind()` 分支，而不是按操作标签推断：向正在关闭的所有者提交返回
+  `RuntimeErrorKind::Closed`，向已毒化的任务组提交返回 `RuntimeErrorKind::Poisoned`。
 - `ScheduledTaskRegistrationOutcome::AlreadyPresent`、`BudgetRejection` 和元数据目标冲突
   等正常结果有各自的类型。
 
@@ -124,7 +122,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 通过 `component(...)` 创建长期组件作用域。如需在关闭或中毒状态下获得创建错误，使用
 `ChildServiceContext::try_component(...)`；当父级不再接收子组时，`component(...)`
-返回已关闭的作用域。动态名称通过 `ScopeId::try_new` 校验；字符串字面量支持静态名称转换。
+返回已关闭的作用域。每个所有者首次出现这种情况时输出一次告警，每次都会计入
+`TaskGroup::event_counts()`；若所有者的关闭报告尚在汇总，还会在报告中注明。
+动态名称通过 `ScopeId::try_new` 校验；字符串字面量支持静态名称转换。
 
 克隆上下文或任务组会共享同一所有者和取消令牌。创建子组则获得独立的取消范围：父级取消
 向下传播，子级取消不影响父级或兄弟组件。丢弃上下文句柄不是优雅关闭协议；活动任务可能
@@ -139,9 +139,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `spawn_with_handle` | 返回指定任务的 join handle，同时保留任务组跟踪。 |
 
 有界请求或可重启工作使用 `OperationContext`，无需为每次操作创建组件组。
-`close_admission()` 停止接收新的操作任务；`wait()` 等待已登记任务完成；
+`close_admission()` 停止接收新的操作任务；`wait()` 等待直到没有活动的操作任务且所有者已结算它们；
 `cancel_and_wait()` 还会请求取消。等待时必须传入操作最初绑定的组件所有者，
-未完成工作会在等待截止时间到达后被中止。
+未完成工作会在等待截止时间到达后被中止。操作只统计活动任务数，任务本身在所有者的
+注册表中按操作打标，因此空闲操作只占几百字节。
 
 `TaskGroup::cancel()` 只广播取消信号。
 使用 `shutdown(...)` 或 `shutdown_until(...)` 关闭任务接收并等待关闭报告。
@@ -151,55 +152,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | 状态 | 含义 |
 | --- | --- |
 | `Open` | 可以登记新任务和子组。 |
-| `Closing` | 已开始关闭，拒绝新的登记。 |
-| `Closed` | 跟踪器已关闭，取消信号已广播。 |
+| `Closing` | 关闭已封闭准入，取消信号尚未到达每个任务。 |
+| `Closed` | 准入已封闭且取消信号已广播，所属工作正在排空。 |
 | `ShutdownCompleted` | 关闭报告已缓存供重复调用使用，但报告不一定健康。 |
 | `Poisoned` | 任务组开放期间发生受跟踪任务 panic，后续登记被拒绝。 |
 
-任务元数据先于 Tokio 提交完成登记。提交锁将登记与关闭状态转换串行化。
-[子组注册表](src/task_group/registry.rs) 按 `TaskGroupId` 保存弱引用；
-最后一个任务组引用释放后，子组会注销。名称只是标签，多个组可以同名而不共享身份。
+关闭按 `Closing`、`Closed`、`ShutdownCompleted` 的顺序推进，因此被关闭唤醒的任务
+看到的已经是 `Closed`。毒化保持 fail-stop：状态转换时输出一次带任务组路径的日志，
+并计入 `TaskGroup::event_counts()`。
+
+任务元数据在提交锁内登记，提交锁将登记与关闭状态转换串行化；释放提交锁之后才把任务
+交给 Tokio。锁内取得的 tracker 令牌让关闭一直等到该任务结束，句柄安装之前到达的中止
+请求也会被执行。任务名称是 `TaskName`：`&'static str` 不分配内存，`String` 与
+`Arc<str>` 原样保存。[子组注册表](src/task_group/registry.rs) 按 `TaskGroupId`
+保存弱引用；最后一个任务组引用释放后，子组会注销。任务组 id 在进程内唯一，跨 owner
+也不重复。名称只是标签，多个组可以同名而不共享身份。
 
 ## 周期任务
 
-按时间语义和所有权选择入口：
+`ScheduledTaskGroup` 是唯一的调度器。通过 `context.scheduled_tasks("maintenance")` 派生，
+或用 `ScheduledTaskGroup::new(group)` 包装已有任务组，然后登记工作：
 
-| 工作类型 | 推荐入口 | 关键契约 |
+| 工作类型 | 入口 | 所有权 |
 | --- | --- | --- |
-| 串行周期维护 | `schedule_bounded` + fixed-delay + serial policy | 首次执行受 initial delay 控制，完成后再等待 period；拒绝零周期。 |
-| 允许并发的周期工作 | `schedule_bounded` + fixed-rate + bounded policy | 先取得运行槽再提交，显式选择 Skip、CoalesceLatest 或 BoundedCatchUp。 |
-| 可变回调或受控结束 | `schedule_fixed_delay_controlled` | 串行调用 FnMut；正常 Stop 计入已完成运行。 |
-| 属于短期 operation 的可变维护 | `schedule_fixed_delay_controlled_operation` | 复用 fixed-delay 执行与结算，同时服从 operation 的取消和 deadline。 |
-| 日历或触发器任务 | 兼容 `TaskScheduler` 的 Cron/Trigger | 保留独立的日历及触发器协议。 |
-| 专属操作系统线程 | `ActorRuntime` | owner 必须发出停止信号并 join；仅取消 async 任务并不足够。 |
+| 周期维护 | `schedule(config, policy, task)` | `task` 是返回 Future 的 `FnMut`；驱动及其执行任务归属于该任务组。 |
+| 属于操作的周期维护 | `schedule_operation(&operation, config, policy, task)` | 同 `schedule`，并在操作取消或到达截止时间时停止。 |
+| 可自行结束的固定延迟工作 | `schedule_controlled(config, task)` | 某次执行返回 `ScheduledTaskControl::Stop` 时结束调度，并计为一次完成的执行。 |
 
-旧 fixed-rate overlap 接口仍允许无界重叠，迁移到 bounded 接口需要明确选择过载策略。
-`ScheduledTaskConfig::shutdown_timeout` 仅保留源码兼容性，实现不读取它；
-关闭预算应传给 task group 的 shutdown API。
+时间模式只由配置决定，策略必须与之相符：
 
-通过 `context.scheduled_tasks("maintenance")` 派生调度器，
-并选择与重叠执行需求相符的登记方法：
+| 配置 | 时间语义 | 策略 |
+| --- | --- | --- |
+| `ScheduledTaskConfig::fixed_delay(name, period)` | 执行完成后再等待 `period`。 | `ScheduledExecutionPolicy::serial(..)` |
+| `ScheduledTaskConfig::fixed_rate_no_overlap(name, period)` | 每 `period` 触发一次，执行从不重叠。 | `ScheduledExecutionPolicy::serial(..)` |
+| `ScheduledTaskConfig::fixed_rate(name, period)` | 每 `period` 触发一次，最多 `n` 次执行重叠。 | `ScheduledExecutionPolicy::bounded(n, ..)` |
 
-| 模式 | 行为 |
-| --- | --- |
-| `FixedDelay` | 执行回调，完成后等待 `period`。 |
-| `FixedRateNoOverlap` | 每个驱动周期尝试执行；上一次仍在运行时跳过。 |
-| `FixedRateAllowOverlap` | 每个驱动周期启动一次执行，不等待前次完成；没有独立的并发执行数量限制。 |
+零周期或与配置矛盾的策略会以 unsupported 错误拒绝。
+`ScheduledExecutionPolicy::default()` 同一时刻只允许一次执行，执行期间到达的触发被跳过。
 
-当前固定频率驱动在提交尝试之间等待相对时长 `period`。预期触发时刻用于测量漂移，
-不会驱动按绝对时间追赶的循环。调用方不能依赖严格的时钟对齐或漏触发补偿。
+固定频率调度按绝对时刻触发。触发时若所有执行槽都被占用，由漏触发策略决定：`Skip` 丢弃，
+`CoalesceLatest` 保留一次待执行，`BoundedCatchUp(n)` 最多保留 `n` 次。漂移指标记录每次
+触发的延迟。
 
-- `initial_delay` 默认为零，允许首次立即执行。
-- `max_run_time` 通过超时后丢弃 Future 限制单次回调；外部副作用仍需适当的取消协议。
-- 可控固定延迟回调通过返回 `ScheduledTaskControl::Stop` 停止驱动。
+- `with_initial_delay(delay)` 设置首次执行前的延迟；默认为零，允许首次立即执行。
+- `max_run_time` 通过超时后丢弃 Future 限制单次执行；外部副作用仍需适当的取消协议。
 - 同名登记返回 `AlreadyPresent`，不会替换已有驱动或指标。
   `clear_completed()` 仅在调度器任务组没有活动任务时清空登记。
 - 驱动和执行任务归属于调度器的任务组。普通执行可在关闭期间完成；
-  支持操作上下文的登记还会观察操作自身的取消和截止时间。
+  属于操作的登记还会观察操作自身的取消和截止时间。
 
 快照记录活动执行数、完成次数、跳过次数、重叠次数、失败次数、漂移和耗时。
-通过 `shutdown(timeout)` 或所属任务组关闭调度器。
-当前调度器不会读取 `ScheduledTaskConfig::shutdown_timeout`；实际预算由关闭调用提供。
+通过 `shutdown(timeout)`、`shutdown_until(deadline)` 或所属任务组关闭调度器。
 
 ## 阻塞工作
 
@@ -216,6 +219,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 空闲容量可以借用；当某通道有等待者时，其预留容量会受到保护，不再借给新的借用者。
 克隆执行器或派生上下文共享已有容量，不会创建另一个线程池。
 
+同一通道的等待者按到达顺序获准，新提交不会越过本通道已排队的等待者。释放的槽位直接
+交给能够使用它的等待者，只唤醒这一个等待者；仍低于预留容量的通道优先。Tokio 阻塞线程池
+的线程数为 `RuntimeConfig::tokio_blocking_threads()`：受管容量再加 `max(2, 容量 / 8)`
+的余量，使直接调用的 `spawn_blocking`、DNS 解析和 `tokio::fs` 不会占用已准入工作所依赖的线程。
+
 `max_queue_depth` 在准入队列已满时拒绝提交。`queue_timeout` 限制等待执行容量的时间；
 `task_timeout` 限制准入后调用方的等待时间。`spawn_until` 和 `spawn_io_until`
 还通过同一个绝对截止时间约束两个阶段。这些方法需要活动的 Tokio 上下文，
@@ -228,7 +236,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `BlockingKind::LongRunning` 会被拒绝。长期阻塞循环需要专用操作系统线程或领域服务作为
 所有者，并提供停止和等待退出协议。`BlockingExecutor::new(policy, owner_group)`
-保留为隔离的兼容构造入口：它创建独立预算，传入的任务组不会将其纳入受管根通道。
+创建隔离的执行器：它拥有独立预算，传入的任务组不会将其纳入受管根通道。
 
 ## 资源预算与队列
 
@@ -245,7 +253,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 这些限制只核算通过预算 API 接收的资源，不会自动限制所有进程内存分配或常驻内存使用量，
 进程不可见的约束也不会被探测到。
 
-`ResourceBudget` 沿祖先链检查数量、保留字节数和可选速率限制。
+`ResourceBudget` 沿祖先链检查数量、保留字节数和可选速率限制。数量与字节容量通过原子
+操作预留；在后续层级失败的请求会回滚已预留的层级，因此任何层级都不会超过上限，只有配置了
+速率限制的层级才加锁。接近容量时，与回滚竞争的请求可能被拒绝，尽管容量随即归还。
 `ResourcePermit` 保留数量与字节配额，直到被丢弃。
 `BudgetClass::Control` 可以使用配置的控制类预留容量，数据类工作不能占用该预留容量。
 同一树中的配额重绑定在组件间转移所有权时保留公共祖先的核算。
@@ -305,10 +315,26 @@ actor 的兼容 `blocking_*` 配置不会替换共享通道策略。
 提供 `/readyz`、`/livez` 和 `/drainz`。
 `ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS` 与 `ROCKETMQ_LIVENESS_STALE_SECONDS`
 分别配置关闭和进度窗口。未配置探针绑定地址时，关闭协调仍然有效。
-服务生命周期的默认关闭超时为 45 秒；`RuntimeConfig` 独立默认为 30 秒。
+
+`/readyz` 和 `/livez` 接受 `GET` 与 `POST`。`/drainz` 会发起关闭，因此默认只接受
+`POST`，对 `GET` 返回 `405` 并带 `Allow: POST`。Kubernetes 的 `preStop.httpGet`
+只能发送 `GET`，此类钩子需设置 `ROCKETMQ_HEALTH_DRAIN_METHODS=GET,POST`，仓库提供的
+chart 已经这样配置；其他取值属于配置错误。每个连接由生命周期任务组的独立任务处理，
+同时最多 64 个，空闲或缓慢的客户端不会拖慢其他探针。服务会一直读到请求头结束，
+请求头可以分片到达。资源耗尽（例如打开文件过多）导致的 `accept` 失败会退避重试；
+只有监听器持续不可用时才将服务标记为失败。
 
 首次关闭请求固定一个 `ShutdownDeadline`，重复的 pre-stop 或信号请求不会延长它。
 将同一截止时间传递给组件关闭流程及 `owner.shutdown_runtime_blocking_until(deadline)`。
+
+各关闭超时的关系如下：
+
+| 超时 | 默认值 | 适用范围 |
+| --- | --- | --- |
+| `ServiceLifecycleConfig::shutdown_timeout`（`ROCKETMQ_SHUTDOWN_TIMEOUT_SECONDS`） | 45 秒 | 首次关闭请求固定的进程截止时间。入口把它传给每个组件和 owner；运行生命周期的进程以它为唯一来源。 |
+| `RuntimeConfig::shutdown_timeout` | 30 秒 | 未显式传入截止时间的 owner 关闭调用，用于不运行生命周期的 owner。 |
+| `ServiceManager` 关闭 | 30 秒 | 仅当调用方和父任务组都未提供截止时间时使用；否则取两者中较早者。 |
+| 组件预算 | 各组件自定 | 限制单个组件在进程截止时间内的份额，不会延长进程截止时间。 |
 
 任务组关闭时先停止登记并广播取消，再并发执行子组关闭和本组任务等待。
 截止时间到达后中止尚未完成的受跟踪任务。报告在任务组级别缓存，
@@ -322,14 +348,23 @@ actor 的兼容 `blocking_*` 配置不会替换共享通道策略。
 | `owner.shutdown_background()` | 返回立即关闭任务的证据，并请求 Tokio 在后台关闭。 |
 | `RuntimeOwner::drop` | 未显式关闭时的紧急清理，不是优雅关闭协议。 |
 
-`ShutdownReport::is_healthy()` 要求 `leaked`、`failed`、`panicked`、`timed_out`、
-`blocking_still_running` 和 `detached_still_running` 均为零，且所有子报告健康。
-仅有 `aborted` 计数不会使报告不健康。立即关闭报告不能证明全部 Future 已完成清理。
-阻塞快照只反映采样时刻的状态，不会终止超过截止时间仍在运行的闭包。
+`ShutdownReport::is_healthy()` 要求 `leaked`、`failed`、`panicked`、`timed_out`
+和 `blocking_still_running` 均为零，且所有子报告健康。`timed_out` 统计本次关闭在截止
+时间后中止的任务以及仍然残留的任务；此前通过 `abort_task` 请求的中止不算超时。
+仅有 `aborted` 计数不会使报告不健康。`remaining_tasks` 最多列出
+`ShutdownReport::REMAINING_TASKS_LIMIT`（64）个任务，其余数量记在
+`remaining_tasks_omitted`，`leaked` 仍包含它们。立即关闭报告不能证明全部 Future
+已完成清理。阻塞快照只反映采样时刻的状态，不会终止超过截止时间仍在运行的闭包。
+
+`ServiceManager` 在 `new_with_task_group` 传入的任务组下以服务任务运行 `ServiceTask`
+循环。其状态（`ServiceTaskState`）是单个原子值；`shutdown_until(deadline)` 最晚在请求的
+截止时间与父任务组已安装截止时间中较早者返回。
 
 ## 诊断
 
 `diagnostics_snapshot()` 提供内部详情，例如运行时和任务组身份、阻塞任务名称。
+其 `events` 字段与 `TaskGroup::event_counts()` 一样，统计任务树中被静默吸收的失败：
+被 panic 毒化的任务组，以及以已关闭子组应答的组件请求。
 面向已认证运维 API 时，优先使用 `diagnostics_view_v1(RuntimeComponent::...)`：
 其版本化视图聚合有界的任务类型和通道摘要，不包含原始 ID、名称、参数或配置对象。
 认证仍由调用方负责。
@@ -352,10 +387,10 @@ V1 的字段和含义保持不变。
 明确选择调度重叠策略，并检查关闭报告。替代方式见
 [API 迁移指南](../rocketmq-doc/en/release/1.0/api-migration.md)。
 
-`RuntimeContext` 用于迁移和测试。其他保留的辅助类型包括 `TokioExecutorService`、
-`ScheduledExecutorService`、`FuturesExecutorService`、`TaskScheduler` 和 `ActorRuntime`；
-它们承担不同的适配或专用线程职责，并非全部已弃用。
-新服务应使用前文介绍的所有权和能力 API。
+`RuntimeContext` 用于迁移和测试。executor service（`TokioExecutorService`、
+`ScheduledExecutorService`、`FuturesExecutorService`）、`TaskScheduler`、
+`ScheduledTaskManager`、`ActorRuntime`、`compat` 模块和旧的 `ServiceManager` 构造函数
+均已删除，替代方式见 [MIGRATION.md](MIGRATION.md)。
 
 [Broker](../rocketmq-broker/src/bin/broker_bootstrap_server.rs)、
 [NameServer](../rocketmq-namesrv/src/bin/namesrv_bootstrap_server.rs)、
@@ -446,6 +481,7 @@ sudo systemd-run --wait --pipe --collect \
 | `budgeted_queue_bench` | 复用队列，测量填充/拒绝/排空、等待/释放或容量已满时的替换。队列和 Tokio 运行时构造不计时；等待场景包含生产者的生成与等待结束。 |
 | `blocking_executor_bench` | 四个通道槽位、1 ms 模拟阻塞工作，测量 8/32 个任务从提交到完成。运行时创建与关闭不计时；超时场景保留真实阻塞闭包，直到释放。 |
 | `metadata_io_bench` | 将首次真实文件系统写入停在关卡，测量排队提交到释放和回执完成。断言合并写入与冷热顺序；首次到达关卡、设置和关闭不计时。 |
+| `runtime_convergence_bench` | 1/4/8 个线程向同一共享任务组或每线程一个任务组提交 draining operation；共享根下的许可申请与释放；空闲任务组、操作与子上下文的分配次数和字节数；争用下阻塞工作的启动顺序。每次调用都计时以得到分位数，JSON 文件名取自 `ROCKETMQ_BENCH_LABEL`。 |
 
 Criterion 提供按批次得出的估计值和置信区间，不是单次请求的 P99。
 拒绝场景会有意在每个满额批次额外拒绝一项；等待和周转场景会断言成功准入及资源释放。
@@ -467,7 +503,6 @@ Criterion 提供按批次得出的估计值和置信区间，不是单次请求�
 rocketmq-runtime/
   src/public_api.rs        deliberate ownership and diagnostics exports
   src/prelude.rs           recommended entry path and common ownership imports
-  src/compat.rs            compatibility facade for older entry points
   src/config.rs            runtime and blocking-lane configuration
   src/owner.rs             validated construction and owned runtime lifecycle
   src/context.rs           borrowed runtime migration/test harness
@@ -485,10 +520,9 @@ rocketmq-runtime/
   src/service_lifecycle.rs readiness, liveness, and shutdown requests
   src/shutdown_deadline.rs shared absolute shutdown deadline
   src/shutdown_report.rs   serializable shutdown evidence
-  src/diagnostics.rs       raw snapshots and sanitized V1 views
-  src/executor_service.rs  retained executor adapters
-  src/schedule/            retained scheduler APIs
-  src/common/              common filesystem, time, and thread helpers
+  src/diagnostics.rs       raw snapshots and sanitized views
+  src/task/                service loops run by ServiceManager
+  src/common/              filesystem, time, and configuration-file helpers
 ```
 
 ## 许可证

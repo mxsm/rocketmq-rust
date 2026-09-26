@@ -15,7 +15,7 @@
 use clap::Parser;
 use rocketmq_error::Result as CanonicalResult;
 use rocketmq_protocol::protocol::body::ha_runtime_info::HARuntimeInfo;
-use rocketmq_runtime::common::util_all::time_millis_to_human_string2;
+use rocketmq_runtime::common::time_utils::time_millis_to_human_string2;
 
 use crate::commands::CommandExecute;
 use rocketmq_admin_core::client_adapter::services::ha::HaService;
