@@ -41,14 +41,14 @@ use crate::task_group::TaskKind;
 
 static NEXT_RUNTIME_DIAGNOSTICS_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug, Clone)]
 /// Represents runtime diagnostics.
+#[derive(Debug, Clone)]
 pub struct RuntimeDiagnostics {
     runtime_id: Arc<str>,
 }
 
-#[derive(Debug, Clone, Serialize)]
 /// Represents runtime diagnostics snapshot.
+#[derive(Debug, Clone, Serialize)]
 pub struct RuntimeDiagnosticsSnapshot {
     /// The runtime identifier.
     pub runtime_id: String,
