@@ -49,6 +49,9 @@ impl BitsArray {
         if bit_length < bytes.len() * 8 {
             return Err(invalid_filter("bit_length_too_small"));
         }
+        if bit_length > bytes.len() * 8 {
+            return Err(invalid_filter("bit_length_too_large"));
+        }
         Ok(BitsArray {
             bytes: bytes.to_vec(),
             bit_length,
@@ -273,7 +276,10 @@ mod tests {
         let non_empty_bytes: &[u8] = &[255];
         assert!(BitsArray::from_bytes_with_length(non_empty_bytes, 0).is_err());
         assert!(BitsArray::from_bytes_with_length(non_empty_bytes, 7).is_err());
-        assert!(BitsArray::from_bytes_with_length(non_empty_bytes, 8).is_ok());
+        let bits = BitsArray::from_bytes_with_length(non_empty_bytes, 8).unwrap();
+        assert!(bits.get_bit(7).unwrap());
+        assert!(bits.get_bit(8).is_err());
+        assert!(BitsArray::from_bytes_with_length(&[0], 9).is_err());
     }
 
     #[test]

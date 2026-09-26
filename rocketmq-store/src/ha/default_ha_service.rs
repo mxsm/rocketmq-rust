@@ -1125,8 +1125,8 @@ mod tests {
 
     #[tokio::test]
     async fn build_connection_wraps_auto_switch_connections_when_enabled() {
-        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-build-{}", current_millis()));
-        let store = new_test_message_store(&temp_root, true);
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let store = new_test_message_store(temp_root.path(), true);
         let service = new_default_ha_service(&store);
         let (server_stream, remote_addr, _client) = new_server_stream().await;
 
@@ -1152,14 +1152,12 @@ mod tests {
         assert_eq!(runtime_handle.slave_broker_id(), Some(9));
 
         connection.shutdown().await;
-
-        let _ = std::fs::remove_dir_all(temp_root);
     }
 
     #[tokio::test]
     async fn build_connection_uses_default_variant_when_auto_switch_is_disabled() {
-        let temp_root = std::env::temp_dir().join(format!("rocketmq-rust-default-ha-build-{}", current_millis()));
-        let store = new_test_message_store(&temp_root, false);
+        let temp_root = tempfile::tempdir().expect("create temp root dir");
+        let store = new_test_message_store(temp_root.path(), false);
         let service = new_default_ha_service(&store);
         let (server_stream, remote_addr, _client) = new_server_stream().await;
 
@@ -1185,8 +1183,6 @@ mod tests {
         assert_eq!(runtime_handle.slave_broker_id(), None);
 
         connection.shutdown().await;
-
-        let _ = std::fs::remove_dir_all(temp_root);
     }
 
     #[tokio::test]

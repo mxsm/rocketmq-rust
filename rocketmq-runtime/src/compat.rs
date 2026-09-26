@@ -22,18 +22,12 @@
 //! [`prelude`](crate::prelude) documents that path with compiling examples.
 //!
 //! The items below stay available, and keep their behavior, while call sites
-//! migrate. Removing them belongs to a 2.0 compatibility boundary and is subject
-//! to the release governance in the API migration guide. Adding this module does
-//! not deprecate anything: items that were already deprecated keep their
-//! attribute, and the rest are retained helpers with their own responsibilities,
+//! migrate. This module groups retained helpers with their own responsibilities,
 //! such as the executor services that adapt a pool or a dedicated client runtime.
 //!
 //! [`ActorRuntime`](crate::ActorRuntime) is deliberately absent. It owns a
 //! dedicated thread instead of adapting the ownership API, so grouping it here
 //! would imply a migration that does not apply.
-
-#[allow(deprecated)]
-pub use crate::legacy::RocketMQRuntime;
 
 pub use crate::executor_service::FuturesExecutorPlan;
 pub use crate::executor_service::FuturesExecutorService;

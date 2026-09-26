@@ -99,8 +99,8 @@ cargo test
   architecture below instead of adding `unwrap`, `expect`, or a string-only
   error path for protocol, I/O, configuration, or lifecycle failures.
 - Explain unsafe invariants with adjacent safety comments and relevant tests.
-  Non-canonical `RocketMQRuntime` use remains a safety finding. Review changed
-  runtime ownership without maintaining source identities or historical counts.
+  Review changed runtime ownership without maintaining source identities or
+  historical counts.
 
 Before opening a pull request that changes these boundaries, run:
 

@@ -201,8 +201,8 @@ impl ServiceTaskHandle {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
 /// Represents service manager lifecycle probe.
+#[derive(Debug, Clone, Serialize)]
 pub struct ServiceManagerLifecycleProbe {
     /// Whether healthy.
     pub healthy: bool,
@@ -318,8 +318,8 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
         Self::new_with_optional_task_group(service, None)
     }
 
-    #[deprecated(note = "use ServiceManager::new_arc_with_task_group; the ambient-runtime adapter is removed in 2.0.0")]
     /// Creates arc.
+    #[deprecated(note = "use ServiceManager::new_arc_with_task_group; the ambient-runtime adapter is removed in 2.0.0")]
     pub fn new_arc(service: Arc<T>) -> Self {
         Self::new_arc_legacy_compatibility(service)
     }
@@ -383,9 +383,19 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
         let wait_point = self.wait_point.clone();
         let task_handle = self.task_handle.clone();
 
-        // Spawn the service task
+        // The service loop is created on the heap by the worker's first poll. An
+        // inline loop would make this future as large as the service's state,
+        // and unoptimized builds copy it at every hop down to the task group.
         let future = async move {
-            Self::run_internal(service, state, stopped, started, has_notified, wait_point).await;
+            Box::pin(Self::run_internal(
+                service,
+                state,
+                stopped,
+                started,
+                has_notified,
+                wait_point,
+            ))
+            .await;
         };
         let handle = match match self.parent_task_group.as_ref() {
             Some(parent_task_group) => spawn_service_task_with_task_group(

@@ -569,7 +569,7 @@ fn render_key_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         Span::raw("  "),
         Span::styled("Global ", label_style()),
         Span::styled(
-            "Tab focus | Ctrl+R rerun | Ctrl+L clear | ? help | q quit",
+            "Tab focus | Ctrl+R rerun | Ctrl+L clear | ? help outside text | Esc cancel/quit",
             muted_value_style(),
         ),
     ]);
@@ -595,8 +595,9 @@ fn render_help(frame: &mut Frame, area: Rect) {
             "Move focus through NameServer, Search, Commands, Parameters, Result",
         ),
         help_line("n", "Edit NameServer address"),
-        help_line("/ or s", "Focus command search when not editing parameters"),
-        help_line("j/k or arrows", "Move command, parameter, or result viewport"),
+        help_line("/ or s", "Focus command search when not editing text"),
+        help_line("j/k", "Move command or result rows when not editing text"),
+        help_line("Arrows", "Move command, parameter, or result viewport"),
         help_line(
             "Left / Right",
             "Collapse groups, cycle enum parameters, or scroll result columns",
@@ -606,7 +607,10 @@ fn render_help(frame: &mut Frame, area: Rect) {
         help_line("Ctrl+R", "Re-run selected command"),
         help_line("Ctrl+L", "Clear result"),
         help_line("Esc", "Close modal, cancel local wait, or quit"),
-        help_line("q", "Close modal or quit"),
+        help_line(
+            "? / q",
+            "Open help or quit when not editing text; close an open help modal",
+        ),
     ];
     frame.render_widget(Clear, area);
     frame.render_widget(
@@ -674,7 +678,7 @@ fn key_hint_for_focus(focus: FocusArea) -> &'static str {
         FocusArea::CommandTree => {
             "j/k move | Enter select/toggle | Left collapse | Right expand | / search | n namesrv"
         }
-        FocusArea::Args => "j/k field | type edit | Space bool | Left/Right enum | Enter execute",
+        FocusArea::Args => "Up/Down field | type edit | Space bool | Left/Right enum | Enter execute",
         FocusArea::Result => "j/k scroll rows | Left/Right scroll columns | Enter reset scroll",
     }
 }

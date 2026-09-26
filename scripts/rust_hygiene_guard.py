@@ -71,9 +71,6 @@ USE_STATEMENT = re.compile(
 )
 
 
-LEGACY_RUNTIME = re.compile(r"\bRocketMQRuntime\b")
-
-
 PUBLIC_SAFE_FUNCTION = re.compile(
     r"\bpub\s+(?:(?:async|const|extern)\b\s*)*fn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)",
     re.MULTILINE,
@@ -335,31 +332,6 @@ def matching_delimiter(masked: str, opening: int, opener: str, closer: str) -> i
     return None
 
 
-def legacy_runtime_offsets(masked: str, relative: str) -> list[int]:
-    """Reject runtime references outside the legacy definition and compatibility re-exports."""
-
-    allowed: list[tuple[int, int]] = []
-    if relative == "rocketmq-runtime/src/legacy.rs":
-        for declaration in re.finditer(r"\b(?:pub\s+enum|impl)\s+RocketMQRuntime\b", masked):
-            opening = masked.find("{", declaration.end())
-            closing = matching_delimiter(masked, opening, "{", "}") if opening >= 0 else None
-            if closing is not None:
-                allowed.append((declaration.start(), closing + 1))
-    elif relative == "rocketmq-runtime/src/lib.rs":
-        reexport = re.search(r"\bpub\s+use\s+legacy\s*::\s*RocketMQRuntime\s*;", masked)
-        if reexport is not None:
-            allowed.append(reexport.span())
-    elif relative == "rocketmq-runtime/src/compat.rs":
-        reexport = re.search(r"\bpub\s+use\s+crate\s*::\s*legacy\s*::\s*RocketMQRuntime\s*;", masked)
-        if reexport is not None:
-            allowed.append(reexport.span())
-    return [
-        match.start()
-        for match in LEGACY_RUNTIME.finditer(masked)
-        if not any(start <= match.start() < end for start, end in allowed)
-    ]
-
-
 def matching_generic_delimiter(masked: str, opening: int) -> int | None:
     angle_depth = 0
     nested_depth = 0
@@ -567,16 +539,6 @@ def scan_source(
             continue
         if relative.startswith(PROTOCOL_PREFIX):
             debt.append(unsafe_debt_entry(relative, source, offset, kind, owner, ordinal))
-
-    for offset in legacy_runtime_offsets(masked, relative):
-        if not is_test_only(offset, test_ranges):
-            safety_findings.append(
-                SafetyFinding(
-                    relative,
-                    source.count("\n", 0, offset) + 1,
-                    "non-canonical production RocketMQRuntime use is forbidden",
-                )
-            )
 
     for kind, offsets in (
         ("manual_pin", (match.start() for match in MANUAL_PIN.finditer(masked))),

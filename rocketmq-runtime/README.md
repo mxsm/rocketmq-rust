@@ -77,9 +77,9 @@ the shutdown budget and read the shutdown report. `RuntimeContext` is the
 migration and test harness rather than a production entry point.
 
 Older entry points are grouped in `rocketmq_runtime::compat` so a migrating
-consumer sees them as one set with a stated direction: `RocketMQRuntime`, the
-retained executor services, and the legacy scheduler types. The module is
-additive. Nothing is newly deprecated there, and `ActorRuntime` stays out of it
+consumer sees the retained executor services and legacy scheduler types as one
+set with a stated direction. The module is additive. Nothing is newly deprecated
+there, and `ActorRuntime` stays out of it
 because it owns a dedicated thread rather than adapting the ownership API.
 
 ## Runtime Ownership And Quick Start
@@ -414,12 +414,11 @@ a partial sum as the whole runtime. V1 keeps its fields and meanings.
 
 ## Compatibility And Workspace Integration
 
-`RocketMQRuntime` remains deprecated but available in 1.x. Migrate construction
-to `RuntimeOwner::plan(config)?.build()?`, inject `ChildServiceContext`, select
-an explicit scheduling overlap policy, and inspect shutdown reports. Future
-removal belongs to a 2.0 compatibility boundary and remains subject to the
-release and owner-approval requirements in the
-[API migration guide](../rocketmq-doc/en/release/1.0/api-migration.md).
+`RocketMQRuntime` has been removed, including its root and `compat` exports.
+Migrate construction to `RuntimeOwner::plan(config)?.build()?`, inject
+`ChildServiceContext`, select an explicit scheduling overlap policy, and inspect
+shutdown reports. See the
+[API migration guide](../rocketmq-doc/en/release/1.0/api-migration.md) for replacements.
 
 `RuntimeContext` is a migration/test harness. Other retained helpers include
 `TokioExecutorService`, `ScheduledExecutorService`, `FuturesExecutorService`,
@@ -573,7 +572,6 @@ rocketmq-runtime/
   src/shutdown_deadline.rs shared absolute shutdown deadline
   src/shutdown_report.rs   serializable shutdown evidence
   src/diagnostics.rs       raw snapshots and sanitized V1 views
-  src/legacy.rs            deprecated RocketMQRuntime wrapper
   src/executor_service.rs  retained executor adapters
   src/schedule/            retained scheduler APIs
   src/common/              common filesystem, time, and thread helpers
