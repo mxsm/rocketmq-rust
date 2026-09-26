@@ -178,7 +178,7 @@ opentelemetry_sdk                  = { version = "0.32", features = ["metrics", 
 opentelemetry-otlp                 = { version = "0.32", default-features = false }
 opentelemetry-prometheus           = { version = "0.32", default-features = false }
 opentelemetry-appender-tracing     = { version = "0.32", default-features = false }
-opentelemetry-semantic-conventions = { version = "0.32" }
+opentelemetry-semantic-conventions = { version = "0.33" }
 tracing-opentelemetry              = { version = "0.33", default-features = false }
 prometheus                         = { version = "0.14", default-features = false }
 rocksdb                            = { version = "0.25", default-features = false, features = ["multi-threaded-cf", "lz4", "zstd"] }
