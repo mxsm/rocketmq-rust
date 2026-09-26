@@ -549,7 +549,7 @@ impl AsyncWrite for PartialFailureTransport {
 
 struct ConcurrentResponseHandler {
     queued: mpsc::Sender<i32>,
-    results: mpsc::Sender<(i32, Result<(), String>)>,
+    results: mpsc::Sender<(i32, Result<(), rocketmq_error::SharedError>)>,
 }
 
 impl ConnectionHandler for ConcurrentResponseHandler {
@@ -574,8 +574,7 @@ impl ConnectionHandler for ConcurrentResponseHandler {
                         .set_opaque(opaque)
                         .set_body(vec![opaque as u8; 128]),
                 )
-                .await
-                .map_err(|error| error.to_string());
+                .await;
             let _ = results.send((opaque, result)).await;
         })
     }
@@ -652,7 +651,12 @@ async fn partial_failure_closes_session_and_fails_every_already_queued_frame() {
         first.1.expect_err("first queued frame should fail"),
         second.1.expect_err("second queued frame should fail"),
     ];
-    assert!(errors.iter().all(|error| error.contains("canonical writer failure")));
+    assert!(errors
+        .iter()
+        .all(|error| error.code() == rocketmq_error::TRANSPORT_CONNECTION_FAILED.code()));
+    assert!(errors
+        .iter()
+        .all(|error| std::error::Error::source(error.as_ref()).is_some()));
     assert!(control.failure_poll.load(Ordering::Acquire) >= 2);
     assert_eq!(
         control.write_polls.load(Ordering::Acquire),
