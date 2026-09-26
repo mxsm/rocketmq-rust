@@ -164,3 +164,30 @@ impl MessageTrait for MessageClientExt {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::message::MessageConst;
+
+    #[test]
+    fn unique_message_id_takes_precedence_over_offset_id() {
+        let mut message = MessageClientExt::new(MessageExt::default());
+        message.set_offset_msg_id("offset-1");
+        assert_eq!(message.get_msg_id(), "offset-1");
+
+        message.put_property(
+            MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX.into(),
+            "client-id".into(),
+        );
+        assert_eq!(message.get_msg_id(), "client-id");
+        assert_eq!(message.get_offset_msg_id(), "offset-1");
+
+        message.set_offset_msg_id("offset-2");
+        assert_eq!(message.get_msg_id(), "client-id");
+        assert_eq!(message.get_offset_msg_id(), "offset-2");
+
+        message.clear_property(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
+        assert_eq!(message.get_msg_id(), "offset-2");
+    }
+}
